@@ -1,0 +1,10 @@
+[files]
+extend-exclude = ["flake.lock", "tests/fixtures/**"]
+
+[default.extend-words]
+MADR = "MADR"
+Diataxis = "Diataxis"
+Bugzilla = "Bugzilla"
+dprint = "dprint"
+lychee = "lychee"
+md-toc = "md-toc"

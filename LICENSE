@@ -1,0 +1,23 @@
+Copyright (c) 2026 Gustavo Basso
+
+SPDX-License-Identifier: MIT AND CC-BY-4.0
+
+This repository carries two licenses. The method is a knowledge product and is
+licensed for reuse with attribution; the distribution that lands it is
+software and is licensed for reuse without further obligation.
+
+Creative Commons Attribution 4.0 International, in LICENSE-CC-BY-4.0, covers
+what is written to be read:
+
+  AGENTS.md          CLAUDE.md          README.md
+  _docs/             bindings/          method/
+  skills/
+
+The MIT License, in LICENSE-MIT, covers what is written to be run:
+
+  Cargo.toml         build.rs           snippets/
+  src/               tests/             versions.toml
+
+Every other file is build, editor, or tool configuration, under the MIT
+License. Where a distribution file quotes the method, the quoted text keeps
+the method's license.

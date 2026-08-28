@@ -1,0 +1,4 @@
+{
+  "config": { "default": false },
+  "customRules": ["markdownlint-rule-relative-links"]
+}

@@ -1,0 +1,153 @@
+# The release automation and the crates.io trusted publisher. This filename
+# is registered at crates.io; cargo-dist's release.yml builds binaries and
+# must never be registered there.
+#
+# The two halves run on different branches. On develop, release-plz opens the
+# version-bump pull request and the release gate pull request is opened once a
+# version is pending; merging any of that publishes nothing. On master, reached
+# only through that gate, release-plz tags the merge commit and publishes. The
+# publish half runs free of any concurrency group — cancelling it could skip a
+# release — while the pull-request half serializes per ref so racing pushes
+# cannot fight over the release pull request.
+name: release-plz
+
+permissions: {}
+
+on:
+  push:
+    branches: [develop, master]
+
+jobs:
+  # master is reached only through a reviewed pull request carrying a passing
+  # test check, so this is the gated half. The app token is what makes the tag
+  # trigger release.yml; a tag pushed with GITHUB_TOKEN starts no further
+  # workflow.
+  release-plz-release:
+    # TODO(release-kit): set the repository owner
+    if: github.repository_owner == 'OWNER' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          app-id: ${{ secrets.RELEASE_PLZ_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PLZ_APP_PRIVATE_KEY }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: release-plz/action@v0.5
+        id: release
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+
+  release-plz-pr:
+    # TODO(release-kit): set the repository owner
+    if: github.repository_owner == 'OWNER' && github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    concurrency:
+      group: release-plz-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          app-id: ${{ secrets.RELEASE_PLZ_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PLZ_APP_PRIVATE_KEY }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: release-plz/action@v0.5
+        id: release-pr
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+
+  # The gate itself. Once the release pull request has merged, develop carries
+  # a version no tag names yet, so this cuts release/v<version> at that commit
+  # and opens the pull request into master that the master ruleset gates. The
+  # head is a branch pinned to one commit, never develop: a pull request tracks
+  # its head branch, so a develop head would silently absorb every later push
+  # into the release and publish commits the changelog never described.
+  #
+  # Every guard earns its place. The version-bump check is what makes the pin
+  # correct rather than merely immutable: only the release commit changes the
+  # version, so an ordinary push racing this job cannot win the branch creation
+  # and pin the gate at its own commit. A missing tag marks the version
+  # unreleased. The commit count keeps the back-merge push from racing ahead of
+  # the tag and opening an empty request. The concurrency group serializes runs
+  # so two pushes cannot both reach the create-and-open step. Re-running this
+  # job from the Actions interface replays the same commit, which is the
+  # recovery path when a transient failure leaves the gate unopened.
+  open-release-gate:
+    # TODO(release-kit): set the repository owner
+    if: github.repository_owner == 'OWNER' && github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    concurrency:
+      group: open-release-gate
+      cancel-in-progress: false
+    steps:
+      - uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          app-id: ${{ secrets.RELEASE_PLZ_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PLZ_APP_PRIVATE_KEY }}
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: open the release gate pull request
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -eu
+          version="$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' Cargo.toml | head -n 1)"
+          if [ -z "$version" ]; then
+            echo "::error::could not read the version from Cargo.toml."
+            exit 1
+          fi
+          previous="$(git show "$SHA^:Cargo.toml" | sed -n 's/^version *= *"\([^"]*\)".*/\1/p' | head -n 1)"
+          if [ "$previous" = "$version" ]; then
+            echo "this commit does not bump the version; only the release commit cuts the gate."
+            exit 0
+          fi
+          if [ -n "$(git ls-remote --tags origin "refs/tags/v$version")" ]; then
+            echo "v$version is already tagged; no release is pending."
+            exit 0
+          fi
+          ahead="$(gh api "repos/$GH_REPO/compare/master...$SHA" -q '.ahead_by')"
+          if [ "$ahead" -eq 0 ]; then
+            echo "this commit is not ahead of master; nothing to gate."
+            exit 0
+          fi
+          branch="release/v$version"
+          if [ -n "$(git ls-remote --heads origin "refs/heads/$branch")" ]; then
+            echo "$branch already exists; leaving it pinned where it is."
+          else
+            gh api -X POST "repos/$GH_REPO/git/refs" \
+              -f "ref=refs/heads/$branch" -f "sha=$SHA" >/dev/null
+            echo "cut $branch at $SHA."
+          fi
+          open="$(gh pr list --base master --head "$branch" --state open --json number -q 'length')"
+          if [ "$open" -gt 0 ]; then
+            echo "the release gate pull request is already open."
+            exit 0
+          fi
+          gh pr create --base master --head "$branch" \
+            --title "release v$version" \
+            --body "Gates the release of v$version, pinned to $SHA. Merging tags that commit and publishes; merge it as a merge commit."

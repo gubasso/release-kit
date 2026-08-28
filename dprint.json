@@ -1,0 +1,23 @@
+{
+  "markdown": {
+    "textWrap": "never"
+  },
+  "json": {
+    "indentWidth": 2
+  },
+  "includes": [
+    "**/*.md",
+    "**/*.json",
+    "**/*.jsonc"
+  ],
+  "excludes": [
+    ".git",
+    "node_modules",
+    "target",
+    "CHANGELOG.md"
+  ],
+  "plugins": [
+    "https://plugins.dprint.dev/markdown-0.22.0.wasm",
+    "https://plugins.dprint.dev/json-0.23.0.wasm"
+  ]
+}

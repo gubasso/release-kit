@@ -1,0 +1,81 @@
+[package]
+name = "release-kit"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "A canonical release workflow: a technology-agnostic method, per-technology bindings, and the rk CLI that lands and serves them."
+license = "MIT AND CC-BY-4.0"
+homepage = "https://github.com/gubasso/release-kit"
+repository = "https://github.com/gubasso/release-kit"
+readme = "README.md"
+keywords = ["release", "release-automation", "changelog", "semver", "workflow"]
+categories = ["command-line-utilities", "development-tools"]
+exclude = [
+    "/_docs",
+    "/.github",
+    "/scripts",
+    "/tests",
+    "/AGENTS.md",
+    "/CLAUDE.md",
+    "/flake.nix",
+    "/flake.lock",
+    "/justfile",
+    "/deny.toml",
+    "/dist-workspace.toml",
+    "/release-plz.toml",
+    "/.pre-commit-config.yaml",
+    "/.markdownlint",
+    "/.markdownlint-cli2.jsonc",
+    "/.editorconfig",
+    "/.envrc",
+    "/.spec-driven-docs",
+    "/.claude",
+    "/.agents",
+    "/dprint.json",
+    "/lychee.toml",
+    "/_typos.toml",
+    "/committed.toml",
+]
+
+[[bin]]
+name = "rk"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+camino = "1.2.5"
+clap = { version = "4.6.6", features = ["derive", "wrap_help"] }
+clap_complete = "4.6.9"
+include_dir = "0.7.4"
+thiserror = "2.0.20"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
+
+[lints.rust]
+unused_must_use = "deny"
+unsafe_code = "forbid"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+expect_used = "warn"
+todo = "deny"
+dbg_macro = "deny"
+unimplemented = "deny"
+panic = "deny"
+wildcard_imports = "deny"
+exit = "deny"
+
+[dev-dependencies]
+assert_cmd = "2.2.2"
+predicates = "3.1.4"
+tempfile = "3.27.0"

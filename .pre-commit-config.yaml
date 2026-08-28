@@ -1,0 +1,250 @@
+default_install_hook_types: [pre-commit, commit-msg, pre-push]
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: check-added-large-files
+        args: ['--maxkb=16384']
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      - id: destroyed-symlinks
+      - id: check-yaml
+      - id: check-toml
+      - id: detect-private-key
+  - repo: https://github.com/editorconfig-checker/editorconfig-checker
+    rev: v3.11.1
+    hooks:
+      - id: editorconfig-checker
+        alias: ec
+        args: [-disable-insert-final-newline]
+        exclude: '\.md$'
+# BEGIN spec-driven-docs managed
+  - repo: local
+    hooks:
+      - id: spec-driven-docs-verify
+        name: verify spec-driven docs instance
+        entry: sdd verify
+        language: system
+        always_run: true
+        pass_filenames: false
+      - id: adr-cites-a-live-rule
+        name: 'decision record citations resolve'
+        entry: sdd gate adr-cites-a-live-rule
+        language: system
+        always_run: true
+        pass_filenames: false
+      - id: adr-filename-shape
+        name: 'decision record filename shape'
+        entry: sdd gate adr-filename-shape
+        language: system
+        files: '^_docs/decisions/.*\.md$'
+      - id: adr-word-cap
+        name: 'decision record word cap'
+        entry: sdd gate adr-word-cap
+        language: system
+        always_run: true
+        pass_filenames: false
+      - id: agents-digest-size
+        name: 'agent digest size'
+        entry: sdd gate agents-digest-size
+        language: system
+        always_run: true
+        pass_filenames: false
+      - id: chapter-size-cap
+        name: 'chapter and catalog size'
+        entry: sdd gate chapter-size-cap
+        language: system
+        always_run: true
+        pass_filenames: false
+      - id: comparison-dated-tables
+        name: 'comparison tables are dated'
+        entry: sdd gate comparison-dated-tables
+        language: system
+        files: '(^|/)COMPARISON-[a-z0-9-]+\.md$'
+      - id: comparison-escaped-pipes
+        name: 'comparison table pipes are escaped'
+        entry: sdd gate comparison-escaped-pipes
+        language: system
+        files: '(^|/)COMPARISON-[a-z0-9-]+\.md$'
+      - id: comparison-legend
+        name: 'comparison legend'
+        entry: sdd gate comparison-legend
+        language: system
+        files: '(^|/)COMPARISON-[a-z0-9-]+\.md$'
+      - id: comparison-one-reference-per-cell
+        name: 'one reference per comparison cell'
+        entry: sdd gate comparison-one-reference-per-cell
+        language: system
+        files: '(^|/)COMPARISON-[a-z0-9-]+\.md$'
+      - id: comparison-verdict-word
+        name: 'comparison verdict word'
+        entry: sdd gate comparison-verdict-word
+        language: system
+        files: '(^|/)COMPARISON-[a-z0-9-]+\.md$'
+      - id: gate-message-cites-a-rule
+        name: 'gate messages cite a rule'
+        entry: sdd gate gate-message-cites-a-rule
+        language: system
+        always_run: true
+        pass_filenames: false
+      - id: instance-manifest
+        name: 'instance manifest'
+        entry: sdd gate instance-manifest
+        language: system
+        always_run: true
+        pass_filenames: false
+      - id: ki-bugzilla-report-width
+        name: 'Bugzilla report width'
+        entry: sdd gate ki-bugzilla-report-width
+        language: system
+        always_run: true
+        pass_filenames: false
+      - id: ki-filename-shape
+        name: 'known issue filename shape'
+        entry: sdd gate ki-filename-shape
+        language: system
+        files: '^_docs/reference/known-issues/.*\.md$'
+      - id: ki-mechanism-walkthrough
+        name: 'known issue mechanism walkthrough'
+        entry: sdd gate ki-mechanism-walkthrough
+        language: system
+        always_run: true
+        pass_filenames: false
+      - id: ki-report-body
+        name: 'known issue report body'
+        entry: sdd gate ki-report-body
+        language: system
+        always_run: true
+        pass_filenames: false
+      - id: ki-retire-when
+        name: 'known issue retirement condition'
+        entry: sdd gate ki-retire-when
+        language: system
+        always_run: true
+        pass_filenames: false
+      - id: no-self-narration
+        name: 'documents state the present'
+        entry: sdd gate no-self-narration
+        language: system
+        types: [markdown]
+        exclude: '^_docs/decisions/'
+      - id: prose-stays-unwrapped
+        name: 'prose lines stay unwrapped'
+        entry: sdd gate prose-stays-unwrapped
+        language: system
+        types: [markdown]
+        exclude: '(?:^|/)CHANGELOG\.md$'
+      - id: spec-requirement-parts
+        name: 'spec requirement parts'
+        entry: sdd gate spec-requirement-parts
+        language: system
+        files: '^_docs/specs/SPEC-.*\.md$'
+      - id: spec-rule-id-unique
+        name: 'spec rule IDs are unique'
+        entry: sdd gate spec-rule-id-unique
+        language: system
+        always_run: true
+        pass_filenames: false
+      - id: spec-size-cap
+        name: 'spec size cap'
+        entry: sdd gate spec-size-cap
+        language: system
+        always_run: true
+        pass_filenames: false
+      - id: spec-verify-hooks-exist
+        name: 'spec hook references exist'
+        entry: sdd gate spec-verify-hooks-exist
+        language: system
+        always_run: true
+        pass_filenames: false
+      - id: suppression-names-its-case
+        name: 'suppressions name a known issue'
+        entry: sdd gate suppression-names-its-case
+        language: system
+        always_run: true
+        pass_filenames: false
+# END spec-driven-docs managed
+  - repo: local
+    hooks:
+      - id: dprint
+        name: dprint check
+        # dprint exits 14 rather than passing when it receives only paths its
+        # own config excludes, which is what a commit touching just the
+        # generated CHANGELOG.md hands it.
+        entry: dprint check --allow-no-files
+        language: system
+        types_or: [markdown, json]
+      - id: cargo-fmt
+        name: cargo fmt check
+        entry: cargo fmt --check
+        language: system
+        types: [rust]
+        pass_filenames: false
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --all-targets --all-features -- -D warnings
+        language: system
+        types: [rust]
+        pass_filenames: false
+      - id: cargo-test
+        name: cargo test
+        entry: cargo test
+        language: system
+        files: '^(src/|tests/|build\.rs$|Cargo\.(toml|lock)$|method/|bindings/|snippets/|skills/|versions\.toml$|LICENSE)'
+        pass_filenames: false
+  - repo: https://github.com/frnmst/md-toc
+    rev: 9.0.0
+    hooks:
+      - id: md-toc
+        args: [-p, -c, --skip-lines, '1', github, -l, '3']
+        files: '^_docs/specs/SPEC-.*\.md$'
+  - repo: https://github.com/DavidAnson/markdownlint-cli2
+    rev: v0.23.2
+    hooks:
+      - id: markdownlint-cli2
+      - id: markdownlint-cli2
+        alias: md-relative-links
+        name: markdownlint relative links
+        additional_dependencies: ['markdownlint-rule-relative-links']
+        args: ['--config', '.spec-driven-docs/markdownlint/relative-links.markdownlint-cli2.jsonc']
+        exclude: '^_docs/decisions/'
+      - id: markdownlint-cli2
+        alias: md-spec
+        name: markdownlint spec heading shape
+        files: '^_docs/specs/SPEC-[a-z0-9-]+\.md$'
+        args: ['--config', '.spec-driven-docs/markdownlint/spec.markdownlint-cli2.jsonc']
+      - id: markdownlint-cli2
+        alias: md-adr
+        name: markdownlint decision heading shape
+        files: '^_docs/decisions/ADR-[a-z-]+\.md$'
+        args: ['--config', '.spec-driven-docs/markdownlint/adr.markdownlint-cli2.jsonc']
+  - repo: https://github.com/crate-ci/typos
+    rev: v1.49.0
+    hooks:
+      - id: typos
+        language: system
+        args: [--force-exclude]
+  - repo: https://github.com/sirwart/ripsecrets
+    rev: v0.1.11
+    hooks:
+      - id: ripsecrets
+  - repo: https://github.com/lycheeverse/lychee
+    rev: lychee-v0.24.2
+    hooks:
+      - id: lychee
+        stages: [pre-push]
+        types: [markdown]
+        exclude: 'CHANGELOG\.md$'
+        args: [--no-progress]
+  - repo: https://github.com/crate-ci/committed
+    rev: v1.1.11
+    hooks:
+      - id: committed
+        language: system
+        stages: [commit-msg]

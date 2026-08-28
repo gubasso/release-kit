@@ -1,0 +1,44 @@
+# git-cliff configuration. git cliff --bump derives the next version from
+# Conventional Commits and rewrites the changelog deterministically; the
+# release workflow drives it, and VERSION stays the committed source of truth.
+
+[changelog]
+header = """
+# Changelog
+
+All notable changes to this project are documented in this file.
+"""
+body = """
+## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group }}
+{% for commit in commits %}
+- {{ commit.message | upper_first }}
+{%- endfor %}
+{% endfor %}
+"""
+trim = true
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+tag_pattern = "v[0-9].*"
+commit_parsers = [
+  { message = "^feat", group = "Added" },
+  { message = "^fix", group = "Fixed" },
+  { message = "^docs", group = "Documentation" },
+  { message = "^perf", group = "Performance" },
+  { message = "^refactor", group = "Refactored" },
+  { message = "^chore\\(release\\)", skip = true },
+  { message = "^chore", group = "Miscellaneous" },
+]
+
+[bump]
+# The unreleased baseline in VERSION is 0.0.0; with no tag yet, the first
+# release request bumps straight to this initial tag instead of deadlocking
+# on the default it would otherwise share with the committed version.
+initial_tag = "v0.1.0"
+# Before 1.0.0 the minor position is the breaking position: a feature bumps
+# the patch and a breaking change bumps the minor, per the method invariant.
+features_always_bump_minor = false
+breaking_always_bump_major = false

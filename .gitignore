@@ -1,0 +1,6 @@
+.direnv/
+.envrc.local
+.draft/
+.lycheecache
+result
+/target

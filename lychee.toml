@@ -1,0 +1,14 @@
+scheme = ["http", "https"]
+cache = true
+max_retries = 3
+
+exclude = [
+  "https://example.invalid/.*",
+  # Owner-only settings pages: 404 to anyone not signed in as the owner.
+  '^https://github\.com/[^/]+/[^/]+/settings(/|$)',
+  # Bot-gated: reachable in a browser, 401 or 403 to any checker.
+  '^https://developers\.redhat\.com/',
+  '^https://fastercapital\.com/',
+  '^https://jira\.atlassian\.com/',
+  '^https://thoughtworks\.medium\.com/',
+]

@@ -1,0 +1,28 @@
+// The decision-record heading shape, gated by MD043 required-headings.
+//
+// This file is loaded by its own hook with an explicit --config, because MD043
+// takes one `headings` array and each shape needs a different one. The
+// project's general `.markdownlint-cli2.jsonc` MUST NOT mention MD043 at any
+// value, including false: it is merged over this file and would silently
+// disable the contract.
+//
+// `?` is the varying title — exactly one heading, where `*` would also admit a
+// record with no title. There is no trailing wildcard: the five sections are
+// the whole record, so a sixth fails here. `match_case` is not the default:
+// without it a record headed `## status` passes a gate whose whole job is the
+// shape.
+{
+  "config": {
+    "MD043": {
+      "headings": [
+        "?",
+        "## Context and Problem Statement",
+        "## Considered Options",
+        "## Decision Outcome",
+        "## Consequences",
+        "## Status"
+      ],
+      "match_case": true
+    }
+  }
+}

@@ -1,0 +1,41 @@
+# EditorConfig for markdown/docs projects.
+# Markdown formatting is owned by dprint + markdownlint, and editorconfig-checker
+# excludes *.md, so no markdown indent block is set here.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.{json,json5,jsonc,yaml,yml,toml}]
+indent_style = space
+indent_size = 2
+
+[Makefile]
+indent_style = tab
+
+# The release helper scripts; 2-space matches the shfmt default (shfmt -i 2).
+[*.{sh,bash,bats}]
+indent_style = space
+indent_size = 2
+
+# rustfmt owns Rust formatting, including continuation indents that are not
+# multiples of the base, so no indent size is enforced here.
+[*.rs]
+indent_style = space
+
+[*.md]
+trim_trailing_whitespace = false
+max_line_length = off
+
+# A Bugzilla ticket body kept as a standalone file, rather than as a fenced
+# `## Report` section, is the same rule as `ki-bugzilla-report-width` reached
+# through editorconfig: Bugzilla renders a comment as preformatted text in a
+# fixed-width box and reflows nothing. The tracker sits in a compound suffix
+# (`*.test.js` convention) so the file keeps the type editors and formatters
+# see while the rule gets a handle a glob can address — a sibling `*.jira.txt`
+# is deliberately not matched, because Jira reflows prose.
+[*.bugzilla.txt]
+max_line_length = 79

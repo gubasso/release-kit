@@ -1,0 +1,26 @@
+// The spec heading shape, gated by MD043 required-headings.
+//
+// This file is loaded by its own hook with an explicit --config, because MD043
+// takes one `headings` array and each shape needs a different one. The
+// project's general `.markdownlint-cli2.jsonc` MUST NOT mention MD043 at any
+// value, including false: it is merged over this file and would silently
+// disable the contract.
+//
+// `?` is the varying title — exactly one heading, where `*` would also admit a
+// spec with no title. `+` covers the requirement and scenario headings, which
+// MD043 sees too, and fails a spec with no requirement in it. `match_case` is
+// not the default: without it a spec headed `## purpose` passes a gate whose
+// whole job is the shape.
+{
+  "config": {
+    "MD043": {
+      "headings": [
+        "?",
+        "## Purpose",
+        "## Requirements",
+        "+"
+      ],
+      "match_case": true
+    }
+  }
+}

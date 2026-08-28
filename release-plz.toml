@@ -1,0 +1,17 @@
+[workspace]
+changelog_update = true
+# The gate is the release/v<version> pull request into master, whose head
+# branch is not release-plz-*, so the branch heuristic release_always = false
+# relies on would never fire. Releasing always is safe: the command no-ops when
+# the registry already serves this version.
+release_always = true
+publish = true
+# cargo-dist owns the GitHub release, because it is the half that has the
+# installers to attach. release-plz creating it first leaves dist's host job
+# failing on "a release with the same tag name already exists" and every
+# release carrying no binaries. The tag stays release-plz's; git_tag_enable is
+# separate and still on.
+git_release_enable = false
+# The lib target exists only so this crate's own tests can link it; no
+# external consumer holds its API, so the library semver check is noise.
+semver_check = false
