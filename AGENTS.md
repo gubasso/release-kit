@@ -9,6 +9,7 @@ This repository is the canonical knowledge product for the release-kit workflow.
 - Do not load `_docs/decisions/` unless someone asks why a rule exists.
 - Update the owning method chapter or binding in the same change as behavior.
 - Update a skill in the same change as the behavior it describes.
+- Run `sdd verify` before handoff.
 
 ## Ownership boundaries
 
@@ -16,6 +17,7 @@ This repository is the canonical knowledge product for the release-kit workflow.
 - `src/` is the distribution: the `rk` binary embeds `method/`, `bindings/`, `snippets/`, `skills/`, `versions.toml`, and the licenses at compile time, so canon and binary cannot drift.
 - Every pinned tool is declared once, in `versions.toml`; a snippet pin changes together with its registry entry.
 - `_docs/` is this repository's own spec-driven-docs instance plus its decisions; it never ships in the crate.
+- `_docs/specs/` and this repository's integration with the instance are instance-owned; `.spec-driven-docs/` belongs to the sdd canon.
 - Keep each durable fact in one owner and link to it elsewhere.
 - `LICENSE` splits terms on the product boundary: CC BY 4.0 for the method, MIT for the distribution.
 
