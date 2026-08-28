@@ -57,6 +57,15 @@ check = "https://api.github.com/repos/actions/create-github-app-token/releases/l
 checked = 2026-08-28
 
 [[tool]]
+name = "attest"
+version = "4"
+action = "actions/attest@v4"
+used_by = ["bash"]
+purpose = "signs the built tarball with a build-provenance attestation"
+check = "https://api.github.com/repos/actions/attest/releases/latest"
+checked = 2026-08-28
+
+[[tool]]
 name = "checkout"
 version = "4"
 action = "actions/checkout@v4"

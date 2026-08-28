@@ -10,7 +10,7 @@ Six stages. No technology changes them.
 2. A bot maintains a release request. It opens a pull request against the integration branch that bumps the committed version and rewrites the changelog. Merging it publishes nothing.
 3. A gate. Automation cuts a branch pinned at the merged release commit and opens it as a pull request into the release branch. Merging the gate is the release decision.
 4. Tag and publish. Automation tags the merge and publishes to the registry. The tag mirrors the committed version; no hand ever authors it.
-5. Build and attach artifacts. What the artifacts are is the binding's answer: a dedicated builder in its own workflow, the registry distributions themselves, or a tarball the release page carries.
+5. Build, attest, and attach artifacts. What the artifacts are is the binding's answer: a dedicated builder in its own workflow, the registry distributions themselves, or a tarball the release page carries. Whatever they are, the run that builds them also signs a statement of where they came from, so a consumer can check the origin without trusting the page the download came from.
 6. Back-merge, so the release branch and the integration branch end equal and the next release diffs cleanly.
 
 ## The two pull requests

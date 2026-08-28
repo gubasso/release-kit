@@ -29,6 +29,7 @@ A binding document answers the four axes for its technology, then carries only w
 - The concrete commands for each stage of [operate](./03-operate.md).
 - The registry's specific rejects, limits, and token scopes, so [setup](./02-setup.md) step 0 and step 5 are executable.
 - The facts that disqualify or configure tools: what the bot can and cannot bump, what the artifact builder generates and owns.
+- The provenance the channel offers, how it is switched on, and how a consumer verifies it; where the channel offers none, the binding says so, per [the invariants](./01-invariants.md).
 - The deterministic files, added under `snippets/<technology>/` with sentinel placeholders, and their tools pinned in the versions registry.
 
 What a binding never carries: a restatement of the spine, the invariants, or another binding's facts. If a sentence holds for every technology, it belongs in a method chapter.

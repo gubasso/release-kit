@@ -24,8 +24,10 @@ Publish by hand, in three moves, and only for a release the gate already approve
 2. Publish with a token scoped like the bootstrap one: new versions of exactly this package, shortest expiry. Revoke it immediately after.
 3. Turn enforcement back on, and let the next automated release prove the OIDC path still works.
 
+A hand-published artifact carries no provenance. The signature is minted by the run that builds, so uploading a file by hand — even the exact file CI built — leaves the attestation lookup answering with nothing, and any consumer that verifies before installing refuses that one version while the releases on either side of it install fine. Treat the manual upload as temporary: once CI returns, re-run the artifact workflow on the same tag so the artifacts are rebuilt and attested through the normal path.
+
 The tag still comes from automation once CI returns; a hand-published version with no tag is reconciled by re-running the release workflow on `master`, never by tagging manually.
 
 ## The artifact build failed
 
-The publish and the artifact build are separate workflows, so a failed artifact build leaves a published version with an empty release page. Re-run the artifact workflow on the same tag. Nothing about the published version changes; the artifacts attach when the build succeeds.
+The publish and the artifact build are separate workflows, so a failed artifact build leaves a published version with an empty release page. Re-run the artifact workflow on the same tag. Nothing about the published version changes; the artifacts attach when the build succeeds, and the re-run mints the provenance the failed one never produced.

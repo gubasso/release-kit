@@ -25,6 +25,12 @@ The publish job runs in a GitHub environment, because PyPI's trusted-publisher r
 
 release-please knows the `python` release type and deterministically bumps `pyproject.toml`, which is what qualifies it under [the invariants](../method/01-invariants.md). python-semantic-release is a push model that versions and publishes on the push itself, with no release-request gate, so it does not fit this convention.
 
+## Provenance
+
+- PyPI carries it, by default and with no configuration to write. From 1.11.0 onward `pypa/gh-action-pypi-publish` generates and uploads PEP 740 attestations for every project publishing over trusted publishing, so the pinned action already does this and the binding adds nothing.
+- The attestation is Sigstore-signed and the index serves it beside the distribution, so a consumer verifies against PyPI itself rather than against the forge that built the file.
+- No installer checks it today: `pip install` does not verify attestations. The attestation is published evidence, not an install-time gate.
+
 ## Recovery specifics
 
 - Withdraw by yanking the release on PyPI; a yanked version stops resolving for new installs while pinned installs keep working.

@@ -31,6 +31,12 @@ The tag push retriggers `release.yml` only because the publish jobs authenticate
 - `semver_check = false` for a binary-only crate, or one whose lib target exists only for its own tests; cargo-semver-checks gates the bump only when external consumers hold the API.
 - `cargo binstall <crate>` resolves cargo-dist's artifacts from the first release with no configuration.
 
+## Provenance
+
+- crates.io offers none. Trusted publishing authenticates the upload and stores no signature and no attestation, so a published crate gives a consumer nothing beyond the SHA-256 that `Cargo.lock` already records. Sigstore signing for crates.io remains a proposal, so this is the state to design around rather than wait out.
+- The release artifacts carry it instead, which makes them the only verifiable half of a Rust release. `github-attestations = true` in `dist-workspace.toml` turns on GitHub Artifact Attestations; `github-attestations-phase` chooses where they are minted and defaults to `build-local-artifacts`, the phase that builds the binaries. Only public repositories, and private repositories of an Enterprise-plan organization, are supported.
+- A consumer verifies with `gh attestation verify <file> --repo <owner>/<repo>`. Nothing in the default install path does this for them: `cargo binstall` supports minisign signatures only and does not check attestations, so the evidence is available on demand and enforced by no installer.
+
 ## Recovery specifics
 
 - Withdraw with `cargo yank --version <v>`; reverse with `cargo yank --version <v> --undo`. Yank stops new resolution and breaks no existing lockfile.

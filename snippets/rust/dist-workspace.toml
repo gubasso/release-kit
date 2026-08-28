@@ -19,3 +19,7 @@ pr-run-mode = "plan"
 install-path = "CARGO_HOME"
 # Whether to install an updater program
 install-updater = false
+# Sign every built artifact with a GitHub Artifact Attestation, so a consumer
+# can check which workflow and commit produced it. crates.io stores no
+# provenance, so the release page is the only place it can live.
+github-attestations = true

@@ -32,9 +32,11 @@ Route by symptom through `rk method recovery`:
 | The changelog shipped wrong                   | Amend on the integration branch; ships next release |
 | CI is down and the release cannot wait        | The three-move hand-publish, enforcement off first  |
 | The release page is empty                     | Re-run the artifact workflow on the same tag        |
+| A released artifact has no attestation        | Re-run the artifact workflow on the same tag        |
 
 ## Defaults
 
 - The gate branch is pinned; work landing meanwhile ships in the next release, and that is never a reason to rush a merge.
 - A verify step that fails right after the gate merge is usually timing: the artifact builder creates the release page minutes after the tag.
 - Prefer the smallest recovery that returns to the happy path; never surgery on tags, published versions, or the release branch.
+- A hand-uploaded artifact carries no provenance, even when CI built the file. Treat that release as unfinished and re-run the artifact workflow on its tag once CI is back.

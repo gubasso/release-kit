@@ -29,3 +29,11 @@ The registry refuses a second upload of the same version, and a moved tag serves
 ## Enforcement is a separate switch
 
 Configuring a trusted publisher permits OIDC publishing; requiring trusted publishing rejects every token publish. Enforcement is turned on only after one automated release has proven the OIDC path, and it is what an emergency hand-publish must first turn off — [recovery](./04-recovery.md) carries that conflict.
+
+## Provenance rides the publish identity
+
+Trusted publishing answers who may publish. A build attestation answers what was built, binding the artifact's digest to the workflow, repository, and commit that produced it. These are two questions, and configuring the first does not answer the second: a channel that authenticates the upload and stores no attestation leaves a consumer nothing to verify.
+
+The identity that authorizes the publish is what signs the artifacts, in the same run that built them. A binding takes the provenance its channel already offers, by default and without ceremony, and never stands up a second signing scheme with its own keys and its own rotation to compensate.
+
+The floor is a build-provenance attestation over every artifact a consumer downloads. It is provenance and not safety: it says where a file came from, never that the code in it is sound. Where a channel offers no attestation at all, the binding states that rather than letting checksums imply a guarantee they do not carry.

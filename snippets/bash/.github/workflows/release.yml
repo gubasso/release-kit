@@ -143,6 +143,11 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      # Minting the build-provenance attestation: the OIDC token identifies
+      # this run to Sigstore, and the other two write the attestation back.
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     steps:
       - uses: actions/create-github-app-token@v3
         id: app-token
@@ -156,6 +161,7 @@ jobs:
       - name: install git-cliff
         run: pipx install git-cliff==2.13.1
       - name: tag and attach
+        id: release
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           GH_REPO: ${{ github.repository }}
@@ -175,6 +181,7 @@ jobs:
           fi
           git fetch origin "refs/tags/v$version:refs/tags/v$version"
           make dist
+          echo "built=true" >> "$GITHUB_OUTPUT"
           git cliff --latest -o notes.md
           if gh release view "v$version" >/dev/null 2>&1; then
             echo "the release page already exists; leaving it as it is."
@@ -182,3 +189,12 @@ jobs:
           fi
           gh release create "v$version" dist/*.tar.gz dist/*.sha256 \
             --title "v$version" --notes-file notes.md
+
+      # Provenance. The run that built the tarball signs it, so a consumer can
+      # check which workflow and commit produced it instead of trusting the
+      # release page the checksum also sits on. Attesting by hand is not
+      # possible: only the building run holds the identity that signs.
+      - uses: actions/attest@v4
+        if: steps.release.outputs.built == 'true'
+        with:
+          subject-path: dist/*.tar.gz

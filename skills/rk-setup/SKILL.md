@@ -32,10 +32,11 @@ Land the release-kit convention in a project. The CLI carries the whole canon: e
 
 ## Verify
 
-The landed files hold the invariants of `rk method invariants`: exactly one workflow carries the OIDC permission and its filename is the one registered; the version file leads and no tag is hand-authored; the release branch is written by automation only. The proof of the whole setup is one release cut end to end with `rk method operate`.
+The landed files hold the invariants of `rk method invariants`: exactly one workflow carries the OIDC permission and its filename is the one registered; the version file leads and no tag is hand-authored; the release branch is written by automation only; every artifact a consumer downloads is attested by the run that built it. The proof of the whole setup is one release cut end to end with `rk method operate`.
 
 ## Defaults
 
 - Never run the setup steps out of order; each one names what the next depends on.
 - Never edit a generated artifact workflow by hand; change its configuration and regenerate, as the binding directs.
+- Never answer provenance with a signing scheme of your own; take what the channel offers by default, and where it offers nothing, say so rather than implying otherwise.
 - A project that already carries a partial setup gets the same sequence, skipping only what is verifiably done.
