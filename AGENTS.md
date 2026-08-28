@@ -15,6 +15,7 @@ This repository is the canonical knowledge product for the release-kit workflow.
 
 - `method/` and `bindings/` are the canon prose; `snippets/` and `versions.toml` are the landable payload.
 - `src/` is the distribution: the `rk` binary embeds `method/`, `bindings/`, `snippets/`, `skills/`, `versions.toml`, and the licenses at compile time, so canon and binary cannot drift.
+- `skills/` installs at user scope only, and `rk init` lands none: an agent resolves a skill by name across scopes, so a second copy is a second entry under one name. `SPEC-distribution.md` binds what the installer may write there.
 - Every pinned tool is declared once, in `versions.toml`; a snippet pin changes together with its registry entry.
 - `_docs/` is this repository's own spec-driven-docs instance plus its decisions; it never ships in the crate.
 - `_docs/specs/` and this repository's integration with the instance are instance-owned; `.spec-driven-docs/` belongs to the sdd canon.
@@ -45,3 +46,4 @@ This repository is the canonical knowledge product for the release-kit workflow.
 - What lands in a target: `snippets/`, served by `rk snippet --list`.
 - Pinned tools and freshness: `versions.toml`, served by `rk versions`.
 - Docs format and budgets: `sdd spec docs-format`; this repository is an sdd instance.
+- What the binary carries and writes outside a target: `_docs/specs/SPEC-distribution.md`, served by `rk skill --help`.

@@ -1,139 +1,142 @@
 //! `rk skill`: the agent skills at user scope.
 //!
-//! Install writes each skill's `SKILL.md` under `~/.claude/skills/`, which
-//! Claude Code reads, and `~/.agents/skills/`, which other coding agents
-//! read. Both operations preview by default and touch only the files the
-//! payload names, so anything a user added alongside survives.
+//! This handler resolves three things — the home directory, the roots the
+//! chosen agent implies, and the record that sits beside them — and prints
+//! what the installer reports. Install and uninstall semantics live in
+//! `skills::installer`; nothing here decides them.
 
-use std::fs;
 use std::path::PathBuf;
 
-use crate::cli::skill::{SkillAction, SkillArgs};
-use crate::embedded;
-use crate::error::RkError;
+use camino::{Utf8Path, Utf8PathBuf};
 
-/// The user-scope roots skills install under.
-const SCOPES: [&str; 2] = [".claude/skills", ".agents/skills"];
+use crate::cli::skill::{Agent, Scope, SkillAction, SkillArgs};
+use crate::error::RkError;
+use crate::skills;
+use crate::skills::installer;
+use crate::skills::record::RECORD_PATH;
+
+/// The root Claude Code reads, relative to the home directory.
+const CLAUDE_ROOT: &str = ".claude/skills";
+
+/// The root Codex, Gemini CLI, and Copilot read, relative to the home
+/// directory.
+const AGENTS_ROOT: &str = ".agents/skills";
 
 /// Dispatch the skill action.
 ///
 /// # Errors
 ///
 /// Returns [`RkError::NotFound`] for an unknown skill name,
-/// [`RkError::Refused`] on a differing destination without `--force`, and
-/// [`RkError::Io`] on filesystem failure.
+/// [`RkError::Refused`] when the home is unusable or a destination cannot be
+/// touched, and [`RkError::Io`] on filesystem failure.
 pub fn run(args: &SkillArgs) -> Result<(), RkError> {
     match &args.action {
         SkillAction::List => {
-            for (name, _) in skills() {
-                println!("{name}");
+            for skill in skills::all()? {
+                println!("{}", skill.name);
             }
             Ok(())
         }
-        SkillAction::Show { name } => skills().into_iter().find(|(n, _)| n == name).map_or_else(
+        SkillAction::Show { name } => show(name),
+        SkillAction::Install {
+            agent,
+            scope,
+            apply,
+            force,
+        } => {
+            let (roots, record) = destinations(*agent, *scope)?;
+            report(installer::install(&roots, &record, *apply, *force)?);
+            Ok(())
+        }
+        SkillAction::Uninstall {
+            agent,
+            scope,
+            apply,
+        } => {
+            let (roots, record) = destinations(*agent, *scope)?;
+            report(installer::uninstall(&roots, &record, *apply)?);
+            Ok(())
+        }
+    }
+}
+
+/// Print one skill's `SKILL.md`, byte-identical to the authored file.
+fn show(name: &str) -> Result<(), RkError> {
+    skills::all()?
+        .into_iter()
+        .find(|skill| skill.name == name)
+        .map_or_else(
             || {
                 Err(RkError::NotFound {
                     kind: "skill",
-                    name: name.clone(),
+                    name: name.to_owned(),
                 })
             },
-            |(_, contents)| {
-                print!("{contents}");
+            |skill| {
+                print!("{}", skill.text);
                 Ok(())
             },
-        ),
-        SkillAction::Install { apply, force } => install(*apply, *force),
-        SkillAction::Uninstall { apply } => uninstall(*apply),
-    }
+        )
 }
 
-/// The embedded skills as `(name, contents)`.
-fn skills() -> Vec<(String, &'static str)> {
-    let mut out: Vec<(String, &'static str)> = embedded::SKILLS
-        .dirs()
-        .filter_map(|dir| {
-            let name = dir.path().to_string_lossy().into_owned();
-            let file = dir.get_file(format!("{name}/SKILL.md"))?;
-            Some((name, file.contents_utf8().unwrap_or_default()))
-        })
-        .collect();
-    out.sort();
-    out
+/// The roots a run touches, and the record that vouches for them.
+fn destinations(agent: Agent, scope: Scope) -> Result<(Vec<Utf8PathBuf>, Utf8PathBuf), RkError> {
+    let Scope::User = scope;
+    let home = home()?;
+    Ok((roots(&home, agent), home.join(RECORD_PATH)))
+}
+
+/// The skill roots under `home`, in the order an apply writes them.
+fn roots(home: &Utf8Path, agent: Agent) -> Vec<Utf8PathBuf> {
+    let mut roots = Vec::new();
+    if matches!(agent, Agent::Claude | Agent::All) {
+        roots.push(home.join(CLAUDE_ROOT));
+    }
+    if matches!(agent, Agent::Codex | Agent::All) {
+        roots.push(home.join(AGENTS_ROOT));
+    }
+    roots
 }
 
 /// The home directory, from the environment.
-fn home() -> Result<PathBuf, RkError> {
-    std::env::var_os("HOME")
+///
+/// A home that is not UTF-8 refuses rather than proceeding: the record names
+/// its destinations as text, so a path it cannot write down is a path it
+/// cannot later vouch for.
+fn home() -> Result<Utf8PathBuf, RkError> {
+    let raw = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
-        .ok_or_else(|| RkError::Refused("neither HOME nor USERPROFILE is set".into()))
+        .ok_or_else(|| RkError::Refused("neither HOME nor USERPROFILE is set".into()))?;
+    Utf8PathBuf::from_path_buf(PathBuf::from(raw)).map_err(|path| {
+        RkError::Refused(format!(
+            "the home directory is not UTF-8: {}",
+            path.display()
+        ))
+    })
 }
 
-fn install(apply: bool, force: bool) -> Result<(), RkError> {
-    let home = home()?;
-    if !apply {
-        println!("DRY RUN: rk skill install writes these files; re-run with --apply");
-        for scope in SCOPES {
-            for (name, _) in skills() {
-                println!(
-                    "{}",
-                    home.join(scope).join(&name).join("SKILL.md").display()
-                );
-            }
-        }
-        return Ok(());
+/// Print what the installer reported, one line each.
+fn report(lines: Vec<String>) {
+    for line in lines {
+        println!("{line}");
     }
-    for scope in SCOPES {
-        for (name, contents) in skills() {
-            let dir = home.join(scope).join(&name);
-            let dest = dir.join("SKILL.md");
-            // Bytes, not strings: a destination that fails to read as UTF-8
-            // still exists, and only a missing file may be written over
-            // silently; any other read failure propagates.
-            match fs::read(&dest) {
-                Ok(found) if found == contents.as_bytes() => {
-                    println!("unchanged {}", dest.display());
-                    continue;
-                }
-                Ok(_) if !force => {
-                    return Err(RkError::Refused(format!(
-                        "{} differs from the payload; re-run with --force to overwrite",
-                        dest.display()
-                    )));
-                }
-                Ok(_) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => return Err(e.into()),
-            }
-            fs::create_dir_all(&dir)?;
-            fs::write(&dest, contents)?;
-            println!("wrote {}", dest.display());
-        }
-    }
-    Ok(())
 }
 
-fn uninstall(apply: bool) -> Result<(), RkError> {
-    let home = home()?;
-    for scope in SCOPES {
-        for (name, _) in skills() {
-            let dir = home.join(scope).join(&name);
-            let dest = dir.join("SKILL.md");
-            if !dest.is_file() {
-                continue;
-            }
-            if apply {
-                fs::remove_file(&dest)?;
-                // The directory goes only when the skill file was its last
-                // entry, so anything a user added alongside survives.
-                if fs::read_dir(&dir)?.next().is_none() {
-                    fs::remove_dir(&dir)?;
-                }
-                println!("removed {}", dest.display());
-            } else {
-                println!("DRY RUN: would remove {}", dest.display());
-            }
-        }
+#[cfg(test)]
+mod tests {
+    use camino::Utf8Path;
+
+    use super::roots;
+    use crate::cli::skill::Agent;
+
+    #[test]
+    fn each_agent_selects_its_own_roots() {
+        let home = Utf8Path::new("/home/u");
+        assert_eq!(roots(home, Agent::Claude), ["/home/u/.claude/skills"]);
+        assert_eq!(roots(home, Agent::Codex), ["/home/u/.agents/skills"]);
+        assert_eq!(
+            roots(home, Agent::All),
+            ["/home/u/.claude/skills", "/home/u/.agents/skills"]
+        );
     }
-    Ok(())
 }
