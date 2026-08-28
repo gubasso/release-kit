@@ -20,26 +20,6 @@
       "source": ".markdownlint/relative-links.markdownlint-cli2.jsonc",
       "destination": ".spec-driven-docs/markdownlint/relative-links.markdownlint-cli2.jsonc",
       "sha256": "c489edba99309dcb809edab714d6ed4db44f85a8cd306a594b2f36efe2e6486e"
-    },
-    {
-      "source": "skills/sdd-setup/SKILL.md",
-      "destination": ".claude/skills/sdd-setup/SKILL.md",
-      "sha256": "971d43449738c72c72856d1d12a55acda6c56dd8ed08c4a79c769e236f63a7ac"
-    },
-    {
-      "source": "skills/sdd-setup/SKILL.md",
-      "destination": ".agents/skills/sdd-setup/SKILL.md",
-      "sha256": "971d43449738c72c72856d1d12a55acda6c56dd8ed08c4a79c769e236f63a7ac"
-    },
-    {
-      "source": "skills/sdd-write-docs/SKILL.md",
-      "destination": ".claude/skills/sdd-write-docs/SKILL.md",
-      "sha256": "7efa83e7e3f4c8d9187eb3caa29503817b2be0e9f425cb2837b9b2e7be42494c"
-    },
-    {
-      "source": "skills/sdd-write-docs/SKILL.md",
-      "destination": ".agents/skills/sdd-write-docs/SKILL.md",
-      "sha256": "7efa83e7e3f4c8d9187eb3caa29503817b2be0e9f425cb2837b9b2e7be42494c"
     }
   ],
   "adopted_files": [
