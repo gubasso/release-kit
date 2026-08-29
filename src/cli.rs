@@ -4,6 +4,7 @@
 
 pub mod completions;
 pub mod init;
+pub mod payload;
 pub mod read;
 pub mod skill;
 
@@ -29,6 +30,8 @@ pub enum Commands {
     Snippet(read::ReadArgs),
     /// Print the pinned-tool registry.
     Versions,
+    /// Report the payload this binary carries, with its digests.
+    Payload(payload::PayloadArgs),
     /// Land a technology's files into a target repository.
     Init(init::InitArgs),
     /// Manage the agent skills at user scope.

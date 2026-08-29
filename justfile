@@ -20,9 +20,10 @@ test:
     cargo nextest run
 
 # Land the rust files into a scratch repository, end to end, with the real
-# binary.
+# binary, and assert the published crate carries every payload root.
 build:
     set -eu; d=$(mktemp -d); trap 'rm -rf "$d"' EXIT; mkdir -p "$d/.git"; cargo run -q -- init --tech rust --target "$d" --apply >/dev/null; test -f "$d/release-plz.toml"
+    cargo nextest run --run-ignored ignored-only -E 'test(the_published_crate_carries_every_root)'
 
 check: lint test build
 

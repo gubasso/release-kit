@@ -27,6 +27,7 @@ fn run(cli: &Cli) -> Result<(), RkError> {
         Commands::Binding(args) => commands::read::binding(args),
         Commands::Snippet(args) => commands::read::snippet(args),
         Commands::Versions => commands::versions::run(),
+        Commands::Payload(args) => commands::payload::run(args),
         Commands::Init(args) => commands::init::run(args),
         Commands::Skill(args) => commands::skill::run(args),
         Commands::License => commands::license::run(),

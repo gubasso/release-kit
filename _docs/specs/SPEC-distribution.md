@@ -4,6 +4,8 @@
 
 - [Purpose](#purpose)
 - [Requirements](#requirements)
+  - [`distribution:the-payload-roots-are-declared-once` — The payload roots are declared once](#distributionthe-payload-roots-are-declared-once--the-payload-roots-are-declared-once)
+  - [`distribution:the-published-crate-carries-every-root` — The published crate carries every root](#distributionthe-published-crate-carries-every-root--the-published-crate-carries-every-root)
   - [`distribution:skills-are-part-of-the-payload` — Skills are part of the payload](#distributionskills-are-part-of-the-payload--skills-are-part-of-the-payload)
   - [`distribution:a-skill-has-one-owner` — A skill has one owner](#distributiona-skill-has-one-owner--a-skill-has-one-owner)
   - [`distribution:a-skill-obeys-the-portable-format` — A skill obeys the portable format](#distributiona-skill-obeys-the-portable-format--a-skill-obeys-the-portable-format)
@@ -21,6 +23,30 @@
 Rules governing what the `rk` binary carries and what it writes outside a target repository. The distribution is one installed binary embedding the method, the bindings, the snippets, the skills, and the pinned-tool registry, and every rule here binds whoever authors that binary. The files `rk init` lands inside a target are governed by the invariants in `method/01-invariants.md`, which an adopting project owns; the documentation this repository writes about itself is governed by `SPEC-instance.md`. No adopting project adopts this spec: its subject is the installer, so a project holding these rules would hold obligations it cannot violate and verifications it cannot run.
 
 ## Requirements
+
+### `distribution:the-payload-roots-are-declared-once` — The payload roots are declared once
+
+Every authored root the binary carries MUST be named in one inventory that the embed, the build script's change tracking, and the package-contents check all read.
+
+#### Scenario: A payload root is embedded without entering the inventory
+
+- GIVEN a new root embedded in `src/embedded.rs` and absent from the inventory in `src/payload_roots.rs`
+- WHEN the test suite runs
+- THEN the agreement test fails naming both files, before a development build can serve stale bytes for a root the build script does not watch
+
+Verify: `cargo nextest run -E 'kind(lib)'`
+
+### `distribution:the-published-crate-carries-every-root` — The published crate carries every root
+
+The published package MUST contain every payload root, and the check MUST run before a release rather than at a consumer.
+
+#### Scenario: An exclude entry is broadened and removes a payload root
+
+- GIVEN a `Cargo.toml` `exclude` entry that newly matches a payload root
+- WHEN `just check` runs its build gate
+- THEN the package-contents test fails naming the root, before `cargo publish` can ship a crate that fails to compile at the consumer
+
+Verify: `cargo nextest run --run-ignored ignored-only -E 'test(the_published_crate_carries_every_root)'`
 
 ### `distribution:skills-are-part-of-the-payload` — Skills are part of the payload
 

@@ -16,8 +16,7 @@
 pub mod installer;
 pub mod record;
 
-use std::fmt;
-
+pub use crate::digest::Digest;
 use crate::embedded;
 use crate::error::RkError;
 
@@ -51,67 +50,11 @@ pub fn all() -> Result<Vec<Skill>, RkError> {
     Ok(out)
 }
 
-/// The lowercase hex alphabet, indexed by nibble.
-const HEX: [u8; 16] = *b"0123456789abcdef";
-
-/// A SHA-256 digest, in its 64-character lowercase hex form.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Digest(String);
-
-impl Digest {
-    /// Digest a byte string.
-    #[must_use]
-    pub fn of(bytes: &[u8]) -> Self {
-        use sha2::Digest as _;
-        let mut hex = String::with_capacity(64);
-        for byte in sha2::Sha256::digest(bytes) {
-            hex.push(char::from(HEX[usize::from(byte >> 4)]));
-            hex.push(char::from(HEX[usize::from(byte & 0x0f)]));
-        }
-        Self(hex)
-    }
-
-    /// Parse a 64-character lowercase hex digest, or reject it.
-    #[must_use]
-    pub fn parse(text: &str) -> Option<Self> {
-        let hex = text.len() == 64
-            && text
-                .bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
-        hex.then(|| Self(text.to_owned()))
-    }
-}
-
-impl fmt::Display for Digest {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use super::{Digest, all};
-
-    #[test]
-    fn a_digest_round_trips_through_its_hex_form() {
-        // The published SHA-256 of the empty string, so the hex encoding is
-        // checked against a value this crate did not compute.
-        let empty = Digest::of(b"");
-        assert_eq!(
-            empty.to_string(),
-            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        );
-        assert_eq!(Digest::parse(&empty.to_string()), Some(empty));
-    }
-
-    #[test]
-    fn a_malformed_digest_is_rejected() {
-        for text in ["", "abc", &"g".repeat(64), &"A".repeat(64), &"a".repeat(63)] {
-            assert!(Digest::parse(text).is_none(), "'{text}' parsed as a digest");
-        }
-    }
+    use super::all;
 
     #[test]
     fn the_payload_carries_every_authored_skill() {

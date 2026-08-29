@@ -142,6 +142,77 @@ fn snippet_lists_every_landable_file() {
 }
 
 #[test]
+fn payload_reports_the_version_and_every_root() {
+    let mut expected =
+        predicate::str::contains(format!("release-kit {}", env!("CARGO_PKG_VERSION")))
+            .and(predicate::str::contains("payload sha256 "))
+            .boxed();
+    for root in release_kit::payload_roots::PAYLOAD_ROOTS {
+        expected = expected
+            .and(predicate::str::contains(format!("{root}: ")))
+            .boxed();
+    }
+    rk().arg("payload").assert().success().stdout(expected);
+}
+
+#[test]
+fn payload_json_parses_and_its_digests_match_the_embedded_bytes() {
+    let out = rk()
+        .args(["payload", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("the report parses");
+    assert_eq!(
+        report["release_kit_version"],
+        serde_json::Value::from(env!("CARGO_PKG_VERSION"))
+    );
+    assert_eq!(report["payload_schema"], serde_json::Value::from(1));
+    let embedded: std::collections::BTreeMap<String, &[u8]> =
+        release_kit::embedded::artifacts().into_iter().collect();
+    let artifacts = report["artifacts"].as_array().expect("an artifact list");
+    assert_eq!(artifacts.len(), embedded.len());
+    for artifact in artifacts {
+        let path = artifact["path"].as_str().expect("a path");
+        let bytes = embedded[path];
+        assert_eq!(
+            artifact["sha256"].as_str().expect("a digest"),
+            Digest::of(bytes).to_string(),
+            "{path}: the reported digest differs from the embedded bytes"
+        );
+    }
+}
+
+/// An `exclude` entry in `Cargo.toml` must never remove a payload root
+/// from the published crate; the failure would otherwise surface as a
+/// crate that does not compile at the consumer.
+#[test]
+#[ignore = "packages the crate; run through the just build gate"]
+fn the_published_crate_carries_every_root() {
+    let out = std::process::Command::new(env!("CARGO"))
+        .args(["package", "--list", "--allow-dirty"])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("cargo package --list runs");
+    assert!(
+        out.status.success(),
+        "cargo package --list failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let listed = String::from_utf8_lossy(&out.stdout);
+    for root in release_kit::payload_roots::PAYLOAD_ROOTS {
+        assert!(
+            listed
+                .lines()
+                .any(|line| line == root || line.starts_with(&format!("{root}/"))),
+            "{root}: the published crate drops this payload root"
+        );
+    }
+}
+
+#[test]
 fn versions_prints_the_registry() {
     rk().arg("versions").assert().success().stdout(
         predicate::str::contains("release-plz")
