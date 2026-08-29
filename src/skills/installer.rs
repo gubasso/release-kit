@@ -55,6 +55,12 @@ pub enum Action {
         /// The `SKILL.md` path removed.
         destination: Utf8PathBuf,
     },
+    /// A destination holding bytes neither the payload nor the record
+    /// accounts for is the user's now, and an uninstall leaves it.
+    KeptEdited {
+        /// The edited `SKILL.md` path left in place.
+        destination: Utf8PathBuf,
+    },
     /// A directory survives a removal because something else lives in it.
     KeptDirectory {
         /// The directory kept.
@@ -341,11 +347,12 @@ pub fn install(
 
 /// Remove every installed skill under each root, previewing by default.
 ///
-/// Only files this tool put there go: each payload skill's `SKILL.md`, plus
-/// the destinations the record still vouches for, and a directory only once
-/// nothing else lives in it. An absent destination is a no-op, so a re-run
-/// succeeds. Removed destinations leave the record too; what is gone cannot be
-/// vouched for.
+/// Only bytes this tool can vouch for go: a destination holding the payload's
+/// bytes or bytes the record says it wrote, plus the recorded leftovers, and a
+/// directory only once nothing else lives in it. A destination the user has
+/// edited is theirs now and stays, reported rather than removed. An absent
+/// destination is a no-op, so a re-run succeeds. Removed destinations leave
+/// the record too; what is gone cannot be vouched for.
 ///
 /// # Errors
 ///
@@ -357,15 +364,27 @@ pub fn uninstall(
     apply: bool,
 ) -> Result<Vec<Action>, RkError> {
     let skills = crate::skills::all()?;
+    let record_found = Record::load(record_path);
     let mut removable: Vec<Utf8PathBuf> = Vec::new();
+    let mut edited: Vec<Utf8PathBuf> = Vec::new();
     for entry in plan(roots, &skills) {
         check_destination(&entry.destination)?;
-        if entry.destination.is_file() {
+        if !entry.destination.is_file() {
+            continue;
+        }
+        // The same two references an install trusts decide what goes: the
+        // payload's bytes, or bytes the record vouches this tool wrote.
+        // Anything else is the user's edit, and removing it would destroy
+        // work an install refuses to even overwrite.
+        let found = fs::read(&entry.destination)?;
+        if found == entry.bytes || record_found.wrote(&entry.destination, &Digest::of(&found)) {
             removable.push(entry.destination);
+        } else {
+            edited.push(entry.destination);
         }
     }
 
-    let mut record = Record::load(record_path);
+    let mut record = record_found;
     // A skill the payload has since dropped is still ours to take back, and an
     // uninstall leaving it behind is the leftover an agent keeps offering. The
     // record is what names it; the payload no longer can.
@@ -381,6 +400,11 @@ pub fn uninstall(
                 .into_iter()
                 .map(|destination| Action::Sweep { destination }),
         );
+        actions.extend(
+            edited
+                .into_iter()
+                .map(|destination| Action::KeptEdited { destination }),
+        );
         return Ok(actions);
     }
 
@@ -394,6 +418,11 @@ pub fn uninstall(
         actions.extend(kept.map(|directory| Action::KeptDirectory { directory }));
         record.written.remove(destination);
     }
+    actions.extend(
+        edited
+            .into_iter()
+            .map(|destination| Action::KeptEdited { destination }),
+    );
 
     let recorded = if record.written.is_empty() {
         fs::remove_file(record_path).or_else(|source| {
@@ -658,6 +687,46 @@ mod tests {
             std::fs::read_to_string(&dropped).unwrap(),
             "the user rewrote this\n"
         );
+    }
+
+    /// A destination the user edited after installing is theirs: an
+    /// uninstall reports it and leaves it, exactly as an install refuses
+    /// to overwrite it.
+    #[test]
+    fn an_uninstall_keeps_an_edited_destination() {
+        let home = Home::new();
+        install(&home.roots(), &home.record(), true, false).unwrap();
+        let edited = home.destination(".claude/skills", &first_skill());
+        std::fs::write(&edited, "the user rewrote this\n").unwrap();
+
+        let preview = uninstall(&home.roots(), &home.record(), false).unwrap();
+        assert!(
+            preview.contains(&Action::KeptEdited {
+                destination: edited.clone()
+            }),
+            "{preview:?}"
+        );
+        assert!(
+            !preview.contains(&Action::Remove {
+                destination: edited.clone()
+            }),
+            "{preview:?}"
+        );
+
+        let actions = uninstall(&home.roots(), &home.record(), true).unwrap();
+        assert!(
+            actions.contains(&Action::KeptEdited {
+                destination: edited.clone()
+            }),
+            "{actions:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&edited).unwrap(),
+            "the user rewrote this\n",
+            "an uninstall must never delete a user's edit"
+        );
+        // Everything the tool can vouch for is still removed.
+        assert!(!home.destination(".agents/skills", &first_skill()).exists());
     }
 
     #[test]

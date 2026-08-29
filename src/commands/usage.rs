@@ -63,8 +63,10 @@ fn describe(out: Output, cmd: &clap::Command, prefix: &str) {
     }
 }
 
-/// One pasteable example: the command path plus every required argument
-/// with a placeholder value.
+/// One pasteable example: the command path, every required argument with a
+/// placeholder value, and every required either-or group rendered as its
+/// alternatives — so no example invokes a command in a shape the parser
+/// refuses.
 fn example(cmd: &clap::Command, path: &str) -> String {
     use std::fmt::Write as _;
     let mut example = path.to_owned();
@@ -80,6 +82,24 @@ fn example(cmd: &clap::Command, path: &str) -> String {
             None => {
                 let _ = write!(example, " {value}");
             }
+        }
+    }
+    for group in cmd.get_groups() {
+        if !group.is_required_set() {
+            continue;
+        }
+        let alternatives: Vec<String> = group
+            .get_args()
+            .filter_map(|id| {
+                let arg = cmd.get_arguments().find(|arg| arg.get_id() == id)?;
+                Some(arg.get_long().map_or_else(
+                    || arg.get_id().as_str().to_ascii_uppercase(),
+                    |long| format!("--{long}"),
+                ))
+            })
+            .collect();
+        if !alternatives.is_empty() {
+            let _ = write!(example, " <{}>", alternatives.join("|"));
         }
     }
     example

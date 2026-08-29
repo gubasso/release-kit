@@ -13,9 +13,23 @@ use release_kit::error::RkError;
 use release_kit::{applog, commands, output};
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    // `try_parse` instead of `parse`, so an argument error goes through the
+    // same contract as every other failure: exit 64 from the matrix, a
+    // diagnostic on stderr, and an application-log record — clap's own
+    // process exit would bypass all three.
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(err) => return parse_failure(&err),
+    };
     let started = std::time::Instant::now();
-    let result = run(&cli);
+    // A run whose work succeeded but whose stdout died mid-result still
+    // failed to deliver, so the retained boundary failure becomes the
+    // run's one typed error — before the log record, so the log agrees
+    // with the exit. A handler's own error takes precedence.
+    let result = match (run(&cli), output::take_stdout_failure()) {
+        (Ok(()), Some(source)) => Err(RkError::Io(source)),
+        (outcome, _) => outcome,
+    };
     let status = result
         .as_ref()
         .map_or_else(|e| e.reason().as_str(), |()| "ok");
@@ -43,6 +57,37 @@ fn run(cli: &Cli) -> Result<(), RkError> {
         Commands::License => commands::license::run(),
         Commands::Completions(args) => commands::completions::run(args),
     }
+}
+
+/// Render an argument-parsing failure through the output contract.
+///
+/// Help and version are successes clap merely reports through its error
+/// type; a real usage error keeps clap's helpful human rendering, maps to
+/// exit 64 like every other usage failure, and — when the raw arguments
+/// asked for `--json` — reports as one diagnostic line instead.
+fn parse_failure(err: &clap::Error) -> ExitCode {
+    if err.exit_code() == 0 {
+        let _ = err.print();
+        applog::record("parse", "ok", 0);
+        return ExitCode::SUCCESS;
+    }
+    // `args_os`, not `args`: the argument that failed to parse may itself
+    // be invalid Unicode, and this handler must not panic on the very
+    // input it exists to report.
+    if std::env::args_os().any(|arg| arg == std::ffi::OsStr::new("--json")) {
+        let message = err
+            .to_string()
+            .lines()
+            .next()
+            .unwrap_or("invalid arguments")
+            .trim_start_matches("error: ")
+            .to_owned();
+        output::render_error(&RkError::Usage(message), true);
+    } else {
+        let _ = err.print();
+    }
+    applog::record("parse", "usage", 0);
+    ExitCode::from(64)
 }
 
 /// The subcommand's log name.

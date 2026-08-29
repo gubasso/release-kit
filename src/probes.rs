@@ -163,12 +163,15 @@ fn git_remote() -> ProbeResult {
             );
         }
     };
+    // The raw remote never reaches the message: a malformed URL can carry
+    // userinfo — `https://user:token@…` — and a probe result lands in
+    // captured output and CI logs, where a credential must never appear.
     remote_host(&url).map_or_else(
         || {
             ProbeResult::failed(
                 id,
                 ProbeClass::Soft,
-                format!("the origin remote does not parse: {url}"),
+                "the origin remote does not parse to a host",
                 "pass --repo <owner/name> where a command needs the slug",
             )
         },

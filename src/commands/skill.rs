@@ -124,6 +124,7 @@ fn planned_line(action: &Action) -> String {
         Action::Sweep { destination } => {
             format!("sweep (no longer in the payload) {destination}")
         }
+        Action::KeptEdited { destination } => format!("keep (edited by you) {destination}"),
         other => format!("{other:?}"),
     }
 }
@@ -139,6 +140,7 @@ fn applied_line(command: &str, action: &Action) -> String {
             format!("could not sweep {destination}; remove it by hand: {error}")
         }
         Action::Remove { destination } => format!("removed {destination}"),
+        Action::KeptEdited { destination } => format!("kept (edited by you) {destination}"),
         Action::KeptDirectory { directory } => format!("kept (not empty) {directory}"),
         Action::RecordUnwritten { record } => {
             if command == "install" {
@@ -244,23 +246,87 @@ mod tests {
         );
     }
 
-    /// The `rk.skill/1` action shape, held by snapshot.
+    /// The complete `rk.skill/1` report shape, held by snapshot.
+    #[test]
+    fn the_skill_report_schema_snapshot_holds() {
+        let actions = vec![Action::Write {
+            destination: "/home/u/.claude/skills/rk-setup/SKILL.md".into(),
+        }];
+        let next = vec!["rk skill list names the installed skills".to_owned()];
+        let report = super::Report {
+            schema: "rk.skill/1",
+            command: "install",
+            mode: "apply",
+            actions: &actions,
+            next: &next,
+        };
+        assert_eq!(
+            serde_json::to_string(&report).expect("a report serializes"),
+            r#"{"schema":"rk.skill/1","command":"install","mode":"apply","actions":[{"action":"write","destination":"/home/u/.claude/skills/rk-setup/SKILL.md"}],"next":["rk skill list names the installed skills"]}"#
+        );
+    }
+
+    /// The `rk.skill/1` action shape, held by snapshot across every
+    /// variant, so the whole tagged-union vocabulary is exact and a
+    /// rename in any one arm fails here first.
     #[test]
     fn the_skill_action_schema_snapshot_holds() {
-        let action = Action::Write {
-            destination: "/home/u/.claude/skills/rk-setup/SKILL.md".into(),
-        };
-        assert_eq!(
-            serde_json::to_string(&action).expect("an action serializes"),
-            r#"{"action":"write","destination":"/home/u/.claude/skills/rk-setup/SKILL.md"}"#
-        );
-        let failed = Action::SweepFailed {
-            destination: "/home/u/.claude/skills/rk-retired/SKILL.md".into(),
-            error: "permission denied".into(),
-        };
-        assert_eq!(
-            serde_json::to_string(&failed).expect("an action serializes"),
-            r#"{"action":"sweep-failed","destination":"/home/u/.claude/skills/rk-retired/SKILL.md","error":"permission denied"}"#
-        );
+        let cases: Vec<(Action, &str)> = vec![
+            (
+                Action::Write {
+                    destination: "/h/SKILL.md".into(),
+                },
+                r#"{"action":"write","destination":"/h/SKILL.md"}"#,
+            ),
+            (
+                Action::Unchanged {
+                    destination: "/h/SKILL.md".into(),
+                },
+                r#"{"action":"unchanged","destination":"/h/SKILL.md"}"#,
+            ),
+            (
+                Action::Sweep {
+                    destination: "/h/SKILL.md".into(),
+                },
+                r#"{"action":"sweep","destination":"/h/SKILL.md"}"#,
+            ),
+            (
+                Action::SweepFailed {
+                    destination: "/h/SKILL.md".into(),
+                    error: "permission denied".into(),
+                },
+                r#"{"action":"sweep-failed","destination":"/h/SKILL.md","error":"permission denied"}"#,
+            ),
+            (
+                Action::Remove {
+                    destination: "/h/SKILL.md".into(),
+                },
+                r#"{"action":"remove","destination":"/h/SKILL.md"}"#,
+            ),
+            (
+                Action::KeptEdited {
+                    destination: "/h/SKILL.md".into(),
+                },
+                r#"{"action":"kept-edited","destination":"/h/SKILL.md"}"#,
+            ),
+            (
+                Action::KeptDirectory {
+                    directory: "/h/rk-setup".into(),
+                },
+                r#"{"action":"kept-directory","directory":"/h/rk-setup"}"#,
+            ),
+            (
+                Action::RecordUnwritten {
+                    record: "/h/skills.sha256".into(),
+                },
+                r#"{"action":"record-unwritten","record":"/h/skills.sha256"}"#,
+            ),
+        ];
+        for (action, expected) in cases {
+            assert_eq!(
+                serde_json::to_string(&action).expect("an action serializes"),
+                expected
+            );
+        }
     }
 }

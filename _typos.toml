@@ -2,6 +2,8 @@
 extend-exclude = ["flake.lock", "tests/fixtures/**"]
 
 [default.extend-words]
+# The RFC 4648 base64 test vector for the two-byte input "fo".
+fo = "fo"
 MADR = "MADR"
 Diataxis = "Diataxis"
 Bugzilla = "Bugzilla"

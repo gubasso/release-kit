@@ -65,6 +65,26 @@ mod tests {
 
     use crate::probes::{ProbeClass, ProbeResult, ProbeStatus};
 
+    /// The complete `rk.doctor/1` shape, held by snapshot.
+    #[test]
+    fn the_doctor_report_schema_snapshot_holds() {
+        let report = super::Report {
+            schema: "rk.doctor/1",
+            probes: vec![ProbeResult {
+                id: "sh",
+                class: ProbeClass::Hard,
+                status: ProbeStatus::Ok,
+                message: "sh runs".into(),
+                remediation: None,
+            }],
+            next: vec!["rk usage lists every verb and flag in one call".into()],
+        };
+        assert_eq!(
+            serde_json::to_string(&report).expect("a report serializes"),
+            r#"{"schema":"rk.doctor/1","probes":[{"id":"sh","class":"hard","status":"ok","message":"sh runs"}],"next":["rk usage lists every verb and flag in one call"]}"#
+        );
+    }
+
     /// The `rk.doctor/1` probe shape, held by snapshot.
     #[test]
     fn the_probe_schema_snapshot_holds() {

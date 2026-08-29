@@ -126,6 +126,151 @@ fn a_read_without_name_or_list_exits_64() {
     rk().arg("binding").assert().code(64);
 }
 
+/// An argument error goes through the same contract as every other
+/// failure: exit 64 from the matrix, never clap's own exit 2 — and under
+/// --json, one diagnostic line carrying its reason.
+#[test]
+fn an_argument_error_exits_64_and_answers_json_with_a_diagnostic() {
+    rk().args(["payload", "--bogus"])
+        .assert()
+        .code(64)
+        .stderr(predicate::str::contains("--bogus"));
+    let output = rk()
+        .args(["payload", "--json", "--bogus"])
+        .assert()
+        .code(64)
+        .get_output()
+        .clone();
+    let diagnostic: serde_json::Value =
+        serde_json::from_slice(&output.stderr).expect("stderr is one JSON diagnostic");
+    assert_eq!(diagnostic["schema"], "rk.diagnostic/1");
+    assert_eq!(diagnostic["reason"], "usage");
+    rk().arg("--help").assert().success();
+    rk().arg("--version").assert().success();
+}
+
+/// The argument-error handler must survive the very input it reports:
+/// an invalid-UTF-8 argument still exits 64 without a panic.
+#[cfg(unix)]
+#[test]
+fn a_non_unicode_argument_error_exits_64_without_panic() {
+    use std::os::unix::ffi::OsStringExt as _;
+    let bogus = std::ffi::OsString::from_vec(vec![b'-', b'-', 0xff, 0xfe]);
+    let out = rk()
+        .arg("payload")
+        .arg(bogus)
+        .assert()
+        .code(64)
+        .get_output()
+        .clone();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("panicked"), "{stderr}");
+}
+
+/// Spawn `rk` behind a start gate so it provably begins only after the
+/// stdout pipe's read end is closed: the wrapper blocks on `cat` until
+/// the parent closes stdin, and the parent closes the read end first.
+/// Every write `rk` makes then deterministically sees `BrokenPipe`.
+/// Returns the exit status and captured stderr.
+fn run_with_closed_stdout(args: &[&str]) -> (std::process::ExitStatus, String) {
+    let rk_bin = assert_cmd::cargo::cargo_bin("rk");
+    let mut child = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(r#"cat >/dev/null; exec "$0" "$@""#)
+        .arg(&rk_bin)
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("the child spawns");
+    drop(child.stdout.take());
+    drop(child.stdin.take());
+    let out = child.wait_with_output().expect("the child finishes");
+    (
+        out.status,
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+/// A consumer closing its pipe mid-apply must not cut the landing short:
+/// the work completes, only the rendering stops.
+#[test]
+fn a_closed_pipe_does_not_interrupt_an_apply() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    let target_path = target.path().to_string_lossy().into_owned();
+    let (status, stderr) = run_with_closed_stdout(&[
+        "init",
+        "--tech",
+        "rust",
+        "--target",
+        &target_path,
+        "--apply",
+    ]);
+    assert!(status.success(), "exit: {status:?}, stderr: {stderr}");
+    for landed in [
+        "release-plz.toml",
+        "dist-workspace.toml",
+        ".github/workflows/release-plz.yml",
+    ] {
+        assert!(
+            target.path().join(landed).is_file(),
+            "{landed}: the landing stopped short when the pipe closed"
+        );
+    }
+}
+
+/// A consumer that closes its pipe ends the run cleanly — no panic, no
+/// error framing — because a closed pipe is the consumer done listening.
+#[test]
+fn a_closed_pipe_terminates_cleanly() {
+    let (status, stderr) = run_with_closed_stdout(&["license"]);
+    assert!(status.success(), "exit: {status:?}, stderr: {stderr}");
+    assert!(
+        !stderr.contains("panicked"),
+        "a closed pipe must not panic: {stderr}"
+    );
+}
+
+/// A stdout that fails outright is a real failure: the run exits through
+/// the matrix's I/O code, carries one typed diagnostic, and the
+/// application log agrees with the exit.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_failing_stdout_is_one_typed_io_failure() {
+    if !Path::new("/dev/full").exists() {
+        return;
+    }
+    let home = Home::new();
+    let sink = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .expect("/dev/full opens");
+    let out = std::process::Command::new(assert_cmd::cargo::cargo_bin("rk"))
+        .args(["payload", "--json"])
+        .env("HOME", home.path())
+        .env("XDG_STATE_HOME", home.path())
+        .stdout(std::process::Stdio::from(sink))
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .expect("the child runs");
+    assert_eq!(
+        out.status.code(),
+        Some(74),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let diagnostic: serde_json::Value =
+        serde_json::from_slice(&out.stderr).expect("stderr is one JSON diagnostic");
+    assert_eq!(diagnostic["reason"], "io");
+    let log = std::fs::read_to_string(home.path().join("release-kit/release-kit.log"))
+        .expect("the log exists");
+    assert!(
+        log.contains("op=payload status=io"),
+        "the log must agree with the exit: {log}"
+    );
+}
+
 #[test]
 fn snippet_lists_every_landable_file() {
     rk().args(["snippet", "--list"]).assert().success().stdout(
@@ -656,6 +801,32 @@ fn skill_agent_flag_touches_one_root_only() {
     );
 }
 
+/// An installed `SKILL.md` the user has since edited is theirs: uninstall
+/// names it and leaves it, matching the install-side conflict refusal.
+#[test]
+fn skill_uninstall_keeps_an_edited_skill() {
+    let home = Home::new();
+    home.rk()
+        .args(["skill", "install", "--apply"])
+        .assert()
+        .success();
+    let edited = home.destination(".claude/skills", "rk-setup");
+    std::fs::write(&edited, "the user rewrote this\n").expect("the edit writes");
+
+    home.rk()
+        .args(["skill", "uninstall", "--apply"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!(
+            "kept (edited by you) {}",
+            edited.display()
+        )));
+    assert_eq!(
+        std::fs::read_to_string(&edited).expect("the edit survives"),
+        "the user rewrote this\n"
+    );
+}
+
 #[test]
 fn skill_uninstall_keeps_what_a_user_put_beside_a_skill() {
     let home = Home::new();
@@ -769,6 +940,62 @@ fn doctor_reports_every_probe_and_exits_0() {
     assert_eq!(by_id("gh-auth")["status"], "ok");
     assert_eq!(by_id("glab-auth")["status"], "failed");
     assert_eq!(by_id("glab-auth")["remediation"], "run glab auth login");
+}
+
+/// A credential in a malformed remote must never reach a probe message:
+/// probe results land in captured output and CI logs.
+#[test]
+fn doctor_never_echoes_a_credential_bearing_remote() {
+    let home = Home::new();
+    for args in [
+        &["init", "-q"][..],
+        &["remote", "add", "origin", "https://user:sekret-token@/repo"][..],
+    ] {
+        let status = std::process::Command::new("git")
+            .args(args)
+            .current_dir(home.path())
+            .status()
+            .expect("git runs");
+        assert!(status.success());
+    }
+    let out = home
+        .rk()
+        .args(["doctor", "--json"])
+        .env("XDG_STATE_HOME", home.path())
+        .env("RK_GH_BIN", "/no/such/gh")
+        .env("RK_GLAB_BIN", "/no/such/glab")
+        .current_dir(home.path())
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !text.contains("sekret-token") && !text.contains("user:"),
+        "a probe result leaked the remote's credential: {text}"
+    );
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one JSON object");
+    let remote = report["probes"]
+        .as_array()
+        .expect("a probe list")
+        .iter()
+        .find(|probe| probe["id"] == "git-remote")
+        .expect("the remote probe reports")
+        .clone();
+    assert_eq!(remote["status"], "failed");
+}
+
+#[test]
+fn usage_examples_carry_the_either_or_requirement() {
+    rk().arg("usage").assert().success().stdout(
+        predicate::str::contains("example: rk method <NAME|--list>")
+            .and(predicate::str::contains(
+                "example: rk binding <NAME|--list>",
+            ))
+            .and(predicate::str::contains(
+                "example: rk snippet <NAME|--list>",
+            )),
+    );
 }
 
 #[test]

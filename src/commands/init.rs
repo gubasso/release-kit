@@ -245,3 +245,47 @@ fn collect_sentinels(target: &Utf8Path, files: &[(String, &[u8])]) -> Vec<Sentin
     }
     found
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used)]
+
+    use super::{FileEntry, Report, SentinelEntry};
+
+    /// The complete `rk.init/1` shape, held by snapshot in both modes: a
+    /// field rename or removal fails here and becomes a schema-version
+    /// bump instead of a silent parser break at some agent.
+    #[test]
+    fn the_init_report_schema_snapshot_holds() {
+        let apply = Report {
+            schema: "rk.init/1",
+            mode: "apply",
+            tech: "rust".into(),
+            target: "/tmp/t".into(),
+            files: vec![FileEntry {
+                path: "release-plz.toml".into(),
+                action: "write",
+            }],
+            sentinels: Some(vec![SentinelEntry {
+                path: "/tmp/t/release-plz.toml".into(),
+                line: 3,
+                text: "# TODO(release-kit): set the repository owner".into(),
+            }]),
+            next: vec!["commit the landed files".into()],
+        };
+        assert_eq!(
+            serde_json::to_string(&apply).expect("a report serializes"),
+            r##"{"schema":"rk.init/1","mode":"apply","tech":"rust","target":"/tmp/t","files":[{"path":"release-plz.toml","action":"write"}],"sentinels":[{"path":"/tmp/t/release-plz.toml","line":3,"text":"# TODO(release-kit): set the repository owner"}],"next":["commit the landed files"]}"##
+        );
+        let preview = Report {
+            sentinels: None,
+            mode: "preview",
+            ..apply
+        };
+        assert_eq!(
+            serde_json::to_string(&preview).expect("a report serializes"),
+            r#"{"schema":"rk.init/1","mode":"preview","tech":"rust","target":"/tmp/t","files":[{"path":"release-plz.toml","action":"write"}],"next":["commit the landed files"]}"#,
+            "a preview omits the sentinels field rather than serializing null"
+        );
+    }
+}

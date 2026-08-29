@@ -100,7 +100,29 @@ pub fn run(args: &PayloadArgs) -> Result<(), RkError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{aggregate, report};
+    #![allow(clippy::expect_used)]
+
+    use super::{Artifact, Report, aggregate, report};
+    use crate::digest::Digest;
+
+    /// The complete `rk.payload/1` shape, held by snapshot against fixture
+    /// values, beside the live test that checks the real digests.
+    #[test]
+    fn the_payload_report_schema_snapshot_holds() {
+        let fixture = Report {
+            release_kit_version: "0.0.0",
+            payload_schema: 1,
+            payload_sha256: Digest::of(b""),
+            artifacts: vec![Artifact {
+                path: "versions.toml".into(),
+                sha256: Digest::of(b""),
+            }],
+        };
+        assert_eq!(
+            serde_json::to_string(&fixture).expect("a report serializes"),
+            r#"{"release_kit_version":"0.0.0","payload_schema":1,"payload_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","artifacts":[{"path":"versions.toml","sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}]}"#
+        );
+    }
 
     #[test]
     fn the_report_names_the_cargo_version_and_every_artifact() {
