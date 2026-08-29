@@ -9,6 +9,8 @@
 
 `rk init --tech rust` lands `release-plz.toml`, `dist-workspace.toml`, and the publish workflow `.github/workflows/release-plz.yml`.
 
+The artifact-builder answer holds on GitHub only. cargo-dist generates CI for GitHub Actions and for no other forge, so `(rust, gitlab)` has no artifact builder: the release page carries no installers, and [operate](../method/03-operate.md) step 8 has nothing to wait for. That is a smaller product, not a broken one — [the diff surface](../method/05-diff-surface.md) already contemplates an axis whose answer is nothing.
+
 ## The workflows
 
 `release-plz.yml` is the publish workflow: it is the filename registered at crates.io, and the only workflow declaring `id-token: write`. It carries three jobs — the release-request maintainer on `develop`, the gate opener on the version-bump push, and the tag-and-publish half on `master`.
