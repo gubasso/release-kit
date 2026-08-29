@@ -18,7 +18,6 @@ stages:
 
 workflow:
   rules:
-    # TODO(release-kit): set the repository owner
     - if: '$CI_PROJECT_ROOT_NAMESPACE == "OWNER" && ($CI_COMMIT_BRANCH == "develop" || $CI_COMMIT_BRANCH == "master")'
 
 .release-plz:

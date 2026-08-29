@@ -1,32 +1,35 @@
 //! `rk init`: land a technology's deterministic files into a target.
 //!
 //! Dry-run by default: without `--apply` the destinations are listed and
-//! nothing is touched. Apply is all-or-nothing against conflicts: every
-//! destination whose bytes differ from the payload is reported and the
-//! whole landing is refused. Each write goes through the temp-plus-rename
-//! writer, so a file lands whole or not at all; an I/O failure mid-loop
-//! can still leave earlier files landed, and the refusal path is what
-//! guarantees a conflicting target is never touched.
-
-use std::fs;
+//! nothing is touched. The payload is rendered before anything is
+//! compared — the repository owner substitutes into `rendered` files from
+//! the detection-resolved `--repo` parameter — so the comparison is
+//! against what would be written, not against the raw payload. Apply is
+//! all-or-nothing against conflicts on `rendered` files; a differing
+//! `seeded` or `state` file is the target's own and is reported and kept.
+//! Every write goes through the temp-plus-rename writer, and the landing
+//! record is written last: a refused landing writes nothing, the record
+//! included.
 
 use camino::Utf8Path;
 use serde::Serialize;
 
-use crate::atomic;
 use crate::cli::init::InitArgs;
-use crate::commands::walk;
 use crate::diagnostic::{Diagnostic, Reason};
-use crate::embedded;
 use crate::error::RkError;
+use crate::landing::manifest::{self, FileRecord, Manifest, Parameters};
+use crate::landing::{self, Entry, Kind};
 use crate::output::Output;
+use crate::{digest::Digest, embedded, registry};
 
 /// One destination and what happened to it.
 #[derive(Debug, Serialize)]
 struct FileEntry {
     /// The destination, relative to the target.
     path: String,
-    /// `land` in a preview; `write` or `unchanged` in an apply.
+    /// The declared ownership kind.
+    kind: &'static str,
+    /// `land` in a preview; `write`, `unchanged`, or `kept` in an apply.
     action: &'static str,
 }
 
@@ -54,7 +57,10 @@ struct Report {
     forge: String,
     /// The target directory.
     target: String,
-    /// Every destination, with its action.
+    /// The resolved project path, where detection or `--repo` named one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    repo: Option<String>,
+    /// Every destination, with its kind and action.
     files: Vec<FileEntry>,
     /// The sentinels an apply left to fill; absent in a preview.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -67,37 +73,13 @@ struct Report {
 ///
 /// # Errors
 ///
-/// Returns [`RkError::Usage`] for an unknown technology,
-/// [`RkError::Refusal`] when the target is missing or a destination
-/// conflicts, and [`RkError::Io`] on filesystem failure.
+/// Returns [`RkError::Usage`] for an unknown technology or pair,
+/// [`RkError::Refusal`] when the target is missing, already carries a
+/// record, or a `rendered` destination conflicts, [`RkError::Missing`]
+/// when an apply resolves no repository, and [`RkError::Io`] on
+/// filesystem failure.
 pub fn run(args: &InitArgs) -> Result<(), RkError> {
     let out = Output::new(args.json);
-    embedded::SNIPPETS.get_dir(&args.tech).ok_or_else(|| {
-        let known: Vec<String> = embedded::SNIPPETS
-            .dirs()
-            .map(|d| d.path().to_string_lossy().into_owned())
-            .collect();
-        RkError::Usage(format!(
-            "unknown tech '{}'; the bindings are: {}",
-            args.tech,
-            known.join(", ")
-        ))
-    })?;
-    let forge = resolve_forge(args)?;
-    let pair = format!("{}/{}", args.tech, forge);
-    let tech_dir = embedded::SNIPPETS.get_dir(&pair).ok_or_else(|| {
-        let known: Vec<String> = embedded::SNIPPETS
-            .dirs()
-            .flat_map(include_dir::Dir::dirs)
-            .map(|d| d.path().to_string_lossy().replace('/', ", "))
-            .collect();
-        RkError::Usage(format!(
-            "the pair ({}, {forge}) has no landable files; the supported pairs are: {}",
-            args.tech,
-            known.join("; ")
-        ))
-    })?;
-
     if !args.target.is_dir() {
         return Err(RkError::refusal(
             Diagnostic::new(
@@ -111,55 +93,25 @@ pub fn run(args: &InitArgs) -> Result<(), RkError> {
             .target_state("unchanged"),
         ));
     }
-
-    // Payload paths carry the `<tech>/<forge>/` prefix; destinations do not.
-    let files: Vec<(String, &[u8])> = walk(tech_dir)
-        .into_iter()
-        .map(|(path, contents)| {
-            let rel = path
-                .strip_prefix(&format!("{pair}/"))
-                .map_or(path.as_str(), |r| r)
-                .to_owned();
-            (rel, contents)
-        })
-        .collect();
-
+    let resolved = landing::resolve(&args.target, args.forge.as_deref(), args.repo.as_deref())?;
+    let forge = resolved.forge;
     if args.apply {
-        apply(out, args, &forge, &files)
+        let repo = resolved.repo.ok_or_else(landing::repo_unresolved)?;
+        let entries = landing::projection(&args.tech, &forge, &repo)?;
+        apply(out, args, &forge, &repo, &entries)
     } else {
-        preview(out, args, &forge, &files)
-    }
-}
-
-/// The forge whose subtree lands: the flag, or detection from the target's
-/// remote. An unrecognized host refuses rather than defaulting — landing
-/// one forge's workflow files into the other forge's project is a
-/// half-configured repository that looks done.
-fn resolve_forge(args: &InitArgs) -> Result<String, RkError> {
-    if let Some(name) = args.forge.as_deref() {
-        return crate::detect::Forge::parse(name)
-            .map(|forge| forge.as_str().to_owned())
-            .ok_or_else(|| {
-                RkError::Usage(format!(
-                    "unknown forge '{name}'; the forges are: github, gitlab"
-                ))
-            });
-    }
-    let detected = crate::detect::detect(args.target.as_std_path());
-    detected
-        .forge
-        .map(|f| f.as_str().to_owned())
-        .ok_or_else(|| {
-            let message = detected.host.map_or_else(
-                || "no forge detected: the target has no origin remote".to_owned(),
-                |host| format!("no forge detected: the host {host} is not recognized"),
+        // A preview lists destinations and compares nothing, so an
+        // unresolved repository only means the owner substitution is
+        // shown unrendered; the placeholder substitutes to itself.
+        if resolved.repo.is_none() {
+            out.frame(
+                "note: no repository detected; an apply derives the owner from --repo <path>",
             );
-            RkError::refusal(
-                Diagnostic::new(Reason::ForgeUndetected, message)
-                    .expected("a github.com or gitlab remote, or --forge")
-                    .action("pass --forge <github|gitlab>"),
-            )
-        })
+        }
+        let repo = resolved.repo;
+        let entries = landing::projection(&args.tech, &forge, repo.as_deref().unwrap_or("OWNER"))?;
+        preview(out, args, &forge, repo, &entries)
+    }
 }
 
 /// List every destination and write nothing.
@@ -167,18 +119,20 @@ fn preview(
     out: Output,
     args: &InitArgs,
     forge: &str,
-    files: &[(String, &[u8])],
+    repo: Option<String>,
+    entries: &[Entry],
 ) -> Result<(), RkError> {
+    let repo_argument = repo.as_deref().unwrap_or("<owner/name>");
     let next = vec![format!(
-        "rk init --tech {} --forge {forge} --target {} --apply",
+        "rk init --tech {} --forge {forge} --repo {repo_argument} --target {} --apply",
         args.tech, args.target
     )];
     out.result_line(format!(
         "DRY RUN: rk init writes these files into {}; re-run with --apply",
         args.target
     ));
-    for (rel, _) in files {
-        out.result_line(rel);
+    for entry in entries {
+        out.result_line(&entry.destination);
     }
     out.next(&next);
     out.emit(&Report {
@@ -187,10 +141,12 @@ fn preview(
         tech: args.tech.clone(),
         forge: forge.to_owned(),
         target: args.target.to_string(),
-        files: files
+        repo,
+        files: entries
             .iter()
-            .map(|(rel, _)| FileEntry {
-                path: rel.clone(),
+            .map(|entry| FileEntry {
+                path: entry.destination.clone(),
+                kind: entry.kind.as_str(),
                 action: "land",
             })
             .collect(),
@@ -199,61 +155,85 @@ fn preview(
     })
 }
 
-/// Land the files, all-or-nothing against conflicts, and report the
-/// sentinels the operator still owes.
+/// Land the files — all-or-nothing against `rendered` conflicts — write
+/// the record last, and report the judgment sentinels the operator still
+/// owes.
 fn apply(
     out: Output,
     args: &InitArgs,
     forge: &str,
-    files: &[(String, &[u8])],
+    repo: &str,
+    entries: &[Entry],
 ) -> Result<(), RkError> {
-    // Every destination is read before anything writes, so an unreadable
-    // path — a directory where a file should land, a permission failure —
-    // surfaces here and the target is never left half-written.
-    let mut conflicts: Vec<&str> = Vec::new();
-    for (rel, contents) in files {
-        let dest = args.target.join(rel);
-        match fs::read(&dest) {
-            Ok(found) if found == *contents => {}
-            Ok(_) => conflicts.push(rel.as_str()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e.into()),
+    refuse_a_recorded_target(args)?;
+    let planned = plan(&args.target, entries)?;
+    let mut file_entries = Vec::new();
+    let mut records = Vec::new();
+    let mut sentinels = Vec::new();
+    for Planned {
+        entry,
+        action,
+        found,
+    } in planned
+    {
+        if action == "write" {
+            landing::write_destination(&args.target, entry)?;
         }
-    }
-    if !conflicts.is_empty() {
-        return Err(RkError::refusal(
-            Diagnostic::new(
-                Reason::StateDrift,
-                format!(
-                    "these files exist with different content, and nothing was written: {}",
-                    conflicts.join(", ")
-                ),
-            )
-            .expected("every destination absent, or holding this payload's bytes")
-            .target_state("unchanged"),
+        out.result_line(format!(
+            "{} {}",
+            match action {
+                "write" => "wrote",
+                "kept" => "kept (target-owned)",
+                _ => "unchanged",
+            },
+            entry.destination
         ));
-    }
-
-    let mut entries = Vec::new();
-    for (rel, contents) in files {
-        let dest = args.target.join(rel);
-        let action = if dest.is_file() {
-            "unchanged"
-        } else {
-            atomic::write(dest.as_std_path(), contents)?;
-            "write"
+        // What the destination now holds: the rendered bytes, or the
+        // target's own where a seeded or state file was kept.
+        let landed = match (action, found) {
+            ("kept", Some(bytes)) => bytes,
+            _ => entry.rendered.clone(),
         };
-        out.result_line(match action {
-            "write" => format!("wrote {rel}"),
-            _ => format!("unchanged {rel}"),
+        collect_sentinels(&args.target, &entry.destination, &landed, &mut sentinels);
+        records.push(FileRecord {
+            destination: entry.destination.clone(),
+            kind: entry.kind,
+            sha256: Digest::of(&landed),
+            baseline_sha256: match entry.kind {
+                Kind::State => None,
+                Kind::Rendered | Kind::Seeded => Some(Digest::of(&entry.baseline)),
+            },
         });
-        entries.push(FileEntry {
-            path: rel.clone(),
+        file_entries.push(FileEntry {
+            path: entry.destination.clone(),
+            kind: entry.kind.as_str(),
             action,
         });
     }
 
-    let sentinels = collect_sentinels(&args.target, files);
+    // The record, last, after every file has landed.
+    manifest::write(
+        &args.target,
+        &Manifest {
+            schema_version: manifest::SCHEMA_VERSION,
+            rk_version: env!("CARGO_PKG_VERSION").to_owned(),
+            payload_sha256: crate::commands::payload::report().payload_sha256,
+            origin: "init".to_owned(),
+            tech: args.tech.clone(),
+            forge: forge.to_owned(),
+            landed_at: manifest::now(),
+            parameters: Parameters {
+                repo: repo.to_owned(),
+            },
+            files: records,
+            pins: registry::pins_for(&args.tech)
+                .into_iter()
+                .map(|pin| (pin.name, pin.version))
+                .collect(),
+        },
+    )?;
+    out.result_line(format!("wrote {}", manifest::MANIFEST_PATH));
+
     if sentinels.is_empty() {
         out.result_line("no sentinels to fill");
     } else {
@@ -267,10 +247,11 @@ fn apply(
     }
     let next = vec![
         if sentinels.is_empty() {
-            "commit the landed files".to_owned()
+            "commit the landed files, the record included".to_owned()
         } else {
-            "fill each sentinel above, then commit the landed files".to_owned()
+            "fill each sentinel above, then commit the landed files, the record included".to_owned()
         },
+        format!("rk status --target {} reports this landing", args.target),
         "rk method setup orders what follows".to_owned(),
     ];
     out.next(&next);
@@ -280,29 +261,107 @@ fn apply(
         tech: args.tech.clone(),
         forge: forge.to_owned(),
         target: args.target.to_string(),
-        files: entries,
+        repo: Some(repo.to_owned()),
+        files: file_entries,
         sentinels: Some(sentinels),
         next,
     })
 }
 
-/// Every sentinel line left in the landed files, so nothing stays
-/// half-configured silently.
-fn collect_sentinels(target: &Utf8Path, files: &[(String, &[u8])]) -> Vec<SentinelEntry> {
-    let mut found = Vec::new();
-    for (rel, contents) in files {
-        let text = String::from_utf8_lossy(contents);
-        for (idx, line) in text.lines().enumerate() {
-            if line.contains(embedded::SENTINEL) {
-                found.push(SentinelEntry {
-                    path: target.join(rel).to_string(),
-                    line: idx + 1,
-                    text: line.trim().to_owned(),
-                });
+/// A re-landing over an existing record is `rk upgrade`'s job, not a
+/// second `rk init`.
+fn refuse_a_recorded_target(args: &InitArgs) -> Result<(), RkError> {
+    if landing::manifest::load(&args.target)?.is_none() {
+        return Ok(());
+    }
+    Err(RkError::refusal(
+        Diagnostic::new(
+            Reason::StateDrift,
+            format!(
+                "{} already carries {}, and nothing was written",
+                args.target,
+                manifest::MANIFEST_PATH
+            ),
+        )
+        .expected("a target without a landing record")
+        .action(format!(
+            "rk upgrade --target {} takes it to this binary's payload",
+            args.target
+        ))
+        .target_state("unchanged"),
+    ))
+}
+
+/// One planned destination: what was found there, and what an apply does
+/// about it.
+struct Planned<'a> {
+    /// The projected artifact.
+    entry: &'a Entry,
+    /// `write`, `unchanged`, or `kept`.
+    action: &'static str,
+    /// The bytes the destination already held, where it held any.
+    found: Option<Vec<u8>>,
+}
+
+/// The read pass before anything writes: every destination is read and
+/// classified, so an unreadable path — a directory where a file should
+/// land, a permission failure — surfaces here and the target is never
+/// left half-written, and every `rendered` conflict is collected before
+/// the one refusal.
+fn plan<'a>(target: &Utf8Path, entries: &'a [Entry]) -> Result<Vec<Planned<'a>>, RkError> {
+    let mut conflicts: Vec<&str> = Vec::new();
+    let mut planned = Vec::new();
+    for entry in entries {
+        let found = landing::read_destination(target, entry)?;
+        let action = match (&found, entry.kind) {
+            (None, _) => "write",
+            (Some(bytes), _) if *bytes == entry.rendered => "unchanged",
+            (Some(_), Kind::Rendered) => {
+                conflicts.push(entry.destination.as_str());
+                "conflict"
             }
+            (Some(_), Kind::Seeded | Kind::State) => "kept",
+        };
+        planned.push(Planned {
+            entry,
+            action,
+            found,
+        });
+    }
+    if conflicts.is_empty() {
+        return Ok(planned);
+    }
+    Err(RkError::refusal(
+        Diagnostic::new(
+            Reason::StateDrift,
+            format!(
+                "these files exist with different content, and nothing was written: {}",
+                conflicts.join(", ")
+            ),
+        )
+        .expected("every rendered destination absent, or holding this landing's bytes")
+        .target_state("unchanged"),
+    ))
+}
+
+/// Collect every judgment-sentinel line one landed file carries, so
+/// nothing stays half-configured silently.
+fn collect_sentinels(
+    target: &Utf8Path,
+    destination: &str,
+    bytes: &[u8],
+    found: &mut Vec<SentinelEntry>,
+) {
+    let text = String::from_utf8_lossy(bytes);
+    for (idx, line) in text.lines().enumerate() {
+        if line.contains(embedded::SENTINEL) {
+            found.push(SentinelEntry {
+                path: target.join(destination).to_string(),
+                line: idx + 1,
+                text: line.trim().to_owned(),
+            });
         }
     }
-    found
 }
 
 #[cfg(test)]
@@ -322,30 +381,33 @@ mod tests {
             tech: "rust".into(),
             forge: "github".into(),
             target: "/tmp/t".into(),
+            repo: Some("acme/widget".into()),
             files: vec![FileEntry {
                 path: "release-plz.toml".into(),
+                kind: "seeded",
                 action: "write",
             }],
             sentinels: Some(vec![SentinelEntry {
                 path: "/tmp/t/release-plz.toml".into(),
                 line: 3,
-                text: "# TODO(release-kit): set the repository owner".into(),
+                text: "# TODO(release-kit): keep false for a binary-only crate".into(),
             }]),
-            next: vec!["commit the landed files".into()],
+            next: vec!["commit the landed files, the record included".into()],
         };
         assert_eq!(
             serde_json::to_string(&apply).expect("a report serializes"),
-            r##"{"schema":"rk.init/1","mode":"apply","tech":"rust","forge":"github","target":"/tmp/t","files":[{"path":"release-plz.toml","action":"write"}],"sentinels":[{"path":"/tmp/t/release-plz.toml","line":3,"text":"# TODO(release-kit): set the repository owner"}],"next":["commit the landed files"]}"##
+            r##"{"schema":"rk.init/1","mode":"apply","tech":"rust","forge":"github","target":"/tmp/t","repo":"acme/widget","files":[{"path":"release-plz.toml","kind":"seeded","action":"write"}],"sentinels":[{"path":"/tmp/t/release-plz.toml","line":3,"text":"# TODO(release-kit): keep false for a binary-only crate"}],"next":["commit the landed files, the record included"]}"##
         );
         let preview = Report {
             sentinels: None,
+            repo: None,
             mode: "preview",
             ..apply
         };
         assert_eq!(
             serde_json::to_string(&preview).expect("a report serializes"),
-            r#"{"schema":"rk.init/1","mode":"preview","tech":"rust","forge":"github","target":"/tmp/t","files":[{"path":"release-plz.toml","action":"write"}],"next":["commit the landed files"]}"#,
-            "a preview omits the sentinels field rather than serializing null"
+            r#"{"schema":"rk.init/1","mode":"preview","tech":"rust","forge":"github","target":"/tmp/t","files":[{"path":"release-plz.toml","kind":"seeded","action":"write"}],"next":["commit the landed files, the record included"]}"#,
+            "a preview omits the sentinels and unresolved repo rather than serializing null"
         );
     }
 }

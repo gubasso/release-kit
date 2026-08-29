@@ -16,10 +16,11 @@ Two pull requests. The release request on the integration branch carries the bum
 ## Cut a release
 
 1. Read the sequence once per session: `rk method operate`. Then follow `rk guide release`, which renders it as commands with the project path, forge, and technology filled in.
-2. Land the work with its release intent captured and the check suite green, then push.
-3. Before merging the release request, compare its changelog entry against the commit range since the previous tag; correct it on the request's branch. This is the last point a correction reaches the release.
-4. Merge the release request, wait for the gate, merge the gate as a merge commit once its checks are green.
-5. Back-merge, wait for the artifact build to finish, then verify: registry, release page, tag, branches, installed binary — the operate chapter lists the checks in order.
+2. Run `rk status --check --target .` before anything ships: drift on a file release-kit owns, or an unfilled sentinel, is fixed before a release, not during one.
+3. Land the work with its release intent captured and the check suite green, then push.
+4. Before merging the release request, compare its changelog entry against the commit range since the previous tag; correct it on the request's branch. This is the last point a correction reaches the release.
+5. Merge the release request, wait for the gate, merge the gate as a merge commit once its checks are green.
+6. Back-merge, wait for the artifact build to finish, then verify: registry, release page, tag, branches, installed binary — the operate chapter lists the checks in order.
 
 ## When it goes wrong
 

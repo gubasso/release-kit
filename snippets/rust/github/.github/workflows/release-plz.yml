@@ -23,7 +23,6 @@ jobs:
   # trigger release.yml; a tag pushed with GITHUB_TOKEN starts no further
   # workflow.
   release-plz-release:
-    # TODO(release-kit): set the repository owner
     if: github.repository_owner == 'OWNER' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     permissions:
@@ -48,7 +47,6 @@ jobs:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
 
   release-plz-pr:
-    # TODO(release-kit): set the repository owner
     if: github.repository_owner == 'OWNER' && github.ref == 'refs/heads/develop'
     runs-on: ubuntu-latest
     permissions:
@@ -91,7 +89,6 @@ jobs:
   # job from the Actions interface replays the same commit, which is the
   # recovery path when a transient failure leaves the gate unopened.
   open-release-gate:
-    # TODO(release-kit): set the repository owner
     if: github.repository_owner == 'OWNER' && github.ref == 'refs/heads/develop'
     runs-on: ubuntu-latest
     permissions:

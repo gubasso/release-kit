@@ -23,15 +23,17 @@ Land the release-kit convention in a project. The CLI carries the whole canon: e
 | Print one landable file         | `rk snippet <tech>/<path>` |
 | Print the pinned-tool registry  | `rk versions`              |
 | List the executable setup steps | `rk setup --list`          |
+| A landed target's own report    | `rk status --target .`     |
 
 ## Land the workflow
 
 1. Detect the technology: `Cargo.toml` means rust, `pyproject.toml` means python, a `VERSION` file or a plain script tree means bash. When none of the bindings fit, stop and say so; the method still applies, the files do not.
 2. Read the spine and the binding before touching anything: `rk method model`, `rk method invariants`, and `rk binding <tech>`.
 3. Check freshness. `rk versions` prints each pinned tool with the URL its check queries. For every tool the chosen binding uses, fetch that URL, compare the latest version against the pin, and read the release notes when they differ. Prefer the latest version when landing; where the landed file then diverges from the snippet, say what moved and why.
-4. Preview, then land: `rk init --tech <tech> --target .` lists every destination without writing; `--apply` writes. The forge is detected from the git remote; pass `--forge` where no remote decides it. The lander refuses to overwrite a file whose content differs.
-5. Fill the sentinels. Apply reports every `TODO(release-kit)` marker left in the landed files — the repository owner, secret names, environment names. Resolve each one from the project.
-6. Walk the repository-side setup with `rk guide setup` for the commands and `rk method setup` for the reasoning. `rk setup --target .` previews the executable steps and `--apply` runs them in order — on GitHub with `--required-check <name>` — then `rk setup check --target .` proves what was applied. The bot-identity walkthrough is `rk forge <name>`; the remaining manual actions are all registry-side, and the runbook names each with its reason.
+4. Check for an existing landing first: `rk status --target .`. A target already carrying `.release-kit/manifest.json` takes `rk upgrade`, not a second landing, and `rk init --apply` refuses over one.
+5. Preview, then land: `rk init --tech <tech> --target .` lists every destination without writing; `--apply` writes the files, splices the routing block into `AGENTS.md`, and writes the landing record last. The forge and repository come from the git remote; pass `--forge` and `--repo` where no remote decides them. The lander refuses when a file release-kit owns holds different content; a differing seeded file is the target's own and is kept.
+6. Fill the sentinels. The repository owner is substituted at landing, so apply reports only the judgment markers — each a `TODO(release-kit)` line in a seeded file. Resolve each one from the project; `rk status --check` exits nonzero while one remains.
+7. Walk the repository-side setup with `rk guide setup` for the commands and `rk method setup` for the reasoning. `rk setup --target .` previews the executable steps and `--apply` runs them in order — on GitHub with `--required-check <name>` — then `rk setup check --target .` proves what was applied. The bot-identity walkthrough is `rk forge <name>`; the remaining manual actions are all registry-side, and the runbook names each with its reason.
 
 ## Verify
 

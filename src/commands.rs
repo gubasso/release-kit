@@ -1,6 +1,7 @@
 //! One handler per subcommand. Handlers hold the behavior; `main` only
 //! dispatches, and `cli` only declares the argument surface.
 
+pub mod adopt;
 pub mod completions;
 pub mod doctor;
 pub mod forge;
@@ -12,6 +13,8 @@ pub mod read;
 pub mod runs;
 pub mod setup;
 pub mod skill;
+pub mod status;
+pub mod upgrade;
 pub mod usage;
 pub mod versions;
 

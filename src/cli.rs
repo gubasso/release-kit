@@ -2,6 +2,7 @@
 //! subcommand's arguments. No behavior lives here; each variant routes to
 //! its handler in `commands`.
 
+pub mod adopt;
 pub mod completions;
 pub mod doctor;
 pub mod guide;
@@ -11,6 +12,9 @@ pub mod read;
 pub mod runs;
 pub mod setup;
 pub mod skill;
+pub mod status;
+pub mod upgrade;
+pub mod versions;
 
 use clap::{Parser, Subcommand};
 
@@ -36,12 +40,18 @@ pub enum Commands {
     Guide(guide::GuideArgs),
     /// Read the per-forge documents.
     Forge(read::ReadArgs),
-    /// Print the pinned-tool registry.
-    Versions,
+    /// Print the pinned-tool registry, with --check as its online freshness report.
+    Versions(versions::VersionsArgs),
     /// Report the payload this binary carries, with its digests.
     Payload(payload::PayloadArgs),
     /// Land a technology's files into a target repository.
     Init(init::InitArgs),
+    /// Report what landed in a target and whether it drifted.
+    Status(status::StatusArgs),
+    /// Take a landed target to this binary's payload.
+    Upgrade(upgrade::UpgradeArgs),
+    /// Record a target landed before the record existed.
+    Adopt(adopt::AdoptArgs),
     /// Execute the repository-side setup against the detected forge.
     Setup(setup::SetupArgs),
     /// Inspect and prune the run journals.

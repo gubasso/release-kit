@@ -1,0 +1,144 @@
+# Landing Specification
+
+<!--TOC-->
+
+- [Purpose](#purpose)
+- [Requirements](#requirements)
+  - [`landing:a-landing-leaves-a-record` — A landing leaves a record](#landinga-landing-leaves-a-record--a-landing-leaves-a-record)
+  - [`landing:a-record-states-its-schema` — A record states its schema](#landinga-record-states-its-schema--a-record-states-its-schema)
+  - [`landing:a-rendered-file-is-reproducible` — A rendered file is reproducible](#landinga-rendered-file-is-reproducible--a-rendered-file-is-reproducible)
+  - [`landing:a-rendered-file-carries-no-judgment` — A rendered file carries no judgment](#landinga-rendered-file-carries-no-judgment--a-rendered-file-carries-no-judgment)
+  - [`landing:an-upgrade-refuses-on-owned-drift` — An upgrade refuses on owned drift](#landingan-upgrade-refuses-on-owned-drift--an-upgrade-refuses-on-owned-drift)
+  - [`landing:a-seeded-file-is-never-rewritten` — A seeded file is never rewritten](#landinga-seeded-file-is-never-rewritten--a-seeded-file-is-never-rewritten)
+  - [`landing:a-dropped-file-stays` — A dropped file stays](#landinga-dropped-file-stays--a-dropped-file-stays)
+  - [`landing:a-target-is-never-downgraded` — A target is never downgraded](#landinga-target-is-never-downgraded--a-target-is-never-downgraded)
+  - [`landing:status-judges-only-under-check` — Status judges only under check](#landingstatus-judges-only-under-check--status-judges-only-under-check)
+  - [`landing:an-adoption-writes-the-record-and-nothing-else` — An adoption writes the record and nothing else](#landingan-adoption-writes-the-record-and-nothing-else--an-adoption-writes-the-record-and-nothing-else)
+
+<!--TOC-->
+
+## Purpose
+
+Rules governing what `rk init`, `rk status`, `rk upgrade`, and `rk adopt` owe a target repository: the landing record at `.release-kit/manifest.json`, the ownership kinds `rendered`, `seeded`, and `state`, and the comparisons each verb may make from them. Its subject is writing into a target and staying truthful about what was written, which is neither carrying a payload — `SPEC-distribution.md` — nor acting on a remote forge — `SPEC-forge-setup.md`. No adopting project adopts this spec: a project cannot violate a rule about how `rk` behaves and cannot run the verification.
+
+## Requirements
+
+### `landing:a-landing-leaves-a-record` — A landing leaves a record
+
+A successful `rk init --apply` MUST write `.release-kit/manifest.json` last, after every file has landed through the temp-plus-rename writer, and a refused landing MUST leave the target unchanged, the record included. The record is committed with the landing: every reader it exists for — a clone, a CI job, an agent — sees only committed files, and it carries digests of committed files, nothing secret and nothing machine-specific.
+
+#### Scenario: A rendered destination conflicts on apply
+
+- GIVEN a target whose workflow destination already holds bytes that differ from the rendered candidate
+- WHEN `rk init --apply` runs
+- THEN it exits 73 naming the conflict, no file lands, and no `.release-kit/` directory appears
+
+Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `landing:a-record-states-its-schema` — A record states its schema
+
+The record MUST carry an integer `schema_version`, and a record at a version this binary does not know MUST refuse naming the record, never a best-effort read, because commands make decisions from it and must be able to say when they cannot.
+
+#### Scenario: A record from a future release is read by an older binary
+
+- GIVEN a `.release-kit/manifest.json` declaring `schema_version: 999`
+- WHEN `rk status` or `rk upgrade` runs
+- THEN each exits 73 naming the record and the version it found, and nothing is written
+
+Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `landing:a-rendered-file-is-reproducible` — A rendered file is reproducible
+
+A `rendered` file's landed bytes MUST be a deterministic function of the payload and the recorded parameters only, and every substituted value MUST be recorded in the manifest's `parameters`, so a later command can re-render the candidate and compare it against the disk.
+
+#### Scenario: The owner substitutes from the repo parameter
+
+- GIVEN a landing run with `--repo acme/widget`
+- WHEN the workflow file lands
+- THEN no `OWNER` token survives in it, the owner reads `acme`, and the record's `parameters.repo` carries `acme/widget` whole
+
+Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `landing:a-rendered-file-carries-no-judgment` — A rendered file carries no judgment
+
+A sentinel needing operator judgment MUST NOT appear in a `rendered` file: a value a `rendered` file needs becomes a landing parameter, and a judgment stays in a `seeded` file, where an edit is expected and costs nothing.
+
+#### Scenario: A landing reports its remaining sentinels
+
+- GIVEN a rust landing with the repository resolved
+- WHEN `rk init --apply` reports the sentinels left to fill
+- THEN every reported line sits in a `seeded` file, and the landed workflow carries none
+
+Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `landing:an-upgrade-refuses-on-owned-drift` — An upgrade refuses on owned drift
+
+Where a `rendered` file's bytes on disk differ from the digest the record says was written, `rk upgrade` MUST collect every such conflict and refuse the whole run in one pass, leaving every file and the record as found, so an operator resolves everything and re-runs once rather than discovering conflicts one at a time.
+
+#### Scenario: Two owned files were edited
+
+- GIVEN a landed target whose workflow and routing block were both edited
+- WHEN `rk upgrade --apply` runs
+- THEN it exits 73 naming both files in one refusal, and neither the files nor the record change
+
+Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `landing:a-seeded-file-is-never-rewritten` — A seeded file is never rewritten
+
+`rk upgrade` MUST NOT rewrite a `seeded` file: a difference from the recorded baseline is reported as drift, and the rewritten record follows the target's bytes while keeping the baseline the target tunes away from — the seeding payload, or the last rendered bytes where the payload reclassified the file from `rendered` — because a `seeded` file is a starting point the target is expected to tune.
+
+#### Scenario: A tuned configuration survives an upgrade
+
+- GIVEN a landed target whose `release-plz.toml` the operator filled
+- WHEN `rk upgrade --apply` runs
+- THEN the tuned bytes survive, the run reports `drift`, and the new record's digest for that file matches the disk
+
+Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `landing:a-dropped-file-stays` — A dropped file stays
+
+A file the payload stops shipping MUST be left in place and named in the upgrade's output, and the rewritten record stops carrying it, because a file release-kit stops shipping is a file the target owns from that moment.
+
+#### Scenario: A newer payload drops a workflow
+
+- GIVEN a record naming a destination this binary's payload no longer ships
+- WHEN `rk upgrade --apply` runs
+- THEN the file survives on disk, the output names it dropped, and the record no longer lists it
+
+Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `landing:a-target-is-never-downgraded` — A target is never downgraded
+
+Where the record names an `rk_version` newer than this binary's, `rk upgrade` MUST refuse and name the version to install, because rewriting a newer landing with older bytes is not an upgrade.
+
+#### Scenario: An old binary meets a new landing
+
+- GIVEN a record whose `rk_version` is above this binary's version
+- WHEN `rk upgrade --apply` runs
+- THEN it exits 73 telling the operator to install the matching release, and nothing is written
+
+Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `landing:status-judges-only-under-check` — Status judges only under check
+
+Plain `rk status` MUST report and exit 0 for every reportable state — drift, staleness, unresolved sentinels, and no landing at all — and `rk status --check` MUST compute the identical report and exit 1 exactly on a violation: drift to a `rendered` file, an invalid or missing landing, or an unresolved judgment sentinel. Seeded drift and pin staleness stay informational in both modes.
+
+#### Scenario: The same target, judged and not
+
+- GIVEN a landed target with a tuned seeded file and an edited rendered file
+- WHEN `rk status` and `rk status --check` run
+- THEN both print the same report, the plain run exits 0, and the check exits 1 naming the rendered drift in its violations
+
+Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `landing:an-adoption-writes-the-record-and-nothing-else` — An adoption writes the record and nothing else
+
+`rk adopt` MUST verify every `rendered` destination byte for byte against the rendered candidate, refuse listing every mismatch and every missing expected file in one run, and end a successful pass with exactly one write — the record, last, with its origin stating the adoption — leaving every target file untouched.
+
+#### Scenario: A pre-record target is adopted
+
+- GIVEN a repository running the convention with no record, matching what this payload renders
+- WHEN `rk adopt --apply` runs
+- THEN the manifest appears with `origin` set to `adopt`, no other file changes, and `rk status` then reports the landing
+
+Verify: `cargo nextest run -E 'binary(cli)'`

@@ -16,6 +16,7 @@ This repository is the canonical knowledge product for the release-kit workflow.
 - `method/` and `bindings/` are the canon prose; `snippets/` and `versions.toml` are the landable payload.
 - `runbooks/`, `forges/`, and `setup/<forge>/` are host-side payload: served by `rk guide` and `rk forge`, executed by `rk setup`, and landed into no target. `SPEC-forge-setup.md` binds how the setup acts on a forge.
 - `snippets/` is scoped by `(technology, forge)` pair, and `rk init` selects the pair; a pair may honestly land fewer files than another.
+- Every landable file has a declared kind in `src/landing.rs` — `rendered`, `seeded`, or `state` — and a landing writes `.release-kit/manifest.json` into the target, last. `SPEC-landing.md` binds the record and every verb that reads it.
 - `src/` is the distribution: the `rk` binary embeds every root in `src/payload_roots.rs` and the licenses at compile time, so canon and binary cannot drift.
 - `skills/` installs at user scope only, and `rk init` lands none: an agent resolves a skill by name across scopes, so a second copy is a second entry under one name. `SPEC-distribution.md` binds what the installer may write there.
 - Every pinned tool is declared once, in `versions.toml`; a snippet pin changes together with its registry entry.
@@ -50,7 +51,8 @@ This repository is the canonical knowledge product for the release-kit workflow.
 - The operator recipes: `runbooks/README.md`, served by `rk guide`.
 - The executable repository-side setup: `rk setup`, with `rk runs` over its journals.
 - What lands in a target: `snippets/`, served by `rk snippet --list`.
-- Pinned tools and freshness: `versions.toml`, served by `rk versions`.
+- What a landed target reports about itself: `rk status`, with `--check` as the judging mode; `rk upgrade` takes it to a newer payload; `rk adopt` records a pre-record target.
+- Pinned tools and freshness: `versions.toml`, served by `rk versions`; `rk versions --check` is the one verb that fetches.
 - The payload's identity and digests: `rk payload`, with `--json` as the machine form.
 - Host readiness and the whole command surface: `rk doctor` and `rk usage`.
 - Docs format and budgets: `sdd spec docs-format`; this repository is an sdd instance.

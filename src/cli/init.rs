@@ -19,6 +19,12 @@ pub struct InitArgs {
     #[arg(long)]
     pub forge: Option<String>,
 
+    /// The project path on the forge, substituted into the rendered files
+    /// and recorded as the landing parameter. Defaults to detection from
+    /// the target's git remote; an apply with neither refuses.
+    #[arg(long)]
+    pub repo: Option<String>,
+
     /// Write the files; without it the destinations are listed and nothing
     /// is touched.
     #[arg(long)]
