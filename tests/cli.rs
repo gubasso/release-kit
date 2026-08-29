@@ -246,6 +246,84 @@ fn skill_show_prints_the_frontmatter() {
         .stdout(predicate::str::contains("name: rk-setup"));
 }
 
+/// The human preview, snapshot-held line for line: the lines an operator
+/// learned keep their shape, and the `Next:` block closes the output.
+#[test]
+fn init_preview_human_lines_are_snapshot_held() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    let path = target.path().to_string_lossy().into_owned();
+    let expected = format!(
+        "DRY RUN: rk init writes these files into {path}; re-run with --apply\n\
+         .github/workflows/release-plz.yml\n\
+         dist-workspace.toml\n\
+         release-plz.toml\n\
+         Next:\n  rk init --tech rust --target {path} --apply\n"
+    );
+    rk().args(["init", "--tech", "rust", "--target", &path])
+        .assert()
+        .success()
+        .stdout(predicate::eq(expected));
+}
+
+#[test]
+fn init_json_emits_one_object_and_nothing_else() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    for (mode, extra) in [("preview", None), ("apply", Some("--apply"))] {
+        let mut cmd = rk();
+        cmd.args(["init", "--tech", "rust", "--target"])
+            .arg(target.path());
+        if let Some(flag) = extra {
+            cmd.arg(flag);
+        }
+        let out = cmd
+            .arg("--json")
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+        assert_eq!(report["schema"], "rk.init/1");
+        assert_eq!(report["mode"], mode);
+        assert!(
+            report["files"].as_array().is_some_and(|f| !f.is_empty()),
+            "{mode}: the report names the files"
+        );
+        assert!(
+            report["next"].as_array().is_some_and(|n| !n.is_empty()),
+            "{mode}: the report carries a next block"
+        );
+    }
+}
+
+/// Under --json a failure is one diagnostic line on stderr, carrying its
+/// reason from the closed vocabulary, and stdout stays clean.
+#[test]
+fn init_json_failure_is_a_diagnostic_on_stderr() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    std::fs::write(target.path().join("release-plz.toml"), "something local\n")
+        .expect("the conflict file writes");
+    let output = rk()
+        .args(["init", "--tech", "rust", "--target"])
+        .arg(target.path())
+        .args(["--apply", "--json"])
+        .assert()
+        .code(73)
+        .get_output()
+        .clone();
+    assert!(output.stdout.is_empty(), "no result on a refused landing");
+    let diagnostic: serde_json::Value =
+        serde_json::from_slice(&output.stderr).expect("stderr is one JSON diagnostic");
+    assert_eq!(diagnostic["schema"], "rk.diagnostic/1");
+    assert_eq!(diagnostic["reason"], "state-drift");
+    assert!(
+        diagnostic["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("release-plz.toml")),
+        "{diagnostic}"
+    );
+}
+
 #[test]
 fn init_dry_runs_by_default_and_writes_nothing() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
@@ -598,6 +676,149 @@ fn skill_uninstall_keeps_what_a_user_put_beside_a_skill() {
         .success()
         .stdout(predicate::str::contains("kept (not empty)"));
     assert!(beside.is_file(), "a file beside a skill must survive");
+}
+
+/// The human preview, snapshot-held line for line, `Next:` block included.
+#[test]
+fn skill_install_preview_human_lines_are_snapshot_held() {
+    let home = Home::new();
+    let mut expected =
+        String::from("DRY RUN: rk skill install writes these files; re-run with --apply\n");
+    for root in ROOTS {
+        for name in SKILLS {
+            expected.push_str(&home.destination(root, name).to_string_lossy());
+            expected.push('\n');
+        }
+    }
+    expected.push_str("Next:\n  rk skill install --apply\n");
+    home.rk()
+        .args(["skill", "install"])
+        .assert()
+        .success()
+        .stdout(predicate::eq(expected));
+}
+
+#[test]
+fn skill_install_json_reports_typed_actions() {
+    let home = Home::new();
+    let out = home
+        .rk()
+        .args(["skill", "install", "--apply", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["schema"], "rk.skill/1");
+    assert_eq!(report["command"], "install");
+    assert_eq!(report["mode"], "apply");
+    let actions = report["actions"].as_array().expect("an action list");
+    assert_eq!(actions.len(), ROOTS.len() * SKILLS.len());
+    assert!(
+        actions.iter().all(|action| action["action"] == "write"),
+        "{actions:?}"
+    );
+}
+
+/// A doctor run answers on any host: probes fail as results, the exit code
+/// stays 0, and the overridable forge binaries keep the test hermetic.
+#[test]
+fn doctor_reports_every_probe_and_exits_0() {
+    let home = Home::new();
+    let gh = home.path().join("fake-gh");
+    let glab = home.path().join("fake-glab");
+    std::fs::write(&gh, "#!/bin/sh\nexit 0\n").expect("the mock writes");
+    std::fs::write(&glab, "#!/bin/sh\nexit 1\n").expect("the mock writes");
+    #[cfg(unix)]
+    for mock in [&gh, &glab] {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(mock, std::fs::Permissions::from_mode(0o755))
+            .expect("the mock is executable");
+    }
+    let out = home
+        .rk()
+        .args(["doctor", "--json"])
+        .env("XDG_STATE_HOME", home.path())
+        .env("RK_GH_BIN", &gh)
+        .env("RK_GLAB_BIN", &glab)
+        .current_dir(home.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["schema"], "rk.doctor/1");
+    let probes = report["probes"].as_array().expect("a probe list");
+    let ids: Vec<&str> = probes
+        .iter()
+        .map(|probe| probe["id"].as_str().expect("an id"))
+        .collect();
+    assert_eq!(
+        ids,
+        ["sh", "state-root", "git-remote", "gh-auth", "glab-auth"]
+    );
+    let by_id = |id: &str| {
+        probes
+            .iter()
+            .find(|probe| probe["id"] == id)
+            .expect("the probe reports")
+            .clone()
+    };
+    assert_eq!(by_id("gh-auth")["status"], "ok");
+    assert_eq!(by_id("glab-auth")["status"], "failed");
+    assert_eq!(by_id("glab-auth")["remediation"], "run glab auth login");
+}
+
+#[test]
+fn usage_dumps_every_verb_in_one_call() {
+    let expected = [
+        "rk method",
+        "rk binding",
+        "rk snippet",
+        "rk versions",
+        "rk payload",
+        "rk init",
+        "rk skill install",
+        "rk skill uninstall",
+        "rk doctor",
+        "rk usage",
+        "rk license",
+        "rk completions",
+    ]
+    .iter()
+    .fold(
+        predicate::str::contains("example: rk init").boxed(),
+        |acc, verb| acc.and(predicate::str::contains(*verb)).boxed(),
+    );
+    rk().arg("usage").assert().success().stdout(expected);
+}
+
+/// One invocation leaves one record in the application log at the XDG
+/// state root, and `RUST_LOG=off` silences it.
+#[test]
+fn a_command_leaves_one_application_log_record() {
+    let home = Home::new();
+    home.rk()
+        .args(["method", "--list"])
+        .env("XDG_STATE_HOME", home.path())
+        .assert()
+        .success();
+    let log = home.path().join("release-kit/release-kit.log");
+    let text = std::fs::read_to_string(&log).expect("the log exists");
+    assert!(
+        text.contains("op=method status=ok"),
+        "the record names the op: {text}"
+    );
+    home.rk()
+        .args(["versions"])
+        .env("XDG_STATE_HOME", home.path())
+        .env("RUST_LOG", "off")
+        .assert()
+        .success();
+    let after = std::fs::read_to_string(&log).expect("the log still reads");
+    assert_eq!(text, after, "RUST_LOG=off must silence the log");
 }
 
 #[test]

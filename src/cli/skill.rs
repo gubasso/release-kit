@@ -34,6 +34,9 @@ pub enum SkillAction {
         /// Overwrite a destination whose bytes differ from the payload.
         #[arg(long, requires = "apply")]
         force: bool,
+        /// Emit one JSON object on stdout instead of the human report.
+        #[arg(long)]
+        json: bool,
     },
     /// Remove the installed skills, previewing by default.
     Uninstall {
@@ -46,6 +49,9 @@ pub enum SkillAction {
         /// Remove the files; without it the removals are listed.
         #[arg(long)]
         apply: bool,
+        /// Emit one JSON object on stdout instead of the human report.
+        #[arg(long)]
+        json: bool,
     },
 }
 

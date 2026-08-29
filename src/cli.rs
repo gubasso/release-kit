@@ -3,6 +3,7 @@
 //! its handler in `commands`.
 
 pub mod completions;
+pub mod doctor;
 pub mod init;
 pub mod payload;
 pub mod read;
@@ -36,6 +37,10 @@ pub enum Commands {
     Init(init::InitArgs),
     /// Manage the agent skills at user scope.
     Skill(skill::SkillArgs),
+    /// Run every environment probe and report by class.
+    Doctor(doctor::DoctorArgs),
+    /// Print the whole command surface in one call.
+    Usage,
     /// Print the license terms the binary carries.
     License,
     /// Generate shell completions.

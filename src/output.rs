@@ -1,0 +1,164 @@
+//! The output boundary every handler emits through.
+//!
+//! One rule in two halves, identical in both modes: stdout carries the
+//! result and only the result — human text by default, machine output
+//! under `--json` — and stderr carries everything else. No handler in
+//! `commands/` prints directly; a source-scan test below holds that, so
+//! the contract cannot regrow a second personality one `println!` at a
+//! time.
+
+use serde::Serialize;
+
+use crate::error::RkError;
+
+/// Which caller the result serves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Format {
+    /// The default rendering, for a person at a terminal.
+    Human,
+    /// One JSON document on stdout, for an agent or a script.
+    Json,
+}
+
+/// The boundary a handler writes results through.
+#[derive(Debug, Clone, Copy)]
+pub struct Output {
+    format: Format,
+}
+
+impl Output {
+    /// The boundary for a command carrying a `--json` flag.
+    #[must_use]
+    pub const fn new(json: bool) -> Self {
+        Self {
+            format: if json { Format::Json } else { Format::Human },
+        }
+    }
+
+    /// The boundary for a command whose result is the document itself —
+    /// a chapter, a binding, a license — where a JSON wrapper would add
+    /// nothing an agent can use.
+    #[must_use]
+    pub const fn human() -> Self {
+        Self {
+            format: Format::Human,
+        }
+    }
+
+    /// Whether this boundary serves the machine form.
+    #[must_use]
+    pub const fn is_json(&self) -> bool {
+        matches!(self.format, Format::Json)
+    }
+
+    /// One human result line on stdout; silent under `--json`, where the
+    /// emitted document is the whole result.
+    pub fn result_line(&self, line: impl AsRef<str>) {
+        if !self.is_json() {
+            println!("{}", line.as_ref());
+        }
+    }
+
+    /// A human result without a trailing newline, for byte-identical
+    /// payload prints; silent under `--json`.
+    pub fn result_raw(&self, text: &str) {
+        if !self.is_json() {
+            print!("{text}");
+        }
+    }
+
+    /// The machine result: one JSON document on stdout, and nothing in
+    /// human mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RkError::Other`] when the report cannot serialize, which
+    /// is a defect in this binary rather than anything a caller can
+    /// correct.
+    pub fn emit<T: Serialize>(&self, report: &T) -> Result<(), RkError> {
+        if self.is_json() {
+            let text = serde_json::to_string_pretty(report).map_err(anyhow::Error::from)?;
+            println!("{text}");
+        }
+        Ok(())
+    }
+
+    /// The `Next:` block closing a human success: two to four lines
+    /// naming the commands that plausibly follow, so no output is a dead
+    /// end. Under `--json` the report's own `next` field carries them.
+    pub fn next(&self, lines: &[String]) {
+        if self.is_json() || lines.is_empty() {
+            return;
+        }
+        println!("Next:");
+        for line in lines {
+            println!("  {line}");
+        }
+    }
+}
+
+/// Render one failure on stderr: the human five-question form by default,
+/// the same fields as one JSON line under `--json`.
+pub fn render_error(err: &RkError, json: bool) {
+    if json {
+        let diagnostic = err.diagnostic();
+        match serde_json::to_string(&diagnostic) {
+            Ok(line) => eprintln!("{line}"),
+            Err(_) => eprintln!(
+                r#"{{"schema":"rk.diagnostic/1","reason":"internal","message":"a diagnostic failed to serialize"}}"#
+            ),
+        }
+        return;
+    }
+    match err {
+        RkError::Refusal(diagnostic) => eprintln!("{}", diagnostic.render_human()),
+        _ => eprintln!("error: {err}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used)]
+
+    /// No handler prints past the boundary: the only print macros under
+    /// `src/` live here and nowhere in `commands/`, `cli/`, `skills/`, or
+    /// `main.rs`, so every result and every diagnostic goes through one
+    /// door.
+    #[test]
+    fn no_handler_prints_past_the_boundary() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut offenders = Vec::new();
+        scan(&root, &mut offenders);
+        assert!(
+            offenders.is_empty(),
+            "these print directly instead of using the output boundary: {offenders:?}"
+        );
+    }
+
+    fn scan(dir: &std::path::Path, offenders: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).expect("the source directory reads") {
+            let path = entry.expect("the entry reads").path();
+            if path.is_dir() {
+                scan(&path, offenders);
+                continue;
+            }
+            if path.extension().is_none_or(|ext| ext != "rs")
+                || path.file_name().is_some_and(|name| name == "output.rs")
+            {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).expect("the source reads");
+            for (idx, line) in text.lines().enumerate() {
+                let trimmed = line.trim_start();
+                if trimmed.starts_with("//") {
+                    continue;
+                }
+                for needle in ["println!", "print!", "eprintln!", "eprint!"] {
+                    if trimmed.contains(needle) {
+                        offenders.push(format!("{}:{}", path.display(), idx + 1));
+                    }
+                }
+            }
+        }
+    }
+}

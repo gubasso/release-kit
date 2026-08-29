@@ -1,18 +1,21 @@
 //! `rk skill`: the agent skills at user scope.
 //!
 //! This handler resolves three things — the home directory, the roots the
-//! chosen agent implies, and the record that sits beside them — and prints
-//! what the installer reports. Install and uninstall semantics live in
-//! `skills::installer`; nothing here decides them.
+//! chosen agent implies, and the record that sits beside them — and renders
+//! what the installer reports, in both the human and the machine form.
+//! Install and uninstall semantics live in `skills::installer`; nothing
+//! here decides them.
 
 use std::path::PathBuf;
 
 use camino::{Utf8Path, Utf8PathBuf};
+use serde::Serialize;
 
 use crate::cli::skill::{Agent, Scope, SkillAction, SkillArgs};
 use crate::error::RkError;
+use crate::output::Output;
 use crate::skills;
-use crate::skills::installer;
+use crate::skills::installer::{self, Action};
 use crate::skills::record::RECORD_PATH;
 
 /// The root Claude Code reads, relative to the home directory.
@@ -21,6 +24,21 @@ const CLAUDE_ROOT: &str = ".claude/skills";
 /// The root Codex, Gemini CLI, and Copilot read, relative to the home
 /// directory.
 const AGENTS_ROOT: &str = ".agents/skills";
+
+/// The machine form of an install or uninstall report.
+#[derive(Debug, Serialize)]
+struct Report<'a> {
+    /// The shape version of this document.
+    schema: &'static str,
+    /// `install` or `uninstall`.
+    command: &'static str,
+    /// `preview` or `apply`.
+    mode: &'static str,
+    /// Everything the run did, or would do.
+    actions: &'a [Action],
+    /// What plausibly follows.
+    next: &'a [String],
+}
 
 /// Dispatch the skill action.
 ///
@@ -32,8 +50,9 @@ const AGENTS_ROOT: &str = ".agents/skills";
 pub fn run(args: &SkillArgs) -> Result<(), RkError> {
     match &args.action {
         SkillAction::List => {
+            let out = Output::human();
             for skill in skills::all()? {
-                println!("{}", skill.name);
+                out.result_line(&skill.name);
             }
             Ok(())
         }
@@ -43,25 +62,114 @@ pub fn run(args: &SkillArgs) -> Result<(), RkError> {
             scope,
             apply,
             force,
+            json,
         } => {
             let (roots, record) = destinations(*agent, *scope)?;
-            report(installer::install(&roots, &record, *apply, *force)?);
-            Ok(())
+            let actions = installer::install(&roots, &record, *apply, *force)?;
+            render(Output::new(*json), "install", *apply, &actions)
         }
         SkillAction::Uninstall {
             agent,
             scope,
             apply,
+            json,
         } => {
             let (roots, record) = destinations(*agent, *scope)?;
-            report(installer::uninstall(&roots, &record, *apply)?);
-            Ok(())
+            let actions = installer::uninstall(&roots, &record, *apply)?;
+            render(Output::new(*json), "uninstall", *apply, &actions)
         }
+    }
+}
+
+/// Render what the installer reported: the human lines by default, the
+/// `rk.skill/1` object under `--json`.
+fn render(
+    out: Output,
+    command: &'static str,
+    apply: bool,
+    actions: &[Action],
+) -> Result<(), RkError> {
+    if apply {
+        for action in actions {
+            out.result_line(applied_line(command, action));
+        }
+    } else {
+        out.result_line(format!(
+            "DRY RUN: rk skill {command} {} these files; re-run with --apply",
+            if command == "install" {
+                "writes"
+            } else {
+                "removes"
+            }
+        ));
+        for action in actions {
+            out.result_line(planned_line(action));
+        }
+    }
+    let next = next_lines(command, apply);
+    out.next(&next);
+    out.emit(&Report {
+        schema: "rk.skill/1",
+        command,
+        mode: if apply { "apply" } else { "preview" },
+        actions,
+        next: &next,
+    })
+}
+
+/// The one human line for a planned action.
+fn planned_line(action: &Action) -> String {
+    match action {
+        Action::Write { destination } | Action::Remove { destination } => destination.to_string(),
+        Action::Sweep { destination } => {
+            format!("sweep (no longer in the payload) {destination}")
+        }
+        other => format!("{other:?}"),
+    }
+}
+
+/// The one human line for a performed action, byte-identical to what the
+/// installer printed before the boundary existed.
+fn applied_line(command: &str, action: &Action) -> String {
+    match action {
+        Action::Write { destination } => format!("wrote {destination}"),
+        Action::Unchanged { destination } => format!("unchanged {destination}"),
+        Action::Sweep { destination } => format!("swept {destination}"),
+        Action::SweepFailed { destination, error } => {
+            format!("could not sweep {destination}; remove it by hand: {error}")
+        }
+        Action::Remove { destination } => format!("removed {destination}"),
+        Action::KeptDirectory { directory } => format!("kept (not empty) {directory}"),
+        Action::RecordUnwritten { record } => {
+            if command == "install" {
+                format!(
+                    "note: could not record the installed digests at {record}; a later install may ask for --force"
+                )
+            } else {
+                format!(
+                    "note: could not update the record at {record}; a later install may ask for --force"
+                )
+            }
+        }
+    }
+}
+
+/// What plausibly follows each outcome.
+fn next_lines(command: &str, apply: bool) -> Vec<String> {
+    match (command, apply) {
+        ("install", false) => vec!["rk skill install --apply".to_owned()],
+        ("install", true) => vec![
+            "rk skill list names the installed skills".to_owned(),
+            "an agent now resolves each skill by name".to_owned(),
+        ],
+        (_, false) => vec!["rk skill uninstall --apply".to_owned()],
+        (_, true) => vec!["rk skill install lands them again".to_owned()],
     }
 }
 
 /// Print one skill's `SKILL.md`, byte-identical to the authored file.
 fn show(name: &str) -> Result<(), RkError> {
+    let out = Output::human();
     skills::all()?
         .into_iter()
         .find(|skill| skill.name == name)
@@ -73,7 +181,7 @@ fn show(name: &str) -> Result<(), RkError> {
                 })
             },
             |skill| {
-                print!("{}", skill.text);
+                out.result_raw(skill.text);
                 Ok(())
             },
         )
@@ -115,19 +223,15 @@ fn home() -> Result<Utf8PathBuf, RkError> {
     })
 }
 
-/// Print what the installer reported, one line each.
-fn report(lines: Vec<String>) {
-    for line in lines {
-        println!("{line}");
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)]
+
     use camino::Utf8Path;
 
     use super::roots;
     use crate::cli::skill::Agent;
+    use crate::skills::installer::Action;
 
     #[test]
     fn each_agent_selects_its_own_roots() {
@@ -137,6 +241,26 @@ mod tests {
         assert_eq!(
             roots(home, Agent::All),
             ["/home/u/.claude/skills", "/home/u/.agents/skills"]
+        );
+    }
+
+    /// The `rk.skill/1` action shape, held by snapshot.
+    #[test]
+    fn the_skill_action_schema_snapshot_holds() {
+        let action = Action::Write {
+            destination: "/home/u/.claude/skills/rk-setup/SKILL.md".into(),
+        };
+        assert_eq!(
+            serde_json::to_string(&action).expect("an action serializes"),
+            r#"{"action":"write","destination":"/home/u/.claude/skills/rk-setup/SKILL.md"}"#
+        );
+        let failed = Action::SweepFailed {
+            destination: "/home/u/.claude/skills/rk-retired/SKILL.md".into(),
+            error: "permission denied".into(),
+        };
+        assert_eq!(
+            serde_json::to_string(&failed).expect("an action serializes"),
+            r#"{"action":"sweep-failed","destination":"/home/u/.claude/skills/rk-retired/SKILL.md","error":"permission denied"}"#
         );
     }
 }

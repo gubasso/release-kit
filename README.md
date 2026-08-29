@@ -22,6 +22,8 @@ The binary is `rk`.
 - Read a technology binding: [bindings/](./bindings/README.md), or `rk binding rust`.
 - Land the workflow in a project: `rk init --tech rust --target .` previews; `--apply` writes.
 - See the pinned tools and their freshness: `rk versions`.
+- Prove what the binary carries: `rk payload`, with `--json` for the machine form.
+- Check the host and load the whole surface: `rk doctor` and `rk usage`.
 - Install the agent skills at user scope: `rk skill install` previews; `--apply` writes `~/.claude/skills/` and `~/.agents/skills/`.
 - Set a repository up end to end: `rk method setup`, with the binding's specifics alongside.
 

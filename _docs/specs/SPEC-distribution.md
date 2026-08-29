@@ -6,6 +6,7 @@
 - [Requirements](#requirements)
   - [`distribution:the-payload-roots-are-declared-once` — The payload roots are declared once](#distributionthe-payload-roots-are-declared-once--the-payload-roots-are-declared-once)
   - [`distribution:the-published-crate-carries-every-root` — The published crate carries every root](#distributionthe-published-crate-carries-every-root--the-published-crate-carries-every-root)
+  - [`distribution:machine-output-declares-its-schema` — Machine output declares its schema](#distributionmachine-output-declares-its-schema--machine-output-declares-its-schema)
   - [`distribution:skills-are-part-of-the-payload` — Skills are part of the payload](#distributionskills-are-part-of-the-payload--skills-are-part-of-the-payload)
   - [`distribution:a-skill-has-one-owner` — A skill has one owner](#distributiona-skill-has-one-owner--a-skill-has-one-owner)
   - [`distribution:a-skill-obeys-the-portable-format` — A skill obeys the portable format](#distributiona-skill-obeys-the-portable-format--a-skill-obeys-the-portable-format)
@@ -47,6 +48,18 @@ The published package MUST contain every payload root, and the check MUST run be
 - THEN the package-contents test fails naming the root, before `cargo publish` can ship a crate that fails to compile at the consumer
 
 Verify: `cargo nextest run --run-ignored ignored-only -E 'test(the_published_crate_carries_every_root)'`
+
+### `distribution:machine-output-declares-its-schema` — Machine output declares its schema
+
+Every machine-readable output the binary emits MUST carry a versioned schema held by a snapshot test, so a consumer is told when the shape changes rather than discovering it, and every failure MUST carry a `reason` from the one closed, append-only vocabulary beside the exit-code matrix.
+
+#### Scenario: A field is renamed in a machine report
+
+- GIVEN a serialized report whose field name an edit changes
+- WHEN the test suite runs
+- THEN the snapshot test fails naming the schema, and the change becomes a deliberate schema-version bump instead of a silent parser break at some agent
+
+Verify: `cargo nextest run -E 'kind(lib)'`
 
 ### `distribution:skills-are-part-of-the-payload` — Skills are part of the payload
 

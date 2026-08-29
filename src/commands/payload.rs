@@ -13,6 +13,7 @@ use crate::cli::payload::PayloadArgs;
 use crate::digest::Digest;
 use crate::embedded;
 use crate::error::RkError;
+use crate::output::Output;
 
 /// The version of this report's shape, not of the payload it describes; a
 /// consumer is told when the shape changes without being told when the
@@ -81,14 +82,10 @@ fn aggregate(artifacts: &[Artifact]) -> Digest {
 /// Returns [`RkError::Other`] when the report cannot serialize, which is a
 /// defect in this binary rather than anything a caller can correct.
 pub fn run(args: &PayloadArgs) -> Result<(), RkError> {
+    let out = Output::new(args.json);
     let report = report();
-    if args.json {
-        let text = serde_json::to_string_pretty(&report).map_err(anyhow::Error::from)?;
-        println!("{text}");
-        return Ok(());
-    }
-    println!("release-kit {}", report.release_kit_version);
-    println!("payload sha256 {}", report.payload_sha256);
+    out.result_line(format!("release-kit {}", report.release_kit_version));
+    out.result_line(format!("payload sha256 {}", report.payload_sha256));
     for root in embedded::PAYLOAD_ROOTS {
         let count = report
             .artifacts
@@ -96,9 +93,9 @@ pub fn run(args: &PayloadArgs) -> Result<(), RkError> {
             .filter(|a| a.path == root || a.path.starts_with(&format!("{root}/")))
             .count();
         let noun = if count == 1 { "file" } else { "files" };
-        println!("{root}: {count} {noun}");
+        out.result_line(format!("{root}: {count} {noun}"));
     }
-    Ok(())
+    out.emit(&report)
 }
 
 #[cfg(test)]

@@ -34,6 +34,7 @@ This repository is the canonical knowledge product for the release-kit workflow.
 ## Executable artifacts
 
 - Rust follows the exobrain CLI conventions: clap derive in `src/cli/`, one handler per subcommand in `src/commands/`, typed errors with a tested exit-code matrix in `src/error.rs`.
+- Every handler emits through the output boundary in `src/output.rs`; no direct printing in `commands/`, and every machine output carries a versioned, snapshot-tested schema per `distribution:machine-output-declares-its-schema`.
 - Every subcommand lands with its integration tests in `tests/cli.rs`.
 - Run `just check` before handoff. It lints, tests, and lands the rust files into a scratch target.
 - `Cargo.toml` is the release source of truth. Write Conventional Commits; release-plz derives the version, the changelog, and the tag. Never author a tag: this repository runs its own convention, `rk method operate`.
@@ -45,5 +46,7 @@ This repository is the canonical knowledge product for the release-kit workflow.
 - Technology specifics: `bindings/README.md`.
 - What lands in a target: `snippets/`, served by `rk snippet --list`.
 - Pinned tools and freshness: `versions.toml`, served by `rk versions`.
+- The payload's identity and digests: `rk payload`, with `--json` as the machine form.
+- Host readiness and the whole command surface: `rk doctor` and `rk usage`.
 - Docs format and budgets: `sdd spec docs-format`; this repository is an sdd instance.
 - What the binary carries and writes outside a target: `_docs/specs/SPEC-distribution.md`, served by `rk skill --help`.

@@ -18,4 +18,8 @@ pub struct InitArgs {
     /// is touched.
     #[arg(long)]
     pub apply: bool,
+
+    /// Emit one JSON object on stdout instead of the human report.
+    #[arg(long)]
+    pub json: bool,
 }

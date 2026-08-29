@@ -6,6 +6,7 @@ use crate::cli::read::ReadArgs;
 use crate::commands::walk;
 use crate::embedded;
 use crate::error::RkError;
+use crate::output::Output;
 
 /// Print a method chapter, or list the chapters.
 ///
@@ -34,10 +35,11 @@ pub fn binding(args: &ReadArgs) -> Result<(), RkError> {
 /// Returns [`RkError::NotFound`] for an unknown path and
 /// [`RkError::Usage`] when neither a name nor `--list` is given.
 pub fn snippet(args: &ReadArgs) -> Result<(), RkError> {
+    let out = Output::human();
     let entries = walk(&embedded::SNIPPETS);
     if args.list {
         for (path, _) in &entries {
-            println!("{path}");
+            out.result_line(path);
         }
         return Ok(());
     }
@@ -54,7 +56,7 @@ pub fn snippet(args: &ReadArgs) -> Result<(), RkError> {
             })
         },
         |(_, contents)| {
-            print_bytes(contents);
+            print_bytes(out, contents);
             Ok(())
         },
     )
@@ -65,10 +67,11 @@ pub fn snippet(args: &ReadArgs) -> Result<(), RkError> {
 /// A chapter file `NN-name.md` answers to `name`, `NN-name`, and
 /// `NN-name.md`; `README.md` answers to `readme`.
 fn flat(dir: &Dir<'static>, kind: &'static str, args: &ReadArgs) -> Result<(), RkError> {
+    let out = Output::human();
     let entries = walk(dir);
     if args.list {
         for (path, _) in &entries {
-            println!("{}", short_key(path));
+            out.result_line(short_key(path));
         }
         return Ok(());
     }
@@ -82,7 +85,7 @@ fn flat(dir: &Dir<'static>, kind: &'static str, args: &ReadArgs) -> Result<(), R
     for (path, contents) in &entries {
         let stem = path.trim_end_matches(".md");
         if stem.eq_ignore_ascii_case(wanted) || short_key(path) == wanted {
-            print_bytes(contents);
+            print_bytes(out, contents);
             return Ok(());
         }
     }
@@ -104,6 +107,6 @@ fn short_key(path: &str) -> String {
 }
 
 /// Print payload bytes as-is; every authored payload file is UTF-8.
-fn print_bytes(contents: &[u8]) {
-    print!("{}", String::from_utf8_lossy(contents));
+fn print_bytes(out: Output, contents: &[u8]) {
+    out.result_raw(&String::from_utf8_lossy(contents));
 }

@@ -6,10 +6,16 @@
 //! `commands` the handlers, `skills` the user-scope skill install,
 //! `digest` the one hash type, and `error` the one exit-code matrix.
 
+pub mod applog;
+pub mod atomic;
 pub mod cli;
 pub mod commands;
+pub mod diagnostic;
 pub mod digest;
 pub mod embedded;
 pub mod error;
+pub mod events;
+pub mod output;
 pub mod payload_roots;
+pub mod probes;
 pub mod skills;

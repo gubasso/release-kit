@@ -2,6 +2,7 @@
 
 use crate::embedded;
 use crate::error::RkError;
+use crate::output::Output;
 
 /// Print the root statement, then both license texts.
 ///
@@ -9,14 +10,15 @@ use crate::error::RkError;
 ///
 /// Never fails; the signature matches the dispatch table.
 pub fn run() -> Result<(), RkError> {
-    print!("{}", embedded::LICENSE);
-    println!();
-    println!("--- LICENSE-MIT ---");
-    println!();
-    print!("{}", embedded::LICENSE_MIT);
-    println!();
-    println!("--- LICENSE-CC-BY-4.0 ---");
-    println!();
-    print!("{}", embedded::LICENSE_CC_BY);
+    let out = Output::human();
+    out.result_raw(embedded::LICENSE);
+    out.result_line("");
+    out.result_line("--- LICENSE-MIT ---");
+    out.result_line("");
+    out.result_raw(embedded::LICENSE_MIT);
+    out.result_line("");
+    out.result_line("--- LICENSE-CC-BY-4.0 ---");
+    out.result_line("");
+    out.result_raw(embedded::LICENSE_CC_BY);
     Ok(())
 }

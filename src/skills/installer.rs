@@ -9,15 +9,64 @@
 //! the same conventions `rk init` follows, and for a sharper reason: an apply
 //! crosses two roots, so a failure partway leaves one agent reading this
 //! version of a skill and another agent reading the last one.
+//!
+//! The installer reports what it did as typed [`Action`]s and renders
+//! nothing; the handler in `commands::skill` owns both renderings.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 
 use camino::{Utf8Path, Utf8PathBuf};
+use serde::Serialize;
 
+use crate::atomic;
 use crate::error::RkError;
 use crate::skills::record::Record;
 use crate::skills::{Digest, Skill};
+
+/// One thing an install or uninstall did, or — in a preview — would do.
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(tag = "action", rename_all = "kebab-case")]
+pub enum Action {
+    /// The payload's bytes land at this destination.
+    Write {
+        /// The `SKILL.md` path written.
+        destination: Utf8PathBuf,
+    },
+    /// The destination already holds the payload's bytes.
+    Unchanged {
+        /// The `SKILL.md` path left alone.
+        destination: Utf8PathBuf,
+    },
+    /// A recorded leftover the payload no longer names is removed.
+    Sweep {
+        /// The leftover taken back.
+        destination: Utf8PathBuf,
+    },
+    /// A leftover could not be removed; it stays for the operator.
+    SweepFailed {
+        /// The leftover still in place.
+        destination: Utf8PathBuf,
+        /// Why the removal failed.
+        error: String,
+    },
+    /// An installed destination is removed.
+    Remove {
+        /// The `SKILL.md` path removed.
+        destination: Utf8PathBuf,
+    },
+    /// A directory survives a removal because something else lives in it.
+    KeptDirectory {
+        /// The directory kept.
+        directory: Utf8PathBuf,
+    },
+    /// The record could not be written; a later install may ask for
+    /// `--force` it should not need.
+    RecordUnwritten {
+        /// The record path that did not write.
+        record: Utf8PathBuf,
+    },
+}
 
 /// One planned write: where, and which bytes.
 struct Planned {
@@ -105,20 +154,18 @@ fn leftovers(roots: &[Utf8PathBuf], record: &Record, keep: &[Utf8PathBuf]) -> Ve
         .collect()
 }
 
-/// Write `bytes` at `path`, creating the directories it needs.
+/// Write `bytes` at `path` through the temp-plus-rename writer, creating
+/// the directories it needs.
 fn write_file(path: &Utf8Path, bytes: &[u8]) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(path, bytes)
+    atomic::write(path.as_std_path(), bytes)
 }
 
 /// Remove one installed destination, and its directory when nothing else is
 /// left there.
 ///
-/// Returns the note for a directory kept because something else lives in it,
-/// so whatever a user put beside a skill survives its removal.
-fn remove_installed(destination: &Utf8Path) -> Result<Option<String>, RkError> {
+/// Returns the directory kept because something else lives in it, so
+/// whatever a user put beside a skill survives its removal.
+fn remove_installed(destination: &Utf8Path) -> Result<Option<Utf8PathBuf>, RkError> {
     fs::remove_file(destination)?;
     let Some(directory) = destination.parent() else {
         return Ok(None);
@@ -127,7 +174,7 @@ fn remove_installed(destination: &Utf8Path) -> Result<Option<String>, RkError> {
         fs::remove_dir(directory)?;
         return Ok(None);
     }
-    Ok(Some(format!("kept (not empty) {directory}")))
+    Ok(Some(directory.to_owned()))
 }
 
 /// Restore every backed-up destination, returning those that would not go back.
@@ -186,7 +233,7 @@ pub fn install(
     record_path: &Utf8Path,
     apply: bool,
     force: bool,
-) -> Result<Vec<String>, RkError> {
+) -> Result<Vec<Action>, RkError> {
     let skills = crate::skills::all()?;
     let planned = plan(roots, &skills);
     for entry in &planned {
@@ -201,15 +248,16 @@ pub fn install(
     let stale = leftovers(roots, &record, &covered);
 
     if !apply {
-        let mut lines =
-            vec!["DRY RUN: rk skill install writes these files; re-run with --apply".to_string()];
-        lines.extend(covered.iter().map(Utf8PathBuf::to_string));
-        lines.extend(
+        let mut actions: Vec<Action> = covered
+            .into_iter()
+            .map(|destination| Action::Write { destination })
+            .collect();
+        actions.extend(
             stale
-                .iter()
-                .map(|d| format!("sweep (no longer in the payload) {d}")),
+                .into_iter()
+                .map(|destination| Action::Sweep { destination }),
         );
-        return Ok(lines);
+        return Ok(actions);
     }
 
     if !force {
@@ -239,11 +287,13 @@ pub fn install(
         backups.insert(entry.destination.clone(), previous);
     }
 
-    let mut lines = Vec::new();
+    let mut actions = Vec::new();
     for entry in &planned {
         let held = backups.get(&entry.destination).and_then(Option::as_ref);
         if held.is_some_and(|previous| previous == entry.bytes) {
-            lines.push(format!("unchanged {}", entry.destination));
+            actions.push(Action::Unchanged {
+                destination: entry.destination.clone(),
+            });
             continue;
         }
         if let Err(source) = write_file(&entry.destination, entry.bytes) {
@@ -252,7 +302,9 @@ pub fn install(
                 &format!("writing {} failed: {source}", entry.destination),
             ));
         }
-        lines.push(format!("wrote {}", entry.destination));
+        actions.push(Action::Write {
+            destination: entry.destination.clone(),
+        });
     }
 
     // Sweep after the writes, never before: a refusal must leave the home
@@ -260,14 +312,17 @@ pub fn install(
     // superseding it has actually landed.
     for destination in &stale {
         match remove_installed(destination) {
-            Ok(note) => {
-                lines.push(format!("swept {destination}"));
-                lines.extend(note);
+            Ok(kept) => {
+                actions.push(Action::Sweep {
+                    destination: destination.clone(),
+                });
+                actions.extend(kept.map(|directory| Action::KeptDirectory { directory }));
                 record.written.remove(destination);
             }
-            Err(source) => lines.push(format!(
-                "could not sweep {destination}; remove it by hand: {source}"
-            )),
+            Err(source) => actions.push(Action::SweepFailed {
+                destination: destination.clone(),
+                error: source.to_string(),
+            }),
         }
     }
 
@@ -277,11 +332,11 @@ pub fn install(
             .insert(entry.destination.clone(), Digest::of(entry.bytes));
     }
     if write_file(record_path, record.to_text().as_bytes()).is_err() {
-        lines.push(format!(
-            "note: could not record the installed digests at {record_path}; a later install may ask for --force"
-        ));
+        actions.push(Action::RecordUnwritten {
+            record: record_path.to_owned(),
+        });
     }
-    Ok(lines)
+    Ok(actions)
 }
 
 /// Remove every installed skill under each root, previewing by default.
@@ -300,7 +355,7 @@ pub fn uninstall(
     roots: &[Utf8PathBuf],
     record_path: &Utf8Path,
     apply: bool,
-) -> Result<Vec<String>, RkError> {
+) -> Result<Vec<Action>, RkError> {
     let skills = crate::skills::all()?;
     let mut removable: Vec<Utf8PathBuf> = Vec::new();
     for entry in plan(roots, &skills) {
@@ -317,24 +372,26 @@ pub fn uninstall(
     let stale = leftovers(roots, &record, &removable);
 
     if !apply {
-        let mut lines = vec![
-            "DRY RUN: rk skill uninstall removes these files; re-run with --apply".to_string(),
-        ];
-        lines.extend(removable.iter().map(Utf8PathBuf::to_string));
-        lines.extend(
+        let mut actions: Vec<Action> = removable
+            .into_iter()
+            .map(|destination| Action::Remove { destination })
+            .collect();
+        actions.extend(
             stale
-                .iter()
-                .map(|d| format!("sweep (no longer in the payload) {d}")),
+                .into_iter()
+                .map(|destination| Action::Sweep { destination }),
         );
-        return Ok(lines);
+        return Ok(actions);
     }
 
     removable.extend(stale);
-    let mut lines = Vec::new();
+    let mut actions = Vec::new();
     for destination in &removable {
-        let note = remove_installed(destination)?;
-        lines.push(format!("removed {destination}"));
-        lines.extend(note);
+        let kept = remove_installed(destination)?;
+        actions.push(Action::Remove {
+            destination: destination.clone(),
+        });
+        actions.extend(kept.map(|directory| Action::KeptDirectory { directory }));
         record.written.remove(destination);
     }
 
@@ -350,11 +407,11 @@ pub fn uninstall(
         write_file(record_path, record.to_text().as_bytes())
     };
     if recorded.is_err() {
-        lines.push(format!(
-            "note: could not update the record at {record_path}; a later install may ask for --force"
-        ));
+        actions.push(Action::RecordUnwritten {
+            record: record_path.to_owned(),
+        });
     }
-    Ok(lines)
+    Ok(actions)
 }
 
 #[cfg(test)]
@@ -363,7 +420,7 @@ mod tests {
 
     use camino::Utf8PathBuf;
 
-    use super::{install, leftovers, uninstall};
+    use super::{Action, install, leftovers, uninstall};
     use crate::skills::record::{RECORD_PATH, Record};
     use crate::skills::{Digest, all};
 
@@ -405,10 +462,15 @@ mod tests {
     #[test]
     fn a_preview_lists_every_destination_and_writes_nothing() {
         let home = Home::new();
-        let lines = install(&home.roots(), &home.record(), false, false).unwrap();
+        let actions = install(&home.roots(), &home.record(), false, false).unwrap();
         let count = all().unwrap().len();
-        assert_eq!(lines.len(), count * 2 + 1, "{lines:?}");
-        assert!(lines[0].contains("DRY RUN"));
+        assert_eq!(actions.len(), count * 2, "{actions:?}");
+        assert!(
+            actions
+                .iter()
+                .all(|action| matches!(action, Action::Write { .. })),
+            "{actions:?}"
+        );
         assert!(!home.path().join(".claude").exists());
         assert!(!home.record().exists());
     }
@@ -418,12 +480,16 @@ mod tests {
         let home = Home::new();
         let first = install(&home.roots(), &home.record(), true, false).unwrap();
         assert!(
-            first.iter().all(|line| line.starts_with("wrote ")),
+            first
+                .iter()
+                .all(|action| matches!(action, Action::Write { .. })),
             "{first:?}"
         );
         let second = install(&home.roots(), &home.record(), true, false).unwrap();
         assert!(
-            second.iter().all(|line| line.starts_with("unchanged ")),
+            second
+                .iter()
+                .all(|action| matches!(action, Action::Unchanged { .. })),
             "{second:?}"
         );
         let record = Record::load(&home.record());
@@ -557,10 +623,12 @@ mod tests {
         );
         std::fs::write(home.record(), record.to_text()).unwrap();
 
-        let lines = install(&home.roots(), &home.record(), true, false).unwrap();
+        let actions = install(&home.roots(), &home.record(), true, false).unwrap();
         assert!(
-            lines.iter().any(|line| line == &format!("swept {dropped}")),
-            "{lines:?}"
+            actions.contains(&Action::Sweep {
+                destination: dropped.clone()
+            }),
+            "{actions:?}"
         );
         assert!(!dropped.exists());
         assert!(!dropped.parent().unwrap().exists());
@@ -604,12 +672,12 @@ mod tests {
             .join("notes.md");
         std::fs::write(&beside, "the user's notes\n").unwrap();
 
-        let lines = uninstall(&home.roots(), &home.record(), true).unwrap();
+        let actions = uninstall(&home.roots(), &home.record(), true).unwrap();
         assert!(
-            lines
+            actions
                 .iter()
-                .any(|line| line.starts_with("kept (not empty)")),
-            "{lines:?}"
+                .any(|action| matches!(action, Action::KeptDirectory { .. })),
+            "{actions:?}"
         );
         assert!(!home.destination(".claude/skills", &skill).exists());
         assert!(beside.is_file(), "a file beside a skill must survive");
