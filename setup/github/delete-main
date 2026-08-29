@@ -1,0 +1,28 @@
+#!/usr/bin/env sh
+# Delete main, now that the integration branch is the default and the release
+# branch exists, so no third long-lived branch remains. Idempotent: an absent
+# main is the desired state. Refuses when main is not an ancestor of the
+# release branch, so a repository whose work is on main cannot lose it to a
+# mistyped setup.
+set -eu
+: "${RK_REPO:?rk sets this; run this script through rk setup}"
+: "${RK_RELEASE_BRANCH:?rk sets this; run this script through rk setup}"
+
+if gh api "repos/$RK_REPO/git/ref/heads/main" >/dev/null 2>&1; then
+  status="$(gh api "repos/$RK_REPO/compare/main...$RK_RELEASE_BRANCH" -q .status)"
+  case "$status" in
+    ahead | identical)
+      gh api -X DELETE "repos/$RK_REPO/git/refs/heads/main"
+      echo 'ok main deleted'
+      ;;
+    *)
+      echo "FAIL main is not an ancestor of $RK_RELEASE_BRANCH ($status); deleting it would lose work" >&2
+      echo 'remediation: merge or move the work on main first, then rerun' >&2
+      exit 1
+      ;;
+  esac
+fi
+
+echo 'check: prints nothing for main'
+gh api "repos/$RK_REPO/git/ref/heads/main" -q .ref 2>/dev/null || true
+echo 'ok delete-main'

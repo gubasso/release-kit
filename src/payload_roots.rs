@@ -10,4 +10,13 @@
 // comments only — no `use`, no inner doc comments, no other modules.
 
 /// Every authored root the binary carries, in one place.
-pub const PAYLOAD_ROOTS: [&str; 5] = ["method", "bindings", "snippets", "skills", "versions.toml"];
+pub const PAYLOAD_ROOTS: [&str; 8] = [
+    "method",
+    "bindings",
+    "runbooks",
+    "forges",
+    "snippets",
+    "setup",
+    "skills",
+    "versions.toml",
+];

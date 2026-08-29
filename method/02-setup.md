@@ -1,6 +1,6 @@
 # 02 — Setup
 
-Bootstrapping one repository onto the convention. Once per repository, in this order; every step names what it proves before the next one starts. The binding for the project's technology supplies the concrete tools, files, and registry; `rk init` lands the deterministic files.
+Bootstrapping one repository onto the convention. Once per repository, in this order; every step names what it proves before the next one starts. The binding for the project's technology supplies the concrete tools, files, and registry; `rk init` lands the deterministic files. The command form of this chapter is the setup runbook, `rk guide setup`, and `rk setup` executes the forge-side steps.
 
 ## 0. Gate the package metadata
 

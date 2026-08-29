@@ -1,0 +1,34 @@
+#!/usr/bin/env sh
+# Protect the integration branch: no force pushes, no deletion. It takes
+# direct pushes and carries no required status check, because one would
+# reject the push that opens a release; the release is gated on the release
+# branch instead. Nothing in the pipeline force-pushes it, so it needs no
+# bypass. Rerunning updates in place.
+set -eu
+: "${RK_REPO:?rk sets this; run this script through rk setup}"
+: "${RK_INTEGRATION_BRANCH:?rk sets this; run this script through rk setup}"
+
+name="$RK_INTEGRATION_BRANCH-protection"
+id="$(gh api "repos/$RK_REPO/rulesets" -q ".[] | select(.name == \"$name\") | .id" | head -n 1)"
+
+if [ -n "$id" ]; then
+  gh api -X PUT "repos/$RK_REPO/rulesets/$id" --input - >/dev/null
+else
+  gh api -X POST "repos/$RK_REPO/rulesets" --input - >/dev/null
+fi <<JSON
+{
+  "name": "$name",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": { "include": ["refs/heads/$RK_INTEGRATION_BRANCH"], "exclude": [] }
+  },
+  "rules": [
+    { "type": "deletion" },
+    { "type": "non_fast_forward" }
+  ]
+}
+JSON
+
+echo "check: prints $name"
+gh api "repos/$RK_REPO/rulesets" -q ".[] | select(.name == \"$name\") | .name"

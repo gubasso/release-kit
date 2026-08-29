@@ -16,6 +16,16 @@ pub static METHOD: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/method");
 /// The per-technology bindings.
 pub static BINDINGS: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/bindings");
 
+/// The human-facing runbooks `rk guide` renders.
+pub static RUNBOOKS: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/runbooks");
+
+/// The per-forge documents answering the fifth axis.
+pub static FORGES: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/forges");
+
+/// The setup scripts, one subtree per forge, executed by `rk setup` and
+/// landed nowhere.
+pub static SETUP: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/setup");
+
 /// The deterministic files `rk init` lands, one subtree per technology,
 /// laid out exactly as they land in a target repository.
 pub static SNIPPETS: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/snippets");
@@ -61,7 +71,10 @@ pub fn root_files(root: &str) -> Option<Vec<(String, &'static [u8])>> {
     let dir = match root {
         "method" => &METHOD,
         "bindings" => &BINDINGS,
+        "runbooks" => &RUNBOOKS,
+        "forges" => &FORGES,
         "snippets" => &SNIPPETS,
+        "setup" => &SETUP,
         "skills" => &SKILLS,
         "versions.toml" => return Some(vec![(root.to_owned(), VERSIONS.as_bytes())]),
         _ => return None,

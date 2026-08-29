@@ -1,0 +1,41 @@
+#!/usr/bin/env sh
+# Delete main, now that the integration branch is the default and the release
+# branch exists, so no third long-lived branch remains. Idempotent: an absent
+# main is the desired state. Refuses when main is not an ancestor of the
+# release branch, so a repository whose work is on main cannot lose it to a
+# mistyped setup.
+set -eu
+: "${RK_REPO:?rk sets this; run this script through rk setup}"
+: "${RK_RELEASE_BRANCH:?rk sets this; run this script through rk setup}"
+
+project="$(printf '%s' "$RK_REPO" | sed 's|/|%2F|g')"
+
+# The forge CLI may pretty-print JSON; stripping whitespace makes every
+# pattern below hold for the compact and the pretty form alike, and no
+# value a pattern touches can carry whitespace of its own.
+compact() { tr -d ' \t\r\n'; }
+
+if glab api "projects/$project/repository/branches/main" >/dev/null 2>&1; then
+  # Commits reachable from main and not from the release branch; an empty
+  # list means main is an ancestor and holds nothing of its own. The
+  # comparison is captured first and fails closed: a comparison that cannot
+  # be read must never read as an empty one, because the next line deletes.
+  if ! compare="$(glab api "projects/$project/repository/compare?from=$RK_RELEASE_BRANCH&to=main")"; then
+    echo "FAIL the comparison of main and $RK_RELEASE_BRANCH could not be read" >&2
+    echo 'remediation: check authentication and rerun' >&2
+    exit 1
+  fi
+  ahead="$(printf '%s' "$compare" | grep -c '"short_id"' || true)"
+  if [ "$ahead" = "0" ]; then
+    glab api -X DELETE "projects/$project/repository/branches/main" >/dev/null
+    echo 'ok main deleted'
+  else
+    echo "FAIL main is not an ancestor of $RK_RELEASE_BRANCH; deleting it would lose work" >&2
+    echo 'remediation: merge or move the work on main first, then rerun' >&2
+    exit 1
+  fi
+fi
+
+echo 'check: prints nothing for main'
+glab api "projects/$project/repository/branches/main" 2>/dev/null | compact | grep -o '"name":"main"' || true
+echo 'ok delete-main'

@@ -137,6 +137,9 @@ pub struct Diagnostic {
     /// The step it happened in, where there is one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub step: Option<String>,
+    /// The run journal explaining it, where one was written.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run: Option<String>,
 }
 
 impl Diagnostic {
@@ -153,6 +156,7 @@ impl Diagnostic {
             retry: None,
             target_state: None,
             step: None,
+            run: None,
         }
     }
 
@@ -174,6 +178,20 @@ impl Diagnostic {
     #[must_use]
     pub fn target_state(mut self, state: impl Into<String>) -> Self {
         self.target_state = Some(state.into());
+        self
+    }
+
+    /// Name the step the failure happened in.
+    #[must_use]
+    pub fn step(mut self, step: impl Into<String>) -> Self {
+        self.step = Some(step.into());
+        self
+    }
+
+    /// Name the run journal that explains the failure.
+    #[must_use]
+    pub fn run(mut self, run: impl Into<String>) -> Self {
+        self.run = Some(run.into());
         self
     }
 
@@ -200,6 +218,9 @@ impl Diagnostic {
         }
         if let Some(state) = &self.target_state {
             let _ = write!(text, "\n  state     {state}");
+        }
+        if let Some(run) = &self.run {
+            let _ = write!(text, "\n  run       {run}");
         }
         text
     }

@@ -203,6 +203,8 @@ fn a_closed_pipe_does_not_interrupt_an_apply() {
         "init",
         "--tech",
         "rust",
+        "--forge",
+        "github",
         "--target",
         &target_path,
         "--apply",
@@ -274,15 +276,15 @@ fn a_failing_stdout_is_one_typed_io_failure() {
 #[test]
 fn snippet_lists_every_landable_file() {
     rk().args(["snippet", "--list"]).assert().success().stdout(
-        predicate::str::contains("rust/release-plz.toml")
+        predicate::str::contains("rust/github/release-plz.toml")
             .and(predicate::str::contains(
-                "rust/.github/workflows/release-plz.yml",
+                "rust/github/.github/workflows/release-plz.yml",
             ))
             .and(predicate::str::contains(
-                "python/.github/workflows/release-please.yml",
+                "python/github/.github/workflows/release-please.yml",
             ))
-            .and(predicate::str::contains("bash/VERSION"))
-            .and(predicate::str::contains("bash/cliff.toml")),
+            .and(predicate::str::contains("bash/github/VERSION"))
+            .and(predicate::str::contains("bash/github/cliff.toml")),
     );
 }
 
@@ -402,12 +404,14 @@ fn init_preview_human_lines_are_snapshot_held() {
          .github/workflows/release-plz.yml\n\
          dist-workspace.toml\n\
          release-plz.toml\n\
-         Next:\n  rk init --tech rust --target {path} --apply\n"
+         Next:\n  rk init --tech rust --forge github --target {path} --apply\n"
     );
-    rk().args(["init", "--tech", "rust", "--target", &path])
-        .assert()
-        .success()
-        .stdout(predicate::eq(expected));
+    rk().args([
+        "init", "--tech", "rust", "--forge", "github", "--target", &path,
+    ])
+    .assert()
+    .success()
+    .stdout(predicate::eq(expected));
 }
 
 #[test]
@@ -415,7 +419,7 @@ fn init_json_emits_one_object_and_nothing_else() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
     for (mode, extra) in [("preview", None), ("apply", Some("--apply"))] {
         let mut cmd = rk();
-        cmd.args(["init", "--tech", "rust", "--target"])
+        cmd.args(["init", "--tech", "rust", "--forge", "github", "--target"])
             .arg(target.path());
         if let Some(flag) = extra {
             cmd.arg(flag);
@@ -449,7 +453,7 @@ fn init_json_failure_is_a_diagnostic_on_stderr() {
     std::fs::write(target.path().join("release-plz.toml"), "something local\n")
         .expect("the conflict file writes");
     let output = rk()
-        .args(["init", "--tech", "rust", "--target"])
+        .args(["init", "--tech", "rust", "--forge", "github", "--target"])
         .arg(target.path())
         .args(["--apply", "--json"])
         .assert()
@@ -472,7 +476,7 @@ fn init_json_failure_is_a_diagnostic_on_stderr() {
 #[test]
 fn init_dry_runs_by_default_and_writes_nothing() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
-    rk().args(["init", "--tech", "rust", "--target"])
+    rk().args(["init", "--tech", "rust", "--forge", "github", "--target"])
         .arg(target.path())
         .assert()
         .success()
@@ -486,7 +490,7 @@ fn init_dry_runs_by_default_and_writes_nothing() {
 #[test]
 fn init_apply_lands_reports_sentinels_and_is_idempotent() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
-    rk().args(["init", "--tech", "rust", "--target"])
+    rk().args(["init", "--tech", "rust", "--forge", "github", "--target"])
         .arg(target.path())
         .arg("--apply")
         .assert()
@@ -501,7 +505,7 @@ fn init_apply_lands_reports_sentinels_and_is_idempotent() {
             .join(".github/workflows/release-plz.yml")
             .is_file()
     );
-    rk().args(["init", "--tech", "rust", "--target"])
+    rk().args(["init", "--tech", "rust", "--forge", "github", "--target"])
         .arg(target.path())
         .arg("--apply")
         .assert()
@@ -514,7 +518,7 @@ fn init_apply_lands_reports_sentinels_and_is_idempotent() {
 #[test]
 fn init_lands_no_skill_into_the_target() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
-    rk().args(["init", "--tech", "rust", "--target"])
+    rk().args(["init", "--tech", "rust", "--forge", "github", "--target"])
         .arg(target.path())
         .arg("--apply")
         .assert()
@@ -532,7 +536,7 @@ fn init_refuses_a_conflicting_target_and_writes_nothing() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
     std::fs::write(target.path().join("release-plz.toml"), "something local\n")
         .expect("the conflict file writes");
-    rk().args(["init", "--tech", "rust", "--target"])
+    rk().args(["init", "--tech", "rust", "--forge", "github", "--target"])
         .arg(target.path())
         .arg("--apply")
         .assert()
@@ -547,7 +551,7 @@ fn init_refuses_a_conflicting_target_and_writes_nothing() {
 #[test]
 fn init_rejects_an_unknown_tech_with_usage() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
-    rk().args(["init", "--tech", "fortran", "--target"])
+    rk().args(["init", "--tech", "fortran", "--forge", "github", "--target"])
         .arg(target.path())
         .assert()
         .code(64)
@@ -556,9 +560,17 @@ fn init_rejects_an_unknown_tech_with_usage() {
 
 #[test]
 fn init_refuses_a_missing_target() {
-    rk().args(["init", "--tech", "rust", "--target", "/no/such/dir"])
-        .assert()
-        .code(73);
+    rk().args([
+        "init",
+        "--tech",
+        "rust",
+        "--forge",
+        "github",
+        "--target",
+        "/no/such/dir",
+    ])
+    .assert()
+    .code(73);
 }
 
 #[test]
@@ -1004,9 +1016,17 @@ fn usage_dumps_every_verb_in_one_call() {
         "rk method",
         "rk binding",
         "rk snippet",
+        "rk guide",
+        "rk forge",
         "rk versions",
         "rk payload",
         "rk init",
+        "rk setup check",
+        "rk setup step",
+        "rk setup script",
+        "rk runs list",
+        "rk runs show",
+        "rk runs prune",
         "rk skill install",
         "rk skill uninstall",
         "rk doctor",
@@ -1173,7 +1193,7 @@ fn init_propagates_an_unreadable_destination_and_writes_nothing() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
     // A directory where a file should land fails the pre-write read pass.
     std::fs::create_dir(target.path().join("release-plz.toml")).expect("the blocking dir creates");
-    rk().args(["init", "--tech", "rust", "--target"])
+    rk().args(["init", "--tech", "rust", "--forge", "github", "--target"])
         .arg(target.path())
         .arg("--apply")
         .assert()
@@ -1181,5 +1201,1362 @@ fn init_propagates_an_unreadable_destination_and_writes_nothing() {
     assert!(
         !target.path().join("dist-workspace.toml").exists(),
         "a failed pre-write pass must write nothing"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The host track: runbooks, forge documents, setup scripts, and the runner.
+// ---------------------------------------------------------------------------
+
+/// The forge-mutating step names: every one exists in both trees under the
+/// same name, per `forge-setup:every-supported-forge-runs-every-step`.
+const FORGE_STEPS: [&str; 10] = [
+    "bot-secrets",
+    "ci-permissions",
+    "create-release-branch",
+    "default-branch",
+    "delete-main",
+    "install-bot",
+    "protect-integration-branch",
+    "protect-release-branch",
+    "protect-tags",
+    "protections-check",
+];
+
+fn repo_path(rel: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join(rel)
+}
+
+fn script_files(forge: &str) -> Vec<(String, String)> {
+    let dir = repo_path("setup").join(forge);
+    let mut files: Vec<(String, String)> = std::fs::read_dir(&dir)
+        .expect("the tree reads")
+        .map(|entry| {
+            let path = entry.expect("an entry").path();
+            (
+                path.file_name().unwrap().to_string_lossy().into_owned(),
+                std::fs::read_to_string(&path).expect("a script reads"),
+            )
+        })
+        .collect();
+    files.sort();
+    files
+}
+
+/// Both trees hold identical step-name sets — the parity rule, one
+/// assertion for a guarantee review cannot hold.
+#[test]
+fn the_two_setup_trees_hold_identical_step_sets() {
+    let github: Vec<String> = script_files("github").into_iter().map(|(n, _)| n).collect();
+    let gitlab: Vec<String> = script_files("gitlab").into_iter().map(|(n, _)| n).collect();
+    assert_eq!(github, gitlab, "the forge trees disagree on step names");
+    let mut expected: Vec<&str> = FORGE_STEPS.to_vec();
+    expected.sort_unstable();
+    assert_eq!(github, expected, "the trees and the step table disagree");
+}
+
+/// Every step in `rk setup --list` resolves to an embedded script in every
+/// tree, except `package-check`, the one step outside the parity rule.
+#[test]
+fn every_listed_step_resolves_to_a_script_in_every_tree() {
+    let out = rk().args(["setup", "--list"]).assert().success();
+    let text = String::from_utf8_lossy(&out.get_output().stdout).into_owned();
+    let mut listed: Vec<String> = text
+        .lines()
+        .filter_map(|line| {
+            let rest = line.trim_start();
+            let (number, rest) = rest.split_once(". ")?;
+            number.trim().parse::<u32>().ok()?;
+            Some(rest.split_whitespace().next()?.to_owned())
+        })
+        .collect();
+    assert_eq!(listed.len(), 11, "eleven steps list: {text}");
+    listed.retain(|name| name != "package-check");
+    listed.sort();
+    let filed: Vec<String> = script_files("github").into_iter().map(|(n, _)| n).collect();
+    assert_eq!(listed, filed, "the list and the tree disagree");
+}
+
+/// The static battery: `sh -n`, `set -eu`, no self-relative `cd`, and no
+/// variable outside the declared environment.
+#[test]
+fn every_setup_script_passes_the_static_battery() {
+    let allowed = [
+        "RK_REPO",
+        "RK_FORGE",
+        "RK_INTEGRATION_BRANCH",
+        "RK_RELEASE_BRANCH",
+        "RK_REQUIRED_CHECK",
+        "RK_BOT_APP_ID",
+        "RK_BOT_PRIVATE_KEY",
+        "RK_BOT_TOKEN",
+        "RK_BOT_INSTALLATION",
+    ];
+    for forge in ["github", "gitlab"] {
+        for (name, text) in script_files(forge) {
+            let path = repo_path("setup").join(forge).join(&name);
+            let ok = std::process::Command::new("sh")
+                .arg("-n")
+                .arg(&path)
+                .status()
+                .expect("sh runs")
+                .success();
+            assert!(ok, "{forge}/{name}: sh -n rejects the script");
+            assert!(
+                text.lines().any(|line| line.trim() == "set -eu"),
+                "{forge}/{name}: no set -eu"
+            );
+            assert!(
+                !text.contains("dirname \"$0\"") && !text.contains("cd \""),
+                "{forge}/{name}: a self-relative cd survived the migration"
+            );
+            assert!(
+                !text.contains("set -x"),
+                "{forge}/{name}: tracing would print expanded variables"
+            );
+            for (idx, ch) in text.char_indices() {
+                if ch != '$' {
+                    continue;
+                }
+                let rest = &text[idx + 1..];
+                let rest = rest.strip_prefix('{').unwrap_or(rest);
+                let var: String = rest
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                    .collect();
+                if var.len() > 1 && var.chars().all(|c| c.is_ascii_uppercase() || c == '_') {
+                    assert!(
+                        allowed.contains(&var.as_str()),
+                        "{forge}/{name}: undeclared variable {var}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// No script invokes the other forge's CLI — the copy-paste a parity test
+/// cannot see.
+#[test]
+fn no_script_invokes_the_other_forges_cli() {
+    for (name, text) in script_files("github") {
+        assert!(!text.contains("glab"), "github/{name} invokes glab");
+    }
+    for (name, text) in script_files("gitlab") {
+        let names_gh = text
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .any(|token| token == "gh");
+        assert!(!names_gh, "gitlab/{name} invokes gh");
+    }
+}
+
+/// Every forge with a script tree has a document, every document has a
+/// tree, and neither document names the other forge's CLI.
+#[test]
+fn forge_documents_close_over_the_script_trees() {
+    let docs: Vec<String> = std::fs::read_dir(repo_path("forges"))
+        .expect("forges/ reads")
+        .filter_map(|entry| {
+            let name = entry
+                .expect("an entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned();
+            let stem = name.strip_suffix(".md")?.to_owned();
+            (stem != "README").then_some(stem)
+        })
+        .collect();
+    let trees: Vec<String> = std::fs::read_dir(repo_path("setup"))
+        .expect("setup/ reads")
+        .map(|entry| {
+            entry
+                .expect("an entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    let mut docs = docs;
+    let mut trees = trees;
+    docs.sort();
+    trees.sort();
+    assert_eq!(docs, trees, "the documents and the trees disagree");
+
+    let github = std::fs::read_to_string(repo_path("forges/github.md")).expect("reads");
+    assert!(!github.contains("glab"), "the github document names glab");
+    let gitlab = std::fs::read_to_string(repo_path("forges/gitlab.md")).expect("reads");
+    let names_gh = gitlab
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|token| token == "gh");
+    assert!(!names_gh, "the gitlab document names gh");
+}
+
+#[test]
+fn forge_serves_byte_identically_and_lists() {
+    rk().args(["forge", "--list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("github").and(predicate::str::contains("gitlab")));
+    let authored = std::fs::read(repo_path("forges/gitlab.md")).expect("the doc reads");
+    let printed = rk()
+        .args(["forge", "gitlab"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(printed, authored);
+    rk().args(["forge", "sourcehut"])
+        .assert()
+        .code(66)
+        .stderr(predicate::str::contains("no forge named"));
+}
+
+/// The runbooks render the spine: same steps, same order, as the chapters.
+#[test]
+fn the_runbooks_match_their_method_chapters() {
+    let chapter = std::fs::read_to_string(repo_path("method/02-setup.md")).expect("reads");
+    let runbook = std::fs::read_to_string(repo_path("runbooks/setup.md")).expect("reads");
+    let chapter_steps: Vec<&str> = chapter
+        .lines()
+        .filter(|line| {
+            line.strip_prefix("## ")
+                .and_then(|rest| rest.split_once('.'))
+                .is_some_and(|(n, _)| n.chars().all(|c| c.is_ascii_digit()))
+        })
+        .collect();
+    let runbook_steps: Vec<&str> = runbook
+        .lines()
+        .filter(|line| {
+            line.strip_prefix("## ")
+                .and_then(|rest| rest.split_once('.'))
+                .is_some_and(|(n, _)| n.chars().all(|c| c.is_ascii_digit()))
+        })
+        .collect();
+    assert_eq!(
+        chapter_steps, runbook_steps,
+        "the setup runbook's steps drifted from the chapter's"
+    );
+
+    let operate = std::fs::read_to_string(repo_path("method/03-operate.md")).expect("reads");
+    let sequence = operate
+        .lines()
+        .filter(|line| {
+            line.split_once(". ")
+                .is_some_and(|(n, _)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+        })
+        .count();
+    let release = std::fs::read_to_string(repo_path("runbooks/release.md")).expect("reads");
+    let rendered = release
+        .lines()
+        .filter(|line| {
+            line.strip_prefix("## ")
+                .and_then(|rest| rest.split_once('.'))
+                .is_some_and(|(n, _)| n.chars().all(|c| c.is_ascii_digit()))
+        })
+        .count();
+    assert_eq!(
+        sequence, rendered,
+        "the release runbook's step count drifted from the chapter's"
+    );
+}
+
+#[test]
+fn every_runbook_fence_declares_a_language() {
+    for name in ["README.md", "release.md", "setup.md"] {
+        let text = std::fs::read_to_string(repo_path("runbooks").join(name)).expect("reads");
+        let mut open = false;
+        for line in text.lines() {
+            if let Some(rest) = line.trim_start().strip_prefix("```") {
+                if !open {
+                    assert!(
+                        !rest.trim().is_empty(),
+                        "{name}: a fence opens without a language"
+                    );
+                }
+                open = !open;
+            }
+        }
+    }
+}
+
+#[test]
+fn guide_lists_and_serves_byte_identically_when_nothing_resolves() {
+    rk().args(["guide", "--list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("release").and(predicate::str::contains("setup")));
+    let bare = tempfile::tempdir().expect("a bare dir exists");
+    let authored = std::fs::read(repo_path("runbooks/release.md")).expect("reads");
+    let printed = rk()
+        .args(["guide", "release"])
+        .current_dir(bare.path())
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("--repo"))
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(
+        printed, authored,
+        "with nothing detected the runbook must print unchanged"
+    );
+    rk().args(["guide", "nope"])
+        .current_dir(bare.path())
+        .assert()
+        .code(66)
+        .stderr(predicate::str::contains("no runbook named"));
+}
+
+/// D6: the resolved value appears, no `<repo>` survives, and `<release pr>`
+/// is still a placeholder — the middle assertion catches a future edit that
+/// starts substituting the pull request number too.
+#[test]
+fn guide_substitutes_the_repo_and_keeps_the_pr_placeholders() {
+    let bare = tempfile::tempdir().expect("a bare dir exists");
+    let out = rk()
+        .args([
+            "guide",
+            "release",
+            "--forge",
+            "github",
+            "--repo",
+            "acme/widget",
+        ])
+        .current_dir(bare.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8_lossy(&out);
+    assert!(text.contains("acme/widget"));
+    assert!(
+        !text.contains("<repo>"),
+        "a placeholder survived substitution"
+    );
+    assert!(
+        text.contains("<release pr>"),
+        "the pr number must stay a placeholder"
+    );
+    assert!(text.contains("gh pr merge"), "the github variant is kept");
+    assert!(
+        !text.contains("glab mr merge"),
+        "the gitlab variant is dropped"
+    );
+    assert!(
+        !text.contains("On github:"),
+        "a kept variant drops its label"
+    );
+}
+
+#[test]
+fn setup_list_marks_required_check_only_on_github() {
+    rk().args(["setup", "--list", "--forge", "github"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("needs --required-check"));
+    rk().args(["setup", "--list", "--forge", "gitlab"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("needs --required-check").not());
+}
+
+#[test]
+fn setup_script_prints_the_embedded_script() {
+    let authored = std::fs::read(repo_path("setup/github/default-branch")).expect("reads");
+    let printed = rk()
+        .args(["setup", "script", "default-branch"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(printed, authored);
+    let gitlab = rk()
+        .args(["setup", "script", "delete-main", "--forge", "gitlab"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(
+        gitlab,
+        std::fs::read(repo_path("setup/gitlab/delete-main")).expect("reads")
+    );
+    rk().args(["setup", "script", "no-such-step"])
+        .assert()
+        .code(66);
+    rk().args(["setup", "script", "package-check"])
+        .assert()
+        .code(64)
+        .stderr(predicate::str::contains("binding"));
+}
+
+/// The new roots must never leak into a target.
+#[test]
+fn init_lands_nothing_from_the_host_only_roots() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    rk().args(["init", "--tech", "rust", "--forge", "github", "--target"])
+        .arg(target.path())
+        .arg("--apply")
+        .assert()
+        .success();
+    for root in ["setup", "runbooks", "forges"] {
+        assert!(
+            !target.path().join(root).exists(),
+            "{root} must not be landed into a target"
+        );
+    }
+}
+
+#[test]
+fn init_refuses_an_unsupported_pair_and_an_undetectable_forge() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    rk().args(["init", "--tech", "python", "--forge", "gitlab", "--target"])
+        .arg(target.path())
+        .assert()
+        .code(64)
+        .stderr(predicate::str::contains("no landable files"));
+    rk().args(["init", "--tech", "rust", "--target"])
+        .arg(target.path())
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("--forge"));
+}
+
+#[test]
+fn snippet_lists_the_gitlab_trees() {
+    rk().args(["snippet", "--list"]).assert().success().stdout(
+        predicate::str::contains("rust/gitlab/.gitlab-ci.yml")
+            .and(predicate::str::contains("rust/gitlab/release-plz.toml"))
+            .and(predicate::str::contains("bash/gitlab/.gitlab-ci.yml")),
+    );
+}
+
+/// The reference does not leak: the promoted zones carry no identifier from
+/// the implementation this work generalized. The tokens are assembled at
+/// run time so this file cannot trip its own scan.
+#[test]
+fn the_promoted_zones_carry_no_reference_identifier() {
+    let deny: Vec<String> = vec![
+        format!("SDD{}", "_"),
+        format!("gubasso{}ci-bot", "-"),
+        format!("RELEASE_PLZ{}APP_ID", "_"),
+        format!("RELEASE_PLZ{}APP_PRIVATE_KEY", "_"),
+        format!("release{}setup.md", "-"),
+        format!("app{}secrets", "-"),
+        format!("actions{}permissions", "-"),
+        format!("create{}master", "-"),
+        format!("ruleset{}master", "-"),
+        format!("ruleset{}develop", "-"),
+        format!("ruleset{}tags", "-"),
+        format!("rulesets{}check", "-"),
+    ];
+    let mut offenders = Vec::new();
+    for zone in [
+        "method",
+        "bindings",
+        "runbooks",
+        "forges",
+        "setup",
+        "snippets",
+        "skills",
+        "src",
+        "tests",
+        "_docs",
+        "README.md",
+        "AGENTS.md",
+    ] {
+        scan_for_tokens(&repo_path(zone), &deny, &mut offenders);
+    }
+    assert!(
+        offenders.is_empty(),
+        "reference identifiers leaked: {offenders:?}"
+    );
+}
+
+fn scan_for_tokens(path: &Path, deny: &[String], offenders: &mut Vec<String>) {
+    if path.is_dir() {
+        for entry in std::fs::read_dir(path).expect("the zone reads") {
+            scan_for_tokens(&entry.expect("an entry").path(), deny, offenders);
+        }
+        return;
+    }
+    let name = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    for token in deny {
+        if name.contains(token.as_str()) {
+            offenders.push(format!("{} (file name)", path.display()));
+        }
+    }
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return;
+    };
+    for (idx, line) in text.lines().enumerate() {
+        for token in deny {
+            if line.contains(token.as_str()) {
+                offenders.push(format!("{}:{}", path.display(), idx + 1));
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The mocked forge harness.
+// ---------------------------------------------------------------------------
+
+const MOCK_GH: &str = r#"#!/usr/bin/env bash
+STATE="__STATE__"
+printf '%s\n' "$*" >> "$STATE/log"
+stdin=""
+case "$*" in
+  *"--input -"*) stdin="$(cat)"; printf '%s\n' "$stdin" >> "$STATE/stdin-log";;
+esac
+cmd="$1"; shift
+branch_json() {
+  if [[ -f "$STATE/branch_$1" ]]; then
+    sha="$(cat "$STATE/branch_$1")"
+    if [[ "$2" == ".object.sha" ]]; then echo "$sha"; else echo "{\"ref\":\"refs/heads/$1\",\"object\":{\"sha\":\"$sha\"}}"; fi
+  else
+    echo "gh: Not Found (HTTP 404)" >&2; exit 1
+  fi
+}
+case "$cmd" in
+auth) exit 0;;
+secret)
+  sub="$1"; shift
+  if [[ "$sub" == set ]]; then
+    value="$(cat)"
+    printf '%s\n' "$value" >> "$STATE/stdin-log"
+    echo "$1" >> "$STATE/secrets.index"
+    exit 0
+  fi
+  sort -u "$STATE/secrets.index" 2>/dev/null || true
+  exit 0;;
+repo)
+  sub="$1"; shift
+  if [[ "$sub" == edit ]]; then
+    while (($#)); do [[ "$1" == --default-branch ]] && echo "$2" > "$STATE/default_branch"; shift; done
+    exit 0
+  fi
+  cat "$STATE/default_branch"; exit 0;;
+api)
+  method=GET; path=""; query=""; fields=()
+  while (($#)); do
+    case "$1" in
+      -X) method="$2"; shift;;
+      -f|-F) fields+=("$2"); shift;;
+      -q) query="$2"; shift;;
+      --input) shift;;
+      --paginate) ;;
+      -*) ;;
+      *) [[ -z "$path" ]] && path="$1";;
+    esac
+    shift
+  done
+  path="${path#/}"; path="${path%%\?*}"
+  case "$method $path" in
+  "GET repos/acme/widget")
+    if [[ -f "$STATE/fail_repo" ]]; then echo "gh: Internal Server Error (HTTP 500)" >&2; exit 1; fi
+    if [[ "$query" == ".id" ]]; then echo 1; else echo "{\"id\":1,\"default_branch\":\"$(cat "$STATE/default_branch")\"}"; fi;;
+  "GET repos/"*"/git/ref/heads/"*)
+    branch_json "${path##*/heads/}" "$query";;
+  "POST repos/"*"/git/refs")
+    ref=""; sha=""
+    for f in "${fields[@]}"; do case "$f" in ref=*) ref="${f#ref=}";; sha=*) sha="${f#sha=}";; esac; done
+    echo "$sha" > "$STATE/branch_${ref##*/}"
+    echo '{}';;
+  "DELETE repos/"*"/git/refs/heads/"*)
+    rm -f "$STATE/branch_${path##*/heads/}";;
+  "GET repos/"*"/compare/"*)
+    pair="${path##*/compare/}"
+    key="compare_${pair//.../_}"
+    status="identical"
+    [[ -f "$STATE/$key" ]] && status="$(cat "$STATE/$key")"
+    if [[ "$status" == "error" ]]; then echo "gh: Internal Server Error (HTTP 500)" >&2; exit 1; fi
+    if [[ "$query" == ".status" ]]; then echo "$status"; else echo "{\"status\":\"$status\"}"; fi;;
+  "PUT repos/"*"/actions/permissions/workflow")
+    echo "write true" > "$STATE/perms";;
+  "GET repos/"*"/actions/permissions/workflow")
+    perms="none false"; [[ -f "$STATE/perms" ]] && perms="$(cat "$STATE/perms")"
+    if [[ -n "$query" ]]; then echo "$perms"; else
+      echo "{\"default_workflow_permissions\":\"${perms%% *}\",\"can_approve_pull_request_reviews\":${perms##* }}"
+    fi;;
+  "GET repos/"*"/actions/secrets")
+    names=""
+    if [[ -f "$STATE/secrets.index" ]]; then
+      while read -r n; do names+="{\"name\":\"$n\"},"; done < <(sort -u "$STATE/secrets.index")
+    fi
+    echo "{\"secrets\":[${names%,}]}";;
+  "GET user/installations")
+    if [[ "$query" == ".total_count" ]]; then echo 1
+    elif [[ -n "$query" ]]; then echo 42
+    else echo '{"total_count":1,"installations":[{"id":42,"app_slug":"bot"}]}'; fi;;
+  "PUT user/installations/"*"/repositories/"*)
+    touch "$STATE/installed"; echo '{}';;
+  "GET user/installations/"*"/repositories")
+    entry=""
+    [[ -f "$STATE/installed" ]] && entry='{"full_name":"acme/widget"}'
+    if [[ -n "$query" ]]; then
+      [[ -n "$entry" ]] && echo "acme/widget"
+    else
+      echo "{\"repositories\":[$entry]}"
+    fi;;
+  "GET repos/acme/widget/rulesets")
+    if [[ "$query" == ".[].name" ]]; then
+      cat "$STATE/rulesets.index" 2>/dev/null || true
+    elif [[ "$query" == *"select(.name =="* ]]; then
+      want="$(sed 's/.*select(.name == "\([^"]*\)").*/\1/' <<<"$query")"
+      line=""
+      [[ -f "$STATE/rulesets.index" ]] && line="$(grep -n -x -F "$want" "$STATE/rulesets.index" | head -1 | cut -d: -f1)"
+      if [[ -n "$line" ]]; then
+        if [[ "$query" == *"| .id" ]]; then echo "$line"; else echo "$want"; fi
+      fi
+    else
+      out="["
+      if [[ -f "$STATE/rulesets.index" ]]; then
+        i=0
+        while read -r n; do i=$((i+1)); out+="{\"name\":\"$n\",\"id\":$i},"; done < "$STATE/rulesets.index"
+      fi
+      out="${out%,}"
+      echo "$out]"
+    fi;;
+  "POST repos/acme/widget/rulesets")
+    name="$(grep -o '"name": "[^"]*"' <<<"$stdin" | head -1 | cut -d'"' -f4)"
+    echo "$name" >> "$STATE/rulesets.index"
+    printf '%s\n' "$stdin" > "$STATE/ruleset_$name"
+    echo '{}';;
+  "PUT repos/acme/widget/rulesets/"*)
+    n="${path##*/}"
+    name="$(sed -n "${n}p" "$STATE/rulesets.index")"
+    printf '%s\n' "$stdin" > "$STATE/ruleset_$name"
+    echo '{}';;
+  "GET repos/acme/widget/rulesets/"*)
+    n="${path##*/}"
+    name="$(sed -n "${n}p" "$STATE/rulesets.index")"
+    body="$(cat "$STATE/ruleset_$name" 2>/dev/null)"
+    case "$query" in
+      "") printf '%s\n' "$body";;
+      *"bypass_actors"*) echo 0;;
+      *'contains(["pull_request"])'*) echo true;;
+      *'contains(["required_status_checks"])'*) echo true;;
+      *'contains(["required_linear_history"])'*) echo false;;
+      *"allowed_merge_methods"*) echo '["merge"]';;
+      *"required_status_checks[].context"*) grep -o '"context": "[^"]*"' <<<"$body" | head -1 | cut -d'"' -f4;;
+      *"required_approving_review_count"*) echo 0;;
+      *) echo null;;
+    esac;;
+  *) echo '{}';;
+  esac
+  exit 0;;
+esac
+exit 0
+"#;
+
+const MOCK_GLAB: &str = r#"#!/usr/bin/env bash
+STATE="__STATE__"
+printf '%s\n' "$*" >> "$STATE/log"
+cmd="$1"; shift
+case "$cmd" in
+auth) exit 0;;
+variable)
+  sub="$1"; shift
+  value="$(cat)"
+  printf '%s\n' "$value" >> "$STATE/stdin-log"
+  touch "$STATE/var_$1"
+  exit 0;;
+api)
+  method=GET; path=""; fields=()
+  while (($#)); do
+    case "$1" in
+      -X) method="$2"; shift;;
+      -f|-F) fields+=("$2"); shift;;
+      -*) ;;
+      *) [[ -z "$path" ]] && path="$1";;
+    esac
+    shift
+  done
+  case "$method $path" in
+  "GET "*"/variables/RELEASE_BOT_TOKEN")
+    if [[ -f "$STATE/var_RELEASE_BOT_TOKEN" ]]; then
+      echo '{"key":"RELEASE_BOT_TOKEN","masked":true}'
+    else
+      echo "glab: 404 Not Found (HTTP 404)" >&2; exit 1
+    fi;;
+  "GET "*"/access_tokens") echo '[]';;
+  "GET "*"/protected_tags/v%2A")
+    if [[ -f "$STATE/tag_protected" ]]; then echo '{"name":"v*"}'; else echo "glab: 404 Not Found (HTTP 404)" >&2; exit 1; fi;;
+  "POST "*"/protected_tags")
+    touch "$STATE/tag_protected"; echo '{}';;
+  "GET "*"/protected_branches/"*)
+    echo "glab: 404 Not Found (HTTP 404)" >&2; exit 1;;
+  "PUT projects/"*)
+    for f in "${fields[@]}"; do
+      case "$f" in default_branch=*) echo "${f#default_branch=}" > "$STATE/default_branch";; esac
+    done
+    echo '{}';;
+  "GET projects/"*)
+    echo "{\"id\":1,\"default_branch\":\"$(cat "$STATE/default_branch")\",\"jobs_enabled\":true,\"only_allow_merge_if_pipeline_succeeds\":false,\"merge_method\":\"ff\"}";;
+  *) echo '{}';;
+  esac
+  exit 0;;
+esac
+exit 0
+"#;
+
+/// One mocked setup fixture: a scratch home, a scratch target, and a mock
+/// forge CLI recording every invocation and every stdin byte.
+struct ForgeFixture {
+    home: tempfile::TempDir,
+    target: tempfile::TempDir,
+    mock: tempfile::TempDir,
+}
+
+impl ForgeFixture {
+    fn new() -> Self {
+        let fixture = Self {
+            home: tempfile::tempdir().expect("a scratch home exists"),
+            target: tempfile::tempdir().expect("a scratch target exists"),
+            mock: tempfile::tempdir().expect("a scratch mock dir exists"),
+        };
+        for (name, body) in [("gh", MOCK_GH), ("glab", MOCK_GLAB)] {
+            let path = fixture.mock.path().join(name);
+            std::fs::write(
+                &path,
+                body.replace("__STATE__", &fixture.mock.path().to_string_lossy()),
+            )
+            .expect("the mock writes");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                    .expect("the mock is executable");
+            }
+        }
+        // A fresh, unconfigured repository: default branch main, one commit
+        // on develop and main, bash so package-check has nothing to run.
+        fixture.seed("default_branch", "main");
+        fixture.seed("branch_develop", "abc123");
+        fixture.seed("branch_main", "abc123");
+        std::fs::write(fixture.target.path().join("VERSION"), "0.1.0\n").expect("VERSION writes");
+        fixture
+    }
+
+    fn seed(&self, name: &str, value: &str) {
+        std::fs::write(self.mock.path().join(name), value).expect("the state seeds");
+    }
+
+    fn state(&self, name: &str) -> PathBuf {
+        self.mock.path().join(name)
+    }
+
+    fn log(&self) -> String {
+        std::fs::read_to_string(self.state("log")).unwrap_or_default()
+    }
+
+    fn stdin_log(&self) -> String {
+        std::fs::read_to_string(self.state("stdin-log")).unwrap_or_default()
+    }
+
+    fn runs_root(&self) -> PathBuf {
+        self.home.path().join("release-kit/runs")
+    }
+
+    fn rk(&self, args: &[&str]) -> Command {
+        let mut command = rk();
+        command
+            .env("HOME", self.home.path())
+            .env("XDG_STATE_HOME", self.home.path())
+            .env("RK_GH_BIN", self.mock.path().join("gh"))
+            .env("RK_GLAB_BIN", self.mock.path().join("glab"))
+            .env_remove("RK_BOT_APP_ID")
+            .env_remove("RK_BOT_PRIVATE_KEY")
+            .env_remove("RK_BOT_TOKEN")
+            .args(args)
+            .args(["--target"])
+            .arg(self.target.path());
+        command
+    }
+}
+
+/// Preview writes nothing and calls no external command.
+#[test]
+fn setup_preview_calls_nothing_and_materializes_nothing() {
+    let fixture = ForgeFixture::new();
+    fixture
+        .rk(&["setup"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("DRY RUN").and(predicate::str::contains("setup/github")));
+    assert_eq!(fixture.log(), "", "preview invoked the forge CLI");
+    let runs: Vec<_> = std::fs::read_dir(fixture.runs_root())
+        .expect("the preview persisted a journal")
+        .map(|entry| entry.expect("an entry").path())
+        .collect();
+    assert_eq!(runs.len(), 1);
+    assert!(
+        !runs[0].join("scripts").exists(),
+        "preview materialized a script"
+    );
+}
+
+/// Under --json the stream is NDJSON: every stdout line parses, the first
+/// names the schema.
+#[test]
+fn setup_json_is_ndjson_opening_with_the_schema() {
+    let fixture = ForgeFixture::new();
+    let out = fixture
+        .rk(&["setup"])
+        .args(["--repo", "acme/widget", "--forge", "github", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let lines: Vec<serde_json::Value> = String::from_utf8_lossy(&out)
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("every stdout line is one JSON object"))
+        .collect();
+    assert!(!lines.is_empty());
+    assert_eq!(lines[0]["type"], "schema");
+    assert_eq!(lines[0]["schema"], "rk.events/1");
+}
+
+/// The flagship: a full apply runs every step against the mocked forge, a
+/// rerun re-asserts, no secret reaches argv or the journal, and check then
+/// reports every step satisfied.
+#[test]
+fn a_full_github_apply_lands_reasserts_and_checks_clean() {
+    let fixture = ForgeFixture::new();
+    let pem = "-----BEGIN FAKE KEY-----\nsekret-pem-bytes\n-----END FAKE KEY-----\n";
+    let apply = |fixture: &ForgeFixture| {
+        let mut command = fixture.rk(&["setup"]);
+        command
+            .args(["--repo", "acme/widget", "--forge", "github"])
+            .args(["--apply", "--required-check", "test-check"])
+            .env("RK_BOT_APP_ID", "314159")
+            .env("RK_BOT_PRIVATE_KEY", pem);
+        command
+    };
+    apply(&fixture).assert().success();
+
+    // The forge now holds the desired state.
+    assert_eq!(
+        std::fs::read_to_string(fixture.state("default_branch")).expect("state reads"),
+        "develop\n"
+    );
+    assert!(fixture.state("branch_master").is_file());
+    assert!(!fixture.state("branch_main").exists());
+    assert!(fixture.state("installed").is_file());
+    let rulesets = std::fs::read_to_string(fixture.state("rulesets.index")).expect("reads");
+    assert_eq!(
+        rulesets.lines().count(),
+        3,
+        "exactly three protections: {rulesets}"
+    );
+    let body = std::fs::read_to_string(fixture.state("ruleset_master-protection")).expect("reads");
+    assert!(body.contains(r#""context": "test-check""#));
+
+    // The secret reached stdin and nothing else.
+    assert!(fixture.stdin_log().contains("sekret-pem-bytes"));
+    assert!(
+        !fixture.log().contains("sekret-pem-bytes"),
+        "a secret reached a process argument list"
+    );
+    let mut journal_dirs: Vec<PathBuf> = std::fs::read_dir(fixture.runs_root())
+        .expect("the journal root reads")
+        .map(|entry| entry.expect("an entry").path())
+        .collect();
+    journal_dirs.sort();
+    assert_eq!(journal_dirs.len(), 1);
+    let run = &journal_dirs[0];
+    for file in ["meta.json", "events.jsonl", "transcript.txt"] {
+        let text = std::fs::read_to_string(run.join(file)).expect("the journal file reads");
+        assert!(
+            !text.contains("sekret-pem-bytes"),
+            "{file} carries key material"
+        );
+    }
+    assert!(
+        !run.join("scripts").exists(),
+        "a clean run keeps its materialized scripts"
+    );
+    let meta: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(run.join("meta.json")).expect("meta reads"))
+            .expect("meta parses");
+    assert_eq!(meta["schema"], "rk.run-meta/1");
+    assert_eq!(meta["exit_code"], 0);
+    assert!(
+        meta["scripts"]
+            .as_array()
+            .is_some_and(|list| !list.is_empty()),
+        "the journal records the materialized digests"
+    );
+    assert!(
+        meta["secrets"]
+            .as_array()
+            .is_some_and(|list| list.iter().any(|s| s["secret"] == "RK_BOT_PRIVATE_KEY")),
+        "the journal records the secret handling"
+    );
+
+    // A rerun re-asserts: every step reports satisfied, nothing mutates.
+    let before = fixture.log();
+    apply(&fixture)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("satisfied"));
+    let after = fixture.log();
+    let new_calls = &after[before.len()..];
+    assert!(
+        !new_calls.contains("-X POST")
+            && !new_calls.contains("-X PUT")
+            && !new_calls.contains("-X DELETE"),
+        "a rerun mutated the forge: {new_calls}"
+    );
+
+    // Two runs leave two distinct journal directories.
+    assert_eq!(
+        std::fs::read_dir(fixture.runs_root())
+            .expect("reads")
+            .count(),
+        2
+    );
+
+    // And check reports clean at exit 0.
+    fixture
+        .rk(&["setup", "check"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("ok protections-check")
+                .not()
+                .or(predicate::str::contains("ok")),
+        );
+}
+
+/// A check against an unconfigured forge reports per step and exits 1.
+#[test]
+fn setup_check_reports_per_step_and_exits_1_on_violations() {
+    let fixture = ForgeFixture::new();
+    let out = fixture
+        .rk(&["setup", "check"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .assert()
+        .code(1)
+        .get_output()
+        .clone();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("ok package-check"), "{text}");
+    assert!(text.contains("unsatisfied default-branch"), "{text}");
+    assert!(text.contains("unsatisfied protect-tags"), "{text}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("not satisfied"), "{stderr}");
+}
+
+/// On GitHub a full apply refuses without --required-check before anything
+/// runs; on GitLab the flag is a usage error.
+#[test]
+fn the_required_check_flag_is_demanded_and_refused_per_forge() {
+    let fixture = ForgeFixture::new();
+    fixture
+        .rk(&["setup"])
+        .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("--required-check"));
+    assert_eq!(fixture.log(), "", "the refusal must precede every step");
+
+    fixture
+        .rk(&["setup"])
+        .args(["--repo", "acme/widget", "--forge", "gitlab"])
+        .args(["--required-check", "test-check"])
+        .assert()
+        .code(64)
+        .stderr(predicate::str::contains("whole pipeline"));
+}
+
+/// The check name reaches the protection body verbatim, spaces included.
+#[test]
+fn the_check_name_reaches_the_protection_body_verbatim() {
+    let fixture = ForgeFixture::new();
+    fixture.seed("branch_master", "abc123");
+    fixture
+        .rk(&["setup", "step", "protect-release-branch"])
+        .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
+        .args(["--required-check", "build (matrix, 1)"])
+        .assert()
+        .success();
+    assert!(
+        fixture
+            .stdin_log()
+            .contains(r#""context": "build (matrix, 1)""#),
+        "the check name was altered on the way to the body: {}",
+        fixture.stdin_log()
+    );
+}
+
+/// Ordering is enforced by observation: a protection step refuses while the
+/// release branch has not been proven.
+#[test]
+fn a_protection_step_refuses_before_the_release_branch_exists() {
+    let fixture = ForgeFixture::new();
+    fixture
+        .rk(&["setup", "step", "protect-release-branch"])
+        .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
+        .args(["--required-check", "test-check"])
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("create-release-branch"));
+    assert!(
+        !fixture.log().contains("-X POST"),
+        "the refusal must write nothing"
+    );
+}
+
+/// delete-main refuses when main is not an ancestor of the release branch.
+#[test]
+fn delete_main_refuses_a_non_ancestor() {
+    let fixture = ForgeFixture::new();
+    fixture.seed("branch_master", "abc123");
+    fixture.seed("compare_main_master", "diverged");
+    fixture
+        .rk(&["setup", "step", "delete-main"])
+        .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("lose work"));
+    assert!(
+        fixture.state("branch_main").is_file(),
+        "the branch must survive the refusal"
+    );
+}
+
+/// A GitLab step runs against the gitlab tree with the same lifecycle.
+#[test]
+fn a_gitlab_step_applies_through_the_gitlab_tree() {
+    let fixture = ForgeFixture::new();
+    fixture
+        .rk(&["setup", "step", "default-branch"])
+        .args(["--repo", "acme/widget", "--forge", "gitlab", "--apply"])
+        .assert()
+        .success();
+    assert_eq!(
+        std::fs::read_to_string(fixture.state("default_branch")).expect("state reads"),
+        "develop\n"
+    );
+    assert!(fixture.log().contains("api -X PUT projects/acme%2Fwidget"));
+}
+
+/// A GitLab credential travels on stdin, never in a process argument list.
+#[test]
+fn gitlab_bot_secrets_takes_the_value_on_stdin() {
+    let fixture = ForgeFixture::new();
+    fixture
+        .rk(&["setup", "step", "bot-secrets"])
+        .args(["--repo", "acme/widget", "--forge", "gitlab", "--apply"])
+        .env("RK_BOT_TOKEN", "glpat-sekret-value")
+        .assert()
+        .success();
+    assert!(fixture.stdin_log().contains("glpat-sekret-value"));
+    assert!(
+        !fixture.log().contains("glpat-sekret-value"),
+        "a secret reached a process argument list"
+    );
+}
+
+/// Detection selects the tree from the remote host, an unknown host refuses
+/// naming the overrides, and a self-hosted GitLab warns about trusted
+/// publishing at the start rather than at the registry step.
+#[test]
+fn detection_selects_the_tree_and_refuses_an_unknown_host() {
+    let fixture = ForgeFixture::new();
+    let git = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .args(args)
+            .current_dir(fixture.target.path())
+            .status()
+            .expect("git runs");
+        assert!(status.success());
+    };
+    git(&["init", "-q"]);
+    git(&[
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/acme/widget.git",
+    ]);
+    fixture.rk(&["setup"]).assert().success().stdout(
+        predicate::str::contains("setup/github").and(predicate::str::contains("acme/widget")),
+    );
+
+    git(&[
+        "remote",
+        "set-url",
+        "origin",
+        "https://gitlab.com/acme/widget.git",
+    ]);
+    fixture
+        .rk(&["setup"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("setup/gitlab"));
+
+    git(&[
+        "remote",
+        "set-url",
+        "origin",
+        "https://gitlab.example.com/acme/widget.git",
+    ]);
+    fixture
+        .rk(&["setup"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("GitLab.com only"));
+
+    git(&[
+        "remote",
+        "set-url",
+        "origin",
+        "https://code.example.com/acme/widget.git",
+    ]);
+    fixture
+        .rk(&["setup"])
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("--forge").and(predicate::str::contains("--repo")));
+}
+
+/// An apply that cannot create its journal refuses unrun; a preview in the
+/// same position warns and completes.
+#[cfg(unix)]
+#[test]
+fn a_read_only_state_root_refuses_apply_and_warns_preview() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let fixture = ForgeFixture::new();
+    let sealed = fixture.home.path().join("sealed");
+    std::fs::create_dir(&sealed).expect("the sealed dir creates");
+    std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o555))
+        .expect("the dir seals");
+    let run = |apply: bool| {
+        let mut command = fixture.rk(&["setup"]);
+        command
+            .args(["--repo", "acme/widget", "--forge", "github"])
+            .env("XDG_STATE_HOME", &sealed);
+        if apply {
+            command.args(["--apply", "--required-check", "test-check"]);
+        }
+        command
+    };
+    run(true)
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("journal"));
+    assert_eq!(
+        fixture.log(),
+        "",
+        "a refused apply must not touch the forge"
+    );
+    run(false)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("no run journal"));
+    std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o755))
+        .expect("the dir unseals");
+}
+
+/// An absent shell fails before any step runs.
+#[test]
+fn an_absent_sh_refuses_before_any_step() {
+    let fixture = ForgeFixture::new();
+    fixture
+        .rk(&["setup"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .args(["--apply", "--required-check", "test-check"])
+        .env("PATH", "/no/such/dir")
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("sh"));
+    assert_eq!(fixture.log(), "", "nothing may run without a shell");
+}
+
+/// The journal keeps a bounded number of runs, and the runs verbs read it.
+#[test]
+fn the_journal_retention_bound_holds_and_runs_verbs_read_it() {
+    let fixture = ForgeFixture::new();
+    for _ in 0..23 {
+        fixture
+            .rk(&["setup"])
+            .args(["--repo", "acme/widget", "--forge", "github"])
+            .assert()
+            .success();
+    }
+    let kept = std::fs::read_dir(fixture.runs_root())
+        .expect("reads")
+        .count();
+    assert!(kept <= 20, "{kept} runs kept, past the bound");
+
+    let list = fixture
+        .rk_bare(&["runs", "list"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8_lossy(&list);
+    let first_id = text
+        .lines()
+        .next()
+        .expect("a run lists")
+        .split_whitespace()
+        .next()
+        .expect("an id")
+        .to_owned();
+    assert!(text.contains("setup"), "{text}");
+
+    fixture
+        .rk_bare(&["runs", "show", &first_id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("rk.run-meta/1"));
+    fixture
+        .rk_bare(&["runs", "show", "no-such-run"])
+        .assert()
+        .code(66);
+    fixture
+        .rk_bare(&["runs", "prune", "--keep", "1"])
+        .assert()
+        .success();
+    assert_eq!(
+        std::fs::read_dir(fixture.runs_root())
+            .expect("reads")
+            .count(),
+        1
+    );
+}
+
+impl ForgeFixture {
+    /// The same environment without the trailing `--target`, for verbs that
+    /// take none.
+    fn rk_bare(&self, args: &[&str]) -> Command {
+        let mut command = rk();
+        command
+            .env("HOME", self.home.path())
+            .env("XDG_STATE_HOME", self.home.path())
+            .args(args);
+        command
+    }
+}
+
+/// Where the forge enforces less than the step claims, the check reports
+/// the weaker guarantee by name rather than a pass.
+#[test]
+fn a_gitlab_check_reports_the_tag_protection_limitation() {
+    let fixture = ForgeFixture::new();
+    fixture.seed("tag_protected", "");
+    let out = fixture
+        .rk(&["setup", "check"])
+        .args(["--repo", "acme/widget", "--forge", "gitlab"])
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8_lossy(&out);
+    assert!(
+        text.contains("ok protect-tags")
+            && text.contains("limitation:")
+            && text.contains("Owner or Maintainer"),
+        "the check must state what the forge actually enforces: {text}"
+    );
+}
+
+/// The destructive step fails closed: an ancestry the guard cannot read is
+/// treated exactly like one it refuted.
+#[test]
+fn delete_main_refuses_an_unreadable_comparison() {
+    let fixture = ForgeFixture::new();
+    fixture.seed("branch_master", "abc123");
+    fixture.seed("compare_main_master", "error");
+    fixture
+        .rk(&["setup", "step", "delete-main"])
+        .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("delete-main refuses"));
+    assert!(
+        fixture.state("branch_main").is_file(),
+        "the branch must survive an unreadable guard"
+    );
+}
+
+/// A release branch carrying commits the integration branch lacks is not a
+/// clean setup, and check says so.
+#[test]
+fn check_reports_a_divergent_release_branch() {
+    let fixture = ForgeFixture::new();
+    fixture.seed("branch_master", "fff999");
+    fixture.seed("compare_develop_master", "diverged");
+    let out = fixture
+        .rk(&["setup", "check"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    assert!(
+        String::from_utf8_lossy(&out).contains("unsatisfied create-release-branch"),
+        "{}",
+        String::from_utf8_lossy(&out)
+    );
+}
+
+/// A run id is one directory name, never a path.
+#[test]
+fn runs_show_refuses_a_traversal_shaped_id() {
+    let fixture = ForgeFixture::new();
+    fixture
+        .rk_bare(&["runs", "show", "../../../etc/passwd"])
+        .assert()
+        .code(66);
+}
+
+/// An override must name the binary the scripts invoke by name, or one
+/// lifecycle would split across two binaries.
+#[test]
+fn a_misnamed_forge_cli_override_refuses() {
+    let fixture = ForgeFixture::new();
+    let wrapper = fixture.mock.path().join("gh-wrapper");
+    std::fs::copy(fixture.mock.path().join("gh"), &wrapper).expect("the wrapper copies");
+    fixture
+        .rk(&["setup"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .env("RK_GH_BIN", &wrapper)
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("must name a binary called gh"));
+}
+
+/// An observation that cannot decide fails closed before anything mutates.
+#[test]
+fn an_unreadable_observation_refuses_before_any_mutation() {
+    let fixture = ForgeFixture::new();
+    fixture.seed("fail_repo", "");
+    fixture
+        .rk(&["setup", "step", "default-branch"])
+        .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("cannot observe the current state"));
+    assert!(
+        !fixture.log().contains("repo edit"),
+        "an unreadable observation must never mutate: {}",
+        fixture.log()
     );
 }

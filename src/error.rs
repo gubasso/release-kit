@@ -41,6 +41,22 @@ pub enum RkError {
     #[error("{}", .0.message)]
     Refusal(Box<Diagnostic>),
 
+    /// A named input is absent — a target that is not a repository, or
+    /// detection that finds no remote — mapping to the sysexits no-input
+    /// code rather than the refusal code.
+    #[error("{}", .0.message)]
+    Missing(Box<Diagnostic>),
+
+    /// A check ran and found violations: the one sanctioned bare exit 1,
+    /// after the per-item report has already been rendered.
+    #[error("{}", .0.message)]
+    CheckFailed(Box<Diagnostic>),
+
+    /// A child process ran and failed for a reason this binary cannot
+    /// classify further; the child's own stderr travels with it.
+    #[error("{}", .0.message)]
+    Subprocess(Box<Diagnostic>),
+
     /// Filesystem failure, classified by its I/O kind.
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
@@ -57,6 +73,24 @@ impl RkError {
         Self::Refusal(Box::new(diagnostic))
     }
 
+    /// A [`Self::Missing`] from a built diagnostic.
+    #[must_use]
+    pub fn missing(diagnostic: Diagnostic) -> Self {
+        Self::Missing(Box::new(diagnostic))
+    }
+
+    /// A [`Self::CheckFailed`] from a built diagnostic.
+    #[must_use]
+    pub fn check_failed(diagnostic: Diagnostic) -> Self {
+        Self::CheckFailed(Box::new(diagnostic))
+    }
+
+    /// A [`Self::Subprocess`] from a built diagnostic.
+    #[must_use]
+    pub fn subprocess(diagnostic: Diagnostic) -> Self {
+        Self::Subprocess(Box::new(diagnostic))
+    }
+
     /// Map to the process exit code.
     ///
     /// `64..=78` follow BSD `sysexits(3)` and mean the tool itself could
@@ -65,12 +99,13 @@ impl RkError {
     pub fn exit_code(&self) -> u8 {
         match self {
             Self::Usage(_) => 64,
-            Self::NotFound { .. } => 66,
+            Self::NotFound { .. } | Self::Missing(_) => 66,
+            Self::CheckFailed(_) => 1,
             Self::Refused(_) | Self::Refusal(_) => 73,
             Self::Io(e) if e.kind() == std::io::ErrorKind::NotFound => 66,
             Self::Io(e) if e.kind() == std::io::ErrorKind::PermissionDenied => 77,
             Self::Io(_) => 74,
-            Self::Other(_) => 70,
+            Self::Subprocess(_) | Self::Other(_) => 70,
         }
     }
 
@@ -81,7 +116,10 @@ impl RkError {
         match self {
             Self::Usage(_) | Self::NotFound { .. } => Reason::Usage,
             Self::Refused(_) => Reason::StateDrift,
-            Self::Refusal(diagnostic) => diagnostic.reason,
+            Self::Refusal(diagnostic)
+            | Self::Missing(diagnostic)
+            | Self::CheckFailed(diagnostic)
+            | Self::Subprocess(diagnostic) => diagnostic.reason,
             Self::Io(_) => Reason::Io,
             Self::Other(_) => Reason::Internal,
         }
@@ -91,7 +129,10 @@ impl RkError {
     #[must_use]
     pub fn diagnostic(&self) -> Diagnostic {
         match self {
-            Self::Refusal(diagnostic) => (**diagnostic).clone(),
+            Self::Refusal(diagnostic)
+            | Self::Missing(diagnostic)
+            | Self::CheckFailed(diagnostic)
+            | Self::Subprocess(diagnostic) => (**diagnostic).clone(),
             _ => Diagnostic::new(self.reason(), self.to_string()),
         }
     }

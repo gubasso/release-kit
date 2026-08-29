@@ -1,0 +1,18 @@
+#!/usr/bin/env sh
+# Keep pipelines able to run and write. On this forge the release jobs act
+# through the project access token install-bot stores, so there is no
+# per-permission switch to grant; what this step proves is that CI is
+# enabled at all, which a fresh or imported project can have off.
+set -eu
+: "${RK_REPO:?rk sets this; run this script through rk setup}"
+
+project="$(printf '%s' "$RK_REPO" | sed 's|/|%2F|g')"
+
+# The forge CLI may pretty-print JSON; stripping whitespace makes every
+# pattern below hold for the compact and the pretty form alike, and no
+# value a pattern touches can carry whitespace of its own.
+compact() { tr -d ' \t\r\n'; }
+
+glab api -X PUT "projects/$project" -f builds_access_level=enabled >/dev/null
+echo 'check: prints "jobs_enabled":true'
+glab api "projects/$project" | compact | grep -o '"jobs_enabled":[a-z]*'

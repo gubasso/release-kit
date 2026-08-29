@@ -1,0 +1,113 @@
+# The release automation and the crates.io trusted publisher for GitLab CI.
+#
+# The two halves run on different branches. On develop, release-plz maintains
+# the release request and the gate job cuts release/v<version> at the bump
+# commit and opens it into master; merging any of that publishes nothing. On
+# master, reached only through that gate, release-plz tags the merge commit,
+# creates the GitLab release, and publishes to crates.io over OIDC.
+#
+# Every job authenticates with RELEASE_BOT_TOKEN, the project access token
+# the setup stores as a masked CI variable: a push made with the default CI
+# job token starts no pipeline, which would silently skip the release half.
+# Trusted publishing covers GitLab.com only; a self-hosted instance cannot
+# take the OIDC path and falls back to a token, which the method's
+# invariants exist to remove.
+
+stages:
+  - release
+
+workflow:
+  rules:
+    # TODO(release-kit): set the repository owner
+    - if: '$CI_PROJECT_ROOT_NAMESPACE == "OWNER" && ($CI_COMMIT_BRANCH == "develop" || $CI_COMMIT_BRANCH == "master")'
+
+.release-plz:
+  stage: release
+  image: rust:1
+  variables:
+    GIT_DEPTH: "0"
+  before_script:
+    - curl -fsSL "https://github.com/release-plz/release-plz/releases/download/release-plz-v0.3.160/release-plz-x86_64-unknown-linux-gnu.tar.gz" | tar -xz -C /usr/local/bin
+
+# The release request: the version bump and the changelog, as one merge
+# request against develop. Force-push refresh is unavailable on this forge,
+# so release-plz closes an outdated request and opens a fresh one when new
+# work lands; the changelog correction window is correspondingly narrower.
+release-request:
+  extends: .release-plz
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+  resource_group: release-request
+  script:
+    - release-plz release-pr --forge gitlab --git-token "$RELEASE_BOT_TOKEN"
+
+# The gate: once the release request has merged, develop carries a version no
+# tag names yet, so this cuts release/v<version> at that commit and opens the
+# merge request into master. The head is a branch pinned to one commit, never
+# develop: a merge request tracks its source branch, so a develop head would
+# silently absorb every later push into the release.
+open-release-gate:
+  stage: release
+  image: alpine:3
+  variables:
+    GIT_DEPTH: "2"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+  resource_group: open-release-gate
+  before_script:
+    - apk add --no-cache curl git
+  script:
+    - |
+      set -eu
+      api() { curl -fsS --header "PRIVATE-TOKEN: $RELEASE_BOT_TOKEN" "$@"; }
+      version="$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' Cargo.toml | head -n 1)"
+      previous="$(git show HEAD^:Cargo.toml | sed -n 's/^version *= *"\([^"]*\)".*/\1/p' | head -n 1)"
+      if [ "$previous" = "$version" ]; then
+        echo "this commit does not bump the version; only the release commit cuts the gate."
+        exit 0
+      fi
+      project="$CI_API_V4_URL/projects/$CI_PROJECT_ID"
+      if api "$project/repository/tags/v$version" >/dev/null 2>&1; then
+        echo "v$version is already tagged; no release is pending."
+        exit 0
+      fi
+      branch="release/v$version"
+      if ! api "$project/repository/branches/release%2Fv$version" >/dev/null 2>&1; then
+        api -X POST "$project/repository/branches" \
+          --data-urlencode "branch=$branch" --data-urlencode "ref=$CI_COMMIT_SHA" >/dev/null
+        echo "cut $branch at $CI_COMMIT_SHA."
+      fi
+      open="$(api "$project/merge_requests?state=opened&source_branch=release%2Fv$version&target_branch=master" | grep -c '"iid"' || true)"
+      if [ "$open" != "0" ]; then
+        echo "the release gate merge request is already open."
+        exit 0
+      fi
+      api -X POST "$project/merge_requests" \
+        --data-urlencode "source_branch=$branch" \
+        --data-urlencode "target_branch=master" \
+        --data-urlencode "title=release v$version" \
+        --data-urlencode "description=Gates the release of v$version, pinned to $CI_COMMIT_SHA. Merging tags that commit and publishes; merge it as a merge commit." >/dev/null
+      echo "opened the release gate merge request."
+
+# The release itself: tag, GitLab release, and the crates.io publish over
+# OIDC. The job's ID token is exchanged for a short-lived registry token;
+# nothing long-lived exists on the publish path.
+release:
+  extends: .release-plz
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "master"'
+  resource_group: release
+  id_tokens:
+    CRATES_IO_ID_TOKEN:
+      aud: crates.io
+  script:
+    - |
+      set -eu
+      response="$(curl -fsS -X PUT "https://crates.io/api/v1/trusted_publishing/tokens" \
+        -H 'Content-Type: application/json' \
+        -d "{\"jwt\":\"$CRATES_IO_ID_TOKEN\"}")"
+      CARGO_REGISTRY_TOKEN="$(printf '%s' "$response" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')"
+      export CARGO_REGISTRY_TOKEN
+      release-plz release --forge gitlab --git-token "$RELEASE_BOT_TOKEN"
+      curl -fsS -X DELETE "https://crates.io/api/v1/trusted_publishing/tokens" \
+        -H "Authorization: Bearer $CARGO_REGISTRY_TOKEN" || true

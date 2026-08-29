@@ -4,9 +4,12 @@
 
 pub mod completions;
 pub mod doctor;
+pub mod guide;
 pub mod init;
 pub mod payload;
 pub mod read;
+pub mod runs;
+pub mod setup;
 pub mod skill;
 
 use clap::{Parser, Subcommand};
@@ -29,12 +32,20 @@ pub enum Commands {
     Binding(read::ReadArgs),
     /// Read the deterministic files a binding lands.
     Snippet(read::ReadArgs),
+    /// Print a runbook with what detection knows filled in.
+    Guide(guide::GuideArgs),
+    /// Read the per-forge documents.
+    Forge(read::ReadArgs),
     /// Print the pinned-tool registry.
     Versions,
     /// Report the payload this binary carries, with its digests.
     Payload(payload::PayloadArgs),
     /// Land a technology's files into a target repository.
     Init(init::InitArgs),
+    /// Execute the repository-side setup against the detected forge.
+    Setup(setup::SetupArgs),
+    /// Inspect and prune the run journals.
+    Runs(runs::RunsArgs),
     /// Manage the agent skills at user scope.
     Skill(skill::SkillArgs),
     /// Run every environment probe and report by class.

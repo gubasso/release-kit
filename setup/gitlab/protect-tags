@@ -1,0 +1,29 @@
+#!/usr/bin/env sh
+# Protect release tags as far as this forge allows: v* can be created only by
+# Maintainers and cannot be touched by git clients or non-privileged users.
+# What this cannot promise, and says so: an Owner or Maintainer can still
+# delete a protected tag through the UI or the API, so this is protection
+# against accident, not against authority; the forge document carries the
+# fact. Protected tags expose no update endpoint, so a rerun that must change
+# the protection is delete-then-create and is briefly not atomic.
+set -eu
+: "${RK_REPO:?rk sets this; run this script through rk setup}"
+
+project="$(printf '%s' "$RK_REPO" | sed 's|/|%2F|g')"
+
+# The forge CLI may pretty-print JSON; stripping whitespace makes every
+# pattern below hold for the compact and the pretty form alike, and no
+# value a pattern touches can carry whitespace of its own.
+compact() { tr -d ' \t\r\n'; }
+
+if glab api "projects/$project/protected_tags/v%2A" >/dev/null 2>&1; then
+  echo 'ok v* is already protected; leaving it in place'
+else
+  glab api -X POST "projects/$project/protected_tags" \
+    -f 'name=v*' -F create_access_level=40 >/dev/null
+  echo 'ok v* protected'
+fi
+
+echo 'check: prints the protected pattern'
+glab api "projects/$project/protected_tags/v%2A" | compact | grep -o '"name":"v\*"'
+echo 'note: an Owner or Maintainer can still delete a protected tag through the UI or API'

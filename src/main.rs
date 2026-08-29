@@ -48,9 +48,13 @@ fn run(cli: &Cli) -> Result<(), RkError> {
         Commands::Method(args) => commands::read::method(args),
         Commands::Binding(args) => commands::read::binding(args),
         Commands::Snippet(args) => commands::read::snippet(args),
+        Commands::Guide(args) => commands::guide::run(args),
+        Commands::Forge(args) => commands::forge::run(args),
         Commands::Versions => commands::versions::run(),
         Commands::Payload(args) => commands::payload::run(args),
         Commands::Init(args) => commands::init::run(args),
+        Commands::Setup(args) => commands::setup::run(args),
+        Commands::Runs(args) => commands::runs::run(args),
         Commands::Skill(args) => commands::skill::run(args),
         Commands::Doctor(args) => commands::doctor::run(args),
         Commands::Usage => commands::usage::run(),
@@ -96,9 +100,13 @@ const fn name(command: &Commands) -> &'static str {
         Commands::Method(_) => "method",
         Commands::Binding(_) => "binding",
         Commands::Snippet(_) => "snippet",
+        Commands::Guide(_) => "guide",
+        Commands::Forge(_) => "forge",
         Commands::Versions => "versions",
         Commands::Payload(_) => "payload",
         Commands::Init(_) => "init",
+        Commands::Setup(_) => "setup",
+        Commands::Runs(_) => "runs",
         Commands::Skill(_) => "skill",
         Commands::Doctor(_) => "doctor",
         Commands::Usage => "usage",
@@ -110,11 +118,22 @@ const fn name(command: &Commands) -> &'static str {
 /// Whether the invocation asked for machine output, which decides how an
 /// error renders on stderr.
 const fn wants_json(command: &Commands) -> bool {
+    use release_kit::cli::runs::RunsAction;
+    use release_kit::cli::setup::SetupAction;
     use release_kit::cli::skill::SkillAction;
     match command {
         Commands::Payload(args) => args.json,
         Commands::Init(args) => args.json,
         Commands::Doctor(args) => args.json,
+        Commands::Setup(args) => match &args.action {
+            Some(SetupAction::Check { json, .. } | SetupAction::Step { json, .. }) => *json,
+            Some(SetupAction::Script { .. }) => false,
+            None => args.json,
+        },
+        Commands::Runs(args) => match &args.action {
+            RunsAction::List { json } | RunsAction::Show { json, .. } => *json,
+            RunsAction::Prune { .. } => false,
+        },
         Commands::Skill(args) => match &args.action {
             SkillAction::Install { json, .. } | SkillAction::Uninstall { json, .. } => *json,
             SkillAction::List | SkillAction::Show { .. } => false,

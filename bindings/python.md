@@ -9,6 +9,8 @@
 
 `rk init --tech python` lands `release-please-config.json`, `.release-please-manifest.json`, and the publish workflow `.github/workflows/release-please.yml`.
 
+The release-request answer holds on GitHub only: release-please speaks the GitHub API and no other forge's, so `(python, gitlab)` has no release-request bot and `rk init` lands nothing for that pair — stated here as a smaller product rather than smoothed over, the same shape as the Go column's missing bot.
+
 ## The workflows
 
 `release-please.yml` is the publish workflow: the filename registered at PyPI, and the only workflow with `id-token: write`. release-please maintains the release request with the `python` release type, which bumps `[project] version` in `pyproject.toml`; the publish job builds the distributions with `python -m build` and uploads them through `pypa/gh-action-pypi-publish`.

@@ -1,0 +1,31 @@
+#!/usr/bin/env sh
+# Make release tags immutable: v* can be created but never moved or deleted.
+# A published version is immutable is a method invariant, not a project
+# choice, so the pattern is fixed. Rerunning updates in place.
+set -eu
+: "${RK_REPO:?rk sets this; run this script through rk setup}"
+
+name=release-tags
+id="$(gh api "repos/$RK_REPO/rulesets" -q ".[] | select(.name == \"$name\") | .id" | head -n 1)"
+
+if [ -n "$id" ]; then
+  gh api -X PUT "repos/$RK_REPO/rulesets/$id" --input - >/dev/null
+else
+  gh api -X POST "repos/$RK_REPO/rulesets" --input - >/dev/null
+fi <<JSON
+{
+  "name": "$name",
+  "target": "tag",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": { "include": ["refs/tags/v*"], "exclude": [] }
+  },
+  "rules": [
+    { "type": "deletion" },
+    { "type": "update" }
+  ]
+}
+JSON
+
+echo "check: prints $name"
+gh api "repos/$RK_REPO/rulesets" -q ".[] | select(.name == \"$name\") | .name"

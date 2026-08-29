@@ -11,24 +11,27 @@ Land the release-kit convention in a project. The CLI carries the whole canon: e
 
 ## Route to the canon
 
-| Need                           | Command                    |
-| ------------------------------ | -------------------------- |
-| List method chapters           | `rk method --list`         |
-| Read a chapter                 | `rk method <chapter>`      |
-| List bindings                  | `rk binding --list`        |
-| Read a technology binding      | `rk binding <tech>`        |
-| List the landable files        | `rk snippet --list`        |
-| Print one landable file        | `rk snippet <tech>/<path>` |
-| Print the pinned-tool registry | `rk versions`              |
+| Need                            | Command                    |
+| ------------------------------- | -------------------------- |
+| List method chapters            | `rk method --list`         |
+| Read a chapter                  | `rk method <chapter>`      |
+| List bindings                   | `rk binding --list`        |
+| Read a technology binding       | `rk binding <tech>`        |
+| Read a forge's specifics        | `rk forge <name>`          |
+| The setup recipe, as commands   | `rk guide setup`           |
+| List the landable files         | `rk snippet --list`        |
+| Print one landable file         | `rk snippet <tech>/<path>` |
+| Print the pinned-tool registry  | `rk versions`              |
+| List the executable setup steps | `rk setup --list`          |
 
 ## Land the workflow
 
 1. Detect the technology: `Cargo.toml` means rust, `pyproject.toml` means python, a `VERSION` file or a plain script tree means bash. When none of the bindings fit, stop and say so; the method still applies, the files do not.
 2. Read the spine and the binding before touching anything: `rk method model`, `rk method invariants`, and `rk binding <tech>`.
 3. Check freshness. `rk versions` prints each pinned tool with the URL its check queries. For every tool the chosen binding uses, fetch that URL, compare the latest version against the pin, and read the release notes when they differ. Prefer the latest version when landing; where the landed file then diverges from the snippet, say what moved and why.
-4. Preview, then land: `rk init --tech <tech> --target .` lists every destination without writing; `rk init --tech <tech> --target . --apply` writes. The lander refuses to overwrite a file whose content differs, so a re-run is safe.
+4. Preview, then land: `rk init --tech <tech> --target .` lists every destination without writing; `--apply` writes. The forge is detected from the git remote; pass `--forge` where no remote decides it. The lander refuses to overwrite a file whose content differs.
 5. Fill the sentinels. Apply reports every `TODO(release-kit)` marker left in the landed files — the repository owner, secret names, environment names. Resolve each one from the project.
-6. Walk the repository-side setup in order with `rk method setup`: the metadata gate, the branch shape, the bot identity, the protections, the first manual publish, the trusted publisher, the proven release, then enforcement. The binding's setup section carries the technology's concrete commands and registry pages.
+6. Walk the repository-side setup with `rk guide setup` for the commands and `rk method setup` for the reasoning. `rk setup --target .` previews the executable steps and `--apply` runs them in order — on GitHub with `--required-check <name>` — then `rk setup check --target .` proves what was applied. The bot-identity walkthrough is `rk forge <name>`; the remaining manual actions are all registry-side, and the runbook names each with its reason.
 
 ## Verify
 

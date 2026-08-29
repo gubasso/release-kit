@@ -1,6 +1,6 @@
 # 03 — Operate
 
-Cutting a release, end to end. The binding supplies the concrete commands; the sequence is the same everywhere.
+Cutting a release, end to end. The binding supplies the concrete commands; the sequence is the same everywhere. The command form of this chapter is the release runbook, `rk guide release`.
 
 ## The sequence
 

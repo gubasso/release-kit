@@ -7,6 +7,9 @@
   - [`distribution:the-payload-roots-are-declared-once` — The payload roots are declared once](#distributionthe-payload-roots-are-declared-once--the-payload-roots-are-declared-once)
   - [`distribution:the-published-crate-carries-every-root` — The published crate carries every root](#distributionthe-published-crate-carries-every-root--the-published-crate-carries-every-root)
   - [`distribution:machine-output-declares-its-schema` — Machine output declares its schema](#distributionmachine-output-declares-its-schema--machine-output-declares-its-schema)
+  - [`distribution:the-payload-names-no-other-project` — The payload names no other project](#distributionthe-payload-names-no-other-project--the-payload-names-no-other-project)
+  - [`distribution:a-runbook-renders-the-spine` — A runbook renders the spine](#distributiona-runbook-renders-the-spine--a-runbook-renders-the-spine)
+  - [`distribution:a-forge-document-answers-its-own-axis` — A forge document answers its own axis](#distributiona-forge-document-answers-its-own-axis--a-forge-document-answers-its-own-axis)
   - [`distribution:skills-are-part-of-the-payload` — Skills are part of the payload](#distributionskills-are-part-of-the-payload--skills-are-part-of-the-payload)
   - [`distribution:a-skill-has-one-owner` — A skill has one owner](#distributiona-skill-has-one-owner--a-skill-has-one-owner)
   - [`distribution:a-skill-obeys-the-portable-format` — A skill obeys the portable format](#distributiona-skill-obeys-the-portable-format--a-skill-obeys-the-portable-format)
@@ -60,6 +63,42 @@ Every machine-readable output the binary emits MUST carry a versioned schema hel
 - THEN the snapshot test fails naming the schema, and the change becomes a deliberate schema-version bump instead of a silent parser break at some agent
 
 Verify: `cargo nextest run -E 'kind(lib)'`
+
+### `distribution:the-payload-names-no-other-project` — The payload names no other project
+
+Nothing the distribution carries or serves MAY name a specific project, repository, or organization other than release-kit's own configuration, so a reader needs no knowledge outside this repository.
+
+#### Scenario: A migrated script keeps one identifier from the implementation it generalized
+
+- GIVEN a setup script or runbook carried over with a foreign variable prefix, bot identity, or guide filename left in it
+- WHEN the test suite runs
+- THEN the denylist test fails naming the file and the line, before a reader who lacks access to the other repository meets a reference they cannot follow
+
+Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `distribution:a-runbook-renders-the-spine` — A runbook renders the spine
+
+A runbook MUST carry the same steps, in the same order, as the method chapter it renders.
+
+#### Scenario: A method chapter gains a step and the runbook is not updated
+
+- GIVEN a new numbered step in `method/03-operate.md` or `method/02-setup.md`
+- WHEN the test suite runs
+- THEN the parity test fails naming the runbook, so the fourth prose zone cannot become a fourth source of truth
+
+Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `distribution:a-forge-document-answers-its-own-axis` — A forge document answers its own axis
+
+Every supported forge MUST have a document carrying its bootstrap walkthrough, its command mapping, and its limitations, and every statement in it MUST be about that forge.
+
+#### Scenario: A forge is added with a script tree and no document
+
+- GIVEN a new subtree under `setup/` with no `forges/<name>.md` beside it
+- WHEN the test suite runs
+- THEN the closure test fails, before an operator reaches the one step no command performs and finds nothing that says what to click
+
+Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `distribution:skills-are-part-of-the-payload` — Skills are part of the payload
 

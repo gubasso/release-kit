@@ -1,0 +1,33 @@
+#!/usr/bin/env sh
+# Create the release branch at the integration branch's tip, before its
+# protection exists, so no rule governs the creation. Idempotent: an existing
+# release branch that is an ancestor of, or equal to, the integration branch
+# is the normal state after releases and is left exactly where it is; one
+# carrying commits the integration branch lacks is not a branch this setup
+# created, and deleting or moving it is not this script's call.
+set -eu
+: "${RK_REPO:?rk sets this; run this script through rk setup}"
+: "${RK_INTEGRATION_BRANCH:?rk sets this; run this script through rk setup}"
+: "${RK_RELEASE_BRANCH:?rk sets this; run this script through rk setup}"
+
+if gh api "repos/$RK_REPO/git/ref/heads/$RK_RELEASE_BRANCH" >/dev/null 2>&1; then
+  status="$(gh api "repos/$RK_REPO/compare/$RK_INTEGRATION_BRANCH...$RK_RELEASE_BRANCH" -q .status)"
+  case "$status" in
+    behind | identical)
+      echo "ok $RK_RELEASE_BRANCH exists; leaving it where it is"
+      ;;
+    *)
+      echo "FAIL $RK_RELEASE_BRANCH carries commits $RK_INTEGRATION_BRANCH does not ($status)" >&2
+      echo 'remediation: finish the back-merge if a release is mid-flight; otherwise inspect the branch before rerunning' >&2
+      exit 1
+      ;;
+  esac
+else
+  sha="$(gh api "repos/$RK_REPO/git/ref/heads/$RK_INTEGRATION_BRANCH" -q .object.sha)"
+  gh api -X POST "repos/$RK_REPO/git/refs" \
+    -f "ref=refs/heads/$RK_RELEASE_BRANCH" -f "sha=$sha" >/dev/null
+  echo "ok $RK_RELEASE_BRANCH created at $RK_INTEGRATION_BRANCH"
+fi
+
+echo "check: prints one sha for $RK_RELEASE_BRANCH"
+gh api "repos/$RK_REPO/git/ref/heads/$RK_RELEASE_BRANCH" -q .object.sha

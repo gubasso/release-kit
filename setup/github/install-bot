@@ -1,0 +1,29 @@
+#!/usr/bin/env sh
+# Add this project to the bot App's installation, so the bot identity can act
+# on it. Creating the App itself is the one manual action, once per account
+# ever; the walkthrough is the forge document. Idempotent: an already-granted
+# project is re-asserted, and no second identity is ever created.
+#
+# RK_BOT_INSTALLATION names the installation id where the account has more
+# than one; with exactly one installation it is derived.
+set -eu
+: "${RK_REPO:?rk sets this; run this script through rk setup}"
+
+installation="${RK_BOT_INSTALLATION:-}"
+if [ -z "$installation" ]; then
+  count="$(gh api /user/installations -q .total_count)"
+  if [ "$count" = "1" ]; then
+    installation="$(gh api /user/installations -q '.installations[0].id')"
+  else
+    echo "FAIL $count app installations reachable; cannot choose one" >&2
+    echo 'remediation: export RK_BOT_INSTALLATION with one id from this list:' >&2
+    gh api /user/installations -q '.installations[] | "\(.id) \(.app_slug)"' >&2
+    exit 1
+  fi
+fi
+
+repo_id="$(gh api "repos/$RK_REPO" -q .id)"
+gh api -X PUT "user/installations/$installation/repositories/$repo_id" >/dev/null
+echo "check: prints $RK_REPO"
+gh api "user/installations/$installation/repositories" --paginate \
+  -q ".repositories[] | select(.full_name == \"$RK_REPO\") | .full_name"

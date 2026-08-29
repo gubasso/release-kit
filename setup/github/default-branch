@@ -1,0 +1,10 @@
+#!/usr/bin/env sh
+# Make the integration branch the default branch, so pushes to it drive the
+# release bot; the method's setup chapter owns the reasoning.
+set -eu
+: "${RK_REPO:?rk sets this; run this script through rk setup}"
+: "${RK_INTEGRATION_BRANCH:?rk sets this; run this script through rk setup}"
+
+gh repo edit "$RK_REPO" --default-branch "$RK_INTEGRATION_BRANCH"
+echo "check: prints \"$RK_INTEGRATION_BRANCH\""
+gh repo view "$RK_REPO" --json defaultBranchRef -q .defaultBranchRef.name

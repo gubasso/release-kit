@@ -50,6 +50,8 @@ struct Report {
     mode: &'static str,
     /// The technology whose files land.
     tech: String,
+    /// The forge whose subtree lands.
+    forge: String,
     /// The target directory.
     target: String,
     /// Every destination, with its action.
@@ -70,7 +72,7 @@ struct Report {
 /// conflicts, and [`RkError::Io`] on filesystem failure.
 pub fn run(args: &InitArgs) -> Result<(), RkError> {
     let out = Output::new(args.json);
-    let tech_dir = embedded::SNIPPETS.get_dir(&args.tech).ok_or_else(|| {
+    embedded::SNIPPETS.get_dir(&args.tech).ok_or_else(|| {
         let known: Vec<String> = embedded::SNIPPETS
             .dirs()
             .map(|d| d.path().to_string_lossy().into_owned())
@@ -79,6 +81,20 @@ pub fn run(args: &InitArgs) -> Result<(), RkError> {
             "unknown tech '{}'; the bindings are: {}",
             args.tech,
             known.join(", ")
+        ))
+    })?;
+    let forge = resolve_forge(args)?;
+    let pair = format!("{}/{}", args.tech, forge);
+    let tech_dir = embedded::SNIPPETS.get_dir(&pair).ok_or_else(|| {
+        let known: Vec<String> = embedded::SNIPPETS
+            .dirs()
+            .flat_map(include_dir::Dir::dirs)
+            .map(|d| d.path().to_string_lossy().replace('/', ", "))
+            .collect();
+        RkError::Usage(format!(
+            "the pair ({}, {forge}) has no landable files; the supported pairs are: {}",
+            args.tech,
+            known.join("; ")
         ))
     })?;
 
@@ -96,12 +112,12 @@ pub fn run(args: &InitArgs) -> Result<(), RkError> {
         ));
     }
 
-    // Payload paths carry the `<tech>/` prefix; destinations do not.
+    // Payload paths carry the `<tech>/<forge>/` prefix; destinations do not.
     let files: Vec<(String, &[u8])> = walk(tech_dir)
         .into_iter()
         .map(|(path, contents)| {
             let rel = path
-                .strip_prefix(&format!("{}/", args.tech))
+                .strip_prefix(&format!("{pair}/"))
                 .map_or(path.as_str(), |r| r)
                 .to_owned();
             (rel, contents)
@@ -109,16 +125,52 @@ pub fn run(args: &InitArgs) -> Result<(), RkError> {
         .collect();
 
     if args.apply {
-        apply(out, args, &files)
+        apply(out, args, &forge, &files)
     } else {
-        preview(out, args, &files)
+        preview(out, args, &forge, &files)
     }
 }
 
+/// The forge whose subtree lands: the flag, or detection from the target's
+/// remote. An unrecognized host refuses rather than defaulting — landing
+/// one forge's workflow files into the other forge's project is a
+/// half-configured repository that looks done.
+fn resolve_forge(args: &InitArgs) -> Result<String, RkError> {
+    if let Some(name) = args.forge.as_deref() {
+        return crate::detect::Forge::parse(name)
+            .map(|forge| forge.as_str().to_owned())
+            .ok_or_else(|| {
+                RkError::Usage(format!(
+                    "unknown forge '{name}'; the forges are: github, gitlab"
+                ))
+            });
+    }
+    let detected = crate::detect::detect(args.target.as_std_path());
+    detected
+        .forge
+        .map(|f| f.as_str().to_owned())
+        .ok_or_else(|| {
+            let message = detected.host.map_or_else(
+                || "no forge detected: the target has no origin remote".to_owned(),
+                |host| format!("no forge detected: the host {host} is not recognized"),
+            );
+            RkError::refusal(
+                Diagnostic::new(Reason::ForgeUndetected, message)
+                    .expected("a github.com or gitlab remote, or --forge")
+                    .action("pass --forge <github|gitlab>"),
+            )
+        })
+}
+
 /// List every destination and write nothing.
-fn preview(out: Output, args: &InitArgs, files: &[(String, &[u8])]) -> Result<(), RkError> {
+fn preview(
+    out: Output,
+    args: &InitArgs,
+    forge: &str,
+    files: &[(String, &[u8])],
+) -> Result<(), RkError> {
     let next = vec![format!(
-        "rk init --tech {} --target {} --apply",
+        "rk init --tech {} --forge {forge} --target {} --apply",
         args.tech, args.target
     )];
     out.result_line(format!(
@@ -133,6 +185,7 @@ fn preview(out: Output, args: &InitArgs, files: &[(String, &[u8])]) -> Result<()
         schema: "rk.init/1",
         mode: "preview",
         tech: args.tech.clone(),
+        forge: forge.to_owned(),
         target: args.target.to_string(),
         files: files
             .iter()
@@ -148,7 +201,12 @@ fn preview(out: Output, args: &InitArgs, files: &[(String, &[u8])]) -> Result<()
 
 /// Land the files, all-or-nothing against conflicts, and report the
 /// sentinels the operator still owes.
-fn apply(out: Output, args: &InitArgs, files: &[(String, &[u8])]) -> Result<(), RkError> {
+fn apply(
+    out: Output,
+    args: &InitArgs,
+    forge: &str,
+    files: &[(String, &[u8])],
+) -> Result<(), RkError> {
     // Every destination is read before anything writes, so an unreadable
     // path — a directory where a file should land, a permission failure —
     // surfaces here and the target is never left half-written.
@@ -220,6 +278,7 @@ fn apply(out: Output, args: &InitArgs, files: &[(String, &[u8])]) -> Result<(), 
         schema: "rk.init/1",
         mode: "apply",
         tech: args.tech.clone(),
+        forge: forge.to_owned(),
         target: args.target.to_string(),
         files: entries,
         sentinels: Some(sentinels),
@@ -261,6 +320,7 @@ mod tests {
             schema: "rk.init/1",
             mode: "apply",
             tech: "rust".into(),
+            forge: "github".into(),
             target: "/tmp/t".into(),
             files: vec![FileEntry {
                 path: "release-plz.toml".into(),
@@ -275,7 +335,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&apply).expect("a report serializes"),
-            r##"{"schema":"rk.init/1","mode":"apply","tech":"rust","target":"/tmp/t","files":[{"path":"release-plz.toml","action":"write"}],"sentinels":[{"path":"/tmp/t/release-plz.toml","line":3,"text":"# TODO(release-kit): set the repository owner"}],"next":["commit the landed files"]}"##
+            r##"{"schema":"rk.init/1","mode":"apply","tech":"rust","forge":"github","target":"/tmp/t","files":[{"path":"release-plz.toml","action":"write"}],"sentinels":[{"path":"/tmp/t/release-plz.toml","line":3,"text":"# TODO(release-kit): set the repository owner"}],"next":["commit the landed files"]}"##
         );
         let preview = Report {
             sentinels: None,
@@ -284,7 +344,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&preview).expect("a report serializes"),
-            r#"{"schema":"rk.init/1","mode":"preview","tech":"rust","target":"/tmp/t","files":[{"path":"release-plz.toml","action":"write"}],"next":["commit the landed files"]}"#,
+            r#"{"schema":"rk.init/1","mode":"preview","tech":"rust","forge":"github","target":"/tmp/t","files":[{"path":"release-plz.toml","action":"write"}],"next":["commit the landed files"]}"#,
             "a preview omits the sentinels field rather than serializing null"
         );
     }

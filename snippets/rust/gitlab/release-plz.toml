@@ -1,0 +1,15 @@
+[workspace]
+changelog_update = true
+# The gate is the release/v<version> merge request into master, whose head
+# branch is not release-plz-*, so the branch heuristic release_always = false
+# relies on would never fire. Releasing always is safe: the command no-ops
+# when the registry already serves this version.
+release_always = true
+publish = true
+# This pair has no artifact builder, so release-plz owns the release page:
+# it creates the GitLab release when it tags. The page carries no installers,
+# which the Rust binding states plainly.
+git_release_enable = true
+# TODO(release-kit): keep false for a binary-only crate or a lib target only
+# this crate's own tests link; set true when external consumers hold the API.
+semver_check = false

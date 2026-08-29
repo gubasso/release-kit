@@ -31,6 +31,12 @@ static STDOUT_ERROR: Mutex<Option<std::io::Error>> = Mutex::new(None);
 /// finish its work, so a dead stdout only suppresses further rendering,
 /// and [`take_stdout_failure`] settles the outcome at the boundary.
 fn to_stdout(text: &str) {
+    to_stdout_bytes(text.as_bytes());
+}
+
+/// The byte form of [`to_stdout`], for child passthrough where invalid
+/// UTF-8 must reach the pipe unchanged.
+fn to_stdout_bytes(bytes: &[u8]) {
     if STDOUT_CLOSED.load(Ordering::Relaxed) {
         return;
     }
@@ -41,9 +47,7 @@ fn to_stdout(text: &str) {
         return;
     }
     let mut stdout = std::io::stdout().lock();
-    let outcome = stdout
-        .write_all(text.as_bytes())
-        .and_then(|()| stdout.flush());
+    let outcome = stdout.write_all(bytes).and_then(|()| stdout.flush());
     if let Err(source) = outcome {
         if source.kind() == std::io::ErrorKind::BrokenPipe {
             STDOUT_CLOSED.store(true, Ordering::Relaxed);
@@ -150,6 +154,45 @@ impl Output {
         Ok(())
     }
 
+    /// One NDJSON event line on stdout under `--json`, and nothing in
+    /// human mode: the long-running commands' machine stream, one complete
+    /// object per line.
+    pub fn event<T: Serialize>(&self, event: &T) {
+        if self.is_json() {
+            if let Ok(line) = serde_json::to_string(event) {
+                to_stdout(&format!("{line}\n"));
+            }
+        }
+    }
+
+    /// One line of framing on stderr in human mode — step frames, the
+    /// command echo, warnings — and nothing under `--json`, where the
+    /// events carry the run.
+    pub fn frame(&self, line: impl AsRef<str>) {
+        if !self.is_json() {
+            to_stderr(line.as_ref());
+        }
+    }
+
+    /// One warning line on stderr, in both modes.
+    pub fn warn(&self, line: impl AsRef<str>) {
+        to_stderr(&format!("warning: {}", line.as_ref()));
+    }
+
+    /// Raw child bytes to the parent's matching stream, human mode only:
+    /// never swallow a subprocess, and never corrupt a pipe either.
+    pub fn child_passthrough(&self, stream: crate::events::ChildStream, bytes: &[u8]) {
+        if self.is_json() {
+            return;
+        }
+        match stream {
+            crate::events::ChildStream::Stdout => to_stdout_bytes(bytes),
+            crate::events::ChildStream::Stderr => {
+                let _ = std::io::stderr().lock().write_all(bytes);
+            }
+        }
+    }
+
     /// The `Next:` block closing a human success: two to four lines
     /// naming the commands that plausibly follow, so no output is a dead
     /// end. Under `--json` the report's own `next` field carries them.
@@ -181,7 +224,10 @@ pub fn render_error(err: &RkError, json: bool) {
         return;
     }
     match err {
-        RkError::Refusal(diagnostic) => to_stderr(&diagnostic.render_human()),
+        RkError::Refusal(diagnostic)
+        | RkError::Missing(diagnostic)
+        | RkError::CheckFailed(diagnostic)
+        | RkError::Subprocess(diagnostic) => to_stderr(&diagnostic.render_human()),
         _ => to_stderr(&format!("error: {err}")),
     }
 }

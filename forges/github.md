@@ -1,0 +1,46 @@
+# GitHub
+
+How this forge answers the method's fifth axis. The CLI is `gh`, and `rk setup` runs the `setup/github/` tree against it.
+
+## Answers
+
+- The release request is a pull request against the integration branch. The bot keeps an open request current by overwriting its branch and force-pushing, so a changelog correction pushed to that branch survives later commits.
+- The gate is a pull request into the release branch, enforced by a ruleset: no direct push, a merge commit as the only merge method, and a required status check matched by name against the CI job the project's own workflow reports.
+- Protections are rulesets, one per target: the release branch, the integration branch, and the `v*` tags. A ruleset has separate create and update endpoints, so a rerun resolves the ruleset id and updates in place.
+- The bot identity is a GitHub App installed on the repository. Its token is what makes a tag push start workflows; a tag pushed with the default CI token starts nothing.
+
+## Bootstrap
+
+Creating the App is the one action no command performs, because the manifest flow needs a browser redirect. It happens once in an account's lifetime, not once per project: adding a project to an existing installation is `rk setup step install-bot`.
+
+1. Open the account's developer settings, GitHub Apps, and check whether the bot App already exists. If it does, skip to step 5.
+2. Create a new GitHub App. The name is yours to choose; the homepage URL is unused; clear the webhook's Active checkbox.
+3. Set the repository permissions: Contents read and write, Pull requests read and write, Metadata read-only. Anything less and the bot cannot push a release branch or open a request; the failure shows up weeks later as a workflow that silently never ran.
+4. Create the App, then install it on the account. Choose "Only select repositories" unless every repository should carry it; the selected set can be edited later, and `rk setup step install-bot` adds a project through the API.
+5. Collect the credentials from the App's settings page: the App ID from the About section, and a generated private key. The `.pem` downloads exactly once and is never shown again; store it before leaving the page.
+6. Export the credentials for `rk setup`: `RK_BOT_APP_ID` holds the App ID, `RK_BOT_PRIVATE_KEY` holds the key file's contents. Where the account has more than one App installation, `RK_BOT_INSTALLATION` names the installation id `install-bot` should use.
+
+From here every remaining action is a command: `rk setup step install-bot --target . --apply` grants the App this project, and `rk setup step bot-secrets --target . --apply` stores the credentials as repository secrets, the private key travelling on standard input so it never enters a process argument list.
+
+## Mapping
+
+| Purpose                           | Command                                                  |
+| --------------------------------- | -------------------------------------------------------- |
+| Raw API                           | `gh api`                                                 |
+| Set the default branch            | `gh repo edit --default-branch`                          |
+| Store a secret                    | `gh secret set NAME` with the value on stdin             |
+| List open gate requests           | `gh pr list --base <branch> --state open`                |
+| Merge the release request         | `gh pr merge --squash --delete-branch`                   |
+| Merge the gate                    | `gh pr merge --merge --delete-branch`                    |
+| Wait on checks                    | `gh pr checks --watch`                                   |
+| Wait on a build                   | `gh run watch --exit-status`                             |
+| Protect a branch                  | rulesets: `POST` or `PUT /repos/{owner}/{repo}/rulesets` |
+| Require the gate's checks         | a ruleset rule naming a status-check context             |
+| Protect tags                      | a ruleset targeting `v*`                                 |
+| Grant the bot access to a project | `PUT /user/installations/{id}/repositories/{id}`         |
+| Find the bot identity             | `GET /user/installations`                                |
+
+## Limitations
+
+- Rulesets on a private repository require a paid plan; on a free private repository the protections cannot be applied and `rk setup check` reports each as unsatisfied rather than pretending.
+- The App's own REST endpoints need App JWT authentication, so a user token cannot query an App directly; `install-bot` and its check work through `GET /user/installations` instead, which sees only installations the authenticated user can reach.

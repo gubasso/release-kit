@@ -83,7 +83,8 @@ fn info_enabled(rust_log: Option<&str>) -> bool {
 }
 
 /// Wall-clock UTC now, RFC 3339 to the second.
-fn now_utc() -> String {
+#[must_use]
+pub fn now_utc() -> String {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_secs());

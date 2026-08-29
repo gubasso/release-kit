@@ -14,7 +14,9 @@ This repository is the canonical knowledge product for the release-kit workflow.
 ## Ownership boundaries
 
 - `method/` and `bindings/` are the canon prose; `snippets/` and `versions.toml` are the landable payload.
-- `src/` is the distribution: the `rk` binary embeds `method/`, `bindings/`, `snippets/`, `skills/`, `versions.toml`, and the licenses at compile time, so canon and binary cannot drift.
+- `runbooks/`, `forges/`, and `setup/<forge>/` are host-side payload: served by `rk guide` and `rk forge`, executed by `rk setup`, and landed into no target. `SPEC-forge-setup.md` binds how the setup acts on a forge.
+- `snippets/` is scoped by `(technology, forge)` pair, and `rk init` selects the pair; a pair may honestly land fewer files than another.
+- `src/` is the distribution: the `rk` binary embeds every root in `src/payload_roots.rs` and the licenses at compile time, so canon and binary cannot drift.
 - `skills/` installs at user scope only, and `rk init` lands none: an agent resolves a skill by name across scopes, so a second copy is a second entry under one name. `SPEC-distribution.md` binds what the installer may write there.
 - Every pinned tool is declared once, in `versions.toml`; a snippet pin changes together with its registry entry.
 - `_docs/` is this repository's own spec-driven-docs instance plus its decisions; it never ships in the crate.
@@ -44,6 +46,9 @@ This repository is the canonical knowledge product for the release-kit workflow.
 
 - The method spine and recovery paths: `method/README.md`.
 - Technology specifics: `bindings/README.md`.
+- Forge specifics and the bot-identity walkthroughs: `forges/README.md`, served by `rk forge`.
+- The operator recipes: `runbooks/README.md`, served by `rk guide`.
+- The executable repository-side setup: `rk setup`, with `rk runs` over its journals.
 - What lands in a target: `snippets/`, served by `rk snippet --list`.
 - Pinned tools and freshness: `versions.toml`, served by `rk versions`.
 - The payload's identity and digests: `rk payload`, with `--json` as the machine form.

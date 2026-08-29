@@ -1,0 +1,75 @@
+#!/usr/bin/env sh
+# Verify the rulesets are exactly the three this setup owns, and that the
+# release-branch protection still has the shape a release merge needs: a
+# ruleset that rejects or corrupts that merge is invisible until the release
+# merge, and a ruleset no step owns is protection nothing here can reproduce
+# or explain.
+set -eu
+: "${RK_REPO:?rk sets this; run this script through rk setup}"
+: "${RK_INTEGRATION_BRANCH:?rk sets this; run this script through rk setup}"
+: "${RK_RELEASE_BRANCH:?rk sets this; run this script through rk setup}"
+
+release_name="$RK_RELEASE_BRANCH-protection"
+integration_name="$RK_INTEGRATION_BRANCH-protection"
+tags_name=release-tags
+
+names="$(gh api "repos/$RK_REPO/rulesets" -q '.[].name' | sort)"
+extra="$names"
+status=0
+
+for pair in "$integration_name:protect-integration-branch" "$release_name:protect-release-branch" "$tags_name:protect-tags"; do
+  name="${pair%%:*}"
+  extra="$(printf '%s\n' "$extra" | grep -vxF "$name" || true)"
+  if printf '%s\n' "$names" | grep -qxF "$name"; then
+    echo "ok $name"
+    continue
+  fi
+  echo "FAIL missing ruleset: $name" >&2
+  echo "remediation: rk setup step ${pair#*:} --apply" >&2
+  status=1
+done
+
+if [ -n "$extra" ]; then
+  echo 'FAIL rulesets no step owns:' >&2
+  printf '%s\n' "$extra" >&2
+  echo 'remediation: delete each one in the repository settings' >&2
+  status=1
+fi
+
+id="$(gh api "repos/$RK_REPO/rulesets" -q ".[] | select(.name == \"$release_name\") | .id" | head -n 1)"
+if [ -n "$id" ]; then
+  check() {
+    label="$1"
+    expected="$2"
+    remedy="$3"
+    actual="$(gh api "repos/$RK_REPO/rulesets/$id" -q "$4")"
+    if [ "$actual" = "$expected" ]; then
+      echo "ok $release_name $label"
+    else
+      echo "FAIL $release_name $label: expected $expected, got $actual" >&2
+      echo "remediation: $remedy" >&2
+      status=1
+    fi
+  }
+
+  rerun='rk setup step protect-release-branch --apply'
+
+  check 'names no bypass actor' 0 "$rerun" '.bypass_actors // [] | length'
+  check 'requires a pull request' true "$rerun" '[.rules[].type] | contains(["pull_request"])'
+  check 'requires a status check' true "$rerun" '[.rules[].type] | contains(["required_status_checks"])'
+  check 'allows a merge commit' false \
+    'this forge offers no fast-forward merge, so linear history rejects every release merge; '"$rerun" \
+    '[.rules[].type] | contains(["required_linear_history"])'
+  check 'allows only the merge method' '["merge"]' \
+    'rebase and squash diverge the release branch from the integration branch; '"$rerun" \
+    '[.rules[] | select(.type=="pull_request") | .parameters.allowed_merge_methods] | first // [] | sort | tojson'
+  if [ -n "${RK_REQUIRED_CHECK:-}" ]; then
+    check 'requires the named check' "$RK_REQUIRED_CHECK" "$rerun" \
+      '[.rules[] | select(.type=="required_status_checks") | .parameters.required_status_checks[].context] | join(",")'
+  fi
+  check 'asks for no approving review' 0 "$rerun" \
+    '[.rules[] | select(.type=="pull_request") | .parameters.required_approving_review_count] | first'
+fi
+
+[ "$status" -eq 0 ] || exit 1
+echo 'ok protections-check'

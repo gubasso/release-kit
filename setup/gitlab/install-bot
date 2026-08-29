@@ -1,0 +1,68 @@
+#!/usr/bin/env sh
+# Create the bot identity: a project access token, whose creation also
+# creates its bot user. The create response is the only time the forge shows
+# the token's value, so this step stores it as the masked CI variable in the
+# same breath — printing it and asking an operator to copy it would put the
+# credential in a terminal, a transcript, and a journal. The value travels on
+# standard input; printf is a shell builtin, so no process argument list ever
+# holds it. Idempotent: an active token whose variable is stored is
+# re-asserted, and an active token whose stored variable has gone missing is
+# revoked and replaced — its value is unrecoverable, so rotation is the only
+# path that does not strand the operator.
+set -eu
+: "${RK_REPO:?rk sets this; run this script through rk setup}"
+
+project="$(printf '%s' "$RK_REPO" | sed 's|/|%2F|g')"
+
+# The forge CLI may pretty-print JSON; stripping whitespace makes every
+# pattern below hold for the compact and the pretty form alike, and no
+# value a pattern touches can carry whitespace of its own.
+compact() { tr -d ' \t\r\n'; }
+name=release-bot
+
+if ! tokens="$(glab api --paginate "projects/$project/access_tokens?state=active&per_page=100")"; then
+  echo 'FAIL the access tokens could not be listed' >&2
+  echo 'remediation: check the caller has Maintainer access or above, then rerun' >&2
+  exit 1
+fi
+tokens="$(printf '%s' "$tokens" | compact)"
+# One token object per line — the objects nest nothing but flat arrays, so
+# splitting on the closing brace isolates each — then match fields in any
+# order within the line; the response guarantees neither field ordering nor
+# compact formatting, so the listing is paginated in full and pre-filtered
+# to active tokens.
+active="$(printf '%s' "$tokens" | tr '}' '\n' | grep "\"name\":\"$name\"" | grep '"active":true' | grep -o '"id":[0-9]*' | head -n 1 | cut -d : -f 2)"
+stored=0
+if glab api "projects/$project/variables/RELEASE_BOT_TOKEN" >/dev/null 2>&1; then
+  stored=1
+fi
+
+if [ -n "$active" ] && [ "$stored" = "1" ]; then
+  echo "ok an active token named $name exists and its variable is stored"
+else
+  if [ -n "$active" ]; then
+    glab api -X DELETE "projects/$project/access_tokens/$active" >/dev/null
+    echo "note: revoked an active $name token whose stored variable was missing"
+  fi
+  # Access tokens require an expiry; the first of this month next year is
+  # always a valid date and lands eleven to twelve months out.
+  expires="$(($(date -u +%Y) + 1))-$(date -u +%m)-01"
+  response="$(glab api -X POST "projects/$project/access_tokens" \
+    -f "name=$name" \
+    -f 'scopes[]=api' \
+    -f 'scopes[]=write_repository' \
+    -F access_level=40 \
+    -f "expires_at=$expires")"
+  token="$(printf '%s' "$response" | compact | grep -o '"token":"[^"]*"' | head -n 1 | cut -d '"' -f 4)"
+  if [ -z "$token" ]; then
+    echo 'FAIL the create response carried no token value' >&2
+    echo 'remediation: check the caller has Maintainer access or above, then rerun' >&2
+    exit 1
+  fi
+  printf '%s' "$token" | glab variable set RELEASE_BOT_TOKEN --masked --repo "$RK_REPO"
+  echo "ok created $name and stored RELEASE_BOT_TOKEN"
+fi
+
+echo "check: prints one active token named $name and the stored variable"
+glab api --paginate "projects/$project/access_tokens?state=active&per_page=100" | compact | tr '}' '\n' | grep "\"name\":\"$name\"" | grep -o '"active":true' | head -n 1
+glab api "projects/$project/variables/RELEASE_BOT_TOKEN" | compact | grep -o '"key":"RELEASE_BOT_TOKEN"'

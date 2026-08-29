@@ -14,6 +14,11 @@ pub struct InitArgs {
     #[arg(long)]
     pub target: Utf8PathBuf,
 
+    /// The forge whose files land: github or gitlab. Defaults to detection
+    /// from the target's git remote; an unrecognized host refuses.
+    #[arg(long)]
+    pub forge: Option<String>,
+
     /// Write the files; without it the destinations are listed and nothing
     /// is touched.
     #[arg(long)]

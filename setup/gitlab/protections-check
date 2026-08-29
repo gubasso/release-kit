@@ -1,0 +1,73 @@
+#!/usr/bin/env sh
+# Verify the protections are exactly the ones this setup owns, with the
+# shapes a release needs, and state what the forge actually enforces rather
+# than passing on a claim it cannot meet: tag protection here stops accident,
+# not authority, and a check that hides that difference is worse than none.
+set -eu
+: "${RK_REPO:?rk sets this; run this script through rk setup}"
+: "${RK_INTEGRATION_BRANCH:?rk sets this; run this script through rk setup}"
+: "${RK_RELEASE_BRANCH:?rk sets this; run this script through rk setup}"
+
+project="$(printf '%s' "$RK_REPO" | sed 's|/|%2F|g')"
+
+# The forge CLI may pretty-print JSON; stripping whitespace makes every
+# pattern below hold for the compact and the pretty form alike, and no
+# value a pattern touches can carry whitespace of its own.
+compact() { tr -d ' \t\r\n'; }
+status=0
+
+assert() {
+  label="$1"
+  pattern="$2"
+  body="$3"
+  remedy="$4"
+  if printf '%s' "$body" | grep -q "$pattern"; then
+    echo "ok $label"
+  else
+    echo "FAIL $label" >&2
+    echo "remediation: $remedy" >&2
+    status=1
+  fi
+}
+
+release="$(glab api "projects/$project/protected_branches/$RK_RELEASE_BRANCH" 2>/dev/null | compact || true)"
+assert "$RK_RELEASE_BRANCH is protected" "\"name\":\"$RK_RELEASE_BRANCH\"" "$release" \
+  'rk setup step protect-release-branch --apply'
+release_levels="$(printf '%s' "$release" | grep -o '"push_access_levels":\[[^]]*\]' || true)"
+release_grants="$(printf '%s' "$release_levels" | grep -o '{' | grep -c . || true)"
+if [ "$release_grants" = "1" ] && printf '%s' "$release_levels" | grep -q '"access_level":0'; then
+  echo "ok $RK_RELEASE_BRANCH takes no direct push"
+else
+  echo "FAIL $RK_RELEASE_BRANCH takes no direct push: the forge honors the most permissive of $release_grants push grants" >&2
+  echo 'remediation: rk setup step protect-release-branch --apply' >&2
+  status=1
+fi
+
+integration="$(glab api "projects/$project/protected_branches/$RK_INTEGRATION_BRANCH" 2>/dev/null | compact || true)"
+assert "$RK_INTEGRATION_BRANCH is protected" "\"name\":\"$RK_INTEGRATION_BRANCH\"" "$integration" \
+  'rk setup step protect-integration-branch --apply'
+assert "$RK_INTEGRATION_BRANCH refuses force pushes" '"allow_force_push":false' "$integration" \
+  'rk setup step protect-integration-branch --apply'
+integration_levels="$(printf '%s' "$integration" | grep -o '"push_access_levels":\[[^]]*\]' || true)"
+integration_grants="$(printf '%s' "$integration_levels" | grep -o '{' | grep -c . || true)"
+if [ "$integration_grants" = "1" ] && printf '%s' "$integration_levels" | grep -q '"access_level":30'; then
+  echo "ok $RK_INTEGRATION_BRANCH carries exactly its one owned push grant"
+else
+  echo "FAIL $RK_INTEGRATION_BRANCH push grants: the setup owns exactly one at developer level, found $integration_grants" >&2
+  echo 'remediation: rk setup step protect-integration-branch --apply' >&2
+  status=1
+fi
+
+settings="$(glab api "projects/$project" | compact)"
+assert 'the gate requires the whole pipeline' '"only_allow_merge_if_pipeline_succeeds":true' "$settings" \
+  'rk setup step protect-release-branch --apply'
+assert 'merges land as merge commits' '"merge_method":"merge"' "$settings" \
+  'rk setup step protect-release-branch --apply'
+
+tags="$(glab api "projects/$project/protected_tags/v%2A" 2>/dev/null | compact || true)"
+assert 'v* is protected' '"name":"v\*"' "$tags" \
+  'rk setup step protect-tags --apply'
+echo 'note: tag protection here stops git clients and non-privileged users; an Owner or Maintainer can still delete a protected tag through the UI or API'
+
+[ "$status" -eq 0 ] || exit 1
+echo 'ok protections-check'

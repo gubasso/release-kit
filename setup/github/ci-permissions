@@ -1,0 +1,12 @@
+#!/usr/bin/env sh
+# Let CI write and open pull requests, so the workflow can act on the
+# integration branch.
+set -eu
+: "${RK_REPO:?rk sets this; run this script through rk setup}"
+
+gh api -X PUT "repos/$RK_REPO/actions/permissions/workflow" \
+  -f default_workflow_permissions=write \
+  -F can_approve_pull_request_reviews=true
+echo 'check: prints "write true"'
+gh api "repos/$RK_REPO/actions/permissions/workflow" \
+  -q '"\(.default_workflow_permissions) \(.can_approve_pull_request_reviews)"'

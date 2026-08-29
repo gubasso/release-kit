@@ -1,0 +1,60 @@
+#!/usr/bin/env sh
+# Protect the release branch. It takes no direct push: a pull request carrying
+# the named passing check is the only way in, and that is the release gate.
+# The merge method is a merge commit because this forge offers no fast-forward
+# merge, so a linear-history rule would reject every release merge and a
+# rebase or squash would make the release branch diverge from the integration
+# branch permanently. Nothing in the pipeline writes this branch — the bot
+# pushes a tag, which release-tags governs — so it names no bypass actor.
+# The method's invariants chapter owns these facts; this comment points there.
+# Rerunning updates in place.
+set -eu
+: "${RK_REPO:?rk sets this; run this script through rk setup}"
+: "${RK_RELEASE_BRANCH:?rk sets this; run this script through rk setup}"
+: "${RK_REQUIRED_CHECK:?rk sets this from --required-check}"
+
+name="$RK_RELEASE_BRANCH-protection"
+id="$(gh api "repos/$RK_REPO/rulesets" -q ".[] | select(.name == \"$name\") | .id" | head -n 1)"
+
+if [ -n "$id" ]; then
+  gh api -X PUT "repos/$RK_REPO/rulesets/$id" --input - >/dev/null
+else
+  gh api -X POST "repos/$RK_REPO/rulesets" --input - >/dev/null
+fi <<JSON
+{
+  "name": "$name",
+  "target": "branch",
+  "enforcement": "active",
+  "bypass_actors": [],
+  "conditions": {
+    "ref_name": { "include": ["refs/heads/$RK_RELEASE_BRANCH"], "exclude": [] }
+  },
+  "rules": [
+    { "type": "deletion" },
+    { "type": "non_fast_forward" },
+    {
+      "type": "pull_request",
+      "parameters": {
+        "required_approving_review_count": 0,
+        "dismiss_stale_reviews_on_push": false,
+        "require_code_owner_review": false,
+        "require_last_push_approval": false,
+        "required_review_thread_resolution": false,
+        "require_extra_approval_for_unattributed_changes": false,
+        "allowed_merge_methods": ["merge"]
+      }
+    },
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "do_not_enforce_on_create": true,
+        "strict_required_status_checks_policy": false,
+        "required_status_checks": [{ "context": "$RK_REQUIRED_CHECK" }]
+      }
+    }
+  ]
+}
+JSON
+
+echo "check: prints $name"
+gh api "repos/$RK_REPO/rulesets" -q ".[] | select(.name == \"$name\") | .name"

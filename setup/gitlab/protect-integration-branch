@@ -1,0 +1,41 @@
+#!/usr/bin/env sh
+# Protect the integration branch: no force pushes, no deletion. It keeps
+# taking direct pushes from developers, because a required gate here would
+# reject the push that opens a release; the release is gated on the release
+# branch instead. A protected branch cannot be deleted while its protection
+# stands. Rerunning re-asserts.
+set -eu
+: "${RK_REPO:?rk sets this; run this script through rk setup}"
+: "${RK_INTEGRATION_BRANCH:?rk sets this; run this script through rk setup}"
+
+project="$(printf '%s' "$RK_REPO" | sed 's|/|%2F|g')"
+
+# The forge CLI may pretty-print JSON; stripping whitespace makes every
+# pattern below hold for the compact and the pretty form alike, and no
+# value a pattern touches can carry whitespace of its own.
+compact() { tr -d ' \t\r\n'; }
+
+if glab api "projects/$project/protected_branches/$RK_INTEGRATION_BRANCH" >/dev/null 2>&1; then
+  current="$(glab api "projects/$project/protected_branches/$RK_INTEGRATION_BRANCH" | compact)"
+  levels="$(printf '%s' "$current" | grep -o '"push_access_levels":\[[^]]*\]' || true)"
+  # Exactly the one grant this setup owns; an extra grant is protection the
+  # setup cannot reproduce or explain, so it is re-created canonically.
+  grants="$(printf '%s' "$levels" | grep -o '{' | grep -c . || true)"
+  if [ "$grants" = "1" ] && printf '%s' "$levels" | grep -q '"access_level":30'; then
+    glab api -X PATCH "projects/$project/protected_branches/$RK_INTEGRATION_BRANCH" \
+      -F allow_force_push=false >/dev/null
+  else
+    glab api -X DELETE "projects/$project/protected_branches/$RK_INTEGRATION_BRANCH" >/dev/null
+    glab api -X POST "projects/$project/protected_branches" \
+      -f "name=$RK_INTEGRATION_BRANCH" -F push_access_level=30 -F merge_access_level=30 \
+      -F allow_force_push=false >/dev/null
+  fi
+else
+  glab api -X POST "projects/$project/protected_branches" \
+    -f "name=$RK_INTEGRATION_BRANCH" -F push_access_level=30 -F merge_access_level=30 \
+    -F allow_force_push=false >/dev/null
+fi
+
+echo "check: prints the protection with force pushes off"
+glab api "projects/$project/protected_branches/$RK_INTEGRATION_BRANCH" | compact | grep -o "\"name\":\"$RK_INTEGRATION_BRANCH\""
+glab api "projects/$project/protected_branches/$RK_INTEGRATION_BRANCH" | compact | grep -o '"allow_force_push":[a-z]*'
