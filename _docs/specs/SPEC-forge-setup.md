@@ -14,7 +14,7 @@
 
 ## Purpose
 
-Rules governing how `rk` configures a remote forge on the operator's behalf, once per repository: the setup steps `rk setup` executes, the scripts that implement them, and the credentials they handle. Its subject is calling a remote API, which is neither carrying a payload — `SPEC-distribution.md` — nor writing into a target repository. No adopting project adopts this spec: a project cannot violate a rule about how `rk` behaves and cannot run the verification.
+Rules governing how `rk` configures a remote forge on the operator's behalf, once per repository: the setup steps `rk setup` executes, the scripts that implement them, and the credentials they handle. Its subject is calling a remote API, which is neither carrying a payload — `SPEC-distribution.md` — nor writing into a target repository. No adopting project adopts this spec: a project cannot violate a rule about how `rk` behaves and cannot run the verification. The forge documentation these rules rest on is in `../reference/REFERENCE-forge-setup-sources.md`, which also records what each forge does not offer.
 
 ## Requirements
 

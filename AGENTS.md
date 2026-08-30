@@ -7,6 +7,7 @@ This repository is the canonical knowledge product for the release-kit workflow.
 - Load each `_docs/specs/SPEC-<domain>.md` affected by the work.
 - Apply stated rules and cite their `<domain>:<rule>` IDs in reports and failures.
 - Do not load `_docs/decisions/` unless someone asks why a rule exists.
+- Load `_docs/reference/REFERENCE-<domain>-sources.md` only to check a rule against the upstream documentation it rests on, or to re-verify a fact a forge or a registry may have moved.
 - Update the owning method chapter or binding in the same change as behavior.
 - Update a skill in the same change as the behavior it describes.
 - Run `sdd verify` before handoff.
