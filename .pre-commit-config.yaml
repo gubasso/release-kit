@@ -24,6 +24,84 @@ repos:
         alias: ec
         args: [-disable-insert-final-newline]
         exclude: '\.md$'
+  - repo: local
+    hooks:
+      - id: dprint
+        name: dprint check
+        # dprint exits 14 rather than passing when it receives only paths its
+        # own config excludes, which is what a commit touching just the
+        # generated CHANGELOG.md hands it.
+        entry: dprint check --allow-no-files
+        language: system
+        types_or: [markdown, json]
+      - id: cargo-fmt
+        name: cargo fmt check
+        entry: cargo fmt --check
+        language: system
+        types: [rust]
+        pass_filenames: false
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --all-targets --all-features -- -D warnings
+        language: system
+        types: [rust]
+        pass_filenames: false
+      - id: cargo-test
+        name: cargo test
+        entry: cargo test
+        language: system
+        files: '^(src/|tests/|build\.rs$|Cargo\.(toml|lock)$|method/|bindings/|snippets/|skills/|versions\.toml$|LICENSE)'
+        pass_filenames: false
+  - repo: https://github.com/frnmst/md-toc
+    rev: 9.0.0
+    hooks:
+      - id: md-toc
+        args: [-p, -c, --skip-lines, '1', github, -l, '3']
+        files: '^_docs/specs/SPEC-.*\.md$'
+  - repo: https://github.com/DavidAnson/markdownlint-cli2
+    rev: v0.23.2
+    hooks:
+      - id: markdownlint-cli2
+      - id: markdownlint-cli2
+        alias: md-relative-links
+        name: markdownlint relative links
+        additional_dependencies: ['markdownlint-rule-relative-links']
+        args: ['--config', '.spec-driven-docs/markdownlint/relative-links.markdownlint-cli2.jsonc']
+        exclude: '^_docs/decisions/'
+      - id: markdownlint-cli2
+        alias: md-spec
+        name: markdownlint spec heading shape
+        files: '^_docs/specs/SPEC-[a-z0-9-]+\.md$'
+        args: ['--config', '.spec-driven-docs/markdownlint/spec.markdownlint-cli2.jsonc']
+      - id: markdownlint-cli2
+        alias: md-adr
+        name: markdownlint decision heading shape
+        files: '^_docs/decisions/ADR-[a-z-]+\.md$'
+        args: ['--config', '.spec-driven-docs/markdownlint/adr.markdownlint-cli2.jsonc']
+  - repo: https://github.com/crate-ci/typos
+    rev: v1.49.0
+    hooks:
+      - id: typos
+        language: system
+        args: [--force-exclude]
+  - repo: https://github.com/sirwart/ripsecrets
+    rev: v0.1.11
+    hooks:
+      - id: ripsecrets
+  - repo: https://github.com/lycheeverse/lychee
+    rev: lychee-v0.24.2
+    hooks:
+      - id: lychee
+        stages: [pre-push]
+        types: [markdown]
+        exclude: 'CHANGELOG\.md$'
+        args: [--no-progress]
+  - repo: https://github.com/crate-ci/committed
+    rev: v1.1.11
+    hooks:
+      - id: committed
+        language: system
+        stages: [commit-msg]
 # BEGIN spec-driven-docs managed
   - repo: local
     hooks:
@@ -128,6 +206,11 @@ repos:
         language: system
         always_run: true
         pass_filenames: false
+      - id: no-personal-path
+        name: 'no personal path'
+        entry: sdd gate no-personal-path
+        language: system
+        types: [text]
       - id: no-self-narration
         name: 'documents state the present'
         entry: sdd gate no-self-narration
@@ -170,81 +253,3 @@ repos:
         always_run: true
         pass_filenames: false
 # END spec-driven-docs managed
-  - repo: local
-    hooks:
-      - id: dprint
-        name: dprint check
-        # dprint exits 14 rather than passing when it receives only paths its
-        # own config excludes, which is what a commit touching just the
-        # generated CHANGELOG.md hands it.
-        entry: dprint check --allow-no-files
-        language: system
-        types_or: [markdown, json]
-      - id: cargo-fmt
-        name: cargo fmt check
-        entry: cargo fmt --check
-        language: system
-        types: [rust]
-        pass_filenames: false
-      - id: cargo-clippy
-        name: cargo clippy
-        entry: cargo clippy --all-targets --all-features -- -D warnings
-        language: system
-        types: [rust]
-        pass_filenames: false
-      - id: cargo-test
-        name: cargo test
-        entry: cargo test
-        language: system
-        files: '^(src/|tests/|build\.rs$|Cargo\.(toml|lock)$|method/|bindings/|snippets/|skills/|versions\.toml$|LICENSE)'
-        pass_filenames: false
-  - repo: https://github.com/frnmst/md-toc
-    rev: 9.0.0
-    hooks:
-      - id: md-toc
-        args: [-p, -c, --skip-lines, '1', github, -l, '3']
-        files: '^_docs/specs/SPEC-.*\.md$'
-  - repo: https://github.com/DavidAnson/markdownlint-cli2
-    rev: v0.23.2
-    hooks:
-      - id: markdownlint-cli2
-      - id: markdownlint-cli2
-        alias: md-relative-links
-        name: markdownlint relative links
-        additional_dependencies: ['markdownlint-rule-relative-links']
-        args: ['--config', '.spec-driven-docs/markdownlint/relative-links.markdownlint-cli2.jsonc']
-        exclude: '^_docs/decisions/'
-      - id: markdownlint-cli2
-        alias: md-spec
-        name: markdownlint spec heading shape
-        files: '^_docs/specs/SPEC-[a-z0-9-]+\.md$'
-        args: ['--config', '.spec-driven-docs/markdownlint/spec.markdownlint-cli2.jsonc']
-      - id: markdownlint-cli2
-        alias: md-adr
-        name: markdownlint decision heading shape
-        files: '^_docs/decisions/ADR-[a-z-]+\.md$'
-        args: ['--config', '.spec-driven-docs/markdownlint/adr.markdownlint-cli2.jsonc']
-  - repo: https://github.com/crate-ci/typos
-    rev: v1.49.0
-    hooks:
-      - id: typos
-        language: system
-        args: [--force-exclude]
-  - repo: https://github.com/sirwart/ripsecrets
-    rev: v0.1.11
-    hooks:
-      - id: ripsecrets
-  - repo: https://github.com/lycheeverse/lychee
-    rev: lychee-v0.24.2
-    hooks:
-      - id: lychee
-        stages: [pre-push]
-        types: [markdown]
-        exclude: 'CHANGELOG\.md$'
-        args: [--no-progress]
-  - repo: https://github.com/crate-ci/committed
-    rev: v1.1.11
-    hooks:
-      - id: committed
-        language: system
-        stages: [commit-msg]

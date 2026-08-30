@@ -108,12 +108,12 @@ mod tests {
     fn record() -> Record {
         let mut record = Record::default();
         record.written.insert(
-            Utf8PathBuf::from("/home/u/.claude/skills/rk-setup/SKILL.md"),
+            Utf8PathBuf::from("/home/<user>/.claude/skills/rk-setup/SKILL.md"),
             Digest::of(b"one"),
         );
         record.written.insert(
             // Two spaces in the path: the separator must not decide the split.
-            Utf8PathBuf::from("/home/u/two  spaces/SKILL.md"),
+            Utf8PathBuf::from("/home/<user>/two  spaces/SKILL.md"),
             Digest::of(b"two"),
         );
         record
@@ -129,7 +129,7 @@ mod tests {
     #[test]
     fn a_record_vouches_only_for_the_digest_it_holds() {
         let record = record();
-        let destination = Utf8PathBuf::from("/home/u/.claude/skills/rk-setup/SKILL.md");
+        let destination = Utf8PathBuf::from("/home/<user>/.claude/skills/rk-setup/SKILL.md");
         assert!(record.wrote(&destination, &Digest::of(b"one")));
         assert!(!record.wrote(&destination, &Digest::of(b"edited")));
         assert!(!record.wrote(

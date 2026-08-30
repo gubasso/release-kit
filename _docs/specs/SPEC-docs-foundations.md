@@ -1,8 +1,23 @@
 # Documentation Foundations Specification
 
+<!--TOC-->
+
+- [Purpose](#purpose)
+- [Requirements](#requirements)
+  - [`docs-foundations:spec-states-the-present` — A change to current behavior updates the owning spec](#docs-foundationsspec-states-the-present--a-change-to-current-behavior-updates-the-owning-spec)
+  - [`docs-foundations:spec-wins-over-record` — A spec outranks a decision record](#docs-foundationsspec-wins-over-record--a-spec-outranks-a-decision-record)
+  - [`docs-foundations:a-document-carries-no-personal-path` — A document carries no path into a person's home](#docs-foundationsa-document-carries-no-personal-path--a-document-carries-no-path-into-a-persons-home)
+  - [`docs-foundations:a-document-owns-what-it-governs` — A document owns what it governs](#docs-foundationsa-document-owns-what-it-governs--a-document-owns-what-it-governs)
+  - [`docs-foundations:specs-are-centralized` — Specs are centralized under the docs root](#docs-foundationsspecs-are-centralized--specs-are-centralized-under-the-docs-root)
+  - [`docs-foundations:artifact-filenames-carry-a-kind-prefix` — A fixed-kind file carries an uppercase kind prefix](#docs-foundationsartifact-filenames-carry-a-kind-prefix--a-fixed-kind-file-carries-an-uppercase-kind-prefix)
+  - [`docs-foundations:a-kind-prefix-carries-a-slug` — A prefixed filename carries a slug, not a counter](#docs-foundationsa-kind-prefix-carries-a-slug--a-prefixed-filename-carries-a-slug-not-a-counter)
+  - [`docs-foundations:companion-artifacts-share-the-spec-name` — A spec's supporting artifacts sit in a directory named for it](#docs-foundationscompanion-artifacts-share-the-spec-name--a-specs-supporting-artifacts-sit-in-a-directory-named-for-it)
+
+<!--TOC-->
+
 ## Purpose
 
-The artifact model this project's documentation follows, its precedence order, and where each artifact goes. Covers which artifact owns a fact, what wins when two disagree, and how artifacts are named and placed. The shape of a spec and the shape of a record are covered by their own specs.
+The artifact model this project's documentation follows, its precedence order, and where each artifact goes. Covers which artifact owns a fact, what wins when two disagree, how artifacts are named and placed, and what a document may not carry out of the machine it was written on. The shape of a spec and the shape of a record are covered by their own specs.
 
 ## Requirements
 
@@ -29,6 +44,30 @@ If a spec and a decision record disagree, then the reader MUST follow the spec.
 - THEN the spec is current and the record is history, and neither is edited to agree
 
 Verify: reviewer confirms no record was edited to match a later spec
+
+### `docs-foundations:a-document-carries-no-personal-path` — A document carries no path into a person's home
+
+The author MUST write a path into a home directory as `~/`, `$HOME/`, or a bracketed placeholder rather than as an absolute path naming a person, except in a file whose purpose is one person's environment.
+
+#### Scenario: A walkthrough is written from the author's own terminal
+
+- GIVEN a chapter that pastes a working command with the author's home directory in it
+- WHEN a second reader follows it
+- THEN the path resolves for nobody else and names someone who never agreed to be named, which the placeholder form avoids at no cost
+
+Verify: `pre-commit run no-personal-path --all-files`
+
+### `docs-foundations:a-document-owns-what-it-governs` — A document owns what it governs
+
+Where a document states a rule this project's own domain owns, the author MUST state it here rather than sending the reader to another project's documentation for it.
+
+#### Scenario: A rule is left to the project it was borrowed from
+
+- GIVEN a convention this project requires and another project happens to document
+- WHEN the spec points at that project instead of stating the rule
+- THEN the requirement changes when someone else edits it, and a reader without access to that project cannot learn what binds them
+
+Verify: reviewer confirms every rule the project owns is stated in the project's own documents
 
 ### `docs-foundations:specs-are-centralized` — Specs are centralized under the docs root
 

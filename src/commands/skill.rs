@@ -237,12 +237,12 @@ mod tests {
 
     #[test]
     fn each_agent_selects_its_own_roots() {
-        let home = Utf8Path::new("/home/u");
-        assert_eq!(roots(home, Agent::Claude), ["/home/u/.claude/skills"]);
-        assert_eq!(roots(home, Agent::Codex), ["/home/u/.agents/skills"]);
+        let home = Utf8Path::new("/home/<user>");
+        assert_eq!(roots(home, Agent::Claude), ["/home/<user>/.claude/skills"]);
+        assert_eq!(roots(home, Agent::Codex), ["/home/<user>/.agents/skills"]);
         assert_eq!(
             roots(home, Agent::All),
-            ["/home/u/.claude/skills", "/home/u/.agents/skills"]
+            ["/home/<user>/.claude/skills", "/home/<user>/.agents/skills"]
         );
     }
 
@@ -250,7 +250,7 @@ mod tests {
     #[test]
     fn the_skill_report_schema_snapshot_holds() {
         let actions = vec![Action::Write {
-            destination: "/home/u/.claude/skills/rk-setup/SKILL.md".into(),
+            destination: "/home/<user>/.claude/skills/rk-setup/SKILL.md".into(),
         }];
         let next = vec!["rk skill list names the installed skills".to_owned()];
         let report = super::Report {
@@ -262,7 +262,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.skill/1","command":"install","mode":"apply","actions":[{"action":"write","destination":"/home/u/.claude/skills/rk-setup/SKILL.md"}],"next":["rk skill list names the installed skills"]}"#
+            r#"{"schema":"rk.skill/1","command":"install","mode":"apply","actions":[{"action":"write","destination":"/home/<user>/.claude/skills/rk-setup/SKILL.md"}],"next":["rk skill list names the installed skills"]}"#
         );
     }
 
