@@ -400,6 +400,15 @@ fn github_install_bot(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkError>
     let installations = match api_get(ctx, run, "user/installations")? {
         Api::Ok(body) => body,
         Api::Missing => return Ok(StepState::not("no app installation is reachable")),
+        // The installation endpoints refuse the OAuth token `gh auth
+        // login` normally mints — the grant is documented for classic
+        // personal access tokens only — so this 403 names the wrong
+        // token class, not missing authentication.
+        Api::Failed(err) if err.contains("authorized to a GitHub App") => {
+            return Ok(StepState::unknown(format!(
+                "{err}; the forge refuses gh's own OAuth token here — authenticate gh with a classic personal access token carrying repo scope, or grant the project at github.com/settings/installations"
+            )));
+        }
         Api::Failed(err) => return Ok(StepState::unknown(err)),
     };
     let ids: Vec<i64> = installations["installations"]

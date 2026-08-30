@@ -87,6 +87,11 @@ pub fn run_all() -> Vec<ProbeResult> {
             "gh",
             "the GitHub CLI",
             "gh auth login",
+            // `gh auth status` fails when any stored account is broken,
+            // even while the active one works; `--active` judges only the
+            // credential this tool would use. Older gh lacks the flag, so
+            // the bare form is the fallback.
+            &[&["auth", "status", "--active"], &["auth", "status"]],
         ),
         forge_cli(
             "glab-auth",
@@ -94,6 +99,7 @@ pub fn run_all() -> Vec<ProbeResult> {
             "glab",
             "the GitLab CLI",
             "glab auth login",
+            &[&["auth", "status"]],
         ),
     ]
 }
@@ -198,33 +204,46 @@ fn remote_host(url: &str) -> Option<String> {
 
 /// A forge CLI is present and authenticated. `env_override` names the
 /// variable that substitutes the binary, which is also what keeps tests
-/// hermetic.
+/// hermetic. `attempts` is tried in order and the first success wins, so
+/// a probe can prefer a sharper flag and still work where the CLI
+/// predates it.
 fn forge_cli(
     id: &'static str,
     env_override: &str,
     default_bin: &str,
     label: &str,
     login: &str,
+    attempts: &[&[&str]],
 ) -> ProbeResult {
     let bin = std::env::var(env_override).unwrap_or_else(|_| default_bin.to_owned());
-    match Command::new(&bin).args(["auth", "status"]).output() {
-        Ok(out) if out.status.success() => ProbeResult::ok(
-            id,
-            ProbeClass::Soft,
-            format!("{default_bin} is authenticated"),
-        ),
-        Ok(_) => ProbeResult::failed(
+    let mut spawned = false;
+    for args in attempts {
+        match Command::new(&bin).args(*args).output() {
+            Ok(out) if out.status.success() => {
+                return ProbeResult::ok(
+                    id,
+                    ProbeClass::Soft,
+                    format!("{default_bin} is authenticated"),
+                );
+            }
+            Ok(_) => spawned = true,
+            Err(_) => {}
+        }
+    }
+    if spawned {
+        ProbeResult::failed(
             id,
             ProbeClass::Soft,
             format!("{default_bin} is not authenticated"),
             format!("run {login}"),
-        ),
-        Err(_) => ProbeResult::failed(
+        )
+    } else {
+        ProbeResult::failed(
             id,
             ProbeClass::Soft,
             format!("{default_bin} is not on PATH"),
             format!("install {label}"),
-        ),
+        )
     }
 }
 

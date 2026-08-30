@@ -4,6 +4,11 @@
 # ever; the walkthrough is the forge document. Idempotent: an already-granted
 # project is re-asserted, and no second identity is ever created.
 #
+# The grant below is documented to work only for a classic personal access
+# token with repo scope, and the listing refuses the OAuth token gh normally
+# mints; run this step with GH_TOKEN holding a classic token, or grant the
+# project by hand under github.com/settings/installations.
+#
 # RK_BOT_INSTALLATION names the installation id where the account has more
 # than one; with exactly one installation it is derived.
 set -eu

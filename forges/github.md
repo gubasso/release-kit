@@ -22,6 +22,8 @@ Creating the App is the one action no command performs, because the manifest flo
 
 From here every remaining action is a command: `rk setup step install-bot --target . --apply` grants the App this project, and `rk setup step bot-secrets --target . --apply` stores the credentials as repository secrets, the private key travelling on standard input so it never enters a process argument list.
 
+One caveat holds for `install-bot`: the grant endpoint is documented to work only for a classic personal access token with `repo` scope, and the listing it observes through refuses the OAuth token `gh auth login` normally mints. Run that one step with `GH_TOKEN` holding a classic token, or grant the project by hand at the installation's settings page — one click, per project, under `github.com/settings/installations`. The check reads the same listing, so `rk setup check` reports this step `unknown` rather than satisfied until it too runs with such a token.
+
 ## Mapping
 
 | Purpose                           | Command                                                  |

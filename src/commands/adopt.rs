@@ -177,7 +177,14 @@ fn verify(
     let mut records = Vec::new();
     for entry in entries {
         let Some(bytes) = landing::read_destination(&args.target, entry)? else {
-            missing.push(entry.destination.clone());
+            // A block-placed artifact reads as absent from a file that
+            // exists; the operator's remedy differs, so the label must.
+            let label = if args.target.join(&entry.destination).exists() {
+                format!("{} (carries no release-kit block)", entry.destination)
+            } else {
+                format!("{} (expected and missing)", entry.destination)
+            };
+            missing.push(label);
             continue;
         };
         let action = match entry.kind {
@@ -210,11 +217,7 @@ fn verify(
     let listed: Vec<String> = mismatches
         .iter()
         .map(|path| format!("{path} (differs from the rendered candidate)"))
-        .chain(
-            missing
-                .iter()
-                .map(|path| format!("{path} (expected and missing)")),
-        )
+        .chain(missing.iter().cloned())
         .collect();
     Err(RkError::refusal(
         Diagnostic::new(

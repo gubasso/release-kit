@@ -1016,6 +1016,91 @@ fn doctor_reports_every_probe_and_exits_0() {
     assert_eq!(by_id("glab-auth")["remediation"], "run glab auth login");
 }
 
+/// The gh probe asks `auth status --active` first: the bare form fails
+/// while any stored account is broken, even though the active one — the
+/// only credential this tool would use — works. A mock that passes only
+/// with `--active` is that host; the bare-form-only probe this replaced
+/// would report it unauthenticated.
+#[test]
+fn the_gh_probe_judges_only_the_active_account() {
+    let home = Home::new();
+    let gh = home.path().join("fake-gh");
+    std::fs::write(
+        &gh,
+        "#!/bin/sh\nfor arg in \"$@\"; do [ \"$arg\" = --active ] && exit 0; done\nexit 1\n",
+    )
+    .expect("the mock writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755))
+            .expect("the mock is executable");
+    }
+    let out = home
+        .rk()
+        .args(["doctor", "--json"])
+        .env("XDG_STATE_HOME", home.path())
+        .env("RK_GH_BIN", &gh)
+        .env("RK_GLAB_BIN", "/no/such/glab")
+        .current_dir(home.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    let gh_auth = report["probes"]
+        .as_array()
+        .expect("a probe list")
+        .iter()
+        .find(|probe| probe["id"] == "gh-auth")
+        .expect("the probe reports")
+        .clone();
+    assert_eq!(gh_auth["status"], "ok");
+}
+
+/// The gh probe prefers `auth status --active` — the bare form fails
+/// while any stored account is broken, even though the active one works
+/// — and falls back to the bare form where the CLI predates the flag,
+/// so an older gh that is authenticated still reports authenticated.
+#[test]
+fn the_gh_probe_falls_back_where_active_is_unknown() {
+    let home = Home::new();
+    let gh = home.path().join("fake-gh");
+    std::fs::write(
+        &gh,
+        "#!/bin/sh\nfor arg in \"$@\"; do [ \"$arg\" = --active ] && exit 1; done\nexit 0\n",
+    )
+    .expect("the mock writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755))
+            .expect("the mock is executable");
+    }
+    let out = home
+        .rk()
+        .args(["doctor", "--json"])
+        .env("XDG_STATE_HOME", home.path())
+        .env("RK_GH_BIN", &gh)
+        .env("RK_GLAB_BIN", "/no/such/glab")
+        .current_dir(home.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    let gh_auth = report["probes"]
+        .as_array()
+        .expect("a probe list")
+        .iter()
+        .find(|probe| probe["id"] == "gh-auth")
+        .expect("the probe reports")
+        .clone();
+    assert_eq!(gh_auth["status"], "ok");
+}
+
 /// A credential in a malformed remote must never reach a probe message:
 /// probe results land in captured output and CI logs.
 #[test]
@@ -3252,6 +3337,32 @@ fn a_missing_expected_file_refuses_adoption() {
         .assert()
         .code(73)
         .stderr(predicate::str::contains("dist-workspace.toml"));
+    assert!(!target.path().join(".release-kit").exists());
+}
+
+/// An `AGENTS.md` that exists without the marked block is not a missing
+/// file; the refusal names the absent block, because the remedy —
+/// splicing the block — differs from restoring a deleted file.
+#[test]
+fn an_agents_file_without_the_block_refuses_naming_the_block() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+    std::fs::remove_dir_all(target.path().join(".release-kit")).expect("the record removes");
+    std::fs::write(
+        target.path().join("AGENTS.md"),
+        "# The target's own orientation\n",
+    )
+    .expect("the rewrite writes");
+
+    rk().args(["adopt", "--tech", "rust", "--forge", "github"])
+        .args(["--repo", "acme/widget", "--target"])
+        .arg(target.path())
+        .arg("--apply")
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains(
+            "AGENTS.md (carries no release-kit block)",
+        ));
     assert!(!target.path().join(".release-kit").exists());
 }
 
