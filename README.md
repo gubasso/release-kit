@@ -30,8 +30,9 @@ The binary is `rk`.
 - Execute the repository-side setup: `rk setup --target .` previews; `--apply` runs; `rk setup check` proves it.
 - Read a forge's specifics: `rk forge github` or `rk forge gitlab`.
 - Audit what a setup run did: `rk runs list` and `rk runs show <id>`.
+- Release this repository itself: [_docs/guides/release/](./_docs/guides/release/README.md) carries the setup once and the release every time.
 
-This repository dogfoods its own convention; the live registry and forge configuration for it is pending its first release setup, following `rk guide setup`.
+This repository dogfoods its own convention. Its own instance of the procedure, with every command spelled out by hand beside the `rk` step that runs it, is [_docs/guides/release/](./_docs/guides/release/README.md).
 
 ## License
 
