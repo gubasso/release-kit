@@ -57,3 +57,14 @@ This repository is the canonical knowledge product for the release-kit workflow.
 - Host readiness and the whole command surface: `rk doctor` and `rk usage`.
 - Docs format and budgets: `sdd spec docs-format`; this repository is an sdd instance.
 - What the binary carries and writes outside a target: `_docs/specs/SPEC-distribution.md`, served by `rk skill --help`.
+
+<!-- BEGIN release-kit -->
+
+## Releases
+
+- This repository runs the release-kit convention; `rk method invariants` states what must stay true.
+- Never author a tag, and never hand-edit a generated artifact workflow.
+- Run `rk status` before changing anything under `.github/workflows/` or `.gitlab-ci.yml`, or any file `.release-kit/manifest.json` names.
+- The full method is `rk method --list`; the recovery paths are `rk method recovery`.
+
+<!-- END release-kit -->

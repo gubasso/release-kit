@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "rk_version": "0.1.0",
+  "payload_sha256": "0e274365dd6554d75ffbae4978f4e17565b7793ee434bac3baf258c67555cd4a",
+  "origin": "adopt",
+  "tech": "rust",
+  "forge": "github",
+  "landed_at": "2026-08-30T00:14:29Z",
+  "parameters": {
+    "repo": "gubasso/release-kit"
+  },
+  "files": [
+    {
+      "destination": ".github/workflows/release-plz.yml",
+      "kind": "rendered",
+      "sha256": "17a15b372256c845752cd77639fe1cee7c7e163ae2406b4a98e02167ba476e8b",
+      "baseline_sha256": "0025ad232c3dc5f497f63a0df427fbc66df66de4dc0bf308eb18099c075e27d1"
+    },
+    {
+      "destination": "AGENTS.md",
+      "kind": "rendered",
+      "sha256": "9743998f3abf75734c8e19c3ab1af04a94a0b9e63917817376c505dd94260f3d",
+      "baseline_sha256": "9743998f3abf75734c8e19c3ab1af04a94a0b9e63917817376c505dd94260f3d"
+    },
+    {
+      "destination": "dist-workspace.toml",
+      "kind": "seeded",
+      "sha256": "1dc24539b534fd5b9505553393c5d507b30775fde976136f272c76d1d70ede50",
+      "baseline_sha256": "eae26fd9dfe93105726202da221a6ccd61545ef9c51b9f5f7e2bc7375ee08e6b"
+    },
+    {
+      "destination": "release-plz.toml",
+      "kind": "seeded",
+      "sha256": "dbb3d2a08e0ad19d30f6c012077bc2fe1901b8c0d25f7920b7b48a55a391af8b",
+      "baseline_sha256": "f78039556fb75c71a5dd756064b199019f78ec243b2adc10e59dd28e90ae5c3d"
+    }
+  ],
+  "pins": {
+    "cargo-dist": "0.32.0",
+    "checkout": "4",
+    "create-github-app-token": "3",
+    "release-plz": "0.3.160"
+  }
+}
