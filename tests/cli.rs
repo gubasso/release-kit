@@ -2093,6 +2093,30 @@ impl ForgeFixture {
         std::fs::write(self.mock.path().join(name), value).expect("the state seeds");
     }
 
+    /// Substitute the mock forge CLI, for the cases that need a child
+    /// with a particular stream or signal behavior rather than a
+    /// working forge.
+    fn replace_gh(&self, body: &str) {
+        let path = self.mock.path().join("gh");
+        std::fs::write(&path, body).expect("the mock writes");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                .expect("the mock is executable");
+        }
+    }
+
+    /// The newest run directory, by the timestamp its id opens with.
+    fn latest_run(&self) -> PathBuf {
+        let mut runs: Vec<PathBuf> = std::fs::read_dir(self.runs_root())
+            .expect("the runs root reads")
+            .map(|entry| entry.expect("an entry").path())
+            .collect();
+        runs.sort();
+        runs.pop().expect("a run was journalled")
+    }
+
     fn state(&self, name: &str) -> PathBuf {
         self.mock.path().join(name)
     }
@@ -2526,6 +2550,123 @@ fn an_absent_sh_refuses_before_any_step() {
         .code(73)
         .stderr(predicate::str::contains("sh"));
     assert_eq!(fixture.log(), "", "nothing may run without a shell");
+}
+
+/// Human mode keeps the child's two streams apart: what the script
+/// writes to stdout reaches this process's stdout, what it writes to
+/// stderr reaches stderr, and neither crosses. Folding them corrupts
+/// `rk setup … > file` for every caller downstream. The step itself
+/// fails to verify here — the mock forge never records the edit — which
+/// is beside the point: the routing is asserted, not the outcome.
+#[test]
+fn human_mode_passes_child_streams_through_uncrossed() {
+    let fixture = ForgeFixture::new();
+    fixture.replace_gh(
+        "#!/bin/sh\nprintf 'CHILD-ERR\\n' >&2\ncase \"$1\" in\napi) printf '{\"default_branch\":\"main\"}\\n';;\nrepo) [ \"$2\" = view ] && printf 'develop\\n';;\nesac\nexit 0\n",
+    );
+    let out = fixture
+        .rk(&["setup", "step", "default-branch", "--apply"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .assert()
+        .get_output()
+        .clone();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stdout.contains("check: prints"),
+        "the child's stdout never reached stdout: {stdout}"
+    );
+    assert!(
+        stderr.contains("CHILD-ERR"),
+        "the child's stderr never reached stderr: {stderr}"
+    );
+    assert!(
+        !stdout.contains("CHILD-ERR"),
+        "the child's stderr crossed into stdout: {stdout}"
+    );
+    assert!(
+        !stderr.contains("check: prints"),
+        "the child's stdout crossed into stderr: {stderr}"
+    );
+}
+
+/// A child killed by a signal names the signal rather than blaming the
+/// forge for output it never got to write, and the journal closes with a
+/// terminal status rather than with nothing: a run that ended on a
+/// signal must be distinguishable afterwards from one still in flight,
+/// which is exactly what the mutating-run guard reads.
+#[test]
+fn a_signalled_child_names_the_signal_and_closes_the_journal() {
+    let fixture = ForgeFixture::new();
+    // Only the apply-phase call signals, and it signals its own parent —
+    // the shell running the step — so observation stays intact and
+    // nothing outside this run is touched.
+    fixture.replace_gh(
+        "#!/bin/sh\ncase \"$1\" in\napi) printf '{\"default_branch\":\"main\"}\\n'; exit 0;;\nrepo) if [ \"$2\" = edit ]; then kill -TERM $PPID; sleep 2; fi;;\nesac\nexit 0\n",
+    );
+    fixture
+        .rk(&["setup", "step", "default-branch", "--apply"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("killed by signal 15"));
+
+    let meta: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(fixture.latest_run().join("meta.json")).expect("meta reads"),
+    )
+    .expect("meta parses");
+    assert_eq!(meta["schema"], "rk.run-meta/1");
+    assert_eq!(meta["reason"], "subprocess-failed");
+    assert!(
+        meta["exit_code"].as_i64().is_some_and(|code| code != 0),
+        "the journal must close with a terminal status, not look in flight: {meta}"
+    );
+    assert!(
+        !meta["ended"].is_null(),
+        "a closed run records when it ended: {meta}"
+    );
+}
+
+/// Two runs at once keep their materialized scripts apart. The scripts
+/// are payload written to disk to be executed, so a shared path is a
+/// window in which one run rewrites the bytes another is about to run;
+/// each run materializes under its own journal directory instead.
+#[test]
+fn concurrent_runs_do_not_share_a_materialized_script() {
+    let fixture = ForgeFixture::new();
+    std::thread::scope(|scope| {
+        for _ in 0..2 {
+            scope.spawn(|| {
+                fixture
+                    .rk(&["setup", "step", "ci-permissions", "--apply"])
+                    .args(["--repo", "acme/widget", "--forge", "github"])
+                    .assert()
+                    .success();
+            });
+        }
+    });
+
+    let runs: Vec<PathBuf> = std::fs::read_dir(fixture.runs_root())
+        .expect("the runs root reads")
+        .map(|entry| entry.expect("an entry").path())
+        .collect();
+    assert_eq!(
+        runs.len(),
+        2,
+        "two concurrent runs must claim two journal directories, not one"
+    );
+    for run in &runs {
+        let meta: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(run.join("meta.json")).expect("meta reads"))
+                .expect("meta parses");
+        assert_eq!(meta["exit_code"], 0);
+        assert!(
+            meta["scripts"]
+                .as_array()
+                .is_some_and(|list| !list.is_empty()),
+            "each run records the digest of what it materialized: {meta}"
+        );
+    }
 }
 
 /// The journal keeps a bounded number of runs, and the runs verbs read it.

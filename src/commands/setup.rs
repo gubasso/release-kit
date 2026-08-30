@@ -817,12 +817,19 @@ fn run_script(engine: &mut Engine, step: &StepSpec) -> Result<(Outcome, PathBuf)
 /// with its own stderr surfaced verbatim.
 fn classify_failure(engine: &Engine, step: &StepSpec, outcome: &Outcome) -> RkError {
     let stderr = String::from_utf8_lossy(&outcome.stderr);
-    let last = stderr
-        .lines()
-        .rev()
-        .find(|line| !line.trim().is_empty())
-        .unwrap_or("no output")
-        .to_owned();
+    // A signalled child usually writes nothing before it dies, and
+    // "no output" would blame the forge for a kill that came from
+    // outside it. The adapter already resolved 128+N; say which.
+    let last = if outcome.exit_code >= 128 {
+        format!("killed by signal {}", outcome.exit_code - 128)
+    } else {
+        stderr
+            .lines()
+            .rev()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or("no output")
+            .to_owned()
+    };
     let reason = if (engine.ctx.forge == Forge::Github && outcome.exit_code == 4)
         || stderr.contains("HTTP 401")
     {
