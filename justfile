@@ -35,9 +35,13 @@ build:
 check: lint test build
 
 # Install this checkout as the user's rk, plus the user-scope agent skills.
+# The installed skills are this checkout's build artifact and never an edit
+# source, so the apply overwrites whatever an older release left in the home
+# roots. The binary is called by the path cargo just wrote it to, since the
+# first install of all runs before any shell has it on PATH.
 install:
     cargo install --path . --locked
-    rk skill install --apply
+    "${CARGO_HOME:-$HOME/.cargo}/bin/rk" skill install --apply --force
 
 # Remove the user-scope skills, then the binary; the binary owns the file
 # list, so the skills go first, while it still exists.
