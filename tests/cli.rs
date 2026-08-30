@@ -371,6 +371,98 @@ fn payload_json_parses_and_its_digests_match_the_embedded_bytes() {
     }
 }
 
+/// Names a reader of this repository alone could not resolve: the sibling
+/// this canon was extracted from, its variable prefix, its bot identity,
+/// and the author's account. The forges, registries, and agents the method
+/// documents are integrations it describes, and naming those is the point.
+const FOREIGN_NAMES: &[&str] = &[
+    "spec-driven-docs",
+    "spec_driven_docs",
+    "sdd_",
+    "sdd ",
+    "exobrain",
+    "gubasso",
+];
+
+/// A home directory belonging to a person, assembled rather than written:
+/// this scan reads its own source file, and a literal would be a finding.
+fn personal_home(user: &str) -> String {
+    format!("/home/{user}")
+}
+
+fn payload_lines() -> Vec<(String, usize, String)> {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("a readable root").flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else {
+                out.push(path);
+            }
+        }
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut paths = Vec::new();
+    for name in release_kit::payload_roots::PAYLOAD_ROOTS {
+        let path = root.join(name);
+        assert!(path.exists(), "{name} is not on disk; the payload moved");
+        if path.is_dir() {
+            walk(&path, &mut paths);
+        } else {
+            paths.push(path);
+        }
+    }
+    assert!(!paths.is_empty(), "the payload scan matched no file");
+    let mut lines = Vec::new();
+    for path in paths {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let relative = path
+            .strip_prefix(root)
+            .expect("a path under the manifest dir")
+            .display()
+            .to_string();
+        for (index, line) in text.lines().enumerate() {
+            lines.push((relative.clone(), index + 1, line.to_lowercase()));
+        }
+    }
+    lines
+}
+
+/// SATISFIES distribution:the-payload-names-no-other-project
+#[test]
+fn the_payload_names_no_other_project() {
+    for (file, number, line) in payload_lines() {
+        for name in FOREIGN_NAMES {
+            assert!(
+                !line.contains(name),
+                "{file}:{number}: the payload names '{name}', which a reader of this repository alone cannot resolve"
+            );
+        }
+    }
+}
+
+/// SATISFIES distribution:the-payload-names-no-other-project
+#[test]
+fn the_payload_carries_no_path_into_a_home_directory() {
+    let marker = personal_home("").to_lowercase();
+    for (file, number, line) in payload_lines() {
+        for root in [marker.as_str(), "/users/"] {
+            let Some(offset) = line.find(root) else {
+                continue;
+            };
+            let rest = &line[offset + root.len()..];
+            let end = rest.find(['/', ' ', '`', '"', ')']).unwrap_or(rest.len());
+            let user = &rest[..end];
+            assert!(
+                user.is_empty() || user.starts_with(['<', '$', '{']) || user == "user",
+                "{file}:{number}: the payload names the home directory of '{user}'"
+            );
+        }
+    }
+}
+
 /// An `exclude` entry in `Cargo.toml` must never remove a payload root
 /// from the published crate; the failure would otherwise surface as a
 /// crate that does not compile at the consumer.
