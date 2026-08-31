@@ -75,15 +75,25 @@ No command: creating a GitHub App is a web flow. Follow the walkthrough in `rk f
 
 ## 6. Grant the App this repository
 
-The installation endpoints refuse gh's own OAuth token, so this step needs a classic personal access token — or one click at github.com/settings/installations.
+The installation endpoints refuse gh's own OAuth token, so this step runs on a classic personal access token; `rk forge github` states the caveat. Four moves, in order:
 
-Store the token once in the OS keyring, then let each run read it back: the value reaches `rk` as an environment assignment, never a process argument, per `forge-setup:a-secret-never-reaches-argv`. Run this step on the host, never in a container — the keyring lookup needs a session bus a container does not have.
+1. Mint the token at github.com/settings/tokens, under Tokens (classic), with `repo` scope and the shortest expiry that covers the bootstrap. No command does this: GitHub creates a classic token through the browser only.
+2. Store it once in the OS keyring, then let each run read it back — the value reaches `rk` as an environment assignment, never a process argument, per `forge-setup:a-secret-never-reaches-argv`.
+3. Prove what landed before spending a call on it. `GH_TOKEN` overrides whatever `gh auth login` stored, so a wrong value fails the step at its first call with a 401.
+4. Run the step.
 
 ```bash
 secret-tool store --label='GitHub classic PAT (repo scope)' service github account gh-classic-pat
+# it prompts "Password:" for the value to store; paste the ghp_ token there
+secret-tool lookup service github account gh-classic-pat | cut -c1-4
+# check: prints ghp_
+GH_TOKEN="$(secret-tool lookup service github account gh-classic-pat)" gh api user -q .login
+# check: prints gubasso
 GH_TOKEN="$(secret-tool lookup service github account gh-classic-pat)" rk setup step install-bot --target . --apply
 # check: the step reports the installation id covering gubasso/release-kit
 ```
+
+Run this on the host, never in a container: the keyring lookup needs a session bus a container does not have. Without a token the same grant is one click at github.com/settings/installations — Configure next to the bot App, add `gubasso/release-kit` under Repository access, Save — and step 11 then reports `install-bot` as `unknown`. The token has no further job once the grant lands; revoking it leaves every remaining step on the ordinary gh login.
 
 ## 7. Store the bot credentials
 
@@ -181,9 +191,11 @@ rk setup step protect-release-lines --target . --apply
 Exactly the owned rulesets — two, or three with the optional line protection — each still carrying the shape a release merge needs.
 
 ```bash
-rk setup check --target .
+GH_TOKEN="$(secret-tool lookup service github account gh-classic-pat)" rk setup check --target .
 # check: every step reports satisfied, and protect-release-lines reports skipped while no line exists
 ```
+
+The token prefix is what makes `install-bot` readable; the check observes it through the same listing the grant uses, and reports it `unknown` without one.
 
 ## 12. Land the workflow files
 

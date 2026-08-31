@@ -2,7 +2,7 @@
 
 External sources behind `SPEC-forge-setup.md`: what each forge's API actually offers, which setup actions are scriptable at all, and how an embedded script is executed safely. Each entry states what the source says and which rule or file it bears on.
 
-Verified against the listed sources on 2026-08-28 and re-checked on 2026-08-29. A source marked corroborating was reported by a parallel review and not independently fetched. Forge APIs move; re-check an entry before trusting it to design something new.
+Verified against the listed sources on 2026-08-28, re-checked on 2026-08-29, and the GitHub App entries re-checked on 2026-08-31. A source marked corroborating was reported by a parallel review and not independently fetched. Forge APIs move; re-check an entry before trusting it to design something new.
 
 ## GitHub rulesets
 
@@ -31,12 +31,18 @@ The App manifest flow, `POST /app-manifests/{code}/conversions`, is the only pro
 
 Adding a repository to an existing installation is an API call: `PUT /user/installations/{installation_id}/repositories/{repository_id}`, documented as working only for classic personal access tokens carrying `repo` scope, and requiring admin on the repository. `DELETE` on the same path removes it, returning 422 where removal would leave the installation with none. `GET /user/installations` lists the installations the authenticated user can reach, which is how a tool discovers the installation id.
 
+The classic token that grant requires is itself created in the account's web settings and nowhere else: token creation over the API ended with the OAuth Authorizations API, whose removal directs integrations to the web application flow instead. The `repo` scope it carries grants full read and write access to public and private repositories, including code, commit statuses, invitations, collaborators, deployment statuses, and webhooks. `GH_TOKEN` and `GITHUB_TOKEN`, in that order, take precedence over the credentials `gh auth login` stored, so a wrong value in the environment replaces a working login rather than falling back to it.
+
 - <https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-app-from-a-manifest>
 - <https://docs.github.com/en/rest/apps/apps>
 - <https://docs.github.com/en/rest/apps/installations>
+- <https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens>
+- <https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/scopes-for-oauth-apps>
+- <https://github.blog/changelog/2020-11-13-token-authentication-required-for-api-operations/>
+- <https://cli.github.com/manual/gh_help_environment>
 - <https://github.com/github/rest-api-description>
 
-Bearing: creating the bot identity is manual once per account, ever; granting it a project is a command. The token-class restriction is stated on the grant and not on the listing, which is why `forges/github.md` and the install-bot step name the classic personal access token explicitly and why a 403 mentioning a GitHub App is reported as the wrong token class rather than as missing authentication. Whether the listing accepts a classic token is unverified — the description is silent, which is not the same as a refusal.
+Bearing: creating the bot identity is manual once per account, ever; granting it a project is a command. The token-class restriction is stated on the grant and not on the listing, which is why `forges/github.md` and the install-bot step name the classic personal access token explicitly and why a 403 mentioning a GitHub App is reported as the wrong token class rather than as missing authentication. Whether the listing accepts a classic token is unverified — the description is silent, which is not the same as a refusal. That the token is browser-only is why the setup guide spends a step on minting it, and the environment precedence is why that step proves the stored value before spending a forge call on it.
 
 ## GitLab protected branches, protected tags, and project access tokens
 
