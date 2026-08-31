@@ -1,0 +1,49 @@
+#!/usr/bin/env sh
+# Retire every long-lived branch besides the trunk, now that the trunk is the
+# default, so exactly one permanent branch remains. Idempotent: an absent
+# candidate is the desired state. Refuses when a candidate is not an ancestor
+# of the trunk, so a repository whose work still sits on an old branch cannot
+# lose it to a mistyped setup.
+set -eu
+: "${RK_REPO:?rk sets this; run this script through rk setup}"
+: "${RK_TRUNK_BRANCH:?rk sets this; run this script through rk setup}"
+
+project="$(printf '%s' "$RK_REPO" | sed 's|/|%2F|g')"
+
+# The forge CLI may pretty-print JSON; stripping whitespace makes every
+# pattern below hold for the compact and the pretty form alike, and no
+# value a pattern touches can carry whitespace of its own.
+compact() { tr -d ' \t\r\n'; }
+
+for candidate in main develop; do
+  if [ "$candidate" = "$RK_TRUNK_BRANCH" ]; then
+    continue
+  fi
+  if glab api "projects/$project/repository/branches/$candidate" >/dev/null 2>&1; then
+    # Commits reachable from the candidate and not from the trunk; an empty
+    # list means the candidate is an ancestor and holds nothing of its own.
+    # The comparison is captured first and fails closed: a comparison that
+    # cannot be read must never read as an empty one, because the next line
+    # deletes.
+    if ! compare="$(glab api "projects/$project/repository/compare?from=$RK_TRUNK_BRANCH&to=$candidate")"; then
+      echo "FAIL the comparison of $candidate and $RK_TRUNK_BRANCH could not be read" >&2
+      echo 'remediation: check authentication and rerun' >&2
+      exit 1
+    fi
+    ahead="$(printf '%s' "$compare" | grep -c '"short_id"' || true)"
+    if [ "$ahead" = "0" ]; then
+      glab api -X DELETE "projects/$project/repository/branches/$candidate" >/dev/null
+      echo "ok $candidate deleted"
+    else
+      echo "FAIL $candidate is not an ancestor of $RK_TRUNK_BRANCH; deleting it would lose work" >&2
+      echo 'remediation: merge or move the work first, then rerun' >&2
+      exit 1
+    fi
+  fi
+done
+
+echo 'check: prints nothing for the retired branches'
+for candidate in main develop; do
+  glab api "projects/$project/repository/branches/$candidate" 2>/dev/null | compact | grep -o "\"name\":\"$candidate\"" || true
+done
+echo 'ok single-trunk'

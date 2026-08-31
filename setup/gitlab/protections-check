@@ -5,8 +5,7 @@
 # not authority, and a check that hides that difference is worse than none.
 set -eu
 : "${RK_REPO:?rk sets this; run this script through rk setup}"
-: "${RK_INTEGRATION_BRANCH:?rk sets this; run this script through rk setup}"
-: "${RK_RELEASE_BRANCH:?rk sets this; run this script through rk setup}"
+: "${RK_TRUNK_BRANCH:?rk sets this; run this script through rk setup}"
 
 project="$(printf '%s' "$RK_REPO" | sed 's|/|%2F|g')"
 
@@ -30,44 +29,40 @@ assert() {
   fi
 }
 
-release="$(glab api "projects/$project/protected_branches/$RK_RELEASE_BRANCH" 2>/dev/null | compact || true)"
-assert "$RK_RELEASE_BRANCH is protected" "\"name\":\"$RK_RELEASE_BRANCH\"" "$release" \
-  'rk setup step protect-release-branch --apply'
-release_levels="$(printf '%s' "$release" | grep -o '"push_access_levels":\[[^]]*\]' || true)"
-release_grants="$(printf '%s' "$release_levels" | grep -o '{' | grep -c . || true)"
-if [ "$release_grants" = "1" ] && printf '%s' "$release_levels" | grep -q '"access_level":0'; then
-  echo "ok $RK_RELEASE_BRANCH takes no direct push"
+trunk="$(glab api "projects/$project/protected_branches/$RK_TRUNK_BRANCH" 2>/dev/null | compact || true)"
+assert "$RK_TRUNK_BRANCH is protected" "\"name\":\"$RK_TRUNK_BRANCH\"" "$trunk" \
+  'rk setup step protect-trunk --apply'
+assert "$RK_TRUNK_BRANCH refuses force pushes" '"allow_force_push":false' "$trunk" \
+  'rk setup step protect-trunk --apply'
+trunk_levels="$(printf '%s' "$trunk" | grep -o '"push_access_levels":\[[^]]*\]' || true)"
+trunk_grants="$(printf '%s' "$trunk_levels" | grep -o '{' | grep -c . || true)"
+if [ "$trunk_grants" = "1" ] && printf '%s' "$trunk_levels" | grep -q '"access_level":0'; then
+  echo "ok $RK_TRUNK_BRANCH takes no direct push"
 else
-  echo "FAIL $RK_RELEASE_BRANCH takes no direct push: the forge honors the most permissive of $release_grants push grants" >&2
-  echo 'remediation: rk setup step protect-release-branch --apply' >&2
-  status=1
-fi
-
-integration="$(glab api "projects/$project/protected_branches/$RK_INTEGRATION_BRANCH" 2>/dev/null | compact || true)"
-assert "$RK_INTEGRATION_BRANCH is protected" "\"name\":\"$RK_INTEGRATION_BRANCH\"" "$integration" \
-  'rk setup step protect-integration-branch --apply'
-assert "$RK_INTEGRATION_BRANCH refuses force pushes" '"allow_force_push":false' "$integration" \
-  'rk setup step protect-integration-branch --apply'
-integration_levels="$(printf '%s' "$integration" | grep -o '"push_access_levels":\[[^]]*\]' || true)"
-integration_grants="$(printf '%s' "$integration_levels" | grep -o '{' | grep -c . || true)"
-if [ "$integration_grants" = "1" ] && printf '%s' "$integration_levels" | grep -q '"access_level":30'; then
-  echo "ok $RK_INTEGRATION_BRANCH carries exactly its one owned push grant"
-else
-  echo "FAIL $RK_INTEGRATION_BRANCH push grants: the setup owns exactly one at developer level, found $integration_grants" >&2
-  echo 'remediation: rk setup step protect-integration-branch --apply' >&2
+  echo "FAIL $RK_TRUNK_BRANCH takes no direct push: the forge honors the most permissive of $trunk_grants push grants" >&2
+  echo 'remediation: rk setup step protect-trunk --apply' >&2
   status=1
 fi
 
 settings="$(glab api "projects/$project" | compact)"
 assert 'the gate requires the whole pipeline' '"only_allow_merge_if_pipeline_succeeds":true' "$settings" \
-  'rk setup step protect-release-branch --apply'
-assert 'merges land as merge commits' '"merge_method":"merge"' "$settings" \
-  'rk setup step protect-release-branch --apply'
+  'rk setup step protect-trunk --apply'
+assert 'merges fast-forward' '"merge_method":"ff"' "$settings" \
+  'rk setup step protect-trunk --apply'
+assert 'every merge request squashes' '"squash_option":"always"' "$settings" \
+  'rk setup step protect-trunk --apply'
 
 tags="$(glab api "projects/$project/protected_tags/v%2A" 2>/dev/null | compact || true)"
 assert 'v* is protected' '"name":"v\*"' "$tags" \
   'rk setup step protect-tags --apply'
 echo 'note: tag protection here stops git clients and non-privileged users; an Owner or Maintainer can still delete a protected tag through the UI or API'
+
+# The optional release-line protection: absent is fine, present is owned.
+lines="$(glab api "projects/$project/protected_branches/release%2F%2A" 2>/dev/null | compact || true)"
+if [ -n "$lines" ]; then
+  assert 'release/* refuses force pushes' '"allow_force_push":false' "$lines" \
+    'rk setup step protect-release-lines --apply'
+fi
 
 [ "$status" -eq 0 ] || exit 1
 echo 'ok protections-check'

@@ -1,19 +1,17 @@
 #!/usr/bin/env sh
-# Protect the release branch. It takes no direct push: a pull request carrying
-# the named passing check is the only way in, and that is the release gate.
-# The merge method is a merge commit because this forge offers no fast-forward
-# merge, so a linear-history rule would reject every release merge and a
-# rebase or squash would make the release branch diverge from the integration
-# branch permanently. Nothing in the pipeline writes this branch — the bot
-# pushes a tag, which release-tags governs — so it names no bypass actor.
-# The method's invariants chapter owns these facts; this comment points there.
-# Rerunning updates in place.
+# Protect the trunk. It takes no direct push and no force-push: a pull
+# request carrying the named passing check is the only way in, and squash is
+# the only merge method, so the trunk history stays linear on a forge that
+# offers no fast-forward merge. Nothing in the pipeline writes this branch —
+# the bot pushes a tag, which release-tags governs — so it names no bypass
+# actor. The method's invariants chapter owns these facts; this comment
+# points there. Rerunning updates in place.
 set -eu
 : "${RK_REPO:?rk sets this; run this script through rk setup}"
-: "${RK_RELEASE_BRANCH:?rk sets this; run this script through rk setup}"
+: "${RK_TRUNK_BRANCH:?rk sets this; run this script through rk setup}"
 : "${RK_REQUIRED_CHECK:?rk sets this from --required-check}"
 
-name="$RK_RELEASE_BRANCH-protection"
+name="$RK_TRUNK_BRANCH-protection"
 id="$(gh api "repos/$RK_REPO/rulesets" -q ".[] | select(.name == \"$name\") | .id" | head -n 1)"
 
 if [ -n "$id" ]; then
@@ -27,7 +25,7 @@ fi <<JSON
   "enforcement": "active",
   "bypass_actors": [],
   "conditions": {
-    "ref_name": { "include": ["refs/heads/$RK_RELEASE_BRANCH"], "exclude": [] }
+    "ref_name": { "include": ["refs/heads/$RK_TRUNK_BRANCH"], "exclude": [] }
   },
   "rules": [
     { "type": "deletion" },
@@ -41,7 +39,7 @@ fi <<JSON
         "require_last_push_approval": false,
         "required_review_thread_resolution": false,
         "require_extra_approval_for_unattributed_changes": false,
-        "allowed_merge_methods": ["merge"]
+        "allowed_merge_methods": ["squash"]
       }
     },
     {

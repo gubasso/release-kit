@@ -1,9 +1,11 @@
 #!/usr/bin/env sh
-# Make the integration branch the default branch, so pushes to it drive the
-# release bot; the method's setup chapter owns the reasoning.
+# Make the trunk the default branch, so pushes to it drive the release bot;
+# the method's setup chapter owns the reasoning. A repository that has no
+# trunk branch yet gets one at the current default's tip — the work is
+# already there — and single-trunk retires the old name.
 set -eu
 : "${RK_REPO:?rk sets this; run this script through rk setup}"
-: "${RK_INTEGRATION_BRANCH:?rk sets this; run this script through rk setup}"
+: "${RK_TRUNK_BRANCH:?rk sets this; run this script through rk setup}"
 
 project="$(printf '%s' "$RK_REPO" | sed 's|/|%2F|g')"
 
@@ -12,6 +14,13 @@ project="$(printf '%s' "$RK_REPO" | sed 's|/|%2F|g')"
 # value a pattern touches can carry whitespace of its own.
 compact() { tr -d ' \t\r\n'; }
 
-glab api -X PUT "projects/$project" -f "default_branch=$RK_INTEGRATION_BRANCH" >/dev/null
-echo "check: prints \"default_branch\":\"$RK_INTEGRATION_BRANCH\""
+if ! glab api "projects/$project/repository/branches/$RK_TRUNK_BRANCH" >/dev/null 2>&1; then
+  current="$(glab api "projects/$project" | compact | grep -o '"default_branch":"[^"]*"' | cut -d'"' -f4)"
+  glab api -X POST "projects/$project/repository/branches" \
+    -f "branch=$RK_TRUNK_BRANCH" -f "ref=$current" >/dev/null
+  echo "ok $RK_TRUNK_BRANCH created at $current"
+fi
+
+glab api -X PUT "projects/$project" -f "default_branch=$RK_TRUNK_BRANCH" >/dev/null
+echo "check: prints \"default_branch\":\"$RK_TRUNK_BRANCH\""
 glab api "projects/$project" | compact | grep -o '"default_branch":"[^"]*"'

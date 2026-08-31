@@ -1,10 +1,11 @@
 [workspace]
 changelog_update = true
-# The gate is the release/v<version> merge request into master, whose head
-# branch is not release-plz-*, so the branch heuristic release_always = false
-# relies on would never fire. Releasing always is safe: the command no-ops
-# when the registry already serves this version.
-release_always = true
+# The bot's own release request has a release-plz-* head branch, which is
+# exactly what the branch heuristic behind this default recognizes: the
+# release half fires only on the push that lands that request's bump, so an
+# ordinary work merge publishes nothing and the release decision stays on the
+# one merge button.
+release_always = false
 publish = true
 # This pair has no artifact builder, so release-plz owns the release page:
 # it creates the GitLab release when it tags. The page carries no installers,

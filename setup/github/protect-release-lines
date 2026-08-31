@@ -1,14 +1,14 @@
 #!/usr/bin/env sh
-# Protect the integration branch: no force pushes, no deletion. It takes
-# direct pushes and carries no required status check, because one would
-# reject the push that opens a release; the release is gated on the release
-# branch instead. Nothing in the pipeline force-pushes it, so it needs no
-# bypass. Rerunning updates in place.
+# Protect the release lines, for the projects that keep older lines: while a
+# line is alive, release/* can be neither force-pushed nor deleted. Direct
+# pushes stay allowed, because a cherry-pick lands on a line by push. This
+# step is optional — a project with no older lines never runs it — and when a
+# line dies its tags pin the commits, so the operator removes this ruleset
+# together with the last line. Rerunning updates in place.
 set -eu
 : "${RK_REPO:?rk sets this; run this script through rk setup}"
-: "${RK_INTEGRATION_BRANCH:?rk sets this; run this script through rk setup}"
 
-name="$RK_INTEGRATION_BRANCH-protection"
+name=release-lines
 id="$(gh api "repos/$RK_REPO/rulesets" -q ".[] | select(.name == \"$name\") | .id" | head -n 1)"
 
 if [ -n "$id" ]; then
@@ -21,7 +21,7 @@ fi <<JSON
   "target": "branch",
   "enforcement": "active",
   "conditions": {
-    "ref_name": { "include": ["refs/heads/$RK_INTEGRATION_BRANCH"], "exclude": [] }
+    "ref_name": { "include": ["refs/heads/release/*"], "exclude": [] }
   },
   "rules": [
     { "type": "deletion" },

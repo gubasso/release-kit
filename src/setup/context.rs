@@ -16,12 +16,9 @@ use crate::detect::{self, Forge};
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
 
-/// The integration branch every setup asserts; named so a later option can
-/// change it.
-pub const INTEGRATION_BRANCH: &str = "develop";
-
-/// The release branch every setup asserts; same.
-pub const RELEASE_BRANCH: &str = "master";
+/// The trunk every setup asserts: the one permanent branch; named so a
+/// later option can change it.
+pub const TRUNK_BRANCH: &str = "master";
 
 /// The variables that pass through from the operator's environment to a
 /// step: the interpreter's search path, the forge CLI's configuration and
@@ -164,14 +161,12 @@ impl Ctx {
         let mut env: Vec<(OsString, OsString)> = vec![
             ("RK_FORGE".into(), self.forge.as_str().into()),
             ("RK_REPO".into(), self.repo.clone().into()),
-            ("RK_INTEGRATION_BRANCH".into(), INTEGRATION_BRANCH.into()),
-            ("RK_RELEASE_BRANCH".into(), RELEASE_BRANCH.into()),
+            ("RK_TRUNK_BRANCH".into(), TRUNK_BRANCH.into()),
             ("GH_PAGER".into(), "".into()),
             ("GLAB_PAGER".into(), "".into()),
         ];
         if let Some(check) = &self.required_check {
-            if self.forge == Forge::Github
-                && matches!(step, "protect-release-branch" | "protections-check")
+            if self.forge == Forge::Github && matches!(step, "protect-trunk" | "protections-check")
             {
                 env.push(("RK_REQUIRED_CHECK".into(), check.clone().into()));
             }

@@ -111,28 +111,26 @@ fn reject_check_flag_on_gitlab(ctx: &Ctx) -> Result<(), RkError> {
     Ok(())
 }
 
-/// On GitHub the release-branch protection needs the check name before any
-/// step runs: a wrong or missing one does not fail, it hangs the merge
-/// button, so a full apply refuses up front rather than writing eight steps
-/// and stopping.
+/// On GitHub the trunk protection needs the check name before any step
+/// runs: a wrong or missing one does not fail, it hangs the merge button,
+/// so a full apply refuses up front rather than writing eight steps and
+/// stopping.
 fn require_check_for(ctx: &Ctx, steps: &[&StepSpec]) -> Result<(), RkError> {
     let needs = ctx.forge == Forge::Github
         && ctx.required_check.is_none()
-        && steps
-            .iter()
-            .any(|step| step.name == "protect-release-branch");
+        && steps.iter().any(|step| step.name == "protect-trunk");
     if needs {
         return Err(RkError::refusal(
             Diagnostic::new(
                 Reason::PrerequisiteUnmet,
-                "protect-release-branch refuses without --required-check, and nothing was written",
+                "protect-trunk refuses without --required-check, and nothing was written",
             )
-            .expected("the name of the CI check the gate must pass")
+            .expected("the name of the CI check the release merge must pass")
             .action(format!(
                 "pass --required-check <name>; gh api repos/{}/commits/HEAD/check-runs lists the project's check names",
                 ctx.repo
             ))
-            .step("protect-release-branch"),
+            .step("protect-trunk"),
         ));
     }
     Ok(())
@@ -160,11 +158,14 @@ fn list(forge: Option<&str>) -> Result<(), RkError> {
             step.chapter,
             step.proves
         );
-        if step.name == "protect-release-branch" && forge != Some(Forge::Gitlab) {
+        if step.name == "protect-trunk" && forge != Some(Forge::Gitlab) {
             line.push_str(" (needs --required-check on github)");
         }
         if step.destructive {
             line.push_str(" (destructive)");
+        }
+        if step.optional {
+            line.push_str(" (optional; a full apply skips it)");
         }
         out.result_line(line);
     }
@@ -398,11 +399,17 @@ fn preview(out: Output, ctx: &Ctx, steps: &[&StepSpec]) -> Result<(), RkError> {
             step.proves
         ));
         out.result_line(format!("  {}", render_invocation(&engine.ctx, step)));
-        if step.name == "protect-release-branch"
+        if step.name == "protect-trunk"
             && engine.ctx.forge == Forge::Github
             && engine.ctx.required_check.is_none()
         {
             out.result_line("  needs: --required-check <name> before apply");
+        }
+        if step.optional && steps.len() > 1 {
+            out.result_line(format!(
+                "  optional: a full apply skips it; rk setup step {} --apply runs it",
+                step.name
+            ));
         }
         let mut event = engine.event(EventKind::StepFinished, Some(step.name));
         event.status = Some("previewed".into());
@@ -431,11 +438,11 @@ fn render_invocation(ctx: &Ctx, step: &StepSpec) -> String {
             let check = ctx
                 .required_check
                 .as_ref()
-                .filter(|_| ctx.forge == Forge::Github && name == "protect-release-branch")
+                .filter(|_| ctx.forge == Forge::Github && name == "protect-trunk")
                 .map(|value| format!(" RK_REQUIRED_CHECK={value}"))
                 .unwrap_or_default();
             format!(
-                "would run: sh <embedded setup/{}/{name}> with RK_REPO={} RK_INTEGRATION_BRANCH=develop RK_RELEASE_BRANCH=master{check}",
+                "would run: sh <embedded setup/{}/{name}> with RK_REPO={} RK_TRUNK_BRANCH=master{check}",
                 ctx.forge.as_str(),
                 ctx.repo
             )
@@ -483,6 +490,22 @@ fn execute(
     let mut engine = Engine::open(out, ctx, command, true)?;
     let mut done: Vec<(String, String)> = Vec::new();
     for (idx, step) in steps.iter().enumerate() {
+        // An optional step applies only by name: a full run states the skip
+        // rather than acting on a condition the operator never asserted.
+        if step.optional && steps.len() > 1 {
+            engine.out.frame(format!(
+                "step {}/{} {} — skipped (optional; rk setup step {} --apply runs it)",
+                idx + 1,
+                steps.len(),
+                step.name,
+                step.name
+            ));
+            let mut finished = engine.event(EventKind::StepFinished, Some(step.name));
+            finished.status = Some("skipped".into());
+            engine.emit(&finished);
+            done.push((step.name.to_owned(), "skipped".to_owned()));
+            continue;
+        }
         engine.out.frame(format!(
             "step {}/{} {} — {}",
             idx + 1,
@@ -603,14 +626,16 @@ fn apply_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
             let state = observe_with(engine, "package-check")?;
             match state {
                 StepState::Satisfied { detail, .. } => Ok(Done::Passed(detail)),
-                StepState::Unsatisfied { detail } => Err(RkError::subprocess(
-                    Diagnostic::new(
-                        Reason::SubprocessFailed,
-                        format!("package-check failed: {detail}"),
-                    )
-                    .expected(step.proves.to_owned())
-                    .step(step.name),
-                )),
+                StepState::Unsatisfied { detail } | StepState::Inapplicable { detail } => {
+                    Err(RkError::subprocess(
+                        Diagnostic::new(
+                            Reason::SubprocessFailed,
+                            format!("package-check failed: {detail}"),
+                        )
+                        .expected(step.proves.to_owned())
+                        .step(step.name),
+                    ))
+                }
                 StepState::Unknown { detail } => Err(RkError::subprocess(
                     Diagnostic::new(
                         Reason::SubprocessFailed,
@@ -620,23 +645,27 @@ fn apply_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
                 )),
             }
         }
-        "delete-main" => {
+        "single-trunk" => {
             let guard = {
                 let ctx = clone_ctx(&engine.ctx);
                 let mut runner = |exec: &Exec| engine.exec(exec, false);
-                observe::delete_main_guard(&ctx, &mut runner)?
+                observe::single_trunk_guard(&ctx, &mut runner)?
             };
             // A destructive step fails closed: an ancestry the guard cannot
             // establish is treated exactly like one it refuted.
             match &guard {
                 StepState::Satisfied { .. } => {}
-                StepState::Unsatisfied { detail } | StepState::Unknown { detail } => {
+                StepState::Unsatisfied { detail }
+                | StepState::Inapplicable { detail }
+                | StepState::Unknown { detail } => {
                     return Err(RkError::refusal(
                         Diagnostic::new(
                             Reason::DestructiveRefusal,
-                            format!("delete-main refuses: {detail}"),
+                            format!("single-trunk refuses: {detail}"),
                         )
-                        .expected("proof that main is absent, or an ancestor of the release branch")
+                        .expected(
+                            "proof that every candidate branch is absent, or an ancestor of the trunk",
+                        )
                         .step(step.name),
                     ));
                 }
@@ -698,7 +727,7 @@ fn apply_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
                     StepState::Satisfied { detail, .. } => {
                         return Ok(Done::Satisfied(detail));
                     }
-                    StepState::Unsatisfied { .. } => {}
+                    StepState::Unsatisfied { .. } | StepState::Inapplicable { .. } => {}
                     StepState::Unknown { detail } => {
                         return Err(RkError::refusal(
                             Diagnostic::new(
@@ -726,17 +755,19 @@ fn run_forge_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError>
     let state = observe_with(engine, step.name)?;
     match state {
         StepState::Satisfied { detail, limitation } => Ok(Done::Changed(detail, limitation)),
-        StepState::Unsatisfied { detail } => Err(RkError::refusal(
-            Diagnostic::new(
-                Reason::StateDrift,
-                format!(
-                    "{} ran and its postcondition does not hold: {detail}",
-                    step.name
-                ),
-            )
-            .expected(step.proves.to_owned())
-            .step(step.name),
-        )),
+        StepState::Unsatisfied { detail } | StepState::Inapplicable { detail } => {
+            Err(RkError::refusal(
+                Diagnostic::new(
+                    Reason::StateDrift,
+                    format!(
+                        "{} ran and its postcondition does not hold: {detail}",
+                        step.name
+                    ),
+                )
+                .expected(step.proves.to_owned())
+                .step(step.name),
+            ))
+        }
         // The lifecycle ends with a proven postcondition; a readback that
         // cannot run leaves the step unproven, and an unproven apply is a
         // failure a retry can cure, never a success.
@@ -769,6 +800,7 @@ fn state_detail(state: &StepState) -> String {
     match state {
         StepState::Satisfied { detail, .. }
         | StepState::Unsatisfied { detail }
+        | StepState::Inapplicable { detail }
         | StepState::Unknown { detail } => detail.clone(),
     }
 }
@@ -900,6 +932,9 @@ fn check(out: Output, ctx: Ctx) -> Result<(), RkError> {
         let state = observe_with(&mut engine, step.name)?;
         let (label, wire) = match &state {
             StepState::Satisfied { .. } => ("ok", "satisfied"),
+            // An optional step whose condition does not hold is stated, not
+            // judged: nothing is wrong and nothing was skipped silently.
+            StepState::Inapplicable { .. } => ("skipped", "skipped"),
             StepState::Unsatisfied { .. } => {
                 unsatisfied += 1;
                 ("unsatisfied", "unsatisfied")

@@ -26,45 +26,43 @@ pub struct StepSpec {
     /// Whether the step deletes anything; a destructive step carries its own
     /// refusal beyond `--apply`.
     pub destructive: bool,
+    /// Whether a full run skips the step: an optional step applies only
+    /// where its condition holds, by name, through `rk setup step`.
+    pub optional: bool,
     /// Steps that must be observed satisfied before this one applies.
     pub prereqs: &'static [&'static str],
 }
 
-/// The eleven steps, in the chapter's order. `package-check` belongs to no
+/// The ten steps, in the chapter's order. `package-check` belongs to no
 /// forge tree — it reads its command from the technology binding — which
 /// makes it the one step outside the parity rule.
-pub const STEPS: [StepSpec; 11] = [
+pub const STEPS: [StepSpec; 10] = [
     StepSpec {
         name: "package-check",
         chapter: "§0",
         mutates: Mutates::Nothing,
         proves: "the package is publishable with no credentials",
         destructive: false,
+        optional: false,
         prereqs: &[],
     },
     StepSpec {
         name: "default-branch",
         chapter: "§1",
         mutates: Mutates::Forge,
-        proves: "the integration branch is the default",
+        proves: "the trunk is the default branch",
         destructive: false,
+        optional: false,
         prereqs: &[],
     },
     StepSpec {
-        name: "create-release-branch",
+        name: "single-trunk",
         chapter: "§1",
         mutates: Mutates::Forge,
-        proves: "the release branch exists at the integration branch's tip",
-        destructive: false,
-        prereqs: &[],
-    },
-    StepSpec {
-        name: "delete-main",
-        chapter: "§1",
-        mutates: Mutates::Forge,
-        proves: "no third long-lived branch remains",
+        proves: "no long-lived branch besides the trunk remains",
         destructive: true,
-        prereqs: &["create-release-branch"],
+        optional: false,
+        prereqs: &["default-branch"],
     },
     StepSpec {
         name: "ci-permissions",
@@ -72,6 +70,7 @@ pub const STEPS: [StepSpec; 11] = [
         mutates: Mutates::Forge,
         proves: "CI may write and open requests",
         destructive: false,
+        optional: false,
         prereqs: &[],
     },
     StepSpec {
@@ -80,6 +79,7 @@ pub const STEPS: [StepSpec; 11] = [
         mutates: Mutates::Forge,
         proves: "the bot identity can act on this project",
         destructive: false,
+        optional: false,
         prereqs: &[],
     },
     StepSpec {
@@ -88,23 +88,17 @@ pub const STEPS: [StepSpec; 11] = [
         mutates: Mutates::Forge,
         proves: "the bot credentials are stored on the project",
         destructive: false,
+        optional: false,
         prereqs: &[],
     },
     StepSpec {
-        name: "protect-release-branch",
+        name: "protect-trunk",
         chapter: "§3",
         mutates: Mutates::Forge,
-        proves: "it takes no direct push, merges as a merge commit, and requires the named check",
+        proves: "the trunk takes no direct push, merges only by squash, and requires the named check",
         destructive: false,
-        prereqs: &["create-release-branch"],
-    },
-    StepSpec {
-        name: "protect-integration-branch",
-        chapter: "§3",
-        mutates: Mutates::Forge,
-        proves: "it cannot be force-pushed or deleted",
-        destructive: false,
-        prereqs: &["create-release-branch"],
+        optional: false,
+        prereqs: &["default-branch"],
     },
     StepSpec {
         name: "protect-tags",
@@ -112,14 +106,25 @@ pub const STEPS: [StepSpec; 11] = [
         mutates: Mutates::Forge,
         proves: "v* is protected as far as the forge allows",
         destructive: false,
-        prereqs: &["create-release-branch"],
+        optional: false,
+        prereqs: &[],
+    },
+    StepSpec {
+        name: "protect-release-lines",
+        chapter: "§3",
+        mutates: Mutates::Forge,
+        proves: "release/* cannot be force-pushed or deleted",
+        destructive: false,
+        optional: true,
+        prereqs: &[],
     },
     StepSpec {
         name: "protections-check",
         chapter: "§3",
         mutates: Mutates::Nothing,
-        proves: "exactly those three protections, with those rules",
+        proves: "exactly the owned protections, with those rules",
         destructive: false,
+        optional: false,
         prereqs: &[],
     },
 ];

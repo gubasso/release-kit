@@ -1,23 +1,22 @@
 #!/usr/bin/env sh
-# Verify the rulesets are exactly the three this setup owns, and that the
-# release-branch protection still has the shape a release merge needs: a
-# ruleset that rejects or corrupts that merge is invisible until the release
-# merge, and a ruleset no step owns is protection nothing here can reproduce
-# or explain.
+# Verify the rulesets are exactly the ones this setup owns — two always,
+# three when the optional release-line protection is applied — and that the
+# trunk protection still has the shape a release merge needs: a ruleset that
+# rejects or corrupts that merge is invisible until the release merge, and a
+# ruleset no step owns is protection nothing here can reproduce or explain.
 set -eu
 : "${RK_REPO:?rk sets this; run this script through rk setup}"
-: "${RK_INTEGRATION_BRANCH:?rk sets this; run this script through rk setup}"
-: "${RK_RELEASE_BRANCH:?rk sets this; run this script through rk setup}"
+: "${RK_TRUNK_BRANCH:?rk sets this; run this script through rk setup}"
 
-release_name="$RK_RELEASE_BRANCH-protection"
-integration_name="$RK_INTEGRATION_BRANCH-protection"
+trunk_name="$RK_TRUNK_BRANCH-protection"
 tags_name=release-tags
+lines_name=release-lines
 
 names="$(gh api "repos/$RK_REPO/rulesets" -q '.[].name' | sort)"
 extra="$names"
 status=0
 
-for pair in "$integration_name:protect-integration-branch" "$release_name:protect-release-branch" "$tags_name:protect-tags"; do
+for pair in "$trunk_name:protect-trunk" "$tags_name:protect-tags"; do
   name="${pair%%:*}"
   extra="$(printf '%s\n' "$extra" | grep -vxF "$name" || true)"
   if printf '%s\n' "$names" | grep -qxF "$name"; then
@@ -29,6 +28,12 @@ for pair in "$integration_name:protect-integration-branch" "$release_name:protec
   status=1
 done
 
+# The optional release-line protection: absent is fine, present is owned.
+extra="$(printf '%s\n' "$extra" | grep -vxF "$lines_name" || true)"
+if printf '%s\n' "$names" | grep -qxF "$lines_name"; then
+  echo "ok $lines_name"
+fi
+
 if [ -n "$extra" ]; then
   echo 'FAIL rulesets no step owns:' >&2
   printf '%s\n' "$extra" >&2
@@ -36,39 +41,43 @@ if [ -n "$extra" ]; then
   status=1
 fi
 
-id="$(gh api "repos/$RK_REPO/rulesets" -q ".[] | select(.name == \"$release_name\") | .id" | head -n 1)"
+check() {
+  id="$1"
+  label="$2"
+  expected="$3"
+  remedy="$4"
+  actual="$(gh api "repos/$RK_REPO/rulesets/$id" -q "$5")"
+  if [ "$actual" = "$expected" ]; then
+    echo "ok $label"
+  else
+    echo "FAIL $label: expected $expected, got $actual" >&2
+    echo "remediation: $remedy" >&2
+    status=1
+  fi
+}
+
+id="$(gh api "repos/$RK_REPO/rulesets" -q ".[] | select(.name == \"$trunk_name\") | .id" | head -n 1)"
 if [ -n "$id" ]; then
-  check() {
-    label="$1"
-    expected="$2"
-    remedy="$3"
-    actual="$(gh api "repos/$RK_REPO/rulesets/$id" -q "$4")"
-    if [ "$actual" = "$expected" ]; then
-      echo "ok $release_name $label"
-    else
-      echo "FAIL $release_name $label: expected $expected, got $actual" >&2
-      echo "remediation: $remedy" >&2
-      status=1
-    fi
-  }
+  rerun='rk setup step protect-trunk --apply'
 
-  rerun='rk setup step protect-release-branch --apply'
-
-  check 'names no bypass actor' 0 "$rerun" '.bypass_actors // [] | length'
-  check 'requires a pull request' true "$rerun" '[.rules[].type] | contains(["pull_request"])'
-  check 'requires a status check' true "$rerun" '[.rules[].type] | contains(["required_status_checks"])'
-  check 'allows a merge commit' false \
-    'this forge offers no fast-forward merge, so linear history rejects every release merge; '"$rerun" \
-    '[.rules[].type] | contains(["required_linear_history"])'
-  check 'allows only the merge method' '["merge"]' \
-    'rebase and squash diverge the release branch from the integration branch; '"$rerun" \
+  check "$id" "$trunk_name names no bypass actor" 0 "$rerun" '.bypass_actors // [] | length'
+  check "$id" "$trunk_name requires a pull request" true "$rerun" '[.rules[].type] | contains(["pull_request"])'
+  check "$id" "$trunk_name requires a status check" true "$rerun" '[.rules[].type] | contains(["required_status_checks"])'
+  check "$id" "$trunk_name allows only the squash merge" '["squash"]' \
+    'a merge commit or a rebase would take the trunk off its one linear history; '"$rerun" \
     '[.rules[] | select(.type=="pull_request") | .parameters.allowed_merge_methods] | first // [] | sort | tojson'
   if [ -n "${RK_REQUIRED_CHECK:-}" ]; then
-    check 'requires the named check' "$RK_REQUIRED_CHECK" "$rerun" \
+    check "$id" "$trunk_name requires the named check" "$RK_REQUIRED_CHECK" "$rerun" \
       '[.rules[] | select(.type=="required_status_checks") | .parameters.required_status_checks[].context] | join(",")'
   fi
-  check 'asks for no approving review' 0 "$rerun" \
+  check "$id" "$trunk_name asks for no approving review" 0 "$rerun" \
     '[.rules[] | select(.type=="pull_request") | .parameters.required_approving_review_count] | first'
+fi
+
+lid="$(gh api "repos/$RK_REPO/rulesets" -q ".[] | select(.name == \"$lines_name\") | .id" | head -n 1)"
+if [ -n "$lid" ]; then
+  check "$lid" "$lines_name pins the lines" true 'rk setup step protect-release-lines --apply' \
+    '[.rules[].type] | contains(["deletion","non_fast_forward"])'
 fi
 
 [ "$status" -eq 0 ] || exit 1

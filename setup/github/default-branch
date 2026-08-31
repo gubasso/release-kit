@@ -1,10 +1,20 @@
 #!/usr/bin/env sh
-# Make the integration branch the default branch, so pushes to it drive the
-# release bot; the method's setup chapter owns the reasoning.
+# Make the trunk the default branch, so the bot's release request targets it
+# with no configuration; the method's setup chapter owns the reasoning. A
+# repository that has no trunk branch yet gets one at the current default's
+# tip — the work is already there — and single-trunk retires the old name.
 set -eu
 : "${RK_REPO:?rk sets this; run this script through rk setup}"
-: "${RK_INTEGRATION_BRANCH:?rk sets this; run this script through rk setup}"
+: "${RK_TRUNK_BRANCH:?rk sets this; run this script through rk setup}"
 
-gh repo edit "$RK_REPO" --default-branch "$RK_INTEGRATION_BRANCH"
-echo "check: prints \"$RK_INTEGRATION_BRANCH\""
+if ! gh api "repos/$RK_REPO/git/ref/heads/$RK_TRUNK_BRANCH" >/dev/null 2>&1; then
+  current="$(gh repo view "$RK_REPO" --json defaultBranchRef -q .defaultBranchRef.name)"
+  sha="$(gh api "repos/$RK_REPO/git/ref/heads/$current" -q .object.sha)"
+  gh api -X POST "repos/$RK_REPO/git/refs" \
+    -f "ref=refs/heads/$RK_TRUNK_BRANCH" -f "sha=$sha" >/dev/null
+  echo "ok $RK_TRUNK_BRANCH created at $current"
+fi
+
+gh repo edit "$RK_REPO" --default-branch "$RK_TRUNK_BRANCH"
+echo "check: prints \"$RK_TRUNK_BRANCH\""
 gh repo view "$RK_REPO" --json defaultBranchRef -q .defaultBranchRef.name

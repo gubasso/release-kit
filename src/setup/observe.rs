@@ -10,12 +10,16 @@ use serde_json::Value;
 
 use crate::detect::Forge;
 use crate::error::RkError;
-use crate::setup::context::{Ctx, INTEGRATION_BRANCH, RELEASE_BRANCH};
+use crate::setup::context::{Ctx, TRUNK_BRANCH};
 use crate::setup::process::{Exec, Outcome};
 
 /// The executor observes run through: the command layer wraps echoing,
 /// journaling, and redaction around the process adapter.
 pub type Runner<'a> = dyn FnMut(&Exec) -> Result<Outcome, RkError> + 'a;
+
+/// The long-lived branch names `single-trunk` retires when each is an
+/// ancestor of the trunk: the common default and the retired second branch.
+pub const TRUNK_CANDIDATES: [&str; 2] = ["main", "develop"];
 
 /// What one observation found.
 #[derive(Debug)]
@@ -31,6 +35,13 @@ pub enum StepState {
     /// The desired state does not hold.
     Unsatisfied {
         /// What was found instead.
+        detail: String,
+    },
+    /// An optional step's condition does not hold: nothing is wrong, and
+    /// nothing is proven — `check` reports it as skipped, while an explicit
+    /// single-step apply still runs it.
+    Inapplicable {
+        /// Why the step does not apply here.
         detail: String,
     },
     /// The observation could not decide.
@@ -63,6 +74,12 @@ impl StepState {
 
     fn not(detail: impl Into<String>) -> Self {
         Self::Unsatisfied {
+            detail: detail.into(),
+        }
+    }
+
+    fn inapplicable(detail: impl Into<String>) -> Self {
+        Self::Inapplicable {
             detail: detail.into(),
         }
     }
@@ -140,72 +157,103 @@ fn package_check(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkError> {
     })
 }
 
-/// The destructive step's own guard: whether deleting `main` can lose
-/// work. `Satisfied` means main is already gone or is an ancestor of the
-/// release branch; `Unsatisfied` means the deletion must refuse.
+/// The destructive step's own guard: whether deleting a candidate branch
+/// can lose work.
+///
+/// `Satisfied` means every candidate is already gone or is an ancestor of
+/// the trunk; `Unsatisfied` means the deletion must refuse.
 ///
 /// # Errors
 ///
 /// Propagates executor failures.
-pub fn delete_main_guard(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkError> {
-    match ctx.forge {
-        Forge::Github => {
-            match api_get(ctx, run, &format!("repos/{}/git/ref/heads/main", ctx.repo))? {
-                Api::Missing => return Ok(StepState::ok("main is already gone")),
-                Api::Failed(err) => return Ok(StepState::unknown(err)),
-                Api::Ok(_) => {}
-            }
-            match api_get(
-                ctx,
-                run,
-                &format!("repos/{}/compare/main...{RELEASE_BRANCH}", ctx.repo),
-            )? {
-                Api::Ok(body) => {
-                    let status = body["status"].as_str().unwrap_or("");
-                    Ok(if matches!(status, "ahead" | "identical") {
-                        StepState::ok(format!("main is an ancestor of {RELEASE_BRANCH}"))
-                    } else {
-                        StepState::not(format!(
-                            "main is not an ancestor of {RELEASE_BRANCH} ({status}); deleting it would lose work"
-                        ))
-                    })
-                }
-                Api::Missing => Ok(StepState::unknown("the comparison is not readable")),
-                Api::Failed(err) => Ok(StepState::unknown(err)),
-            }
+pub fn single_trunk_guard(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkError> {
+    for candidate in TRUNK_CANDIDATES {
+        if candidate == TRUNK_BRANCH {
+            continue;
         }
-        Forge::Gitlab => {
-            let project = ctx.repo.replace('/', "%2F");
-            match api_get(
-                ctx,
-                run,
-                &format!("projects/{project}/repository/branches/main"),
-            )? {
-                Api::Missing => return Ok(StepState::ok("main is already gone")),
-                Api::Failed(err) => return Ok(StepState::unknown(err)),
-                Api::Ok(_) => {}
-            }
-            match api_get(
-                ctx,
-                run,
-                &format!("projects/{project}/repository/compare?from={RELEASE_BRANCH}&to=main"),
-            )? {
-                Api::Ok(body) => {
-                    let ahead = body["commits"]
-                        .as_array()
-                        .is_some_and(|list| !list.is_empty());
-                    Ok(if ahead {
-                        StepState::not(format!(
-                            "main carries commits {RELEASE_BRANCH} does not; deleting it would lose work"
-                        ))
-                    } else {
-                        StepState::ok(format!("main is an ancestor of {RELEASE_BRANCH}"))
-                    })
-                }
-                Api::Missing => Ok(StepState::unknown("the comparison is not readable")),
-                Api::Failed(err) => Ok(StepState::unknown(err)),
-            }
+        let state = match ctx.forge {
+            Forge::Github => github_candidate_guard(ctx, run, candidate)?,
+            Forge::Gitlab => gitlab_candidate_guard(ctx, run, candidate)?,
+        };
+        if !state.satisfied() {
+            return Ok(state);
         }
+    }
+    Ok(StepState::ok(
+        "every candidate branch is absent, or an ancestor of the trunk",
+    ))
+}
+
+/// One candidate branch's ancestry, on GitHub.
+fn github_candidate_guard(
+    ctx: &Ctx,
+    run: &mut Runner,
+    candidate: &str,
+) -> Result<StepState, RkError> {
+    match api_get(
+        ctx,
+        run,
+        &format!("repos/{}/git/ref/heads/{candidate}", ctx.repo),
+    )? {
+        Api::Missing => return Ok(StepState::ok(format!("{candidate} is already gone"))),
+        Api::Failed(err) => return Ok(StepState::unknown(err)),
+        Api::Ok(_) => {}
+    }
+    match api_get(
+        ctx,
+        run,
+        &format!("repos/{}/compare/{candidate}...{TRUNK_BRANCH}", ctx.repo),
+    )? {
+        Api::Ok(body) => {
+            let status = body["status"].as_str().unwrap_or("");
+            Ok(if matches!(status, "ahead" | "identical") {
+                StepState::ok(format!("{candidate} is an ancestor of {TRUNK_BRANCH}"))
+            } else {
+                StepState::not(format!(
+                    "{candidate} is not an ancestor of {TRUNK_BRANCH} ({status}); deleting it would lose work"
+                ))
+            })
+        }
+        Api::Missing => Ok(StepState::unknown("the comparison is not readable")),
+        Api::Failed(err) => Ok(StepState::unknown(err)),
+    }
+}
+
+/// One candidate branch's ancestry, on GitLab.
+fn gitlab_candidate_guard(
+    ctx: &Ctx,
+    run: &mut Runner,
+    candidate: &str,
+) -> Result<StepState, RkError> {
+    let project = ctx.repo.replace('/', "%2F");
+    match api_get(
+        ctx,
+        run,
+        &format!("projects/{project}/repository/branches/{candidate}"),
+    )? {
+        Api::Missing => return Ok(StepState::ok(format!("{candidate} is already gone"))),
+        Api::Failed(err) => return Ok(StepState::unknown(err)),
+        Api::Ok(_) => {}
+    }
+    match api_get(
+        ctx,
+        run,
+        &format!("projects/{project}/repository/compare?from={TRUNK_BRANCH}&to={candidate}"),
+    )? {
+        Api::Ok(body) => {
+            let ahead = body["commits"]
+                .as_array()
+                .is_some_and(|list| !list.is_empty());
+            Ok(if ahead {
+                StepState::not(format!(
+                    "{candidate} carries commits {TRUNK_BRANCH} does not; deleting it would lose work"
+                ))
+            } else {
+                StepState::ok(format!("{candidate} is an ancestor of {TRUNK_BRANCH}"))
+            })
+        }
+        Api::Missing => Ok(StepState::unknown("the comparison is not readable")),
+        Api::Failed(err) => Ok(StepState::unknown(err)),
     }
 }
 
@@ -252,8 +300,8 @@ fn github(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
         "default-branch" => Ok(match api_get(ctx, run, &format!("repos/{repo}"))? {
             Api::Ok(body) => {
                 let found = body["default_branch"].as_str().unwrap_or("");
-                if found == INTEGRATION_BRANCH {
-                    StepState::ok(format!("{INTEGRATION_BRANCH} is the default branch"))
+                if found == TRUNK_BRANCH {
+                    StepState::ok(format!("{TRUNK_BRANCH} is the default branch"))
                 } else {
                     StepState::not(format!("the default branch is {found}"))
                 }
@@ -261,52 +309,23 @@ fn github(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
             Api::Missing => StepState::not(format!("the forge does not know {repo}")),
             Api::Failed(err) => StepState::unknown(err),
         }),
-        "create-release-branch" => {
-            match api_get(
-                ctx,
-                run,
-                &format!("repos/{repo}/git/ref/heads/{RELEASE_BRANCH}"),
-            )? {
-                Api::Ok(_) => {}
-                Api::Missing => {
-                    return Ok(StepState::not(format!("{RELEASE_BRANCH} does not exist")));
+        "single-trunk" => {
+            for candidate in TRUNK_CANDIDATES {
+                if candidate == TRUNK_BRANCH {
+                    continue;
                 }
-                Api::Failed(err) => return Ok(StepState::unknown(err)),
-            }
-            // Existing is not enough: a release branch carrying commits the
-            // integration branch lacks is not one this setup created — or a
-            // release is mid-flight, awaiting its back-merge — and neither
-            // may read as a clean setup.
-            Ok(
-                match api_get(
-                    ctx,
-                    run,
-                    &format!("repos/{repo}/compare/{INTEGRATION_BRANCH}...{RELEASE_BRANCH}"),
-                )? {
-                    Api::Ok(body) => {
-                        let status = body["status"].as_str().unwrap_or("");
-                        if matches!(status, "behind" | "identical") {
-                            StepState::ok(format!(
-                                "{RELEASE_BRANCH} exists and is an ancestor of, or equal to, {INTEGRATION_BRANCH}"
-                            ))
-                        } else {
-                            StepState::not(format!(
-                                "{RELEASE_BRANCH} carries commits {INTEGRATION_BRANCH} does not ({status}); finish the back-merge if a release is mid-flight"
-                            ))
-                        }
+                match api_get(ctx, run, &format!("repos/{repo}/git/ref/heads/{candidate}"))? {
+                    Api::Missing => {}
+                    Api::Ok(_) => {
+                        return Ok(StepState::not(format!("a {candidate} branch still exists")));
                     }
-                    Api::Missing => StepState::unknown("the branch comparison is not readable"),
-                    Api::Failed(err) => StepState::unknown(err),
-                },
-            )
+                    Api::Failed(err) => return Ok(StepState::unknown(err)),
+                }
+            }
+            Ok(StepState::ok(
+                "no long-lived branch besides the trunk remains",
+            ))
         }
-        "delete-main" => Ok(
-            match api_get(ctx, run, &format!("repos/{repo}/git/ref/heads/main"))? {
-                Api::Missing => StepState::ok("no main branch remains"),
-                Api::Ok(_) => StepState::not("a main branch still exists"),
-                Api::Failed(err) => StepState::unknown(err),
-            },
-        ),
         "ci-permissions" => Ok(
             match api_get(
                 ctx,
@@ -353,21 +372,21 @@ fn github(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
                 Api::Failed(err) => StepState::unknown(err),
             },
         ),
-        "protect-release-branch" => github_release_ruleset(ctx, run),
-        "protect-integration-branch" => {
-            let name = format!("{INTEGRATION_BRANCH}-protection");
-            github_ruleset(ctx, run, &name, &["deletion", "non_fast_forward"])
-        }
+        "protect-trunk" => github_trunk_ruleset(ctx, run),
         "protect-tags" => github_ruleset(ctx, run, "release-tags", &["deletion", "update"]),
+        "protect-release-lines" => {
+            if github_ruleset_body(ctx, run, "release-lines")?.is_none() {
+                return Ok(StepState::inapplicable(
+                    "release/* is unprotected; optional — applied only where older lines exist",
+                ));
+            }
+            github_ruleset(ctx, run, "release-lines", &["deletion", "non_fast_forward"])
+        }
         "protections-check" => {
             let mut failures = Vec::new();
-            for owned in [
-                "protect-release-branch",
-                "protect-integration-branch",
-                "protect-tags",
-            ] {
+            for owned in ["protect-trunk", "protect-tags", "protect-release-lines"] {
                 match github(ctx, owned, run)? {
-                    StepState::Satisfied { .. } => {}
+                    StepState::Satisfied { .. } | StepState::Inapplicable { .. } => {}
                     StepState::Unsatisfied { detail } | StepState::Unknown { detail } => {
                         failures.push(format!("{owned}: {detail}"));
                     }
@@ -375,9 +394,9 @@ fn github(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
             }
             if let Api::Ok(body) = api_get(ctx, run, &format!("repos/{repo}/rulesets"))? {
                 let owned = [
-                    format!("{RELEASE_BRANCH}-protection"),
-                    format!("{INTEGRATION_BRANCH}-protection"),
+                    format!("{TRUNK_BRANCH}-protection"),
                     "release-tags".to_owned(),
+                    "release-lines".to_owned(),
                 ];
                 for ruleset in body.as_array().into_iter().flatten() {
                     let name = ruleset["name"].as_str().unwrap_or("");
@@ -387,7 +406,7 @@ fn github(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
                 }
             }
             Ok(if failures.is_empty() {
-                StepState::ok("exactly the three protections, with those rules")
+                StepState::ok("exactly the owned protections, with those rules")
             } else {
                 StepState::not(failures.join("; "))
             })
@@ -480,9 +499,9 @@ fn github_ruleset(
     }
 }
 
-/// The release-branch ruleset, checked for the shape a release merge needs.
-fn github_release_ruleset(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkError> {
-    let name = format!("{RELEASE_BRANCH}-protection");
+/// The trunk ruleset, checked for the shape a release merge needs.
+fn github_trunk_ruleset(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkError> {
+    let name = format!("{TRUNK_BRANCH}-protection");
     let Some(detail) = github_ruleset_body(ctx, run, &name)? else {
         return Ok(StepState::not(format!("no ruleset named {name}")));
     };
@@ -509,16 +528,16 @@ fn github_release_ruleset(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkEr
     for rule in &rules {
         if let Some(kind) = rule["type"].as_str() {
             if !owned.contains(&kind) {
-                // Named for the sharpest case: linear history rejects every
-                // release merge; any other unowned rule is one the setup
-                // cannot reproduce or explain.
+                // Named for the sharpest case: an unowned rule is one the
+                // setup cannot reproduce or explain, and it can block the
+                // very merge the method depends on.
                 faults.push(format!("an unowned rule is present: {kind}"));
             }
         }
     }
     if let Some(request) = rules.iter().find(|rule| rule["type"] == "pull_request") {
-        if request["parameters"]["allowed_merge_methods"] != serde_json::json!(["merge"]) {
-            faults.push("the merge method is not exactly a merge commit".to_owned());
+        if request["parameters"]["allowed_merge_methods"] != serde_json::json!(["squash"]) {
+            faults.push("the merge method is not exactly a squash merge".to_owned());
         }
     }
     if let Some(checks) = rules
@@ -583,8 +602,8 @@ fn gitlab(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
         "default-branch" => Ok(match api_get(ctx, run, &format!("projects/{project}"))? {
             Api::Ok(body) => {
                 let found = body["default_branch"].as_str().unwrap_or("");
-                if found == INTEGRATION_BRANCH {
-                    StepState::ok(format!("{INTEGRATION_BRANCH} is the default branch"))
+                if found == TRUNK_BRANCH {
+                    StepState::ok(format!("{TRUNK_BRANCH} is the default branch"))
                 } else {
                     StepState::not(format!("the default branch is {found}"))
                 }
@@ -592,57 +611,27 @@ fn gitlab(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
             Api::Missing => StepState::not(format!("the forge does not know {}", ctx.repo)),
             Api::Failed(err) => StepState::unknown(err),
         }),
-        "create-release-branch" => {
-            match api_get(
-                ctx,
-                run,
-                &format!("projects/{project}/repository/branches/{RELEASE_BRANCH}"),
-            )? {
-                Api::Ok(_) => {}
-                Api::Missing => {
-                    return Ok(StepState::not(format!("{RELEASE_BRANCH} does not exist")));
+        "single-trunk" => {
+            for candidate in TRUNK_CANDIDATES {
+                if candidate == TRUNK_BRANCH {
+                    continue;
                 }
-                Api::Failed(err) => return Ok(StepState::unknown(err)),
-            }
-            // Same rule as the sibling forge: existing is not enough.
-            Ok(
                 match api_get(
                     ctx,
                     run,
-                    &format!(
-                        "projects/{project}/repository/compare?from={INTEGRATION_BRANCH}&to={RELEASE_BRANCH}"
-                    ),
+                    &format!("projects/{project}/repository/branches/{candidate}"),
                 )? {
-                    Api::Ok(body) => {
-                        let ahead = body["commits"]
-                            .as_array()
-                            .is_some_and(|list| !list.is_empty());
-                        if ahead {
-                            StepState::not(format!(
-                                "{RELEASE_BRANCH} carries commits {INTEGRATION_BRANCH} does not; finish the back-merge if a release is mid-flight"
-                            ))
-                        } else {
-                            StepState::ok(format!(
-                                "{RELEASE_BRANCH} exists and is an ancestor of, or equal to, {INTEGRATION_BRANCH}"
-                            ))
-                        }
+                    Api::Missing => {}
+                    Api::Ok(_) => {
+                        return Ok(StepState::not(format!("a {candidate} branch still exists")));
                     }
-                    Api::Missing => StepState::unknown("the branch comparison is not readable"),
-                    Api::Failed(err) => StepState::unknown(err),
-                },
-            )
+                    Api::Failed(err) => return Ok(StepState::unknown(err)),
+                }
+            }
+            Ok(StepState::ok(
+                "no long-lived branch besides the trunk remains",
+            ))
         }
-        "delete-main" => Ok(
-            match api_get(
-                ctx,
-                run,
-                &format!("projects/{project}/repository/branches/main"),
-            )? {
-                Api::Missing => StepState::ok("no main branch remains"),
-                Api::Ok(_) => StepState::not("a main branch still exists"),
-                Api::Failed(err) => StepState::unknown(err),
-            },
-        ),
         "ci-permissions" => Ok(match api_get(ctx, run, &format!("projects/{project}"))? {
             Api::Ok(body) => {
                 if body["jobs_enabled"] == true {
@@ -723,15 +712,15 @@ fn gitlab(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
                 Api::Failed(err) => StepState::unknown(err),
             },
         ),
-        "protect-release-branch" => {
+        "protect-trunk" => {
             let protection = match api_get(
                 ctx,
                 run,
-                &format!("projects/{project}/protected_branches/{RELEASE_BRANCH}"),
+                &format!("projects/{project}/protected_branches/{TRUNK_BRANCH}"),
             )? {
                 Api::Ok(body) => body,
                 Api::Missing => {
-                    return Ok(StepState::not(format!("{RELEASE_BRANCH} is not protected")));
+                    return Ok(StepState::not(format!("{TRUNK_BRANCH} is not protected")));
                 }
                 Api::Failed(err) => return Ok(StepState::unknown(err)),
             };
@@ -750,55 +739,28 @@ fn gitlab(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
             let mut faults = Vec::new();
             if !no_push {
                 faults.push(format!(
-                    "{RELEASE_BRANCH} still takes a direct push: the forge honors the most permissive of {} push grants",
+                    "{TRUNK_BRANCH} still takes a direct push: the forge honors the most permissive of {} push grants",
                     grants.len()
                 ));
+            }
+            if protection["allow_force_push"] != false {
+                faults.push(format!("{TRUNK_BRANCH} allows force pushes"));
             }
             if settings["only_allow_merge_if_pipeline_succeeds"] != true {
                 faults.push("the pipeline requirement is off".to_owned());
             }
-            if settings["merge_method"] != "merge" {
-                faults.push("the merge method is not a merge commit".to_owned());
+            if settings["merge_method"] != "ff" {
+                faults.push("the merge method is not fast-forward".to_owned());
+            }
+            if settings["squash_option"] != "always" {
+                faults.push("merge requests do not always squash".to_owned());
             }
             Ok(if faults.is_empty() {
-                StepState::ok(format!("{RELEASE_BRANCH} holds the release-merge shape"))
+                StepState::ok(format!("{TRUNK_BRANCH} holds the release-merge shape"))
             } else {
                 StepState::not(faults.join("; "))
             })
         }
-        "protect-integration-branch" => Ok(
-            match api_get(
-                ctx,
-                run,
-                &format!("projects/{project}/protected_branches/{INTEGRATION_BRANCH}"),
-            )? {
-                Api::Ok(body) => {
-                    // The grant set is owned exactly, like the release
-                    // branch's: an extra grant is protection the setup
-                    // cannot reproduce, and a satisfied report here would
-                    // keep the apply from ever reconciling it.
-                    let grants = body["push_access_levels"]
-                        .as_array()
-                        .cloned()
-                        .unwrap_or_default();
-                    let canonical = grants.len() == 1 && grants[0]["access_level"] == 30;
-                    if body["allow_force_push"] != false {
-                        StepState::not(format!("{INTEGRATION_BRANCH} allows force pushes"))
-                    } else if !canonical {
-                        StepState::not(format!(
-                            "{INTEGRATION_BRANCH} carries {} push grants where the setup owns exactly one at developer level",
-                            grants.len()
-                        ))
-                    } else {
-                        StepState::ok(format!(
-                            "{INTEGRATION_BRANCH} refuses force pushes with its one owned push grant"
-                        ))
-                    }
-                }
-                Api::Missing => StepState::not(format!("{INTEGRATION_BRANCH} is not protected")),
-                Api::Failed(err) => StepState::unknown(err),
-            },
-        ),
         "protect-tags" => Ok(
             match api_get(ctx, run, &format!("projects/{project}/protected_tags/v%2A"))? {
                 Api::Ok(_) => {
@@ -808,18 +770,34 @@ fn gitlab(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
                 Api::Failed(err) => StepState::unknown(err),
             },
         ),
+        "protect-release-lines" => Ok(
+            match api_get(
+                ctx,
+                run,
+                &format!("projects/{project}/protected_branches/release%2F%2A"),
+            )? {
+                Api::Ok(body) => {
+                    if body["allow_force_push"] == false {
+                        StepState::ok("release/* refuses force pushes and deletion by git clients")
+                    } else {
+                        StepState::not("release/* allows force pushes")
+                    }
+                }
+                Api::Missing => StepState::inapplicable(
+                    "release/* is unprotected; optional — applied only where older lines exist",
+                ),
+                Api::Failed(err) => StepState::unknown(err),
+            },
+        ),
         "protections-check" => {
             let mut failures = Vec::new();
             let mut limitation = None;
-            for owned in [
-                "protect-release-branch",
-                "protect-integration-branch",
-                "protect-tags",
-            ] {
+            for owned in ["protect-trunk", "protect-tags", "protect-release-lines"] {
                 match gitlab(ctx, owned, run)? {
                     StepState::Satisfied {
                         limitation: found, ..
                     } => limitation = limitation.or(found),
+                    StepState::Inapplicable { .. } => {}
                     StepState::Unsatisfied { detail } | StepState::Unknown { detail } => {
                         failures.push(format!("{owned}: {detail}"));
                     }

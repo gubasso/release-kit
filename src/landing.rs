@@ -46,8 +46,8 @@ impl Kind {
 }
 
 /// The declared classification: every landable destination and its kind.
-/// The workflow and pipeline files carry the gate logic and the OIDC
-/// permission, so release-kit owns them; the tool configurations are
+/// The workflow and pipeline files carry the release automation and the
+/// OIDC permission, so release-kit owns them; the tool configurations are
 /// per-project judgment; the two state files are rewritten by the release
 /// automation itself.
 const KINDS: [(&str, Kind); 10] = [

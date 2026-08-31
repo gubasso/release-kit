@@ -14,7 +14,7 @@ use release_kit::skills::Digest;
 use release_kit::skills::record::{RECORD_PATH, Record};
 
 /// Every skill the payload carries, and the roots an install writes them to.
-const SKILLS: [&str; 2] = ["rk-release", "rk-setup"];
+const SKILLS: [&str; 3] = ["rk-migrate", "rk-release", "rk-setup"];
 const ROOTS: [&str; 2] = [".claude/skills", ".agents/skills"];
 
 fn rk() -> Command {
@@ -1449,17 +1449,16 @@ fn init_propagates_an_unreadable_destination_and_writes_nothing() {
 
 /// The forge-mutating step names: every one exists in both trees under the
 /// same name, per `forge-setup:every-supported-forge-runs-every-step`.
-const FORGE_STEPS: [&str; 10] = [
+const FORGE_STEPS: [&str; 9] = [
     "bot-secrets",
     "ci-permissions",
-    "create-release-branch",
     "default-branch",
-    "delete-main",
     "install-bot",
-    "protect-integration-branch",
-    "protect-release-branch",
+    "protect-release-lines",
     "protect-tags",
+    "protect-trunk",
     "protections-check",
+    "single-trunk",
 ];
 
 fn repo_path(rel: &str) -> PathBuf {
@@ -1509,7 +1508,7 @@ fn every_listed_step_resolves_to_a_script_in_every_tree() {
             Some(rest.split_whitespace().next()?.to_owned())
         })
         .collect();
-    assert_eq!(listed.len(), 11, "eleven steps list: {text}");
+    assert_eq!(listed.len(), 10, "ten steps list: {text}");
     listed.retain(|name| name != "package-check");
     listed.sort();
     let filed: Vec<String> = script_files("github").into_iter().map(|(n, _)| n).collect();
@@ -1523,8 +1522,7 @@ fn every_setup_script_passes_the_static_battery() {
     let allowed = [
         "RK_REPO",
         "RK_FORGE",
-        "RK_INTEGRATION_BRANCH",
-        "RK_RELEASE_BRANCH",
+        "RK_TRUNK_BRANCH",
         "RK_REQUIRED_CHECK",
         "RK_BOT_APP_ID",
         "RK_BOT_PRIVATE_KEY",
@@ -1813,7 +1811,7 @@ fn setup_script_prints_the_embedded_script() {
         .clone();
     assert_eq!(printed, authored);
     let gitlab = rk()
-        .args(["setup", "script", "delete-main", "--forge", "gitlab"])
+        .args(["setup", "script", "single-trunk", "--forge", "gitlab"])
         .assert()
         .success()
         .get_output()
@@ -1821,7 +1819,7 @@ fn setup_script_prints_the_embedded_script() {
         .clone();
     assert_eq!(
         gitlab,
-        std::fs::read(repo_path("setup/gitlab/delete-main")).expect("reads")
+        std::fs::read(repo_path("setup/gitlab/single-trunk")).expect("reads")
     );
     rk().args(["setup", "script", "no-such-step"])
         .assert()
@@ -1938,6 +1936,57 @@ fn scan_for_tokens(path: &Path, deny: &[String], offenders: &mut Vec<String>) {
             }
         }
     }
+}
+
+/// The shipped payload carries no trace of the retired branch model: no
+/// second long-lived branch as a word, no back-merge, and no gate job — the
+/// mechanical half of the cleanup promise. The single-trunk scripts are the
+/// one exemption: their candidate list legitimately names the branches they
+/// retire. The tokens are assembled at run time so this file cannot trip
+/// its own scan.
+#[test]
+fn the_payload_carries_no_retired_branch_model() {
+    let branch = format!("dev{}", "elop");
+    let substrings = [
+        format!("back{}merge", "-"),
+        format!("open-release{}gate", "-"),
+    ];
+    let word_hit = |text: &str| -> bool {
+        text.match_indices(branch.as_str()).any(|(idx, _)| {
+            let boundary =
+                |c: Option<char>| c.is_none_or(|c| !c.is_ascii_alphanumeric() && c != '_');
+            boundary(text[..idx].chars().next_back())
+                && boundary(text[idx + branch.len()..].chars().next())
+        })
+    };
+    let mut offenders = Vec::new();
+    for root in release_kit::payload_roots::PAYLOAD_ROOTS {
+        let mut stack = vec![repo_path(root)];
+        while let Some(path) = stack.pop() {
+            if path.is_dir() {
+                for entry in std::fs::read_dir(&path).expect("the root reads") {
+                    stack.push(entry.expect("an entry").path());
+                }
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let exempt =
+                path.ends_with("github/single-trunk") || path.ends_with("gitlab/single-trunk");
+            for (idx, line) in text.lines().enumerate() {
+                let stale = substrings.iter().any(|token| line.contains(token.as_str()))
+                    || (!exempt && word_hit(line));
+                if stale {
+                    offenders.push(format!("{}:{}", path.display(), idx + 1));
+                }
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "the retired branch model leaked into the payload: {offenders:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -2079,8 +2128,8 @@ api)
       *"bypass_actors"*) echo 0;;
       *'contains(["pull_request"])'*) echo true;;
       *'contains(["required_status_checks"])'*) echo true;;
-      *'contains(["required_linear_history"])'*) echo false;;
-      *"allowed_merge_methods"*) echo '["merge"]';;
+      *'contains(["deletion","non_fast_forward"])'*) echo true;;
+      *"allowed_merge_methods"*) echo '["squash"]';;
       *"required_status_checks[].context"*) grep -o '"context": "[^"]*"' <<<"$body" | head -1 | cut -d'"' -f4;;
       *"required_approving_review_count"*) echo 0;;
       *) echo null;;
@@ -2135,7 +2184,7 @@ api)
     done
     echo '{}';;
   "GET projects/"*)
-    echo "{\"id\":1,\"default_branch\":\"$(cat "$STATE/default_branch")\",\"jobs_enabled\":true,\"only_allow_merge_if_pipeline_succeeds\":false,\"merge_method\":\"ff\"}";;
+    echo "{\"id\":1,\"default_branch\":\"$(cat "$STATE/default_branch")\",\"jobs_enabled\":true,\"only_allow_merge_if_pipeline_succeeds\":false,\"merge_method\":\"ff\",\"squash_option\":\"never\"}";;
   *) echo '{}';;
   esac
   exit 0;;
@@ -2290,6 +2339,7 @@ fn setup_json_is_ndjson_opening_with_the_schema() {
 /// rerun re-asserts, no secret reaches argv or the journal, and check then
 /// reports every step satisfied.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn a_full_github_apply_lands_reasserts_and_checks_clean() {
     let fixture = ForgeFixture::new();
     let pem = "-----BEGIN FAKE KEY-----\nsekret-pem-bytes\n-----END FAKE KEY-----\n";
@@ -2302,24 +2352,30 @@ fn a_full_github_apply_lands_reasserts_and_checks_clean() {
             .env("RK_BOT_PRIVATE_KEY", pem);
         command
     };
-    apply(&fixture).assert().success();
+    apply(&fixture)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("skipped protect-release-lines"));
 
-    // The forge now holds the desired state.
+    // The forge now holds the desired state: the trunk is the default and
+    // the sole long-lived branch, under exactly the two owned protections.
     assert_eq!(
         std::fs::read_to_string(fixture.state("default_branch")).expect("state reads"),
-        "develop\n"
+        "master\n"
     );
     assert!(fixture.state("branch_master").is_file());
     assert!(!fixture.state("branch_main").exists());
+    assert!(!fixture.state("branch_develop").exists());
     assert!(fixture.state("installed").is_file());
     let rulesets = std::fs::read_to_string(fixture.state("rulesets.index")).expect("reads");
     assert_eq!(
         rulesets.lines().count(),
-        3,
-        "exactly three protections: {rulesets}"
+        2,
+        "exactly two protections: {rulesets}"
     );
     let body = std::fs::read_to_string(fixture.state("ruleset_master-protection")).expect("reads");
     assert!(body.contains(r#""context": "test-check""#));
+    assert!(body.contains(r#""allowed_merge_methods": ["squash"]"#));
 
     // The secret reached stdin and nothing else.
     assert!(fixture.stdin_log().contains("sekret-pem-bytes"));
@@ -2386,17 +2442,27 @@ fn a_full_github_apply_lands_reasserts_and_checks_clean() {
         2
     );
 
+    // The optional step applies by name, and the ownership check still
+    // holds with the third protection present.
+    fixture
+        .rk(&["setup", "step", "protect-release-lines"])
+        .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
+        .assert()
+        .success();
+    let rulesets = std::fs::read_to_string(fixture.state("rulesets.index")).expect("reads");
+    assert_eq!(
+        rulesets.lines().count(),
+        3,
+        "the optional protection joins the owned set: {rulesets}"
+    );
+
     // And check reports clean at exit 0.
     fixture
         .rk(&["setup", "check"])
         .args(["--repo", "acme/widget", "--forge", "github"])
         .assert()
         .success()
-        .stdout(
-            predicate::str::contains("ok protections-check")
-                .not()
-                .or(predicate::str::contains("ok")),
-        );
+        .stdout(predicate::str::contains("ok protections-check"));
 }
 
 /// A check against an unconfigured forge reports per step and exits 1.
@@ -2414,6 +2480,7 @@ fn setup_check_reports_per_step_and_exits_1_on_violations() {
     assert!(text.contains("ok package-check"), "{text}");
     assert!(text.contains("unsatisfied default-branch"), "{text}");
     assert!(text.contains("unsatisfied protect-tags"), "{text}");
+    assert!(text.contains("skipped protect-release-lines"), "{text}");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("not satisfied"), "{stderr}");
 }
@@ -2444,9 +2511,9 @@ fn the_required_check_flag_is_demanded_and_refused_per_forge() {
 #[test]
 fn the_check_name_reaches_the_protection_body_verbatim() {
     let fixture = ForgeFixture::new();
-    fixture.seed("branch_master", "abc123");
+    fixture.seed("default_branch", "master");
     fixture
-        .rk(&["setup", "step", "protect-release-branch"])
+        .rk(&["setup", "step", "protect-trunk"])
         .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
         .args(["--required-check", "build (matrix, 1)"])
         .assert()
@@ -2461,31 +2528,33 @@ fn the_check_name_reaches_the_protection_body_verbatim() {
 }
 
 /// Ordering is enforced by observation: a protection step refuses while the
-/// release branch has not been proven.
+/// trunk has not been proven the default.
 #[test]
-fn a_protection_step_refuses_before_the_release_branch_exists() {
+fn a_protection_step_refuses_before_the_trunk_is_the_default() {
     let fixture = ForgeFixture::new();
     fixture
-        .rk(&["setup", "step", "protect-release-branch"])
+        .rk(&["setup", "step", "protect-trunk"])
         .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
         .args(["--required-check", "test-check"])
         .assert()
         .code(73)
-        .stderr(predicate::str::contains("create-release-branch"));
+        .stderr(predicate::str::contains("default-branch"));
     assert!(
         !fixture.log().contains("-X POST"),
         "the refusal must write nothing"
     );
 }
 
-/// delete-main refuses when main is not an ancestor of the release branch.
+/// single-trunk refuses when a candidate is not an ancestor of the trunk,
+/// and every candidate survives the refusal: the guard is all-or-nothing.
 #[test]
-fn delete_main_refuses_a_non_ancestor() {
+fn single_trunk_refuses_a_non_ancestor() {
     let fixture = ForgeFixture::new();
+    fixture.seed("default_branch", "master");
     fixture.seed("branch_master", "abc123");
     fixture.seed("compare_main_master", "diverged");
     fixture
-        .rk(&["setup", "step", "delete-main"])
+        .rk(&["setup", "step", "single-trunk"])
         .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
         .assert()
         .code(73)
@@ -2493,6 +2562,10 @@ fn delete_main_refuses_a_non_ancestor() {
     assert!(
         fixture.state("branch_main").is_file(),
         "the branch must survive the refusal"
+    );
+    assert!(
+        fixture.state("branch_develop").is_file(),
+        "no other candidate may fall to a refused run"
     );
 }
 
@@ -2507,7 +2580,7 @@ fn a_gitlab_step_applies_through_the_gitlab_tree() {
         .success();
     assert_eq!(
         std::fs::read_to_string(fixture.state("default_branch")).expect("state reads"),
-        "develop\n"
+        "master\n"
     );
     assert!(fixture.log().contains("api -X PUT projects/acme%2Fwidget"));
 }
@@ -2855,41 +2928,20 @@ fn a_gitlab_check_reports_the_tag_protection_limitation() {
 /// The destructive step fails closed: an ancestry the guard cannot read is
 /// treated exactly like one it refuted.
 #[test]
-fn delete_main_refuses_an_unreadable_comparison() {
+fn single_trunk_refuses_an_unreadable_comparison() {
     let fixture = ForgeFixture::new();
+    fixture.seed("default_branch", "master");
     fixture.seed("branch_master", "abc123");
     fixture.seed("compare_main_master", "error");
     fixture
-        .rk(&["setup", "step", "delete-main"])
+        .rk(&["setup", "step", "single-trunk"])
         .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
         .assert()
         .code(73)
-        .stderr(predicate::str::contains("delete-main refuses"));
+        .stderr(predicate::str::contains("single-trunk refuses"));
     assert!(
         fixture.state("branch_main").is_file(),
         "the branch must survive an unreadable guard"
-    );
-}
-
-/// A release branch carrying commits the integration branch lacks is not a
-/// clean setup, and check says so.
-#[test]
-fn check_reports_a_divergent_release_branch() {
-    let fixture = ForgeFixture::new();
-    fixture.seed("branch_master", "fff999");
-    fixture.seed("compare_develop_master", "diverged");
-    let out = fixture
-        .rk(&["setup", "check"])
-        .args(["--repo", "acme/widget", "--forge", "github"])
-        .assert()
-        .code(1)
-        .get_output()
-        .stdout
-        .clone();
-    assert!(
-        String::from_utf8_lossy(&out).contains("unsatisfied create-release-branch"),
-        "{}",
-        String::from_utf8_lossy(&out)
     );
 }
 

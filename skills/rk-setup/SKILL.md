@@ -1,6 +1,6 @@
 ---
 name: rk-setup
-description: Lands the release-kit workflow in a project through the rk CLI. Use when asked to set up a release workflow, release automation, trusted publishing, release-plz, release-please, git-cliff, changelog automation, or a release gate, or to adapt the release-kit convention to a project's technology. Triggers include release-kit, rk init, release setup, and release workflow setup.
+description: Lands the release-kit workflow in a project through the rk CLI. Use when asked to set up a release workflow, release automation, trusted publishing, release-plz, release-please, git-cliff, changelog automation, or trunk-based release automation, or to adapt the release-kit convention to a project's technology. Triggers include release-kit, rk init, release setup, and release workflow setup.
 license: CC-BY-4.0
 compatibility: Requires the rk binary on PATH; install with cargo install release-kit or cargo binstall release-kit. Landing files into a target needs write access to that repository.
 ---
@@ -37,7 +37,7 @@ Land the release-kit convention in a project. The CLI carries the whole canon: e
 
 ## Verify
 
-The landed files hold the invariants of `rk method invariants`: exactly one workflow carries the OIDC permission and its filename is the one registered; the version file leads and no tag is hand-authored; the release branch is written by automation only; every artifact a consumer downloads is attested by the run that built it. The proof of the whole setup is one release cut end to end with `rk method operate`.
+The landed files hold the invariants of `rk method invariants`: exactly one workflow carries the OIDC permission and its filename is the one registered; the version file leads and no tag is hand-authored; the trunk is written through squash-merged pull requests only; every artifact a consumer downloads is attested by the run that built it. The proof of the whole setup is one release cut end to end with `rk method operate`.
 
 ## Defaults
 

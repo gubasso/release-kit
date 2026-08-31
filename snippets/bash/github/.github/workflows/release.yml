@@ -1,26 +1,28 @@
 # The whole release pipeline: there is no registry, so publishing is tagging
 # and the tarball attached to the release page is the distribution.
 #
-# On develop, the release-request job drives git-cliff to maintain the
-# version-bump pull request — VERSION plus the changelog — and the gate pull
-# request is opened once a version is pending; merging any of that publishes
-# nothing. On master, reached only through that gate, the release job tags the
-# merge commit, builds the tarball with make dist, and attaches it.
+# Both jobs run on every push to the trunk, and to a release/* line when a
+# project keeps older lines. The release-request job drives git-cliff to
+# maintain the one release pull request — VERSION plus the changelog — against
+# the pushed branch, and merging that request is the release: the bump push is
+# what makes tag-and-attach tag the commit, build the tarball with make dist,
+# and attach it. On a release/* line the same pair backports a patch and tags
+# it there.
 name: release
 
 permissions: {}
 
 on:
   push:
-    branches: [develop, master]
+    branches: [master, 'release/**']
 
 jobs:
   # The release request. git-cliff maintains no pull request on its own, so
   # this job computes the bump, rewrites VERSION and the changelog on a
   # request branch, and opens or refreshes the pull request. Force-pushing the
-  # branch is the refresh: the request always reflects develop's tip.
+  # branch is the refresh: the request always reflects the pushed branch's tip.
   release-request:
-    if: github.repository_owner == 'OWNER' && github.ref == 'refs/heads/develop'
+    if: github.repository_owner == 'OWNER'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -43,6 +45,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          REF: ${{ github.ref_name }}
         run: |
           set -eu
           current="$(cat VERSION)"
@@ -65,78 +68,19 @@ jobs:
           git add VERSION CHANGELOG.md
           git commit -m "chore(release): v$next"
           git push -f origin "$branch"
-          open="$(gh pr list --base develop --head "$branch" --state open --json number -q 'length')"
+          open="$(gh pr list --base "$REF" --head "$branch" --state open --json number -q 'length')"
           if [ "$open" -eq 0 ]; then
-            gh pr create --base develop --head "$branch" \
+            gh pr create --base "$REF" --head "$branch" \
               --title "chore(release): v$next" \
-              --body "Bumps VERSION to $next and rewrites the changelog. Merging publishes nothing; the gate pull request that follows is the release."
+              --body "Bumps VERSION to $next and rewrites the changelog. Merging this request is the release: the bump push tags v$next and attaches the tarball."
           fi
 
-  # The gate: once the release request has merged, develop carries a version
-  # no tag names yet, so this cuts release/v<version> at that commit and opens
-  # the pull request into master. The head is pinned to one commit, never
-  # develop; the guards are explained in the method's operate chapter.
-  open-release-gate:
-    if: github.repository_owner == 'OWNER' && github.ref == 'refs/heads/develop'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    concurrency:
-      group: open-release-gate
-      cancel-in-progress: false
-    steps:
-      - uses: actions/create-github-app-token@v3
-        id: app-token
-        with:
-          app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
-          private-key: ${{ secrets.RELEASE_BOT_APP_PRIVATE_KEY }}
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 2
-          persist-credentials: false
-      - name: open the release gate pull request
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          GH_REPO: ${{ github.repository }}
-          SHA: ${{ github.sha }}
-        run: |
-          set -eu
-          version="$(cat VERSION)"
-          previous="$(git show "$SHA^:VERSION" 2>/dev/null || echo "")"
-          if [ "$previous" = "$version" ]; then
-            echo "this commit does not bump the version; only the release commit cuts the gate."
-            exit 0
-          fi
-          if [ -n "$(git ls-remote --tags origin "refs/tags/v$version")" ]; then
-            echo "v$version is already tagged; no release is pending."
-            exit 0
-          fi
-          ahead="$(gh api "repos/$GH_REPO/compare/master...$SHA" -q '.ahead_by')"
-          if [ "$ahead" -eq 0 ]; then
-            echo "this commit is not ahead of master; nothing to gate."
-            exit 0
-          fi
-          branch="release/v$version"
-          if [ -n "$(git ls-remote --heads origin "refs/heads/$branch")" ]; then
-            echo "$branch already exists; leaving it pinned where it is."
-          else
-            gh api -X POST "repos/$GH_REPO/git/refs" \
-              -f "ref=refs/heads/$branch" -f "sha=$SHA" >/dev/null
-            echo "cut $branch at $SHA."
-          fi
-          open="$(gh pr list --base master --head "$branch" --state open --json number -q 'length')"
-          if [ "$open" -gt 0 ]; then
-            echo "the release gate pull request is already open."
-            exit 0
-          fi
-          gh pr create --base master --head "$branch" \
-            --title "release v$version" \
-            --body "Gates the release of v$version, pinned to $SHA. Merging tags that commit and attaches the tarball; merge it as a merge commit."
-
-  # The release itself: tag the gated merge, build the tarball as a pure
-  # function of the tree, and attach it with its checksum.
+  # The release itself. Only the push that lands the bot's own bump releases —
+  # the VERSION comparison against the parent commit is the guard — so an
+  # ordinary work merge tags nothing. Tag the bump commit, build the tarball
+  # as a pure function of the tree, and attach it with its checksum.
   tag-and-attach:
-    if: github.repository_owner == 'OWNER' && github.ref == 'refs/heads/master'
+    if: github.repository_owner == 'OWNER'
     runs-on: ubuntu-latest
     permissions:
       contents: read

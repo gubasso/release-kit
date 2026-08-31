@@ -2,9 +2,9 @@ name: ci
 
 on:
   push:
-    branches: [develop, master]
+    branches: [master, 'release/**']
   pull_request:
-    branches: [develop]
+    branches: [master, 'release/**']
 
 jobs:
   # The job name is the status-check context branch protection requires.
