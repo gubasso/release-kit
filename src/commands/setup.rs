@@ -552,8 +552,8 @@ fn execute(
         done.push((step.name.to_owned(), status.wire().to_owned()));
     }
     engine.out.result_line(format!(
-        "setup: {} steps completed against {}",
-        done.len(),
+        "setup: {} completed against {}",
+        step_count(done.len()),
         engine.ctx.repo
     ));
     for (name, status) in &done {
@@ -565,6 +565,12 @@ fn execute(
     ]);
     engine.finish(0, None);
     Ok(())
+}
+
+/// A step count rendered with the noun that agrees with it, so no summary
+/// line can regrow a dangling plural.
+fn step_count(count: usize) -> String {
+    format!("{count} {}", if count == 1 { "step" } else { "steps" })
 }
 
 fn elapsed_ms(clock: Instant) -> u64 {
@@ -990,8 +996,8 @@ fn attach_progress(
 ) -> RkError {
     let remaining = steps.len().saturating_sub(done.len() + 1);
     let state = format!(
-        "{} steps completed; {} failed; {remaining} not attempted",
-        done.len(),
+        "{} completed; {} failed; {remaining} not attempted",
+        step_count(done.len()),
         failed.name
     );
     match error {
@@ -1053,12 +1059,9 @@ fn check(out: Output, ctx: Ctx) -> Result<(), RkError> {
             Diagnostic::new(
                 Reason::StateDrift,
                 format!(
-                    "{unsatisfied} {} not satisfied and {unverifiable} could not be verified",
-                    if unsatisfied == 1 {
-                        "step is"
-                    } else {
-                        "steps are"
-                    }
+                    "{} {} not satisfied and {unverifiable} could not be verified",
+                    step_count(unsatisfied),
+                    if unsatisfied == 1 { "is" } else { "are" }
                 ),
             )
             .expected("every step's proof column to hold and to be readable")
@@ -1104,5 +1107,17 @@ fn guard_sh() -> Result<(), RkError> {
                 .action("install a POSIX shell, then rerun")
                 .target_state("nothing was run and nothing changed"),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Every summary line reports its count through one helper, so none of
+    /// them can regrow a dangling plural.
+    #[test]
+    fn a_step_count_carries_a_noun_that_agrees_with_it() {
+        assert_eq!(super::step_count(0), "0 steps");
+        assert_eq!(super::step_count(1), "1 step");
+        assert_eq!(super::step_count(2), "2 steps");
     }
 }
