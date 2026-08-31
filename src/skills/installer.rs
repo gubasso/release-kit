@@ -125,6 +125,34 @@ fn plan_shared(shared: &Utf8Path) -> Vec<Planned> {
         .collect()
 }
 
+/// Refuse a shared root reached through a symlink this installer would
+/// follow.
+///
+/// The chain from the state directory down to the shared root is this tool's
+/// own — nothing here ever creates a symlink in it, so one found there
+/// redirects every shared write and removal somewhere else, and
+/// [`check_destination`] cannot see it: the final component it checks is not
+/// itself a link. The directories above the state directory are the user's
+/// layout and stay unjudged.
+fn check_shared_root(shared: &Utf8Path, record: &Utf8Path) -> Result<(), RkError> {
+    let Some(state_dir) = record.parent() else {
+        return Ok(());
+    };
+    let mut current = Some(shared);
+    while let Some(dir) = current {
+        if !dir.starts_with(state_dir) {
+            break;
+        }
+        if dir.is_symlink() {
+            return Err(RkError::Refused(format!(
+                "the shared root is reached through a symlink, and nothing was written: {dir}"
+            )));
+        }
+        current = dir.parent();
+    }
+    Ok(())
+}
+
 /// Refuse a destination this installer must not write through or replace.
 ///
 /// A symlink is never followed: the payload would land wherever it points,
@@ -259,11 +287,13 @@ fn abort(unrestored: &[Utf8PathBuf], cause: &str) -> RkError {
 ///
 /// # Errors
 ///
-/// Returns [`RkError::Refused`] when a destination cannot be touched, when one
-/// holds bytes neither reference accounts for and `force` is unset, or when a
-/// write fails partway, in which case the destinations are restored first.
+/// Returns [`RkError::Refused`] when the shared root is reached through a
+/// symlink, when a destination cannot be touched, when one holds bytes neither
+/// reference accounts for and `force` is unset, or when a write fails partway,
+/// in which case the destinations are restored first.
 /// Returns [`RkError::Io`] when a destination exists but cannot be read.
 pub fn install(layout: &Layout, apply: bool, force: bool) -> Result<Vec<Action>, RkError> {
+    check_shared_root(&layout.shared, &layout.record)?;
     let record_path = layout.record.as_path();
     let skills = crate::skills::all()?;
     let mut planned = plan_roots(&layout.roots, &skills);
@@ -384,9 +414,11 @@ pub fn install(layout: &Layout, apply: bool, force: bool) -> Result<Vec<Action>,
 ///
 /// # Errors
 ///
-/// Returns [`RkError::Refused`] when a destination is a symlink or not a
-/// regular file, and [`RkError::Io`] when a removal fails.
+/// Returns [`RkError::Refused`] when the shared root is reached through a
+/// symlink, or when a destination is a symlink or not a regular file, and
+/// [`RkError::Io`] when a removal fails.
 pub fn uninstall(layout: &Layout, apply: bool) -> Result<Vec<Action>, RkError> {
+    check_shared_root(&layout.shared, &layout.record)?;
     let record_path = layout.record.as_path();
     let skills = crate::skills::all()?;
     let record_found = Record::load(record_path);
@@ -942,5 +974,41 @@ mod tests {
             !home.destination(".claude/skills", &first_skill()).exists(),
             "the refusal must come before the first write"
         );
+    }
+
+    /// A shared root reached through a symlinked directory refuses both verbs:
+    /// the write would land, and the removal would delete, wherever the link
+    /// points, and no per-destination check can see it.
+    #[test]
+    fn a_symlinked_shared_root_refuses_install_and_uninstall() {
+        for symlinked in ["skills", "skills/shared"] {
+            let home = Home::new();
+            let elsewhere = home.path().join("elsewhere");
+            std::fs::create_dir_all(&elsewhere).unwrap();
+            let state_dir = home.record().parent().unwrap().to_path_buf();
+            let linked = state_dir.join(symlinked);
+            std::fs::create_dir_all(linked.parent().unwrap()).unwrap();
+            std::os::unix::fs::symlink(&elsewhere, &linked).unwrap();
+
+            let message = install(&home.layout(), true, false)
+                .expect_err("a symlinked shared root refuses an install")
+                .to_string();
+            assert!(message.contains("symlink"), "{message}");
+            assert!(
+                !elsewhere.join("plan-gate.md").exists(),
+                "an install must never write through a symlinked shared root"
+            );
+            assert!(!home.path().join(".claude").exists());
+
+            std::fs::write(elsewhere.join("plan-gate.md"), "theirs\n").unwrap();
+            let message = uninstall(&home.layout(), true)
+                .expect_err("a symlinked shared root refuses an uninstall")
+                .to_string();
+            assert!(message.contains("symlink"), "{message}");
+            assert!(
+                elsewhere.join("plan-gate.md").exists(),
+                "an uninstall must never remove through a symlinked shared root"
+            );
+        }
     }
 }

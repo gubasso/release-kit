@@ -952,6 +952,35 @@ fn skill_install_refuses_a_symlinked_destination() {
     assert!(!home.path().join(".agents").exists());
 }
 
+#[cfg(unix)]
+#[test]
+fn skill_install_refuses_a_symlinked_shared_root() {
+    let home = Home::new();
+    let elsewhere = home.path().join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).expect("the outside directory creates");
+    let state_dir = home
+        .record()
+        .parent()
+        .expect("the record has a parent")
+        .to_path_buf();
+    std::fs::create_dir_all(&state_dir).expect("the state directory creates");
+    std::os::unix::fs::symlink(&elsewhere, state_dir.join("skills")).expect("the symlink creates");
+
+    home.rk()
+        .args(["skill", "install", "--apply", "--force"])
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("symlink"));
+    assert_eq!(
+        std::fs::read_dir(&elsewhere)
+            .expect("the symlink target survives")
+            .count(),
+        0,
+        "an install must never write through a symlinked shared root"
+    );
+    assert!(!home.path().join(".claude").exists());
+}
+
 #[test]
 fn skill_agent_flag_touches_one_root_only() {
     let home = Home::new();

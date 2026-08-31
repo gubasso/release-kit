@@ -19,7 +19,7 @@ Do this before the first change of any kind: a file landed in a target, a forge 
 4. Ask what the plan cannot decide. Use `AskUserQuestion` for a choice that changes the work — the technology binding, the forge, a version line. Do not use it to ask whether the plan is acceptable.
 5. Present the plan and end the turn. In Claude Code that is the `ExitPlanMode` tool, whose approval prompt is the gate. Do not pre-approve that tool: approving it automatically is the same as having no gate.
 
-When the request carries `--no-plan`, skip this phase's approval turn only. Still state the ordered plan in the reply before acting, and still run phases 2 and 3 in full.
+When the request carries `--no-plan`, replace this phase's approval turn: do not call `EnterPlanMode` or `ExitPlanMode`, because plan mode's read-only hold blocks phase 3 and only that approval prompt releases it. Do the same read-only research in the current turn, state the ordered plan in the reply, then continue into phase 2 without ending the turn. Phases 2 and 3 run in full.
 
 ## 2. Validate
 

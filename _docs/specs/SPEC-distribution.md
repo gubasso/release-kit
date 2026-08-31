@@ -214,13 +214,19 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `distribution:a-skill-destination-is-a-regular-file` — A skill destination is a regular file
 
-Where a destination is a symlink or is not a regular file, `rk skill install` and `rk skill uninstall` MUST refuse before writing or removing anything, whatever `--force` was given.
+Where a destination is a symlink, is not a regular file, or sits under a shared root reached through a symlinked directory, `rk skill install` and `rk skill uninstall` MUST refuse before writing or removing anything, whatever `--force` was given.
 
 #### Scenario: A destination is symlinked out of the home
 
 - GIVEN `~/.claude/skills/rk-release/SKILL.md` symlinked to a file elsewhere
 - WHEN `rk skill install --apply --force` runs
 - THEN it exits 73 naming the symlink, and the file it points at is unchanged
+
+#### Scenario: The shared root is reached through a symlinked directory
+
+- GIVEN `~/.local/state/release-kit/skills` symlinked to a directory elsewhere, so every shared destination under it resolves outside the home
+- WHEN `rk skill install --apply --force` runs
+- THEN it exits 73 naming the symlink, and the directory it points at is unchanged, because the destination check sees only the final component and cannot see the link above it
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 
