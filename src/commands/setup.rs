@@ -711,10 +711,42 @@ fn apply_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
         }
         "protections-check" => {
             let (outcome, _) = run_script(engine, step)?;
-            if outcome.success() {
-                Ok(Done::Passed("every owned protection holds".into()))
-            } else {
-                Err(classify_failure(engine, step, &outcome))
+            if !outcome.success() {
+                return Err(classify_failure(engine, step, &outcome));
+            }
+            // The script is the operator-auditable mirror; the observation
+            // is the authoritative shape check, so the step passes only
+            // when both agree.
+            match observe_with(engine, step.name)? {
+                StepState::Satisfied { detail, limitation } => {
+                    Ok(Done::Passed(limitation.map_or_else(
+                        || detail.clone(),
+                        |limit| format!("{detail} (limitation: {limit})"),
+                    )))
+                }
+                StepState::Unsatisfied { detail } | StepState::Inapplicable { detail } => {
+                    Err(RkError::refusal(
+                        Diagnostic::new(
+                            Reason::StateDrift,
+                            format!("protections-check passed its script and the observation disagrees: {detail}"),
+                        )
+                        .expected(step.proves.to_owned())
+                        .step(step.name),
+                    ))
+                }
+                // An unreadable readback is a retryable outage, not drift,
+                // exactly as the postcondition lifecycle classifies it.
+                StepState::Unknown { detail } => Err(RkError::refusal(
+                    Diagnostic::new(
+                        Reason::ForgeTemporary,
+                        format!(
+                            "protections-check passed its script and the readback could not confirm it: {detail}"
+                        ),
+                    )
+                    .expected(step.proves.to_owned())
+                    .action("check authentication and connectivity, then rerun")
+                    .step(step.name),
+                )),
             }
         }
         _ => {

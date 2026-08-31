@@ -373,42 +373,74 @@ fn github(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
             },
         ),
         "protect-trunk" => github_trunk_ruleset(ctx, run),
-        "protect-tags" => github_ruleset(ctx, run, "release-tags", &["deletion", "update"]),
+        "protect-tags" => github_ruleset(
+            ctx,
+            run,
+            "release-tags",
+            "tag",
+            "refs/tags/v*",
+            &["deletion", "update"],
+        ),
         "protect-release-lines" => {
-            if github_ruleset_body(ctx, run, "release-lines")?.is_none() {
-                return Ok(StepState::inapplicable(
-                    "release/* is unprotected; optional — applied only where older lines exist",
-                ));
+            match github_ruleset_body(ctx, run, "release-lines")? {
+                RulesetLookup::Absent => {
+                    return Ok(StepState::inapplicable(
+                        "release/* is unprotected; optional — applied only where older lines exist",
+                    ));
+                }
+                RulesetLookup::Unreadable(err) => return Ok(StepState::unknown(err)),
+                RulesetLookup::Found(_) => {}
             }
-            github_ruleset(ctx, run, "release-lines", &["deletion", "non_fast_forward"])
+            github_ruleset(
+                ctx,
+                run,
+                "release-lines",
+                "branch",
+                "refs/heads/release/*",
+                &["deletion", "non_fast_forward"],
+            )
         }
         "protections-check" => {
+            // Confirmed drift and unreadable answers stay apart: a proven
+            // mismatch is drift even beside an outage, and an outage with
+            // nothing proven wrong stays unknown, never drift.
             let mut failures = Vec::new();
+            let mut unknowns = Vec::new();
             for owned in ["protect-trunk", "protect-tags", "protect-release-lines"] {
                 match github(ctx, owned, run)? {
                     StepState::Satisfied { .. } | StepState::Inapplicable { .. } => {}
-                    StepState::Unsatisfied { detail } | StepState::Unknown { detail } => {
+                    StepState::Unsatisfied { detail } => {
                         failures.push(format!("{owned}: {detail}"));
                     }
-                }
-            }
-            if let Api::Ok(body) = api_get(ctx, run, &format!("repos/{repo}/rulesets"))? {
-                let owned = [
-                    format!("{TRUNK_BRANCH}-protection"),
-                    "release-tags".to_owned(),
-                    "release-lines".to_owned(),
-                ];
-                for ruleset in body.as_array().into_iter().flatten() {
-                    let name = ruleset["name"].as_str().unwrap_or("");
-                    if !owned.iter().any(|expected| expected == name) {
-                        failures.push(format!("a ruleset no step owns: {name}"));
+                    StepState::Unknown { detail } => {
+                        unknowns.push(format!("{owned}: {detail}"));
                     }
                 }
             }
-            Ok(if failures.is_empty() {
-                StepState::ok("exactly the owned protections, with those rules")
-            } else {
+            match api_get(ctx, run, &format!("repos/{repo}/rulesets"))? {
+                Api::Ok(body) => {
+                    let owned = [
+                        format!("{TRUNK_BRANCH}-protection"),
+                        "release-tags".to_owned(),
+                        "release-lines".to_owned(),
+                    ];
+                    for ruleset in body.as_array().into_iter().flatten() {
+                        let name = ruleset["name"].as_str().unwrap_or("");
+                        if !owned.iter().any(|expected| expected == name) {
+                            failures.push(format!("a ruleset no step owns: {name}"));
+                        }
+                    }
+                }
+                Api::Missing | Api::Failed(_) => {
+                    unknowns.push("the ruleset inventory is not readable".to_owned());
+                }
+            }
+            Ok(if !failures.is_empty() {
                 StepState::not(failures.join("; "))
+            } else if !unknowns.is_empty() {
+                StepState::unknown(unknowns.join("; "))
+            } else {
+                StepState::ok("exactly the owned protections, with those rules")
             })
         }
         _ => Ok(StepState::unknown(format!("no observation for {step}"))),
@@ -467,13 +499,36 @@ fn github_ruleset(
     ctx: &Ctx,
     run: &mut Runner,
     name: &str,
+    target: &str,
+    include: &str,
     rules: &[&str],
 ) -> Result<StepState, RkError> {
-    let Some(detail) = github_ruleset_body(ctx, run, name)? else {
-        return Ok(StepState::not(format!("no ruleset named {name}")));
+    let detail = match github_ruleset_body(ctx, run, name)? {
+        RulesetLookup::Found(detail) => detail,
+        RulesetLookup::Absent => {
+            return Ok(StepState::not(format!("no ruleset named {name}")));
+        }
+        RulesetLookup::Unreadable(err) => return Ok(StepState::unknown(err)),
     };
     if detail["enforcement"] != "active" {
         return Ok(StepState::not(format!("{name} is not active")));
+    }
+    // The name proves nothing: the ruleset must cover exactly the declared
+    // refs, or the protection it reports exists somewhere else.
+    if detail["target"] != target {
+        return Ok(StepState::not(format!(
+            "{name} does not target {target} refs"
+        )));
+    }
+    if detail["conditions"]["ref_name"]["include"] != serde_json::json!([include]) {
+        return Ok(StepState::not(format!(
+            "{name} does not cover {include} alone"
+        )));
+    }
+    if detail["conditions"]["ref_name"]["exclude"] != serde_json::json!([]) {
+        return Ok(StepState::not(format!(
+            "{name} excludes refs from its own coverage"
+        )));
     }
     let mut held: Vec<&str> = detail["rules"]
         .as_array()
@@ -502,14 +557,35 @@ fn github_ruleset(
 /// The trunk ruleset, checked for the shape a release merge needs.
 fn github_trunk_ruleset(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkError> {
     let name = format!("{TRUNK_BRANCH}-protection");
-    let Some(detail) = github_ruleset_body(ctx, run, &name)? else {
-        return Ok(StepState::not(format!("no ruleset named {name}")));
+    let detail = match github_ruleset_body(ctx, run, &name)? {
+        RulesetLookup::Found(detail) => detail,
+        RulesetLookup::Absent => {
+            return Ok(StepState::not(format!("no ruleset named {name}")));
+        }
+        RulesetLookup::Unreadable(err) => return Ok(StepState::unknown(err)),
     };
     let rules = detail["rules"].as_array().cloned().unwrap_or_default();
     let has = |kind: &str| rules.iter().any(|rule| rule["type"] == kind);
     let mut faults = Vec::new();
     if detail["enforcement"] != "active" {
         faults.push(format!("{name} is not active"));
+    }
+    // The name proves nothing: a ruleset applies only where its conditions
+    // say, so a right-named ruleset covering another ref would otherwise
+    // read as a protected trunk.
+    if detail["target"] != "branch" {
+        faults.push(format!("{name} does not target branches"));
+    }
+    let expected_ref = serde_json::json!([format!("refs/heads/{TRUNK_BRANCH}")]);
+    if detail["conditions"]["ref_name"]["include"] != expected_ref {
+        faults.push(format!(
+            "{name} does not cover refs/heads/{TRUNK_BRANCH} alone"
+        ));
+    }
+    // A matching exclusion negates the include, so the owned shape is an
+    // exclusion list that is exactly empty.
+    if detail["conditions"]["ref_name"]["exclude"] != serde_json::json!([]) {
+        faults.push(format!("{name} excludes refs from its own coverage"));
     }
     if !detail["bypass_actors"].as_array().is_none_or(Vec::is_empty) {
         faults.push("a bypass actor is named".to_owned());
@@ -572,11 +648,31 @@ fn github_trunk_ruleset(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkErro
     })
 }
 
-/// A ruleset's detail body by name, or `None` when no ruleset carries it.
-fn github_ruleset_body(ctx: &Ctx, run: &mut Runner, name: &str) -> Result<Option<Value>, RkError> {
+/// One ruleset lookup by name: found, provably absent, or unreadable —
+/// an unreadable inventory must never read as an absent ruleset.
+enum RulesetLookup {
+    /// The ruleset exists; its detail body.
+    Found(Value),
+    /// The inventory was read successfully and no ruleset carries the
+    /// name.
+    Absent,
+    /// The inventory or the detail could not be read.
+    Unreadable(String),
+}
+
+/// A ruleset's detail body by name.
+fn github_ruleset_body(ctx: &Ctx, run: &mut Runner, name: &str) -> Result<RulesetLookup, RkError> {
+    // A 404 on the collection is an unreachable inventory — a missing
+    // repository or an unauthorized read — never an empty one: an empty
+    // inventory answers 200 with an empty list.
     let list = match api_get(ctx, run, &format!("repos/{}/rulesets", ctx.repo))? {
         Api::Ok(body) => body,
-        Api::Missing | Api::Failed(_) => return Ok(None),
+        Api::Missing => {
+            return Ok(RulesetLookup::Unreadable(
+                "the ruleset inventory is not readable".into(),
+            ));
+        }
+        Api::Failed(err) => return Ok(RulesetLookup::Unreadable(err)),
     };
     let id = list
         .as_array()
@@ -584,10 +680,18 @@ fn github_ruleset_body(ctx: &Ctx, run: &mut Runner, name: &str) -> Result<Option
         .flatten()
         .find(|ruleset| ruleset["name"] == name)
         .and_then(|ruleset| ruleset["id"].as_i64());
-    let Some(id) = id else { return Ok(None) };
+    let Some(id) = id else {
+        return Ok(RulesetLookup::Absent);
+    };
     match api_get(ctx, run, &format!("repos/{}/rulesets/{id}", ctx.repo))? {
-        Api::Ok(body) => Ok(Some(body)),
-        Api::Missing | Api::Failed(_) => Ok(None),
+        Api::Ok(body) => Ok(RulesetLookup::Found(body)),
+        // A listed id that answers 404 is not proof of absence either — the
+        // forge also answers 404 for an unauthorized read — so a rerun
+        // decides, rather than a false drift.
+        Api::Missing => Ok(RulesetLookup::Unreadable(format!(
+            "the {name} detail is not readable"
+        ))),
+        Api::Failed(err) => Ok(RulesetLookup::Unreadable(err)),
     }
 }
 
@@ -732,6 +836,14 @@ fn gitlab(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
                 .cloned()
                 .unwrap_or_default();
             let no_push = grants.len() == 1 && grants[0]["access_level"] == 0;
+            // The merge grant is owned exactly too: a merge level of 0 keeps
+            // every release request unmergeable while the push shape reads
+            // clean, so both halves are checked.
+            let merges = protection["merge_access_levels"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            let can_merge = merges.len() == 1 && merges[0]["access_level"] == 40;
             let settings = match api_get(ctx, run, &format!("projects/{project}"))? {
                 Api::Ok(body) => body,
                 Api::Missing | Api::Failed(_) => Value::Null,
@@ -741,6 +853,11 @@ fn gitlab(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
                 faults.push(format!(
                     "{TRUNK_BRANCH} still takes a direct push: the forge honors the most permissive of {} push grants",
                     grants.len()
+                ));
+            }
+            if !can_merge {
+                faults.push(format!(
+                    "{TRUNK_BRANCH} merge grants are not exactly the one owned maintainer level"
                 ));
             }
             if protection["allow_force_push"] != false {
@@ -777,10 +894,24 @@ fn gitlab(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
                 &format!("projects/{project}/protected_branches/release%2F%2A"),
             )? {
                 Api::Ok(body) => {
-                    if body["allow_force_push"] == false {
-                        StepState::ok("release/* refuses force pushes and deletion by git clients")
-                    } else {
+                    let level_ok = |levels: &Value| {
+                        levels
+                            .as_array()
+                            .is_some_and(|list| list.len() == 1 && list[0]["access_level"] == 40)
+                    };
+                    if body["allow_force_push"] != false {
                         StepState::not("release/* allows force pushes")
+                    } else if !level_ok(&body["push_access_levels"])
+                        || !level_ok(&body["merge_access_levels"])
+                    {
+                        // A push level of 0 blocks the documented
+                        // cherry-pick-by-push path while force-push reads
+                        // clean, so the grant shape is owned exactly.
+                        StepState::not(
+                            "release/* grants are not exactly the owned maintainer levels",
+                        )
+                    } else {
+                        StepState::ok("release/* refuses force pushes and deletion by git clients")
                     }
                 }
                 Api::Missing => StepState::inapplicable(
@@ -790,7 +921,10 @@ fn gitlab(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
             },
         ),
         "protections-check" => {
+            // Same separation as the sibling forge: proven drift wins,
+            // an outage with nothing proven wrong stays unknown.
             let mut failures = Vec::new();
+            let mut unknowns = Vec::new();
             let mut limitation = None;
             for owned in ["protect-trunk", "protect-tags", "protect-release-lines"] {
                 match gitlab(ctx, owned, run)? {
@@ -798,18 +932,23 @@ fn gitlab(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
                         limitation: found, ..
                     } => limitation = limitation.or(found),
                     StepState::Inapplicable { .. } => {}
-                    StepState::Unsatisfied { detail } | StepState::Unknown { detail } => {
+                    StepState::Unsatisfied { detail } => {
                         failures.push(format!("{owned}: {detail}"));
+                    }
+                    StepState::Unknown { detail } => {
+                        unknowns.push(format!("{owned}: {detail}"));
                     }
                 }
             }
-            Ok(if failures.is_empty() {
+            Ok(if !failures.is_empty() {
+                StepState::not(failures.join("; "))
+            } else if !unknowns.is_empty() {
+                StepState::unknown(unknowns.join("; "))
+            } else {
                 StepState::Satisfied {
                     detail: "the protections hold, as far as this forge enforces them".into(),
                     limitation,
                 }
-            } else {
-                StepState::not(failures.join("; "))
             })
         }
         _ => Ok(StepState::unknown(format!("no observation for {step}"))),

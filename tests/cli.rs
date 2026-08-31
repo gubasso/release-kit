@@ -2545,6 +2545,200 @@ fn a_protection_step_refuses_before_the_trunk_is_the_default() {
     );
 }
 
+/// A right-named ruleset proves nothing on its own: one covering another
+/// ref reads as drift, not as a protected trunk.
+#[test]
+fn check_reports_a_ruleset_covering_the_wrong_ref() {
+    let fixture = ForgeFixture::new();
+    fixture.seed("default_branch", "master");
+    fixture.seed("rulesets.index", "master-protection\n");
+    fixture.seed(
+        "ruleset_master-protection",
+        r#"{
+  "name": "master-protection",
+  "target": "branch",
+  "enforcement": "active",
+  "bypass_actors": [],
+  "conditions": {
+    "ref_name": { "include": ["refs/heads/other"], "exclude": [] }
+  },
+  "rules": [
+    { "type": "deletion" },
+    { "type": "non_fast_forward" },
+    {
+      "type": "pull_request",
+      "parameters": { "required_approving_review_count": 0, "allowed_merge_methods": ["squash"] }
+    },
+    {
+      "type": "required_status_checks",
+      "parameters": { "required_status_checks": [{ "context": "test" }] }
+    }
+  ]
+}"#,
+    );
+    let out = fixture
+        .rk(&["setup", "check"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8_lossy(&out);
+    assert!(
+        text.contains("unsatisfied protect-trunk") && text.contains("refs/heads/master"),
+        "a ruleset covering the wrong ref must read as drift: {text}"
+    );
+
+    // A matching exclusion negates a canonical include the same way.
+    fixture.seed(
+        "ruleset_master-protection",
+        r#"{
+  "name": "master-protection",
+  "target": "branch",
+  "enforcement": "active",
+  "bypass_actors": [],
+  "conditions": {
+    "ref_name": { "include": ["refs/heads/master"], "exclude": ["refs/heads/master"] }
+  },
+  "rules": [
+    { "type": "deletion" },
+    { "type": "non_fast_forward" },
+    {
+      "type": "pull_request",
+      "parameters": { "required_approving_review_count": 0, "allowed_merge_methods": ["squash"] }
+    },
+    {
+      "type": "required_status_checks",
+      "parameters": { "required_status_checks": [{ "context": "test" }] }
+    }
+  ]
+}"#,
+    );
+    let out = fixture
+        .rk(&["setup", "check"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8_lossy(&out);
+    assert!(
+        text.contains("unsatisfied protect-trunk") && text.contains("excludes refs"),
+        "a self-negating exclusion must read as drift: {text}"
+    );
+}
+
+/// The executable protections-check passes only when the script and the
+/// authoritative observation agree: a right-named ruleset covering the
+/// wrong ref fails the step even though the script's own checks pass.
+#[test]
+fn protections_check_apply_reads_back_through_the_observation() {
+    let fixture = ForgeFixture::new();
+    fixture.seed("default_branch", "master");
+    fixture.seed("rulesets.index", "master-protection\nrelease-tags\n");
+    fixture.seed(
+        "ruleset_master-protection",
+        r#"{
+  "name": "master-protection",
+  "target": "branch",
+  "enforcement": "active",
+  "bypass_actors": [],
+  "conditions": {
+    "ref_name": { "include": ["refs/heads/other"], "exclude": [] }
+  },
+  "rules": [
+    { "type": "deletion" },
+    { "type": "non_fast_forward" },
+    {
+      "type": "pull_request",
+      "parameters": { "required_approving_review_count": 0, "allowed_merge_methods": ["squash"] }
+    },
+    {
+      "type": "required_status_checks",
+      "parameters": { "required_status_checks": [{ "context": "test" }] }
+    }
+  ]
+}"#,
+    );
+    fixture.seed(
+        "ruleset_release-tags",
+        r#"{
+  "name": "release-tags",
+  "target": "tag",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": { "include": ["refs/tags/v*"], "exclude": [] }
+  },
+  "rules": [
+    { "type": "deletion" },
+    { "type": "update" }
+  ]
+}"#,
+    );
+    fixture
+        .rk(&["setup", "step", "protections-check", "--apply"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("the observation disagrees"));
+}
+
+/// An unreadable ruleset inventory stays unknown, never drift: nothing was
+/// proven wrong, so the check refuses to claim either state.
+#[test]
+fn check_reports_an_unreadable_ruleset_inventory_as_unknown() {
+    let fixture = ForgeFixture::new();
+    fixture.replace_gh(
+        "#!/bin/sh\ncase \"$*\" in\n*rulesets*) echo 'gh: Internal Server Error (HTTP 500)' >&2; exit 1;;\nesac\ncase \"$1\" in\nrepo) printf 'master\\n';;\napi)\n  case \"$*\" in\n  *'repos/acme/widget'*) printf '{\"id\":1,\"default_branch\":\"master\"}\\n';;\n  *) printf '{}\\n';;\n  esac;;\nesac\nexit 0\n",
+    );
+    let out = fixture
+        .rk(&["setup", "check"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8_lossy(&out);
+    assert!(
+        text.contains("unknown protect-trunk"),
+        "an unreadable inventory must stay unknown: {text}"
+    );
+    assert!(
+        text.contains("unknown protections-check"),
+        "the aggregate must not convert an outage into drift: {text}"
+    );
+}
+
+/// A 404 on the ruleset inventory is an unreachable inventory, not an
+/// empty one: nothing reads as absent, and nothing reads as drift.
+#[test]
+fn check_reports_a_missing_ruleset_inventory_as_unknown() {
+    let fixture = ForgeFixture::new();
+    fixture.replace_gh(
+        "#!/bin/sh\ncase \"$*\" in\n*rulesets*) echo 'gh: Not Found (HTTP 404)' >&2; exit 1;;\nesac\ncase \"$1\" in\nrepo) printf 'master\\n';;\napi)\n  case \"$*\" in\n  *'repos/acme/widget'*) printf '{\"id\":1,\"default_branch\":\"master\"}\\n';;\n  *) printf '{}\\n';;\n  esac;;\nesac\nexit 0\n",
+    );
+    let out = fixture
+        .rk(&["setup", "check"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8_lossy(&out);
+    assert!(
+        text.contains("unknown protect-trunk"),
+        "a 404 inventory must stay unknown, not read as absent: {text}"
+    );
+    assert!(
+        text.contains("unknown protections-check"),
+        "the aggregate must not convert a 404 inventory into drift: {text}"
+    );
+}
+
 /// single-trunk refuses when a candidate is not an ancestor of the trunk,
 /// and every candidate survives the refusal: the guard is all-or-nothing.
 #[test]
