@@ -1940,13 +1940,15 @@ fn scan_for_tokens(path: &Path, deny: &[String], offenders: &mut Vec<String>) {
 
 /// The shipped payload carries no trace of the retired branch model: no
 /// second long-lived branch as a word, no back-merge, and no gate job — the
-/// mechanical half of the cleanup promise. The single-trunk scripts are the
-/// one exemption: their candidate list legitimately names the branches they
-/// retire. The tokens are assembled at run time so this file cannot trip
-/// its own scan.
+/// mechanical half of the cleanup promise. Two exemptions: the single-trunk
+/// scripts, whose candidate list legitimately names the branches they
+/// retire, and the forge subcommand that generates a branch from an issue,
+/// whose name collides with the retired branch's without meaning it. The
+/// tokens are assembled at run time so this file cannot trip its own scan.
 #[test]
 fn the_payload_carries_no_retired_branch_model() {
     let branch = format!("dev{}", "elop");
+    let issue_subcommand = format!("issue dev{}", "elop");
     let substrings = [
         format!("back{}merge", "-"),
         format!("open-release{}gate", "-"),
@@ -1975,8 +1977,9 @@ fn the_payload_carries_no_retired_branch_model() {
             let exempt =
                 path.ends_with("github/single-trunk") || path.ends_with("gitlab/single-trunk");
             for (idx, line) in text.lines().enumerate() {
+                let linked = line.contains(issue_subcommand.as_str());
                 let stale = substrings.iter().any(|token| line.contains(token.as_str()))
-                    || (!exempt && word_hit(line));
+                    || (!exempt && !linked && word_hit(line));
                 if stale {
                     offenders.push(format!("{}:{}", path.display(), idx + 1));
                 }

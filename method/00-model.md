@@ -18,6 +18,15 @@ Five stages. No technology changes them.
 
 The trunk is always releasable. Unfinished work still lands, dark: a feature flag keeps incomplete code out of every execution path, and a refactor too large to flag proceeds by branch by abstraction. What looks like a need for a second long-lived branch is one of three needs with better answers: staging unfinished work is flags, a stabilization period is a just-in-time release branch, and a place to integrate before production is an environment. Branches isolate code; environments isolate deployment.
 
+## The short-lived branch
+
+The branch dies at the squash merge and its name never enters history, so the name has one job: routing while the branch is alive — telling a reviewer what the work is, and telling an issue or a ticket which branch serves it. Two forms do that job, and they compose.
+
+- The type prefix, `<type>/<slug>`, with the type mirroring the Conventional Commit type the squash title will carry: `feat/oauth-login`, `fix/empty-csv-upload`.
+- The issue-linked name, `<issue-id>-<slug>`, the shape both supported forges mint when they generate the branch from an issue. Prefer letting the forge mint it — one command links the branch, its pull request, and the issue's closing, and the forge document carries that command.
+
+A tracker outside the forge, Jira being the common case, matches its issue keys anywhere in a branch name, so its key rides inside either form: `fix/PROJ-412-empty-csv`. Whichever form a project picks, the branch name binds nothing downstream: the squash title, not the branch name, is what the bot and the history read.
+
 ## The one pull request
 
 The bot's release request is the gate. Nothing is public until its one reviewed merge: the changelog entry can still be corrected on the request's branch while it is open, merging it is what the tag, the publish, and the artifact build key on, and a release abandoned before the merge is a closed pull request with nothing to clean up.

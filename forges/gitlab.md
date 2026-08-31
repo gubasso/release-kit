@@ -8,6 +8,7 @@ How this forge answers the method's fifth axis. The CLI is `glab`, and `rk setup
 - The gate is the release request's own merge, enforced by the project setting `only_allow_merge_if_pipeline_succeeds`. That is real enforcement — a Maintainer cannot merge past a failing pipeline — with a different shape: it is project-wide rather than branch-targeted, it requires the whole pipeline rather than a named job, and it blocks a merge when there is no pipeline at all. There is no check name to register and nothing for one to point at.
 - Linear trunk history is the project setting `merge_method=ff` plus squash on every merge request: the forge that can fast-forward, does, so the trunk takes no merge commits.
 - Protections are protected branches and protected tags. A protected branch updates in place through `PATCH /projects/:id/protected_branches/:name`; protected tags expose no update endpoint, so a change is delete-then-create and a rerun is briefly not atomic.
+- The issue link is a name match: a branch named `<issue>-<slug>` — the shape the forge mints from an issue — cross-links, and the merge request opened from it carries `Closes #<issue>` by default. `glab mr create --related-issue <issue> --create-source-branch` creates the branch and that merge request in one move.
 - The bot identity is a project access token: creating the token also creates its bot user, in one API call. A push authenticated with the default CI job token starts no pipeline, which is why the token exists at all.
 
 ## Bootstrap
@@ -29,6 +30,7 @@ Rotation is two commands: create a replacement token through the same step once 
 | Merge the release request         | `glab mr merge --squash --remove-source-branch`                        |
 | Wait on checks                    | `glab ci status --wait`                                                |
 | Wait on a build                   | `glab ci status --wait`                                                |
+| Create the branch for an issue    | `glab mr create --related-issue <issue> --create-source-branch`        |
 | Protect a branch                  | `POST /projects/:id/protected_branches`, `PATCH` to update             |
 | Require the trunk's checks        | `PUT /projects/:id` with `only_allow_merge_if_pipeline_succeeds`       |
 | Set the merge method              | `PUT /projects/:id` with `merge_method=ff`                             |

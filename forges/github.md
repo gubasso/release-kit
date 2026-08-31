@@ -7,6 +7,7 @@ How this forge answers the method's fifth axis. The CLI is `gh`, and `rk setup` 
 - The release request is a pull request against the trunk — the default branch, which the bot targets with no configuration. While only its own commits sit on the request's branch the bot refreshes it by force-push; once a human commit lands there, the next refresh closes the request and opens a fresh one, taking the commit with it, which is why a changelog correction is the last act before merging.
 - The gate is the release request's own merge, enforced by the trunk's ruleset: no direct push, squash as the only merge method, and a required status check matched by name against the CI job the project's own workflow reports.
 - Protections are rulesets, one per target: the trunk, the `v*` tags, and — where a project keeps older lines — the `release/*` branches. A ruleset has separate create and update endpoints, so a rerun resolves the ruleset id and updates in place.
+- The issue link is an explicit relation, not a name match: `gh issue develop <issue> --checkout` generates the branch from the issue — named `<issue>-<slug>` — and records the link, so the pull request from that branch attaches to the issue and merging it closes the issue. A branch named by hand links only through a closing keyword, `Closes #<issue>` in the pull request body.
 - The bot identity is a GitHub App installed on the repository. Its token is what makes a tag push start workflows; a tag pushed with the default CI token starts nothing.
 
 ## Bootstrap
@@ -34,6 +35,8 @@ One caveat holds for `install-bot`: the grant endpoint is documented to work onl
 | List open release requests        | `gh pr list --base <branch> --state open`                     |
 | Merge the release request         | `gh pr merge --squash --delete-branch`                        |
 | Wait on checks                    | `gh pr checks --watch`                                        |
+| Create the branch for an issue    | `gh issue develop <issue> --checkout`                         |
+| List the branches an issue links  | `gh issue develop --list <issue>`                             |
 | Wait on a build                   | `gh run watch --exit-status`                                  |
 | Protect a branch                  | rulesets: `POST` or `PUT /repos/{owner}/{repo}/rulesets`      |
 | Require the trunk's checks        | a ruleset rule naming a status-check context                  |
