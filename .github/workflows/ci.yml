@@ -14,4 +14,17 @@ jobs:
       - uses: actions/checkout@v4
       - uses: DeterminateSystems/nix-installer-action@v19
       - uses: DeterminateSystems/magic-nix-cache-action@v13
+      # sdd is this repository's docs gate and is not in the nix shell. The
+      # instance runs gates newer than the last published sdd release, so the
+      # pin is the exact source revision this instance was verified against;
+      # move it to the release binary once that sdd version ships. nix
+      # develop keeps the caller's PATH, so the hook environment finds it.
+      - name: install sdd
+        run: |
+          set -eu
+          nix develop --command cargo install spec-driven-docs --locked \
+            --git https://github.com/gubasso/spec-driven-docs \
+            --rev 438e7541f767461d1a9d1ead8dfbbab0cbb0c78f \
+            --root "$HOME/.local"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - run: nix develop --command just check
