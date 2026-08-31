@@ -12,6 +12,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Instant;
 
+use zeroize::Zeroizing;
+
 use crate::cli::setup::{SetupAction, SetupArgs};
 use crate::detect::Forge;
 use crate::diagnostic::{Diagnostic, Reason};
@@ -24,6 +26,7 @@ use crate::setup::context::{Ctx, SECRET_VARS};
 use crate::setup::journal::Journal;
 use crate::setup::observe::{self, StepState};
 use crate::setup::process::{self, Exec, Outcome};
+use crate::setup::secrets;
 use crate::setup::steps::{Mutates, STEPS, StepSpec, spec};
 
 /// Dispatch the setup surface.
@@ -207,7 +210,7 @@ struct Engine {
     out: Output,
     ctx: Ctx,
     journal: Option<Journal>,
-    secrets: Vec<Vec<u8>>,
+    secrets: Vec<Zeroizing<Vec<u8>>>,
     seq: u64,
     command: &'static str,
     run_id: String,
@@ -224,6 +227,9 @@ impl Engine {
         command: &'static str,
         journal_required: bool,
     ) -> Result<Self, RkError> {
+        // A stale key export is refused wherever a run opens, so every
+        // mode catches it and not the one step that would have used it.
+        secrets::refuse_legacy_key()?;
         let journal =
             match Journal::create(command, ctx.target.as_str(), ctx.forge.as_str(), &ctx.repo) {
                 Ok(journal) => Some(journal),
@@ -398,6 +404,12 @@ fn preview(out: Output, ctx: &Ctx, steps: &[&StepSpec]) -> Result<(), RkError> {
             step.name,
             step.proves
         ));
+        // Preview is the rehearsal of apply, so a credential apply could
+        // not use is a preview failure: the operator learns it here rather
+        // than one flag later, and before an invocation is claimed.
+        if step.name == "bot-secrets" && engine.ctx.forge == Forge::Github {
+            secrets::resolve_key_file(&engine.ctx.target)?;
+        }
         out.result_line(format!("  {}", render_invocation(&engine.ctx, step)));
         if step.name == "protect-trunk"
             && engine.ctx.forge == Forge::Github
@@ -673,9 +685,21 @@ fn apply_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
             run_forge_step(engine, step)
         }
         "bot-secrets" => {
-            let provided = SECRET_VARS
-                .iter()
-                .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()));
+            // Validate before observing: a wrong path or a wrong mode is
+            // the operator's answer either way, and the refusal costs no
+            // forge call. Only GitHub reads a key file; GitLab's credential
+            // is a token, and its step must not fail over a variable it
+            // never consumes.
+            let key = match engine.ctx.forge {
+                Forge::Github => secrets::resolve_key_file(&engine.ctx.target)?,
+                Forge::Gitlab => None,
+            };
+            let provided = match engine.ctx.forge {
+                // Both halves of an App identity, or neither: a run holding
+                // only one of them would store half a credential.
+                Forge::Github => secrets::value_of("RK_BOT_APP_ID").is_some() && key.is_some(),
+                Forge::Gitlab => secrets::value_of("RK_BOT_TOKEN").is_some(),
+            };
             let state = observe_with(engine, step.name)?;
             if !provided {
                 if state.satisfied() {
@@ -683,7 +707,7 @@ fn apply_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
                 }
                 let wanted = match engine.ctx.forge {
                     Forge::Github => {
-                        "export RK_BOT_APP_ID and RK_BOT_PRIVATE_KEY; rk forge github carries the walkthrough"
+                        "export RK_BOT_APP_ID and RK_BOT_PRIVATE_KEY_FILE, the second naming the .pem; rk forge github carries the walkthrough"
                     }
                     Forge::Gitlab => {
                         "rk setup step install-bot --apply stores the token, or export RK_BOT_TOKEN to rotate one"
@@ -694,20 +718,29 @@ fn apply_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
                         Reason::PrerequisiteUnmet,
                         "bot-secrets has no credentials to store",
                     )
-                    .expected("the bot credentials in the environment")
+                    .expected("the bot credentials in the environment, the key as a path")
                     .action(wanted.to_owned())
                     .step(step.name),
                 ));
             }
             if let Some(journal) = &mut engine.journal {
                 for name in SECRET_VARS {
-                    let present = std::env::var_os(name).is_some_and(|value| !value.is_empty());
-                    if present {
-                        journal.record_secret(name, true);
+                    if secrets::value_of(name).is_some() {
+                        journal.record_secret(name, true, "environment");
                     }
                 }
+                if key.is_some() {
+                    journal.record_secret(secrets::PRIVATE_KEY_FILE, true, "file");
+                }
             }
-            run_forge_step(engine, step)
+            // The bytes rk validated are the bytes the child receives and
+            // the bytes the redactor holds: one read, one value, so nothing
+            // can be substituted between the check and the forge.
+            let stdin = key.map(|key| {
+                engine.secrets.push(key.bytes.clone());
+                key.bytes
+            });
+            run_forge_step_with(engine, step, stdin)
         }
         "protections-check" => {
             let (outcome, _) = run_script(engine, step)?;
@@ -780,7 +813,16 @@ fn apply_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
 
 /// Materialize, spawn, classify, and verify one forge-mutating step.
 fn run_forge_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
-    let (outcome, _) = run_script(engine, step)?;
+    run_forge_step_with(engine, step, None)
+}
+
+/// The same, with bytes written to the step's standard input.
+fn run_forge_step_with(
+    engine: &mut Engine,
+    step: &StepSpec,
+    stdin: Option<Zeroizing<Vec<u8>>>,
+) -> Result<Done, RkError> {
+    let (outcome, _) = run_script_with(engine, step, stdin)?;
     if !outcome.success() {
         return Err(classify_failure(engine, step, &outcome));
     }
@@ -840,6 +882,19 @@ fn state_detail(state: &StepState) -> String {
 /// Materialize the step's script into the run's private directory, prove
 /// the written bytes by digest, and spawn it through the interpreter.
 fn run_script(engine: &mut Engine, step: &StepSpec) -> Result<(Outcome, PathBuf), RkError> {
+    run_script_with(engine, step, None)
+}
+
+/// The same, with bytes written to the script's standard input.
+///
+/// A credential travels this way and no other: `rk` reads it, validates it,
+/// and hands the child the bytes it validated, so nothing between the check
+/// and the forge can substitute a different file.
+fn run_script_with(
+    engine: &mut Engine,
+    step: &StepSpec,
+    stdin: Option<Zeroizing<Vec<u8>>>,
+) -> Result<(Outcome, PathBuf), RkError> {
     let rel = format!("{}/{}", engine.ctx.forge.as_str(), step.name);
     let bytes = embedded::SETUP
         .get_file(&rel)
@@ -869,7 +924,7 @@ fn run_script(engine: &mut Engine, step: &StepSpec) -> Result<(Outcome, PathBuf)
         args: vec![path.clone().into_os_string()],
         env: engine.ctx.child_env(step.name),
         cwd: engine.ctx.target.as_std_path().to_path_buf(),
-        stdin: None,
+        stdin,
     };
     let outcome = engine.exec(&exec, true)?;
     Ok((outcome, path))

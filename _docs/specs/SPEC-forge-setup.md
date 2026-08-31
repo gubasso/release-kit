@@ -7,6 +7,7 @@
   - [`forge-setup:a-script-is-executed-never-installed` — A script is executed, never installed](#forge-setupa-script-is-executed-never-installed--a-script-is-executed-never-installed)
   - [`forge-setup:a-step-is-idempotent` — A step is idempotent](#forge-setupa-step-is-idempotent--a-step-is-idempotent)
   - [`forge-setup:a-secret-never-reaches-argv` — A secret never reaches argv](#forge-setupa-secret-never-reaches-argv--a-secret-never-reaches-argv)
+  - [`forge-setup:key-material-never-reaches-the-environment` — Key material never reaches the environment](#forge-setupkey-material-never-reaches-the-environment--key-material-never-reaches-the-environment)
   - [`forge-setup:every-supported-forge-runs-every-step` — Every supported forge runs every step](#forge-setupevery-supported-forge-runs-every-step--every-supported-forge-runs-every-step)
   - [`forge-setup:a-check-reports-what-the-forge-enforces` — A check reports what the forge enforces](#forge-setupa-check-reports-what-the-forge-enforces--a-check-reports-what-the-forge-enforces)
 
@@ -46,11 +47,25 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 A credential MUST reach a setup step through the environment or standard input, and MUST NOT appear in a process argument, in any output, or in any record — nor may any fingerprint of one, since a stable fingerprint correlates a credential across runs; the journal keeps the fact of the handling only.
 
-#### Scenario: The bot private key is stored as a repository secret
+#### Scenario: The bot App identifier is stored as a repository secret
 
 - GIVEN a bot credential exported in the operator's environment
 - WHEN `rk setup step bot-secrets --apply` runs
 - THEN the value travels to the forge CLI on standard input, no spawned argument list contains it, and no journal file or output stream carries it
+
+Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `forge-setup:key-material-never-reaches-the-environment` — Key material never reaches the environment
+
+A private key MUST be named to `rk` as a path, MUST NOT be carried as an environment value by `rk` or by any child it spawns, and the distribution MUST refuse a run whose environment carries one. `rk` MUST read the named file exactly once and MUST transmit those same bytes, so that no substitution between the check and the forge is possible. Before the step spawns, the file MUST be validated for kind, mode, size, and PEM encoding, and every refusal MUST name the fact that was wrong. What the encoded key decodes to is the forge's judgment, not the distribution's.
+
+An environment block is readable from outside the process and every later child of that shell inherits it; naming a file costs neither, and the bytes still reach standard input. An identifier or a short-lived token the forge mints and a command rotates stays a value, because the exposure and the cost of rotation are not the same.
+
+#### Scenario: The bot private key is stored as a repository secret
+
+- GIVEN `RK_BOT_PRIVATE_KEY_FILE` naming an owner-only PEM private key outside the repository
+- WHEN `rk setup step bot-secrets --apply` runs
+- THEN the bytes `rk` validated reach the forge CLI on the step's standard input, no environment `rk` constructs holds them or the path, and a group-readable file, one that is not a PEM private key by kind and encoding, or a stale `RK_BOT_PRIVATE_KEY` export refuses before any forge call
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 

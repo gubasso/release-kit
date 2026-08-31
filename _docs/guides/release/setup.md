@@ -84,11 +84,12 @@ GH_TOKEN=<classic-pat> rk setup step install-bot --target . --apply
 
 ## 7. Store the bot credentials
 
-The values travel on stdin and land as repository secrets; rerunning with new values is the rotation path.
+The values travel on stdin and land as repository secrets; rerunning with new values is the rotation path. The environment carries the key's path, never its contents, and `rk` refuses a `.pem` that is group-readable, is inside the repository, or is not PEM-encoded private-key material.
 
 ```bash
+chmod 600 <path to the .pem>
 export RK_BOT_APP_ID=<app id>
-export RK_BOT_PRIVATE_KEY="$(cat <path to the .pem>)"
+export RK_BOT_PRIVATE_KEY_FILE=<path to the .pem>
 rk setup step bot-secrets --target . --apply
 gh secret list --repo gubasso/release-kit
 # check: lists RELEASE_BOT_APP_ID and RELEASE_BOT_APP_PRIVATE_KEY

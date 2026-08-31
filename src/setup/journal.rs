@@ -39,7 +39,8 @@ pub struct SecretHandling {
     pub secret: String,
     /// Whether a value was present.
     pub present: bool,
-    /// Where the value came from.
+    /// Where the value came from: `environment` for a value the operator
+    /// exported, `file` for one rk read from a path they named.
     pub source: &'static str,
     /// How it reached the forge CLI.
     pub transport: &'static str,
@@ -176,12 +177,14 @@ impl Journal {
         self.write_meta();
     }
 
-    /// Record one secret's handling.
-    pub fn record_secret(&mut self, secret: &str, present: bool) {
+    /// Record one secret's handling: where the value came from, and how
+    /// it reached the forge CLI. A key file is `file`, because the
+    /// environment carried only its path.
+    pub fn record_secret(&mut self, secret: &str, present: bool, source: &'static str) {
         self.meta.secrets.push(SecretHandling {
             secret: secret.to_owned(),
             present,
-            source: "environment",
+            source,
             transport: "stdin",
             redacted: true,
         });
@@ -363,16 +366,16 @@ mod tests {
                 sha256: "ab".into(),
             }],
             secrets: vec![SecretHandling {
-                secret: "RK_BOT_PRIVATE_KEY".into(),
+                secret: "RK_BOT_PRIVATE_KEY_FILE".into(),
                 present: true,
-                source: "environment",
+                source: "file",
                 transport: "stdin",
                 redacted: true,
             }],
         };
         assert_eq!(
             serde_json::to_string(&meta).expect("meta serializes"),
-            r#"{"schema":"rk.run-meta/1","run_id":"2026-08-29T14-02-11Z-0000abcd","rk_version":"0.1.0","command":"setup","argv":["setup","--target","."],"pid":4242,"target":".","forge":"github","repo":"acme/widget","started":"2026-08-29T14:02:11Z","ended":"2026-08-29T14:02:12Z","exit_code":0,"scripts":[{"path":"scripts/github/default-branch","sha256":"ab"}],"secrets":[{"secret":"RK_BOT_PRIVATE_KEY","present":true,"source":"environment","transport":"stdin","redacted":true}]}"#
+            r#"{"schema":"rk.run-meta/1","run_id":"2026-08-29T14-02-11Z-0000abcd","rk_version":"0.1.0","command":"setup","argv":["setup","--target","."],"pid":4242,"target":".","forge":"github","repo":"acme/widget","started":"2026-08-29T14:02:11Z","ended":"2026-08-29T14:02:12Z","exit_code":0,"scripts":[{"path":"scripts/github/default-branch","sha256":"ab"}],"secrets":[{"secret":"RK_BOT_PRIVATE_KEY_FILE","present":true,"source":"file","transport":"stdin","redacted":true}]}"#
         );
     }
 }

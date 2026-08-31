@@ -86,10 +86,12 @@ The classification the sources above produce, which is what `runbooks/setup.md` 
 
 `gh secret set` documents `-b/--body` as the value, reading from standard input if the flag is not specified; the documented examples use redirection with the flag omitted. There is no `-` sentinel, and `--body -` sets the literal value `-`. `glab variable set` likewise accepts the value from standard input, alongside `-v/--value`, `-m/--masked`, and `-p/--protected`.
 
+Feeding a secret from a file is the documented form: `gh secret set --help` lists `gh secret set MYSECRET < myfile.txt` among its examples, and `glab variable set --help` lists both `glab variable set FROM_FILE < secret.txt` and `cat file.txt | glab variable set SERVER_TOKEN`. Neither offers a flag naming a file to read a secret from, so the value arrives on standard input whether a redirect, a pipe, or a writing parent supplies it. `rk` supplies it, because it has already read the file to validate it.
+
 - <https://cli.github.com/manual/gh_secret_set>
 - <https://docs.gitlab.com/cli/variable/set/>
 
-Bearing: `forge-setup:a-secret-never-reaches-argv`. The sentinel that does not exist is worth recording, because it is the transport an unchecked design would have used.
+Bearing: `forge-setup:a-secret-never-reaches-argv` and `forge-setup:key-material-never-reaches-the-environment`. The sentinel that does not exist is worth recording, because it is the transport an unchecked design would have used; so is the file-naming flag that does not exist, because its absence is why standard input is the only way in and why `rk` writes it rather than naming a path to something else.
 
 ## Reconcile inside the step, not a controller around it
 

@@ -1588,7 +1588,7 @@ fn every_setup_script_passes_the_static_battery() {
         "RK_TRUNK_BRANCH",
         "RK_REQUIRED_CHECK",
         "RK_BOT_APP_ID",
-        "RK_BOT_PRIVATE_KEY",
+        "RK_BOT_PRIVATE_KEY_FILE",
         "RK_BOT_TOKEN",
         "RK_BOT_INSTALLATION",
     ];
@@ -2059,9 +2059,19 @@ fn the_payload_carries_no_retired_branch_model() {
 // The mocked forge harness.
 // ---------------------------------------------------------------------------
 
+/// A key file's contents for the tests: RFC 7468 armor around a base64
+/// body, since that is what rk now demands, with a needle inside that every
+/// leak assertion looks for. The body decodes to `sekret-pem-bytes!`.
+const FAKE_PEM: &str =
+    "-----BEGIN FAKE PRIVATE KEY-----\nc2VrcmV0LXBlbS1ieXRlcyE=\n-----END FAKE PRIVATE KEY-----\n";
+
+/// The needle inside `FAKE_PEM`: what must reach stdin and nothing else.
+const PEM_NEEDLE: &str = "c2VrcmV0LXBlbS1ieXRlcyE=";
+
 const MOCK_GH: &str = r#"#!/usr/bin/env bash
 STATE="__STATE__"
 printf '%s\n' "$*" >> "$STATE/log"
+env >> "$STATE/env-log"
 stdin=""
 case "$*" in
   *"--input -"*) stdin="$(cat)"; printf '%s\n' "$stdin" >> "$STATE/stdin-log";;
@@ -2300,6 +2310,25 @@ impl ForgeFixture {
         std::fs::write(self.mock.path().join(name), value).expect("the state seeds");
     }
 
+    /// A key file outside the target, in the mode rk demands. `mode` is the
+    /// lever the refusal tests pull.
+    fn key_file_with(&self, name: &str, body: &str, mode: u32) -> PathBuf {
+        let path = self.home.path().join(name);
+        std::fs::write(&path, body).expect("the key file writes");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))
+                .expect("the key file takes its mode");
+        }
+        path
+    }
+
+    /// The ordinary case: a well-formed, owner-only PEM.
+    fn key_file(&self) -> PathBuf {
+        self.key_file_with("bot.pem", FAKE_PEM, 0o600)
+    }
+
     /// Substitute the mock forge CLI, for the cases that need a child
     /// with a particular stream or signal behavior rather than a
     /// working forge.
@@ -2336,6 +2365,11 @@ impl ForgeFixture {
         std::fs::read_to_string(self.state("stdin-log")).unwrap_or_default()
     }
 
+    /// Everything the mock forge CLI found in its own environment.
+    fn env_log(&self) -> String {
+        std::fs::read_to_string(self.state("env-log")).unwrap_or_default()
+    }
+
     fn runs_root(&self) -> PathBuf {
         self.home.path().join("release-kit/runs")
     }
@@ -2349,6 +2383,7 @@ impl ForgeFixture {
             .env("RK_GLAB_BIN", self.mock.path().join("glab"))
             .env_remove("RK_BOT_APP_ID")
             .env_remove("RK_BOT_PRIVATE_KEY")
+            .env_remove("RK_BOT_PRIVATE_KEY_FILE")
             .env_remove("RK_BOT_TOKEN")
             .args(args)
             .args(["--target"])
@@ -2408,14 +2443,14 @@ fn setup_json_is_ndjson_opening_with_the_schema() {
 #[allow(clippy::too_many_lines)]
 fn a_full_github_apply_lands_reasserts_and_checks_clean() {
     let fixture = ForgeFixture::new();
-    let pem = "-----BEGIN FAKE KEY-----\nsekret-pem-bytes\n-----END FAKE KEY-----\n";
+    let key = fixture.key_file();
     let apply = |fixture: &ForgeFixture| {
         let mut command = fixture.rk(&["setup"]);
         command
             .args(["--repo", "acme/widget", "--forge", "github"])
             .args(["--apply", "--required-check", "test-check"])
             .env("RK_BOT_APP_ID", "314159")
-            .env("RK_BOT_PRIVATE_KEY", pem);
+            .env("RK_BOT_PRIVATE_KEY_FILE", &key);
         command
     };
     apply(&fixture)
@@ -2443,11 +2478,20 @@ fn a_full_github_apply_lands_reasserts_and_checks_clean() {
     assert!(body.contains(r#""context": "test-check""#));
     assert!(body.contains(r#""allowed_merge_methods": ["squash"]"#));
 
-    // The secret reached stdin and nothing else.
-    assert!(fixture.stdin_log().contains("sekret-pem-bytes"));
+    // The key reached stdin and nothing else — not an argument list, and
+    // not the environment, which carried only the path.
+    assert!(fixture.stdin_log().contains(PEM_NEEDLE));
     assert!(
-        !fixture.log().contains("sekret-pem-bytes"),
+        !fixture.log().contains(PEM_NEEDLE),
         "a secret reached a process argument list"
+    );
+    assert!(
+        !fixture.env_log().contains(PEM_NEEDLE),
+        "a secret reached a child environment"
+    );
+    assert!(
+        !fixture.env_log().contains("RK_BOT_PRIVATE_KEY_FILE"),
+        "a child was told where the key file is, and could have reopened it"
     );
     let mut journal_dirs: Vec<PathBuf> = std::fs::read_dir(fixture.runs_root())
         .expect("the journal root reads")
@@ -2458,10 +2502,7 @@ fn a_full_github_apply_lands_reasserts_and_checks_clean() {
     let run = &journal_dirs[0];
     for file in ["meta.json", "events.jsonl", "transcript.txt"] {
         let text = std::fs::read_to_string(run.join(file)).expect("the journal file reads");
-        assert!(
-            !text.contains("sekret-pem-bytes"),
-            "{file} carries key material"
-        );
+        assert!(!text.contains(PEM_NEEDLE), "{file} carries key material");
     }
     assert!(
         !run.join("scripts").exists(),
@@ -2479,9 +2520,9 @@ fn a_full_github_apply_lands_reasserts_and_checks_clean() {
         "the journal records the materialized digests"
     );
     assert!(
-        meta["secrets"]
-            .as_array()
-            .is_some_and(|list| list.iter().any(|s| s["secret"] == "RK_BOT_PRIVATE_KEY")),
+        meta["secrets"].as_array().is_some_and(|list| list
+            .iter()
+            .any(|s| { s["secret"] == "RK_BOT_PRIVATE_KEY_FILE" && s["source"] == "file" })),
         "the journal records the secret handling"
     );
 
@@ -2860,6 +2901,190 @@ fn gitlab_bot_secrets_takes_the_value_on_stdin() {
         !fixture.log().contains("glpat-sekret-value"),
         "a secret reached a process argument list"
     );
+}
+
+/// The key's contents in the environment are refused wherever a run opens,
+/// not only in the step that would have stored them, and the refusal names
+/// the variable that replaces it.
+#[test]
+fn the_key_in_the_environment_is_refused() {
+    let fixture = ForgeFixture::new();
+    for action in [
+        vec!["setup", "check"],
+        vec!["setup", "step", "bot-secrets"],
+        vec!["setup"],
+    ] {
+        fixture
+            .rk(&action)
+            .args(["--repo", "acme/widget", "--forge", "github"])
+            .env("RK_BOT_APP_ID", "314159")
+            .env("RK_BOT_PRIVATE_KEY", FAKE_PEM)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(
+                "RK_BOT_PRIVATE_KEY carries key material",
+            ))
+            .stderr(predicate::str::contains("RK_BOT_PRIVATE_KEY_FILE"));
+    }
+    assert!(
+        !fixture.log().contains("secret set"),
+        "a refused run reached the forge"
+    );
+}
+
+/// Every wrong key file is refused before the step spawns, so nothing
+/// reaches the forge and the operator is told which fact was wrong.
+#[test]
+fn a_wrong_key_file_is_refused_before_the_forge_is_called() {
+    let fixture = ForgeFixture::new();
+    let missing = fixture.home.path().join("absent.pem");
+    let world_readable = fixture.key_file_with("loose.pem", FAKE_PEM, 0o644);
+    let not_a_key = fixture.key_file_with("id.txt", "314159\n", 0o600);
+    let empty = fixture.key_file_with("empty.pem", "", 0o600);
+    let in_tree = fixture.target.path().join("bot.pem");
+    std::fs::write(&in_tree, FAKE_PEM).expect("the in-tree key writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&in_tree, std::fs::Permissions::from_mode(0o600))
+            .expect("the in-tree key takes its mode");
+    }
+
+    let cases: [(PathBuf, &str); 6] = [
+        (missing, "unreadable"),
+        (world_readable, "readable by group or other"),
+        (not_a_key, "is not a PEM-encoded private key"),
+        (empty, "is empty"),
+        (in_tree, "inside the repository being set up"),
+        (PathBuf::from("~/bot.pem"), "unexpanded tilde"),
+    ];
+    for (path, expected) in cases {
+        // Preview rehearses apply, so both refuse the same file.
+        for extra in [vec![], vec!["--apply"]] {
+            fixture
+                .rk(&["setup", "step", "bot-secrets"])
+                .args(["--repo", "acme/widget", "--forge", "github"])
+                .args(&extra)
+                .env("RK_BOT_APP_ID", "314159")
+                .env("RK_BOT_PRIVATE_KEY_FILE", &path)
+                .assert()
+                .failure()
+                .stderr(predicate::str::contains(expected));
+        }
+    }
+    assert!(
+        !fixture.log().contains("secret set"),
+        "a refused run reached the forge"
+    );
+}
+
+/// A FIFO is refused by kind rather than waited on. rk opens the named path
+/// before it knows what it is, so the open must not block on a pipe with no
+/// writer; the timeout is what makes the difference visible.
+#[cfg(unix)]
+#[test]
+fn a_key_path_that_is_a_pipe_refuses_rather_than_blocking() {
+    let fixture = ForgeFixture::new();
+    let fifo = fixture.home.path().join("bot.fifo");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .expect("mkfifo runs");
+    assert!(made.success(), "the fifo was created");
+    fixture
+        .rk(&["setup", "step", "bot-secrets"])
+        .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
+        .env("RK_BOT_APP_ID", "314159")
+        .env("RK_BOT_PRIVATE_KEY_FILE", &fifo)
+        .timeout(std::time::Duration::from_secs(20))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("is not a regular file"));
+}
+
+/// A directory is refused by kind: `rk` reads the named file, and a source
+/// that yields its bytes once is not a key file.
+#[test]
+fn a_key_path_that_is_not_a_regular_file_is_refused() {
+    let fixture = ForgeFixture::new();
+    fixture
+        .rk(&["setup", "step", "bot-secrets"])
+        .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
+        .env("RK_BOT_APP_ID", "314159")
+        .env("RK_BOT_PRIVATE_KEY_FILE", fixture.home.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("is not a regular file"));
+}
+
+/// What rk validated is what rk sends. The key file is replaced with other
+/// material after the run resolves it and before gh could reopen it — which
+/// gh cannot do, because it is never told the path — so the stored secret
+/// is the validated one and the replacement reaches nothing.
+#[test]
+fn the_validated_bytes_are_the_transmitted_bytes() {
+    let fixture = ForgeFixture::new();
+    let key = fixture.key_file();
+    // The mock replaces the key file the moment it is first called, which
+    // is after rk read it. A run that reopened the path would store this.
+    fixture.replace_gh(
+        &MOCK_GH
+            .replace("__STATE__", &fixture.mock.path().to_string_lossy())
+            .replace(
+                "env >> \"$STATE/env-log\"",
+                &format!(
+                    "env >> \"$STATE/env-log\"\nprintf '%s' 'swapped-after-validation' > {}",
+                    key.display()
+                ),
+            ),
+    );
+    fixture
+        .rk(&["setup", "step", "bot-secrets"])
+        .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
+        .env("RK_BOT_APP_ID", "314159")
+        .env("RK_BOT_PRIVATE_KEY_FILE", &key)
+        .assert()
+        .success();
+    assert!(
+        fixture.stdin_log().contains(PEM_NEEDLE),
+        "the validated bytes were not the ones stored"
+    );
+    assert!(
+        !fixture.stdin_log().contains("swapped-after-validation"),
+        "a replacement made after validation reached the forge"
+    );
+}
+
+/// GitLab stores a token and reads no key file, so a stale key variable in
+/// the environment is not its business and must not fail its step.
+#[test]
+fn gitlab_ignores_a_broken_key_file_variable() {
+    let fixture = ForgeFixture::new();
+    fixture
+        .rk(&["setup", "step", "bot-secrets"])
+        .args(["--repo", "acme/widget", "--forge", "gitlab", "--apply"])
+        .env("RK_BOT_TOKEN", "glpat-sekret-value")
+        .env("RK_BOT_PRIVATE_KEY_FILE", "/nonexistent/stale.pem")
+        .assert()
+        .success();
+    assert!(fixture.stdin_log().contains("glpat-sekret-value"));
+}
+
+/// Half an App identity stores nothing: the App ID without the key refuses
+/// naming both variables.
+#[test]
+fn half_an_app_identity_refuses() {
+    let fixture = ForgeFixture::new();
+    fixture
+        .rk(&["setup", "step", "bot-secrets"])
+        .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
+        .env("RK_BOT_APP_ID", "314159")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "bot-secrets has no credentials to store",
+        ))
+        .stderr(predicate::str::contains("RK_BOT_PRIVATE_KEY_FILE"));
 }
 
 /// Detection selects the tree from the remote host, an unknown host refuses
