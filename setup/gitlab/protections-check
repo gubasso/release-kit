@@ -43,6 +43,15 @@ else
   echo 'remediation: rk setup step protect-trunk --apply' >&2
   status=1
 fi
+trunk_merge_levels="$(printf '%s' "$trunk" | grep -o '"merge_access_levels":\[[^]]*\]' || true)"
+trunk_merge_grants="$(printf '%s' "$trunk_merge_levels" | grep -o '{' | grep -c . || true)"
+if [ "$trunk_merge_grants" = "1" ] && printf '%s' "$trunk_merge_levels" | grep -q '"access_level":40'; then
+  echo "ok $RK_TRUNK_BRANCH merges only through maintainers"
+else
+  echo "FAIL $RK_TRUNK_BRANCH merge grants: the setup owns exactly one at maintainer level, found $trunk_merge_grants" >&2
+  echo 'remediation: rk setup step protect-trunk --apply' >&2
+  status=1
+fi
 
 settings="$(glab api "projects/$project" | compact)"
 assert 'the gate requires the whole pipeline' '"only_allow_merge_if_pipeline_succeeds":true' "$settings" \

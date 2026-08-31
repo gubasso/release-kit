@@ -18,9 +18,25 @@ project="$(printf '%s' "$RK_REPO" | sed 's|/|%2F|g')"
 compact() { tr -d ' \t\r\n'; }
 
 if glab api "projects/$project/protected_branches/release%2F%2A" >/dev/null 2>&1; then
-  glab api -X PATCH "projects/$project/protected_branches/release%2F%2A" \
-    -F allow_force_push=false >/dev/null
-  echo 'ok release/* protection re-asserted'
+  current="$(glab api "projects/$project/protected_branches/release%2F%2A" | compact)"
+  levels="$(printf '%s' "$current" | grep -o '"push_access_levels":\[[^]]*\]' || true)"
+  merge_levels="$(printf '%s' "$current" | grep -o '"merge_access_levels":\[[^]]*\]' || true)"
+  # Exactly one grant at maintainer level on each half: a push level of 0
+  # would block the cherry-pick-by-push path this protection exists to keep.
+  grants="$(printf '%s' "$levels" | grep -o '{' | grep -c . || true)"
+  merge_grants="$(printf '%s' "$merge_levels" | grep -o '{' | grep -c . || true)"
+  if [ "$grants" = "1" ] && printf '%s' "$levels" | grep -q '"access_level":40' \
+    && [ "$merge_grants" = "1" ] && printf '%s' "$merge_levels" | grep -q '"access_level":40'; then
+    glab api -X PATCH "projects/$project/protected_branches/release%2F%2A" \
+      -F allow_force_push=false >/dev/null
+    echo 'ok release/* protection re-asserted'
+  else
+    glab api -X DELETE "projects/$project/protected_branches/release%2F%2A" >/dev/null
+    glab api -X POST "projects/$project/protected_branches" \
+      -f 'name=release/*' -F push_access_level=40 -F merge_access_level=40 \
+      -F allow_force_push=false >/dev/null
+    echo 'ok release/* protection re-created with the owned grants'
+  fi
 else
   glab api -X POST "projects/$project/protected_branches" \
     -f 'name=release/*' -F push_access_level=40 -F merge_access_level=40 \

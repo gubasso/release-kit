@@ -23,11 +23,15 @@ if glab api "projects/$project/protected_branches/$RK_TRUNK_BRANCH" >/dev/null 2
   # is delete-then-create; allow_force_push alone patches in place.
   current="$(glab api "projects/$project/protected_branches/$RK_TRUNK_BRANCH" | compact)"
   levels="$(printf '%s' "$current" | grep -o '"push_access_levels":\[[^]]*\]' || true)"
-  # Exactly one push grant, and it is the no-access entry: the forge takes
-  # the most permissive grant, so a second entry beside access level 0 is a
-  # branch that still takes a direct push.
+  merge_levels="$(printf '%s' "$current" | grep -o '"merge_access_levels":\[[^]]*\]' || true)"
+  # Exactly one push grant at the no-access entry, and exactly one merge
+  # grant at maintainer level: the forge takes the most permissive grant, so
+  # a second push entry is a branch that still takes a direct push, and a
+  # merge level of 0 keeps every release request unmergeable.
   grants="$(printf '%s' "$levels" | grep -o '{' | grep -c . || true)"
-  if [ "$grants" = "1" ] && printf '%s' "$levels" | grep -q '"access_level":0'; then
+  merge_grants="$(printf '%s' "$merge_levels" | grep -o '{' | grep -c . || true)"
+  if [ "$grants" = "1" ] && printf '%s' "$levels" | grep -q '"access_level":0' \
+    && [ "$merge_grants" = "1" ] && printf '%s' "$merge_levels" | grep -q '"access_level":40'; then
     glab api -X PATCH "projects/$project/protected_branches/$RK_TRUNK_BRANCH" \
       -F allow_force_push=false >/dev/null
   else
