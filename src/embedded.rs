@@ -33,6 +33,9 @@ pub static SNIPPETS: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/snippets")
 /// The agent skills, one directory per skill.
 pub static SKILLS: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/skills");
 
+/// The artifacts every skill shares, installed once outside the skill roots.
+pub static SKILL_SHARED: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/skill-shared");
+
 /// The pinned-tool registry.
 pub static VERSIONS: &str = include_str!("../versions.toml");
 
@@ -76,6 +79,7 @@ pub fn root_files(root: &str) -> Option<Vec<(String, &'static [u8])>> {
         "snippets" => &SNIPPETS,
         "setup" => &SETUP,
         "skills" => &SKILLS,
+        "skill-shared" => &SKILL_SHARED,
         "versions.toml" => return Some(vec![(root.to_owned(), VERSIONS.as_bytes())]),
         _ => return None,
     };

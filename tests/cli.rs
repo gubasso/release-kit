@@ -17,6 +17,10 @@ use release_kit::skills::record::{RECORD_PATH, Record};
 const SKILLS: [&str; 3] = ["rk-migrate", "rk-release", "rk-setup"];
 const ROOTS: [&str; 2] = [".claude/skills", ".agents/skills"];
 
+/// What every skill shares, installed once outside the agent roots.
+const SHARED: [&str; 1] = ["plan-gate.md"];
+const SHARED_ROOT: &str = ".local/state/release-kit/skills/shared";
+
 fn rk() -> Command {
     Command::cargo_bin("rk").expect("the rk binary builds")
 }
@@ -50,6 +54,10 @@ impl Home {
 
     fn record(&self) -> PathBuf {
         self.path().join(RECORD_PATH)
+    }
+
+    fn shared_gate(&self) -> PathBuf {
+        self.path().join(SHARED_ROOT).join(SHARED[0])
     }
 
     fn load_record(&self) -> Record {
@@ -762,9 +770,13 @@ fn skill_install_apply_and_uninstall_round_trip() {
             assert!(home.destination(root, name).is_file());
         }
     }
+    assert!(
+        home.shared_gate().is_file(),
+        "an apply lands the shared plan gate the skills name"
+    );
     assert_eq!(
         home.load_record().written.len(),
-        ROOTS.len() * SKILLS.len(),
+        ROOTS.len() * SKILLS.len() + SHARED.len(),
         "an apply records every destination it wrote"
     );
 
@@ -1027,6 +1039,8 @@ fn skill_install_preview_human_lines_are_snapshot_held() {
             expected.push('\n');
         }
     }
+    expected.push_str(&home.shared_gate().to_string_lossy());
+    expected.push('\n');
     expected.push_str("Next:\n  rk skill install --apply\n");
     home.rk()
         .args(["skill", "install"])
@@ -1051,7 +1065,7 @@ fn skill_install_json_reports_typed_actions() {
     assert_eq!(report["command"], "install");
     assert_eq!(report["mode"], "apply");
     let actions = report["actions"].as_array().expect("an action list");
-    assert_eq!(actions.len(), ROOTS.len() * SKILLS.len());
+    assert_eq!(actions.len(), ROOTS.len() * SKILLS.len() + SHARED.len());
     assert!(
         actions.iter().all(|action| action["action"] == "write"),
         "{actions:?}"
@@ -1429,6 +1443,55 @@ fn every_skill_carries_the_portable_frontmatter() {
         seen += 1;
     }
     assert_eq!(seen, SKILLS.len(), "the authored skills changed");
+}
+
+/// Every skill drives operations that write files, mutate a forge, or publish
+/// a version, so each one routes to the shared plan gate before it acts, and
+/// states the one flag that changes the gate's shape. The test holds the
+/// instruction's presence; no test can hold a model to it.
+#[test]
+fn every_skill_routes_to_the_plan_gate_before_acting() {
+    const GATE: &str = "~/.local/state/release-kit/skills/shared/plan-gate.md";
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("skills");
+    for name in SKILLS {
+        let text =
+            std::fs::read_to_string(root.join(name).join("SKILL.md")).expect("the skill reads");
+        let gate = text
+            .find("## Before acting")
+            .unwrap_or_else(|| panic!("{name}: no '## Before acting' section"));
+        assert!(
+            text[gate..].contains(GATE),
+            "{name}: the gate section does not name {GATE}"
+        );
+        assert!(
+            text[gate..].contains("--no-plan"),
+            "{name}: the gate section does not state the --no-plan rule"
+        );
+        // Every other section is an acting section, so the gate leads.
+        let first = text
+            .find("\n## ")
+            .expect("a skill carries at least one section");
+        assert_eq!(
+            first + 1,
+            gate,
+            "{name}: a section precedes the plan gate, so acting can start before it is read"
+        );
+    }
+}
+
+/// The gate the skills name is one file, carried by the payload and installed
+/// once, so correcting it corrects every skill under every agent root.
+#[test]
+fn the_payload_carries_the_shared_plan_gate() {
+    let gate = Path::new(env!("CARGO_MANIFEST_DIR")).join("skill-shared/plan-gate.md");
+    let text = std::fs::read_to_string(&gate).expect("the shared gate reads");
+    for phase in ["## 1. Plan", "## 2. Validate", "## 3. Execute"] {
+        assert!(text.contains(phase), "the gate carries no {phase} phase");
+    }
+    assert!(
+        text.contains("--no-plan"),
+        "the gate does not state what --no-plan changes"
+    );
 }
 
 #[test]

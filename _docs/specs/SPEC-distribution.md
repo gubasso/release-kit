@@ -13,6 +13,8 @@
   - [`distribution:skills-are-part-of-the-payload` — Skills are part of the payload](#distributionskills-are-part-of-the-payload--skills-are-part-of-the-payload)
   - [`distribution:a-skill-has-one-owner` — A skill has one owner](#distributiona-skill-has-one-owner--a-skill-has-one-owner)
   - [`distribution:a-skill-obeys-the-portable-format` — A skill obeys the portable format](#distributiona-skill-obeys-the-portable-format--a-skill-obeys-the-portable-format)
+  - [`distribution:a-skill-plans-before-it-acts` — A skill plans before it acts](#distributiona-skill-plans-before-it-acts--a-skill-plans-before-it-acts)
+  - [`distribution:shared-skill-artifacts-have-one-home` — Shared skill artifacts have one home](#distributionshared-skill-artifacts-have-one-home--shared-skill-artifacts-have-one-home)
   - [`distribution:skill-install-previews-before-writing` — A skill install previews before writing](#distributionskill-install-previews-before-writing--a-skill-install-previews-before-writing)
   - [`distribution:a-stale-skill-is-not-a-conflict` — A stale skill is not a conflict](#distributiona-stale-skill-is-not-a-conflict--a-stale-skill-is-not-a-conflict)
   - [`distribution:a-skill-install-restores-on-failure` — A skill install restores on failure](#distributiona-skill-install-restores-on-failure--a-skill-install-restores-on-failure)
@@ -133,6 +135,32 @@ Every skill MUST carry only the portable Agent Skills frontmatter fields on plai
 - GIVEN a skill edited to add a vendor-only frontmatter key
 - WHEN the test suite runs
 - THEN the conformance test fails and names the offending field
+
+Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `distribution:a-skill-plans-before-it-acts` — A skill plans before it acts
+
+Every skill MUST route to the shared plan gate in a section preceding every other section, and MUST state what `--no-plan` changes, because each one drives operations that write files, mutate a forge, or publish a version, and an agent that starts acting before it has stated the sequence has no point left at which the operator can stop it.
+
+#### Scenario: A skill is authored with its steps ahead of the gate
+
+- GIVEN a skill whose first section is a step list rather than the gate
+- WHEN the test suite runs
+- THEN the conformance test fails and names the skill, because an agent reading top to bottom would act before reaching the gate
+
+Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `distribution:shared-skill-artifacts-have-one-home` — Shared skill artifacts have one home
+
+The distribution MUST install what the skills share once, outside the agent skill roots and under the invoking user's home, whichever agent a run selects; and `rk skill uninstall --apply` MUST keep those artifacts while any agent root still holds a skill that names them.
+
+The location is home-relative rather than `XDG_STATE_HOME`-relative for the reason the record already states: the skills reading these artifacts live under `$HOME/.claude` and `$HOME/.agents`, which no XDG variable moves.
+
+#### Scenario: One agent family is uninstalled while the other stays
+
+- GIVEN a home carrying the skills under both agent roots
+- WHEN `rk skill uninstall --agent codex --apply` runs
+- THEN the shared artifacts remain, because the skills under `.claude/skills` still name them, and a later uninstall of the last root removes them
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 

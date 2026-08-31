@@ -15,7 +15,7 @@ use crate::cli::skill::{Agent, Scope, SkillAction, SkillArgs};
 use crate::error::RkError;
 use crate::output::Output;
 use crate::skills;
-use crate::skills::installer::{self, Action};
+use crate::skills::installer::{self, Action, Layout};
 use crate::skills::record::RECORD_PATH;
 
 /// The root Claude Code reads, relative to the home directory.
@@ -24,6 +24,15 @@ const CLAUDE_ROOT: &str = ".claude/skills";
 /// The root Codex, Gemini CLI, and Copilot read, relative to the home
 /// directory.
 const AGENTS_ROOT: &str = ".agents/skills";
+
+/// The root holding what the skills share, relative to the home directory.
+///
+/// Home-relative rather than `XDG_STATE_HOME`-relative for the reason the
+/// record states: the skills naming these artifacts live under `$HOME/.claude`
+/// and `$HOME/.agents`, which no XDG variable moves, and a shared file
+/// reachable under a different home than the skills reading it would be worse
+/// than no shared file at all.
+const SHARED_ROOT: &str = ".local/state/release-kit/skills/shared";
 
 /// The machine form of an install or uninstall report.
 #[derive(Debug, Serialize)]
@@ -64,8 +73,8 @@ pub fn run(args: &SkillArgs) -> Result<(), RkError> {
             force,
             json,
         } => {
-            let (roots, record) = destinations(*agent, *scope)?;
-            let actions = installer::install(&roots, &record, *apply, *force)?;
+            let layout = layout(*agent, *scope)?;
+            let actions = installer::install(&layout, *apply, *force)?;
             render(Output::new(*json), "install", *apply, &actions)
         }
         SkillAction::Uninstall {
@@ -74,8 +83,8 @@ pub fn run(args: &SkillArgs) -> Result<(), RkError> {
             apply,
             json,
         } => {
-            let (roots, record) = destinations(*agent, *scope)?;
-            let actions = installer::uninstall(&roots, &record, *apply)?;
+            let layout = layout(*agent, *scope)?;
+            let actions = installer::uninstall(&layout, *apply)?;
             render(Output::new(*json), "uninstall", *apply, &actions)
         }
     }
@@ -190,10 +199,15 @@ fn show(name: &str) -> Result<(), RkError> {
 }
 
 /// The roots a run touches, and the record that vouches for them.
-fn destinations(agent: Agent, scope: Scope) -> Result<(Vec<Utf8PathBuf>, Utf8PathBuf), RkError> {
+fn layout(agent: Agent, scope: Scope) -> Result<Layout, RkError> {
     let Scope::User = scope;
     let home = home()?;
-    Ok((roots(&home, agent), home.join(RECORD_PATH)))
+    Ok(Layout {
+        roots: roots(&home, agent),
+        every_root: roots(&home, Agent::All),
+        shared: home.join(SHARED_ROOT),
+        record: home.join(RECORD_PATH),
+    })
 }
 
 /// The skill roots under `home`, in the order an apply writes them.
