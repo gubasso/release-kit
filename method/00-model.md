@@ -1,31 +1,42 @@
 # 00 — Model
 
-A release is a promotion, not a push. Work integrates continuously on one branch; releasing is a separate, gated decision that automation executes and a human approves by merging one pull request.
+A release is a promotion, not a push. Work integrates continuously on one trunk; releasing is a separate decision a human approves by merging one pull request, and automation executes everything after that merge.
 
 ## The spine
 
-Six stages. No technology changes them.
+Five stages. No technology changes them.
 
 1. Capture intent. Every change lands with a machine-readable statement of its release impact: Conventional Commits, or per-pull-request changeset files.
-2. A bot maintains a release request. It opens a pull request against the integration branch that bumps the committed version and rewrites the changelog. Merging it publishes nothing.
-3. A gate. Automation cuts a branch pinned at the merged release commit and opens it as a pull request into the release branch. Merging the gate is the release decision.
-4. Tag and publish. Automation tags the merge and publishes to the registry. The tag mirrors the committed version; no hand ever authors it.
+2. A bot maintains a release request. It keeps one pull request open against the trunk, carrying the version bump and the rewritten changelog, and refreshes it as work lands, so the proposed release always describes the trunk's tip. While the request is open, nothing is public.
+3. Merging the release request is the release decision. The trunk takes no direct push and requires its passing check, so the quality bar and the release decision sit on the same merge button, and closing the request abandons a release at no cost.
+4. Tag and publish. Automation tags the push that lands the bump and publishes to the registry. The tag mirrors the committed version; no hand ever authors it.
 5. Build, attest, and attach artifacts. What the artifacts are is the binding's answer: a dedicated builder in its own workflow, the registry distributions themselves, or a tarball the release page carries. Whatever they are, the run that builds them also signs a statement of where they came from, so a consumer can check the origin without trusting the page the download came from.
-6. Back-merge, so the release branch and the integration branch end equal and the next release diffs cleanly.
 
-## The two pull requests
+## The trunk
 
-The two branches are `develop`, where work integrates, and `master`, which exists only to be released from. A release takes two pull requests across them.
+`master` is the only permanent branch and the repository default. This is trunk-based development: one branch called the trunk, and resistance to any other long-lived branch. Every change reaches it through a short-lived branch — a day or two, one author — squash-merged after review and CI and deleted, so one pull request is one commit and the history stays linear. Conventional Commits are enforced on the squash title, because the bot derives the version and the changelog from the trunk's commits.
 
-The first is the release request the bot maintains against `develop`. It carries the version bump and the changelog entry, it is the last point a changelog correction can reach the release, and merging it publishes nothing.
+The trunk is always releasable. Unfinished work still lands, dark: a feature flag keeps incomplete code out of every execution path, and a refactor too large to flag proceeds by branch by abstraction. What looks like a need for a second long-lived branch is one of three needs with better answers: staging unfinished work is flags, a stabilization period is a just-in-time release branch, and a place to integrate before production is an environment. Branches isolate code; environments isolate deployment.
 
-The second is the gate. When the release request merges, `develop` carries a version no tag names yet, so automation cuts `release/v<version>` at exactly that commit and opens it into `master`. The head is a branch pinned to one commit, never `develop` itself: a pull request tracks its head branch, so a `develop` head would silently absorb every later push into the release and publish commits the changelog never described.
+## The one pull request
 
-Merging the gate is what tags and publishes. `master` takes no direct push and requires a passing check, so the release decision and the quality bar sit on the same merge button.
+The bot's release request is the gate. Nothing is public until its one reviewed merge: the changelog entry can still be corrected on the request's branch while it is open, merging it is what the tag, the publish, and the artifact build key on, and a release abandoned before the merge is a closed pull request with nothing to clean up.
 
-## Why the gate publishes, not the bot
+## The two styles
 
-The inverted design — the bot publishes when the release request merges, and `master` is fast-forwarded onto the tag afterwards — puts the publish before the human gate, so the gate approves something already public and can no longer stop it. Gating first means nothing is public until the one reviewed merge, and a gate closed in time costs nothing to abandon.
+Releasing from the trunk is the default: every release ships the trunk's tip, a fix reaches users by rolling forward, and exactly one version is alive in the world. [Release from trunk](./06-release-from-trunk.md) walks one release and one bug fix end to end.
+
+Branching for a release exists for older lines. A `release/<major>.<minor>` branch is cut just in time from a chosen trunk commit — chosen, not necessarily the tip — takes changes from the trunk only by cherry-pick, is never merged back, and is deleted once its tags pin the commits. [Branch for release](./07-branch-for-release.md) walks the whole life of one line.
+
+| Question                                       | If yes             |
+| ---------------------------------------------- | ------------------ |
+| Can every user be on the same version at once? | Release from trunk |
+| Do you ship several times a week or more?      | Release from trunk |
+| Do customers self-host or pin versions?        | Branch for release |
+| Do you owe someone a patch-only release?       | Branch for release |
+| Does a sign-off gate stand before a ship?      | Branch for release |
+
+Default to the trunk. Cut the first release branch the day someone actually needs a backport — retroactively, from the tag — never ahead of the need.
 
 ## What a technology changes
 

@@ -11,7 +11,7 @@
 
 ## The shape
 
-There is no registry, so stages 4 and 5 of [the spine](../method/00-model.md) collapse into the tag and the release page: publishing is tagging, and the tarball attached to the release is the distribution. The two-pull-request shape is unchanged — the release request bumps `VERSION` and the changelog, the gate pins and approves, and the workflow on `master` tags and attaches.
+There is no registry, so stages 4 and 5 of [the spine](../method/00-model.md) collapse into the tag and the release page: publishing is tagging, and the tarball attached to the release is the distribution. The one-pull-request shape is unchanged — the release request bumps `VERSION` and the changelog, and merging it is what makes the workflow tag and attach.
 
 A one-line `VERSION` file is the committed source of truth, and `git-cliff --bump` computes the next version from Conventional Commits and writes the changelog deterministically, which is what qualifies it under [the invariants](../method/01-invariants.md). git-cliff maintains no pull request on its own; the landed workflow drives it to open and refresh the release request.
 

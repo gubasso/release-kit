@@ -4,9 +4,9 @@ A canonical release workflow: one technology-agnostic method, per-technology bin
 
 ## What this is
 
-Two products in one repository. The method is what a reader loads: [method/](./method/README.md) states the six-stage spine, the invariants, and the recovery paths, and [bindings/](./bindings/README.md) states where rust, python, and bash differ. The distribution is what a project installs: the `rk` binary, built from `src/`, embeds the whole payload — the method, the bindings, the landable files under `snippets/`, the agent skills, and the pinned-tool registry — and lands the deterministic files with `rk init`.
+Two products in one repository. The method is what a reader loads: [method/](./method/README.md) states the five-stage spine, the invariants, and the recovery paths, and [bindings/](./bindings/README.md) states where rust, python, and bash differ. The distribution is what a project installs: the `rk` binary, built from `src/`, embeds the whole payload — the method, the bindings, the landable files under `snippets/`, the agent skills, and the pinned-tool registry — and lands the deterministic files with `rk init`.
 
-The design in one sentence: a release takes two pull requests — a bot-maintained release request that bumps the version and the changelog and publishes nothing, then a gate pull request pinned at that commit whose merge is what tags and publishes.
+The design in one sentence: work integrates on one trunk, a bot maintains one release pull request that bumps the version and the changelog, and merging it is the release that tags, publishes, and builds the artifacts.
 
 ## Install
 

@@ -4,21 +4,25 @@ What to do when a release goes wrong. Every path here ends back on the happy pat
 
 ## A published version is defective
 
-Fix forward, then withdraw. The fix merges to `develop` as ordinary work and ships as the next version through the normal sequence. Withdrawing the defective version — `cargo yank`, `npm deprecate`, PyPI's yank — is the second half: fixing forward stops nothing until the bad version is withdrawn, because resolvers keep serving it to new consumers. Withdrawal is reversible; deletion, where a registry even offers it, is not the tool.
+Fix forward, then withdraw. The fix merges to the trunk as ordinary work and ships as the next version through the normal sequence. Withdrawing the defective version — `cargo yank`, `npm deprecate`, PyPI's yank — is the second half: fixing forward stops nothing until the bad version is withdrawn, because resolvers keep serving it to new consumers. Withdrawal is reversible; deletion, where a registry even offers it, is not the tool.
 
 The tag stays. It names what was published, and release-tag immutability exists precisely so that a bad release remains inspectable.
 
-## The gate never opened
+## The release request merged and nothing published
 
-The gate job cuts the release branch only on the push that bumps the committed version. When a transient failure — a rate limit, a network error — leaves the release request merged but no gate open, re-run the gate job from the CI interface on that same commit. The job is idempotent: it replays the same commit, finds the branch or creates it, and opens the pull request only if none is open.
+The release job fires on the push that lands the version bump. When a transient failure — a rate limit, a network error — leaves the bump merged but no tag pushed and nothing published, re-run the release job from the CI interface on that same trunk commit. The job is idempotent: it checks whether the tag and the published version already exist and does only what is missing.
 
 ## The changelog shipped wrong
 
-A published entry is never edited. Land the correction on `develop` as an ordinary commit amending the changelog file; it ships with the next release. The prevention is step 3 of [operate](./03-operate.md), the only point a correction reaches the release it describes.
+A published entry is never edited. Land the correction on the trunk as an ordinary commit amending the changelog file; it ships with the next release. The prevention is step 3 of [operate](./03-operate.md), the only point a correction reaches the release it describes.
+
+## An older line needs a patch
+
+The trunk has rolled forward, and a user on an older version needs only the fix. When the line's branch does not exist, cut it retroactively from the tag — `release/<major>.<minor>` at the line's latest `v<major>.<minor>.<z>` — because the tag pins the exact commit the line shipped from. Then fix on the trunk first and cherry-pick the one commit onto the branch; [branch for release](./07-branch-for-release.md) owns the sequence, the rc validation, and the four ways the pattern breaks.
 
 ## CI is down and the release cannot wait
 
-Publish by hand, in three moves, and only for a release the gate already approved:
+Publish by hand, in three moves, and only for a version whose release request already merged:
 
 1. Turn off the registry's require-trusted-publishing enforcement. While it is on, every token publish is rejected, so the manual path cannot succeed — and its failure message points at credentials, not at the switch.
 2. Publish with a token scoped like the bootstrap one: new versions of exactly this package, shortest expiry. Revoke it immediately after.

@@ -6,21 +6,21 @@ Bootstrapping one repository onto the convention. Once per repository, in this o
 
 Run the registry's dry-run packaging check first, before anything that needs credentials. It catches the common rejects — a missing description, an invalid category — with no token and no remote configuration, and every later step assumes the package is publishable.
 
-## 1. Shape the branches
+## 1. Make the trunk the sole long-lived branch
 
-Make `develop` the default branch, so pushes to it drive the release bot. Create `master` at `develop`'s tip and remove any other long-lived branch, before the protections exist: creating a branch is a direct push, which the protected `master` refuses.
+Make `master` the repository default, so the bot's release request targets it with no configuration, and the only long-lived branch: merge in and delete every other one. Work that kept a second branch alive lands on the trunk behind a flag instead.
 
 ## 2. Let automation act
 
 Grant the repository's CI permission to write and to open pull requests. Provide a bot identity — on GitHub, an App installed on the repository — and store its credentials as repository secrets. The bot identity is what makes the tag push retrigger workflows: a tag pushed with the default CI token starts nothing, which silently skips the artifact build.
 
-## 3. Protect the branches and the tags
+## 3. Protect the trunk and the tags
 
-Three protections, all held by configuration that a script can verify:
+Two protections owned by every repository, and a third where older lines exist, all held by configuration that a script can verify:
 
-- `master` takes no direct push, requires the passing check the gate shows, and merges only as a merge commit.
-- `develop` cannot be force-pushed or deleted. It carries no required status check, because one would also reject the push that opens a release; the release is gated on `master` instead.
-- Release tags are immutable: `v*` can be neither moved nor deleted.
+- `master` takes no direct push and no force-push, requires a pull request carrying the named passing check, and offers squash as the only merge method.
+- Release tags are immutable: `v*` can be neither moved nor deleted, and the pattern already covers the rc tags a release line mints.
+- Where a project keeps older lines, `release/*` cannot be force-pushed or deleted while a line is alive; deletion becomes safe only once the line's tags pin its commits.
 
 ## 4. Land the workflow files
 
@@ -36,7 +36,7 @@ Register owner, repository, and the publish workflow's filename with the registr
 
 ## 7. Prove the automated path
 
-Cut one release end to end through [operate](./03-operate.md). Its verify step passing — the registry serves the new version, the tag exists, the branches agree — is the proof the next step depends on.
+Cut one release end to end through [operate](./03-operate.md). Its verify step passing — the registry serves the new version, and the tag and the trunk name the same commit — is the proof the next step depends on.
 
 ## 8. Require trusted publishing
 

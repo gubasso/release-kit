@@ -37,7 +37,9 @@ Because the two vary independently, a project's configuration is a pair, not a s
 
 An axis answer can be nothing, and the pair table already holds one: `(rust, gitlab)` has no artifact builder, the same shape as the Go column's bot and registry rows. [The Rust binding](../bindings/rust.md) carries that fact, because it is a property of the pair rather than of either axis alone.
 
-What the forge axis owns: how the release request is named and refreshed, what shape the gate's enforcement takes, how branches and tags are protected, what the bot identity is, and which CI file format the workflows use. What it never changes: the two-pull-request shape, the pinned gate, the committed version leading the tag, the back-merge, and the recovery paths.
+What the forge axis owns: how the release request is named and refreshed, which merge verbs keep the trunk linear, how branches and tags are protected, what the bot identity is, and which CI file format the workflows use. What it never changes: the one-pull-request gate, the committed version leading the tag, the one-directional release lines, and the recovery paths.
+
+The merge verbs differ by name and by shape: one forge restricts a pull request to squash through a ruleset and offers no fast-forward, another sets a fast-forward merge method project-wide and squashes per merge request. Linear trunk history is reachable on both, and each forge document owns its own mapping.
 
 ## Writing a new binding
 

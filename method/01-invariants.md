@@ -22,9 +22,17 @@ One workflow file publishes, and only that file carries the OIDC token permissio
 
 The registry refuses a second upload of the same version, and a moved tag serves two payloads under one name. A defect ships as the next version, and the defective one is withdrawn so new consumers stop resolving to it. [Recovery](./04-recovery.md) owns the sequence.
 
-## The release branch is written by automation only
+## Trunk is written through pull requests only
 
-`master` takes no direct push, requires the passing check the gate shows, and merges only as a merge commit, because a rebase or squash makes it diverge from `develop` permanently. Nothing in the pipeline writes it outside the gate merge, so the ruleset names no bypass actor.
+`master` takes no direct push and no force-push, requires the named passing check, and merges only by squash, so one pull request is one commit and the history stays linear. Nothing in the pipeline writes the branch outside a merge, so the ruleset names no bypass actor; the bot's bump rides the same merge button as everyone's work.
+
+## The trunk is always releasable
+
+Any trunk commit can be released, at any moment, because unfinished work ships dark: a feature flag keeps incomplete code out of every execution path, and a change too large to flag proceeds by branch by abstraction. A habit that needs a stabilization branch to make the trunk trustworthy is treating the symptom; the check that gates every merge is what makes the trunk trustworthy.
+
+## A release line flows one direction
+
+Where an older line exists, changes reach its `release/<major>.<minor>` branch from the trunk by cherry-pick, and nothing merges back: a fix lands on the trunk first, then crosses alone. A tag outlives its branch — the branch is deleted once its tags pin the commits, never merged to die. An rc tag on a line publishes to no registry; it exists to build the artifacts a human validates.
 
 ## Enforcement is a separate switch
 

@@ -10,9 +10,9 @@ Before anything that needs credentials or cannot be undone:
 rk setup step package-check --target .
 ```
 
-## 1. Shape the branches
+## 1. Make the trunk the sole long-lived branch
 
-Steps 2 through 4 of `rk setup`; the full apply below covers this section and the next two in order.
+The full apply below covers this section and the next two in order.
 
 ```bash
 rk setup --target .                                      # preview every step
@@ -22,7 +22,7 @@ rk setup check --target .                                # prove what was applie
 
 On github:
 
-`--required-check <name>` names the CI job the gate must pass, and the release-branch protection refuses without it: a wrong or missing check name does not fail, it hangs the merge button with nothing saying why. `gh api repos/<repo>/commits/HEAD/check-runs` lists the names the project's own workflow reports.
+`--required-check <name>` names the CI job the trunk's protection requires, and the protection refuses without it: a wrong or missing check name does not fail, it hangs the merge button with nothing saying why. `gh api repos/<repo>/commits/HEAD/check-runs` lists the names the project's own workflow reports.
 
 On gitlab:
 
@@ -30,7 +30,7 @@ No check is named here: the forge requires the whole pipeline through one projec
 
 ## 2. Let automation act
 
-`rk setup` steps 5 through 7 grant CI its permissions, add the project to the bot identity, and store the bot credentials. One action stays manual, on one forge, once per account ever.
+`rk setup` grants CI its permissions, adds the project to the bot identity, and stores the bot credentials. One action stays manual, on one forge, once per account ever.
 
 On github:
 
@@ -40,9 +40,9 @@ On gitlab:
 
 Nothing is manual: creating the project access token also creates its bot user, so the whole bootstrap is `rk setup step install-bot --target . --apply`, which stores the token as the masked CI variable in the same step. `rk forge gitlab` states the role and scopes the token carries and why.
 
-## 3. Protect the branches and the tags
+## 3. Protect the trunk and the tags
 
-`rk setup` steps 8 through 11: the two branch protections, the tag protection, and the check that exactly those protections exist with those rules.
+The trunk protection, the tag protection, and — where a project keeps older lines — the release-line protection, plus the check that exactly those protections exist with those rules.
 
 ```bash
 rk setup check --target .            # check: every step reports satisfied
@@ -92,7 +92,7 @@ Cut one release end to end:
 rk guide release
 ```
 
-Its verify step passing — the registry serves the new version, the tag exists, the branches agree — is the proof the next step depends on.
+Its verify step passing — the registry serves the new version, and the tag and the trunk name the same commit — is the proof the next step depends on.
 
 ## 8. Require trusted publishing
 

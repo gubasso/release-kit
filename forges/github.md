@@ -4,9 +4,9 @@ How this forge answers the method's fifth axis. The CLI is `gh`, and `rk setup` 
 
 ## Answers
 
-- The release request is a pull request against the integration branch. The bot keeps an open request current by overwriting its branch and force-pushing, so a changelog correction pushed to that branch survives later commits.
-- The gate is a pull request into the release branch, enforced by a ruleset: no direct push, a merge commit as the only merge method, and a required status check matched by name against the CI job the project's own workflow reports.
-- Protections are rulesets, one per target: the release branch, the integration branch, and the `v*` tags. A ruleset has separate create and update endpoints, so a rerun resolves the ruleset id and updates in place.
+- The release request is a pull request against the trunk — the default branch, which the bot targets with no configuration. While only its own commits sit on the request's branch the bot refreshes it by force-push; once a human commit lands there, the next refresh closes the request and opens a fresh one, taking the commit with it, which is why a changelog correction is the last act before merging.
+- The gate is the release request's own merge, enforced by the trunk's ruleset: no direct push, squash as the only merge method, and a required status check matched by name against the CI job the project's own workflow reports.
+- Protections are rulesets, one per target: the trunk, the `v*` tags, and — where a project keeps older lines — the `release/*` branches. A ruleset has separate create and update endpoints, so a rerun resolves the ruleset id and updates in place.
 - The bot identity is a GitHub App installed on the repository. Its token is what makes a tag push start workflows; a tag pushed with the default CI token starts nothing.
 
 ## Bootstrap
@@ -26,23 +26,24 @@ One caveat holds for `install-bot`: the grant endpoint is documented to work onl
 
 ## Mapping
 
-| Purpose                           | Command                                                  |
-| --------------------------------- | -------------------------------------------------------- |
-| Raw API                           | `gh api`                                                 |
-| Set the default branch            | `gh repo edit --default-branch`                          |
-| Store a secret                    | `gh secret set NAME` with the value on stdin             |
-| List open gate requests           | `gh pr list --base <branch> --state open`                |
-| Merge the release request         | `gh pr merge --squash --delete-branch`                   |
-| Merge the gate                    | `gh pr merge --merge --delete-branch`                    |
-| Wait on checks                    | `gh pr checks --watch`                                   |
-| Wait on a build                   | `gh run watch --exit-status`                             |
-| Protect a branch                  | rulesets: `POST` or `PUT /repos/{owner}/{repo}/rulesets` |
-| Require the gate's checks         | a ruleset rule naming a status-check context             |
-| Protect tags                      | a ruleset targeting `v*`                                 |
-| Grant the bot access to a project | `PUT /user/installations/{id}/repositories/{id}`         |
-| Find the bot identity             | `GET /user/installations`                                |
+| Purpose                           | Command                                                       |
+| --------------------------------- | ------------------------------------------------------------- |
+| Raw API                           | `gh api`                                                      |
+| Set the default branch            | `gh repo edit --default-branch`                               |
+| Store a secret                    | `gh secret set NAME` with the value on stdin                  |
+| List open release requests        | `gh pr list --base <branch> --state open`                     |
+| Merge the release request         | `gh pr merge --squash --delete-branch`                        |
+| Wait on checks                    | `gh pr checks --watch`                                        |
+| Wait on a build                   | `gh run watch --exit-status`                                  |
+| Protect a branch                  | rulesets: `POST` or `PUT /repos/{owner}/{repo}/rulesets`      |
+| Require the trunk's checks        | a ruleset rule naming a status-check context                  |
+| Restrict the merge method         | a ruleset `pull_request` rule listing `allowed_merge_methods` |
+| Protect tags                      | a ruleset targeting `v*`                                      |
+| Grant the bot access to a project | `PUT /user/installations/{id}/repositories/{id}`              |
+| Find the bot identity             | `GET /user/installations`                                     |
 
 ## Limitations
 
 - Rulesets on a private repository require a paid plan; on a free private repository the protections cannot be applied and `rk setup check` reports each as unsatisfied rather than pretending.
 - The App's own REST endpoints need App JWT authentication, so a user token cannot query an App directly; `install-bot` and its check work through `GET /user/installations` instead, which sees only installations the authenticated user can reach.
+- Pull requests offer no fast-forward merge. Linear trunk history is reached through squash instead: one pull request becomes one commit, which is the shape the method wants anyway.

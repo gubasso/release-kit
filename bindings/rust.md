@@ -9,13 +9,13 @@
 
 `rk init --tech rust` lands `release-plz.toml`, `dist-workspace.toml`, and the publish workflow `.github/workflows/release-plz.yml`.
 
-The artifact-builder answer holds on GitHub only. cargo-dist generates CI for GitHub Actions and for no other forge, so `(rust, gitlab)` has no artifact builder: the release page carries no installers, and [operate](../method/03-operate.md) step 8 has nothing to wait for. That is a smaller product, not a broken one — [the diff surface](../method/05-diff-surface.md) already contemplates an axis whose answer is nothing.
+The artifact-builder answer holds on GitHub only. cargo-dist generates CI for GitHub Actions and for no other forge, so `(rust, gitlab)` has no artifact builder: the release page carries no installers, and [operate](../method/03-operate.md) step 5 has nothing to wait for. That is a smaller product, not a broken one — [the diff surface](../method/05-diff-surface.md) already contemplates an axis whose answer is nothing.
 
 The registry-and-auth answer is narrower on GitLab too: crates.io trusted publishing covers GitHub Actions and GitLab.com only, the GitLab path in public beta, with no self-hosted support. A self-hosted GitLab therefore cannot satisfy the OIDC half of [the invariants](../method/01-invariants.md) and falls back to a long-lived token; `rk setup` reports that at its first step rather than letting it surface when the trusted publisher will not register.
 
 ## The workflows
 
-`release-plz.yml` is the publish workflow: it is the filename registered at crates.io, and the only workflow declaring `id-token: write`. It carries three jobs — the release-request maintainer on `develop`, the gate opener on the version-bump push, and the tag-and-publish half on `master`.
+`release-plz.yml` is the publish workflow: it is the filename registered at crates.io, and the only workflow declaring `id-token: write`. It carries two jobs — the release-request maintainer, which keeps the bump-and-changelog pull request open against the trunk, and the tag-and-publish half, which fires on the push that lands the bump.
 
 `release.yml` is the artifact workflow and cargo-dist generates it. Never edit it by hand: a hand edit is silently reverted at the next `dist generate`. Change `dist-workspace.toml` and regenerate instead, and bump the `cargo-dist-version` pin there deliberately — regenerate and read the diff. It is never registered at crates.io.
 
@@ -30,7 +30,7 @@ The tag push retriggers `release.yml` only because the publish jobs authenticate
 
 ## Operate specifics
 
-- `release_always = true` in `release-plz.toml`, because the gate's head branch is `release/v<version>`, not a `release-plz-*` branch, so the branch heuristic behind `release_always = false` would never fire. Releasing always is safe: the command no-ops when the registry already serves the version.
+- `release_always = false` in `release-plz.toml`: the release half fires only on the merge of the bot's own request, which the branch heuristic recognizes by its `release-plz-*` head branch, so an ordinary work merge publishes nothing and the release decision stays on the one merge button.
 - `git_release_enable = false`: cargo-dist owns the GitHub release, because it is the half holding the installers. Both creating it leaves dist failing on an existing tag name and every release page empty. The tag stays release-plz's.
 - `semver_check = false` for a binary-only crate, or one whose lib target exists only for its own tests; cargo-semver-checks gates the bump only when external consumers hold the API.
 - `cargo binstall <crate>` resolves cargo-dist's artifacts from the first release with no configuration.

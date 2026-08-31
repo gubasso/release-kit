@@ -4,8 +4,9 @@ How this forge answers the method's fifth axis. The CLI is `glab`, and `rk setup
 
 ## Answers
 
-- The release request is a merge request against the integration branch. Force-push refresh is unavailable here, so the bot keeps a request current by closing the open one and opening a fresh one when new work lands — and a correction on the closed request goes with it. The changelog window in the operate chapter is therefore narrower on this forge: correct and merge, with nothing landing in between.
-- The gate is a merge request into the release branch, enforced by the project setting `only_allow_merge_if_pipeline_succeeds`. That is real enforcement — a Maintainer cannot merge past a failing pipeline — with a different shape: it is project-wide rather than branch-targeted, it requires the whole pipeline rather than a named job, and it blocks a merge when there is no pipeline at all. There is no check name to register and nothing for one to point at.
+- The release request is a merge request against the trunk. Force-push refresh is unavailable here, so the bot keeps a request current by closing the open one and opening a fresh one when new work lands — and a correction on the closed request goes with it. The changelog window in the operate chapter is therefore narrower on this forge: correct and merge, with nothing landing in between.
+- The gate is the release request's own merge, enforced by the project setting `only_allow_merge_if_pipeline_succeeds`. That is real enforcement — a Maintainer cannot merge past a failing pipeline — with a different shape: it is project-wide rather than branch-targeted, it requires the whole pipeline rather than a named job, and it blocks a merge when there is no pipeline at all. There is no check name to register and nothing for one to point at.
+- Linear trunk history is the project setting `merge_method=ff` plus squash on every merge request: the forge that can fast-forward, does, so the trunk takes no merge commits.
 - Protections are protected branches and protected tags. A protected branch updates in place through `PATCH /projects/:id/protected_branches/:name`; protected tags expose no update endpoint, so a change is delete-then-create and a rerun is briefly not atomic.
 - The bot identity is a project access token: creating the token also creates its bot user, in one API call. A push authenticated with the default CI job token starts no pipeline, which is why the token exists at all.
 
@@ -24,13 +25,13 @@ Rotation is two commands: create a replacement token through the same step once 
 | Raw API                           | `glab api`                                                             |
 | Set the default branch            | `glab api -X PUT projects/:id` with `default_branch`                   |
 | Store a secret                    | `glab variable set NAME --masked` with the value on stdin              |
-| List open gate requests           | `glab mr list --target-branch <branch>`                                |
+| List open release requests        | `glab mr list --target-branch <branch>`                                |
 | Merge the release request         | `glab mr merge --squash --remove-source-branch`                        |
-| Merge the gate                    | `glab mr merge --remove-source-branch`                                 |
 | Wait on checks                    | `glab ci status --wait`                                                |
 | Wait on a build                   | `glab ci status --wait`                                                |
 | Protect a branch                  | `POST /projects/:id/protected_branches`, `PATCH` to update             |
-| Require the gate's checks         | `PUT /projects/:id` with `only_allow_merge_if_pipeline_succeeds`       |
+| Require the trunk's checks        | `PUT /projects/:id` with `only_allow_merge_if_pipeline_succeeds`       |
+| Set the merge method              | `PUT /projects/:id` with `merge_method=ff`                             |
 | Protect tags                      | `POST /projects/:id/protected_tags`; no `PATCH`, so delete-then-create |
 | Grant the bot access to a project | `POST /projects/:id/access_tokens`                                     |
 | Find the bot identity             | `GET /projects/:id/access_tokens`                                      |
