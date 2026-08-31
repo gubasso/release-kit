@@ -1053,7 +1053,12 @@ fn check(out: Output, ctx: Ctx) -> Result<(), RkError> {
             Diagnostic::new(
                 Reason::StateDrift,
                 format!(
-                    "{unsatisfied} steps are not satisfied and {unverifiable} could not be verified"
+                    "{unsatisfied} {} not satisfied and {unverifiable} could not be verified",
+                    if unsatisfied == 1 {
+                        "step is"
+                    } else {
+                        "steps are"
+                    }
                 ),
             )
             .expected("every step's proof column to hold and to be readable")
