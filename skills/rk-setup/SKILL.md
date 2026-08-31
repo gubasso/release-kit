@@ -9,6 +9,14 @@ compatibility: Requires the rk binary on PATH; install with cargo install releas
 
 Land the release-kit convention in a project. The CLI carries the whole canon: every method chapter is readable with `rk method <chapter>`, every technology binding with `rk binding <tech>`, and the deterministic files land with `rk init`.
 
+## Before acting
+
+Read `~/.local/state/release-kit/skills/shared/plan-gate.md` before the first action of a task, and hold it for the whole task. It binds three phases: plan and present the plan for approval, validate that plan against every preview and read-only source phase 2 names, then execute it.
+
+The gate is the whole reason this skill is safe to run unattended: every verb below writes files, changes a forge, or publishes a version.
+
+When the request carries `--no-plan`, skip the approval turn only. Still state the ordered plan before acting, and still validate it as phase 2 directs.
+
 ## Route to the canon
 
 | Need                            | Command                    |

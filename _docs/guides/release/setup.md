@@ -77,18 +77,22 @@ No command: creating a GitHub App is a web flow. Follow the walkthrough in `rk f
 
 The installation endpoints refuse gh's own OAuth token, so this step needs a classic personal access token — or one click at github.com/settings/installations.
 
+Store the token once in the OS keyring, then let each run read it back: the value reaches `rk` as an environment assignment, never a process argument, per `forge-setup:a-secret-never-reaches-argv`. Run this step on the host, never in a container — the keyring lookup needs a session bus a container does not have.
+
 ```bash
-GH_TOKEN=<classic-pat> rk setup step install-bot --target . --apply
+secret-tool store --label='GitHub classic PAT (repo scope)' service github account gh-classic-pat
+GH_TOKEN="$(secret-tool lookup service github account gh-classic-pat)" rk setup step install-bot --target . --apply
 # check: the step reports the installation id covering gubasso/release-kit
 ```
 
 ## 7. Store the bot credentials
 
-The values travel on stdin and land as repository secrets; rerunning with new values is the rotation path.
+The values travel on stdin and land as repository secrets; rerunning with new values is the rotation path. The environment carries the key's path, never its contents, and `rk` refuses a `.pem` that is group-readable, is inside the repository, or is not PEM-encoded private-key material.
 
 ```bash
+chmod 600 <path to the .pem>
 export RK_BOT_APP_ID=<app id>
-export RK_BOT_PRIVATE_KEY="$(cat <path to the .pem>)"
+export RK_BOT_PRIVATE_KEY_FILE=<path to the .pem>
 rk setup step bot-secrets --target . --apply
 gh secret list --repo gubasso/release-kit
 # check: lists RELEASE_BOT_APP_ID and RELEASE_BOT_APP_PRIVATE_KEY

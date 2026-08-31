@@ -13,6 +13,8 @@
   - [`distribution:skills-are-part-of-the-payload` — Skills are part of the payload](#distributionskills-are-part-of-the-payload--skills-are-part-of-the-payload)
   - [`distribution:a-skill-has-one-owner` — A skill has one owner](#distributiona-skill-has-one-owner--a-skill-has-one-owner)
   - [`distribution:a-skill-obeys-the-portable-format` — A skill obeys the portable format](#distributiona-skill-obeys-the-portable-format--a-skill-obeys-the-portable-format)
+  - [`distribution:a-skill-plans-before-it-acts` — A skill plans before it acts](#distributiona-skill-plans-before-it-acts--a-skill-plans-before-it-acts)
+  - [`distribution:shared-skill-artifacts-have-one-home` — Shared skill artifacts have one home](#distributionshared-skill-artifacts-have-one-home--shared-skill-artifacts-have-one-home)
   - [`distribution:skill-install-previews-before-writing` — A skill install previews before writing](#distributionskill-install-previews-before-writing--a-skill-install-previews-before-writing)
   - [`distribution:a-stale-skill-is-not-a-conflict` — A stale skill is not a conflict](#distributiona-stale-skill-is-not-a-conflict--a-stale-skill-is-not-a-conflict)
   - [`distribution:a-skill-install-restores-on-failure` — A skill install restores on failure](#distributiona-skill-install-restores-on-failure--a-skill-install-restores-on-failure)
@@ -136,6 +138,32 @@ Every skill MUST carry only the portable Agent Skills frontmatter fields on plai
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 
+### `distribution:a-skill-plans-before-it-acts` — A skill plans before it acts
+
+Every skill MUST route to the shared plan gate in a section preceding every other section, and MUST state what `--no-plan` changes, because each one drives operations that write files, mutate a forge, or publish a version, and an agent that starts acting before it has stated the sequence has no point left at which the operator can stop it.
+
+#### Scenario: A skill is authored with its steps ahead of the gate
+
+- GIVEN a skill whose first section is a step list rather than the gate
+- WHEN the test suite runs
+- THEN the conformance test fails and names the skill, because an agent reading top to bottom would act before reaching the gate
+
+Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `distribution:shared-skill-artifacts-have-one-home` — Shared skill artifacts have one home
+
+The distribution MUST install what the skills share once, outside the agent skill roots and under the invoking user's home, whichever agent a run selects; and `rk skill uninstall --apply` MUST keep those artifacts while any agent root still holds a skill that names them.
+
+The location is home-relative rather than `XDG_STATE_HOME`-relative for the reason the record already states: the skills reading these artifacts live under `$HOME/.claude` and `$HOME/.agents`, which no XDG variable moves.
+
+#### Scenario: One agent family is uninstalled while the other stays
+
+- GIVEN a home carrying the skills under both agent roots
+- WHEN `rk skill uninstall --agent codex --apply` runs
+- THEN the shared artifacts remain, because the skills under `.claude/skills` still name them, and a later uninstall of the last root removes them
+
+Verify: `cargo nextest run -E 'binary(cli)'`
+
 ### `distribution:skill-install-previews-before-writing` — A skill install previews before writing
 
 When run without `--apply`, `rk skill install` MUST list every destination and write nothing, and where a destination holds bytes neither the payload nor the user-scope record accounts for, an apply MUST refuse atomically, naming every conflict in one run.
@@ -186,13 +214,19 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `distribution:a-skill-destination-is-a-regular-file` — A skill destination is a regular file
 
-Where a destination is a symlink or is not a regular file, `rk skill install` and `rk skill uninstall` MUST refuse before writing or removing anything, whatever `--force` was given.
+Where a destination is a symlink, is not a regular file, or sits under a shared root reached through a symlinked directory, `rk skill install` and `rk skill uninstall` MUST refuse before writing or removing anything, whatever `--force` was given.
 
 #### Scenario: A destination is symlinked out of the home
 
 - GIVEN `~/.claude/skills/rk-release/SKILL.md` symlinked to a file elsewhere
 - WHEN `rk skill install --apply --force` runs
 - THEN it exits 73 naming the symlink, and the file it points at is unchanged
+
+#### Scenario: The shared root is reached through a symlinked directory
+
+- GIVEN `~/.local/state/release-kit/skills` symlinked to a directory elsewhere, so every shared destination under it resolves outside the home
+- WHEN `rk skill install --apply --force` runs
+- THEN it exits 73 naming the symlink, and the directory it points at is unchanged, because the destination check sees only the final component and cannot see the link above it
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 

@@ -5,13 +5,18 @@
 //! the declared variables, the forge CLI's own configuration and
 //! authentication variables, and — only for the steps that need them — the
 //! bot credentials. The parent's environment does not leak into a
-//! privileged child, and no secret is ever an argv value.
+//! privileged child, no secret is ever an argv value, and key material
+//! reaches no environment at all: `rk` reads the key the operator named and
+//! writes it to the step's standard input. [`super::secrets`] owns that
+//! boundary.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use camino::Utf8PathBuf;
+use zeroize::Zeroizing;
 
+use super::secrets;
 use crate::detect::{self, Forge};
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
@@ -37,9 +42,12 @@ const PASSTHROUGH: [&str; 11] = [
     "GLAB_CONFIG_DIR",
 ];
 
-/// The secret-bearing variables, forwarded only to the step that consumes
-/// them and recorded in the journal as handling, never as value.
-pub const SECRET_VARS: [&str; 3] = ["RK_BOT_APP_ID", "RK_BOT_PRIVATE_KEY", "RK_BOT_TOKEN"];
+/// The value-bearing bot variables, forwarded only to the steps that
+/// consume them and recorded in the journal as handling, never as value.
+/// The key is in no list here: it reaches its step as bytes on standard
+/// input, and neither it nor its path is ever put in an environment.
+/// [`secrets`] owns that.
+pub use super::secrets::VALUE_VARS as SECRET_VARS;
 
 /// One resolved run context.
 #[derive(Debug)]
@@ -191,11 +199,11 @@ impl Ctx {
         }
         if matches!(step, "install-bot" | "bot-secrets") {
             for name in SECRET_VARS {
-                if let Some(value) = std::env::var_os(name) {
+                if let Some(value) = secrets::value_of(name) {
                     env.push((name.into(), value));
                 }
             }
-            if let Some(value) = std::env::var_os("RK_BOT_INSTALLATION") {
+            if let Some(value) = secrets::value_of("RK_BOT_INSTALLATION") {
                 env.push(("RK_BOT_INSTALLATION".into(), value));
             }
         }
@@ -211,15 +219,19 @@ impl Ctx {
         Path::new(&overridden).parent().map(Path::to_path_buf)
     }
 
-    /// The secret values present in the operator's environment, for
-    /// redaction; never logged, never echoed.
+    /// The secret bytes a run must keep out of its own output: the values
+    /// the environment carries. Every buffer is scrubbed on drop; none is
+    /// ever logged or echoed.
+    ///
+    /// Key material is not read here. The step that transmits a key adds
+    /// the very bytes it sends, so the needle cannot describe one file
+    /// while the child receives another.
     #[must_use]
-    pub fn secret_values() -> Vec<Vec<u8>> {
+    pub fn secret_values() -> Vec<Zeroizing<Vec<u8>>> {
         SECRET_VARS
             .iter()
-            .filter_map(|name| std::env::var(name).ok())
-            .filter(|value| !value.is_empty())
-            .map(String::into_bytes)
+            .filter_map(|name| secrets::value_of(name))
+            .map(|value| Zeroizing::new(value.into_encoded_bytes()))
             .collect()
     }
 }

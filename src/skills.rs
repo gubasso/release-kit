@@ -50,11 +50,44 @@ pub fn all() -> Result<Vec<Skill>, RkError> {
     Ok(out)
 }
 
+/// One shared artifact: its path under the shared root, and its bytes.
+#[derive(Debug)]
+pub struct SharedArtifact {
+    /// The path relative to the shared root, as it lands.
+    pub path: String,
+    /// The authored bytes, byte-identical to the file under `skill-shared/`.
+    pub bytes: &'static [u8],
+}
+
+/// Every artifact the skills share, sorted by path.
+///
+/// These land once, outside the agent skill roots, because every skill names
+/// the same absolute path for them. A copy per skill would be one file to
+/// correct per agent root per skill; one copy is one.
+#[must_use]
+pub fn shared() -> Vec<SharedArtifact> {
+    embedded::walk(&embedded::SKILL_SHARED)
+        .into_iter()
+        .map(|(path, bytes)| SharedArtifact { path, bytes })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use super::all;
+    use super::{all, shared};
+
+    #[test]
+    fn the_payload_carries_the_shared_plan_gate() {
+        let shared = shared();
+        assert!(
+            shared
+                .iter()
+                .any(|artifact| artifact.path == "plan-gate.md"),
+            "the payload carries no shared plan gate"
+        );
+    }
 
     #[test]
     fn the_payload_carries_every_authored_skill() {

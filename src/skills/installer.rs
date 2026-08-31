@@ -76,14 +76,32 @@ pub enum Action {
 
 /// One planned write: where, and which bytes.
 struct Planned {
-    /// The `SKILL.md` path under one root.
+    /// The path this run writes.
     destination: Utf8PathBuf,
     /// The payload bytes that belong there.
     bytes: &'static [u8],
 }
 
-/// Every destination this install covers, root by root and skill by skill.
-fn plan(roots: &[Utf8PathBuf], skills: &[Skill]) -> Vec<Planned> {
+/// Where one run writes: the agent roots, the shared root, and the record.
+///
+/// The shared root is not an agent root and no `--agent` selects it. Every
+/// skill names its artifacts by one absolute path, so one copy serves both
+/// agent families, and an install writes it whichever family it was asked
+/// for.
+#[derive(Debug, Clone)]
+pub struct Layout {
+    /// The agent skill roots this run was asked to touch.
+    pub roots: Vec<Utf8PathBuf>,
+    /// Every agent skill root, whichever this run selected.
+    pub every_root: Vec<Utf8PathBuf>,
+    /// The root holding what the skills share.
+    pub shared: Utf8PathBuf,
+    /// The user-scope digest record.
+    pub record: Utf8PathBuf,
+}
+
+/// Every skill destination under `roots`, root by root and skill by skill.
+fn plan_roots(roots: &[Utf8PathBuf], skills: &[Skill]) -> Vec<Planned> {
     let mut planned = Vec::new();
     for root in roots {
         for skill in skills {
@@ -94,6 +112,45 @@ fn plan(roots: &[Utf8PathBuf], skills: &[Skill]) -> Vec<Planned> {
         }
     }
     planned
+}
+
+/// Every shared destination under `shared`.
+fn plan_shared(shared: &Utf8Path) -> Vec<Planned> {
+    crate::skills::shared()
+        .into_iter()
+        .map(|artifact| Planned {
+            destination: shared.join(&artifact.path),
+            bytes: artifact.bytes,
+        })
+        .collect()
+}
+
+/// Refuse a shared root reached through a symlink this installer would
+/// follow.
+///
+/// The chain from the state directory down to the shared root is this tool's
+/// own — nothing here ever creates a symlink in it, so one found there
+/// redirects every shared write and removal somewhere else, and
+/// [`check_destination`] cannot see it: the final component it checks is not
+/// itself a link. The directories above the state directory are the user's
+/// layout and stay unjudged.
+fn check_shared_root(shared: &Utf8Path, record: &Utf8Path) -> Result<(), RkError> {
+    let Some(state_dir) = record.parent() else {
+        return Ok(());
+    };
+    let mut current = Some(shared);
+    while let Some(dir) = current {
+        if !dir.starts_with(state_dir) {
+            break;
+        }
+        if dir.is_symlink() {
+            return Err(RkError::Refused(format!(
+                "the shared root is reached through a symlink, and nothing was written: {dir}"
+            )));
+        }
+        current = dir.parent();
+    }
+    Ok(())
 }
 
 /// Refuse a destination this installer must not write through or replace.
@@ -230,18 +287,17 @@ fn abort(unrestored: &[Utf8PathBuf], cause: &str) -> RkError {
 ///
 /// # Errors
 ///
-/// Returns [`RkError::Refused`] when a destination cannot be touched, when one
-/// holds bytes neither reference accounts for and `force` is unset, or when a
-/// write fails partway, in which case the destinations are restored first.
+/// Returns [`RkError::Refused`] when the shared root is reached through a
+/// symlink, when a destination cannot be touched, when one holds bytes neither
+/// reference accounts for and `force` is unset, or when a write fails partway,
+/// in which case the destinations are restored first.
 /// Returns [`RkError::Io`] when a destination exists but cannot be read.
-pub fn install(
-    roots: &[Utf8PathBuf],
-    record_path: &Utf8Path,
-    apply: bool,
-    force: bool,
-) -> Result<Vec<Action>, RkError> {
+pub fn install(layout: &Layout, apply: bool, force: bool) -> Result<Vec<Action>, RkError> {
+    check_shared_root(&layout.shared, &layout.record)?;
+    let record_path = layout.record.as_path();
     let skills = crate::skills::all()?;
-    let planned = plan(roots, &skills);
+    let mut planned = plan_roots(&layout.roots, &skills);
+    planned.extend(plan_shared(&layout.shared));
     for entry in &planned {
         check_destination(&entry.destination)?;
     }
@@ -251,7 +307,9 @@ pub fn install(
         .iter()
         .map(|entry| entry.destination.clone())
         .collect();
-    let stale = leftovers(roots, &record, &covered);
+    let mut scanned = layout.roots.clone();
+    scanned.push(layout.shared.clone());
+    let stale = leftovers(&scanned, &record, &covered);
 
     if !apply {
         let mut actions: Vec<Action> = covered
@@ -356,21 +414,23 @@ pub fn install(
 ///
 /// # Errors
 ///
-/// Returns [`RkError::Refused`] when a destination is a symlink or not a
-/// regular file, and [`RkError::Io`] when a removal fails.
-pub fn uninstall(
-    roots: &[Utf8PathBuf],
-    record_path: &Utf8Path,
-    apply: bool,
-) -> Result<Vec<Action>, RkError> {
+/// Returns [`RkError::Refused`] when the shared root is reached through a
+/// symlink, or when a destination is a symlink or not a regular file, and
+/// [`RkError::Io`] when a removal fails.
+pub fn uninstall(layout: &Layout, apply: bool) -> Result<Vec<Action>, RkError> {
+    check_shared_root(&layout.shared, &layout.record)?;
+    let record_path = layout.record.as_path();
     let skills = crate::skills::all()?;
     let record_found = Record::load(record_path);
     let mut removable: Vec<Utf8PathBuf> = Vec::new();
     let mut edited: Vec<Utf8PathBuf> = Vec::new();
-    for entry in plan(roots, &skills) {
+    let classify = |entry: &Planned,
+                    removable: &mut Vec<Utf8PathBuf>,
+                    edited: &mut Vec<Utf8PathBuf>|
+     -> Result<(), RkError> {
         check_destination(&entry.destination)?;
         if !entry.destination.is_file() {
-            continue;
+            return Ok(());
         }
         // The same two references an install trusts decide what goes: the
         // payload's bytes, or bytes the record vouches this tool wrote.
@@ -378,17 +438,39 @@ pub fn uninstall(
         // work an install refuses to even overwrite.
         let found = fs::read(&entry.destination)?;
         if found == entry.bytes || record_found.wrote(&entry.destination, &Digest::of(&found)) {
-            removable.push(entry.destination);
+            removable.push(entry.destination.clone());
         } else {
-            edited.push(entry.destination);
+            edited.push(entry.destination.clone());
         }
+        Ok(())
+    };
+
+    let selected = plan_roots(&layout.roots, &skills);
+    for entry in &selected {
+        classify(entry, &mut removable, &mut edited)?;
+    }
+
+    // The shared artifacts serve every agent root, so they go only once no
+    // root still holds a skill that reads them. Taking them during an
+    // `--agent codex` uninstall would leave the Claude skills naming a file
+    // that is no longer there.
+    let going: BTreeSet<&Utf8Path> = removable.iter().map(Utf8PathBuf::as_path).collect();
+    let retained = plan_roots(&layout.every_root, &skills)
+        .iter()
+        .any(|entry| !going.contains(entry.destination.as_path()) && entry.destination.is_file());
+    let mut scanned = layout.roots.clone();
+    if !retained {
+        for entry in plan_shared(&layout.shared) {
+            classify(&entry, &mut removable, &mut edited)?;
+        }
+        scanned.push(layout.shared.clone());
     }
 
     let mut record = record_found;
     // A skill the payload has since dropped is still ours to take back, and an
     // uninstall leaving it behind is the leftover an agent keeps offering. The
     // record is what names it; the payload no longer can.
-    let stale = leftovers(roots, &record, &removable);
+    let stale = leftovers(&scanned, &record, &removable);
 
     if !apply {
         let mut actions: Vec<Action> = removable
@@ -449,7 +531,7 @@ mod tests {
 
     use camino::Utf8PathBuf;
 
-    use super::{Action, install, leftovers, uninstall};
+    use super::{Action, Layout, install, leftovers, uninstall};
     use crate::skills::record::{RECORD_PATH, Record};
     use crate::skills::{Digest, all};
 
@@ -482,6 +564,30 @@ mod tests {
         fn destination(&self, root: &str, skill: &str) -> Utf8PathBuf {
             self.path().join(root).join(skill).join("SKILL.md")
         }
+
+        fn shared(&self) -> Utf8PathBuf {
+            self.path().join(".local/state/release-kit/skills/shared")
+        }
+
+        /// The layout for every agent root.
+        fn layout(&self) -> Layout {
+            self.layout_for(self.roots())
+        }
+
+        /// The layout for a subset of the agent roots.
+        fn layout_for(&self, roots: Vec<Utf8PathBuf>) -> Layout {
+            Layout {
+                roots,
+                every_root: self.roots(),
+                shared: self.shared(),
+                record: self.record(),
+            }
+        }
+    }
+
+    /// How many shared artifacts every install writes, whatever the agent.
+    fn shared_count() -> usize {
+        crate::skills::shared().len()
     }
 
     fn first_skill() -> String {
@@ -491,9 +597,9 @@ mod tests {
     #[test]
     fn a_preview_lists_every_destination_and_writes_nothing() {
         let home = Home::new();
-        let actions = install(&home.roots(), &home.record(), false, false).unwrap();
+        let actions = install(&home.layout(), false, false).unwrap();
         let count = all().unwrap().len();
-        assert_eq!(actions.len(), count * 2, "{actions:?}");
+        assert_eq!(actions.len(), count * 2 + shared_count(), "{actions:?}");
         assert!(
             actions
                 .iter()
@@ -507,14 +613,14 @@ mod tests {
     #[test]
     fn an_apply_is_idempotent_and_records_what_it_wrote() {
         let home = Home::new();
-        let first = install(&home.roots(), &home.record(), true, false).unwrap();
+        let first = install(&home.layout(), true, false).unwrap();
         assert!(
             first
                 .iter()
                 .all(|action| matches!(action, Action::Write { .. })),
             "{first:?}"
         );
-        let second = install(&home.roots(), &home.record(), true, false).unwrap();
+        let second = install(&home.layout(), true, false).unwrap();
         assert!(
             second
                 .iter()
@@ -522,7 +628,10 @@ mod tests {
             "{second:?}"
         );
         let record = Record::load(&home.record());
-        assert_eq!(record.written.len(), all().unwrap().len() * 2);
+        assert_eq!(
+            record.written.len(),
+            all().unwrap().len() * 2 + shared_count()
+        );
     }
 
     /// The defect the record exists for: bytes a previous release wrote are
@@ -531,7 +640,7 @@ mod tests {
     #[test]
     fn a_copy_a_previous_release_wrote_is_replaced_without_force() {
         let home = Home::new();
-        install(&home.roots(), &home.record(), true, false).unwrap();
+        install(&home.layout(), true, false).unwrap();
 
         // Stand in for an older release: rewrite each destination and record
         // its digest, exactly as that release's apply would have left it.
@@ -544,7 +653,7 @@ mod tests {
         }
         std::fs::write(home.record(), stale.to_text()).unwrap();
 
-        install(&home.roots(), &home.record(), true, false).unwrap();
+        install(&home.layout(), true, false).unwrap();
         let text =
             std::fs::read_to_string(home.destination(".claude/skills", &first_skill())).unwrap();
         assert!(text.contains(&format!("name: {}", first_skill())));
@@ -554,7 +663,7 @@ mod tests {
     #[test]
     fn an_edit_refuses_and_names_every_conflict() {
         let home = Home::new();
-        install(&home.roots(), &home.record(), true, false).unwrap();
+        install(&home.layout(), true, false).unwrap();
         let edited: Vec<Utf8PathBuf> = all()
             .unwrap()
             .iter()
@@ -564,7 +673,7 @@ mod tests {
             std::fs::write(destination, "the user wrote this").unwrap();
         }
 
-        let message = install(&home.roots(), &home.record(), true, false)
+        let message = install(&home.layout(), true, false)
             .unwrap_err()
             .to_string();
         for destination in &edited {
@@ -577,7 +686,7 @@ mod tests {
                 "a refused install must not overwrite"
             );
         }
-        install(&home.roots(), &home.record(), true, true).unwrap();
+        install(&home.layout(), true, true).unwrap();
         assert!(
             std::fs::read_to_string(&edited[0])
                 .unwrap()
@@ -596,9 +705,7 @@ mod tests {
         std::fs::write(&elsewhere, "the user's file\n").unwrap();
         std::os::unix::fs::symlink(&elsewhere, &destination).unwrap();
 
-        let message = install(&home.roots(), &home.record(), true, true)
-            .unwrap_err()
-            .to_string();
+        let message = install(&home.layout(), true, true).unwrap_err().to_string();
         assert!(message.contains("symlink"), "{message}");
         assert_eq!(
             std::fs::read_to_string(&elsewhere).unwrap(),
@@ -611,7 +718,7 @@ mod tests {
     #[test]
     fn a_failed_write_restores_every_destination() {
         let home = Home::new();
-        install(&home.roots(), &home.record(), true, false).unwrap();
+        install(&home.layout(), true, false).unwrap();
         let first = home.destination(".claude/skills", &first_skill());
         std::fs::write(&first, "older canon bytes\n").unwrap();
         let mut record = Record::load(&home.record());
@@ -627,7 +734,7 @@ mod tests {
         std::fs::remove_dir(&blocked).unwrap();
         std::fs::write(&blocked, "in the way\n").unwrap();
 
-        let message = install(&home.roots(), &home.record(), true, false)
+        let message = install(&home.layout(), true, false)
             .unwrap_err()
             .to_string();
         assert!(message.contains("aborted"), "{message}");
@@ -641,7 +748,7 @@ mod tests {
     #[test]
     fn an_install_sweeps_a_destination_the_payload_dropped() {
         let home = Home::new();
-        install(&home.roots(), &home.record(), true, false).unwrap();
+        install(&home.layout(), true, false).unwrap();
         let dropped = home.destination(".claude/skills", "rk-retired");
         std::fs::create_dir_all(dropped.parent().unwrap()).unwrap();
         std::fs::write(&dropped, "a skill a later release dropped\n").unwrap();
@@ -652,7 +759,7 @@ mod tests {
         );
         std::fs::write(home.record(), record.to_text()).unwrap();
 
-        let actions = install(&home.roots(), &home.record(), true, false).unwrap();
+        let actions = install(&home.layout(), true, false).unwrap();
         assert!(
             actions.contains(&Action::Sweep {
                 destination: dropped.clone()
@@ -668,7 +775,7 @@ mod tests {
     #[test]
     fn a_sweep_leaves_an_edited_leftover_alone() {
         let home = Home::new();
-        install(&home.roots(), &home.record(), true, false).unwrap();
+        install(&home.layout(), true, false).unwrap();
         let dropped = home.destination(".claude/skills", "rk-retired");
         std::fs::create_dir_all(dropped.parent().unwrap()).unwrap();
         std::fs::write(&dropped, "the user rewrote this\n").unwrap();
@@ -682,7 +789,7 @@ mod tests {
             !leftovers(&home.roots(), &record, &[]).contains(&dropped),
             "a leftover whose bytes differ from the record is the user's"
         );
-        install(&home.roots(), &home.record(), true, false).unwrap();
+        install(&home.layout(), true, false).unwrap();
         assert_eq!(
             std::fs::read_to_string(&dropped).unwrap(),
             "the user rewrote this\n"
@@ -695,11 +802,11 @@ mod tests {
     #[test]
     fn an_uninstall_keeps_an_edited_destination() {
         let home = Home::new();
-        install(&home.roots(), &home.record(), true, false).unwrap();
+        install(&home.layout(), true, false).unwrap();
         let edited = home.destination(".claude/skills", &first_skill());
         std::fs::write(&edited, "the user rewrote this\n").unwrap();
 
-        let preview = uninstall(&home.roots(), &home.record(), false).unwrap();
+        let preview = uninstall(&home.layout(), false).unwrap();
         assert!(
             preview.contains(&Action::KeptEdited {
                 destination: edited.clone()
@@ -713,7 +820,7 @@ mod tests {
             "{preview:?}"
         );
 
-        let actions = uninstall(&home.roots(), &home.record(), true).unwrap();
+        let actions = uninstall(&home.layout(), true).unwrap();
         assert!(
             actions.contains(&Action::KeptEdited {
                 destination: edited.clone()
@@ -732,7 +839,7 @@ mod tests {
     #[test]
     fn an_uninstall_removes_what_it_wrote_and_keeps_the_rest() {
         let home = Home::new();
-        install(&home.roots(), &home.record(), true, false).unwrap();
+        install(&home.layout(), true, false).unwrap();
         let skill = first_skill();
         let beside = home
             .destination(".claude/skills", &skill)
@@ -741,7 +848,7 @@ mod tests {
             .join("notes.md");
         std::fs::write(&beside, "the user's notes\n").unwrap();
 
-        let actions = uninstall(&home.roots(), &home.record(), true).unwrap();
+        let actions = uninstall(&home.layout(), true).unwrap();
         assert!(
             actions
                 .iter()
@@ -752,18 +859,156 @@ mod tests {
         assert!(beside.is_file(), "a file beside a skill must survive");
         assert!(!home.record().exists(), "an empty record is removed");
         // A re-run over an emptied home is a no-op, not a failure.
-        uninstall(&home.roots(), &home.record(), true).unwrap();
+        uninstall(&home.layout(), true).unwrap();
     }
 
     #[test]
     fn one_root_installs_and_uninstalls_without_touching_the_other() {
         let home = Home::new();
-        let claude = vec![home.path().join(".claude/skills")];
-        install(&claude, &home.record(), true, false).unwrap();
+        let claude = home.layout_for(vec![home.path().join(".claude/skills")]);
+        install(&claude, true, false).unwrap();
         assert!(home.destination(".claude/skills", &first_skill()).is_file());
         assert!(!home.path().join(".agents").exists());
 
-        uninstall(&claude, &home.record(), true).unwrap();
+        uninstall(&claude, true).unwrap();
         assert!(!home.destination(".claude/skills", &first_skill()).exists());
+    }
+
+    /// Every agent reads the same shared artifacts, so an install writes them
+    /// whichever family it was asked for.
+    #[test]
+    fn either_agent_alone_still_lands_the_shared_artifacts() {
+        for root in [".claude/skills", ".agents/skills"] {
+            let home = Home::new();
+            let one = home.layout_for(vec![home.path().join(root)]);
+            install(&one, true, false).unwrap();
+            assert!(
+                home.shared().join("plan-gate.md").is_file(),
+                "{root}: the shared gate did not land"
+            );
+        }
+    }
+
+    /// The defect this guards: taking the shared artifacts while another root
+    /// still holds skills leaves those skills naming a file that is gone.
+    #[test]
+    fn the_shared_artifacts_stay_while_another_root_still_holds_skills() {
+        let home = Home::new();
+        install(&home.layout(), true, false).unwrap();
+        let gate = home.shared().join("plan-gate.md");
+        assert!(gate.is_file());
+
+        let codex = home.layout_for(vec![home.path().join(".agents/skills")]);
+        uninstall(&codex, true).unwrap();
+        assert!(!home.destination(".agents/skills", &first_skill()).exists());
+        assert!(
+            gate.is_file(),
+            "the Claude skills still read the gate, so it must stay"
+        );
+
+        let claude = home.layout_for(vec![home.path().join(".claude/skills")]);
+        let actions = uninstall(&claude, true).unwrap();
+        assert!(
+            !gate.exists(),
+            "the last uninstall takes the gate: {actions:?}"
+        );
+    }
+
+    /// A preview of that last uninstall names the gate before it removes it.
+    #[test]
+    fn the_last_uninstall_previews_the_shared_artifacts() {
+        let home = Home::new();
+        install(&home.layout(), true, false).unwrap();
+        let actions = uninstall(&home.layout(), false).unwrap();
+        assert!(
+            actions.iter().any(|action| matches!(
+                action,
+                Action::Remove { destination } if destination.file_name() == Some("plan-gate.md")
+            )),
+            "{actions:?}"
+        );
+        assert!(
+            home.shared().join("plan-gate.md").is_file(),
+            "a preview writes nothing"
+        );
+    }
+
+    /// A shared artifact the user edited is theirs, exactly as a skill is.
+    #[test]
+    fn an_edited_shared_artifact_refuses_an_install_and_survives_an_uninstall() {
+        let home = Home::new();
+        install(&home.layout(), true, false).unwrap();
+        let gate = home.shared().join("plan-gate.md");
+        std::fs::write(&gate, b"mine now").unwrap();
+
+        let message = install(&home.layout(), true, false)
+            .expect_err("an edited gate refuses")
+            .to_string();
+        assert!(message.contains("plan-gate.md"), "{message}");
+
+        let actions = uninstall(&home.layout(), true).unwrap();
+        assert!(
+            actions.iter().any(|action| matches!(
+                action,
+                Action::KeptEdited { destination } if destination == &gate
+            )),
+            "{actions:?}"
+        );
+        assert_eq!(std::fs::read(&gate).unwrap(), b"mine now");
+    }
+
+    /// A symlinked shared destination refuses before anything is written, the
+    /// same as a symlinked skill.
+    #[test]
+    fn a_symlinked_shared_destination_refuses_before_writing() {
+        let home = Home::new();
+        let gate = home.shared().join("plan-gate.md");
+        std::fs::create_dir_all(home.shared()).unwrap();
+        std::os::unix::fs::symlink("/etc/passwd", &gate).unwrap();
+
+        let message = install(&home.layout(), true, false)
+            .expect_err("a symlink refuses")
+            .to_string();
+        assert!(message.contains("symlink"), "{message}");
+        assert!(
+            !home.destination(".claude/skills", &first_skill()).exists(),
+            "the refusal must come before the first write"
+        );
+    }
+
+    /// A shared root reached through a symlinked directory refuses both verbs:
+    /// the write would land, and the removal would delete, wherever the link
+    /// points, and no per-destination check can see it.
+    #[test]
+    fn a_symlinked_shared_root_refuses_install_and_uninstall() {
+        for symlinked in ["skills", "skills/shared"] {
+            let home = Home::new();
+            let elsewhere = home.path().join("elsewhere");
+            std::fs::create_dir_all(&elsewhere).unwrap();
+            let state_dir = home.record().parent().unwrap().to_path_buf();
+            let linked = state_dir.join(symlinked);
+            std::fs::create_dir_all(linked.parent().unwrap()).unwrap();
+            std::os::unix::fs::symlink(&elsewhere, &linked).unwrap();
+
+            let message = install(&home.layout(), true, false)
+                .expect_err("a symlinked shared root refuses an install")
+                .to_string();
+            assert!(message.contains("symlink"), "{message}");
+            assert!(
+                !elsewhere.join("plan-gate.md").exists(),
+                "an install must never write through a symlinked shared root"
+            );
+            assert!(!home.path().join(".claude").exists());
+
+            std::fs::write(elsewhere.join("plan-gate.md"), "theirs\n").unwrap();
+            let message = uninstall(&home.layout(), true)
+                .expect_err("a symlinked shared root refuses an uninstall")
+                .to_string();
+            assert!(message.contains("symlink"), "{message}");
+            assert!(
+                elsewhere.join("plan-gate.md").exists(),
+                "an uninstall must never remove through a symlinked shared root"
+            );
+        }
     }
 }

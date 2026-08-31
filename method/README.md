@@ -6,7 +6,7 @@ Start with [the model](./00-model.md), hold [the invariants](./01-invariants.md)
 
 | Chapter                                               | Owns                                                      |
 | ----------------------------------------------------- | --------------------------------------------------------- |
-| [00 — Model](./00-model.md)                           | The five-stage spine and the one-pull-request gate        |
+| [00 — Model](./00-model.md)                           | The spine, the branch forms, the one-pull-request gate    |
 | [01 — Invariants](./01-invariants.md)                 | What never varies, in any technology                      |
 | [02 — Setup](./02-setup.md)                           | Bootstrapping a repository onto the convention, in order  |
 | [03 — Operate](./03-operate.md)                       | Cutting a release, end to end                             |

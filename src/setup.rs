@@ -13,4 +13,5 @@ pub mod context;
 pub mod journal;
 pub mod observe;
 pub mod process;
+pub mod secrets;
 pub mod steps;

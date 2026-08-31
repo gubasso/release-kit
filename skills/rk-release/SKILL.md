@@ -9,6 +9,14 @@ compatibility: Requires the rk binary on PATH; install with cargo install releas
 
 Cut a release through the release-kit convention. The sequence is `rk method operate`; the technology's concrete commands are in `rk binding <tech>`; when something goes wrong, `rk method recovery` owns the way back.
 
+## Before acting
+
+Read `~/.local/state/release-kit/skills/shared/plan-gate.md` before the first action of a task, and hold it for the whole task. It binds three phases: plan and present the plan for approval, validate that plan against every preview and read-only source phase 2 names, then execute it.
+
+The gate is the whole reason this skill is safe to run unattended: every verb below writes files, changes a forge, or publishes a version.
+
+When the request carries `--no-plan`, skip the approval turn only. Still state the ordered plan before acting, and still validate it as phase 2 directs.
+
 ## The shape
 
 One pull request. The bot maintains the release request against the trunk — the version bump and the changelog — and merging it is the release: the bump push tags and publishes. Never author a tag, never push the trunk directly, never re-author a published version.

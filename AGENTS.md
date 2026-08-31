@@ -20,6 +20,7 @@ This repository is the canonical knowledge product for the release-kit workflow.
 - Every landable file has a declared kind in `src/landing.rs` — `rendered`, `seeded`, or `state` — and a landing writes `.release-kit/manifest.json` into the target, last. `SPEC-landing.md` binds the record and every verb that reads it.
 - `src/` is the distribution: the `rk` binary embeds every root in `src/payload_roots.rs` and the licenses at compile time, so canon and binary cannot drift.
 - `skills/` installs at user scope only, and `rk init` lands none: an agent resolves a skill by name across scopes, so a second copy is a second entry under one name. `SPEC-distribution.md` binds what the installer may write there.
+- `skill-shared/` is what every skill shares, installed once to `~/.local/state/release-kit/skills/shared/` and named there by absolute path: the two agent roots make no relative path reach one file from both. The plan gate every skill routes to lives there.
 - Every pinned tool is declared once, in `versions.toml`; a snippet pin changes together with its registry entry.
 - `_docs/` is this repository's own spec-driven-docs instance plus its decisions; it never ships in the crate.
 - `_docs/specs/` and this repository's integration with the instance are instance-owned; `.spec-driven-docs/` belongs to the sdd canon.

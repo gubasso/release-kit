@@ -18,10 +18,11 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 
+use zeroize::Zeroizing;
+
 use crate::events::ChildStream;
 
 /// One spawn request, fully constructed before anything runs.
-#[derive(Debug)]
 pub struct Exec {
     /// The program to spawn.
     pub program: OsString,
@@ -31,8 +32,22 @@ pub struct Exec {
     pub env: Vec<(OsString, OsString)>,
     /// The working directory.
     pub cwd: PathBuf,
-    /// Bytes written to the child's stdin, then closed.
-    pub stdin: Option<Vec<u8>>,
+    /// Bytes written to the child's stdin, then closed. Scrubbed on drop,
+    /// because this is the channel a credential travels on.
+    pub stdin: Option<Zeroizing<Vec<u8>>>,
+}
+
+impl std::fmt::Debug for Exec {
+    /// Everything but `stdin`: that field carries a credential, and a
+    /// derived rendering would put it in whatever formatted an `Exec`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Exec")
+            .field("program", &self.program)
+            .field("args", &self.args)
+            .field("cwd", &self.cwd)
+            .field("stdin", &self.stdin.as_ref().map(|_| "[redacted]"))
+            .finish_non_exhaustive()
+    }
 }
 
 impl Exec {
@@ -173,15 +188,16 @@ fn surface_exit(status: std::process::ExitStatus) -> i32 {
 /// exactly across a chunk boundary is out of reach here, which is one more
 /// reason no step ever prints one.
 #[must_use]
-pub fn redact(chunk: &[u8], secrets: &[Vec<u8>]) -> Vec<u8> {
+pub fn redact(chunk: &[u8], secrets: &[impl AsRef<[u8]>]) -> Vec<u8> {
     let mut out = chunk.to_vec();
     for secret in secrets {
+        let secret = secret.as_ref();
         if secret.is_empty() {
             continue;
         }
         while let Some(pos) = out
             .windows(secret.len())
-            .position(|window| window == secret.as_slice())
+            .position(|window| window == secret)
         {
             out.splice(pos..pos + secret.len(), b"[redacted]".iter().copied());
         }
@@ -193,7 +209,7 @@ pub fn redact(chunk: &[u8], secrets: &[Vec<u8>]) -> Vec<u8> {
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use super::{Exec, redact, run};
+    use super::{Exec, Zeroizing, redact, run};
     use std::path::PathBuf;
 
     fn sh(script: &str, stdin: Option<Vec<u8>>) -> Exec {
@@ -205,8 +221,17 @@ mod tests {
                 std::env::var_os("PATH").expect("a PATH exists"),
             )],
             cwd: PathBuf::from("."),
-            stdin,
+            stdin: stdin.map(Zeroizing::new),
         }
+    }
+
+    /// A formatted spawn request never carries what it writes to stdin.
+    #[test]
+    fn a_debug_rendering_omits_the_stdin_bytes() {
+        let exec = sh("true", Some(b"sekret-stdin-value".to_vec()));
+        let rendered = format!("{exec:?}");
+        assert!(!rendered.contains("sekret-stdin-value"));
+        assert!(rendered.contains("[redacted]"));
     }
 
     /// The concurrent-drain obligation: output far past the pipe buffer

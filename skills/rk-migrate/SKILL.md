@@ -9,6 +9,14 @@ compatibility: Requires the rk binary on PATH; install with cargo install releas
 
 Take a repository from wherever it is to the current release-kit convention. The work is a loop, not a script: observe, act on the smallest gap, re-observe, continue — and everything the operator must do by hand is gated, stated as an exact command, and verified after they run it.
 
+## Before acting
+
+Read `~/.local/state/release-kit/skills/shared/plan-gate.md` before the first action of a task, and hold it for the whole task. It binds three phases: plan and present the plan for approval, validate that plan against every preview and read-only source phase 2 names, then execute it.
+
+The gate is the whole reason this skill is safe to run unattended: every verb below writes files, changes a forge, or publishes a version.
+
+When the request carries `--no-plan`, skip the approval turn only. Still state the ordered plan before acting, and still validate it as phase 2 directs.
+
 ## The loop
 
 1. Observe: `rk doctor` for the host, `rk status --target .` for the landed payload (`--check` to judge), `rk setup check --target .` for the forge shape, `rk versions --check` for the pins.

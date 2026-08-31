@@ -364,6 +364,8 @@ fn github(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
                     let wanted = ["RELEASE_BOT_APP_ID", "RELEASE_BOT_APP_PRIVATE_KEY"];
                     if wanted.iter().all(|name| names.contains(name)) {
                         StepState::ok("both bot secrets are stored")
+                    } else if names.is_empty() {
+                        StepState::not("no bot secrets are stored")
                     } else {
                         StepState::not(format!("stored secrets: {}", names.join(", ")))
                     }

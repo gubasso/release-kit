@@ -17,6 +17,10 @@ use release_kit::skills::record::{RECORD_PATH, Record};
 const SKILLS: [&str; 3] = ["rk-migrate", "rk-release", "rk-setup"];
 const ROOTS: [&str; 2] = [".claude/skills", ".agents/skills"];
 
+/// What every skill shares, installed once outside the agent roots.
+const SHARED: [&str; 1] = ["plan-gate.md"];
+const SHARED_ROOT: &str = ".local/state/release-kit/skills/shared";
+
 fn rk() -> Command {
     Command::cargo_bin("rk").expect("the rk binary builds")
 }
@@ -50,6 +54,10 @@ impl Home {
 
     fn record(&self) -> PathBuf {
         self.path().join(RECORD_PATH)
+    }
+
+    fn shared_gate(&self) -> PathBuf {
+        self.path().join(SHARED_ROOT).join(SHARED[0])
     }
 
     fn load_record(&self) -> Record {
@@ -762,9 +770,13 @@ fn skill_install_apply_and_uninstall_round_trip() {
             assert!(home.destination(root, name).is_file());
         }
     }
+    assert!(
+        home.shared_gate().is_file(),
+        "an apply lands the shared plan gate the skills name"
+    );
     assert_eq!(
         home.load_record().written.len(),
-        ROOTS.len() * SKILLS.len(),
+        ROOTS.len() * SKILLS.len() + SHARED.len(),
         "an apply records every destination it wrote"
     );
 
@@ -940,6 +952,35 @@ fn skill_install_refuses_a_symlinked_destination() {
     assert!(!home.path().join(".agents").exists());
 }
 
+#[cfg(unix)]
+#[test]
+fn skill_install_refuses_a_symlinked_shared_root() {
+    let home = Home::new();
+    let elsewhere = home.path().join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).expect("the outside directory creates");
+    let state_dir = home
+        .record()
+        .parent()
+        .expect("the record has a parent")
+        .to_path_buf();
+    std::fs::create_dir_all(&state_dir).expect("the state directory creates");
+    std::os::unix::fs::symlink(&elsewhere, state_dir.join("skills")).expect("the symlink creates");
+
+    home.rk()
+        .args(["skill", "install", "--apply", "--force"])
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("symlink"));
+    assert_eq!(
+        std::fs::read_dir(&elsewhere)
+            .expect("the symlink target survives")
+            .count(),
+        0,
+        "an install must never write through a symlinked shared root"
+    );
+    assert!(!home.path().join(".claude").exists());
+}
+
 #[test]
 fn skill_agent_flag_touches_one_root_only() {
     let home = Home::new();
@@ -1027,6 +1068,8 @@ fn skill_install_preview_human_lines_are_snapshot_held() {
             expected.push('\n');
         }
     }
+    expected.push_str(&home.shared_gate().to_string_lossy());
+    expected.push('\n');
     expected.push_str("Next:\n  rk skill install --apply\n");
     home.rk()
         .args(["skill", "install"])
@@ -1051,7 +1094,7 @@ fn skill_install_json_reports_typed_actions() {
     assert_eq!(report["command"], "install");
     assert_eq!(report["mode"], "apply");
     let actions = report["actions"].as_array().expect("an action list");
-    assert_eq!(actions.len(), ROOTS.len() * SKILLS.len());
+    assert_eq!(actions.len(), ROOTS.len() * SKILLS.len() + SHARED.len());
     assert!(
         actions.iter().all(|action| action["action"] == "write"),
         "{actions:?}"
@@ -1431,6 +1474,55 @@ fn every_skill_carries_the_portable_frontmatter() {
     assert_eq!(seen, SKILLS.len(), "the authored skills changed");
 }
 
+/// Every skill drives operations that write files, mutate a forge, or publish
+/// a version, so each one routes to the shared plan gate before it acts, and
+/// states the one flag that changes the gate's shape. The test holds the
+/// instruction's presence; no test can hold a model to it.
+#[test]
+fn every_skill_routes_to_the_plan_gate_before_acting() {
+    const GATE: &str = "~/.local/state/release-kit/skills/shared/plan-gate.md";
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("skills");
+    for name in SKILLS {
+        let text =
+            std::fs::read_to_string(root.join(name).join("SKILL.md")).expect("the skill reads");
+        let gate = text
+            .find("## Before acting")
+            .unwrap_or_else(|| panic!("{name}: no '## Before acting' section"));
+        assert!(
+            text[gate..].contains(GATE),
+            "{name}: the gate section does not name {GATE}"
+        );
+        assert!(
+            text[gate..].contains("--no-plan"),
+            "{name}: the gate section does not state the --no-plan rule"
+        );
+        // Every other section is an acting section, so the gate leads.
+        let first = text
+            .find("\n## ")
+            .expect("a skill carries at least one section");
+        assert_eq!(
+            first + 1,
+            gate,
+            "{name}: a section precedes the plan gate, so acting can start before it is read"
+        );
+    }
+}
+
+/// The gate the skills name is one file, carried by the payload and installed
+/// once, so correcting it corrects every skill under every agent root.
+#[test]
+fn the_payload_carries_the_shared_plan_gate() {
+    let gate = Path::new(env!("CARGO_MANIFEST_DIR")).join("skill-shared/plan-gate.md");
+    let text = std::fs::read_to_string(&gate).expect("the shared gate reads");
+    for phase in ["## 1. Plan", "## 2. Validate", "## 3. Execute"] {
+        assert!(text.contains(phase), "the gate carries no {phase} phase");
+    }
+    assert!(
+        text.contains("--no-plan"),
+        "the gate does not state what --no-plan changes"
+    );
+}
+
 #[test]
 fn init_propagates_an_unreadable_destination_and_writes_nothing() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
@@ -1525,7 +1617,7 @@ fn every_setup_script_passes_the_static_battery() {
         "RK_TRUNK_BRANCH",
         "RK_REQUIRED_CHECK",
         "RK_BOT_APP_ID",
-        "RK_BOT_PRIVATE_KEY",
+        "RK_BOT_PRIVATE_KEY_FILE",
         "RK_BOT_TOKEN",
         "RK_BOT_INSTALLATION",
     ];
@@ -1940,13 +2032,15 @@ fn scan_for_tokens(path: &Path, deny: &[String], offenders: &mut Vec<String>) {
 
 /// The shipped payload carries no trace of the retired branch model: no
 /// second long-lived branch as a word, no back-merge, and no gate job — the
-/// mechanical half of the cleanup promise. The single-trunk scripts are the
-/// one exemption: their candidate list legitimately names the branches they
-/// retire. The tokens are assembled at run time so this file cannot trip
-/// its own scan.
+/// mechanical half of the cleanup promise. Two exemptions: the single-trunk
+/// scripts, whose candidate list legitimately names the branches they
+/// retire, and the forge subcommand that generates a branch from an issue,
+/// whose name collides with the retired branch's without meaning it. The
+/// tokens are assembled at run time so this file cannot trip its own scan.
 #[test]
 fn the_payload_carries_no_retired_branch_model() {
     let branch = format!("dev{}", "elop");
+    let issue_subcommand = format!("issue dev{}", "elop");
     let substrings = [
         format!("back{}merge", "-"),
         format!("open-release{}gate", "-"),
@@ -1975,8 +2069,9 @@ fn the_payload_carries_no_retired_branch_model() {
             let exempt =
                 path.ends_with("github/single-trunk") || path.ends_with("gitlab/single-trunk");
             for (idx, line) in text.lines().enumerate() {
+                let linked = line.contains(issue_subcommand.as_str());
                 let stale = substrings.iter().any(|token| line.contains(token.as_str()))
-                    || (!exempt && word_hit(line));
+                    || (!exempt && !linked && word_hit(line));
                 if stale {
                     offenders.push(format!("{}:{}", path.display(), idx + 1));
                 }
@@ -1993,9 +2088,19 @@ fn the_payload_carries_no_retired_branch_model() {
 // The mocked forge harness.
 // ---------------------------------------------------------------------------
 
+/// A key file's contents for the tests: RFC 7468 armor around a base64
+/// body, since that is what rk now demands, with a needle inside that every
+/// leak assertion looks for. The body decodes to `sekret-pem-bytes!`.
+const FAKE_PEM: &str =
+    "-----BEGIN FAKE PRIVATE KEY-----\nc2VrcmV0LXBlbS1ieXRlcyE=\n-----END FAKE PRIVATE KEY-----\n";
+
+/// The needle inside `FAKE_PEM`: what must reach stdin and nothing else.
+const PEM_NEEDLE: &str = "c2VrcmV0LXBlbS1ieXRlcyE=";
+
 const MOCK_GH: &str = r#"#!/usr/bin/env bash
 STATE="__STATE__"
 printf '%s\n' "$*" >> "$STATE/log"
+env >> "$STATE/env-log"
 stdin=""
 case "$*" in
   *"--input -"*) stdin="$(cat)"; printf '%s\n' "$stdin" >> "$STATE/stdin-log";;
@@ -2234,6 +2339,25 @@ impl ForgeFixture {
         std::fs::write(self.mock.path().join(name), value).expect("the state seeds");
     }
 
+    /// A key file outside the target, in the mode rk demands. `mode` is the
+    /// lever the refusal tests pull.
+    fn key_file_with(&self, name: &str, body: &str, mode: u32) -> PathBuf {
+        let path = self.home.path().join(name);
+        std::fs::write(&path, body).expect("the key file writes");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))
+                .expect("the key file takes its mode");
+        }
+        path
+    }
+
+    /// The ordinary case: a well-formed, owner-only PEM.
+    fn key_file(&self) -> PathBuf {
+        self.key_file_with("bot.pem", FAKE_PEM, 0o600)
+    }
+
     /// Substitute the mock forge CLI, for the cases that need a child
     /// with a particular stream or signal behavior rather than a
     /// working forge.
@@ -2270,6 +2394,11 @@ impl ForgeFixture {
         std::fs::read_to_string(self.state("stdin-log")).unwrap_or_default()
     }
 
+    /// Everything the mock forge CLI found in its own environment.
+    fn env_log(&self) -> String {
+        std::fs::read_to_string(self.state("env-log")).unwrap_or_default()
+    }
+
     fn runs_root(&self) -> PathBuf {
         self.home.path().join("release-kit/runs")
     }
@@ -2283,6 +2412,7 @@ impl ForgeFixture {
             .env("RK_GLAB_BIN", self.mock.path().join("glab"))
             .env_remove("RK_BOT_APP_ID")
             .env_remove("RK_BOT_PRIVATE_KEY")
+            .env_remove("RK_BOT_PRIVATE_KEY_FILE")
             .env_remove("RK_BOT_TOKEN")
             .args(args)
             .args(["--target"])
@@ -2342,14 +2472,14 @@ fn setup_json_is_ndjson_opening_with_the_schema() {
 #[allow(clippy::too_many_lines)]
 fn a_full_github_apply_lands_reasserts_and_checks_clean() {
     let fixture = ForgeFixture::new();
-    let pem = "-----BEGIN FAKE KEY-----\nsekret-pem-bytes\n-----END FAKE KEY-----\n";
+    let key = fixture.key_file();
     let apply = |fixture: &ForgeFixture| {
         let mut command = fixture.rk(&["setup"]);
         command
             .args(["--repo", "acme/widget", "--forge", "github"])
             .args(["--apply", "--required-check", "test-check"])
             .env("RK_BOT_APP_ID", "314159")
-            .env("RK_BOT_PRIVATE_KEY", pem);
+            .env("RK_BOT_PRIVATE_KEY_FILE", &key);
         command
     };
     apply(&fixture)
@@ -2377,11 +2507,20 @@ fn a_full_github_apply_lands_reasserts_and_checks_clean() {
     assert!(body.contains(r#""context": "test-check""#));
     assert!(body.contains(r#""allowed_merge_methods": ["squash"]"#));
 
-    // The secret reached stdin and nothing else.
-    assert!(fixture.stdin_log().contains("sekret-pem-bytes"));
+    // The key reached stdin and nothing else — not an argument list, and
+    // not the environment, which carried only the path.
+    assert!(fixture.stdin_log().contains(PEM_NEEDLE));
     assert!(
-        !fixture.log().contains("sekret-pem-bytes"),
+        !fixture.log().contains(PEM_NEEDLE),
         "a secret reached a process argument list"
+    );
+    assert!(
+        !fixture.env_log().contains(PEM_NEEDLE),
+        "a secret reached a child environment"
+    );
+    assert!(
+        !fixture.env_log().contains("RK_BOT_PRIVATE_KEY_FILE"),
+        "a child was told where the key file is, and could have reopened it"
     );
     let mut journal_dirs: Vec<PathBuf> = std::fs::read_dir(fixture.runs_root())
         .expect("the journal root reads")
@@ -2392,10 +2531,7 @@ fn a_full_github_apply_lands_reasserts_and_checks_clean() {
     let run = &journal_dirs[0];
     for file in ["meta.json", "events.jsonl", "transcript.txt"] {
         let text = std::fs::read_to_string(run.join(file)).expect("the journal file reads");
-        assert!(
-            !text.contains("sekret-pem-bytes"),
-            "{file} carries key material"
-        );
+        assert!(!text.contains(PEM_NEEDLE), "{file} carries key material");
     }
     assert!(
         !run.join("scripts").exists(),
@@ -2413,9 +2549,9 @@ fn a_full_github_apply_lands_reasserts_and_checks_clean() {
         "the journal records the materialized digests"
     );
     assert!(
-        meta["secrets"]
-            .as_array()
-            .is_some_and(|list| list.iter().any(|s| s["secret"] == "RK_BOT_PRIVATE_KEY")),
+        meta["secrets"].as_array().is_some_and(|list| list
+            .iter()
+            .any(|s| { s["secret"] == "RK_BOT_PRIVATE_KEY_FILE" && s["source"] == "file" })),
         "the journal records the secret handling"
     );
 
@@ -2794,6 +2930,190 @@ fn gitlab_bot_secrets_takes_the_value_on_stdin() {
         !fixture.log().contains("glpat-sekret-value"),
         "a secret reached a process argument list"
     );
+}
+
+/// The key's contents in the environment are refused wherever a run opens,
+/// not only in the step that would have stored them, and the refusal names
+/// the variable that replaces it.
+#[test]
+fn the_key_in_the_environment_is_refused() {
+    let fixture = ForgeFixture::new();
+    for action in [
+        vec!["setup", "check"],
+        vec!["setup", "step", "bot-secrets"],
+        vec!["setup"],
+    ] {
+        fixture
+            .rk(&action)
+            .args(["--repo", "acme/widget", "--forge", "github"])
+            .env("RK_BOT_APP_ID", "314159")
+            .env("RK_BOT_PRIVATE_KEY", FAKE_PEM)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(
+                "RK_BOT_PRIVATE_KEY carries key material",
+            ))
+            .stderr(predicate::str::contains("RK_BOT_PRIVATE_KEY_FILE"));
+    }
+    assert!(
+        !fixture.log().contains("secret set"),
+        "a refused run reached the forge"
+    );
+}
+
+/// Every wrong key file is refused before the step spawns, so nothing
+/// reaches the forge and the operator is told which fact was wrong.
+#[test]
+fn a_wrong_key_file_is_refused_before_the_forge_is_called() {
+    let fixture = ForgeFixture::new();
+    let missing = fixture.home.path().join("absent.pem");
+    let world_readable = fixture.key_file_with("loose.pem", FAKE_PEM, 0o644);
+    let not_a_key = fixture.key_file_with("id.txt", "314159\n", 0o600);
+    let empty = fixture.key_file_with("empty.pem", "", 0o600);
+    let in_tree = fixture.target.path().join("bot.pem");
+    std::fs::write(&in_tree, FAKE_PEM).expect("the in-tree key writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&in_tree, std::fs::Permissions::from_mode(0o600))
+            .expect("the in-tree key takes its mode");
+    }
+
+    let cases: [(PathBuf, &str); 6] = [
+        (missing, "unreadable"),
+        (world_readable, "readable by group or other"),
+        (not_a_key, "is not a PEM-encoded private key"),
+        (empty, "is empty"),
+        (in_tree, "inside the repository being set up"),
+        (PathBuf::from("~/bot.pem"), "unexpanded tilde"),
+    ];
+    for (path, expected) in cases {
+        // Preview rehearses apply, so both refuse the same file.
+        for extra in [vec![], vec!["--apply"]] {
+            fixture
+                .rk(&["setup", "step", "bot-secrets"])
+                .args(["--repo", "acme/widget", "--forge", "github"])
+                .args(&extra)
+                .env("RK_BOT_APP_ID", "314159")
+                .env("RK_BOT_PRIVATE_KEY_FILE", &path)
+                .assert()
+                .failure()
+                .stderr(predicate::str::contains(expected));
+        }
+    }
+    assert!(
+        !fixture.log().contains("secret set"),
+        "a refused run reached the forge"
+    );
+}
+
+/// A FIFO is refused by kind rather than waited on. rk opens the named path
+/// before it knows what it is, so the open must not block on a pipe with no
+/// writer; the timeout is what makes the difference visible.
+#[cfg(unix)]
+#[test]
+fn a_key_path_that_is_a_pipe_refuses_rather_than_blocking() {
+    let fixture = ForgeFixture::new();
+    let fifo = fixture.home.path().join("bot.fifo");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .expect("mkfifo runs");
+    assert!(made.success(), "the fifo was created");
+    fixture
+        .rk(&["setup", "step", "bot-secrets"])
+        .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
+        .env("RK_BOT_APP_ID", "314159")
+        .env("RK_BOT_PRIVATE_KEY_FILE", &fifo)
+        .timeout(std::time::Duration::from_secs(20))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("is not a regular file"));
+}
+
+/// A directory is refused by kind: `rk` reads the named file, and a source
+/// that yields its bytes once is not a key file.
+#[test]
+fn a_key_path_that_is_not_a_regular_file_is_refused() {
+    let fixture = ForgeFixture::new();
+    fixture
+        .rk(&["setup", "step", "bot-secrets"])
+        .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
+        .env("RK_BOT_APP_ID", "314159")
+        .env("RK_BOT_PRIVATE_KEY_FILE", fixture.home.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("is not a regular file"));
+}
+
+/// What rk validated is what rk sends. The key file is replaced with other
+/// material after the run resolves it and before gh could reopen it — which
+/// gh cannot do, because it is never told the path — so the stored secret
+/// is the validated one and the replacement reaches nothing.
+#[test]
+fn the_validated_bytes_are_the_transmitted_bytes() {
+    let fixture = ForgeFixture::new();
+    let key = fixture.key_file();
+    // The mock replaces the key file the moment it is first called, which
+    // is after rk read it. A run that reopened the path would store this.
+    fixture.replace_gh(
+        &MOCK_GH
+            .replace("__STATE__", &fixture.mock.path().to_string_lossy())
+            .replace(
+                "env >> \"$STATE/env-log\"",
+                &format!(
+                    "env >> \"$STATE/env-log\"\nprintf '%s' 'swapped-after-validation' > {}",
+                    key.display()
+                ),
+            ),
+    );
+    fixture
+        .rk(&["setup", "step", "bot-secrets"])
+        .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
+        .env("RK_BOT_APP_ID", "314159")
+        .env("RK_BOT_PRIVATE_KEY_FILE", &key)
+        .assert()
+        .success();
+    assert!(
+        fixture.stdin_log().contains(PEM_NEEDLE),
+        "the validated bytes were not the ones stored"
+    );
+    assert!(
+        !fixture.stdin_log().contains("swapped-after-validation"),
+        "a replacement made after validation reached the forge"
+    );
+}
+
+/// GitLab stores a token and reads no key file, so a stale key variable in
+/// the environment is not its business and must not fail its step.
+#[test]
+fn gitlab_ignores_a_broken_key_file_variable() {
+    let fixture = ForgeFixture::new();
+    fixture
+        .rk(&["setup", "step", "bot-secrets"])
+        .args(["--repo", "acme/widget", "--forge", "gitlab", "--apply"])
+        .env("RK_BOT_TOKEN", "glpat-sekret-value")
+        .env("RK_BOT_PRIVATE_KEY_FILE", "/nonexistent/stale.pem")
+        .assert()
+        .success();
+    assert!(fixture.stdin_log().contains("glpat-sekret-value"));
+}
+
+/// Half an App identity stores nothing: the App ID without the key refuses
+/// naming both variables.
+#[test]
+fn half_an_app_identity_refuses() {
+    let fixture = ForgeFixture::new();
+    fixture
+        .rk(&["setup", "step", "bot-secrets"])
+        .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
+        .env("RK_BOT_APP_ID", "314159")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "bot-secrets has no credentials to store",
+        ))
+        .stderr(predicate::str::contains("RK_BOT_PRIVATE_KEY_FILE"));
 }
 
 /// Detection selects the tree from the remote host, an unknown host refuses
