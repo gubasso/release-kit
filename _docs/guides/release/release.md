@@ -20,7 +20,7 @@ Everything else appears literally, because the convention fixes it: the trunk is
 
 ```bash
 # 1. land the work through squash-merged PRs; the trunk stays releasable
-just check
+SKIP=no-commit-to-branch just check
 
 # 2. the bot maintains the release PR against the trunk
 gh pr list --repo "$OWNER/$REPO" --state open
@@ -42,8 +42,10 @@ Three traps. Step 3: the bot refreshes the PR by force-push while only its own c
 
 Release intent captured in the squash titles, which the landed `pr-title` check holds to the project's scopes before a merge is offered, the check suite green, and the package still publishable. The trunk takes no direct push, so each change reaches it the way [setup.md](./setup.md) step 11 lays out.
 
+The sweep runs from the trunk's checkout, and the landed branch guard reads the checkout rather than a commit event, so the skip names it out — the same form the hook block's comment gives a CI sweep.
+
 ```bash
-just check
+SKIP=no-commit-to-branch just check
 cargo publish --dry-run --locked
 # check: both exit 0; the trunk is releasable
 ```
