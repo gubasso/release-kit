@@ -33,6 +33,8 @@ This repository is the canonical knowledge product for the release-kit workflow.
 - Keep chapters at or below 200 lines and decision records at or below 350 words.
 - Use headings, lists, tables, fenced blocks with a language, inline code, and links. Use no bold or italic text.
 - Keep prose unwrapped: one source line per paragraph or list item.
+- Write guides as numbered steps in prerequisite order: every step carries its check, a manual step enumerates every field and value, and a divergent rerun names its destination.
+- Verify every upstream-owned fact in a guide against an official reference and record the dated citation in `_docs/reference/`, keeping the guide lean.
 - State what is true now. Decision records are the only history-bearing document class.
 - Keep exploratory material in `.draft/`; promotion is a rewrite into the owning zone.
 

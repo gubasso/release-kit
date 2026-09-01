@@ -476,7 +476,8 @@ Trusted publishing attaches to an existing package, so the first version goes up
    git status --porcelain
    # check: empty
    git rev-parse HEAD origin/master
-   # check: two identical SHAs; the publish comes from the trunk's tip
+   # check: two identical SHAs; HEAD is the trunk's tip, and HEAD is what the publish packages
+   # they differ: the trunk takes no direct push, so land the commits through a pull request and rerun this step
    ```
 
 2. Read the version this first release claims.
@@ -486,12 +487,26 @@ Trusted publishing attaches to an existing package, so the first version goes up
    # check: note it; step 4 asserts against it
    ```
 
-3. Mint the narrowest token that can do the job, at `crates.io/settings/tokens`, then New Token.
-   - Name: something that says it is the bootstrap token for this crate
-   - Scopes: `publish-new` only
-   - Crate pattern: none, the name does not exist yet
-   - Expiry: the shortest offered
-   - Create it, then copy the value; the page shows it once
+3. Mint the narrowest token that can do the job: no command, the registry exposes token creation in the browser only. The form is titled New API Token; its fields and their meanings are verified in [REFERENCE-release-guide-sources.md](../../reference/REFERENCE-release-guide-sources.md).
+
+   1. Open `crates.io/settings/tokens`, then click New Token.
+   2. Name: `$CRATE bootstrap publish`.
+      - the field grants nothing; it is the label the token list shows
+   3. Expiration: pick 7 days from the dropdown.
+      - it defaults to 90 days, and 7 is the shortest preset; the token has one job
+      - the line beside the dropdown reads "The token will expire on" the date seven days out
+   4. Scopes: check `publish-new`, Publish new crates. Leave the other four unchecked.
+      - `publish-update`, `yank`, `change-owners`, and `trusted-publishing` are jobs this token never does; step 14 sets up trusted publishing in the crate's own settings, with no token
+   5. Crates: click Add pattern, then enter `$CRATE`.
+      - a pattern also matches crates published after the token is created, so the unclaimed name binds
+      - an empty list reads Unrestricted, which is wider than the job
+   6. Click Generate Token.
+   7. Copy the value from the new row.
+      - the copy icon renders only where the browser exposes a clipboard; without one, select the shown value and copy it by hand
+      - check: the icon reports "Copied to clipboard!"
+      - "Copy to clipboard failed!": select the shown value and copy it by hand
+      - the value is shown this once; a token left uncopied is revoked and reminted, never guessed
+      - check: the row reads Scopes: publish-new, Crates: the crate's name, and Expires in 7 days
 
 4. Store the token, publish, and assert what the registry serves.
 
