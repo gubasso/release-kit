@@ -6,7 +6,7 @@ How this forge answers the method's fifth axis. The CLI is `glab`, and `rk setup
 
 - The release request is a merge request against the trunk. Force-push refresh is unavailable here, so the bot keeps a request current by closing the open one and opening a fresh one when new work lands — and a correction on the closed request goes with it. The changelog window in the operate chapter is therefore narrower on this forge: correct and merge, with nothing landing in between.
 - The gate is the release request's own merge, enforced by the project setting `only_allow_merge_if_pipeline_succeeds`. That is real enforcement — a Maintainer cannot merge past a failing pipeline — with a different shape: it is project-wide rather than branch-targeted, it requires the whole pipeline rather than a named job, and it blocks a merge when there is no pipeline at all. There is no check name to register and nothing for one to point at.
-- Linear trunk history is the project setting `merge_method=ff` plus squash on every merge request: the forge that can fast-forward, does, so the trunk takes no merge commits.
+- Linear trunk history is the project setting `merge_method=ff` plus squash on every merge request: the forge that can fast-forward, does, so the trunk takes no merge commits. The squash message is the merge request's title because `squash_commit_template` is `%{title}` — this forge's documented default, which `protect-trunk` asserts rather than assumes — and the landed `mr-title` job holds that title to the scoped convention, blocking through the pipeline requirement since this forge names no check.
 - Protections are protected branches and protected tags. A protected branch updates in place through `PATCH /projects/:id/protected_branches/:name`; protected tags expose no update endpoint, so a change is delete-then-create and a rerun is briefly not atomic.
 - The issue link is a name match: a branch named `<issue>-<slug>` — the shape the forge mints from an issue — cross-links, and the merge request opened from it carries `Closes #<issue>` by default. `glab mr create --related-issue <issue> --create-source-branch` creates the branch and that merge request in one move.
 - The bot identity is a project access token: creating the token also creates its bot user, in one API call. A push authenticated with the default CI job token starts no pipeline, which is why the token exists at all.
@@ -35,6 +35,7 @@ Rotation is two commands: create a replacement token through the same step once 
 | Protect a branch                     | `POST /projects/:id/protected_branches`, `PATCH` to update             |
 | Require the trunk's checks           | `PUT /projects/:id` with `only_allow_merge_if_pipeline_succeeds`       |
 | Set the merge method                 | `PUT /projects/:id` with `merge_method=ff`                             |
+| Make the title the squash message    | `PUT /projects/:id` with `squash_commit_template=%{title}`             |
 | Protect tags                         | `POST /projects/:id/protected_tags`; no `PATCH`, so delete-then-create |
 | Grant the bot access to a project    | `POST /projects/:id/access_tokens`                                     |
 | Find the bot identity                | `GET /projects/:id/access_tokens`                                      |

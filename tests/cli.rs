@@ -83,7 +83,7 @@ fn utf8(path: &Path) -> Utf8PathBuf {
 /// and return the assertion to judge.
 fn land_rust(target: &Path) -> assert_cmd::assert::Assert {
     rk().args(["init", "--tech", "rust", "--forge", "github"])
-        .args(["--repo", "acme/widget", "--target"])
+        .args(["--repo", "acme/widget", "--scopes", "api,cli", "--target"])
         .arg(target)
         .arg("--apply")
         .assert()
@@ -252,6 +252,8 @@ fn a_closed_pipe_does_not_interrupt_an_apply() {
         "github",
         "--repo",
         "acme/widget",
+        "--scopes",
+        "api,cli",
         "--target",
         &target_path,
         "--apply",
@@ -540,11 +542,13 @@ fn init_preview_human_lines_are_snapshot_held() {
     let path = target.path().to_string_lossy().into_owned();
     let expected = format!(
         "DRY RUN: rk init writes these files into {path}; re-run with --apply\n\
+         .github/workflows/pr-title.yml\n\
          .github/workflows/release-plz.yml\n\
+         .pre-commit-config.yaml\n\
          AGENTS.md\n\
          dist-workspace.toml\n\
          release-plz.toml\n\
-         Next:\n  rk init --tech rust --forge github --repo <owner/name> --target {path} --apply\n"
+         Next:\n  rk init --tech rust --forge github --repo <owner/name> --scopes <scope,scope> --target {path} --apply\n"
     );
     rk().args([
         "init", "--tech", "rust", "--forge", "github", "--target", &path,
@@ -560,7 +564,7 @@ fn init_json_emits_one_object_and_nothing_else() {
     for (mode, extra) in [("preview", None), ("apply", Some("--apply"))] {
         let mut cmd = rk();
         cmd.args(["init", "--tech", "rust", "--forge", "github"])
-            .args(["--repo", "acme/widget", "--target"])
+            .args(["--repo", "acme/widget", "--scopes", "api,cli", "--target"])
             .arg(target.path());
         if let Some(flag) = extra {
             cmd.arg(flag);
@@ -596,7 +600,7 @@ fn init_json_failure_is_a_diagnostic_on_stderr() {
     std::fs::write(&workflow, "something local\n").expect("the conflict file writes");
     let output = rk()
         .args(["init", "--tech", "rust", "--forge", "github"])
-        .args(["--repo", "acme/widget", "--target"])
+        .args(["--repo", "acme/widget", "--scopes", "api,cli", "--target"])
         .arg(target.path())
         .args(["--apply", "--json"])
         .assert()
@@ -2161,12 +2165,19 @@ api)
   "GET repos/acme/widget")
     if [[ -f "$STATE/fail_repo" ]]; then echo "gh: Internal Server Error (HTTP 500)" >&2; exit 1; fi
     deleting="$(cat "$STATE/delete_branch_on_merge" 2>/dev/null || echo false)"
+    squash_title="null"
+    [[ -f "$STATE/squash_merge_commit_title" ]] && squash_title="\"$(cat "$STATE/squash_merge_commit_title")\""
     if [[ "$query" == ".id" ]]; then echo 1
     elif [[ "$query" == ".delete_branch_on_merge" ]]; then echo "$deleting"
-    else echo "{\"id\":1,\"default_branch\":\"$(cat "$STATE/default_branch")\",\"delete_branch_on_merge\":$deleting}"; fi;;
+    elif [[ "$query" == ".squash_merge_commit_title" ]]; then echo "${squash_title//\"/}"
+    else echo "{\"id\":1,\"default_branch\":\"$(cat "$STATE/default_branch")\",\"delete_branch_on_merge\":$deleting,\"squash_merge_commit_title\":$squash_title}"; fi;;
   "PATCH repos/acme/widget")
     for f in "${fields[@]}"; do
-      case "$f" in delete_branch_on_merge=*) echo "${f#delete_branch_on_merge=}" > "$STATE/delete_branch_on_merge";; esac
+      case "$f" in
+        delete_branch_on_merge=*) echo "${f#delete_branch_on_merge=}" > "$STATE/delete_branch_on_merge";;
+        squash_merge_commit_title=*) echo "${f#squash_merge_commit_title=}" > "$STATE/squash_merge_commit_title";;
+        squash_merge_commit_message=*) echo "${f#squash_merge_commit_message=}" > "$STATE/squash_merge_commit_message";;
+      esac
     done
     echo '{}';;
   "GET repos/"*"/git/ref/heads/"*)
@@ -2286,19 +2297,37 @@ api)
     if [[ -f "$STATE/tag_protected" ]]; then echo '{"name":"v*"}'; else echo "glab: 404 Not Found (HTTP 404)" >&2; exit 1; fi;;
   "POST "*"/protected_tags")
     touch "$STATE/tag_protected"; echo '{}';;
+  "GET "*"/protected_branches/master")
+    if [[ -f "$STATE/protected_master" ]]; then
+      echo '{"name":"master","push_access_levels":[{"access_level":0}],"merge_access_levels":[{"access_level":40}],"allow_force_push":false}'
+    else
+      echo "glab: 404 Not Found (HTTP 404)" >&2; exit 1
+    fi;;
   "GET "*"/protected_branches/"*)
     echo "glab: 404 Not Found (HTTP 404)" >&2; exit 1;;
+  "POST "*"/protected_branches")
+    touch "$STATE/protected_master"; echo '{}';;
+  "PATCH "*"/protected_branches/master")
+    echo '{}';;
   "PUT projects/"*)
     for f in "${fields[@]}"; do
       case "$f" in
         default_branch=*) echo "${f#default_branch=}" > "$STATE/default_branch";;
         remove_source_branch_after_merge=*) echo "${f#remove_source_branch_after_merge=}" > "$STATE/remove_source_branch";;
+        only_allow_merge_if_pipeline_succeeds=*) echo "${f#only_allow_merge_if_pipeline_succeeds=}" > "$STATE/pipeline_required";;
+        merge_method=*) echo "${f#merge_method=}" > "$STATE/merge_method";;
+        squash_option=*) echo "${f#squash_option=}" > "$STATE/squash_option";;
+        squash_commit_template=*) echo "${f#squash_commit_template=}" > "$STATE/squash_commit_template";;
       esac
     done
     echo '{}';;
   "GET projects/"*)
     removing="$(cat "$STATE/remove_source_branch" 2>/dev/null || echo false)"
-    echo "{\"id\":1,\"default_branch\":\"$(cat "$STATE/default_branch")\",\"jobs_enabled\":true,\"only_allow_merge_if_pipeline_succeeds\":false,\"merge_method\":\"ff\",\"squash_option\":\"never\",\"remove_source_branch_after_merge\":$removing}";;
+    piped="$(cat "$STATE/pipeline_required" 2>/dev/null || echo false)"
+    merging="$(cat "$STATE/merge_method" 2>/dev/null || echo merge)"
+    squashing="$(cat "$STATE/squash_option" 2>/dev/null || echo never)"
+    template="$(cat "$STATE/squash_commit_template" 2>/dev/null || echo)"
+    echo "{\"id\":1,\"default_branch\":\"$(cat "$STATE/default_branch")\",\"jobs_enabled\":true,\"only_allow_merge_if_pipeline_succeeds\":$piped,\"merge_method\":\"$merging\",\"squash_option\":\"$squashing\",\"remove_source_branch_after_merge\":$removing,\"squash_commit_template\":\"$template\"}";;
   *) echo '{}';;
   esac
   exit 0;;
@@ -2575,7 +2604,13 @@ fn a_full_github_apply_lands_reasserts_and_checks_clean() {
     );
     let body = std::fs::read_to_string(fixture.state("ruleset_master-protection")).expect("reads");
     assert!(body.contains(r#""context": "test-check""#));
+    assert!(body.contains(r#""context": "pr-title""#));
     assert!(body.contains(r#""allowed_merge_methods": ["squash"]"#));
+    assert_eq!(
+        std::fs::read_to_string(fixture.state("squash_merge_commit_title")).expect("state reads"),
+        "PR_TITLE\n",
+        "the squash title source is the request's title"
+    );
 
     // The key reached stdin and nothing else — not an argument list, and
     // not the environment, which carried only the path.
@@ -3049,6 +3084,53 @@ fn the_check_name_reaches_the_protection_body_verbatim() {
             .contains(r#""context": "build (matrix, 1)""#),
         "the check name was altered on the way to the body: {}",
         fixture.stdin_log()
+    );
+    assert!(
+        fixture.stdin_log().contains(r#""context": "pr-title""#),
+        "the title check rides beside the named one: {}",
+        fixture.stdin_log()
+    );
+}
+
+/// The GitLab trunk protection asserts the squash template beside the
+/// merge shape, and its observation faults a project whose template is
+/// anything but the merge request's title.
+#[test]
+fn a_gitlab_protect_trunk_apply_asserts_the_squash_template() {
+    let fixture = ForgeFixture::new();
+    fixture.seed("default_branch", "master");
+
+    // The protection exists but the project settings do not hold: the
+    // observation names the squash template among the faults.
+    fixture.seed("protected_master", "");
+    let out = fixture
+        .rk(&["setup", "check"])
+        .args(["--repo", "acme/widget", "--forge", "gitlab"])
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8_lossy(&out);
+    assert!(
+        text.contains("the squash template is not the merge request's title"),
+        "an unset template must read as drift: {text}"
+    );
+
+    // The apply asserts every setting, and the observation then agrees.
+    fixture
+        .rk(&["setup", "step", "protect-trunk"])
+        .args(["--repo", "acme/widget", "--forge", "gitlab", "--apply"])
+        .assert()
+        .success();
+    assert_eq!(
+        std::fs::read_to_string(fixture.state("squash_commit_template")).expect("state reads"),
+        "%{title}\n",
+        "the squash template is the merge request's title"
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture.state("squash_option")).expect("state reads"),
+        "always\n"
     );
 }
 
@@ -3913,6 +3995,10 @@ fn a_landing_writes_the_record_with_its_identity() {
     assert_eq!(manifest["tech"], "rust");
     assert_eq!(manifest["forge"], "github");
     assert_eq!(manifest["parameters"]["repo"], "acme/widget");
+    assert_eq!(
+        manifest["parameters"]["scopes"],
+        serde_json::json!(["api", "cli"])
+    );
 
     let payload = rk()
         .args(["payload", "--json"])
@@ -3978,10 +4064,106 @@ fn the_routing_block_splices_and_is_recorded() {
     assert!(agents.starts_with("# Widget\n\nHouse rules.\n"));
     assert!(agents.contains("<!-- BEGIN release-kit -->"));
     assert!(agents.contains("rk method invariants"));
+    assert!(agents.contains("branch first"));
+    assert!(
+        agents.contains("the scopes this project accepts are `api,cli`"),
+        "{agents}"
+    );
     assert!(agents.trim_end().ends_with("<!-- END release-kit -->"));
     assert_eq!(
         manifest_file(&read_manifest(target.path()), "AGENTS.md")["kind"],
         "rendered"
+    );
+}
+
+/// The hook block splices into a target's own `.pre-commit-config.yaml`
+/// under its `repos:` key without taking the file over, lands whole with
+/// the hook-types key where none exists, and refuses by name a config
+/// with no `repos:` line — leaving the target unchanged, record included.
+#[test]
+fn the_hook_block_splices_and_lands_whole_and_refuses_reposless() {
+    // A target with its own hooks: the block lands under repos:, the
+    // target's hooks survive, and the top level is untouched.
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    let own = "repos:\n  - repo: https://example.com/own\n    rev: v1\n    hooks:\n      - id: own-hook\n";
+    std::fs::write(target.path().join(".pre-commit-config.yaml"), own)
+        .expect("the target's own config writes");
+    land_rust(target.path()).success();
+    let config = std::fs::read_to_string(target.path().join(".pre-commit-config.yaml"))
+        .expect("the config reads");
+    assert!(
+        config.starts_with("repos:\n# BEGIN release-kit\n"),
+        "{config}"
+    );
+    assert!(
+        config.contains("- id: own-hook"),
+        "the target's hooks survive"
+    );
+    assert!(config.contains("--scopes, 'api,cli'"), "{config}");
+    for hook in [
+        "conventional-pre-commit",
+        "no-commit-to-branch",
+        "rk-branch-name",
+        "rk-no-push-to-trunk",
+        "rk-no-hand-authored-tag",
+        "rk-status-check",
+    ] {
+        assert!(config.contains(hook), "the block carries {hook}");
+    }
+    assert!(
+        !config.contains("default_install_hook_types"),
+        "an existing file's top level belongs to the target"
+    );
+    assert_eq!(
+        manifest_file(&read_manifest(target.path()), ".pre-commit-config.yaml")["kind"],
+        "rendered"
+    );
+
+    // No config at all: the fresh file carries the hook-types key.
+    let fresh = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(fresh.path()).success();
+    let config = std::fs::read_to_string(fresh.path().join(".pre-commit-config.yaml"))
+        .expect("the fresh config reads");
+    assert!(
+        config.starts_with("default_install_hook_types: [pre-commit, commit-msg, pre-push]"),
+        "{config}"
+    );
+
+    // A config with no repos: line refuses before anything lands.
+    let reposless = tempfile::tempdir().expect("a scratch dir exists");
+    std::fs::write(
+        reposless.path().join(".pre-commit-config.yaml"),
+        "minimum_pre_commit_version: '3.2.0'\n",
+    )
+    .expect("the reposless config writes");
+    land_rust(reposless.path())
+        .code(73)
+        .stderr(predicate::str::contains("repos:"));
+    assert!(
+        !reposless.path().join(".release-kit").exists(),
+        "a refused landing writes nothing"
+    );
+    assert!(
+        !reposless.path().join("release-plz.toml").exists(),
+        "a refused landing writes nothing"
+    );
+}
+
+/// An apply without `--scopes` refuses naming the flag: the scope
+/// vocabulary is a decision, not a default.
+#[test]
+fn init_apply_without_scopes_refuses_naming_the_flag() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    rk().args(["init", "--tech", "rust", "--forge", "github"])
+        .args(["--repo", "acme/widget", "--target"])
+        .arg(target.path())
+        .arg("--apply")
+        .assert()
+        .code(64)
+        .stderr(predicate::str::contains("--scopes"));
+    assert!(
+        !target.path().join(".release-kit").exists(),
+        "a refused landing writes nothing"
     );
 }
 
@@ -4406,9 +4588,11 @@ fn a_matching_target_adopts_writing_only_the_manifest() {
 
     let adopt = |apply: bool| {
         let mut cmd = rk();
-        cmd.args(["adopt", "--tech", "rust", "--forge", "github"])
-            .args(["--repo", "acme/widget", "--target"])
-            .arg(target.path());
+        cmd.args([
+            "adopt", "--tech", "rust", "--forge", "github", "--scopes", "api,cli",
+        ])
+        .args(["--repo", "acme/widget", "--target"])
+        .arg(target.path());
         if apply {
             cmd.arg("--apply");
         }
@@ -4424,6 +4608,10 @@ fn a_matching_target_adopts_writing_only_the_manifest() {
     let manifest = read_manifest(target.path());
     assert_eq!(manifest["origin"], "adopt");
     assert_eq!(manifest["parameters"]["repo"], "acme/widget");
+    assert_eq!(
+        manifest["parameters"]["scopes"],
+        serde_json::json!(["api", "cli"])
+    );
     assert_eq!(
         tree_digests(target.path())
             .into_iter()
@@ -4461,17 +4649,19 @@ fn an_edited_rendered_file_refuses_adoption_listing_every_mismatch() {
         .replace("Never author a tag", "Do author tags");
     std::fs::write(&agents, block).expect("the block edit writes");
 
-    rk().args(["adopt", "--tech", "rust", "--forge", "github"])
-        .args(["--repo", "acme/widget", "--target"])
-        .arg(target.path())
-        .arg("--apply")
-        .assert()
-        .code(73)
-        .stderr(
-            predicate::str::contains("release-plz.yml")
-                .and(predicate::str::contains("AGENTS.md"))
-                .and(predicate::str::contains("no record was written")),
-        );
+    rk().args([
+        "adopt", "--tech", "rust", "--forge", "github", "--scopes", "api,cli",
+    ])
+    .args(["--repo", "acme/widget", "--target"])
+    .arg(target.path())
+    .arg("--apply")
+    .assert()
+    .code(73)
+    .stderr(
+        predicate::str::contains("release-plz.yml")
+            .and(predicate::str::contains("AGENTS.md"))
+            .and(predicate::str::contains("no record was written")),
+    );
     assert!(!target.path().join(".release-kit").exists());
 }
 
@@ -4488,15 +4678,17 @@ fn a_differing_seeded_file_adopts_with_both_digests() {
     )
     .expect("the tune writes");
 
-    rk().args(["adopt", "--tech", "rust", "--forge", "github"])
-        .args(["--repo", "acme/widget", "--target"])
-        .arg(target.path())
-        .arg("--apply")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains(
-            "differs release-plz.toml (seeded, target-owned)",
-        ));
+    rk().args([
+        "adopt", "--tech", "rust", "--forge", "github", "--scopes", "api,cli",
+    ])
+    .args(["--repo", "acme/widget", "--target"])
+    .arg(target.path())
+    .arg("--apply")
+    .assert()
+    .success()
+    .stdout(predicate::str::contains(
+        "differs release-plz.toml (seeded, target-owned)",
+    ));
     let seeded = read_manifest(target.path());
     let seeded = manifest_file(&seeded, "release-plz.toml");
     assert_eq!(
@@ -4518,13 +4710,15 @@ fn a_missing_expected_file_refuses_adoption() {
     std::fs::remove_dir_all(target.path().join(".release-kit")).expect("the record removes");
     std::fs::remove_file(target.path().join("dist-workspace.toml")).expect("the file removes");
 
-    rk().args(["adopt", "--tech", "rust", "--forge", "github"])
-        .args(["--repo", "acme/widget", "--target"])
-        .arg(target.path())
-        .arg("--apply")
-        .assert()
-        .code(73)
-        .stderr(predicate::str::contains("dist-workspace.toml"));
+    rk().args([
+        "adopt", "--tech", "rust", "--forge", "github", "--scopes", "api,cli",
+    ])
+    .args(["--repo", "acme/widget", "--target"])
+    .arg(target.path())
+    .arg("--apply")
+    .assert()
+    .code(73)
+    .stderr(predicate::str::contains("dist-workspace.toml"));
     assert!(!target.path().join(".release-kit").exists());
 }
 
@@ -4542,15 +4736,17 @@ fn an_agents_file_without_the_block_refuses_naming_the_block() {
     )
     .expect("the rewrite writes");
 
-    rk().args(["adopt", "--tech", "rust", "--forge", "github"])
-        .args(["--repo", "acme/widget", "--target"])
-        .arg(target.path())
-        .arg("--apply")
-        .assert()
-        .code(73)
-        .stderr(predicate::str::contains(
-            "AGENTS.md (carries no release-kit block)",
-        ));
+    rk().args([
+        "adopt", "--tech", "rust", "--forge", "github", "--scopes", "api,cli",
+    ])
+    .args(["--repo", "acme/widget", "--target"])
+    .arg(target.path())
+    .arg("--apply")
+    .assert()
+    .code(73)
+    .stderr(predicate::str::contains(
+        "AGENTS.md (carries no release-kit block)",
+    ));
     assert!(!target.path().join(".release-kit").exists());
 }
 
@@ -4559,13 +4755,15 @@ fn an_agents_file_without_the_block_refuses_naming_the_block() {
 fn an_existing_record_refuses_adoption_naming_upgrade() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
     land_rust(target.path()).success();
-    rk().args(["adopt", "--tech", "rust", "--forge", "github"])
-        .args(["--repo", "acme/widget", "--target"])
-        .arg(target.path())
-        .arg("--apply")
-        .assert()
-        .code(73)
-        .stderr(predicate::str::contains("rk upgrade"));
+    rk().args([
+        "adopt", "--tech", "rust", "--forge", "github", "--scopes", "api,cli",
+    ])
+    .args(["--repo", "acme/widget", "--target"])
+    .arg(target.path())
+    .arg("--apply")
+    .assert()
+    .code(73)
+    .stderr(predicate::str::contains("rk upgrade"));
 }
 
 /// Every file's digest under a directory, for asserting a tree unchanged.

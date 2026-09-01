@@ -108,7 +108,8 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
             })?
             .to_owned(),
     };
-    let entries = landing::projection(&tech, &resolved.forge, &repo)?;
+    let scopes = required_scopes(args.scopes.as_deref())?;
+    let entries = landing::projection(&tech, &resolved.forge, &repo, &scopes)?;
     let (files, records) = verify(args, &entries)?;
 
     for file in &files {
@@ -129,7 +130,10 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
                 tech: tech.clone(),
                 forge: resolved.forge.clone(),
                 landed_at: manifest::now(),
-                parameters: Parameters { repo: repo.clone() },
+                parameters: Parameters {
+                    repo: repo.clone(),
+                    scopes,
+                },
                 files: records,
                 pins: registry::pins_for(&tech)
                     .into_iter()
@@ -233,6 +237,16 @@ fn verify(
         )
         .target_state("unchanged"),
     ))
+}
+
+/// The `--scopes` argument an adoption cannot proceed without: there is
+/// no record to read the parameter from yet.
+fn required_scopes(raw: Option<&str>) -> Result<Vec<String>, RkError> {
+    landing::parse_scopes(raw.ok_or_else(|| {
+        RkError::Usage(
+            "an adoption renders the candidate under the scopes parameter; pass --scopes <list>, the Conventional Commit scopes this project accepts".into(),
+        )
+    })?)
 }
 
 #[cfg(test)]

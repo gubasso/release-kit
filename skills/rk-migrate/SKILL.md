@@ -27,15 +27,20 @@ When the request carries `--no-plan`, skip the approval turn only. Still state t
 
 ## What runs unattended
 
-| Finding                                  | Act                                             |
-| ---------------------------------------- | ----------------------------------------------- |
-| A target with no landing record          | `rk adopt --target . --apply`                   |
-| A landed payload older than the binary   | `rk upgrade --target . --apply`                 |
-| A missing or drifted forge protection    | `rk setup step <name> --apply`                  |
-| An unfilled `TODO(release-kit)` sentinel | Resolve it in the seeded file, from the project |
-| Stale installed skills                   | `rk skill install --apply`                      |
+| Finding                                               | Act                                                                                         |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| A target with no landing record                       | `rk adopt --target . --scopes <list> --apply`                                               |
+| A landed payload older than the binary                | `rk upgrade --target . --apply`                                                             |
+| A record without the scopes parameter                 | `rk upgrade --target . --scopes <list> --apply`, the list confirmed with the operator first |
+| A missing hook block in `.pre-commit-config.yaml`     | The upgrade lands it; reconcile the config first, as below                                  |
+| A missing or drifted forge protection                 | `rk setup step <name> --apply`                                                              |
+| A squash title source that is not the request's title | `rk setup step protect-trunk --apply` re-asserts it                                         |
+| An unfilled `TODO(release-kit)` sentinel              | Resolve it in the seeded file, from the project                                             |
+| Stale installed skills                                | `rk skill install --apply`                                                                  |
 
 Mechanical file edits can go to a subagent; every forge mutation stays in this loop, where its observation lives.
+
+Before an upgrade lands the hook block into an existing `.pre-commit-config.yaml`, reconcile it: name any hook already doing one of the block's jobs — `committed`, `commitlint`, `gitlint`, another conventional-commit or branch-guard hook — and gate the choice between it and the landed hook for the operator rather than stacking a second hook on one job; verify the top level carries `default_install_hook_types: [pre-commit, commit-msg, pre-push]`, and end with the install command run or stated.
 
 ## What waits for the operator
 
@@ -60,6 +65,7 @@ A repository still running an integration branch plus a gated release branch mig
 
 ## Defaults
 
+- Before any code or file change, check the current branch. On `master` or any long-lived ref, branch first — `<type>/<slug>` matching the intended squash type, or minted from the issue the work serves (`gh issue develop <issue> --checkout`, or the glab counterpart) — and reach the trunk only through a squash-merged request.
 - Never author a tag, and never hand-edit a generated artifact workflow.
 - Prefer an rk verb over a raw forge call; where no verb covers the gap, use the forge CLI and say that the loop is outside the convention there.
 - Report every gated step's outcome from observation, never from the operator's word alone.

@@ -1,15 +1,40 @@
 {
   "schema_version": 1,
   "rk_version": "0.1.0",
-  "payload_sha256": "84f8219a9cb43fd66ad69e58f4f4381fa58318b771b1f5c57d93133f455610d3",
+  "payload_sha256": "d5d2e8896f9822827a4e8532bba00d693df43eee88af06b131641b55f98d1b35",
   "origin": "adopt",
   "tech": "rust",
   "forge": "github",
   "landed_at": "2026-08-30T00:14:29Z",
   "parameters": {
-    "repo": "gubasso/release-kit"
+    "repo": "gubasso/release-kit",
+    "scopes": [
+      "bindings",
+      "ci",
+      "cli",
+      "deps",
+      "distribution",
+      "docs",
+      "forges",
+      "guides",
+      "guides/release",
+      "instance",
+      "landing",
+      "method",
+      "output",
+      "runbooks",
+      "setup",
+      "skills",
+      "snippets"
+    ]
   },
   "files": [
+    {
+      "destination": ".github/workflows/pr-title.yml",
+      "kind": "rendered",
+      "sha256": "3afd322faf135d62e115b138888da25cb484c571492a81dfa80e633f2c6dd0a0",
+      "baseline_sha256": "fdc2d0ff83281d1e2699c74ecdf09fa543ae7f5780d3cfeb747c2ae8f4a1a534"
+    },
     {
       "destination": ".github/workflows/release-plz.yml",
       "kind": "rendered",
@@ -17,10 +42,16 @@
       "baseline_sha256": "d79a7a1a68181fe9ef9cbb6a79ed3a335eeaad157cec85839bd25cdadcf61acf"
     },
     {
+      "destination": ".pre-commit-config.yaml",
+      "kind": "rendered",
+      "sha256": "23d3dacec718d98ee0af00f407b6a119b95764b9fb6c74ff1c4cdea2832fe118",
+      "baseline_sha256": "07dba2056bc2605c10914761128519657593386b4ac0bab9e1036eb3281ba0a4"
+    },
+    {
       "destination": "AGENTS.md",
       "kind": "rendered",
-      "sha256": "9743998f3abf75734c8e19c3ab1af04a94a0b9e63917817376c505dd94260f3d",
-      "baseline_sha256": "9743998f3abf75734c8e19c3ab1af04a94a0b9e63917817376c505dd94260f3d"
+      "sha256": "73f14151682b3a266ab323d6579978d234a4441d0e3542f379d6893bef987de1",
+      "baseline_sha256": "6290f23547308190380068744c8d6370650ee6e50dc564147e23f5544ebd7e8d"
     },
     {
       "destination": "dist-workspace.toml",
@@ -38,7 +69,9 @@
   "pins": {
     "cargo-dist": "0.32.0",
     "checkout": "4",
+    "conventional-pre-commit": "4.4.0",
     "create-github-app-token": "3",
+    "pre-commit-hooks": "6.0.0",
     "release-plz": "0.3.160"
   }
 }

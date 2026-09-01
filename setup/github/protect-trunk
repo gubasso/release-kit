@@ -1,11 +1,14 @@
 #!/usr/bin/env sh
 # Protect the trunk. It takes no direct push and no force-push: a pull
-# request carrying the named passing check is the only way in, and squash is
-# the only merge method, so the trunk history stays linear on a forge that
-# offers no fast-forward merge. Nothing in the pipeline writes this branch —
-# the bot pushes a tag, which release-tags governs — so it names no bypass
-# actor. The method's invariants chapter owns these facts; this comment
-# points there. Rerunning updates in place.
+# request carrying the named passing check and the pr-title check is the
+# only way in, and squash is the only merge method, so the trunk history
+# stays linear on a forge that offers no fast-forward merge. The squash
+# title is the pull request's title — never a lone branch commit's subject —
+# because the bot derives the version from the trunk's commit messages.
+# Nothing in the pipeline writes this branch — the bot pushes a tag, which
+# release-tags governs — so it names no bypass actor. The method's
+# invariants chapter owns these facts; this comment points there. Rerunning
+# updates in place.
 set -eu
 : "${RK_REPO:?rk sets this; run this script through rk setup}"
 : "${RK_TRUNK_BRANCH:?rk sets this; run this script through rk setup}"
@@ -47,12 +50,22 @@ fi <<JSON
       "parameters": {
         "do_not_enforce_on_create": true,
         "strict_required_status_checks_policy": false,
-        "required_status_checks": [{ "context": "$RK_REQUIRED_CHECK" }]
+        "required_status_checks": [
+          { "context": "$RK_REQUIRED_CHECK" },
+          { "context": "pr-title" }
+        ]
       }
     }
   ]
 }
 JSON
 
-echo "check: prints $name"
+# The squash title source is a repository setting, not a ruleset rule: on a
+# one-commit request the forge otherwise offers that commit's own subject,
+# so a branch commit named wip could become the trunk's message.
+gh api -X PATCH "repos/$RK_REPO" \
+  -f squash_merge_commit_title=PR_TITLE -f squash_merge_commit_message=PR_BODY >/dev/null
+
+echo "check: prints $name and the squash title source"
 gh api "repos/$RK_REPO/rulesets" -q ".[] | select(.name == \"$name\") | .name"
+gh api "repos/$RK_REPO" -q .squash_merge_commit_title

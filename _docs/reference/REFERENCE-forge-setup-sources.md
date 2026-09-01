@@ -158,3 +158,25 @@ Bearing: the journal behind `rk runs`, including its retention bound and `rk run
 No mainstream developer tool was found that embeds shell scripts in its binary and materializes them to execute. Repeated searches surfaced mechanism crates, self-extracting-archive techniques, and threat-intelligence writing about embedded payloads, and no peer.
 
 Bearing: the execution model stands on this project's own constraints and claims no precedent. It is also one more reason the materialized copy is plain data invoked through an interpreter rather than an executable dropped to disk.
+
+## The squash title source
+
+Verified 2026-09-01. GitHub's repository update endpoint, `PATCH /repos/{owner}/{repo}`, takes `squash_merge_commit_title` with the values `PR_TITLE` and `COMMIT_OR_PR_TITLE`, the latter documented as the pull request's title only when the request holds more than one commit; the REST page states no default. The setting shipped in the 2022-05-11 changelog entry for customizable squash merge commit messages. Observed single-commit behaviour with the setting unset: the merge dialog offers that commit's own subject as the squash title, so a lone `wip` commit can become the trunk's message.
+
+GitLab's project attribute `squash_commit_template` defaults to `%{title}`, the merge request's title, per the commit-templates documentation; the projects API takes it on `PUT /projects/{id}`. `merge_method=ff` and `squash_option=always` are the settings `protect-trunk` already asserts.
+
+- <https://docs.github.com/en/rest/repos/repos#update-a-repository>
+- <https://github.blog/changelog/2022-05-11-default-to-pr-titles-for-squash-merge-commit-messages/>
+- <https://docs.gitlab.com/ee/api/projects.html>
+- <https://docs.gitlab.com/ee/user/project/merge_requests/commit_templates.html>
+
+Bearing: `forge-setup:the-setup-asserts-the-squash-title-source`. The stated no-default plus the observed single-commit fallback is why the setting is asserted rather than assumed, and why the assertion sits in `protect-trunk` beside the squash-only merge rule it completes.
+
+## The title check beside the merge gate
+
+Verified 2026-09-01. A required status check on GitHub matches by context name — for an Actions job, the job's name — so a workflow job named `pr-title` can be required by the trunk ruleset beside the project's own check. GitLab names no check: `only_allow_merge_if_pipeline_succeeds` requires the whole pipeline, so a title job in the merge request pipeline is blocking without registration, and it also gives every merge request the pipeline that setting waits on.
+
+- <https://docs.github.com/en/rest/repos/rules>
+- <https://docs.gitlab.com/ee/api/projects.html>
+
+Bearing: the pair of required contexts `protect-trunk` writes, and why the GitLab half registers nothing.

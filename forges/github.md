@@ -5,7 +5,7 @@ How this forge answers the method's fifth axis. The CLI is `gh`, and `rk setup` 
 ## Answers
 
 - The release request is a pull request against the trunk — the default branch, which the bot targets with no configuration. While only its own commits sit on the request's branch the bot refreshes it by force-push; once a human commit lands there, the next refresh closes the request and opens a fresh one, taking the commit with it, which is why a changelog correction is the last act before merging.
-- The gate is the release request's own merge, enforced by the trunk's ruleset: no direct push, squash as the only merge method, and a required status check matched by name against the CI job the project's own workflow reports.
+- The gate is the release request's own merge, enforced by the trunk's ruleset: no direct push, squash as the only merge method, and two required status checks matched by name — the CI job the project's own workflow reports, and the landed `pr-title` check. The squash message is the request's title because `protect-trunk` sets `squash_merge_commit_title=PR_TITLE`; unset, a one-commit request offers that commit's own subject, which is how a `wip` subject reaches the trunk.
 - Protections are rulesets, one per target: the trunk, the `v*` tags, and — where a project keeps older lines — the `release/*` branches. A ruleset has separate create and update endpoints, so a rerun resolves the ruleset id and updates in place.
 - The issue link is an explicit relation, not a name match: `gh issue develop <issue> --checkout` generates the branch from the issue — named `<issue>-<slug>` — and records the link, so the pull request from that branch attaches to the issue and merging it closes the issue. A branch named by hand links only through a closing keyword, `Closes #<issue>` in the pull request body.
 - The bot identity is a GitHub App installed on the repository. Its token is what makes a tag push start workflows; a tag pushed with the default CI token starts nothing.
@@ -27,24 +27,25 @@ From here every remaining action is a command: `rk setup step install-bot --targ
 
 ## Mapping
 
-| Purpose                              | Command                                                               |
-| ------------------------------------ | --------------------------------------------------------------------- |
-| Raw API                              | `gh api`                                                              |
-| Set the default branch               | `gh repo edit --default-branch`                                       |
-| Delete a branch when its merge lands | `gh api -X PATCH /repos/{owner}/{repo}` with `delete_branch_on_merge` |
-| Store a secret                       | `gh secret set NAME` with the value on stdin                          |
-| List open release requests           | `gh pr list --base <branch> --state open`                             |
-| Merge the release request            | `gh pr merge --squash --delete-branch`                                |
-| Wait on checks                       | `gh pr checks --watch`                                                |
-| Create the branch for an issue       | `gh issue develop <issue> --checkout`                                 |
-| List the branches an issue links     | `gh issue develop --list <issue>`                                     |
-| Wait on a build                      | `gh run watch --exit-status`                                          |
-| Protect a branch                     | rulesets: `POST` or `PUT /repos/{owner}/{repo}/rulesets`              |
-| Require the trunk's checks           | a ruleset rule naming a status-check context                          |
-| Restrict the merge method            | a ruleset `pull_request` rule listing `allowed_merge_methods`         |
-| Protect tags                         | a ruleset targeting `v*`                                              |
-| Grant the bot access to a project    | `PUT /user/installations/{id}/repositories/{id}`                      |
-| Find the bot identity                | `GET /repos/{owner}/{repo}/installation`, as the App                  |
+| Purpose                              | Command                                                                           |
+| ------------------------------------ | --------------------------------------------------------------------------------- |
+| Raw API                              | `gh api`                                                                          |
+| Set the default branch               | `gh repo edit --default-branch`                                                   |
+| Delete a branch when its merge lands | `gh api -X PATCH /repos/{owner}/{repo}` with `delete_branch_on_merge`             |
+| Store a secret                       | `gh secret set NAME` with the value on stdin                                      |
+| List open release requests           | `gh pr list --base <branch> --state open`                                         |
+| Merge the release request            | `gh pr merge --squash --delete-branch`                                            |
+| Wait on checks                       | `gh pr checks --watch`                                                            |
+| Create the branch for an issue       | `gh issue develop <issue> --checkout`                                             |
+| List the branches an issue links     | `gh issue develop --list <issue>`                                                 |
+| Wait on a build                      | `gh run watch --exit-status`                                                      |
+| Protect a branch                     | rulesets: `POST` or `PUT /repos/{owner}/{repo}/rulesets`                          |
+| Require the trunk's checks           | a ruleset rule naming a status-check context                                      |
+| Restrict the merge method            | a ruleset `pull_request` rule listing `allowed_merge_methods`                     |
+| Make the title the squash message    | `gh api -X PATCH /repos/{owner}/{repo}` with `squash_merge_commit_title=PR_TITLE` |
+| Protect tags                         | a ruleset targeting `v*`                                                          |
+| Grant the bot access to a project    | `PUT /user/installations/{id}/repositories/{id}`                                  |
+| Find the bot identity                | `GET /repos/{owner}/{repo}/installation`, as the App                              |
 
 ## Limitations
 

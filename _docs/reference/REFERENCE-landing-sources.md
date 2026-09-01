@@ -63,3 +63,19 @@ Import brings pre-existing infrastructure under management by recording it rathe
 - <https://developer.hashicorp.com/terraform/cli/commands/plan>
 
 Bearing: `landing:an-adoption-writes-the-record-and-nothing-else`. Adoption records both digests for a file the target may edit, refuses outright on a mismatch in a file the payload owns, and changes no target file — which is the strictest reading of this family's shared rule rather than a departure from it.
+
+## pre-commit, on the stages and environment the landed hooks lean on
+
+Verified 2026-09-01. A hook declares its `stages`, and a stage's hooks run only where that hook type is installed — `pre-commit install --hook-type commit-msg --hook-type pre-push` — which `default_install_hook_types` makes the default for a repository. Pre-push hooks receive `PRE_COMMIT_REMOTE_BRANCH` carrying the full remote ref being pushed, so a local hook can refuse a push to `refs/heads/master` or a `refs/tags/v*` tag; pushes that delete a ref intentionally skip the hooks (pre-commit issue 3050), and git tells a pre-push hook nothing about `--force`, so a force-push has no local mirror. `pre-commit/pre-commit-hooks` ships `no-commit-to-branch`, protecting `main` and `master` by default with `--branch` and `--pattern` overrides.
+
+`compilerla/conventional-pre-commit` checks a commit message against Conventional Commits at the `commit-msg` stage, with `--strict`, `--force-scope`, and a comma-delimited `--scopes` list; `crate-ci/committed` offers `allowed_scopes` but no option to require a scope, which is what decided between them.
+
+- <https://pre-commit.com/#pre-commit-configyaml---top-level>
+- <https://pre-commit.com/#pre-push>
+- <https://github.com/pre-commit/pre-commit/issues/3050>
+- <https://github.com/pre-commit/pre-commit-hooks>
+- <https://github.com/compilerla/conventional-pre-commit>
+- <https://github.com/crate-ci/committed/blob/master/docs/reference.md>
+- <https://git-scm.com/docs/githooks>
+
+Bearing: `landing:a-landed-hook-serves-the-release-convention-alone`. Every mirror the block carries rests on a documented mechanism above, the two honest limits — `--no-verify` and the invisible force-push — are stated by the same sources, and the two third-party hooks are pinned in `versions.toml` like every other snippet pin.

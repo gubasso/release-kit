@@ -14,7 +14,8 @@ lint:
     typos
     markdownlint-cli2 "**/*.md" "#target/**"
     pre-commit validate-config .pre-commit-config.yaml
-    pre-commit run --files $(rg --files --hidden -g '!.git/**')
+    cargo build -q
+    PATH="$(pwd)/target/debug:$PATH" pre-commit run --files $(rg --files --hidden -g '!.git/**')
 
 test:
     cargo nextest run
@@ -24,7 +25,7 @@ test:
 # — then assert the published crate carries every payload root.
 build:
     set -eu; d=$(mktemp -d); trap 'rm -rf "$d"' EXIT; mkdir -p "$d/.git"; \
-    cargo run -q -- init --tech rust --forge github --repo acme/widget --target "$d" --apply >/dev/null; \
+    cargo run -q -- init --tech rust --forge github --repo acme/widget --scopes api,cli --target "$d" --apply >/dev/null; \
     test -f "$d/release-plz.toml"; test -f "$d/.release-kit/manifest.json"; \
     sed -i '/TODO(release-kit)/d' "$d/release-plz.toml"; printf 'semver_check = true\n' >> "$d/release-plz.toml"; \
     cargo run -q -- upgrade --target "$d" --apply >/dev/null; \

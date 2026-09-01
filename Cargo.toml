@@ -34,7 +34,6 @@ exclude = [
     "/dprint.json",
     "/lychee.toml",
     "/_typos.toml",
-    "/committed.toml",
 ]
 
 [[bin]]

@@ -25,7 +25,7 @@ One pull request. The bot maintains the release request against the trunk — th
 
 1. Read the sequence once per session: `rk method operate`. Then follow `rk guide release`, which renders it as commands with the project path, forge, and technology filled in.
 2. Run `rk status --check --target .` before anything ships: drift on a file release-kit owns, or an unfilled sentinel, is fixed before a release, not during one.
-3. Land the work through squash-merged pull requests with the release intent captured in each title, the check suite green.
+3. Land the work through squash-merged pull requests with the release intent captured in each title, the check suite green. The request's title becomes the trunk's commit message — the forge takes the squash message from it — so the title is a scoped Conventional Commit carrying the release intent, and the body carries the context the history keeps.
 4. Before merging the release request, compare its changelog entry against the commit range since the previous tag; correct it on the request's branch, last. The bot refreshes the request as work lands, and a human commit on its branch makes the next refresh close and reopen the request, dropping the correction.
 5. Merge the release request once its checks are green — squash, the only allowed method. This is the release: the bump push publishes and tags.
 6. Wait for the artifact build to finish, then verify: registry, release page, the tag and the trunk naming the same commit, installed binary — the operate chapter lists the checks in order.
@@ -48,6 +48,7 @@ A release line flows one direction: fix on the trunk first, cherry-pick only the
 
 ## Defaults
 
+- Before any code or file change, check the current branch. On `master`, branch first — `<type>/<slug>` matching the intended squash type, or minted from the issue the work serves — and reach the trunk only through a squash-merged request.
 - Work landing while the release request is open ships in the next refresh or the next release; that is never a reason to rush a merge.
 - A verify step that fails right after the release merge is usually timing: the artifact builder creates the release page minutes after the tag.
 - Prefer the smallest recovery that returns to the happy path; never surgery on tags, published versions, or the trunk.

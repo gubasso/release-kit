@@ -60,6 +60,12 @@ pub struct Parameters {
     /// The project path on the forge, recorded whole because a GitLab
     /// project may nest below its group.
     pub repo: String,
+    /// The Conventional Commit scopes the project accepts, rendered into
+    /// the title checks, the commit hook, and the routing block. Defaults
+    /// empty for a record from before the parameter existed; an upgrade of
+    /// such a record asks for `--scopes` once and records the answer.
+    #[serde(default)]
+    pub scopes: Vec<String>,
 }
 
 /// One landed destination.
@@ -286,6 +292,7 @@ mod tests {
             landed_at: "2026-08-29T00:00:00Z".into(),
             parameters: Parameters {
                 repo: "acme/widget".into(),
+                scopes: vec!["api".into(), "cli".into()],
             },
             files: vec![
                 FileRecord {
@@ -307,7 +314,7 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&manifest).expect("a manifest serializes"),
             format!(
-                r#"{{"schema_version":1,"rk_version":"0.1.0","payload_sha256":"{empty}","origin":"init","tech":"rust","forge":"github","landed_at":"2026-08-29T00:00:00Z","parameters":{{"repo":"acme/widget"}},"files":[{{"destination":"release-plz.toml","kind":"seeded","sha256":"{empty}","baseline_sha256":"{empty}"}},{{"destination":"VERSION","kind":"state","sha256":"{empty}"}}],"pins":{{"release-plz":"0.3.160"}}}}"#
+                r#"{{"schema_version":1,"rk_version":"0.1.0","payload_sha256":"{empty}","origin":"init","tech":"rust","forge":"github","landed_at":"2026-08-29T00:00:00Z","parameters":{{"repo":"acme/widget","scopes":["api","cli"]}},"files":[{{"destination":"release-plz.toml","kind":"seeded","sha256":"{empty}","baseline_sha256":"{empty}"}},{{"destination":"VERSION","kind":"state","sha256":"{empty}"}}],"pins":{{"release-plz":"0.3.160"}}}}"#
             ),
             "a state file must omit baseline_sha256 rather than serializing null"
         );

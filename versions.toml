@@ -82,3 +82,19 @@ used_by = ["python"]
 purpose = "provides the interpreter that builds the distributions"
 check = "https://api.github.com/repos/actions/setup-python/releases/latest"
 checked = 2026-08-28
+
+[[tool]]
+name = "conventional-pre-commit"
+version = "4.4.0"
+used_by = ["rust", "python", "bash"]
+purpose = "holds every commit message to the scoped convention through the landed commit-msg hook"
+check = "https://api.github.com/repos/compilerla/conventional-pre-commit/releases/latest"
+checked = 2026-09-01
+
+[[tool]]
+name = "pre-commit-hooks"
+version = "6.0.0"
+used_by = ["rust", "python", "bash"]
+purpose = "refuses a commit made on the trunk through the landed no-commit-to-branch hook"
+check = "https://api.github.com/repos/pre-commit/pre-commit-hooks/releases/latest"
+checked = 2026-09-01
