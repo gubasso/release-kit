@@ -222,6 +222,8 @@ const ROUTING_BLOCK: &str = "<!-- BEGIN release-kit -->
 const HOOKS_BLOCK: &str = r#"# BEGIN release-kit
 # The release convention's hooks. Install every stage they run at:
 # pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push
+# A CI sweep commits nothing, so a job running pre-commit against a trunk
+# checkout sets SKIP=no-commit-to-branch in its environment.
   - repo: https://github.com/compilerla/conventional-pre-commit
     rev: v4.4.0
     hooks:

@@ -4180,6 +4180,10 @@ fn the_hook_block_splices_and_lands_whole_and_refuses_reposless() {
         assert!(config.contains(hook), "the block carries {hook}");
     }
     assert!(
+        config.contains("SKIP=no-commit-to-branch"),
+        "the block names the CI-sweep skip beside the install command"
+    );
+    assert!(
         !config.contains("default_install_hook_types"),
         "an existing file's top level belongs to the target"
     );

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "rk_version": "0.1.0",
-  "payload_sha256": "d5d2e8896f9822827a4e8532bba00d693df43eee88af06b131641b55f98d1b35",
+  "rk_version": "0.2.0",
+  "payload_sha256": "fa87839cb450718510384136a6bf8f33d099ab1955ad38907e947da317a56325",
   "origin": "adopt",
   "tech": "rust",
   "forge": "github",
@@ -44,8 +44,8 @@
     {
       "destination": ".pre-commit-config.yaml",
       "kind": "rendered",
-      "sha256": "23d3dacec718d98ee0af00f407b6a119b95764b9fb6c74ff1c4cdea2832fe118",
-      "baseline_sha256": "07dba2056bc2605c10914761128519657593386b4ac0bab9e1036eb3281ba0a4"
+      "sha256": "cf77731bd15e5c4bddba7627f5effa083a0663702ed3e823dcf5d632a7815f35",
+      "baseline_sha256": "64be1835a68e3deed03d8cd465813cc24e8dce5e2c5be7091164669667d4eb79"
     },
     {
       "destination": "AGENTS.md",
