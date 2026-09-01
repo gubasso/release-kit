@@ -14,7 +14,7 @@ export CRATE=<package name as published to the registry>
 
 Everything else appears literally, because the convention fixes it: the trunk is `master`, the release lines are `release/*`, the required check is `test`, the publish workflow is `release-plz.yml`, and the artifact workflow is `release.yml`.
 
-`Cargo.toml` is the version source of truth. release-plz reads Conventional Commits on the trunk, maintains one release pull request carrying the bump and the changelog, and merging that PR is the release: the bump push tags and publishes. Never author a tag, and never move a published one — a bad release is fixed by the next version.
+`Cargo.toml` is the version source of truth. release-plz reads Conventional Commits on the trunk, maintains one release pull request carrying the bump and the changelog, and merging that PR is the release: the bump push tags and publishes. Below 1.0 only the left-most non-zero component is the incompatible one, so a breaking change moves the minor and a feature moves the patch. Never author a tag, and never move a published one — a bad release is fixed by the next version.
 
 ## At a glance
 
@@ -40,7 +40,7 @@ Three traps. Step 3: the bot refreshes the PR by force-push while only its own c
 
 ## 1. Land the work
 
-Release intent captured in the squash titles — `feat:` bumps minor, `fix:` bumps patch — the check suite green, and the package still publishable. The trunk takes no direct push, so each change reaches it the way [setup.md](./setup.md) step 10 lays out.
+Release intent captured in the squash titles, which the landed `pr-title` check holds to the project's scopes before a merge is offered, the check suite green, and the package still publishable. The trunk takes no direct push, so each change reaches it the way [setup.md](./setup.md) step 11 lays out.
 
 ```bash
 just check

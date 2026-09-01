@@ -28,8 +28,13 @@ Everything else the commands name is fixed by the convention and appears literal
   - fixed by `TRUNK_BRANCH` in `src/setup/context.rs`, and by the `branches:` filter in the landed `release-plz.yml`
 - Release lines: `release/*`
   - fixed by that same `branches:` filter
-- Required check: `test`
-  - the job id the project's CI workflow reports, which every step and `--required-check test` assume
+- Required checks: `test` and `pr-title`
+  - `test` is the job id the project's CI workflow reports, which every step and `--required-check test` assume
+  - `pr-title` is the job id the landed title check reports, and `setup/github/protect-trunk` requires it beside the first
+- Title check: `.github/workflows/pr-title.yml`
+  - fixed by the snippet that lands it, and it runs on `pull_request_target` so the forge executes the trunk's copy
+- Squash title source: `PR_TITLE`, with `PR_BODY` as the message
+  - fixed by `setup/github/protect-trunk`, which sets both on the repository
 - Trunk ruleset: `master-protection`
   - fixed by `setup/github/protect-trunk`
 - Tag and line rulesets: `release-tags`, `release-lines`
@@ -45,7 +50,7 @@ Everything else the commands name is fixed by the convention and appears literal
 - Tool pins: `versions.toml`
   - the payload's own registry
 
-`test` is the one entry the payload does not itself write on a GitHub target: no `ci.yml` snippet lands there, so the project owns that workflow. Name its job `test` and everything below holds; name it otherwise and the required check, the ruleset, and step 9's prerequisite all have to move with it.
+`test` is the one entry the payload does not itself write on a GitHub target: no `ci.yml` snippet lands there, so the project owns that workflow. Name its job `test` and everything below holds; name it otherwise and the required check, the ruleset, and step 10's prerequisite all have to move with it.
 
 ## 0. Prerequisites
 
@@ -125,7 +130,7 @@ A new repository gives its workflows read access to `contents` and `packages` an
 
 - The default reaches only a workflow that declares no `permissions:` of its own. Declaring the key sets every scope left unnamed to `none`, so declaring it replaces the default rather than adding to it.
 - Which is why the release pipeline does not depend on this step: `release-plz.yml` declares `permissions:` on every job and acts as the bot App step 8 stores. The default reaches `ci.yml`, the one workflow that declares none.
-- `can_approve_pull_request_reviews` answers a review requirement. The trunk ruleset step 9 writes requires zero approvals, so nothing consumes it today.
+- `can_approve_pull_request_reviews` answers a review requirement. The trunk ruleset step 10 writes requires zero approvals, so nothing consumes it today.
 
 ```bash
 gh api -X PUT "repos/$OWNER/$REPO/actions/permissions/workflow" \
@@ -303,21 +308,94 @@ gh secret list --repo "$OWNER/$REPO"
 
 `release-plz.yml` reads both through `actions/create-github-app-token@v3`. That action prefers `client-id` and still accepts `app-id`; this convention stays on the App ID, which is why 6c collects the numeric id.
 
-## 9. Protect the trunk
+## 9. Land the workflow files
 
-One ruleset: no direct push, no force-push, a pull request carrying the passing `test` check as the only way in, and squash as the only merge method. Nothing in the pipeline writes the branch, so it names no bypass actor.
+The trunk has to carry these files before step 10 protects it. The title check runs on `pull_request_target`, so the forge executes the trunk's own copy: require it in the ruleset while the trunk lacks it and no request can ever produce it, which blocks the very request that would land it. Nothing protects the trunk yet, so this step writes it directly, and the hooks that forbid that go in last.
 
-### 9a. Prove the check exists
+1. Land the payload. `--scopes` is the Conventional Commit vocabulary this project accepts, rendered into the title check and the commit hook; an apply without it refuses, because a vocabulary is a decision rather than a default.
 
-The project's own `.github/workflows/ci.yml` must declare a job with the id `test` and trigger on `pull_request` as well as `push`, or the rule is unsatisfiable and no release request can ever merge.
+   ```bash
+   rk init --tech rust --forge github --repo "$OWNER/$REPO" \
+     --scopes <comma-separated scopes> --target . --apply
+   # check: writes .github/workflows/pr-title.yml and release-plz.yml, release-plz.toml,
+   #        dist-workspace.toml, the hook block in .pre-commit-config.yaml, the routing
+   #        block in AGENTS.md, and .release-kit/manifest.json last
+   # already landed: this refuses rather than overwrite; rk upgrade --target . --apply
+   #   takes an existing landing to a newer payload instead
+   ```
+
+2. Answer every sentinel the landing reported, then confirm the record.
+
+   ```bash
+   grep -rn 'TODO(release-kit)' . --exclude-dir=.git
+   # check: prints nothing once each sentinel is answered
+   rk status --check --target .
+   # check: reports the landed payload as current
+   ```
+
+3. Install `dist`, which the nix devshell does not carry, at the pin `versions.toml` and `dist-workspace.toml` both name, with the installer the workflow itself uses.
+
+   ```bash
+   PIN="$(grep -m1 '^cargo-dist-version' dist-workspace.toml | cut -d'"' -f2)"
+   curl --proto '=https' --tlsv1.2 -LsSf \
+     "https://github.com/axodotdev/cargo-dist/releases/download/v$PIN/cargo-dist-installer.sh" | sh
+   dist --version
+   # check: prints $PIN; versions.toml owns the pin and dist-workspace.toml carries it
+   ```
+
+4. Regenerate the artifact workflow and prove the committed file is what this pin produces. Never edit `release.yml` by hand: regenerate it.
+
+   ```bash
+   dist generate
+   git diff --stat .github/workflows/release.yml
+   # check: no diff
+   ```
+
+5. Read what a release will build.
+
+   ```bash
+   dist plan
+   # check: prints the artifact list for every target in dist-workspace.toml
+   ```
+
+6. Put it on the trunk, which still takes a direct push.
+
+   ```bash
+   git add -A && git commit -m 'chore(<scope>): land the release workflow files'
+   git push origin master
+   gh api "repos/$OWNER/$REPO/contents/.github/workflows/pr-title.yml" -q .name
+   # check: prints pr-title.yml, so the trunk carries the check step 10 requires
+   # rejected: a ruleset already protects the trunk, so land this through step 11 instead
+   ```
+
+7. Install the hook stages the landed block's first line names, last, because two of them refuse exactly what 6 just did.
+
+   ```bash
+   pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push
+   # check: reports each of the three hook types installed
+   ```
+
+   The block holds the same rules step 10 gives the forge: `no-commit-to-branch` and `rk-no-push-to-trunk` refuse a direct write to the trunk, `conventional-pre-commit` holds a message to the scopes 1 named, and `rk-branch-name` holds a branch to `<type>/<slug>`. They are the refusal at the desk; the forge is the one that decides, so `--no-verify` changes what an author sees and never what the forge accepts.
+
+## 10. Protect the trunk
+
+One ruleset and one repository setting: the trunk takes no direct push and no force-push, a pull request carrying both passing checks is the only way in, squash is the only merge method, and the squash message is the request's title. Nothing in the pipeline writes the branch, so it names no bypass actor.
+
+### 10a. Prove both checks exist
+
+The ruleset names two contexts, and a context no workflow reports is unsatisfiable: nothing would ever merge. `test` is the project's own job; `pr-title` is the one step 9 landed.
 
 ```bash
 gh api "repos/$OWNER/$REPO/contents/.github/workflows/ci.yml" -q .content \
   | base64 -d | grep -E '^\s+(test:|pull_request:)'
 # check: both lines appear; the job id is test and it runs on pull requests
+gh api "repos/$OWNER/$REPO/contents/.github/workflows/pr-title.yml" -q .content \
+  | base64 -d | grep -E '^(name:|  pr-title:)'
+# check: both lines appear; this trunk copy is the one pull_request_target runs
+# 404: step 9 has not reached the trunk, and this step would block the request that lands it
 ```
 
-### 9b. Create or update the ruleset
+### 10b. Create or update the ruleset
 
 `do_not_enforce_on_create` keeps it from blocking branch creation meanwhile. The lookup is what makes the block rerunnable: a ruleset name is unique per repository, so an existing one is updated in place rather than refused.
 
@@ -356,17 +434,28 @@ fi <<'JSON'
       "parameters": {
         "do_not_enforce_on_create": true,
         "strict_required_status_checks_policy": false,
-        "required_status_checks": [{ "context": "test" }]
+        "required_status_checks": [
+          { "context": "test" },
+          { "context": "pr-title" }
+        ]
       }
     }
   ]
 }
 JSON
 # check: prints nothing, whether it created the ruleset or updated one already there
-# then: 9c reports the same shape either way
 ```
 
-### 9c. Verify it
+The squash title source is a repository setting rather than a ruleset rule, and it is asserted rather than assumed: on a one-commit request the forge otherwise offers that commit's own subject, so a branch named `wip` could put `wip` in the trunk's history — the message the bot derives the version and the changelog from.
+
+```bash
+gh api -X PATCH "repos/$OWNER/$REPO" \
+  -f squash_merge_commit_title=PR_TITLE -f squash_merge_commit_message=PR_BODY >/dev/null
+# check: prints nothing, whether this run set it or found it set
+# then: 10c reports the same shape either way
+```
+
+### 10c. Verify it
 
 Assert the shape the forge enforces, not that a name exists.
 
@@ -382,16 +471,18 @@ gh api "repos/$OWNER/$REPO/rulesets/$id" --jq '{
 }'
 # check: target branch, enforcement active, bypass 0, refs ["refs/heads/master"],
 #        rules deletion non_fast_forward pull_request required_status_checks,
-#        merge ["squash"], checks [test]
+#        merge ["squash"], checks [test, pr-title]
+gh api "repos/$OWNER/$REPO" -q .squash_merge_commit_title
+# check: prints PR_TITLE
 ```
 
 Automated: `rk setup step protect-trunk --target . --apply --required-check test`.
 
-## 10. Land work through the trunk's one path
+## 11. Land work through the trunk's one path
 
-From step 9 on, the trunk is unwritable by hand: every later step that changes a file — a regenerated workflow, a corrected pin, a documentation fix — reaches `master` through this path and no other. Run it once now, on whatever the working tree already carries, so the path is proven before a step depends on it.
+From step 10 on, the trunk is unwritable by hand: every later step that changes a file — a regenerated workflow, a corrected pin, a documentation fix — reaches `master` through this path and no other. Run it once now, on whatever the working tree already carries, so the path is proven before a step depends on it.
 
-### 10a. Configure this clone
+### 11a. Configure this clone
 
 Two settings, local to this clone, that match the convention's history to the way git is asked to move it.
 
@@ -406,9 +497,9 @@ git config --local --get-regexp '^(pull\.rebase|fetch\.prune)$'
 - `fetch.prune` drops the remote-tracking ref step 4 taught the forge to delete, so a merged branch stops appearing in this clone.
 - Neither applies to the trunk itself: the trunk is never pulled, only reset, which 10c does.
 
-### 10b. Land one change
+### 11b. Land one change
 
-The pull request title becomes the whole trunk commit, because squash is the only merge method step 9 leaves and the forge takes the title as the message. Write it as a Conventional Commit and carry the strongest intent of everything in the branch: one `!` anywhere in the work makes the title breaking, or the bot derives the wrong version from a history that no longer names it. This is why the title is spelled out rather than filled from a commit: `--fill-first` takes the first commit's subject, which is the intent of one commit out of however many the branch holds.
+The pull request title becomes the whole trunk commit, because squash is the only merge method step 10 leaves and the forge takes the title as the message. Write it as a Conventional Commit and carry the strongest intent of everything in the branch: one `!` anywhere in the work makes the title breaking, or the bot derives the wrong version from a history that no longer names it. This is why the title is spelled out rather than filled from a commit: `--fill-first` takes the first commit's subject, which is the intent of one commit out of however many the branch holds.
 
 ```bash
 git switch -c fix/<slug>
@@ -422,11 +513,11 @@ gh pr merge --squash --delete-branch
 # check: reports the pull request squashed and merged
 ```
 
-- nothing to land: the working tree is clean and the trunk already holds the work, so go to 10c and confirm it.
+- nothing to land: the working tree is clean and the trunk already holds the work, so go to 11c and confirm it.
 - `GH013: Repository rule violations found` on the push: the branch name is `master`, which takes no direct push; branch first and push that branch instead.
-- the check never appears: the job id is not `test`, and step 9a's prerequisite has moved; nothing merges until the ruleset and the workflow agree on the name.
+- the check never appears: the job id is not `test`, and step 10a's prerequisite has moved; nothing merges until the ruleset and the workflow agree on the name.
 
-### 10c. Take the local trunk to the merge
+### 11c. Take the local trunk to the merge
 
 The squash writes one commit that is not the branch's commit, so the local trunk never advances by the merge alone. Reset takes it there in one move whichever way the clone stands, and 10b left the work in the trunk's tip either way.
 
@@ -446,7 +537,7 @@ git branch -D fix/<slug>
 - `gh pr merge` printed `not possible to fast-forward`: that is the ahead-as-well-as-behind case, reported by the local update the merge attempts, and this step is its repair.
 - `-D` rather than `-d` on the topic branch, and not for haste: the squash gave the work a commit no branch is an ancestor of, so `-d` refuses every branch this path produces. What it discards is the pre-squash form of what the trunk now holds.
 
-## 11. Protect the release tags
+## 12. Protect the release tags
 
 `v*` can be created but never moved or deleted; the pattern already covers the rc tags a release line mints. Creation staying open is what lets the bot push `vVERSION` on `Contents: write` alone.
 
@@ -478,7 +569,7 @@ gh api "repos/$OWNER/$REPO/rulesets/$id" --jq '{target, enforcement, refs: .cond
 
 Automated: `rk setup step protect-tags --target . --apply`.
 
-## 12. Protect the release lines, only when one exists
+## 13. Protect the release lines, only when one exists
 
 Style B's one extra step, skipped by a full apply: while an older line is alive, `release/*` can be neither force-pushed nor deleted, and pushes stay allowed because a cherry-pick lands by push. Run it only after the first backport line is cut.
 
@@ -489,7 +580,7 @@ gh api "repos/$OWNER/$REPO/rulesets/$id" --jq '{refs: .conditions.ref_name.inclu
 # check: refs ["refs/heads/release/*"], rules deletion non_fast_forward
 ```
 
-## 13. Prove the protections
+## 14. Prove the protections
 
 1. Run the check.
 
@@ -506,42 +597,6 @@ gh api "repos/$OWNER/$REPO/rulesets/$id" --jq '{refs: .conditions.ref_name.inclu
    ```
 
    With no key on this host: `github.com/settings/installations` lists `$APP` with `$REPO` under Repository access.
-
-## 14. Land the workflow files
-
-`rk init` lands the payload, and cargo-dist generates the artifact workflow from `dist-workspace.toml`. Never edit `release.yml` by hand: regenerate it.
-
-1. Install `dist`, which the nix devshell does not carry, at the pin `versions.toml` and `dist-workspace.toml` both name, with the installer the workflow itself uses.
-
-   ```bash
-   PIN="$(grep -m1 '^cargo-dist-version' dist-workspace.toml | cut -d'"' -f2)"
-   curl --proto '=https' --tlsv1.2 -LsSf \
-     "https://github.com/axodotdev/cargo-dist/releases/download/v$PIN/cargo-dist-installer.sh" | sh
-   dist --version
-   # check: prints $PIN; versions.toml owns the pin and dist-workspace.toml carries it
-   ```
-
-2. Confirm the landed payload is current.
-
-   ```bash
-   rk status --check --target .
-   # check: reports the landed payload as current
-   ```
-
-3. Regenerate the artifact workflow and prove the committed file is what this pin produces.
-
-   ```bash
-   dist generate
-   git diff --stat .github/workflows/release.yml
-   # check: no diff
-   ```
-
-4. Read what a release will build.
-
-   ```bash
-   dist plan
-   # check: prints the artifact list for every target in dist-workspace.toml
-   ```
 
 ## 15. Publish the first version by hand
 
@@ -649,7 +704,7 @@ Prove the bot half runs at all, then cut one release end to end.
    gh pr list --repo "$OWNER/$REPO" --state open --json number,title
    # check: a release request from release-plz is open, proposing the next version
    # none open: the trunk matches the version step 15 published, so release-plz has
-   #   nothing to propose; land one change through step 10 and rerun this step
+   #   nothing to propose; land one change through step 11 and rerun this step
    ```
 
 3. Cut one release end to end through [release.md](./release.md).
