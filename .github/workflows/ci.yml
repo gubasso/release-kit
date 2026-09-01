@@ -13,7 +13,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: DeterminateSystems/nix-installer-action@v19
+      # No FlakeHub account stands behind this repository, so the cache
+      # names its one backend outright instead of probing FlakeHub first
+      # and erroring into every run's log.
       - uses: DeterminateSystems/magic-nix-cache-action@v13
+        with:
+          use-flakehub: false
+          use-gha-cache: true
       # sdd is this repository's docs gate and is not in the nix shell. The
       # instance runs gates newer than the last published sdd release, so the
       # pin is the exact source revision this instance was verified against;
