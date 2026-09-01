@@ -51,6 +51,7 @@ Everything else the commands name is fixed by the convention and appears literal
 - Rust toolchain: `cargo --version`
 - Nix and `just`: `nix develop --command just --version`
 - `rk` on `PATH`: `rk --version`
+- `openssl` and `curl`: `rk doctor` reports both ok; step 6 signs the App JWT with one and carries it to the forge with the other
 - OS keyring: `secret-tool --version`, on a host shell and never in a container
 - Registry account: signed in at crates.io, with a verified email at crates.io/settings/profile
 - Crate name free: `cargo info "$CRATE"` 404s, or the account already owns the crate
@@ -398,7 +399,7 @@ gh api "repos/$OWNER/$REPO/rulesets/$id" --jq '{refs: .conditions.ref_name.inclu
 
    ```bash
    rk setup check --target .
-   # check: every step reports satisfied, and protect-release-lines reports skipped while no line exists
+   # check: every step but install-bot reports satisfied, and protect-release-lines reports skipped while no line exists
    ```
 
 2. Settle `install-bot`, the one step this reports `unknown` without the App exports, because the installation is readable only to the App itself.

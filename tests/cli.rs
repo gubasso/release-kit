@@ -2852,24 +2852,92 @@ exit 7
     }
 }
 
-/// The signing and carrying helpers inherit no forge credential: their
-/// environment is the search path alone, so a helper that dumps its whole
-/// environment on failure has nothing of the operator's to dump.
+/// The signing and carrying helpers inherit no forge credential, so a
+/// helper that dumps its whole environment on failure has nothing of the
+/// operator's to dump. The carrier alone inherits the variables naming
+/// this host's certificate authorities — every one of them, because a
+/// `curl` that locates its trust store by environment cannot verify the
+/// forge without the one its host uses — and the signer, which opens no
+/// connection, inherits none.
 #[test]
-fn the_app_helpers_inherit_no_forge_credential() {
+fn the_carrier_alone_inherits_the_trust_store_and_neither_helper_the_forge_token() {
+    const TRUST: [(&str, &str); 4] = [
+        ("CURL_CA_BUNDLE", "/scratch/curl-bundle.pem"),
+        ("SSL_CERT_DIR", "/scratch/certs"),
+        ("SSL_CERT_FILE", "/scratch/ca-bundle.pem"),
+        ("NIX_SSL_CERT_FILE", "/scratch/nix-bundle.pem"),
+    ];
+    let fixture = ForgeFixture::new();
+    let key = fixture.key_file();
+    let env_log = fixture.state("curl-env-log");
+    fixture.replace_curl(&format!(
+        "#!/usr/bin/env bash
+cat > /dev/null
+env > '{}'
+exit 7
+",
+        env_log.display()
+    ));
+    let mut command = fixture.rk(&["setup", "step", "install-bot"]);
+    command
+        .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
+        .env("GH_TOKEN", "gh-secret-value")
+        .env("RK_BOT_APP_ID", "314159")
+        .env("RK_BOT_PRIVATE_KEY_FILE", &key);
+    for (name, value) in TRUST {
+        command.env(name, value);
+    }
+    let out = command.assert().code(73).get_output().clone();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("gh-secret-value"),
+        "a helper child was handed the forge token: {stderr}"
+    );
+    let carrier = std::fs::read_to_string(&env_log).expect("curl saw an env");
+    let signer =
+        std::fs::read_to_string(fixture.state("openssl-env-log")).expect("openssl saw an env");
+    for (helper, seen) in [("the carrier", &carrier), ("the signer", &signer)] {
+        assert!(
+            !seen.contains("gh-secret-value"),
+            "{helper} was handed the forge token"
+        );
+    }
+    for (name, value) in TRUST {
+        assert!(
+            carrier.contains(&format!("{name}={value}")),
+            "the carrier lost {name}: {carrier}"
+        );
+        assert!(
+            !signer.contains(&format!("{name}={value}")),
+            "the signer was handed {name}, which it has no connection to verify: {signer}"
+        );
+    }
+}
+
+/// A curl failure surfaces the line curl leads with: what follows it is
+/// prose pointing at a web page, so a diagnostic built from the last line
+/// would name nothing an operator could act on.
+#[test]
+fn a_curl_failure_names_the_reason_curl_led_with() {
     let fixture = ForgeFixture::new();
     let key = fixture.key_file();
     fixture.replace_curl(
         "#!/usr/bin/env bash
 cat > /dev/null
-env >&2
-exit 7
+cat >&2 <<'REASON'
+curl: (60) SSL certificate problem: unable to get local issuer certificate
+More details here: https://curl.se/docs/sslcerts.html
+
+curl failed to verify the legitimacy of the server and therefore could not
+establish a secure connection to it. To learn more about this situation and
+how to fix it, please visit the web page mentioned above.
+REASON
+exit 60
 ",
     );
     let out = fixture
         .rk(&["setup", "step", "install-bot"])
         .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
-        .env("GH_TOKEN", "gh-secret-value")
         .env("RK_BOT_APP_ID", "314159")
         .env("RK_BOT_PRIVATE_KEY_FILE", &key)
         .assert()
@@ -2878,14 +2946,13 @@ exit 7
         .clone();
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        !stderr.contains("gh-secret-value"),
-        "a helper child was handed the forge token: {stderr}"
+        stderr.contains("exit 60")
+            && stderr.contains("SSL certificate problem: unable to get local issuer certificate"),
+        "the diagnostic drops what curl named: {stderr}"
     );
-    let openssl_env =
-        std::fs::read_to_string(fixture.state("openssl-env-log")).expect("openssl saw an env");
     assert!(
-        !openssl_env.contains("gh-secret-value"),
-        "the signer was handed the forge token"
+        !stderr.contains("web page mentioned above"),
+        "the diagnostic carries the epilogue instead of the reason: {stderr}"
     );
 }
 

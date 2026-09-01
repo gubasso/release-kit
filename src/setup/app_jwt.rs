@@ -112,6 +112,34 @@ fn helper_env() -> Vec<(OsString, OsString)> {
         .unwrap_or_default()
 }
 
+/// What the carrying child adds to that: the variables naming where this
+/// host keeps its certificate authorities.
+///
+/// They earn their exception by naming public files, and only the carrier
+/// takes them. A `curl` that locates its trust store by environment rather
+/// than by a compiled-in path — a Nix-provided one on a host whose
+/// distribution keeps its own bundle elsewhere is the ordinary case —
+/// verifies no certificate at all once they are cleared, and the call
+/// fails before the forge answers. The signer receives none of them: it
+/// opens no connection and has nothing to verify. Proxy variables stay
+/// out of both, because a proxy URL can carry a credential of its own,
+/// which is the one thing these environments must not hold.
+fn carrier_env() -> Vec<(OsString, OsString)> {
+    const TRUST: [&str; 4] = [
+        "CURL_CA_BUNDLE",
+        "SSL_CERT_DIR",
+        "SSL_CERT_FILE",
+        "NIX_SSL_CERT_FILE",
+    ];
+    let mut env = helper_env();
+    env.extend(
+        TRUST
+            .iter()
+            .filter_map(|name| std::env::var_os(name).map(|value| (OsString::from(*name), value))),
+    );
+    env
+}
+
 /// Sign the token's input with the App key, through the OpenSSL CLI: the
 /// key bytes travel on standard input, the non-secret signing input as a
 /// private scratch file, and no child is told the key's path.
@@ -236,7 +264,7 @@ pub fn api_get(ctx: &Ctx, jwt: &str, path: &str) -> AppApi {
         ]
         .map(OsString::from)
         .to_vec(),
-        env: helper_env(),
+        env: carrier_env(),
         cwd: ctx.target.as_std_path().to_path_buf(),
         stdin: Some(headers),
     };
@@ -257,8 +285,9 @@ pub fn api_get(ctx: &Ctx, jwt: &str, path: &str) -> AppApi {
     let stdout = process::redact(&outcome.stdout, &needles);
     if !outcome.success() {
         return AppApi::Failed(format!(
-            "curl could not reach the forge: {}",
-            last_line(&stderr)
+            "curl could not reach the forge (exit {}): {}",
+            outcome.exit_code,
+            first_line(&stderr)
         ));
     }
     let stdout = String::from_utf8_lossy(&stdout);
@@ -279,15 +308,38 @@ pub fn api_get(ctx: &Ctx, jwt: &str, path: &str) -> AppApi {
     }
 }
 
+/// The first non-empty line of a byte stream, which is where `curl` names
+/// what went wrong; the lines after it are prose pointing at a web page,
+/// so the last line of a failure carries none of the reason.
+fn first_line(bytes: &[u8]) -> String {
+    non_empty_line(bytes, End::First)
+}
+
 /// The last non-empty line of a byte stream, where a CLI puts its verdict.
 fn last_line(bytes: &[u8]) -> String {
-    String::from_utf8_lossy(bytes)
-        .lines()
-        .rev()
-        .find(|line| !line.trim().is_empty())
-        .unwrap_or("no output")
-        .trim()
-        .to_owned()
+    non_empty_line(bytes, End::Last)
+}
+
+/// Which end of a stream a line is taken from.
+#[derive(Clone, Copy)]
+enum End {
+    /// The first non-empty line.
+    First,
+    /// The last non-empty line.
+    Last,
+}
+
+/// One non-empty line of a byte stream, taken from the named end.
+fn non_empty_line(bytes: &[u8], end: End) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    let mut lines = text.lines().filter(|line| !line.trim().is_empty());
+    match end {
+        End::First => lines.next(),
+        End::Last => lines.next_back(),
+    }
+    .unwrap_or("no output")
+    .trim()
+    .to_owned()
 }
 
 /// RFC 4648 base64url without padding, which is what a JWT's segments
