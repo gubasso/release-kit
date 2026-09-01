@@ -105,7 +105,11 @@ Automated: `rk setup step single-trunk --apply`. It is the one destructive step,
 
 ## 4. Delete every branch its merge retires
 
-A topic branch that outlives its merge is a second long-lived branch, which step 3 just spent a destructive guard removing. The setting is project-wide, so it holds whichever merge verb anyone reaches for, and it touches no branch whose merge has not landed.
+Merge a pull request, and the forge deletes its branch for you.
+
+- Why: a merged branch left behind becomes another long-lived branch, which is what step 3 just paid a destructive guard to remove.
+- One switch on the repository, so it holds however anyone merges — the web button, `gh pr merge`, or the bot merging its own release request.
+- Merged, not closed: a branch whose merge never landed is never touched, and one whose merge did land has its commits in the trunk.
 
 ```bash
 gh api -X PATCH "repos/$OWNER/$REPO" -F delete_branch_on_merge=true >/dev/null
@@ -117,8 +121,11 @@ Automated: `rk setup step merge-cleanup --apply`.
 
 ## 5. Let Actions write and open pull requests
 
-- Governs `GITHUB_TOKEN`, not the bot App: the pipeline runs on the App token, and this is the fallback that keeps a release request possible if the App is ever removed.
-- `can_approve_pull_request_reviews` covers that same fallback against a review requirement; the trunk ruleset requires zero approvals, so nothing depends on it today.
+A new repository gives its workflows read access to `contents` and `packages` and nothing else. This step raises that default to read and write across every scope, and lets Actions open pull requests.
+
+- The default reaches only a workflow that declares no `permissions:` of its own. Declaring the key sets every scope left unnamed to `none`, so declaring it replaces the default rather than adding to it.
+- Which is why the release pipeline does not depend on this step: `release-plz.yml` declares `permissions:` on every job and acts as the bot App step 8 stores. The default reaches `ci.yml`, the one workflow that declares none.
+- `can_approve_pull_request_reviews` answers a review requirement. The trunk ruleset step 9 writes requires zero approvals, so nothing consumes it today.
 
 ```bash
 gh api -X PUT "repos/$OWNER/$REPO/actions/permissions/workflow" \
