@@ -37,7 +37,6 @@
             pkgs.ripgrep
             pkgs.python3Packages.md-toc
             pkgs.typos
-            pkgs.committed
             pkgs.markdownlint-cli2
             pkgs.lychee
             pkgs.ripsecrets

@@ -14,7 +14,8 @@ lint:
     typos
     markdownlint-cli2 "**/*.md" "#target/**"
     pre-commit validate-config .pre-commit-config.yaml
-    pre-commit run --files $(rg --files --hidden -g '!.git/**')
+    cargo build -q
+    PATH="$(pwd)/target/debug:$PATH" pre-commit run --files $(rg --files --hidden -g '!.git/**')
 
 test:
     cargo nextest run
