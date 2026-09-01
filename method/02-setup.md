@@ -19,6 +19,7 @@ Grant the repository's CI permission to write and to open pull requests. Provide
 Two protections owned by every repository, and a third where older lines exist, all held by configuration that a script can verify:
 
 - `master` takes no direct push and no force-push, requires a pull request carrying the named passing check and the landed title check, and offers squash as the only merge method, with the squash message taken from the request's title — asserted, because the forge's one-commit fallback is the branch commit's own subject.
+- Where the forge requires the title check by name and runs the trunk's own copy of it — GitHub — land step 4 and merge it first, then apply this protection: requiring the check before it exists on the trunk blocks the very request that would land it. A rerun updates the protection in place. The forge that requires the whole pipeline instead needs no ordering, and what its pipeline-borne gate enforces is stated in that forge's document.
 - Release tags are immutable: `v*` can be neither moved nor deleted, and the pattern already covers the rc tags a release line mints.
 - Where a project keeps older lines, `release/*` cannot be force-pushed or deleted while a line is alive; deletion becomes safe only once the line's tags pin its commits.
 

@@ -3132,6 +3132,27 @@ fn a_gitlab_protect_trunk_apply_asserts_the_squash_template() {
         std::fs::read_to_string(fixture.state("squash_option")).expect("state reads"),
         "always\n"
     );
+
+    // Both satisfied limitations survive the protections aggregate: the
+    // title gate's beside the protected tags', neither shadowing the
+    // other.
+    fixture.seed("tag_protected", "");
+    let out = fixture
+        .rk(&["setup", "check"])
+        .args(["--repo", "acme/widget", "--forge", "gitlab"])
+        .assert()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8_lossy(&out);
+    assert!(
+        text.contains("stops accident, not authority"),
+        "the title limitation reports: {text}"
+    );
+    assert!(
+        text.contains("delete a protected tag"),
+        "the tag limitation survives beside it: {text}"
+    );
 }
 
 /// Ordering is enforced by observation: a protection step refuses while the
@@ -3234,6 +3255,54 @@ fn check_reports_a_ruleset_covering_the_wrong_ref() {
     assert!(
         text.contains("unsatisfied protect-trunk") && text.contains("excludes refs"),
         "a self-negating exclusion must read as drift: {text}"
+    );
+}
+
+/// Proven trunk drift survives a repository-settings outage: the ruleset
+/// faults were already proven, so the failing settings read downgrades
+/// nothing to unknown.
+#[test]
+fn check_keeps_proven_trunk_drift_over_a_settings_outage() {
+    let fixture = ForgeFixture::new();
+    fixture.seed("default_branch", "master");
+    fixture.seed("rulesets.index", "master-protection\n");
+    fixture.seed(
+        "ruleset_master-protection",
+        r#"{
+  "name": "master-protection",
+  "target": "branch",
+  "enforcement": "disabled",
+  "bypass_actors": [],
+  "conditions": {
+    "ref_name": { "include": ["refs/heads/master"], "exclude": [] }
+  },
+  "rules": [
+    { "type": "deletion" },
+    { "type": "non_fast_forward" },
+    {
+      "type": "pull_request",
+      "parameters": { "required_approving_review_count": 0, "allowed_merge_methods": ["squash"] }
+    },
+    {
+      "type": "required_status_checks",
+      "parameters": { "required_status_checks": [{ "context": "test" }] }
+    }
+  ]
+}"#,
+    );
+    fixture.seed("fail_repo", "");
+    let out = fixture
+        .rk(&["setup", "check"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8_lossy(&out);
+    assert!(
+        text.contains("unsatisfied protect-trunk") && text.contains("not active"),
+        "proven drift must win over the settings outage: {text}"
     );
 }
 
@@ -4146,6 +4215,116 @@ fn the_hook_block_splices_and_lands_whole_and_refuses_reposless() {
     assert!(
         !reposless.path().join("release-plz.toml").exists(),
         "a refused landing writes nothing"
+    );
+}
+
+/// A duplicated hook block still executes even when its first copy
+/// matches the record, so status reads it as rendered drift and an
+/// adoption refuses it — the same defect definition every reader shares.
+#[test]
+fn a_duplicated_hook_block_is_drift_everywhere() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+    let config_path = target.path().join(".pre-commit-config.yaml");
+    let config = std::fs::read_to_string(&config_path).expect("the config reads");
+    let begin = config
+        .find("# BEGIN release-kit")
+        .expect("the block landed");
+    let end =
+        config.find("# END release-kit").expect("the block closed") + "# END release-kit".len();
+    let block = config[begin..end].to_owned();
+    std::fs::write(&config_path, format!("{config}\n{block}\n")).expect("the duplicate writes");
+
+    rk().args(["status", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("DRIFT .pre-commit-config.yaml"));
+    rk().args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .code(1);
+
+    // Upgrade sees the same defect as a conflict in preview and refuses
+    // the apply, so preview and apply cannot disagree.
+    rk().args(["upgrade", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("conflict .pre-commit-config.yaml"));
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains(".pre-commit-config.yaml"));
+
+    // Adoption lists the defect beside every other unadoptable fact in
+    // one run, per its aggregate-verification contract.
+    std::fs::remove_dir_all(target.path().join(".release-kit")).expect("the record removes");
+    std::fs::remove_file(target.path().join(".github/workflows/release-plz.yml"))
+        .expect("the workflow removes");
+    rk().args([
+        "adopt", "--tech", "rust", "--forge", "github", "--scopes", "api,cli",
+    ])
+    .args(["--repo", "acme/widget", "--target"])
+    .arg(target.path())
+    .arg("--apply")
+    .assert()
+    .code(73)
+    .stderr(
+        predicate::str::contains(".pre-commit-config.yaml")
+            .and(predicate::str::contains("release-plz.yml")),
+    );
+}
+
+/// A record from before the hook block, upgraded over a hook file with
+/// no `repos:` line: the defect is a conflict in preview, the apply
+/// refuses before anything writes, and the target stays as found.
+#[test]
+fn a_reposless_hook_file_conflicts_a_legacy_upgrade_before_any_write() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+    let mut manifest = read_manifest(target.path());
+    let files = manifest["files"]
+        .as_array()
+        .expect("the record lists files")
+        .iter()
+        .filter(|file| file["destination"] != ".pre-commit-config.yaml")
+        .cloned()
+        .collect::<Vec<_>>();
+    manifest["files"] = files.into();
+    write_manifest(target.path(), &manifest);
+    std::fs::write(
+        target.path().join(".pre-commit-config.yaml"),
+        "minimum_pre_commit_version: '3.2.0'\n",
+    )
+    .expect("the legacy config writes");
+    let workflow_path = target.path().join(".github/workflows/release-plz.yml");
+    let workflow = std::fs::read(&workflow_path).expect("the workflow reads");
+
+    rk().args(["upgrade", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("conflict .pre-commit-config.yaml"));
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains(".pre-commit-config.yaml"));
+    assert_eq!(
+        std::fs::read(&workflow_path).expect("the workflow still reads"),
+        workflow,
+        "a refused upgrade must write nothing"
+    );
+    assert!(
+        read_manifest(target.path())
+            .get("files")
+            .and_then(|files| files.as_array())
+            .is_some_and(|files| files
+                .iter()
+                .all(|file| file["destination"] != ".pre-commit-config.yaml")),
+        "a refused upgrade must not rewrite the record"
     );
 }
 
