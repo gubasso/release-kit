@@ -195,6 +195,8 @@ Doing 5d makes step 6 a verification rather than a run.
 
 Already satisfied by 5d. This step is for a repository added to an existing installation later.
 
+Reading the grant takes no user token: GitHub serves the installation-reading endpoints to the App's own credentials alone, so `rk` observes and verifies this step with the same two exports step 7 stores. Only the write — adding a repository an existing installation does not cover — takes a user credential.
+
 By hand, no token:
 
 1. Open `github.com/settings/installations`.
@@ -203,9 +205,16 @@ By hand, no token:
 4. Add `$OWNER/$REPO` to the picker.
 5. Click Save.
 
-By command, the grant endpoint refuses the OAuth token `gh auth login` mints and takes only a classic personal access token, which GitHub creates through the browser only.
+By command:
 
-1. Mint the token. The New personal access token (classic) form carries three fields; set each one and leave the rest of the page alone.
+1. Run the step with the App exports. A repository the installation already covers reports satisfied here, and nothing below is needed.
+
+   ```bash
+   RK_BOT_APP_ID="$APP_ID" RK_BOT_PRIVATE_KEY_FILE="$KEY" rk setup step install-bot --target . --apply
+   # check: reports the installation id covering $OWNER/$REPO
+   ```
+
+2. Only where step 1 reports the grant refused, mint the token it asks for: GitHub documents that one write for a classic personal access token with `repo` scope alone, created through the browser only. The New personal access token (classic) form carries three fields; set each one and leave the rest of the page alone.
 
    1. Open `github.com/settings/tokens`.
       - the left sidebar lands on Personal access tokens, Tokens (classic)
@@ -224,35 +233,37 @@ By command, the grant endpoint refuses the OAuth token `gh auth login` mints and
    8. Click the copy icon next to the value.
       - the value is shown this once
    9. Where `$OWNER` is an organization using SAML single sign-on, click Configure SSO next to the token, then Authorize.
-2. Store it in the OS keyring, so the value reaches `rk` as an environment assignment and never a process argument, per `forge-setup:a-secret-never-reaches-argv`.
+3. Store it in the OS keyring, so the value reaches `rk` as an environment assignment and never a process argument, per `forge-setup:a-secret-never-reaches-argv`.
 
    ```bash
    secret-tool store --label='GitHub classic PAT (repo scope)' service github account gh-classic-pat
    # it prompts "Password:" for the value to store; paste the ghp_ token there
    ```
 
-3. Read it back, so a mistyped store surfaces here and not four commands later.
+4. Read it back, so a mistyped store surfaces here and not four commands later.
 
    ```bash
    secret-tool lookup service github account gh-classic-pat | cut -c1-4
    # check: prints ghp_
    ```
 
-4. Prove what landed: `GH_TOKEN` overrides the gh login, so a wrong value 401s at this call.
+5. Prove what landed: `GH_TOKEN` overrides the gh login, so a wrong value 401s at this call.
 
    ```bash
    GH_TOKEN="$(secret-tool lookup service github account gh-classic-pat)" gh api user -q .login
    # check: prints $OWNER
    ```
 
-5. Run the step. Where the account carries more than one installation, `RK_BOT_INSTALLATION` names the installation id to use.
+6. Rerun the step with the token beside the App exports; `rk` reads the installation id as the App and the grant rides the token.
 
    ```bash
-   GH_TOKEN="$(secret-tool lookup service github account gh-classic-pat)" rk setup step install-bot --target . --apply
-   # check: the step reports the installation id covering $OWNER/$REPO
+   GH_TOKEN="$(secret-tool lookup service github account gh-classic-pat)" RK_BOT_APP_ID="$APP_ID" RK_BOT_PRIVATE_KEY_FILE="$KEY" rk setup step install-bot --target . --apply
+   # check: reports the installation id covering $OWNER/$REPO
    ```
 
-Run it on the host: the keyring lookup needs a session bus a container does not have. The token has no further job once the grant lands.
+7. Delete the token at `github.com/settings/tokens`; it has no further job.
+
+Run it on the host: `$KEY` lives there, and the keyring lookup needs a session bus a container does not have.
 
 ## 7. Store the bot credentials
 
@@ -390,14 +401,14 @@ gh api "repos/$OWNER/$REPO/rulesets/$id" --jq '{refs: .conditions.ref_name.inclu
    # check: every step reports satisfied, and protect-release-lines reports skipped while no line exists
    ```
 
-2. Settle `install-bot`, the one step this reports `unknown` without a classic token, because the listing it reads refuses the ordinary gh login.
+2. Settle `install-bot`, the one step this reports `unknown` without the App exports, because the installation is readable only to the App itself.
 
    ```bash
-   GH_TOKEN="$(secret-tool lookup service github account gh-classic-pat)" rk setup check --target .
+   RK_BOT_APP_ID="$APP_ID" RK_BOT_PRIVATE_KEY_FILE="$KEY" rk setup check --target .
    # check: install-bot reports satisfied
    ```
 
-   With no token on this host: `github.com/settings/installations` lists `$APP` with `$REPO` under Repository access.
+   With no key on this host: `github.com/settings/installations` lists `$APP` with `$REPO` under Repository access.
 
 ## 12. Land the workflow files
 

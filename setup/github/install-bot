@@ -1,34 +1,27 @@
 #!/usr/bin/env sh
-# Add this project to the bot App's installation, so the bot identity can act
-# on it. Creating the App itself is the one manual action, once per account
-# ever; the walkthrough is the forge document. Idempotent: an already-granted
-# project is re-asserted, and no second identity is ever created.
+# Add this project to the bot App's installation, so the bot identity can
+# act on it. Creating the App itself is the one manual action, once per
+# account ever; the walkthrough is the forge document. Idempotent: an
+# already-granted project is observed satisfied before this runs, so the
+# grant below fires only when it is missing, and no second identity is
+# ever created.
 #
-# The grant below is documented to work only for a classic personal access
-# token with repo scope, and the listing refuses the OAuth token gh normally
-# mints; run this step with GH_TOKEN holding a classic token, or grant the
-# project by hand under github.com/settings/installations.
-#
-# RK_BOT_INSTALLATION names the installation id where the account has more
-# than one; with exactly one installation it is derived.
+# rk observes and verifies the grant as the App itself: the forge serves
+# the installation-reading endpoints to an App JWT only, never to a
+# personal access token of any class. The grant is the one write the forge
+# offers a command, and it is documented to work only for a classic
+# personal access token with repo scope — so gh must hold such a token
+# here, or one click under github.com/settings/installations grants the
+# project by hand. RK_BOT_INSTALLATION arrives from rk, which reads it
+# from the forge as the App.
 set -eu
 : "${RK_REPO:?rk sets this; run this script through rk setup}"
-
-installation="${RK_BOT_INSTALLATION:-}"
-if [ -z "$installation" ]; then
-  count="$(gh api /user/installations -q .total_count)"
-  if [ "$count" = "1" ]; then
-    installation="$(gh api /user/installations -q '.installations[0].id')"
-  else
-    echo "FAIL $count app installations reachable; cannot choose one" >&2
-    echo 'remediation: export RK_BOT_INSTALLATION with one id from this list:' >&2
-    gh api /user/installations -q '.installations[] | "\(.id) \(.app_slug)"' >&2
-    exit 1
-  fi
-fi
+: "${RK_BOT_INSTALLATION:?rk sets this; run this script through rk setup}"
 
 repo_id="$(gh api "repos/$RK_REPO" -q .id)"
-gh api -X PUT "user/installations/$installation/repositories/$repo_id" >/dev/null
-echo "check: prints $RK_REPO"
-gh api "user/installations/$installation/repositories" --paginate \
-  -q ".repositories[] | select(.full_name == \"$RK_REPO\") | .full_name"
+if ! gh api -X PUT "user/installations/$RK_BOT_INSTALLATION/repositories/$repo_id" >/dev/null; then
+  echo 'FAIL the forge refused the grant' >&2
+  echo 'remediation: put a classic personal access token with repo scope in GH_TOKEN, or add the repository by hand under github.com/settings/installations' >&2
+  exit 1
+fi
+echo "granted $RK_REPO to installation $RK_BOT_INSTALLATION"

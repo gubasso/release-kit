@@ -53,6 +53,12 @@ A credential MUST reach a setup step through the environment or standard input, 
 - WHEN `rk setup step bot-secrets --apply` runs
 - THEN the value travels to the forge CLI on standard input, no spawned argument list contains it, and no journal file or output stream carries it
 
+#### Scenario: The App JWT reaches the forge in a header on standard input
+
+- GIVEN `install-bot` observing the installation as the App itself
+- WHEN `rk` carries the minted JWT to the forge
+- THEN the bearer header arrives on the carrying child's standard input, no argument list holds the token, and neither the token nor its signature lands in any journal file or output stream
+
 Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `forge-setup:key-material-never-reaches-the-environment` — Key material never reaches the environment
@@ -66,6 +72,12 @@ An environment block is readable from outside the process and every later child 
 - GIVEN `RK_BOT_PRIVATE_KEY_FILE` naming an owner-only PEM private key outside the repository
 - WHEN `rk setup step bot-secrets --apply` runs
 - THEN the bytes `rk` validated reach the forge CLI on the step's standard input, no environment `rk` constructs holds them or the path, and a group-readable file, one that is not a PEM private key by kind and encoding, or a stale `RK_BOT_PRIVATE_KEY` export refuses before any forge call
+
+#### Scenario: The install-bot observation signs with the key and tells no child its path
+
+- GIVEN `RK_BOT_APP_ID` and `RK_BOT_PRIVATE_KEY_FILE` in the operator's environment
+- WHEN `rk setup check` observes `install-bot`
+- THEN the validated bytes reach the signing child on standard input alone and its argument list names no key file, while an absent export leaves the step unknown with both exports named
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 

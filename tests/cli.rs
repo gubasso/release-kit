@@ -1137,7 +1137,15 @@ fn doctor_reports_every_probe_and_exits_0() {
         .collect();
     assert_eq!(
         ids,
-        ["sh", "state-root", "git-remote", "gh-auth", "glab-auth"]
+        [
+            "sh",
+            "state-root",
+            "git-remote",
+            "gh-auth",
+            "glab-auth",
+            "openssl",
+            "curl"
+        ]
     );
     let by_id = |id: &str| {
         probes
@@ -2181,20 +2189,8 @@ api)
       while read -r n; do names+="{\"name\":\"$n\"},"; done < <(sort -u "$STATE/secrets.index")
     fi
     echo "{\"secrets\":[${names%,}]}";;
-  "GET user/installations")
-    if [[ "$query" == ".total_count" ]]; then echo 1
-    elif [[ -n "$query" ]]; then echo 42
-    else echo '{"total_count":1,"installations":[{"id":42,"app_slug":"bot"}]}'; fi;;
   "PUT user/installations/"*"/repositories/"*)
     touch "$STATE/installed"; echo '{}';;
-  "GET user/installations/"*"/repositories")
-    entry=""
-    [[ -f "$STATE/installed" ]] && entry='{"full_name":"acme/widget"}'
-    if [[ -n "$query" ]]; then
-      [[ -n "$entry" ]] && echo "acme/widget"
-    else
-      echo "{\"repositories\":[$entry]}"
-    fi;;
   "GET repos/acme/widget/rulesets")
     if [[ "$query" == ".[].name" ]]; then
       cat "$STATE/rulesets.index" 2>/dev/null || true
@@ -2297,6 +2293,47 @@ esac
 exit 0
 "#;
 
+/// The OpenSSL stand-in: it records its argument list, its environment,
+/// and the key bytes it received on standard input, then emits a fixed
+/// signature — enough for the JWT to assemble and for the tests to prove
+/// where the key travelled.
+const MOCK_OPENSSL: &str = r#"#!/usr/bin/env bash
+STATE="__STATE__"
+printf '%s\n' "$*" >> "$STATE/openssl-log"
+env >> "$STATE/openssl-env-log"
+cat >> "$STATE/openssl-stdin-log"
+printf 'sig-bytes'
+"#;
+
+/// The curl stand-in for the App-credential reads: the repository
+/// installation answers by the shared `installed` state file, so a grant
+/// the mock forge records flips the observation, and the account listing
+/// names installation 42 — the id the grant must then carry.
+const MOCK_CURL: &str = r#"#!/usr/bin/env bash
+STATE="__STATE__"
+printf '%s\n' "$*" >> "$STATE/curl-log"
+cat >> "$STATE/curl-stdin-log"
+if [[ -f "$STATE/curl_fail" ]]; then
+  echo "curl: (6) Could not resolve host: api.github.com" >&2
+  exit 6
+fi
+url="${@: -1}"
+case "$url" in
+  *"/users/acme/installation")
+    printf '{"id":42,"account":{"login":"acme"}}\n200';;
+  *"/orgs/"*"/installation")
+    printf '{"message":"Not Found"}\n404';;
+  *"/repos/"*"/installation")
+    if [[ -f "$STATE/installed" ]]; then
+      printf '{"id":42,"app_id":7,"app_slug":"bot"}\n200'
+    else
+      printf '{"message":"Not Found"}\n404'
+    fi;;
+  *)
+    printf '{}\n200';;
+esac
+"#;
+
 /// One mocked setup fixture: a scratch home, a scratch target, and a mock
 /// forge CLI recording every invocation and every stdin byte.
 struct ForgeFixture {
@@ -2312,7 +2349,12 @@ impl ForgeFixture {
             target: tempfile::tempdir().expect("a scratch target exists"),
             mock: tempfile::tempdir().expect("a scratch mock dir exists"),
         };
-        for (name, body) in [("gh", MOCK_GH), ("glab", MOCK_GLAB)] {
+        for (name, body) in [
+            ("gh", MOCK_GH),
+            ("glab", MOCK_GLAB),
+            ("openssl", MOCK_OPENSSL),
+            ("curl", MOCK_CURL),
+        ] {
             let path = fixture.mock.path().join(name);
             std::fs::write(
                 &path,
@@ -2372,6 +2414,19 @@ impl ForgeFixture {
         }
     }
 
+    /// Substitute the curl stand-in, for the cases that need the App
+    /// read to fail or to echo.
+    fn replace_curl(&self, body: &str) {
+        let path = self.mock.path().join("curl");
+        std::fs::write(&path, body).expect("the mock writes");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                .expect("the mock is executable");
+        }
+    }
+
     /// The newest run directory, by the timestamp its id opens with.
     fn latest_run(&self) -> PathBuf {
         let mut runs: Vec<PathBuf> = std::fs::read_dir(self.runs_root())
@@ -2410,6 +2465,8 @@ impl ForgeFixture {
             .env("XDG_STATE_HOME", self.home.path())
             .env("RK_GH_BIN", self.mock.path().join("gh"))
             .env("RK_GLAB_BIN", self.mock.path().join("glab"))
+            .env("RK_OPENSSL_BIN", self.mock.path().join("openssl"))
+            .env("RK_CURL_BIN", self.mock.path().join("curl"))
             .env_remove("RK_BOT_APP_ID")
             .env_remove("RK_BOT_PRIVATE_KEY")
             .env_remove("RK_BOT_PRIVATE_KEY_FILE")
@@ -2522,6 +2579,38 @@ fn a_full_github_apply_lands_reasserts_and_checks_clean() {
         !fixture.env_log().contains("RK_BOT_PRIVATE_KEY_FILE"),
         "a child was told where the key file is, and could have reopened it"
     );
+
+    // The App JWT path: the key bytes reached openssl on standard input
+    // and nowhere else, and the token itself travelled to curl in a
+    // header read from standard input, never an argument list.
+    let openssl_stdin =
+        std::fs::read_to_string(fixture.state("openssl-stdin-log")).expect("openssl saw stdin");
+    assert!(openssl_stdin.contains(PEM_NEEDLE));
+    let openssl_args =
+        std::fs::read_to_string(fixture.state("openssl-log")).expect("openssl logged its argv");
+    assert!(!openssl_args.contains(PEM_NEEDLE));
+    assert!(
+        !openssl_args.contains("bot.pem"),
+        "the signer was told the key's path: {openssl_args}"
+    );
+    let openssl_args_full =
+        std::fs::read_to_string(fixture.state("openssl-log")).expect("openssl logged its argv");
+    assert_eq!(
+        openssl_args_full.lines().count(),
+        1,
+        "a full apply mints one JWT, so the key is read once: {openssl_args_full}"
+    );
+    let curl_args = std::fs::read_to_string(fixture.state("curl-log")).expect("curl logged argv");
+    assert!(
+        !curl_args.contains("Bearer"),
+        "the App JWT reached an argument list: {curl_args}"
+    );
+    assert!(
+        std::fs::read_to_string(fixture.state("curl-stdin-log"))
+            .expect("curl saw stdin")
+            .contains("Authorization: Bearer "),
+        "the App JWT travels as a bearer header on standard input"
+    );
     let mut journal_dirs: Vec<PathBuf> = std::fs::read_dir(fixture.runs_root())
         .expect("the journal root reads")
         .map(|entry| entry.expect("an entry").path())
@@ -2592,13 +2681,233 @@ fn a_full_github_apply_lands_reasserts_and_checks_clean() {
         "the optional protection joins the owned set: {rulesets}"
     );
 
-    // And check reports clean at exit 0.
+    // And check reports clean at exit 0, with the same two App exports
+    // the apply carried — install-bot is readable only to the App itself.
     fixture
         .rk(&["setup", "check"])
         .args(["--repo", "acme/widget", "--forge", "github"])
+        .env("RK_BOT_APP_ID", "314159")
+        .env("RK_BOT_PRIVATE_KEY_FILE", &key)
         .assert()
         .success()
+        .stdout(predicate::str::contains("ok install-bot"))
         .stdout(predicate::str::contains("ok protections-check"));
+}
+
+/// Without the App credentials the installation is unreadable: the check
+/// reports the step unknown by name, with the exports that answer it, and
+/// spends no forge call finding out.
+#[test]
+fn check_reports_install_bot_unknown_without_app_credentials() {
+    let fixture = ForgeFixture::new();
+    let out = fixture
+        .rk(&["setup", "check"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .assert()
+        .code(1)
+        .get_output()
+        .clone();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("unknown install-bot"), "{text}");
+    assert!(
+        text.contains("RK_BOT_APP_ID and RK_BOT_PRIVATE_KEY_FILE"),
+        "the remediation names the exports: {text}"
+    );
+    assert!(
+        !fixture.state("curl-log").exists(),
+        "no credentials, no forge call"
+    );
+}
+
+/// The grant: the observation answers 404 as the App, rk reads the
+/// installation id from the App's own list and hands it to the script,
+/// the script issues exactly the documented PUT, and the readback — as
+/// the App again — proves it. The dead user-token listings are gone.
+#[test]
+fn install_bot_grants_with_the_discovered_installation_id() {
+    let fixture = ForgeFixture::new();
+    let key = fixture.key_file();
+    let step = |fixture: &ForgeFixture| {
+        let mut command = fixture.rk(&["setup", "step", "install-bot"]);
+        command
+            .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
+            .env("RK_BOT_APP_ID", "314159")
+            .env("RK_BOT_PRIVATE_KEY_FILE", &key);
+        command
+    };
+    step(&fixture)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("applied install-bot"))
+        .stderr(predicate::str::contains(
+            "installation 42 covers acme/widget",
+        ));
+    assert!(fixture.state("installed").is_file());
+    let log = fixture.log();
+    assert!(
+        log.contains("-X PUT user/installations/42/repositories/"),
+        "the grant carries the discovered id: {log}"
+    );
+    assert!(
+        !log.contains("GET user/installations"),
+        "a user token cannot list installations, and nothing may try: {log}"
+    );
+    let curl = std::fs::read_to_string(fixture.state("curl-log")).expect("curl ran");
+    assert!(curl.contains("repos/acme/widget/installation"), "{curl}");
+    assert!(curl.contains("users/acme/installation"), "{curl}");
+    let openssl = std::fs::read_to_string(fixture.state("openssl-log")).expect("openssl ran");
+    assert_eq!(
+        openssl.lines().count(),
+        1,
+        "one run mints one JWT, so the key is read exactly once: {openssl}"
+    );
+
+    // A rerun observes satisfied and grants nothing twice.
+    let before = fixture.log();
+    step(&fixture)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("satisfied"));
+    let after = fixture.log();
+    assert!(
+        !after[before.len()..].contains("-X PUT"),
+        "a rerun mutated the forge"
+    );
+}
+
+/// A curl that echoes what it was handed cannot leak the token, because
+/// the credential-carrying spawn bypasses the journaling executor
+/// entirely: no stream of it reaches any journal file, and the token and
+/// its signature segment are redaction needles besides.
+#[test]
+fn an_echoing_curl_cannot_put_the_jwt_in_the_journal() {
+    let fixture = ForgeFixture::new();
+    let key = fixture.key_file();
+    fixture.replace_curl(
+        "#!/usr/bin/env bash
+cat
+printf '{}\n500'
+",
+    );
+    fixture
+        .rk(&["setup", "step", "install-bot"])
+        .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
+        .env("RK_BOT_APP_ID", "314159")
+        .env("RK_BOT_PRIVATE_KEY_FILE", &key)
+        .assert()
+        .code(73);
+    let run = fixture.latest_run();
+    for file in ["meta.json", "events.jsonl", "transcript.txt"] {
+        let text = std::fs::read_to_string(run.join(file)).expect("the journal file reads");
+        assert!(
+            !text.contains("Authorization"),
+            "{file} carries the curl child's streams"
+        );
+        assert!(
+            !text.contains("eyJhbGciOiJSUzI1NiI"),
+            "{file} carries the App JWT"
+        );
+        assert!(!text.contains(PEM_NEEDLE), "{file} carries key material");
+    }
+}
+
+/// A curl that echoes its input and then fails cannot leak the token into
+/// the surfaced diagnostic: the failure detail is scrubbed against the
+/// token and its signature before anything is printed or journaled.
+#[test]
+fn a_failing_curl_cannot_put_the_jwt_in_the_diagnostic() {
+    let fixture = ForgeFixture::new();
+    let key = fixture.key_file();
+    fixture.replace_curl(
+        "#!/usr/bin/env bash
+grep Authorization >&2
+exit 7
+",
+    );
+    let out = fixture
+        .rk(&["setup", "step", "install-bot"])
+        .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
+        .env("RK_BOT_APP_ID", "314159")
+        .env("RK_BOT_PRIVATE_KEY_FILE", &key)
+        .assert()
+        .code(73)
+        .get_output()
+        .clone();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("eyJhbGciOiJSUzI1NiI"),
+        "the diagnostic carries the App JWT: {stderr}"
+    );
+    assert!(
+        stderr.contains("[redacted]"),
+        "the echoed header must surface redacted: {stderr}"
+    );
+    let run = fixture.latest_run();
+    for file in ["meta.json", "events.jsonl", "transcript.txt"] {
+        let text = std::fs::read_to_string(run.join(file)).expect("the journal file reads");
+        assert!(
+            !text.contains("eyJhbGciOiJSUzI1NiI"),
+            "{file} carries the App JWT"
+        );
+    }
+}
+
+/// The signing and carrying helpers inherit no forge credential: their
+/// environment is the search path alone, so a helper that dumps its whole
+/// environment on failure has nothing of the operator's to dump.
+#[test]
+fn the_app_helpers_inherit_no_forge_credential() {
+    let fixture = ForgeFixture::new();
+    let key = fixture.key_file();
+    fixture.replace_curl(
+        "#!/usr/bin/env bash
+cat > /dev/null
+env >&2
+exit 7
+",
+    );
+    let out = fixture
+        .rk(&["setup", "step", "install-bot"])
+        .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
+        .env("GH_TOKEN", "gh-secret-value")
+        .env("RK_BOT_APP_ID", "314159")
+        .env("RK_BOT_PRIVATE_KEY_FILE", &key)
+        .assert()
+        .code(73)
+        .get_output()
+        .clone();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("gh-secret-value"),
+        "a helper child was handed the forge token: {stderr}"
+    );
+    let openssl_env =
+        std::fs::read_to_string(fixture.state("openssl-env-log")).expect("openssl saw an env");
+    assert!(
+        !openssl_env.contains("gh-secret-value"),
+        "the signer was handed the forge token"
+    );
+}
+
+/// An unreachable forge leaves the observation undecided, and an apply on
+/// an undecided state refuses before anything mutates.
+#[test]
+fn install_bot_refuses_to_apply_when_the_forge_is_unreachable() {
+    let fixture = ForgeFixture::new();
+    let key = fixture.key_file();
+    fixture.seed("curl_fail", "1");
+    fixture
+        .rk(&["setup", "step", "install-bot"])
+        .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
+        .env("RK_BOT_APP_ID", "314159")
+        .env("RK_BOT_PRIVATE_KEY_FILE", &key)
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("cannot observe the current state"));
+    assert!(
+        !fixture.log().contains("-X PUT"),
+        "an undecided observation must precede every mutation"
+    );
 }
 
 /// A check against an unconfigured forge reports per step and exits 1.

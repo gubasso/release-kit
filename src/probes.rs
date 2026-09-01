@@ -101,7 +101,51 @@ pub fn run_all() -> Vec<ProbeResult> {
             "glab auth login",
             &[&["auth", "status"]],
         ),
+        tool(
+            "openssl",
+            "RK_OPENSSL_BIN",
+            "openssl",
+            "OpenSSL; install-bot signs the App JWT with it",
+            &["version"],
+        ),
+        tool(
+            "curl",
+            "RK_CURL_BIN",
+            "curl",
+            "curl; install-bot reads the installation and rk versions --check fetches with it",
+            &["--version"],
+        ),
     ]
+}
+
+/// A helper binary answers its version call. `env_override` names the
+/// substitute, which is also what keeps tests hermetic; presence is the
+/// whole question, because the tools here take no configuration.
+fn tool(
+    id: &'static str,
+    env_override: &str,
+    default_bin: &str,
+    label: &str,
+    args: &[&str],
+) -> ProbeResult {
+    let bin = std::env::var(env_override).unwrap_or_else(|_| default_bin.to_owned());
+    match Command::new(&bin).args(args).output() {
+        Ok(out) if out.status.success() => {
+            ProbeResult::ok(id, ProbeClass::Soft, format!("{default_bin} runs"))
+        }
+        Ok(_) => ProbeResult::failed(
+            id,
+            ProbeClass::Soft,
+            format!("{default_bin} does not answer {}", args.join(" ")),
+            format!("repair {label}"),
+        ),
+        Err(_) => ProbeResult::failed(
+            id,
+            ProbeClass::Soft,
+            format!("{default_bin} is not on PATH"),
+            format!("install {label}"),
+        ),
+    }
 }
 
 /// A POSIX shell runs; every setup step spawns through it.
