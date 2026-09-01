@@ -45,6 +45,7 @@ Release intent captured in the squash titles — `feat:` bumps minor, `fix:` bum
 ```bash
 just check
 cargo publish --dry-run --locked
+# check: both exit 0; the trunk is releasable
 ```
 
 ## 2. Watch the release PR
@@ -53,6 +54,8 @@ Every push to the trunk refreshes it: the proposed version and the regenerated c
 
 ```bash
 gh pr list --repo "$OWNER/$REPO" --state open
+# check: a release request from release-plz is listed, proposing the next version
+# none listed: nothing releasable has landed since the last release, or release-plz.yml has not run yet
 ```
 
 ## 3. Correct the changelog
@@ -243,12 +246,15 @@ The line is a second trunk, so it needs the same protection, the same release re
    ```bash
    git fetch origin --tags --force
    git checkout -b release/0.2 v0.2.0 && git push -u origin release/0.2
+   # check: the branch is created at the tag and pushed with its upstream set
+   # already cut: the checkout refuses the existing branch; git checkout release/0.2 and go to 2
    ```
 
 2. Protect it, once per account, covering every `release/*` line.
 
    ```bash
    rk setup step protect-release-lines --target . --apply
+   # check: reports applied the first time and satisfied after; 3 proves the shape either way
    ```
 
 3. Assert the shape the forge enforces.

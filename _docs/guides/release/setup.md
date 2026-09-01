@@ -1,6 +1,8 @@
 # Setup
 
-The one-time bootstrap of a repository onto the release-kit convention. Each step carries its own prerequisites, its command by hand, its `rk` equivalent, and what success prints. The reasoning lives in `rk method setup`.
+The one-time bootstrap of a repository onto the release-kit convention. Each step carries its own prerequisites, its command by hand, and its `rk` equivalent. The reasoning lives in `rk method setup`.
+
+Every step is rerunnable. A `# check:` line says what success prints, and a second comment line appears wherever a repeat prints something else or sends you to another step.
 
 ## Coordinates
 
@@ -77,7 +79,7 @@ The bot targets the default branch with no configuration, so the trunk must be i
 ```bash
 gh repo edit "$OWNER/$REPO" --default-branch master
 gh repo view "$OWNER/$REPO" --json defaultBranchRef -q .defaultBranchRef.name
-# check: prints master
+# check: prints master, whether this run set it or found it set
 ```
 
 Automated: `rk setup step default-branch --apply`. A repository with no such branch gets it created at the current default's tip first.
@@ -95,7 +97,8 @@ for candidate in main develop; do
     *) echo "$candidate is not an ancestor of master ($status); merge or move its work first" ;;
   esac
 done
-# check: gh api repos/$OWNER/$REPO/git/ref/heads/<candidate> prints 404 for each
+# check: prints nothing, whether it deleted the branches or found them already gone
+# verify each with gh api "repos/$OWNER/$REPO/git/ref/heads/<candidate>", which must 404
 ```
 
 Automated: `rk setup step single-trunk --apply`. It is the one destructive step, and its guard fails closed.
@@ -208,11 +211,12 @@ By hand, no token:
 
 By command:
 
-1. Run the step with the App exports. A repository the installation already covers reports satisfied here, and nothing below is needed.
+1. Run the step with the App exports.
 
    ```bash
    RK_BOT_APP_ID="$APP_ID" RK_BOT_PRIVATE_KEY_FILE="$KEY" rk setup step install-bot --target . --apply
-   # check: reports the installation id covering $OWNER/$REPO
+   # check: reports the installation id covering $OWNER/$REPO; skip 2 to 7 below
+   # refused: the grant needs a user token, so continue with 2 below
    ```
 
 2. Only where step 1 reports the grant refused, mint the token it asks for: GitHub documents that one write for a classic personal access token with `repo` scope alone, created through the browser only. The New personal access token (classic) form carries three fields; set each one and leave the rest of the page alone.
@@ -275,6 +279,7 @@ chmod 600 "$KEY"
 RK_BOT_APP_ID="$APP_ID" RK_BOT_PRIVATE_KEY_FILE="$KEY" rk setup step bot-secrets --target . --apply
 gh secret list --repo "$OWNER/$REPO"
 # check: lists RELEASE_BOT_APP_ID and RELEASE_BOT_APP_PRIVATE_KEY
+# already stored: both are overwritten and the listing is the same, which is the rotation path
 ```
 
 `release-plz.yml` reads both through `actions/create-github-app-token@v3`. That action prefers `client-id` and still accepts `app-id`; this convention stays on the App ID, which is why 5c collects the numeric id.
@@ -293,12 +298,17 @@ gh api "repos/$OWNER/$REPO/contents/.github/workflows/ci.yml" -q .content \
 # check: both lines appear; the job id is test and it runs on pull requests
 ```
 
-### 8b. Create the ruleset
+### 8b. Create or update the ruleset
 
-`do_not_enforce_on_create` keeps it from blocking branch creation meanwhile.
+`do_not_enforce_on_create` keeps it from blocking branch creation meanwhile. The lookup is what makes the block rerunnable: a ruleset name is unique per repository, so an existing one is updated in place rather than refused.
 
 ```bash
-gh api -X POST "repos/$OWNER/$REPO/rulesets" --input - <<'JSON'
+id="$(gh api "repos/$OWNER/$REPO/rulesets" --jq '.[] | select(.name=="master-protection") | .id')"
+if [ -n "$id" ]; then
+  gh api -X PUT "repos/$OWNER/$REPO/rulesets/$id" --input - >/dev/null
+else
+  gh api -X POST "repos/$OWNER/$REPO/rulesets" --input - >/dev/null
+fi <<'JSON'
 {
   "name": "master-protection",
   "target": "branch",
@@ -333,6 +343,8 @@ gh api -X POST "repos/$OWNER/$REPO/rulesets" --input - <<'JSON'
   ]
 }
 JSON
+# check: prints nothing, whether it created the ruleset or updated one already there
+# then: 8c reports the same shape either way
 ```
 
 ### 8c. Verify it
@@ -361,7 +373,12 @@ Automated: `rk setup step protect-trunk --target . --apply --required-check test
 `v*` can be created but never moved or deleted; the pattern already covers the rc tags a release line mints. Creation staying open is what lets the bot push `vVERSION` on `Contents: write` alone.
 
 ```bash
-gh api -X POST "repos/$OWNER/$REPO/rulesets" --input - <<'JSON'
+id="$(gh api "repos/$OWNER/$REPO/rulesets" --jq '.[] | select(.name=="release-tags") | .id')"
+if [ -n "$id" ]; then
+  gh api -X PUT "repos/$OWNER/$REPO/rulesets/$id" --input - >/dev/null
+else
+  gh api -X POST "repos/$OWNER/$REPO/rulesets" --input - >/dev/null
+fi <<'JSON'
 {
   "name": "release-tags",
   "target": "tag",
@@ -375,6 +392,7 @@ gh api -X POST "repos/$OWNER/$REPO/rulesets" --input - <<'JSON'
   ]
 }
 JSON
+# check: prints nothing, whether it created the ruleset or updated one already there
 id="$(gh api "repos/$OWNER/$REPO/rulesets" --jq '.[] | select(.name=="release-tags") | .id')"
 gh api "repos/$OWNER/$REPO/rulesets/$id" --jq '{target, enforcement, refs: .conditions.ref_name.include, rules: ([.rules[].type] | sort)}'
 # check: target tag, enforcement active, refs ["refs/tags/v*"], rules deletion update
@@ -483,6 +501,7 @@ Trusted publishing attaches to an existing package, so the first version goes up
    cargo publish --locked
    cargo info "$CRATE" | grep -m1 -i '^version'
    # check: prints the version step 2 reported
+   # already published: the registry refuses a version it already serves; go to step 14
    ```
 
 ## 14. Register the trusted publisher
@@ -514,6 +533,7 @@ Two halves, and the second is the one people skip.
    cargo logout
    grep -c crates-io "${CARGO_HOME:-$HOME/.cargo}/credentials.toml" 2>/dev/null || echo 0
    # check: prints 0, or the file is gone
+   # already revoked: cargo logout says there is nothing to remove, and the count is still 0
    ```
 
 The package now has exactly one publishing path.
