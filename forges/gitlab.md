@@ -21,22 +21,23 @@ Rotation is two commands: create a replacement token through the same step once 
 
 ## Mapping
 
-| Purpose                           | Command                                                                |
-| --------------------------------- | ---------------------------------------------------------------------- |
-| Raw API                           | `glab api`                                                             |
-| Set the default branch            | `glab api -X PUT projects/:id` with `default_branch`                   |
-| Store a secret                    | `glab variable set NAME --masked` with the value on stdin              |
-| List open release requests        | `glab mr list --target-branch <branch>`                                |
-| Merge the release request         | `glab mr merge --squash --remove-source-branch`                        |
-| Wait on checks                    | `glab ci status --wait`                                                |
-| Wait on a build                   | `glab ci status --wait`                                                |
-| Create the branch for an issue    | `glab mr create --related-issue <issue> --create-source-branch`        |
-| Protect a branch                  | `POST /projects/:id/protected_branches`, `PATCH` to update             |
-| Require the trunk's checks        | `PUT /projects/:id` with `only_allow_merge_if_pipeline_succeeds`       |
-| Set the merge method              | `PUT /projects/:id` with `merge_method=ff`                             |
-| Protect tags                      | `POST /projects/:id/protected_tags`; no `PATCH`, so delete-then-create |
-| Grant the bot access to a project | `POST /projects/:id/access_tokens`                                     |
-| Find the bot identity             | `GET /projects/:id/access_tokens`                                      |
+| Purpose                              | Command                                                                |
+| ------------------------------------ | ---------------------------------------------------------------------- |
+| Raw API                              | `glab api`                                                             |
+| Set the default branch               | `glab api -X PUT projects/:id` with `default_branch`                   |
+| Delete a branch when its merge lands | `glab api -X PUT projects/:id` with `remove_source_branch_after_merge` |
+| Store a secret                       | `glab variable set NAME --masked` with the value on stdin              |
+| List open release requests           | `glab mr list --target-branch <branch>`                                |
+| Merge the release request            | `glab mr merge --squash --remove-source-branch`                        |
+| Wait on checks                       | `glab ci status --wait`                                                |
+| Wait on a build                      | `glab ci status --wait`                                                |
+| Create the branch for an issue       | `glab mr create --related-issue <issue> --create-source-branch`        |
+| Protect a branch                     | `POST /projects/:id/protected_branches`, `PATCH` to update             |
+| Require the trunk's checks           | `PUT /projects/:id` with `only_allow_merge_if_pipeline_succeeds`       |
+| Set the merge method                 | `PUT /projects/:id` with `merge_method=ff`                             |
+| Protect tags                         | `POST /projects/:id/protected_tags`; no `PATCH`, so delete-then-create |
+| Grant the bot access to a project    | `POST /projects/:id/access_tokens`                                     |
+| Find the bot identity                | `GET /projects/:id/access_tokens`                                      |
 
 ## Limitations
 

@@ -15,7 +15,7 @@ export CRATE=<package name as published to the registry>
 export APP=<the bot App's name>
 ```
 
-Two more appear once they exist, in step 5:
+Two more appear once they exist, in step 6:
 
 ```bash
 export APP_ID=<the bot App's numeric id>
@@ -45,7 +45,7 @@ Everything else the commands name is fixed by the convention and appears literal
 - Tool pins: `versions.toml`
   - the payload's own registry
 
-`test` is the one entry the payload does not itself write on a GitHub target: no `ci.yml` snippet lands there, so the project owns that workflow. Name its job `test` and everything below holds; name it otherwise and the required check, the ruleset, and step 8's prerequisite all have to move with it.
+`test` is the one entry the payload does not itself write on a GitHub target: no `ci.yml` snippet lands there, so the project owns that workflow. Name its job `test` and everything below holds; name it otherwise and the required check, the ruleset, and step 9's prerequisite all have to move with it.
 
 ## 0. Prerequisites
 
@@ -53,13 +53,13 @@ Everything else the commands name is fixed by the convention and appears literal
 - Rust toolchain: `cargo --version`
 - Nix and `just`: `nix develop --command just --version`
 - `rk` on `PATH`: `rk --version`
-- `openssl` and `curl`: `rk doctor` reports both ok; step 6 signs the App JWT with one and carries it to the forge with the other
+- `openssl` and `curl`: `rk doctor` reports both ok; step 7 signs the App JWT with one and carries it to the forge with the other
 - OS keyring: `secret-tool --version`, on a host shell and never in a container
 - Registry account: signed in at crates.io, with a verified email at crates.io/settings/profile
 - Crate name free: `cargo info "$CRATE"` 404s, or the account already owns the crate
 - Clean trunk: `git status --porcelain` empty, `HEAD` equal to `origin/master`
 
-An unverified email cannot publish; step 13 fails at the upload, after the token is minted.
+An unverified email cannot publish; step 15 fails at the upload, after the token is minted.
 
 ## 1. Gate the package metadata
 
@@ -103,7 +103,19 @@ done
 
 Automated: `rk setup step single-trunk --apply`. It is the one destructive step, and its guard fails closed.
 
-## 4. Let Actions write and open pull requests
+## 4. Delete every branch its merge retires
+
+A topic branch that outlives its merge is a second long-lived branch, which step 3 just spent a destructive guard removing. The setting is project-wide, so it holds whichever merge verb anyone reaches for, and it touches no branch whose merge has not landed.
+
+```bash
+gh api -X PATCH "repos/$OWNER/$REPO" -F delete_branch_on_merge=true >/dev/null
+gh api "repos/$OWNER/$REPO" -q .delete_branch_on_merge
+# check: prints true, whether this run set it or found it set
+```
+
+Automated: `rk setup step merge-cleanup --apply`.
+
+## 5. Let Actions write and open pull requests
 
 - Governs `GITHUB_TOKEN`, not the bot App: the pipeline runs on the App token, and this is the fallback that keeps a release request possible if the App is ever removed.
 - `can_approve_pull_request_reviews` covers that same fallback against a review requirement; the trunk ruleset requires zero approvals, so nothing depends on it today.
@@ -117,20 +129,20 @@ gh api "repos/$OWNER/$REPO/actions/permissions/workflow"
 
 Automated: `rk setup step ci-permissions --apply`.
 
-## 5. Create the bot App
+## 6. Create the bot App
 
 No command: registering a GitHub App is a browser flow. One App serves every repository the account owns, so this happens once in an account's lifetime.
 
-### 5a. Check whether it exists
+### 6a. Check whether it exists
 
 1. Open the account's App list.
    - Personal account: `github.com/settings/apps`
    - Organization: `github.com/organizations/$OWNER/settings/apps`
 2. Look for an App named `$APP`.
    - Listed: skip to 5d.
-   - Not listed: continue to 5b.
+   - Not listed: continue to 6b.
 
-### 5b. Register it
+### 6b. Register it
 
 Walk the form top to bottom; each step below is one of its own sections.
 
@@ -169,7 +181,7 @@ What it does not need, against the guesses that cost a rerun:
 - Actions, Workflows: `Workflows: write` is needed only to write files under `.github/workflows/`, and the release request never touches them.
 - Administration: release-plz asks for it only where a tag protection blocks tag creation. Step 9 restricts `deletion` and `update` on `v*` and leaves creation open, so `Contents: write` carries the tag push.
 
-### 5c. Collect the credentials
+### 6c. Collect the credentials
 
 On the App's own settings page, which the registration lands on:
 
@@ -181,9 +193,9 @@ On the App's own settings page, which the registration lands on:
    - GitHub keeps only the public half and never shows the file again
 3. Move the file outside every repository, to `$KEY`.
 4. Run `chmod 600 "$KEY"`.
-   - step 7 refuses a group-readable key
+   - step 8 refuses a group-readable key
 
-### 5d. Install it on this repository
+### 6d. Install it on this repository
 
 1. Left sidebar of the App's settings page, click Install App.
 2. Click Install next to `$OWNER`.
@@ -193,13 +205,13 @@ On the App's own settings page, which the registration lands on:
 6. Open `github.com/settings/installations`.
    - check: it lists `$APP`, with `$REPO` under Repository access
 
-Doing 5d makes step 6 a verification rather than a run.
+Doing 6d makes step 7 a verification rather than a run.
 
-## 6. Grant the App this repository
+## 7. Grant the App this repository
 
 Already satisfied by 5d. This step is for a repository added to an existing installation later.
 
-Reading the grant takes no user token: GitHub serves the installation-reading endpoints to the App's own credentials alone, so `rk` observes and verifies this step with the same two exports step 7 stores. Only the write — adding a repository an existing installation does not cover — takes a user credential.
+Reading the grant takes no user token: GitHub serves the installation-reading endpoints to the App's own credentials alone, so `rk` observes and verifies this step with the same two exports step 8 stores. Only the write — adding a repository an existing installation does not cover — takes a user credential.
 
 By hand, no token:
 
@@ -270,7 +282,7 @@ By command:
 
 Run it on the host: `$KEY` lives there, and the keyring lookup needs a session bus a container does not have.
 
-## 7. Store the bot credentials
+## 8. Store the bot credentials
 
 The values travel on stdin and land as repository secrets; rerunning with new values is the rotation path. The environment carries the key's path, never its contents, and `rk` refuses a `.pem` that is group-readable, is inside the repository, or is not PEM-encoded private-key material.
 
@@ -284,11 +296,11 @@ gh secret list --repo "$OWNER/$REPO"
 
 `release-plz.yml` reads both through `actions/create-github-app-token@v3`. That action prefers `client-id` and still accepts `app-id`; this convention stays on the App ID, which is why 5c collects the numeric id.
 
-## 8. Protect the trunk
+## 9. Protect the trunk
 
 One ruleset: no direct push, no force-push, a pull request carrying the passing `test` check as the only way in, and squash as the only merge method. Nothing in the pipeline writes the branch, so it names no bypass actor.
 
-### 8a. Prove the check exists
+### 9a. Prove the check exists
 
 The project's own `.github/workflows/ci.yml` must declare a job with the id `test` and trigger on `pull_request` as well as `push`, or the rule is unsatisfiable and no release request can ever merge.
 
@@ -298,7 +310,7 @@ gh api "repos/$OWNER/$REPO/contents/.github/workflows/ci.yml" -q .content \
 # check: both lines appear; the job id is test and it runs on pull requests
 ```
 
-### 8b. Create or update the ruleset
+### 9b. Create or update the ruleset
 
 `do_not_enforce_on_create` keeps it from blocking branch creation meanwhile. The lookup is what makes the block rerunnable: a ruleset name is unique per repository, so an existing one is updated in place rather than refused.
 
@@ -347,7 +359,7 @@ JSON
 # then: 8c reports the same shape either way
 ```
 
-### 8c. Verify it
+### 9c. Verify it
 
 Assert the shape the forge enforces, not that a name exists.
 
@@ -368,7 +380,63 @@ gh api "repos/$OWNER/$REPO/rulesets/$id" --jq '{
 
 Automated: `rk setup step protect-trunk --target . --apply --required-check test`.
 
-## 9. Protect the release tags
+## 10. Land work through the trunk's one path
+
+From step 9 on, the trunk is unwritable by hand: every later step that changes a file — a regenerated workflow, a corrected pin, a documentation fix — reaches `master` through this path and no other. Run it once now, on whatever the working tree already carries, so the path is proven before a step depends on it.
+
+### 10a. Configure this clone
+
+Two settings, local to this clone, that match the convention's history to the way git is asked to move it.
+
+```bash
+git config --local pull.rebase true
+git config --local fetch.prune true
+git config --local --get-regexp '^(pull\.rebase|fetch\.prune)$'
+# check: prints both keys as true, whether this run set them or found them set
+```
+
+- `pull.rebase` replays a topic branch onto the trunk rather than merging back, which is what keeps one pull request one commit.
+- `fetch.prune` drops the remote-tracking ref step 4 taught the forge to delete, so a merged branch stops appearing in this clone.
+- Neither applies to the trunk itself: the trunk is never pulled, only reset, which 10c does.
+
+### 10b. Land one change
+
+The pull request title becomes the whole trunk commit, because squash is the only merge method step 9 leaves and the forge takes the title as the message. Write it as a Conventional Commit and carry the strongest intent of everything in the branch: one `!` anywhere in the work makes the title breaking, or the bot derives the wrong version from a history that no longer names it. This is why the title is spelled out rather than filled from a commit: `--fill-first` takes the first commit's subject, which is the intent of one commit out of however many the branch holds.
+
+```bash
+git switch -c fix/<slug>
+git push -u origin "$(git branch --show-current)"
+gh pr create --repo "$OWNER/$REPO" --base master \
+  --head "$(git branch --show-current)" \
+  --title '<type>(<scope>): <subject>' --body '<what changed, and why>'
+gh pr checks --watch
+# check: the test check reports success; the other contexts may report skipped
+gh pr merge --squash --delete-branch
+# check: reports the pull request squashed and merged
+```
+
+- nothing to land: the working tree is clean and the trunk already holds the work, so go to 10c and confirm it.
+- `GH013: Repository rule violations found` on the push: the branch name is `master`, which takes no direct push; branch first and push that branch instead.
+- the check never appears: the job id is not `test`, and step 9a's prerequisite has moved; nothing merges until the ruleset and the workflow agree on the name.
+
+### 10c. Reset the local trunk
+
+The squash writes a commit that no local branch is an ancestor of, so the local trunk diverges the moment the merge lands and no fast-forward can close the gap. Its content is already in the trunk's tip, so the trunk is discarded rather than reconciled.
+
+```bash
+git switch master
+git fetch origin
+git diff --stat HEAD origin/master
+# check: empty; the trunk's tip already carries what this clone holds
+git reset --hard origin/master
+git rev-parse HEAD origin/master
+# check: two identical SHAs
+```
+
+- `git diff` prints a diff: the trunk holds something this clone does not, so read it before resetting; `git reflog` still names every commit a reset leaves behind.
+- `gh pr merge` printed `not possible to fast-forward`: that is this divergence, reported by the local update the merge attempts, and this step is its repair.
+
+## 11. Protect the release tags
 
 `v*` can be created but never moved or deleted; the pattern already covers the rc tags a release line mints. Creation staying open is what lets the bot push `vVERSION` on `Contents: write` alone.
 
@@ -400,7 +468,7 @@ gh api "repos/$OWNER/$REPO/rulesets/$id" --jq '{target, enforcement, refs: .cond
 
 Automated: `rk setup step protect-tags --target . --apply`.
 
-## 10. Protect the release lines, only when one exists
+## 12. Protect the release lines, only when one exists
 
 Style B's one extra step, skipped by a full apply: while an older line is alive, `release/*` can be neither force-pushed nor deleted, and pushes stay allowed because a cherry-pick lands by push. Run it only after the first backport line is cut.
 
@@ -411,7 +479,7 @@ gh api "repos/$OWNER/$REPO/rulesets/$id" --jq '{refs: .conditions.ref_name.inclu
 # check: refs ["refs/heads/release/*"], rules deletion non_fast_forward
 ```
 
-## 11. Prove the protections
+## 13. Prove the protections
 
 1. Run the check.
 
@@ -429,7 +497,7 @@ gh api "repos/$OWNER/$REPO/rulesets/$id" --jq '{refs: .conditions.ref_name.inclu
 
    With no key on this host: `github.com/settings/installations` lists `$APP` with `$REPO` under Repository access.
 
-## 12. Land the workflow files
+## 14. Land the workflow files
 
 `rk init` lands the payload, and cargo-dist generates the artifact workflow from `dist-workspace.toml`. Never edit `release.yml` by hand: regenerate it.
 
@@ -465,7 +533,7 @@ gh api "repos/$OWNER/$REPO/rulesets/$id" --jq '{refs: .conditions.ref_name.inclu
    # check: prints the artifact list for every target in dist-workspace.toml
    ```
 
-## 13. Publish the first version by hand
+## 15. Publish the first version by hand
 
 Trusted publishing attaches to an existing package, so the first version goes up with a token. The upload is permanent: the registry never lets a version be overwritten, and the name is claimed for good.
 
@@ -496,7 +564,7 @@ Trusted publishing attaches to an existing package, so the first version goes up
       - it defaults to 90 days, and 7 is the shortest preset; the token has one job
       - the line beside the dropdown reads "The token will expire on" the date seven days out
    4. Scopes: check `publish-new`, Publish new crates. Leave the other four unchecked.
-      - `publish-update`, `yank`, `change-owners`, and `trusted-publishing` are jobs this token never does; step 14 sets up trusted publishing in the crate's own settings, with no token
+      - `publish-update`, `yank`, `change-owners`, and `trusted-publishing` are jobs this token never does; step 16 sets up trusted publishing in the crate's own settings, with no token
    5. Crates: click Add pattern, then enter `$CRATE`.
       - a pattern also matches crates published after the token is created, so the unclaimed name binds
       - an empty list reads Unrestricted, which is wider than the job
@@ -516,10 +584,10 @@ Trusted publishing attaches to an existing package, so the first version goes up
    cargo publish --locked
    cargo info "$CRATE" | grep -m1 -i '^version'
    # check: prints the version step 2 reported
-   # already published: the registry refuses a version it already serves; go to step 14
+   # already published: the registry refuses a version it already serves; go to step 16
    ```
 
-## 14. Register the trusted publisher
+## 16. Register the trusted publisher
 
 No command: crates.io exposes this in the browser only.
 
@@ -537,7 +605,7 @@ No command: crates.io exposes this in the browser only.
 - The filename is the invariant: `release-plz.yml` publishes, `release.yml` builds installers and is never registered.
 - The workflow needs nothing added. `release-plz.yml` already carries `id-token: write` on its release job and sets no `CARGO_REGISTRY_TOKEN`, which is the trusted-publishing form release-plz documents; `rust-lang/crates-io-auth-action` belongs to hand-written publish workflows, not to this one.
 
-## 15. Revoke the bootstrap token
+## 17. Revoke the bootstrap token
 
 Two halves, and the second is the one people skip.
 
@@ -553,7 +621,7 @@ Two halves, and the second is the one people skip.
 
 The package now has exactly one publishing path.
 
-## 16. Prove the automated path
+## 18. Prove the automated path
 
 Prove the bot half runs at all, then cut one release end to end.
 
@@ -570,15 +638,17 @@ Prove the bot half runs at all, then cut one release end to end.
    ```bash
    gh pr list --repo "$OWNER/$REPO" --state open --json number,title
    # check: a release request from release-plz is open, proposing the next version
+   # none open: the trunk matches the version step 15 published, so release-plz has
+   #   nothing to propose; land one change through step 10 and rerun this step
    ```
 
 3. Cut one release end to end through [release.md](./release.md).
 
 Its verify step passing — the registry serves the version, and the tag and the trunk name the same commit — is the proof the next step depends on.
 
-## 17. Require trusted publishing
+## 19. Require trusted publishing
 
-No command, and only after step 16 proved one OIDC release.
+No command, and only after step 18 proved one OIDC release.
 
 1. Open `crates.io/crates/$CRATE/settings`.
 2. Under Trusted Publishing, check "Require trusted publishing for all new versions".

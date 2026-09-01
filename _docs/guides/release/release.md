@@ -40,7 +40,7 @@ Three traps. Step 3: the bot refreshes the PR by force-push while only its own c
 
 ## 1. Land the work
 
-Release intent captured in the squash titles — `feat:` bumps minor, `fix:` bumps patch — the check suite green, and the package still publishable.
+Release intent captured in the squash titles — `feat:` bumps minor, `fix:` bumps patch — the check suite green, and the package still publishable. The trunk takes no direct push, so each change reaches it the way [setup.md](./setup.md) step 10 lays out.
 
 ```bash
 just check

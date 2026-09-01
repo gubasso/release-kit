@@ -328,6 +328,17 @@ fn github(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
                 "no long-lived branch besides the trunk remains",
             ))
         }
+        "merge-cleanup" => Ok(match api_get(ctx, run, &format!("repos/{repo}"))? {
+            Api::Ok(body) => {
+                if body["delete_branch_on_merge"].as_bool().unwrap_or(false) {
+                    StepState::ok("a merged branch is deleted by the forge")
+                } else {
+                    StepState::not("a merged branch outlives its merge")
+                }
+            }
+            Api::Missing => StepState::not(format!("the forge does not know {repo}")),
+            Api::Failed(err) => StepState::unknown(err),
+        }),
         "ci-permissions" => Ok(
             match api_get(
                 ctx,
@@ -714,6 +725,20 @@ fn gitlab(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
                 "no long-lived branch besides the trunk remains",
             ))
         }
+        "merge-cleanup" => Ok(match api_get(ctx, run, &format!("projects/{project}"))? {
+            Api::Ok(body) => {
+                if body["remove_source_branch_after_merge"]
+                    .as_bool()
+                    .unwrap_or(false)
+                {
+                    StepState::ok("a merged branch is deleted by the forge")
+                } else {
+                    StepState::not("a merged branch outlives its merge")
+                }
+            }
+            Api::Missing => StepState::not(format!("the forge does not know {}", ctx.repo)),
+            Api::Failed(err) => StepState::unknown(err),
+        }),
         "ci-permissions" => Ok(match api_get(ctx, run, &format!("projects/{project}"))? {
             Api::Ok(body) => {
                 if body["jobs_enabled"] == true {

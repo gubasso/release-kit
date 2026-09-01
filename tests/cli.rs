@@ -1549,11 +1549,12 @@ fn init_propagates_an_unreadable_destination_and_writes_nothing() {
 
 /// The forge-mutating step names: every one exists in both trees under the
 /// same name, per `forge-setup:every-supported-forge-runs-every-step`.
-const FORGE_STEPS: [&str; 9] = [
+const FORGE_STEPS: [&str; 10] = [
     "bot-secrets",
     "ci-permissions",
     "default-branch",
     "install-bot",
+    "merge-cleanup",
     "protect-release-lines",
     "protect-tags",
     "protect-trunk",
@@ -1608,7 +1609,7 @@ fn every_listed_step_resolves_to_a_script_in_every_tree() {
             Some(rest.split_whitespace().next()?.to_owned())
         })
         .collect();
-    assert_eq!(listed.len(), 10, "ten steps list: {text}");
+    assert_eq!(listed.len(), 11, "eleven steps list: {text}");
     listed.retain(|name| name != "package-check");
     listed.sort();
     let filed: Vec<String> = script_files("github").into_iter().map(|(n, _)| n).collect();
@@ -2159,7 +2160,15 @@ api)
   case "$method $path" in
   "GET repos/acme/widget")
     if [[ -f "$STATE/fail_repo" ]]; then echo "gh: Internal Server Error (HTTP 500)" >&2; exit 1; fi
-    if [[ "$query" == ".id" ]]; then echo 1; else echo "{\"id\":1,\"default_branch\":\"$(cat "$STATE/default_branch")\"}"; fi;;
+    deleting="$(cat "$STATE/delete_branch_on_merge" 2>/dev/null || echo false)"
+    if [[ "$query" == ".id" ]]; then echo 1
+    elif [[ "$query" == ".delete_branch_on_merge" ]]; then echo "$deleting"
+    else echo "{\"id\":1,\"default_branch\":\"$(cat "$STATE/default_branch")\",\"delete_branch_on_merge\":$deleting}"; fi;;
+  "PATCH repos/acme/widget")
+    for f in "${fields[@]}"; do
+      case "$f" in delete_branch_on_merge=*) echo "${f#delete_branch_on_merge=}" > "$STATE/delete_branch_on_merge";; esac
+    done
+    echo '{}';;
   "GET repos/"*"/git/ref/heads/"*)
     branch_json "${path##*/heads/}" "$query";;
   "POST repos/"*"/git/refs")
@@ -2281,11 +2290,15 @@ api)
     echo "glab: 404 Not Found (HTTP 404)" >&2; exit 1;;
   "PUT projects/"*)
     for f in "${fields[@]}"; do
-      case "$f" in default_branch=*) echo "${f#default_branch=}" > "$STATE/default_branch";; esac
+      case "$f" in
+        default_branch=*) echo "${f#default_branch=}" > "$STATE/default_branch";;
+        remove_source_branch_after_merge=*) echo "${f#remove_source_branch_after_merge=}" > "$STATE/remove_source_branch";;
+      esac
     done
     echo '{}';;
   "GET projects/"*)
-    echo "{\"id\":1,\"default_branch\":\"$(cat "$STATE/default_branch")\",\"jobs_enabled\":true,\"only_allow_merge_if_pipeline_succeeds\":false,\"merge_method\":\"ff\",\"squash_option\":\"never\"}";;
+    removing="$(cat "$STATE/remove_source_branch" 2>/dev/null || echo false)"
+    echo "{\"id\":1,\"default_branch\":\"$(cat "$STATE/default_branch")\",\"jobs_enabled\":true,\"only_allow_merge_if_pipeline_succeeds\":false,\"merge_method\":\"ff\",\"squash_option\":\"never\",\"remove_source_branch_after_merge\":$removing}";;
   *) echo '{}';;
   esac
   exit 0;;
