@@ -18,13 +18,13 @@ Grant the repository's CI permission to write and to open pull requests. Provide
 
 Two protections owned by every repository, and a third where older lines exist, all held by configuration that a script can verify:
 
-- `master` takes no direct push and no force-push, requires a pull request carrying the named passing check, and offers squash as the only merge method.
+- `master` takes no direct push and no force-push, requires a pull request carrying the named passing check and the landed title check, and offers squash as the only merge method, with the squash message taken from the request's title — asserted, because the forge's one-commit fallback is the branch commit's own subject.
 - Release tags are immutable: `v*` can be neither moved nor deleted, and the pattern already covers the rc tags a release line mints.
 - Where a project keeps older lines, `release/*` cannot be force-pushed or deleted while a line is alive; deletion becomes safe only once the line's tags pin its commits.
 
 ## 4. Land the workflow files
 
-`rk init` lands the binding's files: the bot configuration, the publish workflow, and the artifact-builder configuration. Fill the sentinel placeholders it reports, and hold the invariant that the publish workflow filename is the one the registry will be told.
+`rk init` lands the binding's files: the bot configuration, the publish workflow, the artifact-builder configuration, the title check, and the commit-contract hook block spliced into `.pre-commit-config.yaml`. The landing takes `--scopes`, the Conventional Commit scopes the project accepts, and renders them into the title check, the commit hook, and the routing block. Fill the sentinel placeholders it reports, install the hook stages the block's first line names, and hold the invariant that the publish workflow filename is the one the registry will be told. The hooks and step 3's forge protections are the same rules at two distances: the forge enforces, the hooks give the refusal at the desk, and `--no-verify` bypassing a hook changes what an author sees, never what the forge accepts.
 
 ## 5. Publish the first version by hand
 

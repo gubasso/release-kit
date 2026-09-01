@@ -25,6 +25,13 @@ pub struct InitArgs {
     #[arg(long)]
     pub repo: Option<String>,
 
+    /// The Conventional Commit scopes this project accepts,
+    /// comma-separated, rendered into the title checks and the commit
+    /// hook and recorded as a landing parameter. An apply without it
+    /// refuses: the scope vocabulary is a decision, not a default.
+    #[arg(long)]
+    pub scopes: Option<String>,
+
     /// Write the files; without it the destinations are listed and nothing
     /// is touched.
     #[arg(long)]

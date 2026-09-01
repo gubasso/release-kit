@@ -24,7 +24,7 @@ test:
 # — then assert the published crate carries every payload root.
 build:
     set -eu; d=$(mktemp -d); trap 'rm -rf "$d"' EXIT; mkdir -p "$d/.git"; \
-    cargo run -q -- init --tech rust --forge github --repo acme/widget --target "$d" --apply >/dev/null; \
+    cargo run -q -- init --tech rust --forge github --repo acme/widget --scopes api,cli --target "$d" --apply >/dev/null; \
     test -f "$d/release-plz.toml"; test -f "$d/.release-kit/manifest.json"; \
     sed -i '/TODO(release-kit)/d' "$d/release-plz.toml"; printf 'semver_check = true\n' >> "$d/release-plz.toml"; \
     cargo run -q -- upgrade --target "$d" --apply >/dev/null; \

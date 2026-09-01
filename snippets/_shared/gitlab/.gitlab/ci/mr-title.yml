@@ -1,0 +1,22 @@
+# The squash-title gate. protect-trunk sets squash_commit_template to
+# %{title}, so the merge request's title becomes the trunk's commit message,
+# and the bot derives the version and the changelog from that message; this
+# job holds the title to a scoped Conventional Commit. The project setting
+# requiring the whole pipeline is what makes it blocking — this forge names
+# no check — and running it also gives every merge request the pipeline
+# that requirement waits on.
+
+mr-title:
+  stage: .pre
+  image: alpine:3
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  # The second alternative is the bot's own release request, whose title
+  # the release automation authors, not an operator.
+  script:
+    - |
+      printf '%s' "$CI_MERGE_REQUEST_TITLE" | grep -Eq \
+        '^((build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)\((RK_SCOPES_PIPE)\)!?: .+|chore(\((release|master|main)\))?: (release|v).+)$' \
+        && exit 0
+      echo "the title '$CI_MERGE_REQUEST_TITLE' must read type(scope) then a colon and a description, with the scope one of RK_SCOPES_CSV"
+      exit 1

@@ -14,6 +14,9 @@
   - [`landing:a-target-is-never-downgraded` — A target is never downgraded](#landinga-target-is-never-downgraded--a-target-is-never-downgraded)
   - [`landing:status-judges-only-under-check` — Status judges only under check](#landingstatus-judges-only-under-check--status-judges-only-under-check)
   - [`landing:an-adoption-writes-the-record-and-nothing-else` — An adoption writes the record and nothing else](#landingan-adoption-writes-the-record-and-nothing-else--an-adoption-writes-the-record-and-nothing-else)
+  - [`landing:a-block-destination-owns-its-marked-lines-alone` — A block destination owns its marked lines alone](#landinga-block-destination-owns-its-marked-lines-alone--a-block-destination-owns-its-marked-lines-alone)
+  - [`landing:the-shared-zone-composes-into-every-pair` — The shared zone composes into every pair](#landingthe-shared-zone-composes-into-every-pair--the-shared-zone-composes-into-every-pair)
+  - [`landing:a-landed-hook-serves-the-release-convention-alone` — A landed hook serves the release convention alone](#landinga-landed-hook-serves-the-release-convention-alone--a-landed-hook-serves-the-release-convention-alone)
 
 <!--TOC-->
 
@@ -140,5 +143,41 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 - GIVEN a repository running the convention with no record, matching what this payload renders
 - WHEN `rk adopt --apply` runs
 - THEN the manifest appears with `origin` set to `adopt`, no other file changes, and `rk status` then reports the landing
+
+Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `landing:a-block-destination-owns-its-marked-lines-alone` — A block destination owns its marked lines alone
+
+A block-placed artifact MUST own exactly the lines between its markers: a landing splices the block into the target's document — fresh where none exists, in place where marked, under the owning key otherwise — and MUST refuse by name a document that offers the block no place, leaving the target unchanged, because rewriting a document the target owns is not a landing.
+
+#### Scenario: A hooks file with no repos list
+
+- GIVEN a target whose `.pre-commit-config.yaml` exists carrying no `repos:` line
+- WHEN `rk init --apply` runs
+- THEN it exits 73 naming the file, no file lands, and no `.release-kit/` directory appears
+
+Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `landing:the-shared-zone-composes-into-every-pair` — The shared zone composes into every pair
+
+`snippets/_shared/<forge>` MUST land with every `(technology, forge)` pair for its forge, MUST never be selectable as a technology, and a destination the shared zone and a pair both ship MUST refuse as a payload defect, never one zone silently winning.
+
+#### Scenario: The shared zone is offered as a technology
+
+- GIVEN the embedded payload carrying `snippets/_shared/`
+- WHEN `rk init --tech _shared` runs, and the supported pairs are listed for an unknown pair
+- THEN the tech refuses as unknown, and neither listing names `_shared`
+
+Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `landing:a-landed-hook-serves-the-release-convention-alone` — A landed hook serves the release convention alone
+
+The hook block MUST carry only hooks enforcing the release convention's own rules — the commit contract and the local mirrors of the forge protections — never general hygiene, which stays the target's own, and every third-party hook it names MUST be pinned in `versions.toml`.
+
+#### Scenario: The block's hooks are enumerated
+
+- GIVEN a landed `.pre-commit-config.yaml` block
+- WHEN its hooks are read beside `rk versions`
+- THEN each hook maps to a rule the method states, and each third-party repository the block names carries a registry pin
 
 Verify: `cargo nextest run -E 'binary(cli)'`

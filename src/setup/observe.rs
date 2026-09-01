@@ -23,6 +23,10 @@ pub type Runner<'a> = dyn FnMut(&Exec) -> Result<Outcome, RkError> + 'a;
 /// ancestor of the trunk: the common default and the retired second branch.
 pub const TRUNK_CANDIDATES: [&str; 2] = ["main", "develop"];
 
+/// The landed title check's context, fixed by the payload: the job in
+/// `pr-title.yml` that holds the squash title to the commit convention.
+pub const TITLE_CHECK: &str = "pr-title";
+
 /// What one observation found.
 #[derive(Debug)]
 pub enum StepState {
@@ -618,17 +622,41 @@ fn github_trunk_ruleset(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkErro
             })
             .unwrap_or_default();
         // Where the expected check is known, the context set must be exactly
-        // it: an extra stale context does not fail a merge, it hangs one.
+        // it plus the title check: an extra stale context does not fail a
+        // merge, it hangs one, and a missing title check lets an
+        // unconventional squash title land on the trunk.
         if contexts.is_empty() {
             faults.push("no status check is required".to_owned());
         } else if let Some(expected) = &ctx.required_check {
-            if contexts != [expected.as_str()] {
+            let mut held = contexts.clone();
+            held.sort_unstable();
+            let mut owned_contexts = [expected.as_str(), TITLE_CHECK];
+            owned_contexts.sort_unstable();
+            if held != owned_contexts {
                 faults.push(format!(
-                    "the required checks are [{}] where the setup owns [{expected}]",
-                    contexts.join(", ")
+                    "the required checks are [{}] where the setup owns [{}]",
+                    contexts.join(", "),
+                    owned_contexts.join(", ")
+                ));
+            }
+        } else if !contexts.contains(&TITLE_CHECK) {
+            faults.push(format!("the {TITLE_CHECK} check is not required"));
+        }
+    }
+    // The squash title source is a repository setting beside the ruleset:
+    // left unset, a one-commit request offers that commit's own subject as
+    // the trunk's message, which the bot then reads for the version.
+    match api_get(ctx, run, &format!("repos/{}", ctx.repo))? {
+        Api::Ok(body) => {
+            if body["squash_merge_commit_title"] != "PR_TITLE" {
+                faults.push(format!(
+                    "the squash title source is {} where the setup owns PR_TITLE",
+                    body["squash_merge_commit_title"]
                 ));
             }
         }
+        Api::Missing => faults.push(format!("the forge does not know {}", ctx.repo)),
+        Api::Failed(err) => return Ok(StepState::unknown(err)),
     }
     Ok(if faults.is_empty() {
         StepState::ok(format!("{name} holds the release-merge shape"))
@@ -874,6 +902,9 @@ fn gitlab(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
             }
             if settings["squash_option"] != "always" {
                 faults.push("merge requests do not always squash".to_owned());
+            }
+            if settings["squash_commit_template"] != "%{title}" {
+                faults.push("the squash template is not the merge request's title".to_owned());
             }
             Ok(if faults.is_empty() {
                 StepState::ok(format!("{TRUNK_BRANCH} holds the release-merge shape"))

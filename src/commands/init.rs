@@ -97,19 +97,36 @@ pub fn run(args: &InitArgs) -> Result<(), RkError> {
     let forge = resolved.forge;
     if args.apply {
         let repo = resolved.repo.ok_or_else(landing::repo_unresolved)?;
-        let entries = landing::projection(&args.tech, &forge, &repo)?;
-        apply(out, args, &forge, &repo, &entries)
+        let scopes = landing::parse_scopes(args.scopes.as_deref().ok_or_else(|| {
+            RkError::Usage(
+                "an apply renders the scope-bearing files; pass --scopes <list>, the Conventional Commit scopes this project accepts".into(),
+            )
+        })?)?;
+        let entries = landing::projection(&args.tech, &forge, &repo, &scopes)?;
+        apply(out, args, &forge, &repo, &scopes, &entries)
     } else {
         // A preview lists destinations and compares nothing, so an
         // unresolved repository only means the owner substitution is
-        // shown unrendered; the placeholder substitutes to itself.
+        // shown unrendered; the placeholder substitutes to itself, and an
+        // absent scope list leaves the scope tokens standing.
         if resolved.repo.is_none() {
             out.frame(
                 "note: no repository detected; an apply derives the owner from --repo <path>",
             );
         }
         let repo = resolved.repo;
-        let entries = landing::projection(&args.tech, &forge, repo.as_deref().unwrap_or("OWNER"))?;
+        let scopes = args
+            .scopes
+            .as_deref()
+            .map(landing::parse_scopes)
+            .transpose()?
+            .unwrap_or_default();
+        let entries = landing::projection(
+            &args.tech,
+            &forge,
+            repo.as_deref().unwrap_or("OWNER"),
+            &scopes,
+        )?;
         preview(out, args, &forge, repo, &entries)
     }
 }
@@ -123,8 +140,9 @@ fn preview(
     entries: &[Entry],
 ) -> Result<(), RkError> {
     let repo_argument = repo.as_deref().unwrap_or("<owner/name>");
+    let scopes_argument = args.scopes.as_deref().unwrap_or("<scope,scope>");
     let next = vec![format!(
-        "rk init --tech {} --forge {forge} --repo {repo_argument} --target {} --apply",
+        "rk init --tech {} --forge {forge} --repo {repo_argument} --scopes {scopes_argument} --target {} --apply",
         args.tech, args.target
     )];
     out.result_line(format!(
@@ -163,9 +181,11 @@ fn apply(
     args: &InitArgs,
     forge: &str,
     repo: &str,
+    scopes: &[String],
     entries: &[Entry],
 ) -> Result<(), RkError> {
     refuse_a_recorded_target(args)?;
+    landing::hooks_splice_refusal(&args.target)?;
     let planned = plan(&args.target, entries)?;
     let mut file_entries = Vec::new();
     let mut records = Vec::new();
@@ -224,6 +244,7 @@ fn apply(
             landed_at: manifest::now(),
             parameters: Parameters {
                 repo: repo.to_owned(),
+                scopes: scopes.to_vec(),
             },
             files: records,
             pins: registry::pins_for(&args.tech)

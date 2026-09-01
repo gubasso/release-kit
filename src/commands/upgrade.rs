@@ -73,8 +73,14 @@ struct Decision<'a> {
 /// [`RkError::Io`] on filesystem failure.
 pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
     let out = Output::new(args.json);
-    let recorded = load_upgradable(&args.target)?;
-    let entries = landing::projection(&recorded.tech, &recorded.forge, &recorded.parameters.repo)?;
+    let mut recorded = load_upgradable(&args.target)?;
+    resolve_scopes(&mut recorded, args.scopes.as_deref())?;
+    let entries = landing::projection(
+        &recorded.tech,
+        &recorded.forge,
+        &recorded.parameters.repo,
+        &recorded.parameters.scopes,
+    )?;
     refuse_non_regular(&args.target, &entries)?;
 
     let mut conflicts: Vec<String> = Vec::new();
@@ -102,6 +108,9 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
 
     if args.apply && !conflicts.is_empty() {
         return Err(refuse_conflicts(&conflicts));
+    }
+    if args.apply {
+        landing::hooks_splice_refusal(&args.target)?;
     }
 
     let mut sentinels: Vec<String> = Vec::new();
@@ -223,6 +232,7 @@ fn rewrite_record(
             landed_at: recorded.landed_at.clone(),
             parameters: manifest::Parameters {
                 repo: recorded.parameters.repo.clone(),
+                scopes: recorded.parameters.scopes.clone(),
             },
             files: decisions
                 .iter()
@@ -470,6 +480,20 @@ fn clone_record(record: &FileRecord) -> FileRecord {
         sha256: record.sha256.clone(),
         baseline_sha256: record.baseline_sha256.clone(),
     }
+}
+
+/// The scope parameter comes from the record; a record from before the
+/// parameter existed takes `--scopes` once, and the rewrite records it.
+fn resolve_scopes(recorded: &mut Manifest, raw: Option<&str>) -> Result<(), RkError> {
+    if let Some(raw) = raw {
+        recorded.parameters.scopes = landing::parse_scopes(raw)?;
+    }
+    if recorded.parameters.scopes.is_empty() {
+        return Err(RkError::Usage(
+            "the record carries no scopes parameter; pass --scopes <list>, the Conventional Commit scopes this project accepts, and the upgrade records it".into(),
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

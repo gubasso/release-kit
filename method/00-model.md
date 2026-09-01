@@ -14,7 +14,7 @@ Five stages. No technology changes them.
 
 ## The trunk
 
-`master` is the only permanent branch and the repository default. This is trunk-based development: one branch called the trunk, and resistance to any other long-lived branch. Every change reaches it through a short-lived branch — a day or two, one author — squash-merged after review and CI and deleted, so one pull request is one commit and the history stays linear. Conventional Commits are enforced on the squash title, because the bot derives the version and the changelog from the trunk's commits.
+`master` is the only permanent branch and the repository default. This is trunk-based development: one branch called the trunk, and resistance to any other long-lived branch. Every change reaches it through a short-lived branch — a day or two, one author — squash-merged after review and CI and deleted, so one pull request is one commit and the history stays linear. Conventional Commits are enforced on the squash title by two landed mechanisms, because the bot derives the version and the changelog from the trunk's commits: the setup asserts that the forge takes the squash message from the request's title, and a required title check holds that title to the scoped convention. Every local commit follows the same convention through the landed commit-msg hook, so the squash title is never the first conventional line an author writes.
 
 The trunk is always releasable. Unfinished work still lands, dark: a feature flag keeps incomplete code out of every execution path, and a refactor too large to flag proceeds by branch by abstraction. What looks like a need for a second long-lived branch is one of three needs with better answers: staging unfinished work is flags, a stabilization period is a just-in-time release branch, and a place to integrate before production is an environment. Branches isolate code; environments isolate deployment.
 
@@ -25,7 +25,7 @@ The branch dies at the squash merge and its name never enters history, so the na
 - The type prefix, `<type>/<slug>`, with the type mirroring the Conventional Commit type the squash title will carry: `feat/oauth-login`, `fix/empty-csv-upload`.
 - The issue-linked name, `<issue-id>-<slug>`, the shape both supported forges mint when they generate the branch from an issue. Prefer letting the forge mint it — one command links the branch, its pull request, and the issue's closing, and the forge document carries that command.
 
-A tracker outside the forge, Jira being the common case, matches its issue keys anywhere in a branch name, so its key rides inside either form: `fix/PROJ-412-empty-csv`. Whichever form a project picks, the branch name binds nothing downstream: the squash title, not the branch name, is what the bot and the history read.
+A tracker outside the forge, Jira being the common case, matches its issue keys anywhere in a branch name, so its key rides inside either form: `fix/PROJ-412-empty-csv`. Whichever form a project picks, the branch name binds nothing downstream: the squash title, not the branch name, is what the bot and the history read. The landed branch-name hook holds the routing to these two forms while the branch lives — it changes nothing about what the name binds.
 
 ## The one pull request
 

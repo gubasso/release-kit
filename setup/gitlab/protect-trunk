@@ -46,11 +46,16 @@ else
     -F allow_force_push=false >/dev/null
 fi
 
+# The squash template is asserted, not assumed: %{title} is this forge's
+# documented default, and asserting it keeps the trunk's commit message the
+# merge request's title even where a project once set something else.
 glab api -X PUT "projects/$project" \
-  -F only_allow_merge_if_pipeline_succeeds=true -f merge_method=ff -f squash_option=always >/dev/null
+  -F only_allow_merge_if_pipeline_succeeds=true -f merge_method=ff -f squash_option=always \
+  -f 'squash_commit_template=%{title}' >/dev/null
 
-echo "check: prints the protection, the pipeline requirement, the merge method, and the squash setting"
+echo "check: prints the protection, the pipeline requirement, the merge method, the squash setting, and the squash template"
 glab api "projects/$project/protected_branches/$RK_TRUNK_BRANCH" | compact | grep -o "\"name\":\"$RK_TRUNK_BRANCH\""
 glab api "projects/$project" | compact | grep -o '"only_allow_merge_if_pipeline_succeeds":[a-z]*'
 glab api "projects/$project" | compact | grep -o '"merge_method":"[^"]*"'
 glab api "projects/$project" | compact | grep -o '"squash_option":"[^"]*"'
+glab api "projects/$project" | compact | grep -o '"squash_commit_template":"[^"]*"'

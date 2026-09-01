@@ -50,11 +50,13 @@ impl Kind {
 /// OIDC permission, so release-kit owns them; the tool configurations are
 /// per-project judgment; the two state files are rewritten by the release
 /// automation itself.
-const KINDS: [(&str, Kind); 10] = [
+const KINDS: [(&str, Kind); 12] = [
     (".github/workflows/release-plz.yml", Kind::Rendered),
     (".github/workflows/release-please.yml", Kind::Rendered),
     (".github/workflows/release.yml", Kind::Rendered),
+    (".github/workflows/pr-title.yml", Kind::Rendered),
     (".gitlab-ci.yml", Kind::Rendered),
+    (".gitlab/ci/mr-title.yml", Kind::Rendered),
     ("release-plz.toml", Kind::Seeded),
     ("dist-workspace.toml", Kind::Seeded),
     ("release-please-config.json", Kind::Seeded),
@@ -67,7 +69,7 @@ const KINDS: [(&str, Kind); 10] = [
 /// does not classify.
 #[must_use]
 pub fn kind_of(destination: &str) -> Option<Kind> {
-    if destination == AGENTS_DESTINATION {
+    if destination == AGENTS_DESTINATION || destination == HOOKS_DESTINATION {
         return Some(Kind::Rendered);
     }
     KINDS
@@ -76,28 +78,83 @@ pub fn kind_of(destination: &str) -> Option<Kind> {
         .map(|(_, kind)| *kind)
 }
 
-/// The mechanical substitution site in `rendered` files.
+/// The mechanical substitution sites in `rendered` files.
 ///
-/// One known value, substituted identically everywhere it appears. The
-/// owner is derived from the landing's `repo` parameter, so the landed
-/// bytes stay a deterministic function of payload plus parameters.
+/// Known values, substituted identically everywhere each appears. The
+/// owner is derived from the landing's `repo` parameter and the two scope
+/// forms from its `scopes` list, so the landed bytes stay a deterministic
+/// function of payload plus parameters.
 pub const OWNER_TOKEN: &[u8] = b"OWNER";
 
-/// Substitute the landing parameters into a `rendered` file's bytes: the
-/// repository's owner — the project path's first segment — replaces every
-/// `OWNER` occurrence.
+/// The scope list, comma-joined: hook arguments and prose.
+pub const SCOPES_CSV_TOKEN: &[u8] = b"RK_SCOPES_CSV";
+
+/// The scope list, pipe-joined: the title checks' regular expression.
+pub const SCOPES_PIPE_TOKEN: &[u8] = b"RK_SCOPES_PIPE";
+
+/// Substitute the landing parameters into a `rendered` file's bytes.
+///
+/// The repository's owner — the project path's first segment — replaces
+/// every `OWNER` occurrence, and the scope list replaces the two scope
+/// tokens. An empty scope list leaves the scope tokens standing, which
+/// only a preview renders under; an apply refuses before reaching here.
 #[must_use]
-pub fn render(baseline: &[u8], repo: &str) -> Vec<u8> {
-    let owner = repo.split('/').next().unwrap_or(repo).as_bytes();
+pub fn render(baseline: &[u8], repo: &str, scopes: &[String]) -> Vec<u8> {
+    let owner = repo.split('/').next().unwrap_or(repo);
+    let mut out = substitute(baseline, OWNER_TOKEN, owner.as_bytes());
+    if !scopes.is_empty() {
+        out = substitute(&out, SCOPES_CSV_TOKEN, scopes.join(",").as_bytes());
+        out = substitute(&out, SCOPES_PIPE_TOKEN, scopes.join("|").as_bytes());
+    }
+    out
+}
+
+/// Every `token` occurrence replaced with `value`.
+fn substitute(baseline: &[u8], token: &[u8], value: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(baseline.len());
     let mut rest = baseline;
-    while let Some(at) = find(rest, OWNER_TOKEN) {
+    while let Some(at) = find(rest, token) {
         out.extend_from_slice(&rest[..at]);
-        out.extend_from_slice(owner);
-        rest = &rest[at + OWNER_TOKEN.len()..];
+        out.extend_from_slice(value);
+        rest = &rest[at + token.len()..];
     }
     out.extend_from_slice(rest);
     out
+}
+
+/// The `--scopes` argument parsed into the recorded list.
+///
+/// Comma-separated, each scope non-empty and made of letters, digits, and
+/// `_ . / -`, so every scope drops into the title checks' regular
+/// expression verbatim.
+///
+/// # Errors
+///
+/// Returns [`RkError::Usage`] naming the offending scope, or the empty
+/// list.
+pub fn parse_scopes(raw: &str) -> Result<Vec<String>, RkError> {
+    let scopes: Vec<String> = raw
+        .split(',')
+        .map(str::trim)
+        .filter(|scope| !scope.is_empty())
+        .map(str::to_owned)
+        .collect();
+    if scopes.is_empty() {
+        return Err(RkError::Usage(
+            "--scopes names no scope; pass a comma-separated list, e.g. --scopes api,cli".into(),
+        ));
+    }
+    for scope in &scopes {
+        let clean = scope
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '/' | '-'));
+        if !clean {
+            return Err(RkError::Usage(format!(
+                "the scope '{scope}' carries a character outside letters, digits, and _ . / -"
+            )));
+        }
+    }
+    Ok(scopes)
 }
 
 /// First occurrence of `needle` in `haystack`.
@@ -116,52 +173,181 @@ pub const BLOCK_BEGIN: &str = "<!-- BEGIN release-kit -->";
 /// The block's closing marker.
 pub const BLOCK_END: &str = "<!-- END release-kit -->";
 
-/// The routing block: the whole of target-side governance. Four lines of
-/// operational discovery — the files are owned, a convention governs
-/// them, and where the convention lives — spliced into the target's
-/// `AGENTS.md` and never grown into a method chapter.
+/// The destination the hook block splices into.
+pub const HOOKS_DESTINATION: &str = ".pre-commit-config.yaml";
+
+/// The hook block's opening marker, a YAML comment at column zero.
+pub const HOOKS_BEGIN: &str = "# BEGIN release-kit";
+
+/// The hook block's closing marker.
+pub const HOOKS_END: &str = "# END release-kit";
+
+/// The top-level key the fresh hook file carries and the skills verify on
+/// an existing one: the commit-msg and pre-push hooks run only where their
+/// hook types are installed.
+pub const HOOK_TYPES_LINE: &str = "default_install_hook_types: [pre-commit, commit-msg, pre-push]";
+
+/// The routing block template: the whole of target-side governance. Seven
+/// lines of operational discovery — work branches before it starts, the
+/// commit contract, the files are owned, a convention governs them, and
+/// where the convention lives — spliced into the target's `AGENTS.md` and
+/// never grown into a method chapter. The scope token renders from the
+/// landing's `scopes` parameter.
 const ROUTING_BLOCK: &str = "<!-- BEGIN release-kit -->
 
 ## Releases
 
 - This repository runs the release-kit convention; `rk method invariants` states what must stay true.
+- Change nothing while on `master`: work starts on a short-lived branch — `<type>/<slug>` mirroring the squash title's type, or the forge-minted `<issue-id>-<slug>` — and reaches the trunk only through its pull request. When asked to implement or change code while the checkout sits on `master`, branch first.
+- Land work through squash-merged pull requests. The request's title becomes the trunk's commit message, so it MUST be a scoped Conventional Commit; the body carries the context.
+- Every commit follows the same scoped convention; the landed commit-msg hook enforces it, and the scopes this project accepts are `RK_SCOPES_CSV`.
 - Never author a tag, and never hand-edit a generated artifact workflow.
 - Run `rk status` before changing anything under `.github/workflows/` or `.gitlab-ci.yml`, or any file `.release-kit/manifest.json` names.
 - The full method is `rk method --list`; the recovery paths are `rk method recovery`.
 
 <!-- END release-kit -->";
 
-/// The routing block, markers included, without a trailing newline.
+/// The hook block template: the commit contract and the local mirrors of
+/// the forge protections, as list items under the target's `repos:` key.
+/// Each hook mirrors one named rule; every mirror dies to `--no-verify`,
+/// so the forge protections stay the enforcement and these exist for the
+/// refusal at the desk. The third-party hooks are pinned in
+/// `versions.toml`; the scope token renders from the landing's `scopes`
+/// parameter.
+const HOOKS_BLOCK: &str = r#"# BEGIN release-kit
+# The release convention's hooks. Install every stage they run at:
+# pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v4.4.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+        args: [--strict, --force-scope, --scopes, 'RK_SCOPES_CSV']
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: no-commit-to-branch
+        args: [--branch, master]
+  - repo: local
+    hooks:
+      - id: rk-branch-name
+        name: rk branch name
+        language: system
+        always_run: true
+        pass_filenames: false
+        entry: sh -c 'branch=$(git symbolic-ref --quiet --short HEAD) || exit 0; [ "$branch" = master ] && exit 0; printf %s "$branch" | grep -Eq "^((build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)/[A-Za-z0-9._/-]+|([0-9]+|[A-Z][A-Z0-9]+-[0-9]+)-[A-Za-z0-9._-]+|release[-/].+)$" && exit 0; echo "branch $branch is neither <type>/<slug> nor <issue-id>-<slug>; gh issue develop <issue> --checkout or its glab counterpart mints the linked form" >&2; exit 1'
+      - id: rk-no-push-to-trunk
+        name: rk no push to trunk
+        stages: [pre-push]
+        language: system
+        always_run: true
+        pass_filenames: false
+        entry: sh -c '[ "$PRE_COMMIT_REMOTE_BRANCH" != refs/heads/master ] || { echo "the trunk takes no direct push; it is written through squash-merged pull requests alone" >&2; exit 1; }'
+      - id: rk-no-hand-authored-tag
+        name: rk no hand-authored tag
+        stages: [pre-push]
+        language: system
+        always_run: true
+        pass_filenames: false
+        entry: sh -c 'case "$PRE_COMMIT_REMOTE_BRANCH" in refs/tags/v*) echo "never author a tag; the release automation mints every v* tag" >&2; exit 1;; esac'
+      - id: rk-status-check
+        name: rk status check
+        language: system
+        pass_filenames: false
+        entry: rk status --check --target .
+        files: '^(\.github/workflows/|\.gitlab-ci\.yml$|\.gitlab/ci/|AGENTS\.md$|\.release-kit/|\.pre-commit-config\.yaml$|release-plz\.toml$|dist-workspace\.toml$|release-please-config\.json$|cliff\.toml$|\.release-please-manifest\.json$|VERSION$)'
+# END release-kit"#;
+
+/// The routing block template, markers included, without a trailing
+/// newline and with its scope token unrendered.
 #[must_use]
 pub const fn routing_block() -> &'static str {
     ROUTING_BLOCK
 }
 
-/// The marked block inside a target's `AGENTS.md`, markers included, or
-/// `None` where the file carries no complete block.
+/// The hook block template, markers included, without a trailing newline
+/// and with its scope token unrendered.
 #[must_use]
-pub fn extract_block(text: &str) -> Option<&str> {
-    let start = text.find(BLOCK_BEGIN)?;
-    let end = text[start..].find(BLOCK_END)? + start + BLOCK_END.len();
-    Some(&text[start..end])
+pub const fn hooks_block() -> &'static str {
+    HOOKS_BLOCK
 }
 
-/// The whole `AGENTS.md` content after splicing the block.
+/// The markers of a block destination, or `None` for a whole-file one.
+#[must_use]
+pub fn block_markers(destination: &str) -> Option<(&'static str, &'static str)> {
+    match destination {
+        AGENTS_DESTINATION => Some((BLOCK_BEGIN, BLOCK_END)),
+        HOOKS_DESTINATION => Some((HOOKS_BEGIN, HOOKS_END)),
+        _ => None,
+    }
+}
+
+/// The marked block inside a document, markers included, or `None` where
+/// the text carries no complete block.
+#[must_use]
+pub fn extract_block<'a>(text: &'a str, begin: &str, end: &str) -> Option<&'a str> {
+    let start = text.find(begin)?;
+    let stop = text[start..].find(end)? + start + end.len();
+    Some(&text[start..stop])
+}
+
+/// The whole `AGENTS.md` content after splicing the rendered block.
 ///
 /// A fresh file where none exists, the block replaced in place where one
 /// is marked, appended after the target's own content otherwise —
 /// release-kit owns the lines inside the markers, not the document.
 #[must_use]
-pub fn splice_block(existing: Option<&str>) -> String {
+pub fn splice_agents_block(existing: Option<&str>, block: &str) -> String {
     existing.map_or_else(
-        || format!("{ROUTING_BLOCK}\n"),
+        || format!("{block}\n"),
         |text| {
-            extract_block(text).map_or_else(
-                || format!("{}\n\n{ROUTING_BLOCK}\n", text.trim_end()),
-                |found| text.replacen(found, ROUTING_BLOCK, 1),
+            extract_block(text, BLOCK_BEGIN, BLOCK_END).map_or_else(
+                || format!("{}\n\n{block}\n", text.trim_end()),
+                |found| text.replacen(found, block, 1),
             )
         },
     )
+}
+
+/// The whole `.pre-commit-config.yaml` content after splicing the
+/// rendered hook block.
+///
+/// A fresh file carries the hook-types key, the `repos:` key, and the
+/// block; a marked file takes the block in place; an unmarked file takes
+/// it directly under its `repos:` line, above the target's own hooks. An
+/// unmarked file with no `repos:` line is refused by name — the block's
+/// entries are list items and have nowhere honest to go.
+///
+/// # Errors
+///
+/// The reason the block has no place, for the caller's refusal to carry.
+pub fn splice_hooks_block(existing: Option<&str>, block: &str) -> Result<String, String> {
+    let Some(text) = existing else {
+        return Ok(format!("{HOOK_TYPES_LINE}\n\nrepos:\n{block}\n"));
+    };
+    if let Some(found) = extract_block(text, HOOKS_BEGIN, HOOKS_END) {
+        return Ok(text.replacen(found, block, 1));
+    }
+    let mut out = String::with_capacity(text.len() + block.len() + 1);
+    let mut placed = false;
+    for line in text.split_inclusive('\n') {
+        out.push_str(line);
+        if !placed && line.trim_end() == "repos:" {
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str(block);
+            out.push('\n');
+            placed = true;
+        }
+    }
+    if placed {
+        Ok(out)
+    } else {
+        Err(format!(
+            "{HOOKS_DESTINATION} exists with no repos: line, so the hook block has nowhere to land"
+        ))
+    }
 }
 
 /// How a projected artifact occupies its destination.
@@ -199,20 +385,24 @@ pub struct Entry {
 /// Returns [`RkError::Usage`] naming the known bindings for an unknown
 /// technology, and the supported pairs for a pair with no files.
 pub fn pair_files(tech: &str, forge: &str) -> Result<Vec<(String, &'static [u8])>, RkError> {
-    embedded::SNIPPETS.get_dir(tech).ok_or_else(|| {
+    // The shared zone is not a technology: `_shared/<forge>` composes into
+    // every pair and never names one.
+    if tech.starts_with('_') || embedded::SNIPPETS.get_dir(tech).is_none() {
         let known: Vec<String> = embedded::SNIPPETS
             .dirs()
             .map(|dir| dir.path().to_string_lossy().into_owned())
+            .filter(|name| !name.starts_with('_'))
             .collect();
-        RkError::Usage(format!(
+        return Err(RkError::Usage(format!(
             "unknown tech '{tech}'; the bindings are: {}",
             known.join(", ")
-        ))
-    })?;
+        )));
+    }
     let pair = format!("{tech}/{forge}");
     let pair_dir = embedded::SNIPPETS.get_dir(&pair).ok_or_else(|| {
         let known: Vec<String> = embedded::SNIPPETS
             .dirs()
+            .filter(|dir| !dir.path().to_string_lossy().starts_with('_'))
             .flat_map(include_dir::Dir::dirs)
             .map(|dir| dir.path().to_string_lossy().replace('/', ", "))
             .collect();
@@ -221,36 +411,58 @@ pub fn pair_files(tech: &str, forge: &str) -> Result<Vec<(String, &'static [u8])
             known.join("; ")
         ))
     })?;
-    // Payload paths carry the `<tech>/<forge>/` prefix; destinations do not.
-    Ok(embedded::walk(pair_dir)
-        .into_iter()
-        .map(|(path, contents)| {
+    // Payload paths carry their zone prefix; destinations do not. The
+    // shared zone lands first, and a destination both zones ship is a
+    // payload defect refused by name, never one zone silently winning.
+    let mut files: Vec<(String, &'static [u8])> = Vec::new();
+    let shared = format!("_shared/{forge}");
+    if let Some(shared_dir) = embedded::SNIPPETS.get_dir(&shared) {
+        for (path, contents) in embedded::walk(shared_dir) {
             let rel = path
-                .strip_prefix(&format!("{pair}/"))
+                .strip_prefix(&format!("{shared}/"))
                 .map_or(path.as_str(), |rel| rel)
                 .to_owned();
-            (rel, contents)
-        })
-        .collect())
+            files.push((rel, contents));
+        }
+    }
+    for (path, contents) in embedded::walk(pair_dir) {
+        let rel = path
+            .strip_prefix(&format!("{pair}/"))
+            .map_or(path.as_str(), |rel| rel)
+            .to_owned();
+        if files.iter().any(|(existing, _)| *existing == rel) {
+            return Err(anyhow::anyhow!(
+                "the shared zone and the pair ({tech}, {forge}) both ship {rel}; the payload is defective"
+            )
+            .into());
+        }
+        files.push((rel, contents));
+    }
+    Ok(files)
 }
 
-/// The whole payload projection for one pair under one `repo` parameter:
-/// every snippet with its kind and rendered bytes, plus the routing
-/// block, sorted by destination.
+/// The whole payload projection for one pair under the `repo` and
+/// `scopes` parameters: every snippet with its kind and rendered bytes,
+/// plus the routing block and the hook block, sorted by destination.
 ///
 /// # Errors
 ///
 /// Returns the [`pair_files`] errors, and [`RkError::Other`] for a
 /// snippet destination the kind table does not classify, which is a
 /// defect in this binary.
-pub fn projection(tech: &str, forge: &str, repo: &str) -> Result<Vec<Entry>, RkError> {
+pub fn projection(
+    tech: &str,
+    forge: &str,
+    repo: &str,
+    scopes: &[String],
+) -> Result<Vec<Entry>, RkError> {
     let mut entries = Vec::new();
     for (destination, baseline) in pair_files(tech, forge)? {
         let kind = kind_of(&destination).ok_or_else(|| {
             anyhow::anyhow!("the payload does not classify {destination}; the kind table is stale")
         })?;
         let rendered = match kind {
-            Kind::Rendered => render(baseline, repo),
+            Kind::Rendered => render(baseline, repo, scopes),
             Kind::Seeded | Kind::State => baseline.to_vec(),
         };
         entries.push(Entry {
@@ -261,13 +473,18 @@ pub fn projection(tech: &str, forge: &str, repo: &str) -> Result<Vec<Entry>, RkE
             rendered,
         });
     }
-    entries.push(Entry {
-        destination: AGENTS_DESTINATION.to_owned(),
-        kind: Kind::Rendered,
-        placement: Placement::Block,
-        baseline: ROUTING_BLOCK.as_bytes().to_vec(),
-        rendered: ROUTING_BLOCK.as_bytes().to_vec(),
-    });
+    for (destination, template) in [
+        (AGENTS_DESTINATION, ROUTING_BLOCK),
+        (HOOKS_DESTINATION, HOOKS_BLOCK),
+    ] {
+        entries.push(Entry {
+            destination: destination.to_owned(),
+            kind: Kind::Rendered,
+            placement: Placement::Block,
+            baseline: template.as_bytes().to_vec(),
+            rendered: render(template.as_bytes(), repo, scopes),
+        });
+    }
     entries.sort_by(|a, b| a.destination.cmp(&b.destination));
     Ok(entries)
 }
@@ -283,9 +500,12 @@ pub fn read_destination(target: &Utf8Path, entry: &Entry) -> std::io::Result<Opt
     read_recorded(target, &entry.destination)
 }
 
-/// The bytes a recorded destination currently holds, by the placement its
-/// name implies: the marked block for `AGENTS.md`, the whole file
-/// otherwise. `None` means the file — or the block — is absent.
+/// The bytes a recorded destination currently holds, by the placement
+/// its name implies.
+///
+/// The marked block for `AGENTS.md` and `.pre-commit-config.yaml`, the
+/// whole file otherwise. `None` means the file — or the block — is
+/// absent.
 ///
 /// # Errors
 ///
@@ -297,9 +517,9 @@ pub fn read_recorded(target: &Utf8Path, destination: &str) -> std::io::Result<Op
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e),
     };
-    if destination == AGENTS_DESTINATION {
+    if let Some((begin, end)) = block_markers(destination) {
         let text = String::from_utf8_lossy(&bytes);
-        Ok(extract_block(&text).map(|block| block.as_bytes().to_vec()))
+        Ok(extract_block(&text, begin, end).map(|block| block.as_bytes().to_vec()))
     } else {
         Ok(Some(bytes))
     }
@@ -376,12 +596,14 @@ pub fn repo_unresolved() -> RkError {
 }
 
 /// Land one entry: the whole file through the temp-plus-rename writer, or
-/// the block spliced into `AGENTS.md` and the whole document rewritten the
-/// same way.
+/// the block spliced into its document and the whole document rewritten
+/// the same way.
 ///
 /// # Errors
 ///
-/// Any write failure; the destination then holds what it held.
+/// Any write failure; the destination then holds what it held. An
+/// unspliceable hook file surfaces as an error here only as a backstop —
+/// [`hooks_splice_refusal`] is the check a verb runs before any write.
 pub fn write_destination(target: &Utf8Path, entry: &Entry) -> std::io::Result<()> {
     let path = target.join(&entry.destination);
     match entry.placement {
@@ -392,9 +614,44 @@ pub fn write_destination(target: &Utf8Path, entry: &Entry) -> std::io::Result<()
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
                 Err(e) => return Err(e),
             };
-            let spliced = splice_block(existing.as_deref());
+            let block = String::from_utf8_lossy(&entry.rendered).into_owned();
+            let spliced = if entry.destination == HOOKS_DESTINATION {
+                splice_hooks_block(existing.as_deref(), &block).map_err(std::io::Error::other)?
+            } else {
+                splice_agents_block(existing.as_deref(), &block)
+            };
             atomic::write(path.as_std_path(), spliced.as_bytes())
         }
+    }
+}
+
+/// The refusal a landing verb answers before writing anything, where
+/// the target's hook file offers the block no place.
+///
+/// Checked ahead of every write so the all-or-nothing property holds and
+/// no landing dies half-written into `.pre-commit-config.yaml`.
+///
+/// # Errors
+///
+/// [`RkError::Refusal`] naming the file, and any read failure.
+pub fn hooks_splice_refusal(target: &Utf8Path) -> Result<(), RkError> {
+    let path = target.join(HOOKS_DESTINATION);
+    let existing = match std::fs::read(&path) {
+        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e.into()),
+    };
+    match splice_hooks_block(Some(&existing), HOOKS_BLOCK) {
+        Ok(_) => Ok(()),
+        Err(reason) => Err(RkError::refusal(
+            Diagnostic::new(
+                Reason::StateDrift,
+                format!("{reason}, and nothing was written"),
+            )
+            .expected("a .pre-commit-config.yaml with a repos: line, or none")
+            .action(format!("add a repos: list to {path}, then re-run"))
+            .target_state("unchanged"),
+        )),
     }
 }
 
@@ -403,13 +660,19 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use super::{
-        AGENTS_DESTINATION, Kind, extract_block, kind_of, projection, render, routing_block,
-        splice_block,
+        AGENTS_DESTINATION, BLOCK_BEGIN, BLOCK_END, HOOK_TYPES_LINE, HOOKS_BEGIN,
+        HOOKS_DESTINATION, HOOKS_END, Kind, extract_block, hooks_block, kind_of, pair_files,
+        parse_scopes, projection, render, routing_block, splice_agents_block, splice_hooks_block,
     };
     use crate::embedded;
 
+    fn scopes(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| (*s).to_owned()).collect()
+    }
+
     /// Every snippet destination has a declared kind: a new landable file
-    /// without a classification fails here, not at a landing.
+    /// without a classification fails here, not at a landing. The shared
+    /// zone's files are enumerated the same way.
     #[test]
     fn the_kind_table_closes_over_every_snippet() {
         for tech_dir in embedded::SNIPPETS.dirs() {
@@ -425,18 +688,65 @@ mod tests {
             }
         }
         assert_eq!(kind_of(AGENTS_DESTINATION), Some(Kind::Rendered));
+        assert_eq!(kind_of(HOOKS_DESTINATION), Some(Kind::Rendered));
         assert_eq!(kind_of("something-else.txt"), None);
     }
 
     /// Substitution is total and derives from the repo parameter's first
     /// segment, so a nested GitLab project path still yields its root
-    /// namespace.
+    /// namespace; the scope list renders in both joined forms.
     #[test]
     fn rendering_substitutes_every_owner_occurrence() {
         let baseline = b"if: repository_owner == 'OWNER'\n# OWNER again: OWNER\n";
-        let rendered = render(baseline, "acme/sub/widget");
+        let rendered = render(baseline, "acme/sub/widget", &[]);
         let text = String::from_utf8(rendered).expect("rendered bytes stay text");
         assert_eq!(text, "if: repository_owner == 'acme'\n# acme again: acme\n");
+
+        let baseline = b"scopes 'RK_SCOPES_CSV' match (RK_SCOPES_PIPE)\n";
+        let rendered = render(baseline, "acme/widget", &scopes(&["api", "cli"]));
+        let text = String::from_utf8(rendered).expect("rendered bytes stay text");
+        assert_eq!(text, "scopes 'api,cli' match (api|cli)\n");
+    }
+
+    /// The scope argument parses to the recorded list, refusing the empty
+    /// list and any scope that would not drop into the title regex.
+    #[test]
+    fn scope_parsing_refuses_the_unusable() {
+        assert_eq!(
+            parse_scopes("api, cli,guides/release").expect("a clean list parses"),
+            scopes(&["api", "cli", "guides/release"])
+        );
+        assert!(parse_scopes("").is_err());
+        assert!(parse_scopes(" , ").is_err());
+        assert!(parse_scopes("api|cli").is_err());
+        assert!(parse_scopes("a b").is_err());
+    }
+
+    /// The shared zone composes into every pair, lands first, and is
+    /// absent from the technology listing an unknown tech names.
+    #[test]
+    fn the_shared_zone_composes_into_the_pair() {
+        let files = pair_files("rust", "github").expect("the pair lists");
+        assert!(
+            files
+                .iter()
+                .any(|(dest, _)| dest == ".github/workflows/pr-title.yml"),
+            "the shared title check lands with the pair"
+        );
+        let files = pair_files("rust", "gitlab").expect("the pair lists");
+        assert!(
+            files
+                .iter()
+                .any(|(dest, _)| dest == ".gitlab/ci/mr-title.yml"),
+            "the shared title job lands with the pair"
+        );
+        let err = pair_files("_shared", "github").expect_err("the shared zone is no tech");
+        let listing = err.to_string();
+        let bindings = listing
+            .split("the bindings are:")
+            .nth(1)
+            .expect("the refusal lists the bindings");
+        assert!(!bindings.contains("_shared"), "{listing}");
     }
 
     /// A rendered projection carries no unsubstituted token and no
@@ -444,7 +754,8 @@ mod tests {
     /// file.
     #[test]
     fn a_projection_renders_owned_files_and_keeps_seeded_judgment() {
-        let entries = projection("rust", "github", "acme/widget").expect("the pair projects");
+        let entries = projection("rust", "github", "acme/widget", &scopes(&["api", "cli"]))
+            .expect("the pair projects");
         let workflow = entries
             .iter()
             .find(|entry| entry.destination.ends_with("release-plz.yml"))
@@ -454,6 +765,16 @@ mod tests {
         assert!(!text.contains("OWNER"), "an owner token survived rendering");
         assert!(text.contains("'acme'"));
         assert!(!text.contains("TODO(release-kit)"));
+        let title = entries
+            .iter()
+            .find(|entry| entry.destination.ends_with("pr-title.yml"))
+            .expect("the title check projects");
+        let text = String::from_utf8_lossy(&title.rendered);
+        assert!(text.contains("api|cli"), "{text}");
+        assert!(
+            !text.contains("RK_SCOPES"),
+            "a scope token survived: {text}"
+        );
         let seeded = entries
             .iter()
             .find(|entry| entry.destination == "release-plz.toml")
@@ -461,32 +782,75 @@ mod tests {
         assert_eq!(seeded.kind, Kind::Seeded);
         assert_eq!(seeded.rendered, seeded.baseline);
         assert!(String::from_utf8_lossy(&seeded.rendered).contains("TODO(release-kit)"));
-        assert!(
-            entries
+        for block in [AGENTS_DESTINATION, HOOKS_DESTINATION] {
+            let entry = entries
                 .iter()
-                .any(|entry| entry.destination == AGENTS_DESTINATION),
-            "the routing block is part of the projection"
-        );
+                .find(|entry| entry.destination == block)
+                .expect("both blocks are part of the projection");
+            let text = String::from_utf8_lossy(&entry.rendered);
+            assert!(!text.contains("RK_SCOPES"), "{block} kept a token: {text}");
+            assert!(text.contains("api,cli"), "{block} lost the scopes: {text}");
+        }
     }
 
     #[test]
     fn the_block_splices_into_every_agents_shape() {
-        let fresh = splice_block(None);
-        assert_eq!(fresh, format!("{}\n", routing_block()));
-        assert_eq!(extract_block(&fresh), Some(routing_block()));
+        let block = routing_block();
+        let fresh = splice_agents_block(None, block);
+        assert_eq!(fresh, format!("{block}\n"));
+        assert_eq!(extract_block(&fresh, BLOCK_BEGIN, BLOCK_END), Some(block));
 
-        let appended = splice_block(Some("# My project\n\nOwn rules.\n"));
+        let appended = splice_agents_block(Some("# My project\n\nOwn rules.\n"), block);
         assert!(appended.starts_with("# My project\n\nOwn rules.\n\n<!-- BEGIN release-kit -->"));
-        assert_eq!(extract_block(&appended), Some(routing_block()));
+        assert_eq!(
+            extract_block(&appended, BLOCK_BEGIN, BLOCK_END),
+            Some(block)
+        );
 
         let stale = appended.replace("Never author a tag", "Do author a tag");
-        let refreshed = splice_block(Some(&stale));
-        assert_eq!(extract_block(&refreshed), Some(routing_block()));
+        let refreshed = splice_agents_block(Some(&stale), block);
+        assert_eq!(
+            extract_block(&refreshed, BLOCK_BEGIN, BLOCK_END),
+            Some(block)
+        );
         assert!(refreshed.starts_with("# My project"));
         assert_eq!(
             refreshed.matches("BEGIN release-kit").count(),
             1,
             "a re-splice must replace, not accumulate"
         );
+    }
+
+    /// The hook block lands under `repos:` in every honest shape and
+    /// refuses the one dishonest shape by name.
+    #[test]
+    fn the_hook_block_splices_under_repos() {
+        let block = hooks_block();
+        let fresh = splice_hooks_block(None, block).expect("a fresh file splices");
+        assert!(fresh.starts_with(HOOK_TYPES_LINE));
+        assert!(fresh.contains("\nrepos:\n# BEGIN release-kit\n"));
+        assert_eq!(extract_block(&fresh, HOOKS_BEGIN, HOOKS_END), Some(block));
+
+        let own =
+            "repos:\n  - repo: https://example.com/own\n    rev: v1\n    hooks:\n      - id: own\n";
+        let spliced = splice_hooks_block(Some(own), block).expect("an unmarked file splices");
+        assert!(spliced.starts_with("repos:\n# BEGIN release-kit\n"));
+        assert!(spliced.contains("- id: own"), "the target's hooks survive");
+        assert!(
+            !spliced.contains(HOOK_TYPES_LINE),
+            "an existing file's top level is the skills' duty, not the splice's"
+        );
+
+        let stale = spliced.replace("--force-scope", "--no-scope");
+        let refreshed = splice_hooks_block(Some(&stale), block).expect("a marked file re-splices");
+        assert_eq!(
+            extract_block(&refreshed, HOOKS_BEGIN, HOOKS_END),
+            Some(block)
+        );
+        assert_eq!(refreshed.matches(HOOKS_BEGIN).count(), 1);
+
+        let err = splice_hooks_block(Some("minimum_pre_commit_version: '3.2.0'\n"), block)
+            .expect_err("no repos: line refuses");
+        assert!(err.contains("repos:"), "{err}");
     }
 }

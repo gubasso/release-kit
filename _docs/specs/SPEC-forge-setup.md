@@ -10,6 +10,7 @@
   - [`forge-setup:key-material-never-reaches-the-environment` — Key material never reaches the environment](#forge-setupkey-material-never-reaches-the-environment--key-material-never-reaches-the-environment)
   - [`forge-setup:every-supported-forge-runs-every-step` — Every supported forge runs every step](#forge-setupevery-supported-forge-runs-every-step--every-supported-forge-runs-every-step)
   - [`forge-setup:a-check-reports-what-the-forge-enforces` — A check reports what the forge enforces](#forge-setupa-check-reports-what-the-forge-enforces--a-check-reports-what-the-forge-enforces)
+  - [`forge-setup:the-setup-asserts-the-squash-title-source` — The setup asserts the squash title source](#forge-setupthe-setup-asserts-the-squash-title-source--the-setup-asserts-the-squash-title-source)
 
 <!--TOC-->
 
@@ -102,5 +103,17 @@ Where a forge cannot enforce what a step's proof claims, `rk setup check` MUST r
 - GIVEN a protected `v*` pattern on a forge whose Owners can still delete a protected tag
 - WHEN `rk setup check` runs
 - THEN the step reports satisfied with the limitation named, so nobody believes an immutability the forge does not provide
+
+Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `forge-setup:the-setup-asserts-the-squash-title-source` — The setup asserts the squash title source
+
+`protect-trunk` MUST assert, where the forge exposes it, that the squash commit's message derives from the request's title — `squash_merge_commit_title=PR_TITLE` on GitHub, `squash_commit_template=%{title}` on GitLab — and the observation MUST fault any other value, because the bot derives the version and the changelog from the trunk's commit messages and the forge's one-commit fallback is the lone branch commit's own subject.
+
+#### Scenario: A one-commit request titled by its branch commit
+
+- GIVEN a repository whose squash title source is unset, holding a pull request with one commit whose subject is `wip`
+- WHEN `rk setup step protect-trunk --apply` runs and `rk setup check` reads the repository back
+- THEN the apply sets the title source to the request's title, and a check against a repository holding any other value reports `protect-trunk` unsatisfied naming the setting
 
 Verify: `cargo nextest run -E 'binary(cli)'`

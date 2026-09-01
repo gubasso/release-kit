@@ -17,6 +17,7 @@ This repository is the canonical knowledge product for the release-kit workflow.
 - `method/` and `bindings/` are the canon prose; `snippets/` and `versions.toml` are the landable payload.
 - `runbooks/`, `forges/`, and `setup/<forge>/` are host-side payload: served by `rk guide` and `rk forge`, executed by `rk setup`, and landed into no target. `SPEC-forge-setup.md` binds how the setup acts on a forge.
 - `snippets/` is scoped by `(technology, forge)` pair, and `rk init` selects the pair; a pair may honestly land fewer files than another.
+- `snippets/_shared/<forge>` holds a forge's technology-independent files, composed into every pair at landing; it is not a technology, and a destination it shares with a pair is a payload defect.
 - Every landable file has a declared kind in `src/landing.rs` — `rendered`, `seeded`, or `state` — and a landing writes `.release-kit/manifest.json` into the target, last. `SPEC-landing.md` binds the record and every verb that reads it.
 - `src/` is the distribution: the `rk` binary embeds every root in `src/payload_roots.rs` and the licenses at compile time, so canon and binary cannot drift.
 - `skills/` installs at user scope only, and `rk init` lands none: an agent resolves a skill by name across scopes, so a second copy is a second entry under one name. `SPEC-distribution.md` binds what the installer may write there.
@@ -68,6 +69,9 @@ This repository is the canonical knowledge product for the release-kit workflow.
 ## Releases
 
 - This repository runs the release-kit convention; `rk method invariants` states what must stay true.
+- Change nothing while on `master`: work starts on a short-lived branch — `<type>/<slug>` mirroring the squash title's type, or the forge-minted `<issue-id>-<slug>` — and reaches the trunk only through its pull request. When asked to implement or change code while the checkout sits on `master`, branch first.
+- Land work through squash-merged pull requests. The request's title becomes the trunk's commit message, so it MUST be a scoped Conventional Commit; the body carries the context.
+- Every commit follows the same scoped convention; the landed commit-msg hook enforces it, and the scopes this project accepts are `bindings,ci,cli,deps,distribution,docs,forges,guides,guides/release,instance,landing,method,output,runbooks,setup,skills,snippets`.
 - Never author a tag, and never hand-edit a generated artifact workflow.
 - Run `rk status` before changing anything under `.github/workflows/` or `.gitlab-ci.yml`, or any file `.release-kit/manifest.json` names.
 - The full method is `rk method --list`; the recovery paths are `rk method recovery`.

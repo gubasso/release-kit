@@ -1,6 +1,49 @@
 default_install_hook_types: [pre-commit, commit-msg, pre-push]
 
 repos:
+# BEGIN release-kit
+# The release convention's hooks. Install every stage they run at:
+# pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v4.4.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+        args: [--strict, --force-scope, --scopes, 'bindings,ci,cli,deps,distribution,docs,forges,guides,guides/release,instance,landing,method,output,runbooks,setup,skills,snippets']
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: no-commit-to-branch
+        args: [--branch, master]
+  - repo: local
+    hooks:
+      - id: rk-branch-name
+        name: rk branch name
+        language: system
+        always_run: true
+        pass_filenames: false
+        entry: sh -c 'branch=$(git symbolic-ref --quiet --short HEAD) || exit 0; [ "$branch" = master ] && exit 0; printf %s "$branch" | grep -Eq "^((build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)/[A-Za-z0-9._/-]+|([0-9]+|[A-Z][A-Z0-9]+-[0-9]+)-[A-Za-z0-9._-]+|release[-/].+)$" && exit 0; echo "branch $branch is neither <type>/<slug> nor <issue-id>-<slug>; gh issue develop <issue> --checkout or its glab counterpart mints the linked form" >&2; exit 1'
+      - id: rk-no-push-to-trunk
+        name: rk no push to trunk
+        stages: [pre-push]
+        language: system
+        always_run: true
+        pass_filenames: false
+        entry: sh -c '[ "$PRE_COMMIT_REMOTE_BRANCH" != refs/heads/master ] || { echo "the trunk takes no direct push; it is written through squash-merged pull requests alone" >&2; exit 1; }'
+      - id: rk-no-hand-authored-tag
+        name: rk no hand-authored tag
+        stages: [pre-push]
+        language: system
+        always_run: true
+        pass_filenames: false
+        entry: sh -c 'case "$PRE_COMMIT_REMOTE_BRANCH" in refs/tags/v*) echo "never author a tag; the release automation mints every v* tag" >&2; exit 1;; esac'
+      - id: rk-status-check
+        name: rk status check
+        language: system
+        pass_filenames: false
+        entry: rk status --check --target .
+        files: '^(\.github/workflows/|\.gitlab-ci\.yml$|\.gitlab/ci/|AGENTS\.md$|\.release-kit/|\.pre-commit-config\.yaml$|release-plz\.toml$|dist-workspace\.toml$|release-please-config\.json$|cliff\.toml$|\.release-please-manifest\.json$|VERSION$)'
+# END release-kit
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
@@ -96,12 +139,6 @@ repos:
         types: [markdown]
         exclude: 'CHANGELOG\.md$'
         args: [--no-progress]
-  - repo: https://github.com/crate-ci/committed
-    rev: v1.1.11
-    hooks:
-      - id: committed
-        language: system
-        stages: [commit-msg]
 # BEGIN spec-driven-docs managed
   - repo: local
     hooks:

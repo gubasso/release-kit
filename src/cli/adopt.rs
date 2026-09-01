@@ -30,6 +30,13 @@ pub struct AdoptArgs {
     #[arg(long)]
     pub repo: Option<String>,
 
+    /// The Conventional Commit scopes this project accepts,
+    /// comma-separated, the parameter the candidate is rendered under and
+    /// the record carries. There is no record to read it from yet, so the
+    /// adoption refuses without it.
+    #[arg(long)]
+    pub scopes: Option<String>,
+
     /// Write the record; without it the verification runs and nothing is
     /// touched.
     #[arg(long)]

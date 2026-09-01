@@ -13,11 +13,18 @@
 # the setup stores as a masked CI variable: a push made with the default CI
 # job token starts no pipeline, which would silently skip the release half.
 
+include:
+  - local: .gitlab/ci/mr-title.yml
+
 stages:
   - release
 
+# Merge request pipelines run the title gate; branch pipelines on the trunk
+# and the release lines run the release jobs, whose own rules never match a
+# merge request event.
 workflow:
   rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_PROJECT_ROOT_NAMESPACE == "OWNER" && ($CI_COMMIT_BRANCH == "master" || $CI_COMMIT_BRANCH =~ /^release\//)'
 
 .tooling:
