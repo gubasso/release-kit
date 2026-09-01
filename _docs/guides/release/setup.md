@@ -419,22 +419,25 @@ gh pr merge --squash --delete-branch
 - `GH013: Repository rule violations found` on the push: the branch name is `master`, which takes no direct push; branch first and push that branch instead.
 - the check never appears: the job id is not `test`, and step 9a's prerequisite has moved; nothing merges until the ruleset and the workflow agree on the name.
 
-### 10c. Reset the local trunk
+### 10c. Take the local trunk to the merge
 
-The squash writes a commit that no local branch is an ancestor of, so the local trunk diverges the moment the merge lands and no fast-forward can close the gap. Its content is already in the trunk's tip, so the trunk is discarded rather than reconciled.
+The squash writes one commit that is not the branch's commit, so the local trunk never advances by the merge alone. Reset takes it there in one move whichever way the clone stands, and 10b left the work in the trunk's tip either way.
 
 ```bash
 git switch master
 git fetch origin
-git diff --stat HEAD origin/master
-# check: empty; the trunk's tip already carries what this clone holds
+git status -sb
+# check: behind by the merge and ahead by nothing
 git reset --hard origin/master
 git rev-parse HEAD origin/master
 # check: two identical SHAs
+git branch -D fix/<slug>
+# check: reports the branch deleted; the forge already deleted its remote by step 4
 ```
 
-- `git diff` prints a diff: the trunk holds something this clone does not, so read it before resetting; `git reflog` still names every commit a reset leaves behind.
-- `gh pr merge` printed `not possible to fast-forward`: that is this divergence, reported by the local update the merge attempts, and this step is its repair.
+- ahead as well as behind: the clone committed to the trunk directly before branching, so the trunk holds those commits twice — once each and once squashed. `git diff --stat HEAD origin/master` prints nothing, which is the proof the reset discards duplicates only, and `git reflog` still names each one.
+- `gh pr merge` printed `not possible to fast-forward`: that is the ahead-as-well-as-behind case, reported by the local update the merge attempts, and this step is its repair.
+- `-D` rather than `-d` on the topic branch, and not for haste: the squash gave the work a commit no branch is an ancestor of, so `-d` refuses every branch this path produces. What it discards is the pre-squash form of what the trunk now holds.
 
 ## 11. Protect the release tags
 
