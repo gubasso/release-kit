@@ -4,7 +4,9 @@
 # job holds the title to a scoped Conventional Commit. The project setting
 # requiring the whole pipeline is what makes it blocking — this forge names
 # no check — and running it also gives every merge request the pipeline
-# that requirement waits on.
+# that requirement waits on. It stops accident, not authority: the job runs
+# from the request's own CI configuration, and a title edit starts no new
+# pipeline; the forge document's Limitations state both.
 
 mr-title:
   stage: .pre

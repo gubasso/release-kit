@@ -225,6 +225,15 @@ fn observe(args: &StatusArgs, manifest: &Manifest) -> Result<Observed, RkError> 
                 ));
             }
         }
+        // The hook file's markers must be well formed even when its first
+        // block matches the record: a duplicate block still executes, so
+        // an ill-formed file reads as rendered drift, never as clean.
+        if file.destination == landing::HOOKS_DESTINATION
+            && !observed.drift_rendered.contains(&file.destination)
+            && landing::hooks_file_defect(&args.target)?.is_some()
+        {
+            observed.drift_rendered.push(file.destination.clone());
+        }
     }
     // Stale means behind, not merely different: a landing from a newer rk
     // can carry pins ahead of this binary's registry, and that is the

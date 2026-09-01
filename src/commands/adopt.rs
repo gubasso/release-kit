@@ -93,21 +93,7 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
     }
     let resolved = landing::resolve(&args.target, args.forge.as_deref(), args.repo.as_deref())?;
     let repo = resolved.repo.ok_or_else(landing::repo_unresolved)?;
-    let tech = match args.tech.as_deref() {
-        Some(tech) => tech.to_owned(),
-        None => crate::detect::tech_of(args.target.as_std_path())
-            .ok_or_else(|| {
-                RkError::missing(
-                    Diagnostic::new(
-                        Reason::TargetNotFound,
-                        "no technology detected: the target has no version file",
-                    )
-                    .expected("a Cargo.toml, pyproject.toml, or VERSION file")
-                    .action("pass --tech <rust|python|bash>"),
-                )
-            })?
-            .to_owned(),
-    };
+    let tech = resolved_tech(args)?;
     let scopes = required_scopes(args.scopes.as_deref())?;
     let entries = landing::projection(&tech, &resolved.forge, &repo, &scopes)?;
     let (files, records) = verify(args, &entries)?;
@@ -179,6 +165,12 @@ fn verify(
     let mut missing: Vec<String> = Vec::new();
     let mut files = Vec::new();
     let mut records = Vec::new();
+    // An ill-formed hook file lists beside the mismatches rather than
+    // refusing alone, so one run still names everything unadoptable.
+    let mut defects: Vec<String> = Vec::new();
+    if let Some(defect) = landing::hooks_file_defect(&args.target)? {
+        defects.push(defect);
+    }
     for entry in entries {
         let Some(bytes) = landing::read_destination(&args.target, entry)? else {
             // A block-placed artifact reads as absent from a file that
@@ -215,13 +207,14 @@ fn verify(
             },
         });
     }
-    if mismatches.is_empty() && missing.is_empty() {
+    if mismatches.is_empty() && missing.is_empty() && defects.is_empty() {
         return Ok((files, records));
     }
     let listed: Vec<String> = mismatches
         .iter()
         .map(|path| format!("{path} (differs from the rendered candidate)"))
         .chain(missing.iter().cloned())
+        .chain(defects.iter().cloned())
         .collect();
     Err(RkError::refusal(
         Diagnostic::new(
@@ -237,6 +230,28 @@ fn verify(
         )
         .target_state("unchanged"),
     ))
+}
+
+/// The technology whose payload the target runs: the flag, or detection
+/// from the version file.
+fn resolved_tech(args: &AdoptArgs) -> Result<String, RkError> {
+    args.tech.as_deref().map_or_else(
+        || {
+            crate::detect::tech_of(args.target.as_std_path())
+                .map(str::to_owned)
+                .ok_or_else(|| {
+                    RkError::missing(
+                        Diagnostic::new(
+                            Reason::TargetNotFound,
+                            "no technology detected: the target has no version file",
+                        )
+                        .expected("a Cargo.toml, pyproject.toml, or VERSION file")
+                        .action("pass --tech <rust|python|bash>"),
+                    )
+                })
+        },
+        |tech| Ok(tech.to_owned()),
+    )
 }
 
 /// The `--scopes` argument an adoption cannot proceed without: there is

@@ -643,25 +643,52 @@ fn github_trunk_ruleset(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkErro
             faults.push(format!("the {TITLE_CHECK} check is not required"));
         }
     }
-    // The squash title source is a repository setting beside the ruleset:
-    // left unset, a one-commit request offers that commit's own subject as
-    // the trunk's message, which the bot then reads for the version.
-    match api_get(ctx, run, &format!("repos/{}", ctx.repo))? {
-        Api::Ok(body) => {
-            if body["squash_merge_commit_title"] != "PR_TITLE" {
-                faults.push(format!(
-                    "the squash title source is {} where the setup owns PR_TITLE",
-                    body["squash_merge_commit_title"]
-                ));
+    match squash_title_source(ctx, run)? {
+        TitleSource::Owned => {}
+        TitleSource::Fault(fault) => faults.push(fault),
+        // Proven drift wins over an outage: an unreadable settings read
+        // downgrades the answer to unknown only when nothing above it was
+        // proven wrong.
+        TitleSource::Unreadable(err) => {
+            if faults.is_empty() {
+                return Ok(StepState::unknown(err));
             }
         }
-        Api::Missing => faults.push(format!("the forge does not know {}", ctx.repo)),
-        Api::Failed(err) => return Ok(StepState::unknown(err)),
     }
     Ok(if faults.is_empty() {
         StepState::ok(format!("{name} holds the release-merge shape"))
     } else {
         StepState::not(faults.join("; "))
+    })
+}
+
+/// What the repository's squash title setting holds.
+enum TitleSource {
+    /// The request's title, as the setup owns.
+    Owned,
+    /// A proven other value, as one fault line.
+    Fault(String),
+    /// The settings could not be read.
+    Unreadable(String),
+}
+
+/// The squash title source, a repository setting beside the ruleset: left
+/// unset, a one-commit request offers that commit's own subject as the
+/// trunk's message, which the bot then reads for the version.
+fn squash_title_source(ctx: &Ctx, run: &mut Runner) -> Result<TitleSource, RkError> {
+    Ok(match api_get(ctx, run, &format!("repos/{}", ctx.repo))? {
+        Api::Ok(body) => {
+            if body["squash_merge_commit_title"] == "PR_TITLE" {
+                TitleSource::Owned
+            } else {
+                TitleSource::Fault(format!(
+                    "the squash title source is {} where the setup owns PR_TITLE",
+                    body["squash_merge_commit_title"]
+                ))
+            }
+        }
+        Api::Missing => TitleSource::Fault(format!("the forge does not know {}", ctx.repo)),
+        Api::Failed(err) => TitleSource::Unreadable(err),
     })
 }
 
@@ -715,6 +742,10 @@ fn github_ruleset_body(ctx: &Ctx, run: &mut Runner, name: &str) -> Result<Rulese
 /// The GitLab limitation `protect-tags` and `protections-check` report.
 const GITLAB_TAG_LIMITATION: &str =
     "an Owner or Maintainer can still delete a protected tag through the UI or API";
+
+/// The GitLab limitation `protect-trunk` and `protections-check` report:
+/// the title gate rides the request's own pipeline on this forge.
+const GITLAB_TITLE_LIMITATION: &str = "the title gate stops accident, not authority: a merge request runs its own CI configuration, and a title edit starts no new pipeline";
 
 #[allow(clippy::too_many_lines)]
 fn gitlab(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError> {
@@ -907,7 +938,10 @@ fn gitlab(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
                 faults.push("the squash template is not the merge request's title".to_owned());
             }
             Ok(if faults.is_empty() {
-                StepState::ok(format!("{TRUNK_BRANCH} holds the release-merge shape"))
+                StepState::ok_with_limitation(
+                    format!("{TRUNK_BRANCH} holds the release-merge shape"),
+                    GITLAB_TITLE_LIMITATION,
+                )
             } else {
                 StepState::not(faults.join("; "))
             })
@@ -959,12 +993,14 @@ fn gitlab(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
             // an outage with nothing proven wrong stays unknown.
             let mut failures = Vec::new();
             let mut unknowns = Vec::new();
-            let mut limitation = None;
+            // Every satisfied step's limitation survives the aggregate: a
+            // first limitation must not shadow a second.
+            let mut limitations: Vec<String> = Vec::new();
             for owned in ["protect-trunk", "protect-tags", "protect-release-lines"] {
                 match gitlab(ctx, owned, run)? {
                     StepState::Satisfied {
                         limitation: found, ..
-                    } => limitation = limitation.or(found),
+                    } => limitations.extend(found),
                     StepState::Inapplicable { .. } => {}
                     StepState::Unsatisfied { detail } => {
                         failures.push(format!("{owned}: {detail}"));
@@ -981,7 +1017,11 @@ fn gitlab(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
             } else {
                 StepState::Satisfied {
                     detail: "the protections hold, as far as this forge enforces them".into(),
-                    limitation,
+                    limitation: if limitations.is_empty() {
+                        None
+                    } else {
+                        Some(limitations.join("; "))
+                    },
                 }
             })
         }

@@ -104,7 +104,12 @@ pub fn render(baseline: &[u8], repo: &str, scopes: &[String]) -> Vec<u8> {
     let mut out = substitute(baseline, OWNER_TOKEN, owner.as_bytes());
     if !scopes.is_empty() {
         out = substitute(&out, SCOPES_CSV_TOKEN, scopes.join(",").as_bytes());
-        out = substitute(&out, SCOPES_PIPE_TOKEN, scopes.join("|").as_bytes());
+        // The pipe form drops into an extended regular expression, where a
+        // dot matches any character; among the characters `parse_scopes`
+        // admits, the dot is the only special one, so `api.v1` escapes to
+        // match itself alone.
+        let pipe: Vec<String> = scopes.iter().map(|s| s.replace('.', "\\.")).collect();
+        out = substitute(&out, SCOPES_PIPE_TOKEN, pipe.join("|").as_bytes());
     }
     out
 }
@@ -125,8 +130,8 @@ fn substitute(baseline: &[u8], token: &[u8], value: &[u8]) -> Vec<u8> {
 /// The `--scopes` argument parsed into the recorded list.
 ///
 /// Comma-separated, each scope non-empty and made of letters, digits, and
-/// `_ . / -`, so every scope drops into the title checks' regular
-/// expression verbatim.
+/// `_ . / -` — a set safe for the title checks' regular expression once
+/// the renderer escapes the dot, the one special character among them.
 ///
 /// # Errors
 ///
@@ -325,6 +330,9 @@ pub fn splice_hooks_block(existing: Option<&str>, block: &str) -> Result<String,
     let Some(text) = existing else {
         return Ok(format!("{HOOK_TYPES_LINE}\n\nrepos:\n{block}\n"));
     };
+    if let Some(defect) = hooks_marker_defect(text) {
+        return Err(defect);
+    }
     if let Some(found) = extract_block(text, HOOKS_BEGIN, HOOKS_END) {
         return Ok(text.replacen(found, block, 1));
     }
@@ -347,6 +355,32 @@ pub fn splice_hooks_block(existing: Option<&str>, block: &str) -> Result<String,
         Err(format!(
             "{HOOKS_DESTINATION} exists with no repos: line, so the hook block has nowhere to land"
         ))
+    }
+}
+
+/// The one definition of an ill-formed hook file, shared by the splice
+/// and every reader that judges one.
+///
+/// The hooks between the markers execute, so ownership must be
+/// unambiguous: exactly one begin marker paired with exactly one end
+/// marker after it, or none of either. A second begin is a second block
+/// pre-commit would still run, and a marker without its pair — or an end
+/// before its begin — is a block whose extent nothing can state.
+#[must_use]
+pub fn hooks_marker_defect(text: &str) -> Option<String> {
+    let begins = text.matches(HOOKS_BEGIN).count();
+    let ends = text.matches(HOOKS_END).count();
+    if begins > 1 || ends > 1 {
+        return Some(format!(
+            "{HOOKS_DESTINATION} carries more than one release-kit marker pair; release-kit owns exactly one block"
+        ));
+    }
+    match (text.find(HOOKS_BEGIN), text.find(HOOKS_END)) {
+        (Some(begin), Some(end)) if end > begin => None,
+        (None, None) => None,
+        _ => Some(format!(
+            "{HOOKS_DESTINATION} carries an unmatched or misordered release-kit marker, so the block's extent is ambiguous"
+        )),
     }
 }
 
@@ -625,6 +659,30 @@ pub fn write_destination(target: &Utf8Path, entry: &Entry) -> std::io::Result<()
     }
 }
 
+/// The hook file's defect, read from the target: `None` for a missing
+/// file or one the block can land in.
+///
+/// The one judgment every verb shares, covering every splice refusal —
+/// ill-formed markers, and an unmarked file offering the block no
+/// `repos:` line. Status reports it as rendered drift, upgrade collects
+/// it as a conflict in preview and apply alike so no landing dies
+/// half-written, and adopt lists it with its mismatches.
+///
+/// # Errors
+///
+/// Any read failure other than the file being absent.
+pub fn hooks_file_defect(target: &Utf8Path) -> std::io::Result<Option<String>> {
+    let path = target.join(HOOKS_DESTINATION);
+    match std::fs::read(&path) {
+        Ok(bytes) => {
+            let text = String::from_utf8_lossy(&bytes);
+            Ok(splice_hooks_block(Some(&text), HOOKS_BLOCK).err())
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
 /// The refusal a landing verb answers before writing anything, where
 /// the target's hook file offers the block no place.
 ///
@@ -635,24 +693,20 @@ pub fn write_destination(target: &Utf8Path, entry: &Entry) -> std::io::Result<()
 ///
 /// [`RkError::Refusal`] naming the file, and any read failure.
 pub fn hooks_splice_refusal(target: &Utf8Path) -> Result<(), RkError> {
-    let path = target.join(HOOKS_DESTINATION);
-    let existing = match std::fs::read(&path) {
-        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(e.into()),
-    };
-    match splice_hooks_block(Some(&existing), HOOKS_BLOCK) {
-        Ok(_) => Ok(()),
-        Err(reason) => Err(RkError::refusal(
+    hooks_file_defect(target)?.map_or(Ok(()), |reason| {
+        Err(RkError::refusal(
             Diagnostic::new(
                 Reason::StateDrift,
                 format!("{reason}, and nothing was written"),
             )
-            .expected("a .pre-commit-config.yaml with a repos: line, or none")
-            .action(format!("add a repos: list to {path}, then re-run"))
+            .expected("a .pre-commit-config.yaml the block can land in, or none")
+            .action(format!(
+                "resolve it in {}, then re-run",
+                target.join(HOOKS_DESTINATION)
+            ))
             .target_state("unchanged"),
-        )),
-    }
+        ))
+    })
 }
 
 #[cfg(test)]
@@ -706,6 +760,12 @@ mod tests {
         let rendered = render(baseline, "acme/widget", &scopes(&["api", "cli"]));
         let text = String::from_utf8(rendered).expect("rendered bytes stay text");
         assert_eq!(text, "scopes 'api,cli' match (api|cli)\n");
+
+        // A dot is the one admitted character that is special in the
+        // regular expression: it escapes, so `api.v1` matches only itself.
+        let rendered = render(baseline, "acme/widget", &scopes(&["api.v1"]));
+        let text = String::from_utf8(rendered).expect("rendered bytes stay text");
+        assert_eq!(text, "scopes 'api.v1' match (api\\.v1)\n");
     }
 
     /// The scope argument parses to the recorded list, refusing the empty
@@ -852,5 +912,50 @@ mod tests {
         let err = splice_hooks_block(Some("minimum_pre_commit_version: '3.2.0'\n"), block)
             .expect_err("no repos: line refuses");
         assert!(err.contains("repos:"), "{err}");
+
+        // The hooks between the markers execute, so ownership is exactly
+        // one well-formed block: a duplicate or an unmatched marker
+        // refuses rather than leaving a stale block active.
+        let doubled = format!("repos:\n{block}\n{block}\n");
+        let err = splice_hooks_block(Some(&doubled), block).expect_err("a second block refuses");
+        assert!(err.contains("one block"), "{err}");
+        let unmatched = "repos:\n# BEGIN release-kit\n  - repo: local\n";
+        let err =
+            splice_hooks_block(Some(unmatched), block).expect_err("an unmatched marker refuses");
+        assert!(err.contains("unmatched"), "{err}");
+    }
+
+    /// One definition of an ill-formed hook file, for every reader: the
+    /// well-formed shapes pass and each ambiguous shape names a defect.
+    #[test]
+    fn the_hook_marker_defects_are_named() {
+        use super::hooks_marker_defect;
+        let block = hooks_block();
+        assert_eq!(hooks_marker_defect(""), None);
+        assert_eq!(hooks_marker_defect(&format!("repos:\n{block}\n")), None);
+        for (case, text) in [
+            (
+                "a second begin",
+                format!("repos:\n{block}\n# BEGIN release-kit\n"),
+            ),
+            (
+                "a second end",
+                format!("repos:\n{block}\n# END release-kit\n"),
+            ),
+            (
+                "an unpaired begin",
+                "repos:\n# BEGIN release-kit\n".to_owned(),
+            ),
+            ("an unpaired end", "repos:\n# END release-kit\n".to_owned()),
+            (
+                "an end before its begin",
+                "repos:\n# END release-kit\n# BEGIN release-kit\n".to_owned(),
+            ),
+        ] {
+            assert!(
+                hooks_marker_defect(&text).is_some(),
+                "{case} must be a defect"
+            );
+        }
     }
 }

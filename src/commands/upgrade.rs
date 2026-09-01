@@ -83,17 +83,7 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
     )?;
     refuse_non_regular(&args.target, &entries)?;
 
-    let mut conflicts: Vec<String> = Vec::new();
-    let mut decisions: Vec<Decision> = Vec::new();
-    for entry in &entries {
-        let disk = landing::read_recorded(&args.target, &entry.destination)?;
-        decisions.push(decide(
-            entry,
-            recorded.file(&entry.destination),
-            disk.as_deref(),
-            &mut conflicts,
-        ));
-    }
+    let (decisions, conflicts) = decide_all(args, &recorded, &entries)?;
     // A file this payload stops shipping is a file the target owns from
     // that moment: left in place, named, and dropped from the record.
     let mut dropped: Vec<String> = Vec::new();
@@ -108,9 +98,6 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
 
     if args.apply && !conflicts.is_empty() {
         return Err(refuse_conflicts(&conflicts));
-    }
-    if args.apply {
-        landing::hooks_splice_refusal(&args.target)?;
     }
 
     let mut sentinels: Vec<String> = Vec::new();
@@ -286,6 +273,41 @@ fn load_upgradable(target: &camino::Utf8Path) -> Result<Manifest, RkError> {
 }
 
 /// Decide one candidate destination from the three digests.
+/// Every entry decided in one pass, with the collected conflicts. An
+/// ill-formed hook file is a conflict in preview and apply alike: its
+/// first block may match while a duplicate still executes, so the
+/// per-entry comparison cannot see it, and the refusal names each
+/// conflict once.
+fn decide_all<'a>(
+    args: &UpgradeArgs,
+    recorded: &'a Manifest,
+    entries: &'a [Entry],
+) -> Result<(Vec<Decision<'a>>, Vec<String>), RkError> {
+    let mut conflicts: Vec<String> = Vec::new();
+    let mut decisions: Vec<Decision<'a>> = Vec::new();
+    if landing::hooks_file_defect(&args.target)?.is_some() {
+        conflicts.push(landing::HOOKS_DESTINATION.to_owned());
+    }
+    for entry in entries {
+        let disk = landing::read_recorded(&args.target, &entry.destination)?;
+        let mut decision = decide(
+            entry,
+            recorded.file(&entry.destination),
+            disk.as_deref(),
+            &mut conflicts,
+        );
+        if entry.destination == landing::HOOKS_DESTINATION
+            && conflicts.iter().any(|c| c == landing::HOOKS_DESTINATION)
+        {
+            decision.action = "conflict";
+        }
+        decisions.push(decision);
+    }
+    let mut seen = std::collections::HashSet::new();
+    conflicts.retain(|conflict| seen.insert(conflict.clone()));
+    Ok((decisions, conflicts))
+}
+
 fn decide<'a>(
     entry: &'a Entry,
     recorded: Option<&FileRecord>,
