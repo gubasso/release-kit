@@ -2,7 +2,7 @@
 
 External sources behind `SPEC-forge-setup.md`: what each forge's API actually offers, which setup actions are scriptable at all, and how an embedded script is executed safely. Each entry states what the source says and which rule or file it bears on.
 
-Verified against the listed sources on 2026-08-28, re-checked on 2026-08-29, the GitHub App entries re-checked on 2026-08-31 and again on 2026-09-01 when the token-class findings below were also confirmed against a live account, and the merged-branch deletion entry verified on 2026-09-01. A source marked corroborating was reported by a parallel review and not independently fetched. Forge APIs move; re-check an entry before trusting it to design something new.
+Verified against the listed sources on 2026-08-28, re-checked on 2026-08-29, the GitHub App entries re-checked on 2026-08-31 and again on 2026-09-01 when the token-class findings below were also confirmed against a live account, and the merged-branch deletion and default-workflow-permissions entries verified on 2026-09-01. A source marked corroborating was reported by a parallel review and not independently fetched. Forge APIs move; re-check an entry before trusting it to design something new.
 
 ## GitHub rulesets
 
@@ -24,6 +24,20 @@ Events triggered by the default `GITHUB_TOKEN` do not start new workflow runs.
 - <https://docs.github.com/en/actions/concepts/security/github_token>
 
 Bearing: this is the whole reason a bot identity exists. A tag pushed under the default token would never retrigger the artifact workflow, which is what `method/01-invariants.md` states as an invariant rather than a preference.
+
+## Default workflow permissions for GITHUB_TOKEN
+
+"By default, when you create a new repository in your personal account, `GITHUB_TOKEN` only has read access for the `contents` and `packages` scopes." The repository setting that changes it is documented as "Under 'Workflow permissions', choose whether you want the `GITHUB_TOKEN` to have read and write access for all permissions (the permissive setting), or just read access for the `contents` and `packages` permissions (the restricted setting)", beside the "Allow GitHub Actions to create and approve pull requests" setting, which "configure[s] whether `GITHUB_TOKEN` can create and approve pull requests".
+
+`GET` and `PUT /repos/{owner}/{repo}/actions/permissions/workflow` carry both. `default_workflow_permissions` is a string of `read` or `write`, "The default workflow permissions granted to the GITHUB_TOKEN when running workflows", and `can_approve_pull_request_reviews` is a boolean, "Whether GitHub Actions can approve pull requests. Enabling this can be a security risk".
+
+A workflow that declares the `permissions` key does not inherit that default. The permissions "are initially set to the default setting for the enterprise, organization, or repository", and "If you specify the access for any of these permissions, all of those that are not specified are set to `none`".
+
+- <https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository>
+- <https://docs.github.com/en/rest/actions/permissions>
+- <https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax>
+
+Bearing: `forge-setup:every-supported-forge-runs-every-step` and the `ci-permissions` step. Unnamed scopes falling to `none` is why every landed release workflow, each declaring `permissions:` per job, is untouched by this setting, and why the setup guide names `ci.yml` as the one workflow the default reaches.
 
 ## GitHub App registration and installation
 
