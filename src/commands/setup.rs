@@ -8,6 +8,7 @@
 //! spawn it as `sh <path>`, and read the state back. `check` calls the same
 //! observe functions with the mutating half unreachable from its code path.
 
+use std::ffi::OsString;
 use std::fs;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -22,6 +23,7 @@ use crate::embedded;
 use crate::error::RkError;
 use crate::events::{ChildStream, Event, EventKind};
 use crate::output::Output;
+use crate::setup::app_jwt::{self, AppApi};
 use crate::setup::context::{Ctx, SECRET_VARS};
 use crate::setup::journal::Journal;
 use crate::setup::observe::{self, StepState};
@@ -211,6 +213,10 @@ struct Engine {
     ctx: Ctx,
     journal: Option<Journal>,
     secrets: Vec<Zeroizing<Vec<u8>>>,
+    /// The run's one read of the named key file; see [`key_file_for`].
+    key: Option<secrets::KeyFile>,
+    /// The run's App JWT, minted at most once; see [`app_jwt_for`].
+    app_jwt: Option<String>,
     seq: u64,
     command: &'static str,
     run_id: String,
@@ -256,6 +262,8 @@ impl Engine {
             ctx,
             journal,
             secrets: Ctx::secret_values(),
+            key: None,
+            app_jwt: None,
             seq: 0,
             command,
             run_id,
@@ -552,8 +560,8 @@ fn execute(
         done.push((step.name.to_owned(), status.wire().to_owned()));
     }
     engine.out.result_line(format!(
-        "setup: {} steps completed against {}",
-        done.len(),
+        "setup: {} completed against {}",
+        step_count(done.len()),
         engine.ctx.repo
     ));
     for (name, status) in &done {
@@ -565,6 +573,12 @@ fn execute(
     ]);
     engine.finish(0, None);
     Ok(())
+}
+
+/// A step count rendered with the noun that agrees with it, so no summary
+/// line can regrow a dangling plural.
+fn step_count(count: usize) -> String {
+    format!("{count} {}", if count == 1 { "step" } else { "steps" })
 }
 
 fn elapsed_ms(clock: Instant) -> u64 {
@@ -691,7 +705,10 @@ fn apply_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
             // is a token, and its step must not fail over a variable it
             // never consumes.
             let key = match engine.ctx.forge {
-                Forge::Github => secrets::resolve_key_file(&engine.ctx.target)?,
+                // The run's one read: an install-bot observation earlier in
+                // this run already holds the bytes, and this step stores
+                // those very bytes rather than reopening the path.
+                Forge::Github => key_file_for(engine)?.map(|key| key.bytes.clone()),
                 Forge::Gitlab => None,
             };
             let provided = match engine.ctx.forge {
@@ -736,11 +753,8 @@ fn apply_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
             // The bytes rk validated are the bytes the child receives and
             // the bytes the redactor holds: one read, one value, so nothing
             // can be substituted between the check and the forge.
-            let stdin = key.map(|key| {
-                engine.secrets.push(key.bytes.clone());
-                key.bytes
-            });
-            run_forge_step_with(engine, step, stdin)
+            let stdin = key;
+            run_forge_step_with(engine, step, stdin, Vec::new())
         }
         "protections-check" => {
             let (outcome, _) = run_script(engine, step)?;
@@ -782,6 +796,37 @@ fn apply_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
                 )),
             }
         }
+        // GitHub's grant is the one write the forge offers a command, and
+        // it takes a user credential; everything else here — the pre- and
+        // post-observation, and the installation id the script is handed —
+        // happens as the App itself. GitLab's install-bot needs none of
+        // this and takes the generic lifecycle below.
+        "install-bot" if engine.ctx.forge == Forge::Github => {
+            match observe_with(engine, step.name)? {
+                StepState::Satisfied { detail, .. } => {
+                    return Ok(Done::Satisfied(detail));
+                }
+                StepState::Unsatisfied { .. } | StepState::Inapplicable { .. } => {}
+                StepState::Unknown { detail } => {
+                    return Err(RkError::refusal(
+                        Diagnostic::new(
+                            Reason::ForgeTemporary,
+                            format!("{} cannot observe the current state: {detail}", step.name),
+                        )
+                        .expected("a readable forge answer before anything mutates")
+                        .action("check the App credentials and connectivity, then rerun")
+                        .step(step.name),
+                    ));
+                }
+            }
+            let installation = github_installation_id(engine, step)?;
+            run_forge_step_with(
+                engine,
+                step,
+                None,
+                vec![("RK_BOT_INSTALLATION".into(), installation.into())],
+            )
+        }
         _ => {
             if step.mutates == Mutates::Forge {
                 // The lifecycle applies only on a state it has read: an
@@ -811,18 +856,91 @@ fn apply_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
     }
 }
 
-/// Materialize, spawn, classify, and verify one forge-mutating step.
-fn run_forge_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
-    run_forge_step_with(engine, step, None)
+/// The id of the App's installation on this repository's owner, read as
+/// the App itself. The grant needs it, and no user credential can read
+/// it: the observation that just ran answered 404, so the repository
+/// endpoint that names the id directly has nothing to say yet. The
+/// account-level installation is a direct read for either account kind —
+/// the user endpoint answers for a person, the organization endpoint for
+/// an organization — so nothing here lists or paginates.
+fn github_installation_id(engine: &mut Engine, step: &StepSpec) -> Result<String, RkError> {
+    let refuse = |message: String, action: &str| {
+        RkError::refusal(
+            Diagnostic::new(Reason::PrerequisiteUnmet, message)
+                .expected("the App installed on the repository's owner")
+                .action(action.to_owned())
+                .step(step.name),
+        )
+    };
+    let jwt = match app_jwt_for(engine)? {
+        Ok(jwt) => jwt,
+        Err(detail) => {
+            return Err(refuse(
+                format!("install-bot has no App token: {detail}"),
+                app_jwt::REMEDIATION,
+            ));
+        }
+    };
+    let owner = engine
+        .ctx
+        .repo
+        .split('/')
+        .next()
+        .unwrap_or_default()
+        .to_owned();
+    let ctx = clone_ctx(&engine.ctx);
+    for path in [
+        format!("users/{owner}/installation"),
+        format!("orgs/{owner}/installation"),
+    ] {
+        match app_jwt::api_get(&ctx, &jwt, &path) {
+            AppApi::Ok(body) => {
+                return body["id"].as_i64().map(|id| id.to_string()).ok_or_else(|| {
+                    refuse(
+                        format!("the forge answered {path} without an installation id"),
+                        "check RK_BOT_APP_ID and the key file name the same App",
+                    )
+                });
+            }
+            AppApi::Missing => {}
+            AppApi::Refused(detail) => {
+                return Err(refuse(
+                    detail,
+                    "check RK_BOT_APP_ID and the key file name the same App",
+                ));
+            }
+            AppApi::Failed(detail) => {
+                return Err(RkError::refusal(
+                    Diagnostic::new(
+                        Reason::ForgeTemporary,
+                        format!("install-bot cannot read the App's installation: {detail}"),
+                    )
+                    .action("check connectivity, then rerun")
+                    .step(step.name),
+                ));
+            }
+        }
+    }
+    Err(refuse(
+        format!("the App has no installation on {owner}"),
+        "install the App on the account first; the setup guide's step 5 walks it",
+    ))
 }
 
-/// The same, with bytes written to the step's standard input.
+/// Materialize, spawn, classify, and verify one forge-mutating step.
+fn run_forge_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
+    run_forge_step_with(engine, step, None, Vec::new())
+}
+
+/// The same, with bytes written to the step's standard input and values
+/// `rk` derived added to its environment.
 fn run_forge_step_with(
     engine: &mut Engine,
     step: &StepSpec,
     stdin: Option<Zeroizing<Vec<u8>>>,
+    extra_env: Vec<(OsString, OsString)>,
 ) -> Result<Done, RkError> {
-    let (outcome, _) = run_script_with(engine, step, stdin)?;
+    let (outcome, _) = run_script_with(engine, step, stdin, extra_env)?;
     if !outcome.success() {
         return Err(classify_failure(engine, step, &outcome));
     }
@@ -864,10 +982,77 @@ fn run_forge_step_with(
 }
 
 /// Observe one step through the engine's executor.
+///
+/// `install-bot` on GitHub is the one observation that authenticates as
+/// the App itself, so it routes through [`app_jwt_for`] here — where the
+/// engine can mint once and register the redaction needles — rather than
+/// through the credential-free name dispatch in [`observe::observe`].
 fn observe_with(engine: &mut Engine, step: &str) -> Result<StepState, RkError> {
+    if step == "install-bot" && engine.ctx.forge == Forge::Github {
+        let jwt = match app_jwt_for(engine)? {
+            Ok(jwt) => jwt,
+            Err(detail) => return Ok(StepState::Unknown { detail }),
+        };
+        return Ok(observe::github_install_bot(&engine.ctx, &jwt));
+    }
     let ctx = clone_ctx(&engine.ctx);
     let mut runner = |exec: &Exec| engine.exec(exec, false);
     observe::observe(&ctx, step, &mut runner)
+}
+
+/// The run's validated key file, read exactly once per run: the first
+/// consumer resolves it and every later one reuses the same bytes, so the
+/// file that authenticated the App is the file `bot-secrets` stores, and
+/// no replacement between steps can split the two. The bytes become a
+/// redaction needle the moment they are read.
+fn key_file_for(engine: &mut Engine) -> Result<Option<&secrets::KeyFile>, RkError> {
+    if engine.key.is_none() {
+        engine.key = secrets::resolve_key_file(&engine.ctx.target)?;
+        if let Some(key) = &engine.key {
+            engine.secrets.push(key.bytes.clone());
+        }
+    }
+    Ok(engine.key.as_ref())
+}
+
+/// The run's App JWT, minted at most once: the key comes from the run's
+/// one read, and the minted token and its signature segment become
+/// redaction needles before anything else spawns. Every install-bot
+/// observation and the grant's installation-id discovery reuse the one
+/// token, whose nine-minute life covers a run's contiguous step easily.
+///
+/// The inner value is `Err` with a one-line detail where no token can
+/// exist — absent exports, or a signer that failed — which an observation
+/// reports as `unknown` and an apply turns into a refusal.
+fn app_jwt_for(engine: &mut Engine) -> Result<Result<String, String>, RkError> {
+    if let Some(jwt) = &engine.app_jwt {
+        return Ok(Ok(jwt.clone()));
+    }
+    let app_id = app_jwt::app_id()?;
+    let key_bytes = key_file_for(engine)?.map(|key| key.bytes.clone());
+    let (Some(app_id), Some(key_bytes)) = (app_id, key_bytes) else {
+        return Ok(Err(format!(
+            "the installation is readable only to the App itself; {}",
+            app_jwt::REMEDIATION
+        )));
+    };
+    let credentials = app_jwt::AppCredentials { app_id, key_bytes };
+    let ctx = clone_ctx(&engine.ctx);
+    Ok(match app_jwt::mint(&ctx, &credentials) {
+        Ok(jwt) => {
+            engine
+                .secrets
+                .push(Zeroizing::new(jwt.clone().into_bytes()));
+            if let Some(signature) = jwt.rsplit('.').next() {
+                engine
+                    .secrets
+                    .push(Zeroizing::new(signature.as_bytes().to_vec()));
+            }
+            engine.app_jwt = Some(jwt.clone());
+            Ok(jwt)
+        }
+        Err(detail) => Err(detail),
+    })
 }
 
 fn state_detail(state: &StepState) -> String {
@@ -882,7 +1067,7 @@ fn state_detail(state: &StepState) -> String {
 /// Materialize the step's script into the run's private directory, prove
 /// the written bytes by digest, and spawn it through the interpreter.
 fn run_script(engine: &mut Engine, step: &StepSpec) -> Result<(Outcome, PathBuf), RkError> {
-    run_script_with(engine, step, None)
+    run_script_with(engine, step, None, Vec::new())
 }
 
 /// The same, with bytes written to the script's standard input.
@@ -894,6 +1079,7 @@ fn run_script_with(
     engine: &mut Engine,
     step: &StepSpec,
     stdin: Option<Zeroizing<Vec<u8>>>,
+    extra_env: Vec<(OsString, OsString)>,
 ) -> Result<(Outcome, PathBuf), RkError> {
     let rel = format!("{}/{}", engine.ctx.forge.as_str(), step.name);
     let bytes = embedded::SETUP
@@ -919,10 +1105,12 @@ fn run_script_with(
         )));
     }
     journal.record_script(format!("scripts/{rel}"), digest.to_string());
+    let mut env = engine.ctx.child_env(step.name);
+    env.extend(extra_env);
     let exec = Exec {
         program: "sh".into(),
         args: vec![path.clone().into_os_string()],
-        env: engine.ctx.child_env(step.name),
+        env,
         cwd: engine.ctx.target.as_std_path().to_path_buf(),
         stdin,
     };
@@ -990,8 +1178,8 @@ fn attach_progress(
 ) -> RkError {
     let remaining = steps.len().saturating_sub(done.len() + 1);
     let state = format!(
-        "{} steps completed; {} failed; {remaining} not attempted",
-        done.len(),
+        "{} completed; {} failed; {remaining} not attempted",
+        step_count(done.len()),
         failed.name
     );
     match error {
@@ -1053,12 +1241,9 @@ fn check(out: Output, ctx: Ctx) -> Result<(), RkError> {
             Diagnostic::new(
                 Reason::StateDrift,
                 format!(
-                    "{unsatisfied} {} not satisfied and {unverifiable} could not be verified",
-                    if unsatisfied == 1 {
-                        "step is"
-                    } else {
-                        "steps are"
-                    }
+                    "{} {} not satisfied and {unverifiable} could not be verified",
+                    step_count(unsatisfied),
+                    if unsatisfied == 1 { "is" } else { "are" }
                 ),
             )
             .expected("every step's proof column to hold and to be readable")
@@ -1104,5 +1289,17 @@ fn guard_sh() -> Result<(), RkError> {
                 .action("install a POSIX shell, then rerun")
                 .target_state("nothing was run and nothing changed"),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Every summary line reports its count through one helper, so none of
+    /// them can regrow a dangling plural.
+    #[test]
+    fn a_step_count_carries_a_noun_that_agrees_with_it() {
+        assert_eq!(super::step_count(0), "0 steps");
+        assert_eq!(super::step_count(1), "1 step");
+        assert_eq!(super::step_count(2), "2 steps");
     }
 }

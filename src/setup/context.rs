@@ -197,14 +197,11 @@ impl Ctx {
                 env.push(("PATH".into(), joined));
             }
         }
-        if matches!(step, "install-bot" | "bot-secrets") {
+        if step == "bot-secrets" {
             for name in SECRET_VARS {
                 if let Some(value) = secrets::value_of(name) {
                     env.push((name.into(), value));
                 }
-            }
-            if let Some(value) = secrets::value_of("RK_BOT_INSTALLATION") {
-                env.push(("RK_BOT_INSTALLATION".into(), value));
             }
         }
         env

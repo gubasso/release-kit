@@ -2,7 +2,7 @@
 
 External sources behind `SPEC-forge-setup.md`: what each forge's API actually offers, which setup actions are scriptable at all, and how an embedded script is executed safely. Each entry states what the source says and which rule or file it bears on.
 
-Verified against the listed sources on 2026-08-28 and re-checked on 2026-08-29. A source marked corroborating was reported by a parallel review and not independently fetched. Forge APIs move; re-check an entry before trusting it to design something new.
+Verified against the listed sources on 2026-08-28, re-checked on 2026-08-29, and the GitHub App entries re-checked on 2026-08-31 and again on 2026-09-01, when the token-class findings below were also confirmed against a live account. A source marked corroborating was reported by a parallel review and not independently fetched. Forge APIs move; re-check an entry before trusting it to design something new.
 
 ## GitHub rulesets
 
@@ -29,14 +29,25 @@ Bearing: this is the whole reason a bot identity exists. A tag pushed under the 
 
 The App manifest flow, `POST /app-manifests/{code}/conversions`, is the only programmatic registration path, and it works by redirecting a person to the forge and exchanging a temporary code afterwards. It returns the app id, the private key, and the webhook secret, and it still requires a browser. There is no API to create an App without that redirect.
 
-Adding a repository to an existing installation is an API call: `PUT /user/installations/{installation_id}/repositories/{repository_id}`, documented as working only for classic personal access tokens carrying `repo` scope, and requiring admin on the repository. `DELETE` on the same path removes it, returning 422 where removal would leave the installation with none. `GET /user/installations` lists the installations the authenticated user can reach, which is how a tool discovers the installation id.
+Adding a repository to an existing installation is an API call: `PUT /user/installations/{installation_id}/repositories/{repository_id}`, documented as working only for classic personal access tokens carrying `repo` scope, and requiring admin on the repository. `DELETE` on the same path removes it, returning 422 where removal would leave the installation with none.
+
+Reading an installation is a different credential class entirely. `GET /user/installations` is listed among the endpoints available to GitHub App user access tokens — the `ghu_` tokens only the App's own user-authorization flow mints — and a classic token with exactly `repo` scope gets 403 there, "You must authenticate with an access token authorized to a GitHub App", verified against a live account on 2026-09-01. The endpoints that do answer for the App are JWT-only: `GET /repos/{owner}/{repo}/installation` names the installation covering one repository, 404 when it does not, and `GET /users/{username}/installation` and `GET /orgs/{org}/installation` name the account-level installation directly, so discovering the grant's id needs no listing and no pagination. The JWT is RS256, signed with the App's private key, `iss` the App or client id, `iat` backdated sixty seconds against clock drift, `exp` at most ten minutes out, and it must travel as `Authorization: Bearer` — the `token` scheme is refused for JWTs. The gh CLI sends the `token` scheme and offers no Bearer form, so a JWT cannot ride `gh api`; GitHub's own documentation signs with the OpenSSL CLI in its shell example.
+
+The classic token that grant requires is itself created in the account's web settings and nowhere else: token creation over the API ended with the OAuth Authorizations API, whose removal directs integrations to the web application flow instead. The `repo` scope it carries grants full read and write access to public and private repositories, including code, commit statuses, invitations, collaborators, deployment statuses, and webhooks. `GH_TOKEN` and `GITHUB_TOKEN`, in that order, take precedence over the credentials `gh auth login` stored, so a wrong value in the environment replaces a working login rather than falling back to it.
 
 - <https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-app-from-a-manifest>
 - <https://docs.github.com/en/rest/apps/apps>
 - <https://docs.github.com/en/rest/apps/installations>
+- <https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app>
+- <https://docs.github.com/en/rest/authentication/authenticating-to-the-rest-api>
+- <https://github.com/cli/cli/issues/12828>
+- <https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens>
+- <https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/scopes-for-oauth-apps>
+- <https://github.blog/changelog/2020-11-13-token-authentication-required-for-api-operations/>
+- <https://cli.github.com/manual/gh_help_environment>
 - <https://github.com/github/rest-api-description>
 
-Bearing: creating the bot identity is manual once per account, ever; granting it a project is a command. The token-class restriction is stated on the grant and not on the listing, which is why `forges/github.md` and the install-bot step name the classic personal access token explicitly and why a 403 mentioning a GitHub App is reported as the wrong token class rather than as missing authentication. Whether the listing accepts a classic token is unverified — the description is silent, which is not the same as a refusal.
+Bearing: creating the bot identity is manual once per account, ever; reading its installation is the App's own privilege; granting it a project is the one write left to a user credential. This split is why `install-bot` observes and verifies as the App — an OpenSSL-signed JWT carried by `curl`, since gh cannot speak Bearer — and grants through the documented PUT, with the installation id discovered as the App and handed to the script. An earlier revision of this entry called the listing's token acceptance unverified; the live 403 settled it, and it is the failure every operator hit while the step observed through `GET /user/installations`. That the classic token is browser-only is why the setup guide spends a sub-recipe on minting it, and the environment precedence is why that recipe proves the stored value before spending a forge call on it.
 
 ## GitLab protected branches, protected tags, and project access tokens
 
@@ -70,17 +81,17 @@ Bearing: the ordering in `method/02-setup.md`, which publishes by hand before re
 
 The classification the sources above produce, which is what `runbooks/setup.md` and `rk guide setup` route around.
 
-| Action                                 | Scriptable               | Frequency        |
-| -------------------------------------- | ------------------------ | ---------------- |
-| Create the bot identity on GitHub      | no, browser redirect     | once per account |
-| Add a project to a GitHub installation | yes                      | per project      |
-| Create the bot identity on GitLab      | yes                      | per project      |
-| Store credentials on the project       | yes                      | per project      |
-| Create the bootstrap registry token    | no, web UI               | once per package |
-| First publish                          | yes                      | once per package |
-| Register the trusted publisher         | no, web UI, no API found | once per package |
-| Revoke the bootstrap token             | no, web UI               | once per package |
-| Enable publishing enforcement          | no, web UI, no API found | once per package |
+| Action                                 | Scriptable                     | Frequency        |
+| -------------------------------------- | ------------------------------ | ---------------- |
+| Create the bot identity on GitHub      | no, browser redirect           | once per account |
+| Add a project to a GitHub installation | yes, write needs a classic PAT | per project      |
+| Create the bot identity on GitLab      | yes                            | per project      |
+| Store credentials on the project       | yes                            | per project      |
+| Create the bootstrap registry token    | no, web UI                     | once per package |
+| First publish                          | yes                            | once per package |
+| Register the trusted publisher         | no, web UI, no API found       | once per package |
+| Revoke the bootstrap token             | no, web UI                     | once per package |
+| Enable publishing enforcement          | no, web UI, no API found       | once per package |
 
 ## Secrets on standard input
 

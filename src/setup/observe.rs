@@ -3,13 +3,15 @@
 //! One implementation per forge and step, called by preview never, by apply
 //! before and after the mutation, and by `check` as its whole job — so the
 //! three modes cannot drift apart, and the mutating half is unreachable from
-//! here by construction: nothing in this module spawns anything but
-//! read-only forge-CLI calls and the technology's own dry-run check.
+//! here by construction: nothing spawned from this module mutates anything —
+//! read-only forge-CLI calls, the technology's own dry-run check, and the
+//! App-credential read [`super::app_jwt`] carries for `install-bot`.
 
 use serde_json::Value;
 
 use crate::detect::Forge;
 use crate::error::RkError;
+use crate::setup::app_jwt::{self, AppApi};
 use crate::setup::context::{Ctx, TRUNK_BRANCH};
 use crate::setup::process::{Exec, Outcome};
 
@@ -349,7 +351,6 @@ fn github(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
                 Api::Failed(err) => StepState::unknown(err),
             },
         ),
-        "install-bot" => github_install_bot(ctx, run),
         "bot-secrets" => Ok(
             match api_get(ctx, run, &format!("repos/{repo}/actions/secrets"))? {
                 Api::Ok(body) => {
@@ -449,48 +450,23 @@ fn github(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
     }
 }
 
-fn github_install_bot(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkError> {
-    let installations = match api_get(ctx, run, "user/installations")? {
-        Api::Ok(body) => body,
-        Api::Missing => return Ok(StepState::not("no app installation is reachable")),
-        // The installation endpoints refuse the OAuth token `gh auth
-        // login` normally mints — the grant is documented for classic
-        // personal access tokens only — so this 403 names the wrong
-        // token class, not missing authentication.
-        Api::Failed(err) if err.contains("authorized to a GitHub App") => {
-            return Ok(StepState::unknown(format!(
-                "{err}; the forge refuses gh's own OAuth token here — authenticate gh with a classic personal access token carrying repo scope, or grant the project at github.com/settings/installations"
-            )));
+/// The installation, observed as the App itself.
+///
+/// The forge serves `repos/{owner}/{repo}/installation` to an App JWT and
+/// to nothing a user can hold. The caller mints `jwt` — once per run, with
+/// the token and the key bytes already registered as redaction needles —
+/// which is why this lives outside the name dispatch above: an observation
+/// entered without that token has no honest answer.
+#[must_use]
+pub fn github_install_bot(ctx: &Ctx, jwt: &str) -> StepState {
+    match app_jwt::api_get(ctx, jwt, &format!("repos/{}/installation", ctx.repo)) {
+        AppApi::Ok(body) => {
+            let id = body["id"].as_i64().unwrap_or_default();
+            StepState::ok(format!("installation {id} covers {}", ctx.repo))
         }
-        Api::Failed(err) => return Ok(StepState::unknown(err)),
-    };
-    let ids: Vec<i64> = installations["installations"]
-        .as_array()
-        .map(|list| list.iter().filter_map(|i| i["id"].as_i64()).collect())
-        .unwrap_or_default();
-    if ids.is_empty() {
-        return Ok(StepState::not("no app installation is reachable"));
+        AppApi::Missing => StepState::not(format!("the App is not installed on {}", ctx.repo)),
+        AppApi::Refused(detail) | AppApi::Failed(detail) => StepState::unknown(detail),
     }
-    for id in ids {
-        let path = format!("user/installations/{id}/repositories?per_page=100");
-        if let Api::Ok(body) = api_get(ctx, run, &path)? {
-            let granted = body["repositories"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .any(|repository| repository["full_name"] == ctx.repo.as_str());
-            if granted {
-                return Ok(StepState::ok(format!(
-                    "installation {id} covers {}",
-                    ctx.repo
-                )));
-            }
-        }
-    }
-    Ok(StepState::not(format!(
-        "no reachable installation covers {}",
-        ctx.repo
-    )))
 }
 
 /// A plain ruleset: active, and carrying exactly the expected rule types —
