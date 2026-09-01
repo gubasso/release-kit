@@ -1,0 +1,12 @@
+#!/usr/bin/env sh
+# Have the forge delete a branch when its merge lands, so keeping the trunk
+# the sole long-lived branch costs no one a habit; the method's setup
+# chapter owns the reasoning. The setting is project-wide, so it holds
+# whichever merge verb the operator uses, and it never touches a branch
+# whose merge has not landed.
+set -eu
+: "${RK_REPO:?rk sets this; run this script through rk setup}"
+
+gh api -X PATCH "repos/$RK_REPO" -F delete_branch_on_merge=true >/dev/null
+echo 'check: prints true'
+gh api "repos/$RK_REPO" -q .delete_branch_on_merge

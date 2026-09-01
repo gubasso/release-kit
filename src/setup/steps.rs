@@ -33,10 +33,10 @@ pub struct StepSpec {
     pub prereqs: &'static [&'static str],
 }
 
-/// The ten steps, in the chapter's order. `package-check` belongs to no
+/// The eleven steps, in the chapter's order. `package-check` belongs to no
 /// forge tree — it reads its command from the technology binding — which
 /// makes it the one step outside the parity rule.
-pub const STEPS: [StepSpec; 10] = [
+pub const STEPS: [StepSpec; 11] = [
     StepSpec {
         name: "package-check",
         chapter: "§0",
@@ -61,6 +61,15 @@ pub const STEPS: [StepSpec; 10] = [
         mutates: Mutates::Forge,
         proves: "no long-lived branch besides the trunk remains",
         destructive: true,
+        optional: false,
+        prereqs: &["default-branch"],
+    },
+    StepSpec {
+        name: "merge-cleanup",
+        chapter: "§1",
+        mutates: Mutates::Forge,
+        proves: "the forge deletes a branch when its merge lands",
+        destructive: false,
         optional: false,
         prereqs: &["default-branch"],
     },

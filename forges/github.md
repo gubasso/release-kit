@@ -27,23 +27,24 @@ From here every remaining action is a command: `rk setup step install-bot --targ
 
 ## Mapping
 
-| Purpose                           | Command                                                       |
-| --------------------------------- | ------------------------------------------------------------- |
-| Raw API                           | `gh api`                                                      |
-| Set the default branch            | `gh repo edit --default-branch`                               |
-| Store a secret                    | `gh secret set NAME` with the value on stdin                  |
-| List open release requests        | `gh pr list --base <branch> --state open`                     |
-| Merge the release request         | `gh pr merge --squash --delete-branch`                        |
-| Wait on checks                    | `gh pr checks --watch`                                        |
-| Create the branch for an issue    | `gh issue develop <issue> --checkout`                         |
-| List the branches an issue links  | `gh issue develop --list <issue>`                             |
-| Wait on a build                   | `gh run watch --exit-status`                                  |
-| Protect a branch                  | rulesets: `POST` or `PUT /repos/{owner}/{repo}/rulesets`      |
-| Require the trunk's checks        | a ruleset rule naming a status-check context                  |
-| Restrict the merge method         | a ruleset `pull_request` rule listing `allowed_merge_methods` |
-| Protect tags                      | a ruleset targeting `v*`                                      |
-| Grant the bot access to a project | `PUT /user/installations/{id}/repositories/{id}`              |
-| Find the bot identity             | `GET /repos/{owner}/{repo}/installation`, as the App          |
+| Purpose                              | Command                                                               |
+| ------------------------------------ | --------------------------------------------------------------------- |
+| Raw API                              | `gh api`                                                              |
+| Set the default branch               | `gh repo edit --default-branch`                                       |
+| Delete a branch when its merge lands | `gh api -X PATCH /repos/{owner}/{repo}` with `delete_branch_on_merge` |
+| Store a secret                       | `gh secret set NAME` with the value on stdin                          |
+| List open release requests           | `gh pr list --base <branch> --state open`                             |
+| Merge the release request            | `gh pr merge --squash --delete-branch`                                |
+| Wait on checks                       | `gh pr checks --watch`                                                |
+| Create the branch for an issue       | `gh issue develop <issue> --checkout`                                 |
+| List the branches an issue links     | `gh issue develop --list <issue>`                                     |
+| Wait on a build                      | `gh run watch --exit-status`                                          |
+| Protect a branch                     | rulesets: `POST` or `PUT /repos/{owner}/{repo}/rulesets`              |
+| Require the trunk's checks           | a ruleset rule naming a status-check context                          |
+| Restrict the merge method            | a ruleset `pull_request` rule listing `allowed_merge_methods`         |
+| Protect tags                         | a ruleset targeting `v*`                                              |
+| Grant the bot access to a project    | `PUT /user/installations/{id}/repositories/{id}`                      |
+| Find the bot identity                | `GET /repos/{owner}/{repo}/installation`, as the App                  |
 
 ## Limitations
 

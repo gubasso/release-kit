@@ -2,7 +2,7 @@
 
 External sources behind `SPEC-forge-setup.md`: what each forge's API actually offers, which setup actions are scriptable at all, and how an embedded script is executed safely. Each entry states what the source says and which rule or file it bears on.
 
-Verified against the listed sources on 2026-08-28, re-checked on 2026-08-29, and the GitHub App entries re-checked on 2026-08-31 and again on 2026-09-01, when the token-class findings below were also confirmed against a live account. A source marked corroborating was reported by a parallel review and not independently fetched. Forge APIs move; re-check an entry before trusting it to design something new.
+Verified against the listed sources on 2026-08-28, re-checked on 2026-08-29, the GitHub App entries re-checked on 2026-08-31 and again on 2026-09-01 when the token-class findings below were also confirmed against a live account, and the merged-branch deletion entry verified on 2026-09-01. A source marked corroborating was reported by a parallel review and not independently fetched. Forge APIs move; re-check an entry before trusting it to design something new.
 
 ## GitHub rulesets
 
@@ -62,6 +62,17 @@ Protected branches expose `GET`, `POST`, `PATCH /projects/:id/protected_branches
 - <https://docs.gitlab.com/security/tokens/>
 
 Bearing: a protected branch updates in place, so its step is atomic on rerun; a protected tag has no update endpoint, so its step is delete-then-create and briefly not atomic, which `forges/gitlab.md` states rather than smooths over. The single-call bootstrap is the asymmetry with GitHub worth stating in both forge documents: the GitLab bot is fully scriptable per project, and the GitHub one is not.
+
+## Deleting the merged branch
+
+`PATCH /repos/{owner}/{repo}` takes `delete_branch_on_merge`, a boolean defaulting to false, documented as "Either true to allow automatically deleting head branches when pull requests are merged, or false to prevent automatic deletion". The same field is read back on `GET /repos/{owner}/{repo}`, so one endpoint serves the write and the observation.
+
+GitLab spells the same setting `remove_source_branch_after_merge` on `PUT /projects/:id`, documented as "Whether the source branch is automatically removed after merge", and reads it back on `GET /projects/:id`.
+
+- <https://docs.github.com/en/rest/repos/repos>
+- <https://docs.gitlab.com/api/projects/>
+
+Bearing: `forge-setup:every-supported-forge-runs-every-step` and the `merge-cleanup` step. Both forges settle this in project configuration rather than per merge, so the step is one write and one read on each, and neither depends on the merge verb the operator happens to use.
 
 ## Registry trusted publishing
 
