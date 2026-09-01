@@ -139,7 +139,7 @@ No command: registering a GitHub App is a browser flow. One App serves every rep
    - Personal account: `github.com/settings/apps`
    - Organization: `github.com/organizations/$OWNER/settings/apps`
 2. Look for an App named `$APP`.
-   - Listed: skip to 5d.
+   - Listed: skip to 6d.
    - Not listed: continue to 6b.
 
 ### 6b. Register it
@@ -209,7 +209,7 @@ Doing 6d makes step 7 a verification rather than a run.
 
 ## 7. Grant the App this repository
 
-Already satisfied by 5d. This step is for a repository added to an existing installation later.
+Already satisfied by 6d. This step is for a repository added to an existing installation later.
 
 Reading the grant takes no user token: GitHub serves the installation-reading endpoints to the App's own credentials alone, so `rk` observes and verifies this step with the same two exports step 8 stores. Only the write — adding a repository an existing installation does not cover — takes a user credential.
 
@@ -294,7 +294,7 @@ gh secret list --repo "$OWNER/$REPO"
 # already stored: both are overwritten and the listing is the same, which is the rotation path
 ```
 
-`release-plz.yml` reads both through `actions/create-github-app-token@v3`. That action prefers `client-id` and still accepts `app-id`; this convention stays on the App ID, which is why 5c collects the numeric id.
+`release-plz.yml` reads both through `actions/create-github-app-token@v3`. That action prefers `client-id` and still accepts `app-id`; this convention stays on the App ID, which is why 6c collects the numeric id.
 
 ## 9. Protect the trunk
 
@@ -356,7 +356,7 @@ fi <<'JSON'
 }
 JSON
 # check: prints nothing, whether it created the ruleset or updated one already there
-# then: 8c reports the same shape either way
+# then: 9c reports the same shape either way
 ```
 
 ### 9c. Verify it
