@@ -399,9 +399,16 @@ fn header(count: usize) -> String {
     }
 }
 
-/// Run one git command against the target, spawn failure typed.
+/// Run one git command against the target, spawn failure typed. The
+/// hook variables are scrubbed: the reminder invokes this verb from a
+/// git hook, and the child must act on the named target, never on the
+/// hook's exported repository.
 fn git(target: &Utf8Path, args: &[&str]) -> Result<std::process::Output, RkError> {
-    std::process::Command::new("git")
+    let mut command = std::process::Command::new("git");
+    for var in maintenance::GIT_HOOK_VARS {
+        command.env_remove(var);
+    }
+    command
         .arg("-C")
         .arg(target.as_std_path())
         .args(args)

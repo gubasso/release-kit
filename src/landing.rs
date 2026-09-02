@@ -300,7 +300,7 @@ const WORKTREE_GUARD_ENTRY: &str = r#"      - id: rk-worktree-location
         language: system
         always_run: true
         pass_filenames: false
-        entry: sh -c '[ "$(git rev-parse --git-dir)" = "$(git rev-parse --git-common-dir)" ] || exit 0; branch=$(git symbolic-ref --quiet --short HEAD) || { echo "this project works in worktrees: the main checkout takes no commit, detached included; rk worktree add <branch> seats work in its own worktree" >&2; exit 1; }; [ "$branch" = master ] && exit 0; echo "this project works in worktrees: the main checkout takes no branch commit, as the forge trunk takes no direct push; rk worktree add $branch gives this branch its own worktree" >&2; exit 1'"#;
+        entry: sh -c '[ "$(git rev-parse --git-dir)" = "$(git rev-parse --git-common-dir)" ] || exit 0; branch=$(git symbolic-ref --quiet --short HEAD) || { echo "this project works in worktrees — the main checkout takes no commit, detached included; rk worktree add <branch> seats work in its own worktree" >&2; exit 1; }; [ "$branch" = master ] && exit 0; echo "this project works in worktrees — the main checkout takes no branch commit, as the forge trunk takes no direct push; rk worktree add $branch gives this branch its own worktree" >&2; exit 1'"#;
 
 /// The routing block for one workflow mode.
 ///
@@ -1022,6 +1022,20 @@ mod tests {
             assert!(block.contains(BRANCH_GRAMMAR), "the grammar has one owner");
             for token in ["RK_BRANCH_GRAMMAR", "RK_SWEEP_SKIP", "RK_WORKTREE_GUARD"] {
                 assert!(!block.contains(token), "{token} survived: {block}");
+            }
+        }
+        // A hook entry renders as a YAML plain scalar, where a colon
+        // followed by a space ends the scalar and breaks the whole file
+        // — the defect dogfood caught in the guard's refusal messages —
+        // so no entry value may carry one.
+        for block in [&worktree_hooks, &branches_hooks] {
+            for line in block.lines() {
+                if let Some(value) = line.trim_start().strip_prefix("entry: ") {
+                    assert!(
+                        !value.contains(": "),
+                        "an entry value breaks the YAML plain scalar: {line}"
+                    );
+                }
             }
         }
         let guard_line = worktree_hooks

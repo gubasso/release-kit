@@ -22,7 +22,14 @@ const SHARED: [&str; 1] = ["plan-gate.md"];
 const SHARED_ROOT: &str = ".local/state/release-kit/skills/shared";
 
 fn rk() -> Command {
-    Command::cargo_bin("rk").expect("the rk binary builds")
+    // Scrubbed of the variables a running git hook exports: a suite that
+    // executes under pre-commit from a linked worktree would otherwise
+    // hand every child a GIT_DIR resolving to the real repository.
+    let mut command = Command::cargo_bin("rk").expect("the rk binary builds");
+    for var in GIT_HOOK_VARS {
+        command.env_remove(var);
+    }
+    command
 }
 
 /// A scratch home the skill commands run against, so no test touches the
@@ -43,7 +50,7 @@ impl Home {
     }
 
     fn rk(&self) -> Command {
-        let mut command = rk();
+        let mut command = rk_scrubbed();
         command.env("HOME", self.path());
         command
     }
@@ -1259,12 +1266,7 @@ fn doctor_never_echoes_a_credential_bearing_remote() {
         &["init", "-q"][..],
         &["remote", "add", "origin", "https://user:sekret-token@/repo"][..],
     ] {
-        let status = std::process::Command::new("git")
-            .args(args)
-            .current_dir(home.path())
-            .status()
-            .expect("git runs");
-        assert!(status.success());
+        git_in(home.path(), args);
     }
     let out = home
         .rk()
@@ -2539,7 +2541,15 @@ impl ForgeFixture {
         // A real repository, so the branch-reminder step has a hooks
         // directory to write into; it has no remote, so detection still
         // resolves nothing and every test passes --repo and --forge.
-        let init = std::process::Command::new("git")
+        // Scrubbed like every other fixture git: under a pre-commit run
+        // from a linked worktree, the exported hook variables resolve to
+        // the real repository's shared config, and an unscrubbed init
+        // acts there instead of in the tempdir.
+        let mut init = std::process::Command::new("git");
+        for var in GIT_HOOK_VARS {
+            init.env_remove(var);
+        }
+        let init = init
             .args(["init", "-q"])
             .current_dir(fixture.target.path())
             .status()
@@ -2630,7 +2640,7 @@ impl ForgeFixture {
     }
 
     fn rk(&self, args: &[&str]) -> Command {
-        let mut command = rk();
+        let mut command = rk_scrubbed();
         command
             .env("HOME", self.home.path())
             .env("XDG_STATE_HOME", self.home.path())
@@ -3791,14 +3801,7 @@ fn half_an_app_identity_refuses() {
 #[test]
 fn detection_selects_the_tree_and_refuses_an_unknown_host() {
     let fixture = ForgeFixture::new();
-    let git = |args: &[&str]| {
-        let status = std::process::Command::new("git")
-            .args(args)
-            .current_dir(fixture.target.path())
-            .status()
-            .expect("git runs");
-        assert!(status.success());
-    };
+    let git = |args: &[&str]| git_in(fixture.target.path(), args);
     git(&["init", "-q"]);
     git(&[
         "remote",
@@ -5725,7 +5728,11 @@ fn branches_prune_apply_refuses_a_branch_that_moved_after_verification() {
     // branch before answering - the race the compare-and-delete refuses.
     // A distinct object to move to: an empty-tree commit made on the spot.
     let new_commit = {
-        let out = std::process::Command::new("git")
+        let mut command = std::process::Command::new("git");
+        for var in GIT_HOOK_VARS {
+            command.env_remove(var);
+        }
+        let out = command
             .args([
                 "commit-tree",
                 "-m",
@@ -7283,7 +7290,11 @@ fn worktree_add_creates_a_tracking_branch_from_a_remote_tip() {
         remote_tip,
         "the worktree lands on the remote tip, not the trunk"
     );
-    let upstream = std::process::Command::new("git")
+    let mut command = std::process::Command::new("git");
+    for var in GIT_HOOK_VARS {
+        command.env_remove(var);
+    }
+    let upstream = command
         .args(["rev-parse", "--abbrev-ref"])
         .arg(concat!("feat/x@", "{upstream}"))
         .current_dir(&repo)
@@ -7635,7 +7646,11 @@ fn worktree_prune_apply_reads_the_stale_sweep_per_row() {
             .is_some_and(|detail| detail.contains("re-run rk worktree prune --apply")),
         "a failure row names its recovery: {report}"
     );
-    let registered = std::process::Command::new("git")
+    let mut command = std::process::Command::new("git");
+    for var in GIT_HOOK_VARS {
+        command.env_remove(var);
+    }
+    let registered = command
         .args(["worktree", "list", "--porcelain"])
         .current_dir(&repo)
         .output()
@@ -7864,7 +7879,11 @@ fn worktree_prune_apply_drops_the_branch_configuration() {
         .env("RK_GH_BIN", &gh)
         .assert()
         .success();
-    let leftover = std::process::Command::new("git")
+    let mut command = std::process::Command::new("git");
+    for var in GIT_HOOK_VARS {
+        command.env_remove(var);
+    }
+    let leftover = command
         .args(["config", "--get-regexp", r"^branch\.feat/merged\."])
         .current_dir(&repo)
         .output()

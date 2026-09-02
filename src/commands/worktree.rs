@@ -125,16 +125,19 @@ fn seats(target: &Utf8Path) -> Vec<Utf8PathBuf> {
             .filter(|path| !path.is_empty())
             .map(Utf8PathBuf::from)
     };
+    let scrubbed = || {
+        let mut command = std::process::Command::new("git");
+        for var in maintenance::GIT_HOOK_VARS {
+            command.env_remove(var);
+        }
+        command
+    };
     let mut seats = Vec::new();
-    if let Some(seat) = toplevel(
-        std::process::Command::new("git")
-            .args(["rev-parse", "--show-toplevel"])
-            .output(),
-    ) {
+    if let Some(seat) = toplevel(scrubbed().args(["rev-parse", "--show-toplevel"]).output()) {
         seats.push(seat);
     }
     if let Some(seat) = toplevel(
-        std::process::Command::new("git")
+        scrubbed()
             .arg("-C")
             .arg(target.as_std_path())
             .args(["rev-parse", "--show-toplevel"])
@@ -1124,9 +1127,15 @@ fn header(count: usize) -> String {
     }
 }
 
-/// Run one git command against the target, spawn failure typed.
+/// Run one git command against the target, spawn failure typed. The
+/// hook variables are scrubbed: a run from inside a git hook must act
+/// on the named target, never on the hook's own repository.
 fn git(target: &Utf8Path, args: &[&str]) -> Result<std::process::Output, RkError> {
-    std::process::Command::new("git")
+    let mut command = std::process::Command::new("git");
+    for var in maintenance::GIT_HOOK_VARS {
+        command.env_remove(var);
+    }
+    command
         .arg("-C")
         .arg(target.as_std_path())
         .args(args)
