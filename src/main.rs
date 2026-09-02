@@ -152,7 +152,9 @@ const fn wants_json(command: &Commands) -> bool {
         // An explicit nested match over all three actions: a `_ => false`
         // arm would silently swallow a new one.
         Commands::Worktree(args) => match &args.action {
-            WorktreeAction::List { json, .. } | WorktreeAction::Add { json, .. } => *json,
+            WorktreeAction::List { json, .. }
+            | WorktreeAction::Add { json, .. }
+            | WorktreeAction::Prune { json, .. } => *json,
         },
         Commands::Runs(args) => match &args.action {
             RunsAction::List { json } | RunsAction::Show { json, .. } => *json,

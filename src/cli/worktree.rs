@@ -52,4 +52,41 @@ pub enum WorktreeAction {
         #[arg(long)]
         json: bool,
     },
+
+    /// Report the worktrees a squash merge retired — stale records and
+    /// gone upstreams, never healthy seats — and remove only the
+    /// forge-confirmed ones, and only under --apply.
+    Prune {
+        /// The repository to read; any of its worktrees names it.
+        #[arg(long, default_value = ".")]
+        target: Utf8PathBuf,
+
+        /// Override the detected project path (owner/name) for the forge
+        /// confirmation.
+        #[arg(long)]
+        repo: Option<String>,
+
+        /// Override the detected forge: github or gitlab.
+        #[arg(long)]
+        forge: Option<String>,
+
+        /// Confirm each candidate against the forge's merged requests,
+        /// removing nothing.
+        #[arg(long)]
+        verify: bool,
+
+        /// Confirm each candidate, then remove the worktree before its
+        /// branch, and clear the stale records.
+        #[arg(long)]
+        apply: bool,
+
+        /// Print nothing when there is nothing to report, for the
+        /// post-merge hook.
+        #[arg(long, conflicts_with = "json")]
+        quiet: bool,
+
+        /// Emit one JSON object on stdout instead of the human report.
+        #[arg(long)]
+        json: bool,
+    },
 }
