@@ -2,12 +2,13 @@
 # publishing is tagging, and the tarball attached to the release page is the
 # distribution.
 #
-# Both jobs run on every push to the trunk, and to a release/* line when a
-# project keeps older lines. The release-request job drives git-cliff to
-# maintain the one release merge request — VERSION plus the changelog —
+# The release jobs run on every push to the trunk, and to a release/* line
+# when a project keeps older lines. The release-request job drives git-cliff
+# to maintain the one release merge request — VERSION plus the changelog —
 # against the pushed branch, and merging that request is the release: the
-# bump push is what makes tag-and-attach tag the commit, build the tarball
-# with make dist, and attach it to the GitLab release.
+# bump push is what makes tag-and-build tag the commit and build the tarball
+# with make dist, provenance sign the runner's SLSA statement over it, and
+# attach publish everything and create the GitLab release.
 #
 # Every job authenticates with RELEASE_BOT_TOKEN, the project access token
 # the setup stores as a masked CI variable: a push made with the default CI
@@ -18,6 +19,8 @@ include:
 
 stages:
   - release
+  - provenance
+  - publish
 
 # Merge request pipelines run the title gate; branch pipelines on the trunk
 # and the release lines run the release jobs, whose own rules never match a
@@ -78,23 +81,31 @@ release-request:
           --data-urlencode "description=Bumps VERSION to $next and rewrites the changelog. Merging this request is the release: the bump push tags v$next and attaches the tarball." >/dev/null
       fi
 
-# The release itself. Only the push that lands the bot's own bump releases —
+# The release build. Only the push that lands the bot's own bump releases —
 # the VERSION comparison against the parent commit is the guard — so an
-# ordinary work merge tags nothing. Tag the bump commit, build the tarball as
-# a pure function of the tree, upload it to the generic package registry, and
-# create the GitLab release pointing at it. This channel offers no provenance
-# attestation; the checksum beside the tarball is the whole verification
-# surface, and the binding says so rather than implying otherwise.
-tag-and-attach:
+# ordinary work merge tags nothing. Tag the bump commit and build the tarball
+# as a pure function of the tree; publishing belongs to the attach job, after
+# provenance exists. RUNNER_GENERATE_ARTIFACTS_METADATA makes the runner emit
+# its SLSA v1 provenance statement beside the exported artifacts, which is
+# what the provenance job signs. The release-version marker is what tells the
+# downstream jobs a release is in flight; a push that bumps nothing writes no
+# marker and they exit without acting.
+tag-and-build:
   extends: .tooling
   rules:
     - if: '$CI_COMMIT_BRANCH == "master" || $CI_COMMIT_BRANCH =~ /^release\//'
   resource_group: release
+  variables:
+    RUNNER_GENERATE_ARTIFACTS_METADATA: "true"
   script:
     - |
       set -eu
       api() { curl -fsS --header "PRIVATE-TOKEN: $RELEASE_BOT_TOKEN" "$@"; }
       project="$CI_API_V4_URL/projects/$CI_PROJECT_ID"
+      # The marker gates the downstream jobs, so a stale or tracked copy in
+      # the workspace must not survive into the artifacts of a push that
+      # releases nothing: clear it before deciding.
+      rm -f release-version
       version="$(cat VERSION)"
       previous="$(git show HEAD^:VERSION 2>/dev/null || echo "")"
       if [ "$previous" = "$version" ]; then
@@ -107,20 +118,158 @@ tag-and-attach:
         echo "tagged v$version at $CI_COMMIT_SHA."
       fi
       make dist
+      git cliff --latest -o notes.md
+      printf '%s\n' "$version" > release-version
+  artifacts:
+    paths:
+      - dist/
+      - notes.md
+      - release-version
+    expire_in: 7d
+
+# Provenance. The runner already wrote a SLSA v1 provenance statement for the
+# build above; this job signs that statement keylessly with cosign, producing
+# the bundle a consumer verifies. It is a build-provenance attestation — the
+# statement carries the source commit, the builder identity, and the build
+# parameters — where a bare signature over the tarball would prove only that
+# some identity signed a digest. The job is isolated from the build on
+# purpose: the signing identity lives here and never in the job that ran the
+# project's own build steps. No standing private key is managed anywhere —
+# keyless signing mints an ephemeral key pair against the job's OIDC identity
+# and discards it, which is what keeps this inside the one signing scheme the
+# channel offers.
+#
+# Sigstore's public instance trusts gitlab.com as an OIDC issuer and no
+# self-managed CI_SERVER_URL, so keyless signing works on GitLab.com only;
+# elsewhere this job says so and the release continues without provenance
+# rather than failing a pipeline that cannot mint certificates.
+provenance:
+  stage: provenance
+  needs: ["tag-and-build"]
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "master" || $CI_COMMIT_BRANCH =~ /^release\//'
+  image: alpine:3
+  id_tokens:
+    SIGSTORE_ID_TOKEN:
+      aud: sigstore
+  variables:
+    COSIGN_YES: "true"
+    COSIGN_VERSION: "3.1.3"
+    COSIGN_SHA256: "4629c757b7618056f8ddd7e2625ae9fdd94c0372a65049520bc7d9df9efc7f71"
+  before_script:
+    - apk add --no-cache curl jq
+  script:
+    - |
+      set -eu
+      if [ ! -f release-version ]; then
+        echo "no release in flight; nothing to attest."
+        exit 0
+      fi
+      if [ "$CI_SERVER_HOST" != "gitlab.com" ]; then
+        echo "keyless signing needs GitLab.com: Sigstore's public instance does not trust this instance as an OIDC issuer."
+        echo "continuing without provenance; the release page will carry the tarball and checksum alone."
+        exit 0
+      fi
+      # A tool whose version floats with a base image is not pinned: fetch
+      # the release binary at the pin and refuse to run it unless its digest
+      # matches the one authored here beside the version.
+      curl -fsSL -o /usr/local/bin/cosign "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-linux-amd64"
+      echo "${COSIGN_SHA256}  /usr/local/bin/cosign" | sha256sum -c -
+      chmod +x /usr/local/bin/cosign
+      tarball="$(ls dist/*.tar.gz | head -n 1)"
+      # The runner's statement wraps the predicate; cosign re-wraps it over
+      # the tarball's own digest, so the signed subject is the file itself.
+      jq -c .predicate artifacts-metadata.json > predicate.json
+      cosign attest-blob \
+        --predicate predicate.json \
+        --type slsaprovenance1 \
+        --bundle "$tarball.sigstore.json" \
+        "$tarball"
+      # Self-verify before anything publishes: the certificate identity is
+      # the CI configuration path at the ref this release was built from,
+      # which is what a consumer checks too.
+      cosign verify-blob-attestation \
+        --type slsaprovenance1 \
+        --bundle "$tarball.sigstore.json" \
+        --certificate-oidc-issuer "https://gitlab.com" \
+        --certificate-identity "https://gitlab.com/${CI_PROJECT_PATH}//${CI_CONFIG_PATH}@refs/heads/${CI_COMMIT_BRANCH}" \
+        "$tarball"
+      echo "provenance signed and verified for $tarball."
+  artifacts:
+    paths:
+      - dist/*.sigstore.json
+    expire_in: 7d
+
+# Publication, last, so nothing publicly reachable exists before its
+# provenance does — the same ordering rule the GitHub pair holds. Every step
+# reconciles rather than skips: a rerun after a partial failure uploads
+# whichever files the package registry is missing, and adds whichever links
+# the existing release page lacks, instead of leaving a half-published
+# release permanently half-published. On a self-managed instance the bundle
+# does not exist and its upload and link are honestly absent.
+attach:
+  stage: publish
+  needs: ["tag-and-build", "provenance"]
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "master" || $CI_COMMIT_BRANCH =~ /^release\//'
+  resource_group: release
+  image: alpine:3
+  before_script:
+    - apk add --no-cache curl jq
+  script:
+    - |
+      set -eu
+      api() { curl -fsS --header "PRIVATE-TOKEN: $RELEASE_BOT_TOKEN" "$@"; }
+      project="$CI_API_V4_URL/projects/$CI_PROJECT_ID"
+      if [ ! -f release-version ]; then
+        echo "no release in flight; nothing to publish."
+        exit 0
+      fi
+      version="$(cat release-version)"
       tarball="$(ls dist/*.tar.gz | head -n 1)"
       file="$(basename "$tarball")"
       package="$project/packages/generic/release/$version"
-      curl -fsS --header "PRIVATE-TOKEN: $RELEASE_BOT_TOKEN" --upload-file "$tarball" "$package/$file" >/dev/null
-      curl -fsS --header "PRIVATE-TOKEN: $RELEASE_BOT_TOKEN" --upload-file "$tarball.sha256" "$package/$file.sha256" >/dev/null 2>&1 || true
-      if api "$project/releases/v$version" >/dev/null 2>&1; then
-        echo "the release page already exists; leaving it as it is."
-        exit 0
+      # package_name is a fuzzy filter on this API, so select the exact
+      # package rather than trusting the first row of a substring match.
+      id="$(api "$project/packages?package_type=generic&package_name=release&package_version=$version&per_page=100" \
+        | jq -r --arg v "$version" '[ .[] | select(.package_type == "generic" and .name == "release" and .version == $v) ][0].id // empty')"
+      present=""
+      if [ -n "$id" ]; then
+        present="$(api "$project/packages/$id/package_files" | jq -r '.[].file_name')"
       fi
-      git cliff --latest -o notes.md
-      api -X POST "$project/releases" \
-        --data-urlencode "tag_name=v$version" \
-        --data-urlencode "name=v$version" \
-        --data-urlencode "description=$(cat notes.md)" \
-        --data-urlencode "assets[links][][name]=$file" \
-        --data-urlencode "assets[links][][url]=$package/$file" >/dev/null
-      echo "released v$version with $file attached."
+      upload() {
+        if printf '%s\n' "$present" | grep -qxF "$(basename "$1")"; then
+          echo "$(basename "$1") is already in the package registry."
+        else
+          curl -fsS --header "PRIVATE-TOKEN: $RELEASE_BOT_TOKEN" --upload-file "$1" "$package/$(basename "$1")" >/dev/null
+          echo "uploaded $(basename "$1")."
+        fi
+      }
+      upload "$tarball"
+      upload "$tarball.sha256"
+      if [ -f "$tarball.sigstore.json" ]; then
+        upload "$tarball.sigstore.json"
+      fi
+      links="$file $file.sha256"
+      if [ -f "$tarball.sigstore.json" ]; then
+        links="$links $file.sigstore.json"
+      fi
+      if ! api "$project/releases/v$version" >/dev/null 2>&1; then
+        api -X POST "$project/releases" \
+          --data-urlencode "tag_name=v$version" \
+          --data-urlencode "name=v$version" \
+          --data-urlencode "description=$(cat notes.md)" >/dev/null
+        echo "released v$version."
+      fi
+      existing="$(api "$project/releases/v$version" | jq -r '.assets.links[].name')"
+      for name in $links; do
+        if printf '%s\n' "$existing" | grep -qxF "$name"; then
+          echo "the release already links $name."
+        else
+          api -X POST "$project/releases/v$version/assets/links" \
+            --data-urlencode "name=$name" \
+            --data-urlencode "url=$package/$name" >/dev/null
+          echo "linked $name."
+        fi
+      done
+      echo "v$version is published, every declared asset attached."
