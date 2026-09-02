@@ -31,7 +31,7 @@ This repository is the canonical knowledge product for the release-kit workflow.
 ## Authoring
 
 - Keep the root digest at or below 100 lines and subtree digests at or below 150 lines.
-- Keep chapters at or below 200 lines and decision records at or below 350 words.
+- Keep chapters at or below 200 lines and decision records at or below 350 words; runbooks and forge documents follow the guide rule below rather than the chapter cap, and stay as lean as the procedure allows.
 - Use headings, lists, tables, fenced blocks with a language, inline code, and links. Use no bold or italic text.
 - Keep prose unwrapped: one source line per paragraph or list item.
 - Write guides as numbered steps in prerequisite order: every step carries its check, a manual step enumerates every field and value, and a divergent rerun names its destination.
@@ -53,8 +53,8 @@ This repository is the canonical knowledge product for the release-kit workflow.
 - The method spine and recovery paths: `method/README.md`.
 - Technology specifics: `bindings/README.md`.
 - Forge specifics and the bot-identity walkthroughs: `forges/README.md`, served by `rk forge`.
-- The operator recipes: `runbooks/README.md`, served by `rk guide`.
-- The release procedure this repository runs on itself, parameterized by coordinates a reader exports once, with the hand form of every automated call: `_docs/guides/release/README.md`. It names no account, repository, or crate: the guides are public and carry no operator's particulars.
+- The procedure's how, step by step: `runbooks/README.md`, served by `rk guide`; its chapter owns each step's why, and the pair states each procedure once.
+- This repository's overlay over `rk guide setup` and `rk guide release` — its coordinates, its deviations, and the proof transcript: `_docs/guides/release/README.md`. It names no account, repository, or crate: the guides are public and carry no operator's particulars.
 - The executable repository-side setup: `rk setup`, with `rk runs` over its journals.
 - What lands in a target: `snippets/`, served by `rk snippet --list`.
 - What a landed target reports about itself: `rk status`, with `--check` as the judging mode; `rk upgrade` takes it to a newer payload; `rk adopt` records a pre-record target.

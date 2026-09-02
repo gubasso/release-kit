@@ -101,8 +101,8 @@ fn label_of(line: &str) -> Option<&str> {
 }
 
 /// Render one runbook: keep the matching variant of every resolved axis and
-/// drop its siblings, substitute `<repo>` where it is known, and leave
-/// everything else byte-identical.
+/// drop its siblings, substitute `<repo>` and `<tech>` where they are known,
+/// and leave everything else byte-identical.
 fn render(text: &str, forge: Option<&str>, tech: Option<&str>, repo: Option<&str>) -> String {
     let lines: Vec<&str> = text.split('\n').collect();
     let mut out: Vec<String> = Vec::with_capacity(lines.len());
@@ -110,7 +110,7 @@ fn render(text: &str, forge: Option<&str>, tech: Option<&str>, repo: Option<&str
     while idx < lines.len() {
         let line = lines[idx];
         let Some(selector) = label_of(line) else {
-            out.push(substitute(line, repo));
+            out.push(substitute(line, repo, tech));
             idx += 1;
             continue;
         };
@@ -120,7 +120,7 @@ fn render(text: &str, forge: Option<&str>, tech: Option<&str>, repo: Option<&str
             _ => None,
         };
         let Some(resolved) = resolved else {
-            out.push(substitute(line, repo));
+            out.push(substitute(line, repo, tech));
             idx += 1;
             continue;
         };
@@ -140,7 +140,7 @@ fn render(text: &str, forge: Option<&str>, tech: Option<&str>, repo: Option<&str
         };
         if selector == resolved {
             for kept in lines.iter().take(body_end).skip(body_start) {
-                out.push(substitute(kept, repo));
+                out.push(substitute(kept, repo, tech));
             }
             idx = body_end;
         } else {
@@ -155,10 +155,17 @@ fn render(text: &str, forge: Option<&str>, tech: Option<&str>, repo: Option<&str
     out.join("\n")
 }
 
-/// Fill `<repo>` where detection or `--repo` resolved it; everything else
-/// stays a placeholder.
-fn substitute(line: &str, repo: Option<&str>) -> String {
-    repo.map_or_else(|| line.to_owned(), |slug| line.replace("<repo>", slug))
+/// Fill `<repo>` and `<tech>` where detection or a flag resolved them;
+/// everything else stays a placeholder.
+fn substitute(line: &str, repo: Option<&str>, tech: Option<&str>) -> String {
+    let mut line = line.to_owned();
+    if let Some(slug) = repo {
+        line = line.replace("<repo>", slug);
+    }
+    if let Some(tech) = tech {
+        line = line.replace("<tech>", tech);
+    }
+    line
 }
 
 #[cfg(test)]
@@ -195,5 +202,16 @@ mod tests {
         let doc = "On github:\n\nthe force-push refresh survives.\n\nOn gitlab:\n\nthe request is replaced.\n\nend\n";
         let rendered = render(doc, Some("gitlab"), None, None);
         assert_eq!(rendered, "the request is replaced.\n\nend\n");
+    }
+
+    /// A resolved tech fills `<tech>` everywhere; unresolved it stays.
+    #[test]
+    fn a_resolved_tech_fills_the_placeholder() {
+        let doc = "rk init --tech <tech> --target .\n";
+        assert_eq!(
+            render(doc, None, Some("rust"), None),
+            "rk init --tech rust --target .\n"
+        );
+        assert_eq!(render(doc, None, None, None), doc);
     }
 }
