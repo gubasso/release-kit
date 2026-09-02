@@ -24,3 +24,4 @@ pub mod probes;
 pub mod registry;
 pub mod setup;
 pub mod skills;
+pub mod worktree;
