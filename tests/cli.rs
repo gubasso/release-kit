@@ -8012,7 +8012,7 @@ fn the_guard_holds_the_full_matrix() {
 /// controlled PATH; returns (stdout, stderr, success).
 fn run_reminder(path_dir: &Path, repo: &Path) -> (String, String, bool) {
     let script = repo.join("reminder.sh");
-    std::fs::write(&script, release_kit::setup::branch_reminder::HOOK_BODY)
+    std::fs::write(&script, release_kit::setup::branch_reminder::hook_body())
         .expect("the body writes");
     // Absolute sh: the controlled PATH is the test's point, and it must
     // constrain what the hook finds, not what the test can spawn.
@@ -8126,8 +8126,8 @@ fn branch_reminder_drifted_body_rewrites_on_reapply() {
         .success();
     let written = std::fs::read_to_string(&hook).expect("the hook reads");
     assert_eq!(
-        written,
-        release_kit::setup::branch_reminder::HOOK_BODY,
+        written.as_bytes(),
+        release_kit::setup::branch_reminder::hook_body(),
         "the drifted body is rewritten to this binary's"
     );
     assert!(written.contains("rk worktree prune --help"), "{written}");

@@ -7,6 +7,7 @@
   - [`distribution:the-payload-roots-are-declared-once` — The payload roots are declared once](#distributionthe-payload-roots-are-declared-once--the-payload-roots-are-declared-once)
   - [`distribution:the-published-crate-carries-every-root` — The published crate carries every root](#distributionthe-published-crate-carries-every-root--the-published-crate-carries-every-root)
   - [`distribution:machine-output-declares-its-schema` — Machine output declares its schema](#distributionmachine-output-declares-its-schema--machine-output-declares-its-schema)
+  - [`distribution:a-human-faced-artifact-is-authored-text` — A human-faced artifact is authored text](#distributiona-human-faced-artifact-is-authored-text--a-human-faced-artifact-is-authored-text)
   - [`distribution:the-payload-names-no-other-project` — The payload names no other project](#distributionthe-payload-names-no-other-project--the-payload-names-no-other-project)
   - [`distribution:a-runbook-renders-the-spine` — A runbook renders the spine](#distributiona-runbook-renders-the-spine--a-runbook-renders-the-spine)
   - [`distribution:a-skill-routes-and-never-restates` — A skill routes and never restates](#distributiona-skill-routes-and-never-restates--a-skill-routes-and-never-restates)
@@ -66,6 +67,18 @@ Every machine-readable output the binary emits MUST carry a versioned schema hel
 - THEN the snapshot test fails naming the schema, and the change becomes a deliberate schema-version bump instead of a silent parser break at some agent
 
 Verify: `cargo nextest run -E 'kind(lib)'`
+
+### `distribution:a-human-faced-artifact-is-authored-text` — A human-faced artifact is authored text
+
+Every whole artifact the binary writes into a target or a host — a spliced block, an installed hook body — MUST originate from an authored file under `blocks/`, never from a source literal; markers, grammars, and substitution tokens stay code, and token rendering is the one transformation allowed between the authored bytes and the written ones.
+
+#### Scenario: A new host-written text is added as a Rust string literal
+
+- GIVEN a whole artifact body added to the sources as a string constant
+- WHEN the test suite runs
+- THEN the source scan fails naming the file and line, and the body moves under `blocks/` before the change lands
+
+Verify: `cargo nextest run -E 'binary(cli) or kind(lib)'`
 
 ### `distribution:the-payload-names-no-other-project` — The payload names no other project
 
