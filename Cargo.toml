@@ -1,6 +1,6 @@
 [package]
 name = "release-kit"
-version = "0.2.5"
+version = "0.2.6"
 edition = "2024"
 rust-version = "1.85"
 description = "A canonical release workflow: a technology-agnostic method, per-technology bindings, and the rk CLI that lands and serves them."
