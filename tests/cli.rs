@@ -7988,6 +7988,178 @@ fn the_guard_holds_the_full_matrix() {
     assert!(guard_verdict(&linked), "linked + another branch passes");
 }
 
+/// Write the reminder body to a script and run it under sh with a
+/// controlled PATH; returns (stdout, stderr, success).
+fn run_reminder(path_dir: &Path, repo: &Path) -> (String, String, bool) {
+    let script = repo.join("reminder.sh");
+    std::fs::write(&script, release_kit::setup::branch_reminder::HOOK_BODY)
+        .expect("the body writes");
+    // Absolute sh: the controlled PATH is the test's point, and it must
+    // constrain what the hook finds, not what the test can spawn.
+    let mut command = std::process::Command::new("/bin/sh");
+    for var in GIT_HOOK_VARS {
+        command.env_remove(var);
+    }
+    let out = command
+        .arg(script)
+        .env("PATH", path_dir)
+        .current_dir(repo)
+        .output()
+        .expect("sh runs");
+    (
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+        out.status.success(),
+    )
+}
+
+/// A stub `rk` in its own PATH directory, plus the sh git needs.
+fn stub_rk(body: &str) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("a stub dir exists");
+    let path = dir.path().join("rk");
+    std::fs::write(&path, body).expect("the stub writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .expect("the stub is executable");
+    }
+    dir
+}
+
+/// SATISFIES maintenance:the-reminder-is-silent-on-a-binary-that-cannot-prune
+/// Behavioral, not a string assertion: a binary that fails every argument
+/// — an rk too old for the verbs — keeps the hook silent and exit 0.
+#[test]
+fn the_reminder_is_silent_on_a_binary_that_cannot_prune() {
+    let (_parent, repo) = worktree_fixture();
+    let stub = stub_rk("#!/bin/sh\necho 'Usage: rk <COMMAND>' >&2\nexit 64\n");
+    let (stdout, stderr, ok) = run_reminder(stub.path(), &repo);
+    assert_eq!(stdout, "", "nothing on stdout");
+    assert_eq!(
+        stderr, "",
+        "the probe swallows the incapable binary's usage noise"
+    );
+    assert!(ok, "the reminder never blocks a pull");
+}
+
+/// SATISFIES maintenance:the-reminder-never-blocks-a-pull
+/// Command-not-found is the other silent case, and only this exercises
+/// it: a PATH with no rk at all.
+#[test]
+fn the_reminder_is_silent_with_no_rk_on_the_path() {
+    let (_parent, repo) = worktree_fixture();
+    let empty = tempfile::tempdir().expect("an empty PATH dir exists");
+    let (stdout, stderr, ok) = run_reminder(empty.path(), &repo);
+    assert_eq!(stdout, "");
+    assert_eq!(stderr, "");
+    assert!(ok);
+}
+
+/// During a transition a binary exists that carries one prune verb and
+/// not the other: the probes are per verb, so the half that works runs
+/// and the half that does not stays silent.
+#[test]
+fn the_reminder_probes_each_verb_separately() {
+    let (_parent, repo) = worktree_fixture();
+    let stub = stub_rk(
+        "#!/bin/sh\ncase \"$1 $2\" in\n'branches prune') echo 'BRANCHES RAN';;\n*) echo 'Usage: rk <COMMAND>' >&2; exit 64;;\nesac\n",
+    );
+    let (stdout, stderr, ok) = run_reminder(stub.path(), &repo);
+    assert!(
+        stdout.contains("BRANCHES RAN"),
+        "the capable half runs: {stdout}"
+    );
+    assert!(!stdout.contains("worktree"), "{stdout}");
+    assert_eq!(stderr, "", "the incapable half stays silent");
+    assert!(ok);
+}
+
+/// The landed old body observes as Drifted and the designed
+/// drift-and-reapply path rewrites it to the probe form.
+#[test]
+fn branch_reminder_drifted_body_rewrites_on_reapply() {
+    let repo = branch_fixture();
+    let home = tempfile::tempdir().expect("a scratch home exists");
+    let (_mock, gh) = mock_gh("#!/bin/sh\nexit 0\n");
+    let hook = repo.path().join(".git/hooks/post-merge");
+    std::fs::create_dir_all(hook.parent().expect("a parent")).expect("hooks dir");
+    // The 0.2.x body: marker present, `command -v` guard, branches only.
+    std::fs::write(
+        &hook,
+        "#!/bin/sh\n# release-kit branch reminder\nif command -v rk >/dev/null 2>&1; then\n  rk branches prune --quiet || :\nfi\nexit 0\n",
+    )
+    .expect("the old body writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))
+            .expect("the hook is executable");
+    }
+    rk_scrubbed()
+        .env("HOME", home.path())
+        .env("XDG_STATE_HOME", home.path())
+        .env("RK_GH_BIN", &gh)
+        .args(["setup", "step", "branch-reminder", "--apply", "--target"])
+        .arg(repo.path())
+        .assert()
+        .success();
+    let written = std::fs::read_to_string(&hook).expect("the hook reads");
+    assert_eq!(
+        written,
+        release_kit::setup::branch_reminder::HOOK_BODY,
+        "the drifted body is rewritten to this binary's"
+    );
+    assert!(written.contains("rk worktree prune --help"), "{written}");
+}
+
+/// The branches report routes a worktree-bound row to the verb that owns
+/// its cleanup — and only then.
+#[test]
+fn branches_prune_next_names_the_worktree_verb_only_when_bound_rows_exist() {
+    let repo = branch_fixture();
+    gone_branch(repo.path(), "feat/plain");
+    let unbound = rk_scrubbed()
+        .args(["branches", "prune", "--target"])
+        .arg(repo.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert!(
+        !String::from_utf8_lossy(&unbound).contains("rk worktree prune"),
+        "no bound row, no worktree line"
+    );
+
+    gone_branch(repo.path(), "feat/seated");
+    let elsewhere = repo.path().join("seated-worktree");
+    git_in(
+        repo.path(),
+        &[
+            "worktree",
+            "add",
+            "-q",
+            elsewhere.to_str().expect("utf-8"),
+            "feat/seated",
+        ],
+    );
+    let bound = rk_scrubbed()
+        .args(["branches", "prune", "--target"])
+        .arg(repo.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert!(
+        String::from_utf8_lossy(&bound)
+            .contains("rk worktree prune --verify confirms the worktree-bound branches"),
+        "a bound row routes to the worktree verb: {}",
+        String::from_utf8_lossy(&bound)
+    );
+}
+
 /// The closing operator line rides what is still owed, never the mode:
 /// for both verbs, a preview, a verify, and an apply that kept something
 /// keep it; an apply that finished everything it named and an empty

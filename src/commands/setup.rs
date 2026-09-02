@@ -692,7 +692,7 @@ fn apply_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
                     )
                     .expected("no post-merge hook, or one carrying the release-kit marker")
                     .action(
-                        "merge by hand: guard `rk branches prune --quiet` behind `command -v rk` inside the existing hook",
+                        "merge by hand: guard each call behind its own capability probe inside the existing hook — `rk branches prune --help >/dev/null 2>&1` before `rk branches prune --quiet || :`, and the same pair for `rk worktree prune`",
                     )
                     .target_state("unchanged")
                     .step(step.name),

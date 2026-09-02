@@ -227,7 +227,8 @@ fn prune(
     } else {
         "preview"
     };
-    let next = next_lines(mode);
+    let bound = rows.iter().any(|row| row.status == "worktree-bound");
+    let next = next_lines(mode, bound);
     render(out, &rows, &next, quiet);
     out.emit(&Report {
         schema: "rk.branches-prune/1",
@@ -342,15 +343,23 @@ fn recheck_verdict(probe: &std::process::Output) -> Result<Option<String>, Strin
     Ok((!worktree.is_empty()).then_some(worktree))
 }
 
-/// What plausibly follows each mode; an apply is its own conclusion.
-fn next_lines(mode: &str) -> Vec<String> {
+/// What plausibly follows each mode; an apply is its own conclusion, and
+/// a worktree-bound row routes to the verb that owns its cleanup.
+fn next_lines(mode: &str, worktree_bound: bool) -> Vec<String> {
     let verify = "rk branches prune --verify confirms each candidate against the forge";
     let apply = "rk branches prune --apply verifies, then deletes the confirmed branches";
-    match mode {
+    let mut next = match mode {
         "preview" => vec![verify.to_owned(), apply.to_owned()],
         "verify" => vec![apply.to_owned()],
         _ => Vec::new(),
+    };
+    if worktree_bound {
+        next.push(
+            "rk worktree prune --verify confirms the worktree-bound branches and their worktrees"
+                .to_owned(),
+        );
     }
+    next
 }
 
 /// The human report: silent under `--quiet` when nothing is reportable,
