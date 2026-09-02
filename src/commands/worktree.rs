@@ -396,18 +396,24 @@ fn add(
             // whose directory was deleted by hand is a stale record, not
             // a standing worktree, and reporting it satisfied would print
             // a path that does not exist.
+            // The recovery differs by lock: prune keeps a locked record
+            // unconditionally, so naming it for one would loop the
+            // operator back here forever.
             if seat.prunable.is_some() || !path.is_dir() {
+                let recovery = if seat.locked.is_some() {
+                    format!(
+                        "the record is locked, which prune keeps unconditionally: git worktree repair recovers a moved directory, or git worktree unlock {path} — for a lock you own — then rk worktree prune --apply clears it"
+                    )
+                } else {
+                    "rk worktree prune --apply clears the stale record, then re-run; git worktree repair recovers a moved directory instead".to_owned()
+                };
                 return Err(RkError::refusal(
                     Diagnostic::new(
                         Reason::StateDrift,
-                        format!(
-                            "{path} is registered to {branch} and its directory is missing"
-                        ),
+                        format!("{path} is registered to {branch} and its directory is missing"),
                     )
                     .expected("the canonical worktree standing, or its stale record cleared")
-                    .action(
-                        "rk worktree prune --apply clears the stale record, then re-run; git worktree repair recovers a moved directory instead",
-                    )
+                    .action(recovery)
                     .target_state("unchanged"),
                 ));
             }

@@ -8271,6 +8271,23 @@ fn worktree_add_refuses_a_stale_canonical_record() {
             predicate::str::contains("directory is missing")
                 .and(predicate::str::contains("rk worktree prune --apply")),
         );
+
+    // A locked missing seat takes a different recovery: prune keeps a
+    // locked record unconditionally, so the refusal names the unlock or
+    // the repair, never a prune that would loop back here.
+    git_in(&repo, &["branch", "feat/held"]);
+    let held = seat(&repo, "feat/held");
+    git_in(&repo, &["worktree", "lock", held.to_str().expect("utf-8")]);
+    std::fs::remove_dir_all(&held).expect("the directory disappears");
+    rk_scrubbed()
+        .args(["worktree", "add", "feat/held", "--apply", "--target"])
+        .arg(&repo)
+        .assert()
+        .code(73)
+        .stderr(
+            predicate::str::contains("git worktree unlock")
+                .and(predicate::str::contains("git worktree repair")),
+        );
 }
 
 /// A behavior-defining flag the preview was run with rides into the
