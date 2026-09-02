@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3](https://github.com/gubasso/release-kit/compare/v0.2.2...v0.2.3) - 2026-09-02
+
+### Added
+
+- *(snippets)* pin every action by commit SHA ([#26](https://github.com/gubasso/release-kit/pull/26))
+- *(landing)* a seeded file still carries the invariants ([#25](https://github.com/gubasso/release-kit/pull/25))
+- *(method)* a release is not done until its provenance verifies ([#24](https://github.com/gubasso/release-kit/pull/24))
+- *(snippets)* sign the GitLab runner's provenance statement ([#23](https://github.com/gubasso/release-kit/pull/23))
+- *(cli)* Prune gone branches and remind after a pull ([#21](https://github.com/gubasso/release-kit/pull/21))
+- *(runbooks)* Move the release procedure's how into the shipped runbooks ([#19](https://github.com/gubasso/release-kit/pull/19))
+
+### Fixed
+
+- *(snippets)* attest every artifact a consumer downloads ([#22](https://github.com/gubasso/release-kit/pull/22))
+
 ## [0.2.2](https://github.com/gubasso/release-kit/compare/v0.2.1...v0.2.2) - 2026-09-02
 
 ### Fixed
