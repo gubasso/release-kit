@@ -9,6 +9,7 @@
 //! written. The kinds are declared here, beside the payload, never
 //! inferred at runtime; a test holds the table closed over every snippet.
 
+pub mod invariants;
 pub mod manifest;
 
 use camino::Utf8Path;
