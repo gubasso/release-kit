@@ -97,9 +97,23 @@ pub fn row_owes(status: &str, detail: Option<&str>) -> bool {
     }
 }
 
+/// The variables a running git hook exports; a child inheriting them
+/// would resolve the hook's repository instead of the `-C` target, so
+/// every git this crate spawns against a named target scrubs them.
+pub(crate) const GIT_HOOK_VARS: [&str; 4] = [
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_COMMON_DIR",
+];
+
 /// Run one git command against the target; a spawn failure is the detail.
 fn git(target: &Utf8Path, args: &[&str]) -> Result<std::process::Output, String> {
-    std::process::Command::new("git")
+    let mut command = std::process::Command::new("git");
+    for var in GIT_HOOK_VARS {
+        command.env_remove(var);
+    }
+    command
         .arg("-C")
         .arg(target.as_std_path())
         .args(args)
