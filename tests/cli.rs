@@ -5854,8 +5854,12 @@ fn branches_prune_apply_reports_a_surviving_branch_configuration() {
         .success();
     let text = String::from_utf8_lossy(&out.get_output().stdout).into_owned();
     assert!(
-        text.contains("deleted (merged request #8); the branch configuration could not be removed"),
+        text.contains("deleted (merged request #8); the branch configuration survives: git config --remove-section branch.feat/merged"),
         "{text}"
+    );
+    assert!(
+        text.contains("Deleting a branch is the operator's action"),
+        "a surviving configuration still owes the operator a move: {text}"
     );
     assert!(!branch_names(repo.path()).contains("feat/merged"));
 }

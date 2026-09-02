@@ -14,6 +14,7 @@ use crate::cli::branches::{BranchesAction, BranchesArgs};
 use crate::detect::Forge;
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
+use crate::maintenance;
 use crate::output::Output;
 use crate::setup::context::{TRUNK_BRANCH, resolve_cli};
 
@@ -270,8 +271,9 @@ fn confirm_candidates(
 /// checkout state is re-read at the last instant — a branch someone
 /// checked out mid-run becomes worktree-bound, because `update-ref`,
 /// unlike `branch -D`, never looks at worktree HEADs. Then the deletion
-/// itself is a compare-and-delete: the verified tip travels with it, so
-/// a ref the forge CLI raced past the verification is refused, not lost.
+/// itself rides the shared compare-and-swap helper: the verified tip
+/// travels with it, so a ref the forge CLI raced past the verification
+/// is refused, not lost.
 fn delete_branch(target: &Utf8Path, row: &mut Row) -> Result<(), usize> {
     let ref_name = format!("refs/heads/{}", row.name);
     let rechecked = git(
@@ -289,7 +291,7 @@ fn delete_branch(target: &Utf8Path, row: &mut Row) -> Result<(), usize> {
             // Fail closed: a probe that cannot answer proves nothing,
             // and only a probe that answered "free" clears the delete.
             row.status = "delete-failed";
-            row.detail = Some(detail);
+            row.detail = Some(format!("{detail}; rk branches prune --verify re-runs it"));
             return Err(1);
         }
         Ok(Some(worktree)) => {
@@ -299,36 +301,24 @@ fn delete_branch(target: &Utf8Path, row: &mut Row) -> Result<(), usize> {
         }
         Ok(None) => {}
     }
-    let deleted = git(target, &["update-ref", "-d", &ref_name, &row.tip]).map_err(|_| 1usize)?;
-    if !deleted.status.success() {
-        row.status = "delete-failed";
-        row.detail = Some(last_line(&deleted.stderr));
-        return Err(1);
-    }
-    row.status = "deleted";
-    // What `git branch -d` would have removed beside the ref: the
-    // branch's own configuration section, so a later branch under the
-    // reused name inherits nothing stale. A section that was never
-    // written makes the removal fail, which is the common clean case;
-    // entries that survive the attempt are the reportable failure.
-    let section = format!("branch.{}", row.name);
-    let removed = git(target, &["config", "--remove-section", &section]).map_err(|_| 1usize)?;
-    if !removed.status.success() {
-        // Enumerate rather than pattern-match: a branch name can carry
-        // regex metacharacters, so the filter is an exact prefix test
-        // over the fixed-pattern listing.
-        let leftover =
-            git(target, &["config", "--get-regexp", "^branch\\."]).map_err(|_| 1usize)?;
-        let prefix = format!("branch.{}.", row.name);
-        let survives = leftover.status.success()
-            && String::from_utf8_lossy(&leftover.stdout)
-                .lines()
-                .any(|line| line.starts_with(&prefix));
-        if survives {
-            row.detail = Some("the branch configuration could not be removed".to_owned());
+    match maintenance::delete_branch(target, &row.name, &row.tip) {
+        maintenance::Deletion::Deleted => {
+            row.status = "deleted";
+            Ok(())
+        }
+        maintenance::Deletion::ConfigSurvived { detail } => {
+            row.status = "deleted";
+            row.detail = Some(detail);
+            Ok(())
+        }
+        maintenance::Deletion::Refused { detail } => {
+            row.status = "delete-failed";
+            row.detail = Some(format!(
+                "{detail}; the tip moved after verification: rk branches prune --verify re-confirms it"
+            ));
+            Err(1)
         }
     }
-    Ok(())
 }
 
 /// Judge the last-instant probe: `Err` when it did not answer, the

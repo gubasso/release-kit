@@ -18,6 +18,7 @@ pub mod embedded;
 pub mod error;
 pub mod events;
 pub mod landing;
+pub mod maintenance;
 pub mod output;
 pub mod payload_roots;
 pub mod probes;
