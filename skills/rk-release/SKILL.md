@@ -23,12 +23,10 @@ One pull request. The bot maintains the release request against the trunk — th
 
 ## Cut a release
 
-1. Read the sequence once per session: `rk method operate`. Then follow `rk guide release`, which renders it as commands with the project path, forge, and technology filled in.
+1. Read the sequence once per session: `rk method operate`. Then follow `rk guide release`, which renders it as commands with the project path and technology filled in and the forge's variants selected.
 2. Run `rk status --check --target .` before anything ships: drift on a file release-kit owns, or an unfilled sentinel, is fixed before a release, not during one.
-3. Land the work through squash-merged pull requests with the release intent captured in each title, the check suite green. The request's title becomes the trunk's commit message — the forge takes the squash message from it — so the title is a scoped Conventional Commit carrying the release intent, and the body carries the context the history keeps.
-4. Before merging the release request, compare its changelog entry against the commit range since the previous tag; correct it on the request's branch, last. The bot refreshes the request as work lands, and a human commit on its branch makes the next refresh close and reopen the request, dropping the correction.
-5. Merge the release request once its checks are green — squash, the only allowed method. This is the release: the bump push publishes and tags, so the merge is the operator's unless their request named it.
-6. Wait for the artifact build to finish, then verify: registry, release page, the tag and the trunk naming the same commit, installed binary — the operate chapter lists the checks in order.
+3. Follow the guide's six steps in order and by number, running each check it prints; this skill adds no step of its own. The merge in its step 4 is the release itself, so it stays the operator's unless their request named it.
+4. An older line takes `rk guide backport` the same way.
 
 ## When it goes wrong
 

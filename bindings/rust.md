@@ -25,8 +25,79 @@ The tag push retriggers `release.yml` only because the publish jobs authenticate
 
 - Step 0 is `cargo publish --dry-run` plus reading `cargo package --list`. crates.io hard-rejects a publish with no `description` and rejects a `categories` value that is not a canonical slug; both surface here without credentials.
 - The `.crate` hard limit is 10 MB. For a binary crate no consumer reads any file in the tarball beyond build inputs, so `exclude` in `Cargo.toml` keeps it lean. `exclude` is the safer default over `include`: `include` is an allowlist that drops `README.md` and a plain `LICENSE` unless each is listed.
-- Token scopes for the bootstrap publish: crates.io offers `publish-new`, `publish-update`, `yank`, `change-owners`, and `legacy`. The bootstrap token is `publish-new`, exact crate name, shortest expiry, revoked after the trusted publisher is registered.
-- The trusted publisher is owner, repository, and the workflow filename `release-plz.yml`. Enforcement is the separate "Require trusted publishing for all new versions" switch, enabled only after one proven OIDC release.
+- Publishing needs a verified email on the account: an unverified one fails at the upload, after the token is minted.
+
+### The artifact workflow pin
+
+`versions.toml` owns the cargo-dist pin and `dist-workspace.toml` carries it. The nix devshell does not carry `dist`; install it at the pin with the installer the workflow itself uses, then prove the committed workflow is what that pin produces and read what a release will build.
+
+```bash
+PIN="$(grep -m1 '^cargo-dist-version' dist-workspace.toml | cut -d'"' -f2)"
+curl --proto '=https' --tlsv1.2 -LsSf \
+  "https://github.com/axodotdev/cargo-dist/releases/download/v$PIN/cargo-dist-installer.sh" | sh
+dist --version
+# check: prints the pin
+dist generate
+git diff --stat .github/workflows/release.yml
+# check: no diff
+dist plan
+# check: prints the artifact list for every target in dist-workspace.toml
+```
+
+### The bootstrap token
+
+The first publish is manual, and the registry exposes token creation in the browser only: the New API Token form at `crates.io/settings/tokens`. Mint the narrowest token that can do the job.
+
+1. Click New Token.
+2. Name: the crate and the job, `<crate> bootstrap publish`.
+   - the field grants nothing; it is the label the token list shows
+3. Expiration: pick 7 days from the dropdown.
+   - it defaults to 90 days, and 7 is the shortest preset; the token has one job
+   - the line beside the dropdown reads "The token will expire on" the date seven days out
+4. Scopes: check `publish-new`, Publish new crates. Leave the other four unchecked.
+   - `publish-update`, `yank`, `change-owners`, and `trusted-publishing` are jobs this token never does; the trusted publisher is registered in the crate's own settings, with no token
+5. Crates: click Add pattern, then enter the crate's name.
+   - a pattern also matches crates published after the token is created, so the unclaimed name binds
+   - an empty list reads Unrestricted, which is wider than the job
+6. Click Generate Token.
+7. Copy the value from the new row.
+   - the copy icon renders only where the browser exposes a clipboard; without one, select the shown value and copy it by hand
+   - the value is shown this once; a token left uncopied is revoked and reminted, never guessed
+   - check: the row reads Scopes: publish-new, Crates: the crate's name, and Expires in 7 days
+
+`cargo login` then takes the value on stdin, and `cargo publish --locked` spends it.
+
+### The trusted publisher
+
+crates.io exposes this in the browser only, once per package.
+
+1. Open `crates.io/crates/<crate>/settings`.
+2. Under Trusted Publishing, choose Add, then GitHub.
+3. Fill the form.
+   - Repository owner: the account or organization
+   - Repository name: the repository
+   - Workflow filename: `release-plz.yml`
+   - Environment: leave empty
+4. Choose Add.
+5. Read the Trusted Publishing table back on that page.
+   - check: it lists the owner, the repository, and `release-plz.yml`
+
+The filename is the invariant: `release-plz.yml` publishes, `release.yml` builds installers and is never registered. The workflow needs nothing added — `release-plz.yml` already carries `id-token: write` on its release job and sets no `CARGO_REGISTRY_TOKEN`, which is the trusted-publishing form release-plz documents; `rust-lang/crates-io-auth-action` belongs to hand-written publish workflows, not to this one.
+
+Enforcement is the separate "Require trusted publishing for all new versions" checkbox on the same settings page, enabled only after one proven OIDC release; reload the page and the setting reads as enabled. From there every token publish is rejected, and the hand-publish escape in [recovery](../method/04-recovery.md) starts by turning it off.
+
+### Revoking the bootstrap token
+
+Two halves, and the second is the one people skip. Server side: open `crates.io/settings/tokens`, then click Revoke next to the bootstrap token. Host side: clear the local copy `cargo login` wrote.
+
+```bash
+cargo logout
+grep -c crates-io "${CARGO_HOME:-$HOME/.cargo}/credentials.toml" 2>/dev/null || echo 0
+# check: prints 0, or the file is gone
+# already revoked: cargo logout says there is nothing to remove, and the count is still 0
+```
+
+The package then has exactly one publishing path.
 
 ## Operate specifics
 

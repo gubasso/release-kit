@@ -2,6 +2,20 @@
 
 The style for older lines. Precondition: users cannot simply be moved forward — customers run pinned versions on their own infrastructure, a support contract covers an old line, or a sign-off gate stands before a ship. The [shared setup](./06-release-from-trunk.md) carries the same product and team; here the trunk is at H, and Carol's export feature is, in this scenario, unfinished and not flagged.
 
+## The sequence
+
+The command form of this chapter is the backport runbook, `rk guide backport`; the sections after this one walk the same life with its reasons.
+
+1. Cut the line from the tag it patches, only where it does not exist yet; the branch point is chosen, and a tag makes retroactive creation possible.
+2. Protect the lines, once per repository: `release/*` takes no force-push and no deletion while a line is alive, and plain pushes stay allowed because a cherry-pick lands by push.
+3. Prove the protection's shape before trusting it.
+4. Fix on the trunk first — test, fix, one squash-merged request — never on the line.
+5. Cherry-pick only that commit onto the line; a cherry-pick is not a merge, and nothing else travels.
+6. Wait for the line's own CI: the pipeline runs twice per fix, once guarding the trunk and once guarding the line, which is this style's real cost.
+7. Read the line's own release request, which the bot opens because the publish workflow watches the release lines too.
+8. Release the line the way the trunk releases: correct, merge, wait, verify, each against the line.
+9. Delete the branch when the line dies; the tags outlive it and keep its commits recoverable.
+
 ## Cutting the branch
 
 A few days before the planned v1.1.0 release:

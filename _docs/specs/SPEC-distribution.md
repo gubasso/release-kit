@@ -9,6 +9,7 @@
   - [`distribution:machine-output-declares-its-schema` — Machine output declares its schema](#distributionmachine-output-declares-its-schema--machine-output-declares-its-schema)
   - [`distribution:the-payload-names-no-other-project` — The payload names no other project](#distributionthe-payload-names-no-other-project--the-payload-names-no-other-project)
   - [`distribution:a-runbook-renders-the-spine` — A runbook renders the spine](#distributiona-runbook-renders-the-spine--a-runbook-renders-the-spine)
+  - [`distribution:a-skill-routes-and-never-restates` — A skill routes and never restates](#distributiona-skill-routes-and-never-restates--a-skill-routes-and-never-restates)
   - [`distribution:a-forge-document-answers-its-own-axis` — A forge document answers its own axis](#distributiona-forge-document-answers-its-own-axis--a-forge-document-answers-its-own-axis)
   - [`distribution:skills-are-part-of-the-payload` — Skills are part of the payload](#distributionskills-are-part-of-the-payload--skills-are-part-of-the-payload)
   - [`distribution:a-skill-has-one-owner` — A skill has one owner](#distributiona-skill-has-one-owner--a-skill-has-one-owner)
@@ -80,15 +81,33 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `distribution:a-runbook-renders-the-spine` — A runbook renders the spine
 
-A runbook MUST carry the same steps, in the same order, as the method chapter it renders.
+A runbook MUST carry the same numbered steps, in the same order, as the method chapter it renders, and the pair MUST state each procedure exactly once: the chapter owns each step's why and the runbook owns its how — the commands, the checks, and the hand forms. A substep MUST elaborate a step the runbook has and MUST NOT add one.
 
 #### Scenario: A method chapter gains a step and the runbook is not updated
 
-- GIVEN a new numbered step in `method/03-operate.md` or `method/02-setup.md`
+- GIVEN a new numbered step in a chapter a runbook renders
 - WHEN the test suite runs
-- THEN the parity test fails naming the runbook, so the fourth prose zone cannot become a fourth source of truth
+- THEN the parity test fails naming the runbook, so the procedure cannot fork into two step lists
+
+#### Scenario: A substep names a step the runbook does not have
+
+- GIVEN a runbook edited to carry `### 9a.` where no `## 9.` exists
+- WHEN the test suite runs
+- THEN the substep test fails naming the file, because a substep outside every step is a new step in disguise
 
 Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `distribution:a-skill-routes-and-never-restates` — A skill routes and never restates
+
+A skill MUST route to the runbook, chapter, forge document, or binding that owns a procedure — by served name, and by step number where it addresses one step — and MUST NOT restate the owned steps' content, because a restated sequence is a second copy that drifts silently while the served one moves.
+
+#### Scenario: A skill is edited to carry a runbook's steps inline
+
+- GIVEN a skill whose task a served runbook already sequences
+- WHEN the edit spells the runbook's steps out in the skill body
+- THEN review rejects the change, because the skill's judgment lines belong to it and the sequence belongs to the runbook
+
+Verify: reviewer confirms each skill names its sources and carries no step content a served document owns
 
 ### `distribution:a-forge-document-answers-its-own-axis` — A forge document answers its own axis
 

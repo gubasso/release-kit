@@ -40,7 +40,7 @@ When the request carries `--no-plan`, skip the approval turn only. Still state t
 
 Mechanical file edits can go to a subagent; every forge mutation stays in this loop, where its observation lives.
 
-Before an upgrade lands the hook block into an existing `.pre-commit-config.yaml`, reconcile it: name any hook already doing one of the block's jobs — `committed`, `commitlint`, `gitlint`, another conventional-commit or branch-guard hook — and gate the choice between it and the landed hook for the operator rather than stacking a second hook on one job; verify the top level carries `default_install_hook_types: [pre-commit, commit-msg, pre-push]`, and end with the install command run or stated.
+Before an upgrade lands the hook block into an existing `.pre-commit-config.yaml`, reconcile it as `rk guide setup` step 4 directs, and gate the choice between an existing hook and the landed one for the operator rather than stacking a second hook on one job.
 
 ## What waits for the operator
 

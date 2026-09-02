@@ -1783,59 +1783,103 @@ fn forge_serves_byte_identically_and_lists() {
         .stderr(predicate::str::contains("no forge named"));
 }
 
-/// The runbooks render the spine: same steps, same order, as the chapters.
+/// The `## N.` step headings of a chapter or runbook, in order.
+fn numbered_headings(text: &str) -> Vec<&str> {
+    text.lines()
+        .filter(|line| {
+            line.strip_prefix("## ")
+                .and_then(|rest| rest.split_once('.'))
+                .is_some_and(|(n, _)| n.chars().all(|c| c.is_ascii_digit()))
+        })
+        .collect()
+}
+
+/// The pair states the procedure once: the chapter owns each step's why, the
+/// runbook owns its how, and they share the `## N.` spine — same steps, same
+/// order. Per `distribution:a-runbook-renders-the-spine`.
 #[test]
 fn the_runbooks_match_their_method_chapters() {
     let chapter = std::fs::read_to_string(repo_path("method/02-setup.md")).expect("reads");
     let runbook = std::fs::read_to_string(repo_path("runbooks/setup.md")).expect("reads");
-    let chapter_steps: Vec<&str> = chapter
-        .lines()
-        .filter(|line| {
-            line.strip_prefix("## ")
-                .and_then(|rest| rest.split_once('.'))
-                .is_some_and(|(n, _)| n.chars().all(|c| c.is_ascii_digit()))
-        })
-        .collect();
-    let runbook_steps: Vec<&str> = runbook
-        .lines()
-        .filter(|line| {
-            line.strip_prefix("## ")
-                .and_then(|rest| rest.split_once('.'))
-                .is_some_and(|(n, _)| n.chars().all(|c| c.is_ascii_digit()))
-        })
-        .collect();
     assert_eq!(
-        chapter_steps, runbook_steps,
+        numbered_headings(&chapter),
+        numbered_headings(&runbook),
         "the setup runbook's steps drifted from the chapter's"
     );
 
-    let operate = std::fs::read_to_string(repo_path("method/03-operate.md")).expect("reads");
-    let sequence = operate
-        .lines()
-        .filter(|line| {
-            line.split_once(". ")
-                .is_some_and(|(n, _)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
-        })
-        .count();
-    let release = std::fs::read_to_string(repo_path("runbooks/release.md")).expect("reads");
-    let rendered = release
-        .lines()
-        .filter(|line| {
-            line.strip_prefix("## ")
-                .and_then(|rest| rest.split_once('.'))
-                .is_some_and(|(n, _)| n.chars().all(|c| c.is_ascii_digit()))
-        })
-        .count();
-    assert_eq!(
-        sequence, rendered,
-        "the release runbook's step count drifted from the chapter's"
-    );
+    let sequence_count = |path: &str| {
+        std::fs::read_to_string(repo_path(path))
+            .expect("reads")
+            .lines()
+            .filter(|line| {
+                line.split_once(". ")
+                    .is_some_and(|(n, _)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+            })
+            .count()
+    };
+    for (chapter, runbook) in [
+        ("method/03-operate.md", "runbooks/release.md"),
+        ("method/07-branch-for-release.md", "runbooks/backport.md"),
+    ] {
+        let rendered = std::fs::read_to_string(repo_path(runbook)).expect("reads");
+        assert_eq!(
+            sequence_count(chapter),
+            numbered_headings(&rendered).len(),
+            "{runbook}'s step count drifted from {chapter}'s"
+        );
+    }
+}
+
+/// A substep elaborates a step and never adds one: every `### ` heading in a
+/// runbook is `Na.` where `## N.` exists in the same file.
+#[test]
+fn every_runbook_substep_names_its_step() {
+    for entry in std::fs::read_dir(repo_path("runbooks")).expect("reads") {
+        let path = entry.expect("an entry").path();
+        let text = std::fs::read_to_string(&path).expect("reads");
+        let name = path.file_name().and_then(|n| n.to_str()).expect("a name");
+        let steps: Vec<String> = numbered_headings(&text)
+            .iter()
+            .map(|h| {
+                h.trim_start_matches("## ")
+                    .split('.')
+                    .next()
+                    .expect("a number")
+                    .to_owned()
+            })
+            .collect();
+        for line in text.lines() {
+            let Some(rest) = line.strip_prefix("### ") else {
+                continue;
+            };
+            let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+            let shaped = rest[digits.len()..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_lowercase())
+                && rest[digits.len() + 1..].starts_with(". ");
+            assert!(
+                !digits.is_empty() && shaped,
+                "{name}: substep '{rest}' is not of the form 'Na. <title>'"
+            );
+            assert!(
+                steps.contains(&digits),
+                "{name}: substep '{rest}' names step {digits}, which the file does not have"
+            );
+        }
+    }
 }
 
 #[test]
 fn every_runbook_fence_declares_a_language() {
-    for name in ["README.md", "release.md", "setup.md"] {
-        let text = std::fs::read_to_string(repo_path("runbooks").join(name)).expect("reads");
+    for entry in std::fs::read_dir(repo_path("runbooks")).expect("reads") {
+        let path = entry.expect("an entry").path();
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .expect("a name")
+            .to_owned();
+        let text = std::fs::read_to_string(&path).expect("reads");
         let mut open = false;
         for line in text.lines() {
             if let Some(rest) = line.trim_start().strip_prefix("```") {
@@ -1853,10 +1897,11 @@ fn every_runbook_fence_declares_a_language() {
 
 #[test]
 fn guide_lists_and_serves_byte_identically_when_nothing_resolves() {
-    rk().args(["guide", "--list"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("release").and(predicate::str::contains("setup")));
+    rk().args(["guide", "--list"]).assert().success().stdout(
+        predicate::str::contains("release")
+            .and(predicate::str::contains("setup"))
+            .and(predicate::str::contains("backport")),
+    );
     let bare = tempfile::tempdir().expect("a bare dir exists");
     let authored = std::fs::read(repo_path("runbooks/release.md")).expect("reads");
     let printed = rk()
@@ -1919,6 +1964,34 @@ fn guide_substitutes_the_repo_and_keeps_the_pr_placeholders() {
         !text.contains("On github:"),
         "a kept variant drops its label"
     );
+}
+
+/// A resolved technology fills `<tech>` the way `--repo` fills `<repo>`,
+/// while the run-scoped placeholders stay visible.
+#[test]
+fn guide_substitutes_the_tech() {
+    let bare = tempfile::tempdir().expect("a bare dir exists");
+    let out = rk()
+        .args([
+            "guide",
+            "setup",
+            "--forge",
+            "github",
+            "--tech",
+            "rust",
+            "--repo",
+            "acme/widget",
+        ])
+        .current_dir(bare.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8_lossy(&out);
+    assert!(text.contains("--tech rust"), "the tech is filled in");
+    assert!(!text.contains("<tech>"), "a placeholder survived");
+    assert!(!text.contains("<repo>"), "a placeholder survived");
 }
 
 #[test]

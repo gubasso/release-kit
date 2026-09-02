@@ -1,10 +1,11 @@
 # Runbooks
 
-The human-facing step by step: the method rendered as commands, in order, with the traps called out. A runbook carries commands, their order, and the check each one prints; every why belongs to a method chapter or a binding, and the runbook links to it. A runbook never introduces a step the method does not have — its step count and order match the chapter it renders, and a test holds that. The commands are the operator's to run: an agent serves a runbook and states the command, and runs one only where the operator's request named that step.
+The human-facing step by step: the chapter and its runbook state each procedure exactly once, as a pair — the chapter owns each step's why, the runbook owns its how: the commands, their order, and the check each one prints. The pair shares the numbered step spine, a test holds the two to it, and a substep elaborates its step without adding one; every why belongs to a method chapter, a forge document, or a binding, and the runbook links to it. The commands are the operator's to run: an agent serves a runbook and states the command, and runs one only where the operator's request named that step.
 
-| Runbook                 | Renders             | Serve with         |
-| ----------------------- | ------------------- | ------------------ |
-| [release](./release.md) | `rk method operate` | `rk guide release` |
-| [setup](./setup.md)     | `rk method setup`   | `rk guide setup`   |
+| Runbook                   | Renders                        | Serve with          |
+| ------------------------- | ------------------------------ | ------------------- |
+| [release](./release.md)   | `rk method operate`            | `rk guide release`  |
+| [setup](./setup.md)       | `rk method setup`              | `rk guide setup`    |
+| [backport](./backport.md) | `rk method branch-for-release` | `rk guide backport` |
 
-`rk guide` substitutes what detection knows — the project path, the forge, the technology — and nothing else. Blocks labeled `On github:`, `On gitlab:`, `On rust:`, `On python:`, or `On bash:` are variants: when the axis is resolved, the matching block is kept and its siblings are dropped; unresolved, every variant prints with its label. Placeholders such as `<release pr>` exist only once a bot has opened them and are never substituted: a stale number merges someone else's work, where a visible placeholder fails loudly.
+`rk guide` substitutes what detection knows — the project path as `<repo>`, the technology as `<tech>` — and nothing else. Blocks labeled `On github:`, `On gitlab:`, `On rust:`, `On python:`, or `On bash:` are variants: when the axis is resolved, the matching block is kept and its siblings are dropped; unresolved, every variant prints with its label. Placeholders such as `<release pr>` exist only once a bot has opened them and are never substituted: a stale number merges someone else's work, where a visible placeholder fails loudly.
