@@ -5871,3 +5871,225 @@ fn the_bash_github_workflow_attests_before_it_creates_the_release() {
         "the attest step must precede gh release create, so nothing publicly reachable exists before its attestation does"
     );
 }
+
+/// The bash/gitlab pipeline, split into its top-level sections: everything
+/// from a column-zero `name:` line to the next column-zero line, comments
+/// dropped so a job's prose neighbour cannot satisfy an assertion about its
+/// commands. The provenance tests reason about which job carries what, so
+/// they need the boundaries, not just the whole file.
+fn bash_gitlab_sections() -> Vec<(String, String)> {
+    let text = std::fs::read_to_string(repo_path("snippets/bash/gitlab/.gitlab-ci.yml"))
+        .expect("the pipeline reads");
+    let mut sections: Vec<(String, String)> = Vec::new();
+    for line in text.lines() {
+        if line.trim_start().starts_with('#') {
+            continue;
+        }
+        let starts_section =
+            !line.starts_with([' ', '#']) && !line.is_empty() && line.trim_end().ends_with(':');
+        if starts_section {
+            let name = line.trim_end().trim_end_matches(':').to_owned();
+            sections.push((name, String::new()));
+        }
+        if let Some((_, body)) = sections.last_mut() {
+            body.push_str(line);
+            body.push('\n');
+        }
+    }
+    assert!(!sections.is_empty(), "the pipeline parsed to no sections");
+    sections
+}
+
+fn bash_gitlab_job(name: &str) -> String {
+    bash_gitlab_sections()
+        .into_iter()
+        .find(|(section, _)| section == name)
+        .map_or_else(
+            || panic!("the pipeline has no `{name}` job"),
+            |(_, body)| body,
+        )
+}
+
+/// The build job enables the runner's SLSA provenance metadata, and the
+/// signing happens in an isolated downstream job: the job holding the
+/// signing identity runs no project build steps, and the job that builds
+/// holds no signing identity.
+#[test]
+fn the_bash_gitlab_build_emits_metadata_and_an_isolated_job_signs_it() {
+    let build = bash_gitlab_job("tag-and-build");
+    assert!(
+        build.contains("RUNNER_GENERATE_ARTIFACTS_METADATA: \"true\""),
+        "the build job must enable the runner's provenance metadata"
+    );
+    assert!(
+        !build.contains("cosign"),
+        "the build job must hold no signing identity"
+    );
+    let provenance = bash_gitlab_job("provenance");
+    assert!(
+        provenance.contains("cosign attest-blob") && provenance.contains("--type slsaprovenance1"),
+        "the provenance job signs the runner's statement, not a bare blob"
+    );
+    assert!(
+        !provenance.contains("make dist"),
+        "the signing job must run no project build steps"
+    );
+    assert!(
+        provenance.contains("SIGSTORE_ID_TOKEN"),
+        "the signing job alone carries the sigstore-audience id token"
+    );
+    assert!(
+        !build.contains("SIGSTORE_ID_TOKEN"),
+        "the build job must not carry the signing token"
+    );
+}
+
+/// The bundle self-verification pins the signer: the GitLab.com issuer and
+/// the CI-configuration-plus-ref certificate identity, which is also what a
+/// consumer checks. A release cut from a release/* line verifies against
+/// that ref, so the identity must be built from the pipeline's own ref, not
+/// a hard-coded trunk.
+#[test]
+fn the_bash_gitlab_bundle_verification_pins_issuer_and_identity() {
+    let provenance = bash_gitlab_job("provenance");
+    assert!(
+        provenance.contains("cosign verify-blob-attestation"),
+        "the bundle is verified before anything publishes"
+    );
+    assert!(
+        provenance.contains("--certificate-oidc-issuer \"https://gitlab.com\""),
+        "verification pins the GitLab.com issuer"
+    );
+    assert!(
+        provenance.contains("${CI_PROJECT_PATH}//${CI_CONFIG_PATH}@refs/heads/${CI_COMMIT_BRANCH}"),
+        "the certificate identity is the CI configuration path at the built ref"
+    );
+    assert!(
+        !provenance.contains("@refs/heads/master"),
+        "the identity must not hard-code the trunk: a release/* line verifies against its own ref"
+    );
+}
+
+/// A push that releases nothing writes no release-version marker, and both
+/// downstream jobs exit on its absence before taking any action, so an
+/// ordinary work merge signs and publishes nothing.
+#[test]
+fn the_bash_gitlab_downstream_jobs_guard_on_the_release_marker() {
+    for job in ["provenance", "attach"] {
+        let body = bash_gitlab_job(job);
+        let guard = body
+            .find("[ ! -f release-version ]")
+            .unwrap_or_else(|| panic!("{job} carries no release-version guard"));
+        for action in ["cosign", "--upload-file", "releases"] {
+            if let Some(position) = body.find(action) {
+                assert!(
+                    guard < position,
+                    "{job}: the release-version guard must precede `{action}`"
+                );
+            }
+        }
+    }
+    let build = bash_gitlab_job("tag-and-build");
+    let clear = build
+        .find("rm -f release-version")
+        .expect("the build job clears a stale or tracked marker");
+    let bail = build
+        .find("nothing to release")
+        .expect("the build job keeps the bump guard");
+    let marker = build
+        .find("> release-version")
+        .expect("the build job writes the marker");
+    assert!(
+        clear < bail && bail < marker,
+        "the marker is cleared before the bump guard and written only past it, so a pre-existing file cannot survive a no-bump push into the artifacts"
+    );
+}
+
+/// A rerun repairs a partial release instead of skipping it: uploads are
+/// per-file and conditional on what the package registry already holds, and
+/// an existing release page gains its missing asset links rather than being
+/// left as found.
+#[test]
+fn the_bash_gitlab_attach_job_reconciles_a_partial_release() {
+    let attach = bash_gitlab_job("attach");
+    assert!(
+        attach.contains("package_files"),
+        "the attach job reads what the package registry already holds"
+    );
+    assert!(
+        attach.contains(
+            r#"select(.package_type == "generic" and .name == "release" and .version == $v)"#
+        ),
+        "the package lookup selects the exact package: package_name is a fuzzy filter on this API"
+    );
+    assert!(
+        attach.contains("assets/links"),
+        "an existing release gains its missing links on a rerun"
+    );
+    assert!(
+        !attach.contains("leaving it as it is"),
+        "an existing release is reconciled, never skipped"
+    );
+}
+
+/// A self-managed instance cannot mint keyless certificates, and the
+/// pipeline says so at run time and releases without provenance, rather
+/// than failing compilation or the release. The guard sits in the signing
+/// job, before cosign is even fetched.
+#[test]
+fn the_bash_gitlab_pipeline_degrades_honestly_off_gitlab_com() {
+    let provenance = bash_gitlab_job("provenance");
+    let guard = provenance
+        .find("\"$CI_SERVER_HOST\" != \"gitlab.com\"")
+        .expect("the signing job guards on the instance");
+    let fetch = provenance
+        .find("cosign-linux-amd64")
+        .expect("the signing job fetches the pinned cosign");
+    assert!(
+        guard < fetch,
+        "the instance guard precedes the cosign fetch"
+    );
+    let attach = bash_gitlab_job("attach");
+    assert!(
+        attach.contains("-f \"$tarball.sigstore.json\""),
+        "publication treats the bundle as conditionally present, so the self-managed path still releases"
+    );
+}
+
+/// cosign is pinned like every other tool: the version in the pipeline is
+/// the registry's, and the download is verified against a digest authored
+/// beside it rather than trusted to a floating package index.
+#[test]
+fn the_bash_gitlab_cosign_pin_agrees_with_the_registry() {
+    let registry = std::fs::read_to_string(repo_path("versions.toml")).expect("the registry reads");
+    let value: toml::Table = registry.parse().expect("the registry parses");
+    let pinned = value
+        .get("tool")
+        .and_then(toml::Value::as_array)
+        .expect("tool entries")
+        .iter()
+        .find(|tool| tool.get("name").and_then(toml::Value::as_str) == Some("cosign"))
+        .expect("a cosign entry")
+        .get("version")
+        .and_then(toml::Value::as_str)
+        .expect("a cosign version")
+        .to_owned();
+    let provenance = bash_gitlab_job("provenance");
+    assert!(
+        provenance.contains(&format!("COSIGN_VERSION: \"{pinned}\"")),
+        "the pipeline's cosign version must be the registry's ({pinned})"
+    );
+    let digest = provenance
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("COSIGN_SHA256: \""))
+        .and_then(|rest| rest.strip_suffix('"'))
+        .expect("an authored digest beside the version");
+    assert!(
+        digest.len() == 64 && digest.chars().all(|c| c.is_ascii_hexdigit()),
+        "the authored digest is a sha256 hex literal"
+    );
+    assert!(
+        provenance.contains("sha256sum -c"),
+        "the fetched binary is checked against the authored digest before it runs"
+    );
+}
