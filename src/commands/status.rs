@@ -51,6 +51,9 @@ struct Report {
     tech: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     forge: Option<String>,
+    /// The recorded working-copy mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    workflow: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     rk_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -80,6 +83,9 @@ struct Report {
 struct Observed {
     drift_rendered: Vec<String>,
     drift_seeded: Vec<String>,
+    /// Recorded block destinations whose recorded digest the record's own
+    /// parameters do not reproduce: the record was edited, not the file.
+    parameter_drift: Vec<String>,
     missing: Vec<String>,
     stale: Vec<StalePin>,
     sentinels: Vec<(String, usize, String)>,
@@ -118,10 +124,11 @@ pub fn run(args: &StatusArgs) -> Result<(), RkError> {
             ),
         ]);
         out.emit(&Report {
-            schema: "rk.status/2",
+            schema: "rk.status/3",
             landed: false,
             tech: None,
             forge: None,
+            workflow: None,
             rk_version: None,
             binary_version: None,
             alignment: None,
@@ -151,15 +158,16 @@ pub fn run(args: &StatusArgs) -> Result<(), RkError> {
 
     let violations = violations_of(&observed);
     out.emit(&Report {
-        schema: "rk.status/2",
+        schema: "rk.status/3",
         landed: true,
         tech: Some(manifest.tech),
         forge: Some(manifest.forge),
+        workflow: Some(manifest.parameters.workflow.as_str()),
         rk_version: Some(manifest.rk_version),
         binary_version: Some(env!("CARGO_PKG_VERSION")),
         alignment: Some(alignment),
         drift: Some(Drift {
-            rendered: observed.drift_rendered.len(),
+            rendered: observed.drift_rendered.len() + observed.parameter_drift.len(),
             seeded: observed.drift_seeded.len(),
         }),
         missing: Some(observed.missing.clone()),
@@ -197,6 +205,12 @@ fn violations_of(observed: &Observed) -> Vec<String> {
         .map(|path| format!("rendered drift: {path}"))
         .chain(
             observed
+                .parameter_drift
+                .iter()
+                .map(|path| format!("parameter drift: {path}")),
+        )
+        .chain(
+            observed
                 .missing
                 .iter()
                 .map(|path| format!("missing: {path}")),
@@ -222,6 +236,7 @@ fn observe(args: &StatusArgs, manifest: &Manifest) -> Result<Observed, RkError> 
     let mut observed = Observed {
         drift_rendered: Vec::new(),
         drift_seeded: Vec::new(),
+        parameter_drift: Vec::new(),
         missing: Vec::new(),
         stale: Vec::new(),
         sentinels: Vec::new(),
@@ -265,6 +280,52 @@ fn observe(args: &StatusArgs, manifest: &Manifest) -> Result<Observed, RkError> 
             observed.drift_rendered.push(file.destination.clone());
         }
     }
+    // The record-consistency step: recorded digests alone cannot see a
+    // manifest edited only at its parameters — every file still matches
+    // its own record — so the two mode-bearing block destinations are
+    // re-rendered from the record's own parameters and compared against
+    // the digest the record stores for each. Only where the recorded
+    // payload is this binary's: an older landing's blocks legitimately
+    // differ from this payload's candidate — that is the alignment line's
+    // story and the upgrade's job, not parameter drift. A destination
+    // already reported as rendered drift is the file's own story, not the
+    // record's, and is skipped too.
+    let same_payload = manifest.payload_sha256 == crate::commands::payload::report().payload_sha256;
+    for (destination, template) in [
+        (
+            landing::AGENTS_DESTINATION,
+            landing::routing_block(manifest.parameters.workflow),
+        ),
+        (
+            landing::HOOKS_DESTINATION,
+            landing::hooks_block(manifest.parameters.workflow),
+        ),
+    ] {
+        if !same_payload {
+            break;
+        }
+        let Some(record) = manifest.file(destination) else {
+            continue;
+        };
+        if observed
+            .drift_rendered
+            .iter()
+            .any(|path| path == destination)
+            || observed.missing.iter().any(|path| path == destination)
+        {
+            continue;
+        }
+        let candidate = landing::render(
+            template.as_bytes(),
+            &manifest.parameters.repo,
+            &manifest.parameters.scopes,
+        );
+        if Digest::of(&candidate) != record.sha256 {
+            observed
+                .parameter_drift
+                .push(format!("{destination} (parameters.workflow)"));
+        }
+    }
     // Stale means behind, not merely different: a landing from a newer rk
     // can carry pins ahead of this binary's registry, and that is the
     // alignment line's story, not a freshness complaint.
@@ -291,8 +352,12 @@ fn render_human(
     observed: &Observed,
 ) {
     out.result_line(format!(
-        "release-kit {} ({}, {}) at {}",
-        manifest.rk_version, manifest.tech, manifest.forge, args.target
+        "release-kit {} ({}, {}, {} workflow) at {}",
+        manifest.rk_version,
+        manifest.tech,
+        manifest.forge,
+        manifest.parameters.workflow.as_str(),
+        args.target
     ));
     match alignment {
         Alignment::BinaryNewer => out.result_line(format!(
@@ -307,6 +372,11 @@ fn render_human(
     }
     for path in &observed.drift_rendered {
         out.result_line(format!("DRIFT {path} (rendered, release-kit-owned)"));
+    }
+    for path in &observed.parameter_drift {
+        out.result_line(format!(
+            "DRIFT {path}: the recorded parameters do not render the recorded bytes"
+        ));
     }
     for path in &observed.drift_seeded {
         out.result_line(format!("DRIFT {path} (seeded, target-owned)"));
@@ -358,10 +428,11 @@ mod tests {
     #[test]
     fn the_status_report_schema_snapshot_holds() {
         let landed = Report {
-            schema: "rk.status/2",
+            schema: "rk.status/3",
             landed: true,
             tech: Some("rust".into()),
             forge: Some("github".into()),
+            workflow: Some("worktree"),
             rk_version: Some("0.1.0".into()),
             binary_version: Some("0.2.0"),
             alignment: Some(crate::landing::manifest::Alignment::BinaryNewer),
@@ -386,12 +457,13 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&landed).expect("a report serializes"),
-            r#"{"schema":"rk.status/2","landed":true,"tech":"rust","forge":"github","rk_version":"0.1.0","binary_version":"0.2.0","alignment":"binary-newer","drift":{"rendered":0,"seeded":1},"missing":[],"stale_pins":[{"tool":"release-plz","landed":"0.3.160","available":"0.3.170"}],"sentinels":1,"invariant_failures":[{"code":"attestations-disabled","destination":"dist-workspace.toml","reason":"github-attestations is not effectively true","remediation":"set github-attestations = true in [dist]"}]}"#
+            r#"{"schema":"rk.status/3","landed":true,"tech":"rust","forge":"github","workflow":"worktree","rk_version":"0.1.0","binary_version":"0.2.0","alignment":"binary-newer","drift":{"rendered":0,"seeded":1},"missing":[],"stale_pins":[{"tool":"release-plz","landed":"0.3.160","available":"0.3.170"}],"sentinels":1,"invariant_failures":[{"code":"attestations-disabled","destination":"dist-workspace.toml","reason":"github-attestations is not effectively true","remediation":"set github-attestations = true in [dist]"}]}"#
         );
         let absent = Report {
             landed: false,
             tech: None,
             forge: None,
+            workflow: None,
             rk_version: None,
             binary_version: None,
             alignment: None,
@@ -405,7 +477,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&absent).expect("a report serializes"),
-            r#"{"schema":"rk.status/2","landed":false}"#,
+            r#"{"schema":"rk.status/3","landed":false}"#,
             "an absent landing reports one field a caller can branch on"
         );
     }

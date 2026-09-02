@@ -32,6 +32,14 @@ pub struct InitArgs {
     #[arg(long)]
     pub scopes: Option<String>,
 
+    /// The working-copy mode this project chooses: worktree (every
+    /// code-changing branch in a linked worktree, the main checkout
+    /// commits nothing) or branches (branches worked in the main
+    /// checkout, worktrees optional beside them). Recorded as a landing
+    /// parameter and rendered into the landed blocks.
+    #[arg(long, default_value = "worktree")]
+    pub workflow: String,
+
     /// Write the files; without it the destinations are listed and nothing
     /// is touched.
     #[arg(long)]

@@ -548,7 +548,7 @@ fn init_preview_human_lines_are_snapshot_held() {
          AGENTS.md\n\
          dist-workspace.toml\n\
          release-plz.toml\n\
-         Next:\n  rk init --tech rust --forge github --repo <owner/name> --scopes <scope,scope> --target {path} --apply\n"
+         Next:\n  rk init --tech rust --forge github --repo <owner/name> --scopes <scope,scope> --workflow worktree --target {path} --apply\n"
     );
     rk().args([
         "init", "--tech", "rust", "--forge", "github", "--target", &path,
@@ -577,7 +577,7 @@ fn init_json_emits_one_object_and_nothing_else() {
             .stdout
             .clone();
         let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-        assert_eq!(report["schema"], "rk.init/1");
+        assert_eq!(report["schema"], "rk.init/2");
         assert_eq!(report["mode"], mode);
         assert!(
             report["files"].as_array().is_some_and(|f| !f.is_empty()),
@@ -4520,7 +4520,7 @@ fn status_json_is_one_object_over_a_fresh_landing() {
         .stdout
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["schema"], "rk.status/2");
+    assert_eq!(report["schema"], "rk.status/3");
     assert_eq!(report["landed"], true);
     assert_eq!(report["tech"], "rust");
     assert_eq!(report["forge"], "github");
@@ -4902,7 +4902,13 @@ fn a_matching_target_adopts_writing_only_the_manifest() {
         cmd.args([
             "adopt", "--tech", "rust", "--forge", "github", "--scopes", "api,cli",
         ])
-        .args(["--repo", "acme/widget", "--target"])
+        .args([
+            "--workflow",
+            "worktree",
+            "--repo",
+            "acme/widget",
+            "--target",
+        ])
         .arg(target.path());
         if apply {
             cmd.arg("--apply");
@@ -4992,7 +4998,13 @@ fn a_differing_seeded_file_adopts_with_both_digests() {
     rk().args([
         "adopt", "--tech", "rust", "--forge", "github", "--scopes", "api,cli",
     ])
-    .args(["--repo", "acme/widget", "--target"])
+    .args([
+        "--workflow",
+        "worktree",
+        "--repo",
+        "acme/widget",
+        "--target",
+    ])
     .arg(target.path())
     .arg("--apply")
     .assert()
@@ -6649,5 +6661,1421 @@ fn this_repos_own_record_carries_every_rust_pin() {
     assert_eq!(
         recorded, expected,
         "the record's pin map must equal the registry's rust pins — nothing missing, nothing obsolete; refresh it with this binary's rk upgrade --target . --apply"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The workflow mode: a landing parameter
+
+/// Land the rust payload under one explicit workflow mode.
+fn land_rust_with_workflow(target: &Path, workflow: &str) -> assert_cmd::assert::Assert {
+    rk().args(["init", "--tech", "rust", "--forge", "github"])
+        .args(["--repo", "acme/widget", "--scopes", "api,cli", "--workflow"])
+        .arg(workflow)
+        .args(["--target"])
+        .arg(target)
+        .arg("--apply")
+        .assert()
+}
+
+/// SATISFIES maintenance:the-workflow-mode-is-a-landing-parameter
+/// SATISFIES maintenance:worktree-mode-guards-the-main-checkout
+#[test]
+fn init_defaults_to_the_worktree_workflow() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+    let manifest = read_manifest(target.path());
+    assert_eq!(manifest["parameters"]["workflow"], "worktree");
+    let hooks = std::fs::read_to_string(target.path().join(".pre-commit-config.yaml"))
+        .expect("the hook file reads");
+    assert!(
+        hooks.contains("- id: rk-worktree-location"),
+        "the worktree mode lands the location guard: {hooks}"
+    );
+    assert!(
+        hooks.contains("SKIP=no-commit-to-branch,rk-worktree-location"),
+        "the sweep comment names the skip pair: {hooks}"
+    );
+    let agents = std::fs::read_to_string(target.path().join("AGENTS.md")).expect("AGENTS.md reads");
+    assert!(
+        agents.contains("This project works in worktrees"),
+        "{agents}"
+    );
+}
+
+/// SATISFIES maintenance:branches-mode-refuses-nothing
+#[test]
+fn init_lands_the_branches_workflow_without_the_guard() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust_with_workflow(target.path(), "branches").success();
+    let manifest = read_manifest(target.path());
+    assert_eq!(manifest["parameters"]["workflow"], "branches");
+    let hooks = std::fs::read_to_string(target.path().join(".pre-commit-config.yaml"))
+        .expect("the hook file reads");
+    assert!(
+        !hooks.contains("rk-worktree-location"),
+        "the branches mode lands no guard entry at all: {hooks}"
+    );
+    let agents = std::fs::read_to_string(target.path().join("AGENTS.md")).expect("AGENTS.md reads");
+    assert!(
+        agents.contains("Branches are worked in the main checkout"),
+        "{agents}"
+    );
+    rk().args([
+        "init",
+        "--tech",
+        "rust",
+        "--forge",
+        "github",
+        "--workflow",
+        "bogus",
+    ])
+    .args(["--target"])
+    .arg(target.path())
+    .assert()
+    .code(64)
+    .stderr(predicate::str::contains("worktree, branches"));
+}
+
+/// The flag chooses which candidate adoption verifies against — nothing
+/// more: adoption defaults to `branches`, the compatibility-safe reading
+/// of a pre-record target, and records the mode it verified.
+#[test]
+fn adopt_records_the_branches_workflow_by_default() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust_with_workflow(target.path(), "branches").success();
+    std::fs::remove_dir_all(target.path().join(".release-kit")).expect("the record removes");
+    rk().args([
+        "adopt", "--tech", "rust", "--forge", "github", "--scopes", "api,cli",
+    ])
+    .args(["--repo", "acme/widget", "--target"])
+    .arg(target.path())
+    .arg("--apply")
+    .assert()
+    .success();
+    assert_eq!(
+        read_manifest(target.path())["parameters"]["workflow"],
+        "branches"
+    );
+}
+
+/// Adoption verifies against the selected candidate and never blesses the
+/// disk: a target whose blocks carry the other mode refuses whole, every
+/// mismatch listed, not a byte written — in both directions.
+#[test]
+fn adopt_refuses_a_target_whose_blocks_do_not_match_the_selected_candidate() {
+    for (landed, selected) in [("worktree", "branches"), ("branches", "worktree")] {
+        let target = tempfile::tempdir().expect("a scratch dir exists");
+        land_rust_with_workflow(target.path(), landed).success();
+        std::fs::remove_dir_all(target.path().join(".release-kit")).expect("the record removes");
+        let before = tree_digests(target.path());
+        let output = rk()
+            .args([
+                "adopt", "--tech", "rust", "--forge", "github", "--scopes", "api,cli",
+            ])
+            .args(["--workflow", selected, "--repo", "acme/widget", "--target"])
+            .arg(target.path())
+            .arg("--apply")
+            .assert()
+            .code(73)
+            .get_output()
+            .clone();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("AGENTS.md") && stderr.contains(".pre-commit-config.yaml"),
+            "every mismatching block is listed: {stderr}"
+        );
+        assert!(
+            stderr.contains("align first"),
+            "the refusal names the preview-first alignment: {stderr}"
+        );
+        assert_eq!(
+            tree_digests(target.path()),
+            before,
+            "a refused adoption writes nothing"
+        );
+    }
+}
+
+/// SATISFIES landing:a-rendered-file-is-reproducible
+/// Recorded digests alone cannot see a manifest edited only at
+/// `parameters.workflow` — every file still matches its own record — so
+/// `--check` re-renders the blocks from the record's own parameters and
+/// flags the contradiction; the plain run stays exit 0.
+#[test]
+fn status_check_flags_a_manifest_whose_workflow_contradicts_its_landed_blocks() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+    let mut manifest = read_manifest(target.path());
+    manifest["parameters"]["workflow"] = serde_json::json!("branches");
+    write_manifest(target.path(), &manifest);
+
+    rk().args(["status", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "the recorded parameters do not render the recorded bytes",
+        ));
+    let out = rk()
+        .args(["status", "--check", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert!(
+        report["violations"]
+            .as_array()
+            .is_some_and(|violations| violations.iter().any(|violation| {
+                violation
+                    .as_str()
+                    .is_some_and(|line| line.starts_with("parameter drift:"))
+            })),
+        "{report}"
+    );
+}
+
+/// SATISFIES landing:a-record-states-its-schema
+/// An upgrade of a schema-1 target is also the record's migration: the
+/// absent parameter reads as `branches`, the blocks re-render to that
+/// mode, and the rewrite records schema 2 with the mode stated.
+#[test]
+fn an_upgrade_migrates_a_schema_1_record_to_schema_2() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+    let mut manifest = read_manifest(target.path());
+    manifest["schema_version"] = serde_json::json!(1);
+    manifest
+        .get_mut("parameters")
+        .and_then(serde_json::Value::as_object_mut)
+        .expect("a parameters object")
+        .remove("workflow");
+    write_manifest(target.path(), &manifest);
+
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let migrated = read_manifest(target.path());
+    assert_eq!(migrated["schema_version"], 2);
+    assert_eq!(migrated["parameters"]["workflow"], "branches");
+    let hooks = std::fs::read_to_string(target.path().join(".pre-commit-config.yaml"))
+        .expect("the hook file reads");
+    assert!(
+        !hooks.contains("rk-worktree-location"),
+        "a pre-mode record reads as branches, so no guard is imposed: {hooks}"
+    );
+}
+
+/// SATISFIES landing:an-upgrade-refuses-on-owned-drift
+/// A mode change on a drifted target refuses atomically: exit nonzero,
+/// every file and the manifest byte-identical.
+#[test]
+fn a_mode_change_refuses_atomically_on_owned_drift() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+    let workflow = target.path().join(".github/workflows/release-plz.yml");
+    let mut edited = std::fs::read_to_string(&workflow).expect("the workflow reads");
+    edited.push_str("# a local edit\n");
+    std::fs::write(&workflow, edited).expect("the drift writes");
+    let before = tree_digests(target.path());
+
+    rk().args(["upgrade", "--workflow", "branches", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("release-plz.yml"));
+    assert_eq!(
+        tree_digests(target.path()),
+        before,
+        "a refused mode change leaves every file and the manifest byte-identical"
+    );
+}
+
+/// The mode change is an upgrade with exactly one overridden parameter:
+/// the record and the two blocks flip, everything else stays
+/// byte-identical, and no other flag is passed.
+#[test]
+fn a_mode_change_upgrades_from_the_record() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+    let before = tree_digests(target.path());
+
+    rk().args(["upgrade", "--workflow", "branches", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let manifest = read_manifest(target.path());
+    assert_eq!(manifest["parameters"]["workflow"], "branches");
+    let hooks = std::fs::read_to_string(target.path().join(".pre-commit-config.yaml"))
+        .expect("the hook file reads");
+    assert!(!hooks.contains("rk-worktree-location"), "{hooks}");
+    let moved = [
+        "AGENTS.md",
+        ".pre-commit-config.yaml",
+        ".release-kit/manifest.json",
+    ];
+    let after = tree_digests(target.path());
+    for (path, digest) in &before {
+        if moved.contains(&path.as_str()) {
+            continue;
+        }
+        assert!(
+            after.iter().any(|(other, d)| other == path && d == digest),
+            "{path} moved under a mode change that does not own it"
+        );
+    }
+}
+
+/// A plain upgrade keeps the recorded mode across payload versions.
+#[test]
+fn upgrade_keeps_the_recorded_mode() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    assert_eq!(
+        read_manifest(target.path())["parameters"]["workflow"],
+        "worktree"
+    );
+    let hooks = std::fs::read_to_string(target.path().join(".pre-commit-config.yaml"))
+        .expect("the hook file reads");
+    assert!(hooks.contains("- id: rk-worktree-location"), "{hooks}");
+}
+
+/// SATISFIES landing:status-judges-only-under-check
+/// The mode is reported in both status forms, and a hand-removed guard
+/// entry is caught the ordinary way: the file's digest moved.
+#[test]
+fn status_reports_the_mode_and_check_flags_a_hand_edited_guard() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+    let out = rk()
+        .args(["status", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["workflow"], "worktree");
+    rk().args(["status", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("worktree workflow"));
+
+    let hooks_path = target.path().join(".pre-commit-config.yaml");
+    let hooks = std::fs::read_to_string(&hooks_path).expect("the hook file reads");
+    let edited: String = hooks
+        .lines()
+        .filter(|line| !line.contains("rk worktree location"))
+        .flat_map(|line| [line, "\n"])
+        .collect();
+    assert_ne!(hooks, edited, "the guard's name line is removed by hand");
+    std::fs::write(&hooks_path, edited).expect("the edit writes");
+    let out = rk()
+        .args(["status", "--check", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert!(
+        report["violations"]
+            .as_array()
+            .is_some_and(|violations| violations.iter().any(|violation| {
+                violation
+                    .as_str()
+                    .is_some_and(|line| line.contains(".pre-commit-config.yaml"))
+            })),
+        "{report}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// rk worktree list | add | prune
+
+/// A scratch parent holding the repo at `./widget`, so the derived
+/// sibling worktrees stay inside the tempdir and die with it.
+fn worktree_fixture() -> (tempfile::TempDir, PathBuf) {
+    let parent = tempfile::tempdir().expect("a scratch parent exists");
+    let repo = parent.path().join("widget");
+    std::fs::create_dir(&repo).expect("the repo dir creates");
+    git_in(&repo, &["init", "-q", "-b", "master"]);
+    git_in(&repo, &["config", "user.email", "rk@example.invalid"]);
+    git_in(&repo, &["config", "user.name", "rk test"]);
+    git_in(
+        &repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/widget.git",
+        ],
+    );
+    std::fs::write(repo.join("seed"), "x\n").expect("the seed writes");
+    git_in(&repo, &["add", "seed"]);
+    git_in(&repo, &["commit", "-qm", "chore: seed"]);
+    (parent, repo)
+}
+
+/// Seat one existing branch in its derived sibling worktree, via git.
+fn seat(repo: &Path, branch: &str) -> PathBuf {
+    let path = repo
+        .parent()
+        .expect("a parent")
+        .join(format!("widget-{}", branch.replace('/', "-")));
+    git_in(
+        repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            path.to_str().expect("utf-8"),
+            branch,
+        ],
+    );
+    path
+}
+
+#[test]
+fn worktree_list_reports_main_linked_drift_and_missing() {
+    let (_parent, repo) = worktree_fixture();
+    gone_branch(&repo, "feat/x");
+    let seat_x = seat(&repo, "feat/x");
+    std::fs::write(seat_x.join("dirt"), "y\n").expect("the dirt writes");
+    // An off-path seat, made by hand elsewhere: works, reported, never
+    // refused.
+    git_in(&repo, &["branch", "fix/y"]);
+    let elsewhere = repo.parent().expect("a parent").join("somewhere-else");
+    git_in(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            elsewhere.to_str().expect("utf-8"),
+            "fix/y",
+        ],
+    );
+    // A registered record whose directory is gone.
+    git_in(&repo, &["branch", "fix/z"]);
+    let missing = seat(&repo, "fix/z");
+    std::fs::remove_dir_all(&missing).expect("the directory disappears");
+
+    let out = rk_scrubbed()
+        .args(["worktree", "list", "--json", "--target"])
+        .arg(&repo)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["schema"], "rk.worktree-list/1");
+    let rows = report["worktrees"].as_array().expect("rows");
+    assert_eq!(rows.len(), 4);
+    assert_eq!(rows[0]["kind"], "main");
+    assert_eq!(rows[0]["branch"], "master");
+    let named = |branch: &str| {
+        rows.iter()
+            .find(|row| row["branch"] == branch)
+            .unwrap_or_else(|| panic!("a row for {branch}"))
+    };
+    assert_eq!(named("feat/x")["state"], "dirty");
+    assert_eq!(named("feat/x")["canonical"], true);
+    assert_eq!(named("fix/y")["state"], "clean");
+    assert_eq!(named("fix/y")["canonical"], false);
+    assert_eq!(named("fix/z")["state"], "missing");
+
+    let human = rk_scrubbed()
+        .args(["worktree", "list", "--target"])
+        .arg(&repo)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8_lossy(&human);
+    assert!(
+        text.contains("off-path: expected ../widget-fix-y"),
+        "{text}"
+    );
+    assert!(text.contains("rk worktree prune"), "{text}");
+}
+
+#[test]
+fn worktree_add_previews_and_writes_nothing() {
+    let (_parent, repo) = worktree_fixture();
+    let before = branch_names(&repo);
+    let out = rk_scrubbed()
+        .args(["worktree", "add", "feat/oauth-login", "--target"])
+        .arg(&repo)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8_lossy(&out);
+    assert!(
+        text.contains("path:   ../widget-feat-oauth-login"),
+        "{text}"
+    );
+    assert!(text.contains("would run: git worktree add"), "{text}");
+    assert_eq!(branch_names(&repo), before, "a preview creates no branch");
+    assert!(
+        !repo
+            .parent()
+            .expect("a parent")
+            .join("widget-feat-oauth-login")
+            .exists(),
+        "a preview creates no worktree"
+    );
+}
+
+/// SATISFIES maintenance:a-worktree-path-derives-from-project-and-branch
+#[test]
+fn worktree_add_applies_creates_branch_and_prints_the_path() {
+    let (_parent, repo) = worktree_fixture();
+    let expected = repo
+        .parent()
+        .expect("a parent")
+        .join("widget-feat-oauth-login");
+    let out = rk_scrubbed()
+        .args([
+            "worktree",
+            "add",
+            "feat/oauth-login",
+            "--apply",
+            "--json",
+            "--target",
+        ])
+        .arg(&repo)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["schema"], "rk.worktree-add/1");
+    assert_eq!(report["mode"], "apply");
+    assert_eq!(report["created"], "branch");
+    assert_eq!(report["source"], "trunk");
+    assert_eq!(
+        report["path"],
+        expected.to_str().expect("utf-8"),
+        "{report}"
+    );
+    assert!(expected.is_dir(), "the worktree exists");
+    assert!(branch_names(&repo).contains("feat/oauth-login"));
+
+    let human = rk_scrubbed()
+        .args(["worktree", "add", "fix/second", "--apply", "--target"])
+        .arg(&repo)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8_lossy(&human);
+    assert!(
+        text.lines()
+            .next()
+            .is_some_and(|line| line.ends_with("widget-fix-second")),
+        "the result line is the absolute path: {text}"
+    );
+}
+
+#[test]
+fn worktree_add_adopts_a_local_branch_and_is_satisfied_when_standing() {
+    let (_parent, repo) = worktree_fixture();
+    git_in(&repo, &["branch", "feat/bare"]);
+    let out = rk_scrubbed()
+        .args([
+            "worktree",
+            "add",
+            "feat/bare",
+            "--apply",
+            "--json",
+            "--target",
+        ])
+        .arg(&repo)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["source"], "adopted");
+    assert_eq!(report["created"], "worktree");
+
+    // Idempotent: the standing canonical worktree satisfies.
+    let out = rk_scrubbed()
+        .args([
+            "worktree",
+            "add",
+            "feat/bare",
+            "--apply",
+            "--json",
+            "--target",
+        ])
+        .arg(&repo)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["created"], "nothing", "{report}");
+}
+
+/// The remote-source arm: a forge-minted branch or the bot's release
+/// branch is seated from its real remote tip with the upstream set —
+/// never silently recreated from the trunk.
+#[test]
+fn worktree_add_creates_a_tracking_branch_from_a_remote_tip() {
+    let (parent, repo) = worktree_fixture();
+    // A real remote: a bare sibling carrying feat/x one commit ahead.
+    let bare = parent.path().join("origin.git");
+    git_in(
+        parent.path(),
+        &["init", "-q", "--bare", bare.to_str().expect("utf-8")],
+    );
+    git_in(
+        &repo,
+        &["remote", "set-url", "origin", bare.to_str().expect("utf-8")],
+    );
+    git_in(&repo, &["push", "-q", "origin", "master"]);
+    git_in(&repo, &["branch", "feat/x"]);
+    git_in(&repo, &["checkout", "-q", "feat/x"]);
+    std::fs::write(repo.join("ahead"), "y\n").expect("the extra file writes");
+    git_in(&repo, &["add", "ahead"]);
+    git_in(&repo, &["commit", "-qm", "chore: advance"]);
+    let remote_tip = tip_of(&repo, "feat/x");
+    git_in(&repo, &["push", "-q", "origin", "feat/x"]);
+    git_in(&repo, &["checkout", "-q", "master"]);
+    git_in(&repo, &["branch", "-D", "feat/x"]);
+    git_in(&repo, &["fetch", "-q", "origin"]);
+
+    let out = rk_scrubbed()
+        .args(["worktree", "add", "feat/x", "--apply", "--json", "--target"])
+        .arg(&repo)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["source"], "remote", "{report}");
+    assert_eq!(report["upstream"], "origin/feat/x");
+    assert_eq!(
+        tip_of(&repo, "feat/x"),
+        remote_tip,
+        "the worktree lands on the remote tip, not the trunk"
+    );
+    let upstream = std::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref"])
+        .arg(concat!("feat/x@", "{upstream}"))
+        .current_dir(&repo)
+        .output()
+        .expect("git runs");
+    assert_eq!(
+        String::from_utf8_lossy(&upstream.stdout).trim(),
+        "origin/feat/x",
+        "the tracking branch carries its upstream"
+    );
+}
+
+#[test]
+fn worktree_add_refuses_the_trunk_a_bad_grammar_and_a_collision() {
+    let (_parent, repo) = worktree_fixture();
+    // The trunk fails the grammar before its own refusal arm: the main
+    // checkout is its seat either way.
+    rk_scrubbed()
+        .args(["worktree", "add", "master", "--target"])
+        .arg(&repo)
+        .assert()
+        .code(64)
+        .stderr(predicate::str::contains("<type>/<slug>"));
+    rk_scrubbed()
+        .args(["worktree", "add", "feature/nope", "--target"])
+        .arg(&repo)
+        .assert()
+        .code(64)
+        .stderr(predicate::str::contains("release/<line>"));
+
+    // The flattening collision: feat/a-b vs feat-a/b — wait, feat-a is
+    // no type; use the honest pair the derivation admits.
+    git_in(&repo, &["branch", "feat/a-b"]);
+    let seat_ab = seat(&repo, "feat/a-b");
+    assert!(seat_ab.is_dir());
+    let before = branch_names(&repo);
+    rk_scrubbed()
+        .args(["worktree", "add", "feat/a/b", "--apply", "--target"])
+        .arg(&repo)
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("feat/a-b"));
+    assert_eq!(branch_names(&repo), before, "a refusal mutates nothing");
+}
+
+#[test]
+fn worktree_add_refuses_a_git_invalid_ref_and_an_unresolvable_base() {
+    let (_parent, repo) = worktree_fixture();
+    let before = branch_names(&repo);
+    rk_scrubbed()
+        .args(["worktree", "add", "feat/a..b", "--target"])
+        .arg(&repo)
+        .assert()
+        .code(64)
+        .stderr(predicate::str::contains("git refuses"));
+    rk_scrubbed()
+        .args(["worktree", "add", "feat/x.lock", "--target"])
+        .arg(&repo)
+        .assert()
+        .code(64);
+    rk_scrubbed()
+        .args([
+            "worktree",
+            "add",
+            "feat/x",
+            "--base",
+            "no-such-ref",
+            "--target",
+        ])
+        .arg(&repo)
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("does not resolve"));
+    // clap already refuses a bare `--base --force`; the equals form
+    // reaches the handler, whose own validation refuses it before any
+    // resolution.
+    rk_scrubbed()
+        .args(["worktree", "add", "feat/x", "--base=--force", "--target"])
+        .arg(&repo)
+        .assert()
+        .code(64)
+        .stderr(predicate::str::contains("option-shaped"));
+    rk_scrubbed()
+        .args(["worktree", "add", "release/1.2", "--target"])
+        .arg(&repo)
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("--base"));
+    assert_eq!(branch_names(&repo), before, "every refusal mutates nothing");
+}
+
+#[test]
+fn worktree_add_refuses_a_branch_checked_out_elsewhere() {
+    let (_parent, repo) = worktree_fixture();
+    git_in(&repo, &["branch", "feat/held"]);
+    let elsewhere = repo.parent().expect("a parent").join("held-elsewhere");
+    git_in(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            elsewhere.to_str().expect("utf-8"),
+            "feat/held",
+        ],
+    );
+    rk_scrubbed()
+        .args(["worktree", "add", "feat/held", "--apply", "--target"])
+        .arg(&repo)
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("held-elsewhere"));
+
+    // The main-checkout seat names the move.
+    git_in(&repo, &["checkout", "-qb", "feat/mine"]);
+    rk_scrubbed()
+        .args(["worktree", "add", "feat/mine", "--apply", "--target"])
+        .arg(&repo)
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("git switch master"));
+}
+
+#[test]
+fn worktree_add_refuses_a_bare_repository() {
+    let parent = tempfile::tempdir().expect("a scratch parent exists");
+    let bare = parent.path().join("bare.git");
+    git_in(
+        parent.path(),
+        &["init", "-q", "--bare", bare.to_str().expect("utf-8")],
+    );
+    rk_scrubbed()
+        .args(["worktree", "add", "feat/x", "--target"])
+        .arg(&bare)
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("bare"));
+}
+
+/// A seated branch whose upstream is gone: the reportable shape.
+fn gone_seat(repo: &Path, branch: &str) -> PathBuf {
+    gone_branch(repo, branch);
+    seat(repo, branch)
+}
+
+/// SATISFIES maintenance:a-dirty-or-locked-worktree-is-never-removed
+#[test]
+fn worktree_prune_preview_is_offline_and_keeps_the_guarded() {
+    let (_parent, repo) = worktree_fixture();
+    let dirty = gone_seat(&repo, "feat/dirty");
+    std::fs::write(dirty.join("dirt"), "y\n").expect("the dirt writes");
+    let locked = gone_seat(&repo, "feat/held");
+    git_in(
+        &repo,
+        &[
+            "worktree",
+            "lock",
+            "--reason",
+            "a running agent",
+            locked.to_str().expect("utf-8"),
+        ],
+    );
+    gone_branch(&repo, "release/1.2");
+    seat(&repo, "release/1.2");
+    gone_seat(&repo, "feat/free");
+    // A detached probe seat: never a row — no branch, no upstream.
+    let probe = repo.parent().expect("a parent").join("widget-probe");
+    git_in(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "--detach",
+            probe.to_str().expect("utf-8"),
+        ],
+    );
+
+    let out = rk_scrubbed()
+        .args(["worktree", "prune", "--json", "--target"])
+        .arg(&repo)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["schema"], "rk.worktree-prune/1");
+    assert_eq!(report["mode"], "preview");
+    let rows = report["worktrees"].as_array().expect("rows");
+    let named = |branch: &str| {
+        rows.iter()
+            .find(|row| row["branch"] == branch)
+            .unwrap_or_else(|| panic!("a row for {branch}"))
+    };
+    assert_eq!(named("feat/dirty")["status"], "kept");
+    assert!(
+        named("feat/dirty")["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("uncommitted")),
+        "{report}"
+    );
+    assert_eq!(named("feat/held")["status"], "kept");
+    assert!(
+        named("feat/held")["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("a running agent")),
+        "{report}"
+    );
+    assert_eq!(named("release/1.2")["status"], "kept");
+    assert_eq!(named("feat/free")["status"], "candidate");
+    assert!(
+        !rows.iter().any(|row| row["path"]
+            .as_str()
+            .is_some_and(|path| path.ends_with("widget-probe"))),
+        "a detached seat is never a row: {report}"
+    );
+    assert_eq!(rows.len(), 4, "{report}");
+}
+
+/// SATISFIES maintenance:a-prune-report-covers-cleanup-not-inventory
+/// A repository with only a main checkout, and one with an active linked
+/// worktree mid-work, report nothing — the clean-clone guarantee the
+/// reminder hook rests on.
+#[test]
+fn worktree_prune_reports_nothing_in_a_healthy_repository() {
+    let (_parent, repo) = worktree_fixture();
+    let assert_clean = |repo: &Path| {
+        let out = rk_scrubbed()
+            .args(["worktree", "prune", "--json", "--target"])
+            .arg(repo)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+        assert_eq!(report["worktrees"], serde_json::json!([]), "{report}");
+        let quiet = rk_scrubbed()
+            .args(["worktree", "prune", "--quiet", "--target"])
+            .arg(repo)
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        assert!(quiet.stdout.is_empty(), "quiet prints nothing when clean");
+    };
+    assert_clean(&repo);
+    // An active linked worktree on a branch with no upstream: healthy.
+    git_in(&repo, &["branch", "feat/active"]);
+    seat(&repo, "feat/active");
+    assert_clean(&repo);
+}
+
+/// SATISFIES maintenance:an-unobservable-branch-is-never-a-candidate
+#[test]
+fn worktree_prune_keeps_a_worktree_whose_branch_observation_is_missing() {
+    let (_parent, repo) = worktree_fixture();
+    git_in(&repo, &["branch", "feat/ghost"]);
+    let ghost = seat(&repo, "feat/ghost");
+    let tip = tip_of(&repo, "feat/ghost");
+    // Delete the ref under the seated worktree: the inventory still names
+    // the branch, and no observation covers it.
+    git_in(&repo, &["update-ref", "-d", "refs/heads/feat/ghost", &tip]);
+    let out = rk_scrubbed()
+        .args(["worktree", "prune", "--json", "--target"])
+        .arg(&repo)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    let row = report["worktrees"]
+        .as_array()
+        .and_then(|rows| rows.iter().find(|row| row["branch"] == "feat/ghost"))
+        .expect("a kept row");
+    assert_eq!(row["status"], "kept");
+    assert!(
+        row["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("no branch observation")),
+        "{report}"
+    );
+    assert!(ghost.is_dir(), "nothing is removed");
+
+    // The whole inventory failing to parse refuses the run before any
+    // judgment: no branch lines at all while worktrees name branches.
+    git_in(&repo, &["update-ref", "-d", "refs/heads/master"]);
+    rk_scrubbed()
+        .args(["worktree", "prune", "--target"])
+        .arg(&repo)
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("branch inventory"));
+}
+
+/// The stale sweep's outcome is read per row, never assumed: one record
+/// cleared, one surviving what a mid-run lock would do.
+#[cfg(unix)]
+#[test]
+fn worktree_prune_apply_reads_the_stale_sweep_per_row() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let (_parent, repo) = worktree_fixture();
+    git_in(&repo, &["branch", "fix/gone"]);
+    let gone = seat(&repo, "fix/gone");
+    std::fs::remove_dir_all(&gone).expect("the directory disappears");
+    git_in(&repo, &["branch", "fix/gone-too"]);
+    let survivor = seat(&repo, "fix/gone-too");
+    std::fs::remove_dir_all(&survivor).expect("the directory disappears");
+    // A record the sweep cannot clear — its administrative directory made
+    // read-only — stands in for a lock arriving mid-run: the per-row
+    // re-observation reports it truthfully instead of a blanket claim.
+    let record_dir = repo.join(".git/worktrees/widget-fix-gone-too");
+    assert!(record_dir.is_dir(), "the record directory exists");
+    let readonly = std::fs::Permissions::from_mode(0o555);
+    std::fs::set_permissions(&record_dir, readonly).expect("the permissions set");
+
+    let out = rk_scrubbed()
+        .args(["worktree", "prune", "--apply", "--json", "--target"])
+        .arg(&repo)
+        .assert()
+        .code(70)
+        .get_output()
+        .stdout
+        .clone();
+    std::fs::set_permissions(&record_dir, std::fs::Permissions::from_mode(0o755))
+        .expect("the permissions restore");
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    let rows = report["worktrees"].as_array().expect("rows");
+    let row = |suffix: &str| {
+        rows.iter()
+            .find(|row| {
+                row["path"]
+                    .as_str()
+                    .is_some_and(|path| path.ends_with(suffix))
+            })
+            .unwrap_or_else(|| panic!("a row ending {suffix}"))
+    };
+    assert_eq!(row("widget-fix-gone")["status"], "pruned", "{report}");
+    assert_eq!(
+        row("widget-fix-gone-too")["status"],
+        "remove-failed",
+        "{report}"
+    );
+    assert!(
+        row("widget-fix-gone-too")["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("re-run rk worktree prune --apply")),
+        "a failure row names its recovery: {report}"
+    );
+    let registered = std::process::Command::new("git")
+        .args(["worktree", "list", "--porcelain"])
+        .current_dir(&repo)
+        .output()
+        .expect("git runs");
+    let listing = String::from_utf8_lossy(&registered.stdout).into_owned();
+    assert!(
+        !listing.contains("widget-fix-gone\n") && listing.contains("widget-fix-gone-too"),
+        "the locked record is intact, the stale one is cleared: {listing}"
+    );
+}
+
+#[test]
+fn worktree_prune_keeps_the_callers_seat_across_targets() {
+    let (_parent, repo) = worktree_fixture();
+    let seat_a = gone_seat(&repo, "feat/mine");
+    let out = rk_scrubbed()
+        .current_dir(&seat_a)
+        .args(["worktree", "prune", "--json", "--target"])
+        .arg(&repo)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    let row = report["worktrees"]
+        .as_array()
+        .and_then(|rows| rows.iter().find(|row| row["branch"] == "feat/mine"))
+        .expect("a row");
+    assert_eq!(row["status"], "kept", "{report}");
+    assert!(
+        row["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("seat in use")),
+        "{report}"
+    );
+}
+
+#[test]
+fn worktree_prune_classifies_fresh_and_locked_missing_records() {
+    let (_parent, repo) = worktree_fixture();
+    gone_branch(&repo, "feat/unlocked");
+    let unlocked = seat(&repo, "feat/unlocked");
+    std::fs::remove_dir_all(&unlocked).expect("the directory disappears");
+    gone_branch(&repo, "feat/locked");
+    let locked = seat(&repo, "feat/locked");
+    git_in(
+        &repo,
+        &["worktree", "lock", locked.to_str().expect("utf-8")],
+    );
+    std::fs::remove_dir_all(&locked).expect("the directory disappears");
+
+    let out = rk_scrubbed()
+        .args(["worktree", "prune", "--json", "--target"])
+        .arg(&repo)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    let rows = report["worktrees"].as_array().expect("rows");
+    let by_branch = |branch: &str| {
+        rows.iter()
+            .find(|row| row["branch"] == branch)
+            .unwrap_or_else(|| panic!("a row for {branch}"))
+    };
+    assert_eq!(by_branch("feat/unlocked")["status"], "stale", "{report}");
+    assert_eq!(by_branch("feat/locked")["status"], "kept", "{report}");
+}
+
+/// The mock forge confirming one tip through the commits/<tip>/pulls path.
+fn confirming_gh(tip: &str) -> String {
+    format!(
+        "#!/bin/sh\nprintf '[{{\"number\":8,\"merged_at\":\"2026-01-01T00:00:00Z\",\"head\":{{\"sha\":\"{tip}\"}}}}]'\n"
+    )
+}
+
+/// SATISFIES maintenance:one-merge-proof-authorizes-both-removals
+#[test]
+fn worktree_prune_verify_confirms_against_the_forge() {
+    let (_parent, repo) = worktree_fixture();
+    gone_seat(&repo, "feat/merged");
+    let tip = tip_of(&repo, "feat/merged");
+    let (_mock, gh) = mock_gh(&confirming_gh(&tip));
+    let out = rk_scrubbed()
+        .args(["worktree", "prune", "--verify", "--json", "--target"])
+        .arg(&repo)
+        .env("RK_GH_BIN", &gh)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["mode"], "verify");
+    let row = &report["worktrees"][0];
+    assert_eq!(row["status"], "confirmed");
+    assert_eq!(row["request"], "#8");
+    assert!(
+        repo.parent()
+            .expect("a parent")
+            .join("widget-feat-merged")
+            .is_dir(),
+        "verify removes nothing"
+    );
+}
+
+/// SATISFIES maintenance:a-worktree-is-removed-before-its-branch
+/// SATISFIES maintenance:a-branch-deletion-is-compare-and-swap
+#[test]
+fn worktree_prune_apply_removes_the_tree_then_cas_deletes_the_branch() {
+    let (_parent, repo) = worktree_fixture();
+    let path = gone_seat(&repo, "feat/merged");
+    // Dirt makes git refuse the remove without --force: the ordered
+    // apply must then leave the branch and its configuration untouched.
+    std::fs::write(path.join("dirt"), "y\n").expect("the dirt writes");
+    let tip = tip_of(&repo, "feat/merged");
+    let (_mock, gh) = mock_gh(&confirming_gh(&tip));
+    let run = |args: &[&str]| {
+        let mut cmd = rk_scrubbed();
+        cmd.args(["worktree", "prune"])
+            .args(args)
+            .args(["--json", "--target"])
+            .arg(&repo)
+            .env("RK_GH_BIN", &gh);
+        cmd.assert()
+    };
+    // The candidate is dirty, so it is kept — clean it first to reach the
+    // remove path, then re-dirty between verify and apply below.
+    std::fs::remove_file(path.join("dirt")).expect("the dirt clears");
+    // Simulate the refused remove instead with a lock git honors.
+    git_in(&repo, &["worktree", "lock", path.to_str().expect("utf-8")]);
+    let out = run(&["--apply"]).success().get_output().stdout.clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(
+        report["worktrees"][0]["status"], "kept",
+        "a lock keeps the worktree whole: {report}"
+    );
+    assert!(branch_names(&repo).contains("feat/merged"));
+
+    git_in(
+        &repo,
+        &["worktree", "unlock", path.to_str().expect("utf-8")],
+    );
+    let out = run(&["--apply"]).success().get_output().stdout.clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["worktrees"][0]["status"], "pruned", "{report}");
+    assert_eq!(report["worktrees"][0]["request"], "#8");
+    assert!(!path.exists(), "the worktree is removed");
+    assert!(
+        !branch_names(&repo).contains("feat/merged"),
+        "the branch follows its worktree"
+    );
+}
+
+/// Verification authorizes only the state it saw: a tip that moved after
+/// the forge confirmed it keeps the worktree in place.
+#[test]
+fn worktree_prune_apply_keeps_a_tip_that_moved_before_removal() {
+    let (_parent, repo) = worktree_fixture();
+    let path = gone_seat(&repo, "feat/moved");
+    let old_tip = tip_of(&repo, "feat/moved");
+    let (_mock, gh) = mock_gh(&confirming_gh(&old_tip));
+    // The forge answers for the old tip; the branch then advances in its
+    // worktree before the apply acts.
+    let advance = path.join("more");
+    std::fs::write(&advance, "y\n").expect("the extra file writes");
+    git_in(&path, &["add", "more"]);
+    git_in(&path, &["commit", "-qm", "chore: advance"]);
+    let out = rk_scrubbed()
+        .args(["worktree", "prune", "--apply", "--json", "--target"])
+        .arg(&repo)
+        .env("RK_GH_BIN", &gh)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    let row = &report["worktrees"][0];
+    assert!(
+        row["status"] == "kept" || row["status"] == "unconfirmed",
+        "the moved tip is never removed: {report}"
+    );
+    assert!(path.is_dir(), "nothing was removed");
+    assert!(branch_names(&repo).contains("feat/moved"));
+}
+
+/// The residual window, exercised at the helper seam: a tip the
+/// compare-and-swap no longer matches refuses the deletion, so a branch
+/// can outlive its removed worktree — reported truthfully, with
+/// `rk worktree add` as the named recovery.
+#[test]
+fn worktree_prune_apply_reports_a_branch_that_outlived_its_worktree() {
+    let (_parent, repo) = worktree_fixture();
+    advanced_gone_branch(&repo, "feat/racy");
+    let stale_tip = tip_of(&repo, "master");
+    assert_ne!(stale_tip, tip_of(&repo, "feat/racy"));
+    let refused = release_kit::maintenance::delete_branch(&utf8(&repo), "feat/racy", &stale_tip);
+    assert!(
+        matches!(refused, release_kit::maintenance::Deletion::Refused { .. }),
+        "a moved tip refuses the compare-and-swap: {refused:?}"
+    );
+    assert!(
+        branch_names(&repo).contains("feat/racy"),
+        "the branch and its work survive"
+    );
+    let current = tip_of(&repo, "feat/racy");
+    assert!(matches!(
+        release_kit::maintenance::delete_branch(&utf8(&repo), "feat/racy", &current),
+        release_kit::maintenance::Deletion::Deleted
+    ));
+}
+
+/// After a pruned row, no branch.<name> configuration survives.
+#[test]
+fn worktree_prune_apply_drops_the_branch_configuration() {
+    let (_parent, repo) = worktree_fixture();
+    gone_seat(&repo, "feat/merged");
+    let tip = tip_of(&repo, "feat/merged");
+    let (_mock, gh) = mock_gh(&confirming_gh(&tip));
+    rk_scrubbed()
+        .args(["worktree", "prune", "--apply", "--target"])
+        .arg(&repo)
+        .env("RK_GH_BIN", &gh)
+        .assert()
+        .success();
+    let leftover = std::process::Command::new("git")
+        .args(["config", "--get-regexp", r"^branch\.feat/merged\."])
+        .current_dir(&repo)
+        .output()
+        .expect("git runs");
+    assert!(
+        leftover.stdout.is_empty(),
+        "no stale configuration survives: {}",
+        String::from_utf8_lossy(&leftover.stdout)
+    );
+}
+
+/// SATISFIES maintenance:forge-unavailability-never-authorizes-deletion
+#[test]
+fn worktree_prune_apply_keeps_unknown() {
+    let (_parent, repo) = worktree_fixture();
+    let path = gone_seat(&repo, "feat/unknown");
+    let (_mock, gh) = mock_gh("#!/bin/sh\necho 'connect: network is unreachable' >&2\nexit 1\n");
+    let out = rk_scrubbed()
+        .args(["worktree", "prune", "--apply", "--json", "--target"])
+        .arg(&repo)
+        .env("RK_GH_BIN", &gh)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["worktrees"][0]["status"], "unknown", "{report}");
+    assert!(path.is_dir(), "forge unavailability removes nothing");
+    assert!(branch_names(&repo).contains("feat/unknown"));
+}
+
+#[test]
+fn worktree_prune_quiet_prints_nothing_when_clean() {
+    let (_parent, repo) = worktree_fixture();
+    let out = rk_scrubbed()
+        .args(["worktree", "prune", "--quiet", "--target"])
+        .arg(&repo)
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    assert!(out.stdout.is_empty());
+    rk_scrubbed()
+        .args(["worktree", "prune", "--quiet", "--json", "--target"])
+        .arg(&repo)
+        .assert()
+        .code(64);
+}
+
+#[test]
+fn worktree_json_failure_is_one_diagnostic_line() {
+    let output = rk_scrubbed()
+        .args(["worktree", "list", "--json", "--target", "/no/such/dir"])
+        .assert()
+        .code(66)
+        .get_output()
+        .clone();
+    assert!(output.stdout.is_empty());
+    let diagnostic: serde_json::Value =
+        serde_json::from_slice(&output.stderr).expect("stderr is one JSON diagnostic");
+    assert_eq!(diagnostic["schema"], "rk.diagnostic/1");
+}
+
+// ---------------------------------------------------------------------------
+// Orientation and enforcement: the guard, the reminder, the closing line
+
+/// The `rk-worktree-location` entry's script, extracted from the rendered
+/// worktree-mode hook block — the exact bytes a landing writes.
+fn guard_script() -> String {
+    let block = release_kit::landing::hooks_block(release_kit::landing::Workflow::Worktree);
+    let entry = block
+        .lines()
+        .skip_while(|line| !line.contains("id: rk-worktree-location"))
+        .find(|line| line.trim_start().starts_with("entry: sh -c '"))
+        .expect("the guard entry line exists");
+    entry
+        .trim_start()
+        .strip_prefix("entry: sh -c '")
+        .and_then(|rest| rest.strip_suffix('\''))
+        .expect("the entry is one single-quoted script")
+        .to_owned()
+}
+
+/// Run the guard's script through sh in one directory, as pre-commit
+/// would.
+fn guard_verdict(dir: &Path) -> bool {
+    let mut command = std::process::Command::new("sh");
+    for var in GIT_HOOK_VARS {
+        command.env_remove(var);
+    }
+    command
+        .args(["-c", &guard_script()])
+        .current_dir(dir)
+        .output()
+        .expect("sh runs")
+        .status
+        .success()
+}
+
+/// SATISFIES maintenance:worktree-mode-guards-the-main-checkout
+/// The six-cell matrix: main+master passes, main+topic and main+detached
+/// refuse — the invariant is whole, detached included — and a linked
+/// worktree passes in all three states, because topology is tested first.
+#[test]
+fn the_guard_holds_the_full_matrix() {
+    let (_parent, repo) = worktree_fixture();
+    git_in(&repo, &["branch", "feat/linked"]);
+    let linked = seat(&repo, "feat/linked");
+
+    assert!(guard_verdict(&repo), "main + master passes");
+    git_in(&repo, &["checkout", "-qb", "feat/topic"]);
+    assert!(!guard_verdict(&repo), "main + topic refuses");
+    git_in(&repo, &["checkout", "-q", "--detach"]);
+    assert!(!guard_verdict(&repo), "main + detached refuses");
+    git_in(&repo, &["checkout", "-q", "master"]);
+
+    assert!(guard_verdict(&linked), "linked + its branch passes");
+    git_in(&linked, &["checkout", "-q", "--detach"]);
+    assert!(guard_verdict(&linked), "linked + detached passes");
+    git_in(&linked, &["checkout", "-qb", "feat/renamed"]);
+    assert!(guard_verdict(&linked), "linked + another branch passes");
+}
+
+/// The closing operator line rides what is still owed, never the mode:
+/// for both verbs, a preview, a verify, and an apply that kept something
+/// keep it; an apply that finished everything it named and an empty
+/// report drop it, the empty report keeping its Next block.
+#[test]
+fn a_report_that_owes_nothing_drops_the_operator_line() {
+    // branches: an apply that deletes its one candidate closes silent.
+    let repo = branch_fixture();
+    gone_branch(repo.path(), "feat/merged");
+    let tip = tip_of(repo.path(), "feat/merged");
+    let (_mock, gh) = mock_gh(&confirming_gh(&tip));
+    let preview = rk_scrubbed()
+        .args(["branches", "prune", "--target"])
+        .arg(repo.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert!(
+        String::from_utf8_lossy(&preview).contains("Deleting a branch is the operator's action"),
+        "a candidate still owes"
+    );
+    let applied = rk_scrubbed()
+        .args(["branches", "prune", "--apply", "--target"])
+        .arg(repo.path())
+        .env("RK_GH_BIN", &gh)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8_lossy(&applied);
+    assert!(text.contains("deleted"), "{text}");
+    assert!(
+        !text.contains("operator's action"),
+        "an apply that finished everything it named closes without the line: {text}"
+    );
+    let empty = rk_scrubbed()
+        .args(["branches", "prune", "--target"])
+        .arg(repo.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8_lossy(&empty);
+    assert!(
+        !text.contains("operator's action"),
+        "an empty report owes nothing: {text}"
+    );
+    assert!(
+        text.contains("Next:"),
+        "the empty report keeps Next: {text}"
+    );
+
+    // worktree: same discipline through the shared predicate.
+    let (_parent, wt_repo) = worktree_fixture();
+    gone_seat(&wt_repo, "feat/merged");
+    let tip = tip_of(&wt_repo, "feat/merged");
+    let (_mock2, gh2) = mock_gh(&confirming_gh(&tip));
+    let verify = rk_scrubbed()
+        .args(["worktree", "prune", "--verify", "--target"])
+        .arg(&wt_repo)
+        .env("RK_GH_BIN", &gh2)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert!(
+        String::from_utf8_lossy(&verify)
+            .contains("Removing a worktree and deleting its branch are the operator's action"),
+        "a confirmed row still owes the apply"
+    );
+    let applied = rk_scrubbed()
+        .args(["worktree", "prune", "--apply", "--target"])
+        .arg(&wt_repo)
+        .env("RK_GH_BIN", &gh2)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8_lossy(&applied);
+    assert!(text.contains("pruned"), "{text}");
+    assert!(
+        !text.contains("operator's action"),
+        "a finished worktree apply closes without the line: {text}"
     );
 }

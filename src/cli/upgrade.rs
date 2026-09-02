@@ -19,6 +19,13 @@ pub struct UpgradeArgs {
     #[arg(long)]
     pub scopes: Option<String>,
 
+    /// Change the recorded working-copy mode: worktree or branches. The
+    /// one overridden parameter — everything else comes from the record —
+    /// and the apply's diff is the visible mode change. Omitted, the
+    /// recorded mode is kept.
+    #[arg(long)]
+    pub workflow: Option<String>,
+
     /// Write the upgrade; without it every file's action is listed and
     /// nothing is touched.
     #[arg(long)]
