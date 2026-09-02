@@ -68,3 +68,15 @@ rk worktree prune --apply                # check: pruned; the branch and its con
 ### 4a. The divergent rerun
 
 An interrupted cleanup recovers with `git worktree list` and `git worktree repair`, then `rk worktree prune` again. A kept row's reason names its unblocking: commit or stash for dirt, `git worktree unlock <path>` for a lock you own. A `branch-delete-failed` row means the worktree is gone and the branch survives with its work; `rk worktree add <branch> --apply` re-seats it.
+
+## 5. Promote to a container (optional)
+
+A container is a directory holding only this project's main checkout and its worktrees; the [chapter](../method/08-worktrees.md) states the layouts this is one of. Promotion is a move per seat, at any time:
+
+```bash
+mkdir ../<container>
+git worktree move ../<project>@<flat> ../<container>/<project>@<flat>   # each linked worktree; git refuses to move the main one
+mv ../<project> ../<container>/<project>                                # the main checkout last, as a plain move
+git -C ../<container>/<project> worktree repair                         # check: repair reports each re-linked seat, or nothing
+rk worktree list                                                        # check: every seat listed, none off-path, none missing
+```

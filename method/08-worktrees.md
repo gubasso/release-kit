@@ -12,12 +12,24 @@ Parallel work forces the worktree form regardless of mode. Two writers — human
 
 A worktree's path derives from the project and the branch: the branch name flattens by replacing every `/` with `-`, and the worktree is the sibling `../<project>@<flattened branch>`. Flattening is not injective — `feat/a-b` and `feat-a/b` derive the same directory — so `rk worktree add` refuses a collision by name and never suffixes silently. A worktree made by hand at some other path works and is reported off-path by `rk worktree list`, never refused; `rk worktree add` for its branch refuses to make a second seat and names `git worktree move` to the derived path as the move.
 
+## The layouts the sibling rule admits
+
+The sibling parent is the main checkout's parent, whatever it is: `rk` derives it from the standing main worktree and stores nothing, so the layout is chosen by where the project is cloned and needs no configuration.
+
+- Flat — the main checkout beside its peer projects, worktrees interleaving with them. The default, and what most projects want.
+- Container — the main checkout inside a directory that holds only this project: `release-kit.wt/release-kit` with `release-kit.wt/release-kit@feat-x` beside it. Every worktree keeps the project name in its basename, so editor, tmux, and fuzzy-finder titles stay meaningful — the failure mode of layouts that name the inner directories after the branch alone. Promotion is a move per seat, at any time; the [runbook](../runbooks/worktree.md) states the commands.
+- Detached root — the main checkout untouched and the worktrees somewhere else entirely. Reported off-path by `rk worktree list`, never refused, fully functional; `rk worktree add` will not produce those paths, so the operator makes and moves them.
+- Unsupported: the bare-repo container — a bare repository with peer checkouts under it. `rk` refuses a bare main record: the sibling derivation has no main checkout to compose with, and the convention rests on one main worktree that commits nothing.
+
+No directory suffix is canonical: the container's name is the operator's.
+
 ## The sequence
 
 1. Create the worktree from its source — an adopted local branch, a remote tip, a base, or the trunk.
 2. Prepare its environment — a worktree is a fresh checkout.
 3. Land through the one path: commit, push, pull request, squash merge.
 4. Prune after the merge: forge-confirmed, worktree before branch.
+5. Promote to a container — optional: a layout move per seat, never required.
 
 `rk worktree add` resolves the source by precedence: an existing local branch is adopted into its worktree, a lone matching remote tip becomes a local tracking branch — which is how a forge-minted issue branch or the release bot's branch is seated from its real tip, never silently recreated from the trunk — and anything else is created from `--base` or the refreshed trunk, with a release line always taking an explicit base because a line is cut from a tag, never the tip.
 
