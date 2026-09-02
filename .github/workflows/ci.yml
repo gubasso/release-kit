@@ -33,8 +33,10 @@ jobs:
             --rev 438e7541f767461d1a9d1ead8dfbbab0cbb0c78f \
             --root "$HOME/.local"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      # CI sweeps a checkout and commits nothing, so the commit-time
-      # branch guard is out of scope here; every other hook still runs.
+      # CI sweeps a detached checkout and commits nothing, so the two
+      # commit-time guards are out of scope here — the skip pair the
+      # landed block's comment names for a worktree-mode target; every
+      # other hook still runs.
       - run: nix develop --command just check
         env:
-          SKIP: no-commit-to-branch
+          SKIP: no-commit-to-branch,rk-worktree-location

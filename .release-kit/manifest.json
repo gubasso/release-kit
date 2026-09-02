@@ -1,7 +1,7 @@
 {
-  "schema_version": 1,
-  "rk_version": "0.2.2",
-  "payload_sha256": "02bf073e229cc4e695eb65ff12c014216701255888685329726dfa6b2ca6bd39",
+  "schema_version": 2,
+  "rk_version": "0.2.5",
+  "payload_sha256": "14fde4c6e0104a6af2c9664e8e6e6e33572c9e991ba43d4f76a33ddde1614024",
   "origin": "adopt",
   "tech": "rust",
   "forge": "github",
@@ -26,7 +26,8 @@
       "setup",
       "skills",
       "snippets"
-    ]
+    ],
+    "workflow": "worktree"
   },
   "files": [
     {
@@ -44,14 +45,14 @@
     {
       "destination": ".pre-commit-config.yaml",
       "kind": "rendered",
-      "sha256": "cf77731bd15e5c4bddba7627f5effa083a0663702ed3e823dcf5d632a7815f35",
-      "baseline_sha256": "64be1835a68e3deed03d8cd465813cc24e8dce5e2c5be7091164669667d4eb79"
+      "sha256": "14a00e4f4ec416f67c59b51b2e76180b9b180c764623d32955ad12ce6b6d7473",
+      "baseline_sha256": "fb03b6f647c320a2dac37862de98432601276972057102ef01a617157e7166c6"
     },
     {
       "destination": "AGENTS.md",
       "kind": "rendered",
-      "sha256": "4b777f0286bbd73d6cfec86207a4c79504075903b0f50084488215cbb72bb52c",
-      "baseline_sha256": "3f3c2dcc54b90b4635376964257e15ae82ea1b8e60debab0e484bda5d616b467"
+      "sha256": "9db9953ae3adb11556d3099b7dbba3dd9d060f636dc8cfc9c00af1a70f489f78",
+      "baseline_sha256": "7304e69a80809eca2005f074f00bd2467f5b4473bf940f88a4a3516e36cfc409"
     },
     {
       "destination": "dist-workspace.toml",

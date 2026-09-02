@@ -71,8 +71,9 @@ This repository is the canonical knowledge product for the release-kit workflow.
 ## Releases
 
 - This repository runs the release-kit convention; `rk method invariants` states what must stay true.
-- An agent here guides and never drives: it reads this convention, tells the operator which step comes next, and takes no git or forge action — creating, switching or deleting a branch, committing, pushing, tagging, opening or updating or merging a pull request — unless the operator's request named that action. A request to change code authorizes the file changes alone.
+- An agent here guides and never drives: it reads this convention, tells the operator which step comes next, and takes no git or forge action — creating, switching or deleting a branch, creating or removing a worktree, committing, pushing, tagging, opening or updating or merging a pull request — unless the operator's request named that action. A request to change code authorizes the file changes alone.
 - Work reaches the trunk only through a squash-merged pull request from a short-lived branch — `<type>/<slug>` mirroring the squash title's type, or the forge-minted `<issue-id>-<slug>`. Nothing is committed on `master`.
+- This project works in worktrees: every code-changing branch lives in its linked worktree (`rk worktree add <branch>` creates or adopts it beside the checkout), the main checkout commits nothing, and `rk worktree prune` retires a merged worktree. One branch, one writer.
 - The request's title becomes the trunk's commit message, so it MUST be a scoped Conventional Commit; the body carries the context.
 - Every commit follows the same scoped convention; the landed commit-msg hook enforces it, and the scopes this project accepts are `bindings,ci,cli,deps,distribution,docs,forges,guides,guides/release,instance,landing,method,output,runbooks,setup,skills,snippets`.
 - Never author a tag, and never hand-edit a generated artifact workflow.
