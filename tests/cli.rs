@@ -4511,7 +4511,7 @@ fn status_json_is_one_object_over_a_fresh_landing() {
         .stdout
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["schema"], "rk.status/1");
+    assert_eq!(report["schema"], "rk.status/2");
     assert_eq!(report["landed"], true);
     assert_eq!(report["tech"], "rust");
     assert_eq!(report["forge"], "github");
@@ -6162,4 +6162,152 @@ fn guide_release_renders_the_resolved_pairs_verifier() {
             "unresolved render must keep {label}"
         );
     }
+}
+
+/// SATISFIES landing:a-seeded-file-still-carries-the-invariants
+/// A seeded file is judged, never rewritten: a target that turns
+/// attestations off is reported by plain status (exit 0) and fails
+/// `--check`, with the remediation stating what to write; the file itself
+/// is untouched, and seeded drift alone stays informational.
+#[test]
+fn status_judges_a_seeded_file_that_dropped_the_invariants() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+    let seeded = target.path().join("dist-workspace.toml");
+    let broken = "[workspace]\nmembers = [\"cargo:.\"]\n\n[dist]\ncargo-dist-version = \"0.32.0\"\nci = \"github\"\ngithub-attestations = false\n";
+    std::fs::write(&seeded, broken).expect("the edit writes");
+
+    // Plain status reports and exits 0; the file is the target's.
+    let plain = rk()
+        .args(["status", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&plain).expect("one JSON object");
+    let failures = report["invariant_failures"]
+        .as_array()
+        .expect("the plain report carries the failures too");
+    assert!(
+        failures
+            .iter()
+            .any(|failure| failure["code"] == "attestations-disabled"
+                && failure["destination"] == "dist-workspace.toml"
+                && failure["remediation"]
+                    .as_str()
+                    .is_some_and(|text| text.contains("github-attestations = true"))),
+        "{report}"
+    );
+    assert!(
+        failures
+            .iter()
+            .any(|failure| failure["code"] == "attestation-phase-not-host"),
+        "{report}"
+    );
+
+    // The same report under --check is the violation.
+    let checked = rk()
+        .args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8_lossy(&checked);
+    assert!(
+        text.contains("INVARIANT dist-workspace.toml (attestations-disabled)"),
+        "{text}"
+    );
+    assert!(
+        text.contains("dist-workspace.toml: set github-attestations = true in [dist]"),
+        "the next lines carry the remediation: {text}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&seeded).expect("the seeded file reads"),
+        broken,
+        "the judgment rewrites nothing"
+    );
+
+    // A tuned targets list is seeded drift, informational as ever.
+    let tuned = "[workspace]\nmembers = [\"cargo:.\"]\n\n[dist]\ncargo-dist-version = \"0.32.0\"\nci = \"github\"\ntargets = [\"x86_64-unknown-linux-gnu\"]\ngithub-attestations = true\ngithub-attestations-phase = \"host\"\ngithub-release = \"host\"\n";
+    std::fs::write(&seeded, tuned).expect("the tune writes");
+    rk().args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("DRIFT dist-workspace.toml"));
+    // The remaining exit-1 is the landed judgment sentinel, not the
+    // seeded drift: filling it proves the tuned file alone passes.
+    let filled = std::fs::read_to_string(target.path().join("release-plz.toml"))
+        .expect("the seeded file reads")
+        .lines()
+        .filter(|line| !line.contains("TODO(release-kit)"))
+        .fold(String::new(), |mut text, line| {
+            text.push_str(line);
+            text.push('\n');
+            text
+        });
+    std::fs::write(target.path().join("release-plz.toml"), filled).expect("the fill writes");
+    rk().args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+}
+
+/// A recorded file that vanished is the missing violation, never a
+/// validation attempt over absent bytes: plain status reports MISSING and
+/// exits 0, the check exits 1 on the same report, and no invariant
+/// failure is fabricated for a file that is not there.
+#[test]
+fn status_reports_a_missing_invariant_bearing_file_as_missing() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+    std::fs::remove_file(target.path().join("dist-workspace.toml")).expect("the file removes");
+    let plain = rk()
+        .args(["status", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&plain).expect("one JSON object");
+    assert!(
+        report["missing"]
+            .as_array()
+            .is_some_and(|missing| missing.iter().any(|path| path == "dist-workspace.toml")),
+        "{report}"
+    );
+    assert!(
+        report["invariant_failures"]
+            .as_array()
+            .is_some_and(|failures| failures
+                .iter()
+                .all(|failure| failure["destination"] != "dist-workspace.toml")),
+        "no invariant failure is fabricated for absent bytes: {report}"
+    );
+    let checked = rk()
+        .args(["status", "--check", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    let checked: serde_json::Value = serde_json::from_slice(&checked).expect("one JSON object");
+    assert!(
+        checked["violations"]
+            .as_array()
+            .is_some_and(|violations| violations
+                .iter()
+                .any(|violation| violation == "missing: dist-workspace.toml")),
+        "the missing file is itself the violation, not a bystander to the sentinel: {checked}"
+    );
+    assert!(
+        !target.path().join("dist-workspace.toml").exists(),
+        "the judgment rewrites nothing"
+    );
 }

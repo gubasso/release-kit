@@ -14,6 +14,7 @@ use crate::cli::status::StatusArgs;
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::digest::Digest;
 use crate::error::RkError;
+use crate::landing::invariants::{self, InvariantFailure};
 use crate::landing::manifest::{self, Alignment, Manifest};
 use crate::landing::{self, Kind};
 use crate::output::Output;
@@ -66,6 +67,10 @@ struct Report {
     /// Unresolved judgment sentinels across the landed files.
     #[serde(skip_serializing_if = "Option::is_none")]
     sentinels: Option<usize>,
+    /// Invariants a landed file's effective configuration violates —
+    /// judged, never rewritten, because the file stays the target's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    invariant_failures: Option<Vec<InvariantFailure>>,
     /// Present only under `--check`: what the judgment failed on.
     #[serde(skip_serializing_if = "Option::is_none")]
     violations: Option<Vec<String>>,
@@ -78,6 +83,7 @@ struct Observed {
     missing: Vec<String>,
     stale: Vec<StalePin>,
     sentinels: Vec<(String, usize, String)>,
+    invariants: Vec<InvariantFailure>,
 }
 
 /// Report the target's landing.
@@ -112,7 +118,7 @@ pub fn run(args: &StatusArgs) -> Result<(), RkError> {
             ),
         ]);
         out.emit(&Report {
-            schema: "rk.status/1",
+            schema: "rk.status/2",
             landed: false,
             tech: None,
             forge: None,
@@ -123,6 +129,7 @@ pub fn run(args: &StatusArgs) -> Result<(), RkError> {
             missing: None,
             stale_pins: None,
             sentinels: None,
+            invariant_failures: None,
             violations: args.check.then(|| vec!["no landing".to_owned()]),
         })?;
         if args.check {
@@ -142,7 +149,49 @@ pub fn run(args: &StatusArgs) -> Result<(), RkError> {
     let alignment = manifest::alignment(&manifest.rk_version, env!("CARGO_PKG_VERSION"));
     render_human(out, args, &manifest, alignment, &observed);
 
-    let violations: Vec<String> = observed
+    let violations = violations_of(&observed);
+    out.emit(&Report {
+        schema: "rk.status/2",
+        landed: true,
+        tech: Some(manifest.tech),
+        forge: Some(manifest.forge),
+        rk_version: Some(manifest.rk_version),
+        binary_version: Some(env!("CARGO_PKG_VERSION")),
+        alignment: Some(alignment),
+        drift: Some(Drift {
+            rendered: observed.drift_rendered.len(),
+            seeded: observed.drift_seeded.len(),
+        }),
+        missing: Some(observed.missing.clone()),
+        stale_pins: Some(observed.stale),
+        sentinels: Some(observed.sentinels.len()),
+        invariant_failures: Some(observed.invariants),
+        violations: args.check.then(|| violations.clone()),
+    })?;
+
+    if args.check && !violations.is_empty() {
+        return Err(RkError::check_failed(
+            Diagnostic::new(
+                Reason::StateDrift,
+                format!(
+                    "the landing is not clean: {} violation{}",
+                    violations.len(),
+                    if violations.len() == 1 { "" } else { "s" }
+                ),
+            )
+            .expected(
+                "no rendered drift, no missing recorded file, no unresolved sentinel, no invariant failure",
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// The check-mode violation lines: rendered drift, missing recorded
+/// files, unresolved sentinels, and invariant failures — the closed set
+/// `landing:status-judges-only-under-check` names.
+fn violations_of(observed: &Observed) -> Vec<String> {
+    observed
         .drift_rendered
         .iter()
         .map(|path| format!("rendered drift: {path}"))
@@ -158,39 +207,13 @@ pub fn run(args: &StatusArgs) -> Result<(), RkError> {
                 .iter()
                 .map(|(path, line, _)| format!("sentinel: {path}:{line}")),
         )
-        .collect();
-    out.emit(&Report {
-        schema: "rk.status/1",
-        landed: true,
-        tech: Some(manifest.tech),
-        forge: Some(manifest.forge),
-        rk_version: Some(manifest.rk_version),
-        binary_version: Some(env!("CARGO_PKG_VERSION")),
-        alignment: Some(alignment),
-        drift: Some(Drift {
-            rendered: observed.drift_rendered.len(),
-            seeded: observed.drift_seeded.len(),
-        }),
-        missing: Some(observed.missing.clone()),
-        stale_pins: Some(observed.stale),
-        sentinels: Some(observed.sentinels.len()),
-        violations: args.check.then(|| violations.clone()),
-    })?;
-
-    if args.check && !violations.is_empty() {
-        return Err(RkError::check_failed(
-            Diagnostic::new(
-                Reason::StateDrift,
-                format!(
-                    "the landing is not clean: {} violation{}",
-                    violations.len(),
-                    if violations.len() == 1 { "" } else { "s" }
-                ),
-            )
-            .expected("no rendered drift, no missing recorded file, no unresolved sentinel"),
-        ));
-    }
-    Ok(())
+        .chain(
+            observed
+                .invariants
+                .iter()
+                .map(|failure| format!("invariant: {}: {}", failure.destination, failure.code)),
+        )
+        .collect()
 }
 
 /// One pass over the record and the disk: drift, missing files, stale
@@ -202,6 +225,7 @@ fn observe(args: &StatusArgs, manifest: &Manifest) -> Result<Observed, RkError> 
         missing: Vec::new(),
         stale: Vec::new(),
         sentinels: Vec::new(),
+        invariants: Vec::new(),
     };
     for file in &manifest.files {
         let Some(bytes) = landing::read_recorded(&args.target, &file.destination)? else {
@@ -215,6 +239,12 @@ fn observe(args: &StatusArgs, manifest: &Manifest) -> Result<Observed, RkError> 
                 Kind::State => {}
             }
         }
+        observed.invariants.extend(invariants::failures(
+            &manifest.tech,
+            &manifest.forge,
+            &file.destination,
+            &bytes,
+        ));
         let text = String::from_utf8_lossy(&bytes);
         for (idx, line) in text.lines().enumerate() {
             if line.contains(embedded::SENTINEL) {
@@ -293,7 +323,16 @@ fn render_human(
     for (path, line, text) in &observed.sentinels {
         out.result_line(format!("SENTINEL {path}:{line}: {text}"));
     }
+    for failure in &observed.invariants {
+        out.result_line(format!(
+            "INVARIANT {} ({}): {}",
+            failure.destination, failure.code, failure.reason
+        ));
+    }
     let mut next = Vec::new();
+    for failure in &observed.invariants {
+        next.push(format!("{}: {}", failure.destination, failure.remediation));
+    }
     if alignment == Alignment::BinaryNewer {
         next.push(format!(
             "rk upgrade --target {} takes this landing to {}",
@@ -312,14 +351,14 @@ fn render_human(
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use super::{Drift, Report, StalePin};
+    use super::{Drift, InvariantFailure, Report, StalePin};
 
     /// The complete `rk.status/1` shape, held by snapshot in both the
     /// landed and absent forms.
     #[test]
     fn the_status_report_schema_snapshot_holds() {
         let landed = Report {
-            schema: "rk.status/1",
+            schema: "rk.status/2",
             landed: true,
             tech: Some("rust".into()),
             forge: Some("github".into()),
@@ -337,11 +376,17 @@ mod tests {
                 available: "0.3.170".into(),
             }]),
             sentinels: Some(1),
+            invariant_failures: Some(vec![InvariantFailure {
+                code: "attestations-disabled",
+                destination: "dist-workspace.toml".into(),
+                reason: "github-attestations is not effectively true".into(),
+                remediation: "set github-attestations = true in [dist]",
+            }]),
             violations: None,
         };
         assert_eq!(
             serde_json::to_string(&landed).expect("a report serializes"),
-            r#"{"schema":"rk.status/1","landed":true,"tech":"rust","forge":"github","rk_version":"0.1.0","binary_version":"0.2.0","alignment":"binary-newer","drift":{"rendered":0,"seeded":1},"missing":[],"stale_pins":[{"tool":"release-plz","landed":"0.3.160","available":"0.3.170"}],"sentinels":1}"#
+            r#"{"schema":"rk.status/2","landed":true,"tech":"rust","forge":"github","rk_version":"0.1.0","binary_version":"0.2.0","alignment":"binary-newer","drift":{"rendered":0,"seeded":1},"missing":[],"stale_pins":[{"tool":"release-plz","landed":"0.3.160","available":"0.3.170"}],"sentinels":1,"invariant_failures":[{"code":"attestations-disabled","destination":"dist-workspace.toml","reason":"github-attestations is not effectively true","remediation":"set github-attestations = true in [dist]"}]}"#
         );
         let absent = Report {
             landed: false,
@@ -354,12 +399,13 @@ mod tests {
             missing: None,
             stale_pins: None,
             sentinels: None,
+            invariant_failures: None,
             violations: None,
             ..landed
         };
         assert_eq!(
             serde_json::to_string(&absent).expect("a report serializes"),
-            r#"{"schema":"rk.status/1","landed":false}"#,
+            r#"{"schema":"rk.status/2","landed":false}"#,
             "an absent landing reports one field a caller can branch on"
         );
     }

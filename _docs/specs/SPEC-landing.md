@@ -10,6 +10,7 @@
   - [`landing:a-rendered-file-carries-no-judgment` — A rendered file carries no judgment](#landinga-rendered-file-carries-no-judgment--a-rendered-file-carries-no-judgment)
   - [`landing:an-upgrade-refuses-on-owned-drift` — An upgrade refuses on owned drift](#landingan-upgrade-refuses-on-owned-drift--an-upgrade-refuses-on-owned-drift)
   - [`landing:a-seeded-file-is-never-rewritten` — A seeded file is never rewritten](#landinga-seeded-file-is-never-rewritten--a-seeded-file-is-never-rewritten)
+  - [`landing:a-seeded-file-still-carries-the-invariants` — A seeded file still carries the invariants](#landinga-seeded-file-still-carries-the-invariants--a-seeded-file-still-carries-the-invariants)
   - [`landing:a-dropped-file-stays` — A dropped file stays](#landinga-dropped-file-stays--a-dropped-file-stays)
   - [`landing:a-target-is-never-downgraded` — A target is never downgraded](#landinga-target-is-never-downgraded--a-target-is-never-downgraded)
   - [`landing:status-judges-only-under-check` — Status judges only under check](#landingstatus-judges-only-under-check--status-judges-only-under-check)
@@ -99,6 +100,18 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 
+### `landing:a-seeded-file-still-carries-the-invariants` — A seeded file still carries the invariants
+
+`rk status` MUST judge a landed file's effective configuration against the invariants its `(technology, forge, destination)` key owns, reporting each failure with a stable code, the destination, the reason, and the exact remediation, and `--check` MUST count each one a violation. The relationship to `landing:a-seeded-file-is-never-rewritten` is deliberate: nothing is rewritten — the file stays the target's to tune — and the narrow part the invariants own is judged. The judgment MUST read the parsed configuration, never match text: a commented key, a disabled value, a defaulted phase, or an unpaired phase fails, and whitespace or key order changes nothing.
+
+#### Scenario: A landed target turns attestations off
+
+- GIVEN a landed rust/github target whose `dist-workspace.toml` sets `github-attestations = false`
+- WHEN `rk status` and `rk status --check` run
+- THEN both report the failure with its code and remediation, the plain run exits 0, the check exits 1, and the file is untouched
+
+Verify: `cargo nextest run -E 'binary(cli)'`
+
 ### `landing:a-dropped-file-stays` — A dropped file stays
 
 A file the payload stops shipping MUST be left in place and named in the upgrade's output, and the rewritten record stops carrying it, because a file release-kit stops shipping is a file the target owns from that moment.
@@ -125,7 +138,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `landing:status-judges-only-under-check` — Status judges only under check
 
-Plain `rk status` MUST report and exit 0 for every reportable state — drift, staleness, unresolved sentinels, and no landing at all — and `rk status --check` MUST compute the identical report and exit 1 exactly on a violation: drift to a `rendered` file, an invalid or missing landing, or an unresolved judgment sentinel. Seeded drift and pin staleness stay informational in both modes.
+Plain `rk status` MUST report and exit 0 for every reportable state — drift, staleness, unresolved sentinels, invariant failures, and no landing at all — and `rk status --check` MUST compute the identical report and exit 1 exactly on a violation: drift to a `rendered` file, an invalid or missing landing, an unresolved judgment sentinel, or an invariant failure under `landing:a-seeded-file-still-carries-the-invariants`. Seeded drift and pin staleness stay informational in both modes.
 
 #### Scenario: The same target, judged and not
 

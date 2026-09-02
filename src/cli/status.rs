@@ -11,8 +11,9 @@ pub struct StatusArgs {
     pub target: Utf8PathBuf,
 
     /// Judge the identical report: exit 1 on a violation — drift on a
-    /// rendered file, an invalid or missing landing, or an unresolved
-    /// judgment sentinel. Seeded drift and pin staleness stay
+    /// rendered file, an invalid or missing landing, an unresolved
+    /// judgment sentinel, or an invariant a landed file's effective
+    /// configuration violates. Seeded drift and pin staleness stay
     /// informational.
     #[arg(long)]
     pub check: bool,
