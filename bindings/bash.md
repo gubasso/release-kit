@@ -26,7 +26,7 @@ A one-line `VERSION` file is the committed source of truth, and `git-cliff --bum
 ## Provenance
 
 - There is no registry, so the release page is the entire distribution surface, and its assets are mutable: whatever can replace the tarball can replace the `.sha256` beside it. This binding needs the attestation more than the ones with a registry behind them, not less.
-- The landed `release.yml` attests the tarball with `actions/attest` in the same job that builds it, which is why `tag-and-attach` carries `id-token: write`, `attestations: write`, and `artifact-metadata: write` alongside `contents: read`.
+- The landed `release.yml` attests the tarball with `actions/attest` in the same job that builds it, which is why `tag-and-attach` carries `id-token: write`, `attestations: write`, and `artifact-metadata: write` alongside `contents: read`. The attestation is minted before `gh release create` runs: the order is the rule, not an implementation detail, because the release page is public the moment it exists, and a page created first would point at an unattested tarball until the attest step ran — permanently, if the run failed between the two.
 - A consumer verifies with `gh attestation verify <tarball> --repo <owner>/<repo>`. An `install.sh` served from the release page is itself an artifact and can be attested and verified the same way before it is run.
 
 ## Downstream packaging

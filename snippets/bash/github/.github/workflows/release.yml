@@ -78,7 +78,8 @@ jobs:
   # The release itself. Only the push that lands the bot's own bump releases —
   # the VERSION comparison against the parent commit is the guard — so an
   # ordinary work merge tags nothing. Tag the bump commit, build the tarball
-  # as a pure function of the tree, and attach it with its checksum.
+  # as a pure function of the tree, attest it, and only then attach it with
+  # its checksum: nothing is publicly reachable before its attestation exists.
   tag-and-attach:
     if: github.repository_owner == 'OWNER'
     runs-on: ubuntu-latest
@@ -101,8 +102,8 @@ jobs:
           persist-credentials: false
       - name: install git-cliff
         run: pipx install git-cliff==2.13.1
-      - name: tag and attach
-        id: release
+      - name: tag and build
+        id: build
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           GH_REPO: ${{ github.repository }}
@@ -122,20 +123,34 @@ jobs:
           fi
           git fetch origin "refs/tags/v$version:refs/tags/v$version"
           make dist
-          echo "built=true" >> "$GITHUB_OUTPUT"
           git cliff --latest -o notes.md
-          if gh release view "v$version" >/dev/null 2>&1; then
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "built=true" >> "$GITHUB_OUTPUT"
+
+      # Provenance, minted before anything is publishable. The run that built
+      # the tarball signs it, so a consumer can check which workflow and commit
+      # produced it instead of trusting the release page the checksum also sits
+      # on. Attesting by hand is not possible: only the building run holds the
+      # identity that signs. The order is the rule, not a detail: the
+      # attestation exists before the release page does, so no public release
+      # ever points at an unattested tarball, not even between the steps of a
+      # failed run. A rerun rebuilds the identical tarball from the tag and
+      # re-attests it before touching the page.
+      - uses: actions/attest@v4
+        if: steps.build.outputs.built == 'true'
+        with:
+          subject-path: dist/*.tar.gz
+
+      - name: attach
+        if: steps.build.outputs.built == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          VERSION: ${{ steps.build.outputs.version }}
+        run: |
+          set -eu
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
             echo "the release page already exists; leaving it as it is."
             exit 0
           fi
-          gh release create "v$version" dist/*.tar.gz dist/*.sha256 \
-            --title "v$version" --notes-file notes.md
-
-      # Provenance. The run that built the tarball signs it, so a consumer can
-      # check which workflow and commit produced it instead of trusting the
-      # release page the checksum also sits on. Attesting by hand is not
-      # possible: only the building run holds the identity that signs.
-      - uses: actions/attest@v4
-        if: steps.release.outputs.built == 'true'
-        with:
-          subject-path: dist/*.tar.gz
+          gh release create "v$VERSION" dist/*.tar.gz dist/*.sha256 \
+            --title "v$VERSION" --notes-file notes.md

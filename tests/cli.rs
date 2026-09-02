@@ -5807,3 +5807,67 @@ fn branches_prune_apply_reports_a_surviving_branch_configuration() {
     );
     assert!(!branch_names(repo.path()).contains("feat/merged"));
 }
+
+/// The rust/github seed attests the whole release payload. The flag alone
+/// uses cargo-dist's default phase, which attests only the per-platform
+/// archives; the installers a consumer actually curls are global artifacts
+/// built later, so the seed must pin the `host` phase, pair the release
+/// creation with it, and declare no narrowing filter. `announce` is a valid
+/// cargo-dist phase but not this binding's: an announce-phase attestation is
+/// minted after the release page exists, so accepting it would stop holding
+/// the mint-before-publishable rule.
+#[test]
+fn the_rust_github_seed_attests_the_release_payload_in_the_host_phase() {
+    let text = std::fs::read_to_string(repo_path("snippets/rust/github/dist-workspace.toml"))
+        .expect("the seed reads");
+    let value: toml::Table = text.parse().expect("the seed parses as TOML");
+    let dist = value
+        .get("dist")
+        .and_then(toml::Value::as_table)
+        .expect("a [dist] table");
+    assert_eq!(
+        dist.get("github-attestations")
+            .and_then(toml::Value::as_bool),
+        Some(true),
+        "github-attestations must be enabled"
+    );
+    assert_eq!(
+        dist.get("github-attestations-phase")
+            .and_then(toml::Value::as_str),
+        Some("host"),
+        "the attest phase must be exactly host: the default attests only the per-platform archives, and announce attests after the page exists"
+    );
+    assert_eq!(
+        dist.get("github-release").and_then(toml::Value::as_str),
+        dist.get("github-attestations-phase")
+            .and_then(toml::Value::as_str),
+        "the release must be created in the same phase that attests"
+    );
+    assert!(
+        !dist.contains_key("github-attestations-filters"),
+        "no narrowing filter: the default [\"*\"] covers every hosted file, and an enumerated list goes quiet when an archive format moves"
+    );
+}
+
+/// The bash/github release workflow mints the attestation before the release
+/// page exists: the page is public the moment `gh release create` runs, so an
+/// attest step after it leaves a window — permanent, if the run dies between
+/// the two — where a public release points at an unattested tarball. The
+/// assertion is on the order of the two in the file, not on their presence.
+#[test]
+fn the_bash_github_workflow_attests_before_it_creates_the_release() {
+    let text = std::fs::read_to_string(repo_path(
+        "snippets/bash/github/.github/workflows/release.yml",
+    ))
+    .expect("the workflow reads");
+    let attest = text
+        .find("uses: actions/attest@")
+        .expect("the workflow carries an attest step");
+    let create = text
+        .find("gh release create")
+        .expect("the workflow creates the release");
+    assert!(
+        attest < create,
+        "the attest step must precede gh release create, so nothing publicly reachable exists before its attestation does"
+    );
+}

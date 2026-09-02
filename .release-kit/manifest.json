@@ -56,7 +56,7 @@
     {
       "destination": "dist-workspace.toml",
       "kind": "seeded",
-      "sha256": "1dc24539b534fd5b9505553393c5d507b30775fde976136f272c76d1d70ede50",
+      "sha256": "3ddf5d24ea08060e8aa9d090081c4c82ddc714f0def5a1dd6e7048221d937afd",
       "baseline_sha256": "eae26fd9dfe93105726202da221a6ccd61545ef9c51b9f5f7e2bc7375ee08e6b"
     },
     {
