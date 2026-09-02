@@ -17,7 +17,7 @@ use serde::Serialize;
 use crate::cli::init::InitArgs;
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
-use crate::landing::manifest::{self, FileRecord, Manifest, Parameters};
+use crate::landing::manifest::{self, FileRecord, Manifest, Parameters, Workflow};
 use crate::landing::{self, Entry, Kind};
 use crate::output::Output;
 use crate::{digest::Digest, embedded, registry};
@@ -245,6 +245,7 @@ fn apply(
             parameters: Parameters {
                 repo: repo.to_owned(),
                 scopes: scopes.to_vec(),
+                workflow: Workflow::Branches,
             },
             files: records,
             pins: registry::pins_for(&args.tech)

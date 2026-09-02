@@ -220,6 +220,7 @@ fn rewrite_record(
             parameters: manifest::Parameters {
                 repo: recorded.parameters.repo.clone(),
                 scopes: recorded.parameters.scopes.clone(),
+                workflow: recorded.parameters.workflow,
             },
             files: decisions
                 .iter()

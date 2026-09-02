@@ -23,8 +23,57 @@ use crate::landing::Kind;
 /// Where the record lives, relative to the target root.
 pub const MANIFEST_PATH: &str = ".release-kit/manifest.json";
 
-/// The one schema this binary reads and writes.
-pub const SCHEMA_VERSION: u64 = 1;
+/// The schema this binary writes. It also reads schema 1 — the pre-mode
+/// record, whose absent `workflow` parameter reads as `branches` — and
+/// refuses anything else by name.
+pub const SCHEMA_VERSION: u64 = 2;
+
+/// The oldest schema this binary still reads.
+const OLDEST_READABLE_SCHEMA: u64 = 1;
+
+/// The working-copy mode a landing records: a project decision, rendered
+/// into the landed blocks and changed only through the landing verbs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Workflow {
+    /// Every code-changing branch lives in a linked worktree and the main
+    /// checkout commits nothing.
+    Worktree,
+    /// Branches are worked in the main checkout; worktrees stay available
+    /// beside them and nothing refuses either form.
+    Branches,
+}
+
+impl Workflow {
+    /// The flag, wire, and report form.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Worktree => "worktree",
+            Self::Branches => "branches",
+        }
+    }
+
+    /// Parse a `--workflow` flag value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RkError::Usage`] naming the two values.
+    pub fn parse(raw: &str) -> Result<Self, RkError> {
+        match raw {
+            "worktree" => Ok(Self::Worktree),
+            "branches" => Ok(Self::Branches),
+            other => Err(RkError::Usage(format!(
+                "unknown workflow '{other}'; the modes are: worktree, branches"
+            ))),
+        }
+    }
+}
+
+/// The serde default for a record from before the parameter existed.
+const fn workflow_branches() -> Workflow {
+    Workflow::Branches
+}
 
 /// The record a landing writes and every target-side verb reads.
 #[derive(Debug, Serialize, Deserialize)]
@@ -66,6 +115,13 @@ pub struct Parameters {
     /// such a record asks for `--scopes` once and records the answer.
     #[serde(default)]
     pub scopes: Vec<String>,
+    /// The working-copy mode the project chose: every code-changing branch
+    /// in a linked worktree (`worktree`), or branches worked in the main
+    /// checkout with worktrees optional beside them (`branches`). A record
+    /// predating the field reads as `branches`, so an upgrade never imposes
+    /// a guard the project did not choose.
+    #[serde(default = "workflow_branches")]
+    pub workflow: Workflow,
 }
 
 /// One landed destination.
@@ -123,16 +179,21 @@ pub fn load(target: &Utf8Path) -> Result<Option<Manifest>, RkError> {
     };
     let value: serde_json::Value = serde_json::from_slice(&bytes)
         .map_err(|e| anyhow::anyhow!("{path} is not a landing record: {e}"))?;
+    // Schema 1 is the pre-mode record: it parses through the same
+    // `Parameters`, whose serde default reads the absent `workflow` as
+    // `branches`. Anything past this binary's schema refuses by name —
+    // the record decides whether a guard is landed, and an older binary
+    // must never silently ignore that.
     let schema = value
         .get("schema_version")
         .and_then(serde_json::Value::as_u64);
-    if schema != Some(SCHEMA_VERSION) {
+    if !schema.is_some_and(|version| (OLDEST_READABLE_SCHEMA..=SCHEMA_VERSION).contains(&version)) {
         let found = schema.map_or_else(|| "none".to_owned(), |version| version.to_string());
         return Err(RkError::refusal(
             Diagnostic::new(
                 Reason::UnsupportedSchema,
                 format!(
-                    "{path} declares schema_version {found}, and this binary knows only {SCHEMA_VERSION}"
+                    "{path} declares schema_version {found}, and this binary knows only {OLDEST_READABLE_SCHEMA} through {SCHEMA_VERSION}"
                 ),
             )
             .expected("a record this binary can read")
@@ -140,8 +201,9 @@ pub fn load(target: &Utf8Path) -> Result<Option<Manifest>, RkError> {
             .target_state("unchanged"),
         ));
     }
+    let declared = schema.unwrap_or(SCHEMA_VERSION);
     let manifest: Manifest = serde_json::from_value(value)
-        .map_err(|e| anyhow::anyhow!("{path} does not parse at schema_version 1: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("{path} does not parse at schema_version {declared}: {e}"))?;
     Ok(Some(manifest))
 }
 
@@ -273,17 +335,17 @@ fn numeric_core(version: &str) -> Vec<u64> {
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use super::{Alignment, FileRecord, Manifest, Parameters, alignment};
+    use super::{Alignment, FileRecord, Manifest, Parameters, Workflow, alignment};
     use crate::digest::Digest;
     use crate::landing::Kind;
 
-    /// The complete record shape at schema 1, held by snapshot: a field
+    /// The complete record shape at schema 2, held by snapshot: a field
     /// rename or removal fails here and becomes a schema-version bump
     /// instead of a silent break at every reader.
     #[test]
     fn the_manifest_schema_snapshot_holds() {
         let manifest = Manifest {
-            schema_version: 1,
+            schema_version: 2,
             rk_version: "0.1.0".into(),
             payload_sha256: Digest::of(b""),
             origin: "init".into(),
@@ -293,6 +355,7 @@ mod tests {
             parameters: Parameters {
                 repo: "acme/widget".into(),
                 scopes: vec!["api".into(), "cli".into()],
+                workflow: Workflow::Worktree,
             },
             files: vec![
                 FileRecord {
@@ -314,10 +377,35 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&manifest).expect("a manifest serializes"),
             format!(
-                r#"{{"schema_version":1,"rk_version":"0.1.0","payload_sha256":"{empty}","origin":"init","tech":"rust","forge":"github","landed_at":"2026-08-29T00:00:00Z","parameters":{{"repo":"acme/widget","scopes":["api","cli"]}},"files":[{{"destination":"release-plz.toml","kind":"seeded","sha256":"{empty}","baseline_sha256":"{empty}"}},{{"destination":"VERSION","kind":"state","sha256":"{empty}"}}],"pins":{{"release-plz":"0.3.160"}}}}"#
+                r#"{{"schema_version":2,"rk_version":"0.1.0","payload_sha256":"{empty}","origin":"init","tech":"rust","forge":"github","landed_at":"2026-08-29T00:00:00Z","parameters":{{"repo":"acme/widget","scopes":["api","cli"],"workflow":"worktree"}},"files":[{{"destination":"release-plz.toml","kind":"seeded","sha256":"{empty}","baseline_sha256":"{empty}"}},{{"destination":"VERSION","kind":"state","sha256":"{empty}"}}],"pins":{{"release-plz":"0.3.160"}}}}"#
             ),
             "a state file must omit baseline_sha256 rather than serializing null"
         );
+    }
+
+    /// A record written before the mode existed reads as `branches`; a
+    /// record past this binary's schema refuses by name, because the field
+    /// it cannot see decides whether a guard is landed.
+    #[test]
+    fn a_schema_1_record_reads_as_branches_and_a_newer_schema_refuses() {
+        let dir = tempfile::tempdir().expect("a scratch target exists");
+        let target = camino::Utf8Path::from_path(dir.path()).expect("utf-8 path");
+        std::fs::create_dir_all(target.join(".release-kit")).expect("the record dir writes");
+        let record = |schema: u64| {
+            format!(
+                r#"{{"schema_version":{schema},"rk_version":"0.1.0","payload_sha256":"0000000000000000000000000000000000000000000000000000000000000000","origin":"init","tech":"rust","forge":"github","landed_at":"2026-08-29T00:00:00Z","parameters":{{"repo":"acme/widget","scopes":["api"]}},"files":[],"pins":{{}}}}"#
+            )
+        };
+        std::fs::write(target.join(super::MANIFEST_PATH), record(1)).expect("the record writes");
+        let manifest = super::load(target)
+            .expect("a schema-1 record loads")
+            .expect("the record exists");
+        assert_eq!(manifest.parameters.workflow, Workflow::Branches);
+
+        std::fs::write(target.join(super::MANIFEST_PATH), record(3)).expect("the record writes");
+        let refused = super::load(target).expect_err("a schema-3 record refuses");
+        let message = refused.to_string();
+        assert!(message.contains('3'), "{message}");
     }
 
     #[test]

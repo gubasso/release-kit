@@ -16,7 +16,7 @@ use crate::cli::adopt::AdoptArgs;
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::digest::Digest;
 use crate::error::RkError;
-use crate::landing::manifest::{self, FileRecord, Manifest, Parameters};
+use crate::landing::manifest::{self, FileRecord, Manifest, Parameters, Workflow};
 use crate::landing::{self, Kind};
 use crate::output::Output;
 use crate::registry;
@@ -119,6 +119,7 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
                 parameters: Parameters {
                     repo: repo.clone(),
                     scopes,
+                    workflow: Workflow::Branches,
                 },
                 files: records,
                 pins: registry::pins_for(&tech)
