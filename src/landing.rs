@@ -192,19 +192,20 @@ pub const HOOKS_END: &str = "# END release-kit";
 /// hook types are installed.
 pub const HOOK_TYPES_LINE: &str = "default_install_hook_types: [pre-commit, commit-msg, pre-push]";
 
-/// The routing block template: the whole of target-side governance. Seven
-/// lines of operational discovery — work branches before it starts, the
-/// commit contract, the files are owned, a convention governs them, and
-/// where the convention lives — spliced into the target's `AGENTS.md` and
-/// never grown into a method chapter. The scope token renders from the
-/// landing's `scopes` parameter.
+/// The routing block template: the whole of target-side governance. Eight
+/// lines of operational discovery — the agent guides and never drives, work
+/// branches before it starts, the commit contract, the files are owned, a
+/// convention governs them, and where the convention lives — spliced into
+/// the target's `AGENTS.md` and never grown into a method chapter. The scope
+/// token renders from the landing's `scopes` parameter.
 const ROUTING_BLOCK: &str = "<!-- BEGIN release-kit -->
 
 ## Releases
 
 - This repository runs the release-kit convention; `rk method invariants` states what must stay true.
-- Change nothing while on `master`: work starts on a short-lived branch — `<type>/<slug>` mirroring the squash title's type, or the forge-minted `<issue-id>-<slug>` — and reaches the trunk only through its pull request. When asked to implement or change code while the checkout sits on `master`, branch first.
-- Land work through squash-merged pull requests. The request's title becomes the trunk's commit message, so it MUST be a scoped Conventional Commit; the body carries the context.
+- An agent here guides and never drives: it reads this convention, tells the operator which step comes next, and takes no git or forge action — creating, switching or deleting a branch, committing, pushing, tagging, opening or updating or merging a pull request — unless the operator's request named that action. A request to change code authorizes the file changes alone.
+- Work reaches the trunk only through a squash-merged pull request from a short-lived branch — `<type>/<slug>` mirroring the squash title's type, or the forge-minted `<issue-id>-<slug>`. Nothing is committed on `master`.
+- The request's title becomes the trunk's commit message, so it MUST be a scoped Conventional Commit; the body carries the context.
 - Every commit follows the same scoped convention; the landed commit-msg hook enforces it, and the scopes this project accepts are `RK_SCOPES_CSV`.
 - Never author a tag, and never hand-edit a generated artifact workflow.
 - Run `rk status` before changing anything under `.github/workflows/` or `.gitlab-ci.yml`, or any file `.release-kit/manifest.json` names.

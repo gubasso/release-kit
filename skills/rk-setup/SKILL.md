@@ -13,7 +13,7 @@ Land the release-kit convention in a project. The CLI carries the whole canon: e
 
 Read `~/.local/state/release-kit/skills/shared/plan-gate.md` before the first action of a task, and hold it for the whole task. It binds three phases: plan and present the plan for approval, validate that plan against every preview and read-only source phase 2 names, then execute it.
 
-The gate is the whole reason this skill is safe to run unattended: every verb below writes files, changes a forge, or publishes a version.
+The gate is why this skill is safe to run: every verb below writes files, changes a forge, or publishes a version, and the gate states which of those steps stay the operator's own.
 
 When the request carries `--no-plan`, skip the approval turn only. Still state the ordered plan before acting, and still validate it as phase 2 directs.
 
@@ -51,7 +51,6 @@ The landed files hold the invariants of `rk method invariants`: exactly one work
 
 ## Defaults
 
-- Before any code or file change, check the current branch. On `master` or any long-lived ref, branch first — `<type>/<slug>` matching the intended squash type, or minted from the issue the work serves (`gh issue develop <issue> --checkout`, or the glab counterpart) — and reach the trunk only through a squash-merged request. This holds here and in every landed target.
 - Never run the setup steps out of order; each one names what the next depends on.
 - Never edit a generated artifact workflow by hand; change its configuration and regenerate, as the binding directs.
 - Never answer provenance with a signing scheme of your own; take what the channel offers by default, and where it offers nothing, say so rather than implying otherwise.

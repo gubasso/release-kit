@@ -17,6 +17,7 @@
   - [`landing:a-block-destination-owns-its-marked-lines-alone` — A block destination owns its marked lines alone](#landinga-block-destination-owns-its-marked-lines-alone--a-block-destination-owns-its-marked-lines-alone)
   - [`landing:the-shared-zone-composes-into-every-pair` — The shared zone composes into every pair](#landingthe-shared-zone-composes-into-every-pair--the-shared-zone-composes-into-every-pair)
   - [`landing:a-landed-hook-serves-the-release-convention-alone` — A landed hook serves the release convention alone](#landinga-landed-hook-serves-the-release-convention-alone--a-landed-hook-serves-the-release-convention-alone)
+  - [`landing:the-routing-block-bounds-the-agents-initiative` — The routing block bounds the agent's initiative](#landingthe-routing-block-bounds-the-agents-initiative--the-routing-block-bounds-the-agents-initiative)
 
 <!--TOC-->
 
@@ -179,5 +180,17 @@ The hook block MUST carry only hooks enforcing the release convention's own rule
 - GIVEN a landed `.pre-commit-config.yaml` block
 - WHEN its hooks are read beside `rk versions`
 - THEN each hook maps to a rule the method states, and each third-party repository the block names carries a registry pin
+
+Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `landing:the-routing-block-bounds-the-agents-initiative` — The routing block bounds the agent's initiative
+
+The routing block MUST state that an agent acting in the target guides and never drives: that a request to change code authorizes the file changes alone, and that creating, switching or deleting a branch, committing, pushing, tagging, and opening, updating or merging a pull request happen only where the operator's request named that action. It is the one landed line no mechanism enforces — a hook and a forge protection bound the end state and cannot tell an agent from a person — so the target carries it as a sentence rather than leaving an agent to discover it by refusal.
+
+#### Scenario: The block is read for what it authorizes
+
+- GIVEN the routing block release-kit renders into a target's `AGENTS.md`
+- WHEN the test suite reads it
+- THEN it carries the line bounding the agent's initiative, and no line ordering an agent to branch, commit, or merge on its own
 
 Verify: `cargo nextest run -E 'binary(cli)'`

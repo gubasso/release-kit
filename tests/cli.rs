@@ -1533,6 +1533,35 @@ fn the_payload_carries_the_shared_plan_gate() {
         text.contains("--no-plan"),
         "the gate does not state what --no-plan changes"
     );
+    assert!(
+        text.contains("## What a request authorizes"),
+        "the gate does not bound what a request authorizes"
+    );
+}
+
+/// The landed block says who acts, per
+/// `landing:the-routing-block-bounds-the-agents-initiative`: it names the
+/// git and forge actions an agent takes only on the operator's order, and
+/// carries no sentence ordering one to branch, commit, or merge on its own.
+#[test]
+fn the_routing_block_bounds_the_agents_initiative() {
+    let block = release_kit::landing::routing_block();
+    for phrase in [
+        "guides and never drives",
+        "unless the operator's request named that action",
+        "authorizes the file changes alone",
+    ] {
+        assert!(
+            block.contains(phrase),
+            "the block drops '{phrase}': {block}"
+        );
+    }
+    for order in ["branch first", "Land work through"] {
+        assert!(
+            !block.contains(order),
+            "the block still orders the agent to act: '{order}'"
+        );
+    }
 }
 
 #[test]
@@ -4133,7 +4162,7 @@ fn the_routing_block_splices_and_is_recorded() {
     assert!(agents.starts_with("# Widget\n\nHouse rules.\n"));
     assert!(agents.contains("<!-- BEGIN release-kit -->"));
     assert!(agents.contains("rk method invariants"));
-    assert!(agents.contains("branch first"));
+    assert!(agents.contains("guides and never drives"));
     assert!(
         agents.contains("the scopes this project accepts are `api,cli`"),
         "{agents}"
