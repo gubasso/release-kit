@@ -12,6 +12,7 @@ use crate::commands::walk;
 use crate::detect;
 use crate::embedded;
 use crate::error::RkError;
+use crate::landing::manifest::{self, Workflow};
 use crate::output::Output;
 
 /// Print one runbook, or list them.
@@ -69,14 +70,29 @@ pub fn run(args: &GuideArgs) -> Result<(), RkError> {
         }
         None => None,
     };
+    let workflow = args.workflow.as_deref().map(Workflow::parse).transpose()?;
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let detected = detect::detect(&cwd);
     let forge = forge.or_else(|| detected.forge.map(detect::Forge::as_str));
     let tech = tech.or_else(|| detect::tech_of(&cwd).map(str::to_owned));
     let repo = args.repo.clone().or(detected.repo);
+    // The workflow axis resolves from the landing record — the mode is a
+    // committed project decision, not a detection guess — and stays open
+    // where no record exists, the honest pre-landing fallback.
+    let workflow = workflow.or_else(|| {
+        camino::Utf8Path::from_path(&cwd)
+            .and_then(|path| manifest::load(path).ok().flatten())
+            .map(|record| record.parameters.workflow)
+    });
 
-    let rendered = render(&text, forge, tech.as_deref(), repo.as_deref());
+    let rendered = render(
+        &text,
+        forge,
+        tech.as_deref(),
+        repo.as_deref(),
+        workflow.map(Workflow::as_str),
+    );
     let unresolved = repo.is_none() && rendered.contains("<repo>");
     out.result_raw(&rendered);
     if unresolved {
@@ -96,6 +112,7 @@ fn axis_of(selector: &str) -> Option<&'static str> {
     match selector {
         "github" | "gitlab" => Some("forge"),
         "rust" | "python" | "bash" => Some("tech"),
+        "worktree" | "branches" => Some("workflow"),
         _ => None,
     }
 }
@@ -109,7 +126,13 @@ fn label_of(line: &str) -> Option<&str> {
 /// Render one runbook: keep the matching variant of every resolved axis and
 /// drop its siblings, substitute `<repo>` and `<tech>` where they are known,
 /// and leave everything else byte-identical.
-fn render(text: &str, forge: Option<&str>, tech: Option<&str>, repo: Option<&str>) -> String {
+fn render(
+    text: &str,
+    forge: Option<&str>,
+    tech: Option<&str>,
+    repo: Option<&str>,
+    workflow: Option<&str>,
+) -> String {
     let lines: Vec<&str> = text.split('\n').collect();
     let mut out: Vec<String> = Vec::with_capacity(lines.len());
     let mut idx = 0;
@@ -123,6 +146,7 @@ fn render(text: &str, forge: Option<&str>, tech: Option<&str>, repo: Option<&str
         let resolved = match axis_of(selector) {
             Some("forge") => forge.map(str::to_owned),
             Some("tech") => tech.map(str::to_owned),
+            Some("workflow") => workflow.map(str::to_owned),
             // A pair resolves only once both halves have: with either axis
             // open, every pair variant stays visible, label and all.
             Some("pair") => match (tech, forge) {
@@ -189,7 +213,7 @@ mod tests {
     /// Nothing resolved: the output is byte-identical to the source.
     #[test]
     fn an_unresolved_render_is_byte_identical() {
-        assert_eq!(render(DOC, None, None, None), DOC);
+        assert_eq!(render(DOC, None, None, None, None), DOC);
     }
 
     /// A resolved forge keeps its variant, drops the sibling and both
@@ -197,13 +221,13 @@ mod tests {
     /// stays a placeholder.
     #[test]
     fn a_resolved_render_selects_and_substitutes() {
-        let rendered = render(DOC, Some("github"), None, Some("acme/widget"));
+        let rendered = render(DOC, Some("github"), None, Some("acme/widget"), None);
         assert!(rendered.contains("gh pr list --repo acme/widget"));
         assert!(!rendered.contains("glab"));
         assert!(!rendered.contains("On github:"));
         assert!(!rendered.contains("<repo>"));
         assert!(rendered.contains("<release pr>"));
-        let gitlab = render(DOC, Some("gitlab"), None, None);
+        let gitlab = render(DOC, Some("gitlab"), None, None, None);
         assert!(gitlab.contains("glab mr list"));
         assert!(!gitlab.contains("gh pr list"));
     }
@@ -212,7 +236,7 @@ mod tests {
     #[test]
     fn a_paragraph_variant_renders() {
         let doc = "On github:\n\nthe force-push refresh survives.\n\nOn gitlab:\n\nthe request is replaced.\n\nend\n";
-        let rendered = render(doc, Some("gitlab"), None, None);
+        let rendered = render(doc, Some("gitlab"), None, None, None);
         assert_eq!(rendered, "the request is replaced.\n\nend\n");
     }
 
@@ -223,15 +247,34 @@ mod tests {
     #[test]
     fn a_pair_variant_selects_on_both_axes() {
         let doc = "On bash/gitlab:\n\n```bash\ncosign verify-blob-attestation\n```\n\nOn rust/gitlab:\n\nno provenance surface.\n\nend\n";
-        let matched = render(doc, Some("gitlab"), Some("bash"), None);
+        let matched = render(doc, Some("gitlab"), Some("bash"), None, None);
         assert!(matched.contains("cosign verify-blob-attestation"));
         assert!(!matched.contains("no provenance surface"));
         assert!(!matched.contains("On bash/gitlab:"));
-        let sibling = render(doc, Some("gitlab"), Some("rust"), None);
+        let sibling = render(doc, Some("gitlab"), Some("rust"), None, None);
         assert!(!sibling.contains("cosign"));
         assert!(sibling.contains("no provenance surface."));
-        let open_axis = render(doc, Some("gitlab"), None, None);
+        let open_axis = render(doc, Some("gitlab"), None, None, None);
         assert_eq!(open_axis, doc, "an open axis keeps every pair variant");
+    }
+
+    /// The workflow axis renders like the others: resolved, the matching
+    /// variant is kept and its sibling dropped; open, every variant
+    /// prints with its label.
+    #[test]
+    fn a_workflow_variant_selects_on_the_mode() {
+        let doc = "On worktree:\n\nrk worktree add release-branch --apply\n\nOn branches:\n\ngh pr checkout 7\n\nend\n";
+        let worktree = render(doc, None, None, None, Some("worktree"));
+        assert!(worktree.contains("rk worktree add"));
+        assert!(!worktree.contains("gh pr checkout"));
+        let branches = render(doc, None, None, None, Some("branches"));
+        assert!(branches.contains("gh pr checkout"));
+        assert!(!branches.contains("rk worktree add"));
+        assert_eq!(
+            render(doc, None, None, None, None),
+            doc,
+            "an unresolved mode keeps every variant, label and all"
+        );
     }
 
     /// A resolved tech fills `<tech>` everywhere; unresolved it stays.
@@ -239,9 +282,9 @@ mod tests {
     fn a_resolved_tech_fills_the_placeholder() {
         let doc = "rk init --tech <tech> --target .\n";
         assert_eq!(
-            render(doc, None, Some("rust"), None),
+            render(doc, None, Some("rust"), None, None),
             "rk init --tech rust --target .\n"
         );
-        assert_eq!(render(doc, None, None, None), doc);
+        assert_eq!(render(doc, None, None, None, None), doc);
     }
 }

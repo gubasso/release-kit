@@ -26,4 +26,10 @@ pub struct GuideArgs {
     /// the git remote.
     #[arg(long)]
     pub repo: Option<String>,
+
+    /// Select the workflow mode's lines where the runbook branches:
+    /// worktree or branches. Defaults to the mode the landing record
+    /// states; without a record, every variant prints with its label.
+    #[arg(long)]
+    pub workflow: Option<String>,
 }
