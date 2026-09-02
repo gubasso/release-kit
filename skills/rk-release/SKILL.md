@@ -25,7 +25,7 @@ One pull request. The bot maintains the release request against the trunk — th
 
 1. Read the sequence once per session: `rk method operate`. Then follow `rk guide release`, which renders it as commands with the project path and technology filled in and the forge's variants selected.
 2. Run `rk status --check --target .` before anything ships: drift on a file release-kit owns, or an unfilled sentinel, is fixed before a release, not during one.
-3. Follow the guide's six steps in order and by number, running each check it prints; this skill adds no step of its own. The merge in its step 4 is the release itself, so it stays the operator's unless their request named it.
+3. Follow the guide's six steps in order and by number, running each check it prints; this skill adds no step of its own. The merge in its step 4 is the release itself, so it stays the operator's unless their request named it. Route the changelog correction and any checkout by the project's workflow mode, read from `rk status`: under `worktree` the request's branch takes `rk worktree add "<bot branch>" --apply`, under `branches` the forge CLI's checkout — `rk guide release` renders the right form.
 4. An older line takes `rk guide backport` the same way.
 
 ## When it goes wrong
@@ -50,4 +50,4 @@ A release line flows one direction: fix on the trunk first, cherry-pick only the
 - A verify step that fails right after the release merge is usually timing: the artifact builder creates the release page minutes after the tag.
 - Prefer the smallest recovery that returns to the happy path; never surgery on tags, published versions, or the trunk.
 - A hand-uploaded artifact carries no provenance, even when CI built the file. Treat that release as unfinished and re-run the artifact workflow on its tag once CI is back.
-- After a release merges, `rk branches prune` reports the retired local branch; state the command and let the operator run the deletion.
+- After a release merges, `rk branches prune` reports the retired local branch and `rk worktree prune --verify` confirms the retired worktree; state each command and let the operator run the `--apply`.
