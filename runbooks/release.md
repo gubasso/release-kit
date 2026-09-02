@@ -89,7 +89,7 @@ gh pr checkout <release pr> --repo <repo>        # or glab mr checkout <release 
 On worktree:
 
 ```bash
-rk worktree add "<bot branch>" --apply && cd "../<project>-<bot branch flattened>"
+rk worktree add "<bot branch>" --apply && cd "../<project>@<bot branch flattened>"
 # check: the source line reports remote — the bot's branch fits the grammar's release arm and is seated from origin's tip, never recreated from the trunk; step 4's merge retires the worktree through step 4 of rk guide worktree
 ```
 

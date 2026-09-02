@@ -2,7 +2,7 @@
 
 A project chooses its working-copy form once, at setup, and records the choice in the landing: the workflow mode, `worktree` or `branches`. The mode is a landing parameter — recorded in `.release-kit/manifest.json`, rendered into the committed hook block and routing block, reported by `rk status`, judged by `rk status --check`, and changed only through the landing verbs — so every clone and every agent sees the same mode, and changing it is a visible, reviewed re-landing, never an ad hoc local toggle.
 
-`worktree` is the default and the first-class form: every code-changing branch lives in a linked worktree at `../<project>-<flattened branch>`, and the main checkout commits nothing — not on a branch, not detached — just as the forge trunk takes no direct push. `branches` is the supported alternative: short-lived branches are worked in the main checkout, worktrees remain available and fully functional beside them, and nothing refuses either form.
+`worktree` is the default and the first-class form: every code-changing branch lives in a linked worktree at `../<project>@<flattened branch>`, and the main checkout commits nothing — not on a branch, not detached — just as the forge trunk takes no direct push. `branches` is the supported alternative: short-lived branches are worked in the main checkout, worktrees remain available and fully functional beside them, and nothing refuses either form.
 
 ## Why worktrees are first-class
 
@@ -10,7 +10,7 @@ Parallel work forces the worktree form regardless of mode. Two writers — human
 
 ## The naming rule
 
-A worktree's path derives from the project and the branch: the branch name flattens by replacing every `/` with `-`, and the worktree is the sibling `../<project>-<flattened branch>`. Flattening is not injective — `feat/a-b` and `feat-a/b` derive the same directory — so `rk worktree add` refuses a collision by name and never suffixes silently. A worktree made by hand at some other path works and is reported off-path by `rk worktree list`, never refused.
+A worktree's path derives from the project and the branch: the branch name flattens by replacing every `/` with `-`, and the worktree is the sibling `../<project>@<flattened branch>`. Flattening is not injective — `feat/a-b` and `feat-a/b` derive the same directory — so `rk worktree add` refuses a collision by name and never suffixes silently. A worktree made by hand at some other path works and is reported off-path by `rk worktree list`, never refused; `rk worktree add` for its branch refuses to make a second seat and names `git worktree move` to the derived path as the move.
 
 ## The sequence
 

@@ -129,13 +129,19 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `maintenance:a-worktree-path-derives-from-project-and-branch` — A worktree path derives from project and branch
 
-`rk worktree add` MUST derive the path as the sibling `../<project>-<flattened branch>` with every `/` flattened to `-`, MUST refuse a collision by name and never suffix silently, and an off-path worktree MUST be reported and never refused.
+`rk worktree add` MUST derive the path as the sibling `../<project>@<flattened branch>` with `@` separating the two halves and every `/` in the branch flattened to `-`, MUST refuse a collision by name and never suffix silently, MUST refuse a branch whose standing seat is off the derived path with `git worktree move` named as the move, and an off-path worktree MUST be reported by `rk worktree list` and never refused.
 
 #### Scenario: Two branches flatten to one directory
 
 - GIVEN a seated `feat/a-b` and a request to seat `feat/a/b`
 - WHEN `rk worktree add feat/a/b --apply` runs
 - THEN it refuses naming the occupying branch, and nothing is created
+
+#### Scenario: A branch stands seated off the derived path
+
+- GIVEN a branch seated at a path the derivation does not produce
+- WHEN `rk worktree add <branch> --apply` runs
+- THEN it refuses naming `git worktree move` as the move, and nothing is created
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 

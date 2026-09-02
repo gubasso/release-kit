@@ -35,7 +35,7 @@ Alice reproduces the bug at the trunk's tip, commit H, and writes the failing te
 ## Fix on the trunk, in a short-lived branch
 
 ```bash
-rk worktree add fix/PROJ-412-empty-csv --apply && cd ../<project>-fix-PROJ-412-empty-csv
+rk worktree add fix/PROJ-412-empty-csv --apply && cd ../<project>@fix-PROJ-412-empty-csv
 ```
 
 Or, in the branches mode, `git checkout -b fix/PROJ-412-empty-csv` in the main checkout — [worktrees](./08-worktrees.md) owns the difference. The name follows [the model's](./00-model.md) branch forms — the type prefix a reviewer routes by, the ticket key the tracker matches. Test, fix, commit, open the pull request; once CI is green and the review lands, squash-merge and delete the branch.

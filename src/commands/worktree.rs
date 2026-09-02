@@ -422,20 +422,24 @@ fn add(
             }
             return report_satisfied(out, branch, &path, apply);
         }
-        let move_hint = if seat.path == layout.main {
-            format!("; git switch {TRUNK_BRANCH} there, then re-run")
+        // The recovery differs by seat: the main checkout is never moved,
+        // so the branch leaves it; a linked worktree moves to the derived
+        // path, keeping its standing state.
+        let recovery = if seat.path == layout.main {
+            format!("git switch {TRUNK_BRANCH} there, then re-run")
         } else {
-            String::new()
+            format!("git worktree move {} {path}", seat.path)
         };
         return Err(RkError::refusal(
             Diagnostic::new(
                 Reason::StateDrift,
                 format!(
-                    "branch {branch} is checked out at {}, and one branch has one seat{move_hint}",
+                    "branch {branch} is checked out at {}, and one branch has one seat",
                     seat.path
                 ),
             )
             .expected("the branch free, or already at its derived path")
+            .action(recovery)
             .target_state("unchanged"),
         ));
     }
@@ -1205,17 +1209,17 @@ mod tests {
             schema: "rk.worktree-add/1",
             mode: "apply",
             branch: "feat/x".into(),
-            path: "/srv/widget-feat-x".into(),
+            path: "/srv/widget@feat-x".into(),
             created: "branch",
             source: "remote",
             base: Some("origin/feat/x".into()),
             upstream: Some("origin/feat/x".into()),
             detail: Some("the fetch failed; the run proceeded on local refs".into()),
-            next: vec!["cd /srv/widget-feat-x".into()],
+            next: vec!["cd /srv/widget@feat-x".into()],
         };
         assert_eq!(
             serde_json::to_string(&apply).expect("a report serializes"),
-            r#"{"schema":"rk.worktree-add/1","mode":"apply","branch":"feat/x","path":"/srv/widget-feat-x","created":"branch","source":"remote","base":"origin/feat/x","upstream":"origin/feat/x","detail":"the fetch failed; the run proceeded on local refs","next":["cd /srv/widget-feat-x"]}"#
+            r#"{"schema":"rk.worktree-add/1","mode":"apply","branch":"feat/x","path":"/srv/widget@feat-x","created":"branch","source":"remote","base":"origin/feat/x","upstream":"origin/feat/x","detail":"the fetch failed; the run proceeded on local refs","next":["cd /srv/widget@feat-x"]}"#
         );
         let preview = super::AddReport {
             mode: "preview",
@@ -1228,7 +1232,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&preview).expect("a report serializes"),
-            r#"{"schema":"rk.worktree-add/1","mode":"preview","branch":"feat/x","path":"/srv/widget-feat-x","created":"nothing","source":"adopted","next":["cd /srv/widget-feat-x"]}"#,
+            r#"{"schema":"rk.worktree-add/1","mode":"preview","branch":"feat/x","path":"/srv/widget@feat-x","created":"nothing","source":"adopted","next":["cd /srv/widget@feat-x"]}"#,
             "an absent option must be omitted rather than serializing null"
         );
     }
@@ -1242,7 +1246,7 @@ mod tests {
             mode: "verify",
             worktrees: vec![
                 PruneRow {
-                    path: "/srv/widget-feat-x".into(),
+                    path: "/srv/widget@feat-x".into(),
                     branch: Some("feat/x".into()),
                     tip: Some("aaaabbbbccccddddaaaabbbbccccddddaaaabbbb".into()),
                     status: "confirmed",
@@ -1250,7 +1254,7 @@ mod tests {
                     detail: None,
                 },
                 PruneRow {
-                    path: "/srv/widget-fix-y".into(),
+                    path: "/srv/widget@fix-y".into(),
                     branch: None,
                     tip: None,
                     status: "stale",
@@ -1265,7 +1269,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&populated).expect("a report serializes"),
-            r##"{"schema":"rk.worktree-prune/1","mode":"verify","worktrees":[{"path":"/srv/widget-feat-x","branch":"feat/x","tip":"aaaabbbbccccddddaaaabbbbccccddddaaaabbbb","status":"confirmed","request":"#8"},{"path":"/srv/widget-fix-y","status":"stale"}],"next":["rk worktree prune --apply verifies, then removes each worktree before its branch"]}"##
+            r##"{"schema":"rk.worktree-prune/1","mode":"verify","worktrees":[{"path":"/srv/widget@feat-x","branch":"feat/x","tip":"aaaabbbbccccddddaaaabbbbccccddddaaaabbbb","status":"confirmed","request":"#8"},{"path":"/srv/widget@fix-y","status":"stale"}],"next":["rk worktree prune --apply verifies, then removes each worktree before its branch"]}"##
         );
         let clean = PruneReport {
             schema: "rk.worktree-prune/1",

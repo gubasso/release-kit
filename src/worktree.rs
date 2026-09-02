@@ -147,12 +147,12 @@ impl Layout {
     }
 }
 
-/// The canonical worktree path for a branch: `<parent>/<project>-<flat>`.
+/// The canonical worktree path for a branch: `<parent>/<project>@<flat>`.
 #[must_use]
 pub fn derived_path(layout: &Layout, branch: &str) -> Utf8PathBuf {
     layout
         .parent
-        .join(format!("{}-{}", layout.project, flatten(branch)))
+        .join(format!("{}@{}", layout.project, flatten(branch)))
 }
 
 /// One worktree as `git worktree list --porcelain -z` reports it.
@@ -504,7 +504,7 @@ mod tests {
         };
         assert_eq!(
             derived_path(&layout, "feat/oauth-login"),
-            Utf8PathBuf::from("/srv/checkouts/widget-feat-oauth-login")
+            Utf8PathBuf::from("/srv/checkouts/widget@feat-oauth-login")
         );
     }
 
@@ -534,7 +534,7 @@ mod tests {
                 "branch refs/heads/master",
             ],
             &[
-                "worktree /srv/checkouts/widget-feat-x",
+                "worktree /srv/checkouts/widget@feat-x",
                 "HEAD bbbb",
                 "branch refs/heads/feat/x",
             ],
@@ -644,7 +644,7 @@ mod tests {
     /// saw clears the removal.
     #[test]
     fn a_reobservation_clears_only_the_verified_resource() {
-        let seat = fixture("/srv/widget-feat-x", Some("feat/x"));
+        let seat = fixture("/srv/widget@feat-x", Some("feat/x"));
         assert_eq!(super::reobservation(Some(&seat), "feat/x"), None);
         assert!(
             super::reobservation(None, "feat/x").is_some_and(|reason| reason.contains("vanished"))
@@ -691,7 +691,7 @@ mod tests {
             parent: Utf8PathBuf::from("/srv"),
             project: "widget".into(),
         };
-        let seat = Utf8Path::new("/srv/widget-feat-seat");
+        let seat = Utf8Path::new("/srv/widget@feat-seat");
         let seats: &[&Utf8Path] = &[seat];
         let gone = observation("feat/x", true);
         let keep = |worktree: &Worktree, branch: Option<&Branch>, dirty: bool| {
@@ -706,7 +706,7 @@ mod tests {
         );
         assert_eq!(
             keep(
-                &fixture("/srv/widget-feat-seat", Some("feat/x")),
+                &fixture("/srv/widget@feat-seat", Some("feat/x")),
                 Some(&gone),
                 false
             ),
@@ -717,7 +717,7 @@ mod tests {
         let locked_missing = Worktree {
             locked: Some(String::new()),
             prunable: Some("gone".into()),
-            ..fixture("/srv/widget-feat-x", Some("feat/x"))
+            ..fixture("/srv/widget@feat-x", Some("feat/x"))
         };
         assert_eq!(
             keep(&locked_missing, Some(&gone), false),
@@ -728,7 +728,7 @@ mod tests {
         );
         let stale_detached = Worktree {
             prunable: Some("gone".into()),
-            ..fixture("/srv/widget-feat-x", None)
+            ..fixture("/srv/widget@feat-x", None)
         };
         assert_eq!(
             keep(&stale_detached, None, false),
@@ -743,7 +743,7 @@ mod tests {
         );
         assert_eq!(
             keep(
-                &fixture("/srv/widget-release-1.2", Some("release/1.2")),
+                &fixture("/srv/widget@release-1.2", Some("release/1.2")),
                 Some(&observation("release/1.2", true)),
                 false
             ),
@@ -753,7 +753,7 @@ mod tests {
         );
         assert_eq!(
             keep(
-                &fixture("/srv/widget-feat-x", Some("feat/x")),
+                &fixture("/srv/widget@feat-x", Some("feat/x")),
                 Some(&gone),
                 true
             ),
@@ -762,7 +762,7 @@ mod tests {
             }
         );
         assert_eq!(
-            keep(&fixture("/srv/widget-feat-x", Some("feat/x")), None, true),
+            keep(&fixture("/srv/widget@feat-x", Some("feat/x")), None, true),
             WtClass::Kept {
                 reason: "no branch observation covers feat/x".into()
             },
@@ -770,7 +770,7 @@ mod tests {
         );
         assert_eq!(
             keep(
-                &fixture("/srv/widget-feat-x", Some("feat/x")),
+                &fixture("/srv/widget@feat-x", Some("feat/x")),
                 Some(&observation("feat/x", false)),
                 false
             ),
@@ -780,7 +780,7 @@ mod tests {
         );
         assert_eq!(
             keep(
-                &fixture("/srv/widget-feat-x", Some("feat/x")),
+                &fixture("/srv/widget@feat-x", Some("feat/x")),
                 Some(&gone),
                 false
             ),
