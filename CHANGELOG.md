@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.7](https://github.com/gubasso/release-kit/compare/v0.2.6...v0.2.7) - 2026-09-02
+
+### Added
+
+- *(setup)* assert the squash body source and gate the request body ([#36](https://github.com/gubasso/release-kit/pull/36))
+- *(cli)* guard the commit and request content with rk message ([#35](https://github.com/gubasso/release-kit/pull/35))
+
+### Other
+
+- *(distribution)* author the host-written block texts under a blocks root ([#33](https://github.com/gubasso/release-kit/pull/33))
+
 ## [0.2.6](https://github.com/gubasso/release-kit/compare/v0.2.5...v0.2.6) - 2026-09-02
 
 ### Other
