@@ -40,6 +40,14 @@ check = "https://api.github.com/repos/pypa/gh-action-pypi-publish/releases/lates
 checked = 2026-08-28
 
 [[tool]]
+name = "pypi-attestations"
+version = "0.0.30"
+used_by = ["python"]
+purpose = "verifies a published distribution's PEP 740 attestations in the release verify step"
+check = "https://api.github.com/repos/pypi/pypi-attestations/releases/latest"
+checked = 2026-09-02
+
+[[tool]]
 name = "git-cliff"
 version = "2.13.1"
 used_by = ["bash"]

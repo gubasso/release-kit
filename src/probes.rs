@@ -115,6 +115,20 @@ pub fn run_all() -> Vec<ProbeResult> {
             "curl; install-bot reads the installation and rk versions --check fetches with it",
             &["--version"],
         ),
+        tool(
+            "cosign",
+            "RK_COSIGN_BIN",
+            "cosign",
+            "cosign; the release verify step checks a GitLab provenance bundle with it",
+            &["version"],
+        ),
+        tool(
+            "pypi-attestations",
+            "RK_PYPI_ATTESTATIONS_BIN",
+            "pypi-attestations",
+            "pypi-attestations; the release verify step checks a PyPI distribution's attestations with it",
+            &["--help"],
+        ),
     ]
 }
 

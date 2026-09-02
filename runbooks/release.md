@@ -216,7 +216,63 @@ curl -LsSf "https://github.com/<repo>/releases/download/v<version>/<crate>-insta
 # check: the installed binary reports <version>; a bare version call only reads whatever is already on PATH
 ```
 
-### 6e. Repair a failed tag push
+### 6e. The provenance verifies
+
+The run that built each artifact in the release payload signed it, and the pair's own verifier proves it — this is the check that turns the provenance invariant from a comment into a rule.
+
+On rust/github:
+
+```bash
+tmp="$(mktemp -d)"
+gh release download "v<version>" --repo <repo> --dir "$tmp"
+( for artifact in "$tmp"/*; do
+    gh attestation verify "$artifact" --repo <repo> \
+      --source-digest "$(git rev-parse "v<version>^{commit}")" \
+      --signer-workflow "<repo>/.github/workflows/<artifact workflow>" \
+      || exit 1
+  done )
+# check: exits 0 — every downloaded file verifies, the curled installers included, and one failure fails the whole loop; the release payload is whatever a consumer downloads, not just the archives
+# the two flags bind the evidence to this release: a repo-only verify would also accept a valid attestation some other run of some other workflow minted over identical bytes
+```
+
+On bash/github:
+
+```bash
+tmp="$(mktemp -d)"
+gh release download "v<version>" --repo <repo> --dir "$tmp" --pattern '*.tar.gz'
+gh attestation verify "$tmp"/*.tar.gz --repo <repo> \
+  --source-digest "$(git rev-parse "v<version>^{commit}")" \
+  --signer-workflow "<repo>/.github/workflows/<artifact workflow>"
+# check: the tarball verifies against the release commit and the signing workflow; the .sha256 beside it is verification evidence, not payload
+```
+
+On bash/gitlab:
+
+```bash
+curl -fsSL -o "<name>.tar.gz" "<package file url>"
+curl -fsSL -o "<name>.tar.gz.sigstore.json" "<bundle file url>"
+cosign verify-blob-attestation --type slsaprovenance1 \
+  --bundle "<name>.tar.gz.sigstore.json" \
+  --certificate-oidc-issuer https://gitlab.com \
+  --certificate-identity "https://gitlab.com/<repo>//.gitlab-ci.yml@<built ref>" \
+  "<name>.tar.gz"
+# check: prints Verified OK; the release page links both files
+# <built ref>: the certificate names the ref the release was built from — refs/heads/master for a trunk release, refs/heads/release/<line> for a line release
+# self-managed instance: the pipeline stated the keyless-signing boundary and released without provenance; there is no bundle, and this check does not apply
+```
+
+On python/github:
+
+```bash
+pypi-attestations verify pypi --repository "https://github.com/<repo>" "pypi:<distribution filename>"
+# check: prints OK, once per sdist and wheel the release published
+```
+
+On rust/gitlab:
+
+The pair declares no provenance surface — crates.io stores none, and the pair builds and attaches no binaries; [the Rust binding](../bindings/rust.md) states it, and this check does not apply.
+
+### 6f. Repair a failed tag push
 
 Anything but 6a's two identical SHAs means the tag push failed: rerun the publish workflow on the merge commit — never the artifact workflow, which only builds from a tag that already exists.
 

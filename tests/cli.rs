@@ -1148,7 +1148,9 @@ fn doctor_reports_every_probe_and_exits_0() {
             "gh-auth",
             "glab-auth",
             "openssl",
-            "curl"
+            "curl",
+            "cosign",
+            "pypi-attestations"
         ]
     );
     let by_id = |id: &str| {
@@ -6092,4 +6094,72 @@ fn the_bash_gitlab_cosign_pin_agrees_with_the_registry() {
         provenance.contains("sha256sum -c"),
         "the fetched binary is checked against the authored digest before it runs"
     );
+}
+
+/// SATISFIES distribution:a-runbook-renders-the-spine
+/// Step 6's provenance check renders the verifier of exactly the resolved
+/// pair: the axis is technology and forge together, so a per-axis label
+/// cannot say it, and the pair label must. Unresolved, every pair's answer
+/// stays visible under its label.
+#[test]
+fn guide_release_renders_the_resolved_pairs_verifier() {
+    let bare = tempfile::tempdir().expect("a bare dir exists");
+    let render = |tech: &str, forge: &str| -> String {
+        let out = rk()
+            .args(["guide", "release", "--tech", tech, "--forge", forge])
+            .current_dir(bare.path())
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        String::from_utf8_lossy(&out).into_owned()
+    };
+    let rust_github = render("rust", "github");
+    assert!(rust_github.contains("gh attestation verify"));
+    assert!(!rust_github.contains("cosign") && !rust_github.contains("pypi-attestations"));
+    assert!(!rust_github.contains("no provenance surface"));
+    // The flags are what bind the evidence to this release rather than to
+    // any run that ever attested identical bytes, and the fail-fast exit is
+    // what keeps one unattested asset from hiding behind the last one.
+    assert!(rust_github.contains("--source-digest") && rust_github.contains("--signer-workflow"));
+    assert!(rust_github.contains("|| exit 1"));
+    let bash_github = render("bash", "github");
+    assert!(bash_github.contains("gh attestation verify"));
+    assert!(bash_github.contains("--source-digest") && bash_github.contains("--signer-workflow"));
+    assert!(!bash_github.contains("cosign") && !bash_github.contains("pypi-attestations"));
+    let bash_gitlab = render("bash", "gitlab");
+    assert!(bash_gitlab.contains("cosign verify-blob-attestation"));
+    assert!(!bash_gitlab.contains("gh attestation verify"));
+    // The certificate ref is the branch the release was built from, so the
+    // served command must carry the visible placeholder, never the trunk.
+    assert!(bash_gitlab.contains("@<built ref>"));
+    assert!(!bash_gitlab.contains("@refs/heads/master"));
+    let rust_gitlab = render("rust", "gitlab");
+    assert!(rust_gitlab.contains("declares no provenance surface"));
+    assert!(!rust_gitlab.contains("cosign verify-blob-attestation"));
+    let python_github = render("python", "github");
+    assert!(python_github.contains("pypi-attestations verify pypi"));
+    assert!(!python_github.contains("cosign"));
+    let unresolved = rk()
+        .args(["guide", "release"])
+        .current_dir(bare.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let unresolved = String::from_utf8_lossy(&unresolved);
+    for label in [
+        "On rust/github:",
+        "On bash/github:",
+        "On bash/gitlab:",
+        "On python/github:",
+        "On rust/gitlab:",
+    ] {
+        assert!(
+            unresolved.contains(label),
+            "unresolved render must keep {label}"
+        );
+    }
 }

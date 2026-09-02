@@ -37,7 +37,7 @@ Register owner, repository, and the publish workflow's filename with the registr
 
 ## 7. Prove the automated path
 
-Cut one release end to end through [operate](./03-operate.md). Its verify step passing — the registry serves the new version, and the tag and the trunk name the same commit — is the proof the next step depends on.
+Cut one release end to end through [operate](./03-operate.md). Its verify step passing — the registry serves the new version, the tag and the trunk name the same commit, and the provenance verifies where the binding declares it — is the proof the next step depends on.
 
 ## 8. Require trusted publishing
 
