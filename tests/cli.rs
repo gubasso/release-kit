@@ -17,9 +17,14 @@ use release_kit::skills::record::{RECORD_PATH, Record};
 const SKILLS: [&str; 3] = ["rk-migrate", "rk-release", "rk-setup"];
 const ROOTS: [&str; 2] = [".claude/skills", ".agents/skills"];
 
-/// What every skill shares, installed once outside the agent roots.
-const SHARED: [&str; 1] = ["plan-gate.md"];
+/// What every skill shares, installed once outside the agent roots, in the
+/// sorted order the payload walks them.
+const SHARED: [&str; 2] = ["plan-gate.md", "pre-flight-gate.md"];
 const SHARED_ROOT: &str = ".local/state/release-kit/skills/shared";
+
+/// The same root as the skills themselves name it: an absolute path under the
+/// home, because no relative path reaches it from both agent roots.
+const SHARED_ROOT_HOME: &str = "~/.local/state/release-kit/skills/shared";
 
 fn rk() -> Command {
     // Scrubbed of the variables a running git hook exports: a suite that
@@ -1079,8 +1084,17 @@ fn skill_install_preview_human_lines_are_snapshot_held() {
             expected.push('\n');
         }
     }
-    expected.push_str(&home.shared_gate().to_string_lossy());
-    expected.push('\n');
+    // The shared artifacts follow the skills, in the payload's sorted order.
+    for artifact in SHARED {
+        expected.push_str(
+            &home
+                .path()
+                .join(SHARED_ROOT)
+                .join(artifact)
+                .to_string_lossy(),
+        );
+        expected.push('\n');
+    }
     expected.push_str("Next:\n  rk skill install --apply\n");
     home.rk()
         .args(["skill", "install"])
@@ -1151,6 +1165,9 @@ fn doctor_reports_every_probe_and_exits_0() {
         [
             "sh",
             "state-root",
+            "skill-roots",
+            "skill-gate",
+            "skill-payload",
             "git-remote",
             "gh-auth",
             "glab-auth",
@@ -1170,6 +1187,125 @@ fn doctor_reports_every_probe_and_exits_0() {
     assert_eq!(by_id("gh-auth")["status"], "ok");
     assert_eq!(by_id("glab-auth")["status"], "failed");
     assert_eq!(by_id("glab-auth")["remediation"], "run glab auth login");
+}
+
+/// A doctor run against a scratch home, with the forge binaries mocked away
+/// so only the skill probes decide the answers.
+fn skill_probes(home: &Home) -> serde_json::Value {
+    let out = home
+        .rk()
+        .args(["doctor", "--json"])
+        .env("XDG_STATE_HOME", home.path())
+        .env("RK_GH_BIN", "/no/such/gh")
+        .env("RK_GLAB_BIN", "/no/such/glab")
+        .current_dir(home.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    serde_json::from_slice(&out).expect("one JSON object")
+}
+
+fn probe(report: &serde_json::Value, id: &str) -> serde_json::Value {
+    report["probes"]
+        .as_array()
+        .expect("a probe list")
+        .iter()
+        .find(|probe| probe["id"] == id)
+        .unwrap_or_else(|| panic!("no {id} probe"))
+        .clone()
+}
+
+/// The agent roots and the shared root are separate directories, so a home
+/// can carry the skills and not the gate they are told to read first — which
+/// is what a container sharing one and not the other produces. The probe
+/// names that home before an agent acts in it, and clears once the gate is
+/// where the skills look for it.
+#[test]
+fn the_gate_probe_names_a_home_whose_skills_cannot_read_their_gate() {
+    let home = Home::new();
+    home.rk()
+        .args(["skill", "install", "--apply"])
+        .assert()
+        .success();
+    assert_eq!(probe(&skill_probes(&home), "skill-gate")["status"], "ok");
+
+    // The one difference between a working home and the failing one: the
+    // shared root is gone while every agent root stays.
+    std::fs::remove_dir_all(home.path().join(SHARED_ROOT)).expect("the shared root removes");
+    let report = skill_probes(&home);
+    let gate = probe(&report, "skill-gate");
+    assert_eq!(gate["status"], "failed");
+    assert!(
+        gate["message"]
+            .as_str()
+            .expect("a message")
+            .contains("plan-gate.md"),
+        "{gate:?}"
+    );
+    assert_eq!(gate["remediation"], "rk skill install --apply");
+    assert_eq!(
+        probe(&report, "skill-payload")["status"],
+        "ok",
+        "the skills are installed; only their gate is missing"
+    );
+}
+
+/// One binary serves every repository, so an installed skill and the `rk` on
+/// PATH can be updated apart. The probe reports bytes that are not this
+/// binary's, and asks for the `--force` only where the record cannot vouch
+/// for what it would overwrite.
+#[test]
+fn the_payload_probe_names_a_skill_that_is_not_this_binarys() {
+    let home = Home::new();
+    home.rk()
+        .args(["skill", "install", "--apply"])
+        .assert()
+        .success();
+    assert_eq!(probe(&skill_probes(&home), "skill-payload")["status"], "ok");
+
+    // Bytes the record cannot account for are the operator's own.
+    let edited = home.destination(ROOTS[0], SKILLS[0]);
+    std::fs::write(&edited, "mine now\n").expect("the skill rewrites");
+    let payload = probe(&skill_probes(&home), "skill-payload");
+    assert_eq!(payload["status"], "failed");
+    assert_eq!(payload["remediation"], "rk skill install --apply --force");
+
+    // Bytes the record vouches for are an older release's, and the plain
+    // apply corrects them.
+    let mut record = home.load_record();
+    record
+        .written
+        .insert(utf8(&edited), Digest::of(b"mine now\n"));
+    home.write_record(&record);
+    let payload = probe(&skill_probes(&home), "skill-payload");
+    assert_eq!(payload["status"], "failed");
+    assert_eq!(payload["remediation"], "rk skill install --apply");
+
+    // A skill destination that is simply absent is neither.
+    std::fs::remove_file(&edited).expect("the skill removes");
+    let payload = probe(&skill_probes(&home), "skill-payload");
+    assert_eq!(payload["status"], "failed");
+    assert_eq!(payload["remediation"], "rk skill install --apply");
+}
+
+/// A home nobody has installed into fails both skill probes and neither
+/// panics: the doctor answers on any host.
+#[test]
+fn the_skill_probes_answer_on_a_home_with_no_install() {
+    let home = Home::new();
+    let report = skill_probes(&home);
+    for id in ["skill-gate", "skill-payload"] {
+        let found = probe(&report, id);
+        assert_eq!(found["status"], "failed", "{id}");
+        assert_eq!(found["remediation"], "rk skill install --apply", "{id}");
+    }
+    assert_eq!(
+        probe(&report, "skill-roots")["status"],
+        "ok",
+        "an absent root under a writable home is not a refusal"
+    );
 }
 
 /// The gh probe asks `auth status --active` first: the bare form fails
@@ -1496,12 +1632,11 @@ fn every_skill_carries_the_portable_frontmatter() {
 }
 
 /// Every skill drives operations that write files, mutate a forge, or publish
-/// a version, so each one routes to the shared plan gate before it acts, and
-/// states the one flag that changes the gate's shape. The test holds the
+/// a version, so each one routes to both shared gates before it acts, and
+/// states the one flag that changes the plan gate's shape. The test holds the
 /// instruction's presence; no test can hold a model to it.
 #[test]
 fn every_skill_routes_to_the_plan_gate_before_acting() {
-    const GATE: &str = "~/.local/state/release-kit/skills/shared/plan-gate.md";
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("skills");
     for name in SKILLS {
         let text =
@@ -1509,13 +1644,23 @@ fn every_skill_routes_to_the_plan_gate_before_acting() {
         let gate = text
             .find("## Before acting")
             .unwrap_or_else(|| panic!("{name}: no '## Before acting' section"));
-        assert!(
-            text[gate..].contains(GATE),
-            "{name}: the gate section does not name {GATE}"
-        );
+        // Both shared artifacts are named, by the absolute path they install
+        // to: the two agent roots make no relative path reach one file from
+        // both, so the skills name them the one way that resolves.
+        for artifact in SHARED {
+            let named = format!("{SHARED_ROOT_HOME}/{artifact}");
+            assert!(
+                text[gate..].contains(&named),
+                "{name}: the gate section does not name {named}"
+            );
+        }
         assert!(
             text[gate..].contains("--no-plan"),
             "{name}: the gate section does not state the --no-plan rule"
+        );
+        assert!(
+            text[gate..].contains("No flag skips it"),
+            "{name}: the gate section does not state that the pre-flight is unconditional"
         );
         // Every other section is an acting section, so the gate leads.
         let first = text
@@ -1529,22 +1674,56 @@ fn every_skill_routes_to_the_plan_gate_before_acting() {
     }
 }
 
-/// The gate the skills name is one file, carried by the payload and installed
-/// once, so correcting it corrects every skill under every agent root.
+/// The shared artifacts are files, carried by the payload and installed once,
+/// so correcting one corrects every skill under every agent root. Each has its
+/// own duty and the payload carries both.
 #[test]
 fn the_payload_carries_the_shared_plan_gate() {
-    let gate = Path::new(env!("CARGO_MANIFEST_DIR")).join("skill-shared/plan-gate.md");
-    let text = std::fs::read_to_string(&gate).expect("the shared gate reads");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("skill-shared");
+    let read = |name: &str| {
+        std::fs::read_to_string(root.join(name)).unwrap_or_else(|_| panic!("{name} reads"))
+    };
+
+    let plan = read("plan-gate.md");
     for phase in ["## 1. Plan", "## 2. Validate", "## 3. Execute"] {
-        assert!(text.contains(phase), "the gate carries no {phase} phase");
+        assert!(
+            plan.contains(phase),
+            "the plan gate carries no {phase} phase"
+        );
     }
     assert!(
-        text.contains("--no-plan"),
-        "the gate does not state what --no-plan changes"
+        plan.contains("--no-plan"),
+        "the plan gate does not state what --no-plan changes"
     );
     assert!(
-        text.contains("## What a request authorizes"),
-        "the gate does not bound what a request authorizes"
+        plan.contains("## What a request authorizes"),
+        "the plan gate does not bound what a request authorizes"
+    );
+
+    let pre_flight = read("pre-flight-gate.md");
+    assert!(
+        pre_flight.contains("rk doctor"),
+        "the pre-flight gate does not run the probe catalog"
+    );
+    // Read from the catalog's own declaration, not listed here: a skill probe
+    // added without a line in the pre-flight gate is a probe no agent
+    // following it ever reads.
+    for id in release_kit::probes::SKILL_PROBES {
+        assert!(
+            pre_flight.contains(id),
+            "the pre-flight gate does not read the {id} probe"
+        );
+    }
+    // The pre-flight runs whatever the request carries; only the plan gate
+    // has a flag. A pre-flight that could be waived is one no skill can rely
+    // on having run.
+    assert!(
+        pre_flight.contains("No flag skips it"),
+        "the pre-flight gate does not state that it is unconditional"
+    );
+    assert!(
+        pre_flight.contains("plan-gate.md"),
+        "the pre-flight gate does not hand the task to the plan gate"
     );
 }
 
