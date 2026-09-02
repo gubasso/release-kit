@@ -189,6 +189,11 @@ fn script(name: &str, forge: Option<&str>) -> Result<(), RkError> {
             "package-check reads its command from the technology binding and has no script".into(),
         ));
     }
+    if name == "branch-reminder" {
+        return Err(RkError::Usage(
+            "branch-reminder writes an embedded hook body and has no script; rk setup step branch-reminder previews the write".into(),
+        ));
+    }
     let forge = match forge {
         Some(value) => Forge::parse(value).ok_or_else(|| {
             RkError::Usage(format!(
@@ -448,6 +453,9 @@ fn preview(out: Output, ctx: &Ctx, steps: &[&StepSpec]) -> Result<(), RkError> {
 /// non-secret variable resolved.
 fn render_invocation(ctx: &Ctx, step: &StepSpec) -> String {
     match step.name {
+        "branch-reminder" => {
+            "would write: the post-merge reminder hook at $(git rev-parse --git-path hooks)/post-merge".to_owned()
+        }
         "package-check" => match ctx.tech {
             Some("rust") => "would run: cargo publish --dry-run --allow-dirty".to_owned(),
             Some("python") => "would run: python3 -m build".to_owned(),
@@ -669,6 +677,59 @@ fn apply_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
                     )
                     .step(step.name),
                 )),
+            }
+        }
+        "branch-reminder" => {
+            use crate::setup::branch_reminder::{HOOK_BODY, HookState, hook_path, observe_hook};
+            match observe_hook(&engine.ctx.target) {
+                HookState::Installed => Ok(Done::Satisfied(
+                    "the post-merge reminder hook is installed".into(),
+                )),
+                HookState::Foreign => Err(RkError::refusal(
+                    Diagnostic::new(
+                        Reason::StateDrift,
+                        "a foreign post-merge hook exists; the reminder is never written over it",
+                    )
+                    .expected("no post-merge hook, or one carrying the release-kit marker")
+                    .action(
+                        "merge by hand: guard `rk branches prune --quiet` behind `command -v rk` inside the existing hook",
+                    )
+                    .target_state("unchanged")
+                    .step(step.name),
+                )),
+                HookState::Unreadable(detail) => Err(RkError::refusal(
+                    Diagnostic::new(
+                        Reason::StateDrift,
+                        format!("the post-merge hook cannot be read: {detail}"),
+                    )
+                    .target_state("unchanged")
+                    .step(step.name),
+                )),
+                HookState::Absent | HookState::Drifted => {
+                    let path = hook_path(&engine.ctx.target).map_err(|detail| {
+                        RkError::refusal(
+                            Diagnostic::new(
+                                Reason::PrerequisiteUnmet,
+                                format!("the hooks directory cannot be resolved: {detail}"),
+                            )
+                            .expected("a git repository whose hooks directory git can name")
+                            .step(step.name),
+                        )
+                    })?;
+                    crate::atomic::write(&path, HOOK_BODY.as_bytes())?;
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt as _;
+                        std::fs::set_permissions(
+                            &path,
+                            std::fs::Permissions::from_mode(0o755),
+                        )?;
+                    }
+                    Ok(Done::Changed(
+                        "wrote the post-merge reminder hook".into(),
+                        None,
+                    ))
+                }
             }
         }
         "single-trunk" => {

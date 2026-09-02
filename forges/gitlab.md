@@ -31,6 +31,7 @@ Rotation is two commands: create a replacement token through the same step once 
 | Merge the release request            | `glab mr merge --squash --remove-source-branch`                        |
 | Wait on checks                       | `glab ci status --wait`                                                |
 | Wait on a build                      | `glab ci status --wait`                                                |
+| Find the merged request for a commit | `glab api projects/:id/repository/commits/<sha>/merge_requests`        |
 | Create the branch for an issue       | `glab mr create --related-issue <issue> --create-source-branch`        |
 | Protect a branch                     | `POST /projects/:id/protected_branches`, `PATCH` to update             |
 | Require the trunk's checks           | `PUT /projects/:id` with `only_allow_merge_if_pipeline_succeeds`       |

@@ -10,6 +10,7 @@
 //! read-only paths.
 
 pub mod app_jwt;
+pub mod branch_reminder;
 pub mod context;
 pub mod journal;
 pub mod observe;

@@ -3,6 +3,7 @@
 //! its handler in `commands`.
 
 pub mod adopt;
+pub mod branches;
 pub mod completions;
 pub mod doctor;
 pub mod guide;
@@ -54,6 +55,8 @@ pub enum Commands {
     Adopt(adopt::AdoptArgs),
     /// Execute the repository-side setup against the detected forge.
     Setup(setup::SetupArgs),
+    /// Report and prune local branches the forge already merged.
+    Branches(branches::BranchesArgs),
     /// Inspect and prune the run journals.
     Runs(runs::RunsArgs),
     /// Manage the agent skills at user scope.

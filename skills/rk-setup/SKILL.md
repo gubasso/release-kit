@@ -19,19 +19,20 @@ When the request carries `--no-plan`, skip the approval turn only. Still state t
 
 ## Route to the canon
 
-| Need                            | Command                    |
-| ------------------------------- | -------------------------- |
-| List method chapters            | `rk method --list`         |
-| Read a chapter                  | `rk method <chapter>`      |
-| List bindings                   | `rk binding --list`        |
-| Read a technology binding       | `rk binding <tech>`        |
-| Read a forge's specifics        | `rk forge <name>`          |
-| The setup recipe, as commands   | `rk guide setup`           |
-| List the landable files         | `rk snippet --list`        |
-| Print one landable file         | `rk snippet <tech>/<path>` |
-| Print the pinned-tool registry  | `rk versions`              |
-| List the executable setup steps | `rk setup --list`          |
-| A landed target's own report    | `rk status --target .`     |
+| Need                                       | Command                    |
+| ------------------------------------------ | -------------------------- |
+| List method chapters                       | `rk method --list`         |
+| Read a chapter                             | `rk method <chapter>`      |
+| List bindings                              | `rk binding --list`        |
+| Read a technology binding                  | `rk binding <tech>`        |
+| Read a forge's specifics                   | `rk forge <name>`          |
+| The setup recipe, as commands              | `rk guide setup`           |
+| List the landable files                    | `rk snippet --list`        |
+| Print one landable file                    | `rk snippet <tech>/<path>` |
+| Print the pinned-tool registry             | `rk versions`              |
+| List the executable setup steps            | `rk setup --list`          |
+| A landed target's own report               | `rk status --target .`     |
+| The merged branches this clone still holds | `rk branches prune`        |
 
 ## Land the workflow
 

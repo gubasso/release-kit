@@ -234,9 +234,15 @@ impl Ctx {
 }
 
 /// Resolve the forge CLI once, at context time: the `RK_GH_BIN` and
-/// `RK_GLAB_BIN` overrides first, then a `PATH` search. Not found and not
-/// executable are distinct failures, in the shell convention.
-fn resolve_cli(forge: Forge) -> Result<PathBuf, RkError> {
+/// `RK_GLAB_BIN` overrides first, then a `PATH` search.
+///
+/// Not found and not executable are distinct failures, in the shell
+/// convention. `rk branches prune` shares it for the verify path.
+///
+/// # Errors
+///
+/// Refuses when the override or the search resolves no usable binary.
+pub fn resolve_cli(forge: Forge) -> Result<PathBuf, RkError> {
     let override_var = match forge {
         Forge::Github => "RK_GH_BIN",
         Forge::Gitlab => "RK_GLAB_BIN",

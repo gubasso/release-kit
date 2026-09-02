@@ -8,7 +8,7 @@ Run the registry's dry-run packaging check first, before anything that needs cre
 
 ## 1. Make the trunk the sole long-lived branch
 
-Make `master` the repository default, so the bot's release request targets it with no configuration, and the only long-lived branch: merge in and delete every other one. Work that kept a second branch alive lands on the trunk behind a flag instead. Then have the forge delete a branch when its merge lands, so keeping the trunk sole costs no one a habit.
+Make `master` the repository default, so the bot's release request targets it with no configuration, and the only long-lived branch: merge in and delete every other one. Work that kept a second branch alive lands on the trunk behind a flag instead. Then have the forge delete a branch when its merge lands, so keeping the trunk sole costs no one a habit. Locally, a post-merge reminder hook closes the same loop from the clone's side: after a pull, `rk branches prune` names the merged branches the clone still holds, and deleting one stays the operator's action.
 
 ## 2. Let automation act
 
