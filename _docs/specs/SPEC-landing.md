@@ -18,6 +18,7 @@
   - [`landing:a-block-destination-owns-its-marked-lines-alone` — A block destination owns its marked lines alone](#landinga-block-destination-owns-its-marked-lines-alone--a-block-destination-owns-its-marked-lines-alone)
   - [`landing:the-shared-zone-composes-into-every-pair` — The shared zone composes into every pair](#landingthe-shared-zone-composes-into-every-pair--the-shared-zone-composes-into-every-pair)
   - [`landing:a-landed-hook-serves-the-release-convention-alone` — A landed hook serves the release convention alone](#landinga-landed-hook-serves-the-release-convention-alone--a-landed-hook-serves-the-release-convention-alone)
+  - [`landing:the-landed-guards-hold-the-message-content` — The landed guards hold the message content](#landingthe-landed-guards-hold-the-message-content--the-landed-guards-hold-the-message-content)
   - [`landing:the-routing-block-bounds-the-agents-initiative` — The routing block bounds the agent's initiative](#landingthe-routing-block-bounds-the-agents-initiative--the-routing-block-bounds-the-agents-initiative)
 
 <!--TOC-->
@@ -193,6 +194,24 @@ The hook block MUST carry only hooks enforcing the release convention's own rule
 - GIVEN a landed `.pre-commit-config.yaml` block
 - WHEN its hooks are read beside `rk versions`
 - THEN each hook maps to a rule the method states, and each third-party repository the block names carries a registry pin
+
+Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `landing:the-landed-guards-hold-the-message-content` — The landed guards hold the message content
+
+The landed commit-msg hook MUST refuse a message referencing a git-ignored path or carrying agent attribution, exempting only the release bot's request, recognized by exactly the title shape the landed title check admits for the bot.
+
+#### Scenario: A message references an internal planning artifact
+
+- GIVEN a commit whose body names a path the repository git-ignores
+- WHEN the landed rk-message hook judges the message
+- THEN the commit is refused naming the line and the ignored path, before the reference can become the trunk's permanent record
+
+#### Scenario: The release bot's request passes with its generated body
+
+- GIVEN release-plz's request titled `chore: release v0.3.0` whose body carries its own generated-with line and bot co-author trailer
+- WHEN the landed rk-message hook judges the message
+- THEN the attribution class is exempt by the title, the ignored-path class still runs, and a clean body passes
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 

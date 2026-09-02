@@ -1323,6 +1323,7 @@ fn usage_dumps_every_verb_in_one_call() {
         "rk setup step",
         "rk setup script",
         "rk branches prune",
+        "rk message",
         "rk worktree list",
         "rk worktree add",
         "rk worktree prune",
@@ -4303,6 +4304,7 @@ fn the_hook_block_splices_and_lands_whole_and_refuses_reposless() {
     assert!(config.contains("--scopes, 'api,cli'"), "{config}");
     for hook in [
         "conventional-pre-commit",
+        "rk-message",
         "no-commit-to-branch",
         "rk-branch-name",
         "rk-no-push-to-trunk",
@@ -8346,5 +8348,209 @@ fn a_preview_follow_up_keeps_the_previewed_decision() {
         String::from_utf8_lossy(&out).contains("rk upgrade --workflow branches --target"),
         "the upgrade follow-up carries the mode change: {}",
         String::from_utf8_lossy(&out)
+    );
+}
+
+/// A scratch repository ignoring `.draft/`, for the message content guard.
+fn message_fixture() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("a scratch repo exists");
+    git_in(dir.path(), &["init", "-q", "-b", "master"]);
+    std::fs::write(dir.path().join(".gitignore"), ".draft/\n").expect("the ignore writes");
+    dir
+}
+
+/// An agent attribution trailer is a finding, and `--check` refuses it.
+#[test]
+fn a_message_with_attribution_fails_the_check() {
+    let dir = message_fixture();
+    rk().args(["message", "--check", "--target"])
+        .arg(dir.path())
+        .write_stdin("feat(api): add\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n")
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(predicate::str::contains("attribution:3"))
+        .stderr(predicate::str::contains("2 findings"));
+}
+
+/// A reference to a git-ignored path is a finding at its line.
+#[test]
+fn a_message_naming_an_ignored_path_fails_the_check() {
+    let dir = message_fixture();
+    rk().args(["message", "--check", "--target"])
+        .arg(dir.path())
+        .write_stdin("feat(api): add\n\nSee .draft/plan.md for the plan.\n")
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(predicate::str::contains(
+            "internal-path:3 .draft/plan.md is git-ignored",
+        ));
+}
+
+/// The release bot's request is exempt from the attribution class by its
+/// title — the real release-plz body shape passes — while the
+/// ignored-path class still runs.
+#[test]
+fn the_bot_request_is_exempt_from_attribution_alone() {
+    let dir = message_fixture();
+    rk().args(["message", "--check", "--target"])
+        .arg(dir.path())
+        .write_stdin(
+            "chore: release v0.2.6\n\n## 🤖 New release\n\
+             \n* `release-kit`: 0.2.5 -> 0.2.6\n\
+             \n---\nThis PR was generated with [release-plz](https://github.com/release-plz/release-plz/).\n\
+             Co-authored-by: gubasso-release-kit-bot[bot] <231623272+gubasso-release-kit-bot[bot]@users.noreply.github.com>\n",
+        )
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("exempt: the release bot's request"));
+    rk().args(["message", "--check", "--target"])
+        .arg(dir.path())
+        .write_stdin("chore: release v0.2.6\n\nStill names .draft/notes.md though.\n")
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(predicate::str::contains("internal-path:3"));
+}
+
+/// A clean message passes, from a file and from stdin, and a plain run
+/// reports without failing.
+#[test]
+fn a_clean_message_passes_and_a_plain_run_reports() {
+    let dir = message_fixture();
+    let file = dir.path().join("COMMIT_EDITMSG");
+    std::fs::write(&file, "feat(api): add the endpoint\n\nA plain body.\n")
+        .expect("the message writes");
+    rk().args(["message", "--check", "--target"])
+        .arg(dir.path())
+        .arg(&file)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("clean commit"));
+    rk().args(["message", "--target"])
+        .arg(dir.path())
+        .write_stdin("docs(readme): tidy\n\nCo-Authored-By: Claude\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("attribution:3"));
+}
+
+/// `--json` emits one object carrying the schema, kind, exemption, and
+/// findings, also when the check fails.
+#[test]
+fn the_message_json_is_one_object_with_the_schema() {
+    let dir = message_fixture();
+    let out = rk()
+        .args(["message", "--json", "--check", "--target"])
+        .arg(dir.path())
+        .write_stdin("feat(api): add\n\nSee .draft/plan.md here.\n")
+        .assert()
+        .failure()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value =
+        serde_json::from_slice(&out).expect("one JSON object on stdout");
+    assert_eq!(report["schema"], "rk.message/1");
+    assert_eq!(report["kind"], "commit");
+    assert_eq!(report["exempt"], false);
+    assert_eq!(report["findings"][0]["class"], "internal-path");
+    assert_eq!(report["findings"][0]["line"], 3);
+}
+
+/// Outside a repository the ignored-path class degrades to the fixed
+/// `.draft/` pattern, honestly noted, and still finds the leak.
+#[test]
+fn a_non_repo_target_degrades_to_the_fixed_pattern() {
+    let dir = tempfile::tempdir().expect("a plain directory exists");
+    rk().args(["message", "--check", "--target"])
+        .arg(dir.path())
+        .write_stdin("feat(api): add\n\nSee .draft/plan.md here.\n")
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(predicate::str::contains(
+            "references the internal .draft/ tree",
+        ))
+        .stderr(predicate::str::contains("not a git repository"));
+}
+
+/// A body is judged with its request title supplying the exemption.
+#[test]
+fn a_body_is_judged_under_its_request_title() {
+    let dir = message_fixture();
+    rk().args([
+        "message",
+        "--check",
+        "--kind",
+        "body",
+        "--title",
+        "chore: release v0.3.0",
+        "--target",
+    ])
+    .arg(dir.path())
+    .write_stdin("Generated with [Claude Code](https://claude.com/claude-code)\n")
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("exempt"));
+    rk().args(["message", "--check", "--kind", "body", "--target"])
+        .arg(dir.path())
+        .write_stdin("Generated with [Claude Code](https://claude.com/claude-code)\n")
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(predicate::str::contains("attribution:1"));
+}
+
+/// A decorated reference — no clean whitespace token — still answers in
+/// a repository, through the fixed pattern, and a non-ASCII ignored path
+/// comes back verbatim through check-ignore's NUL-delimited form.
+#[test]
+fn decorated_and_non_ascii_references_still_answer() {
+    let dir = message_fixture();
+    rk().args(["message", "--check", "--target"])
+        .arg(dir.path())
+        .write_stdin("feat(api): add\n\nkept at path=.draft/plan.md today\n")
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(predicate::str::contains(
+            "internal-path:3 .draft/plan.md references the internal .draft/ tree",
+        ));
+    rk().args(["message", "--check", "--target"])
+        .arg(dir.path())
+        .write_stdin("feat(api): add\n\nSee .draft/r\u{e9}sum\u{e9}.md here\n")
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(predicate::str::contains("is git-ignored"));
+}
+
+/// A nested ignored path is one finding, not a git-ignored one plus a
+/// fixed-pattern duplicate.
+#[test]
+fn a_nested_draft_reference_is_reported_once() {
+    let dir = message_fixture();
+    std::fs::create_dir(dir.path().join("nested")).expect("the nested dir exists");
+    let out = rk()
+        .args(["message", "--json", "--target"])
+        .arg(dir.path())
+        .write_stdin("feat(api): add\n\nSee nested/.draft/plan.md here\n")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    let findings = report["findings"].as_array().expect("findings is an array");
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert!(
+        findings[0]["detail"]
+            .as_str()
+            .expect("detail is a string")
+            .contains("is git-ignored"),
+        "the repository judgment wins"
     );
 }

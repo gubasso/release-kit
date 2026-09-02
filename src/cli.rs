@@ -8,6 +8,7 @@ pub mod completions;
 pub mod doctor;
 pub mod guide;
 pub mod init;
+pub mod message;
 pub mod payload;
 pub mod read;
 pub mod runs;
@@ -58,6 +59,8 @@ pub enum Commands {
     Setup(setup::SetupArgs),
     /// Report and prune local branches the forge already merged.
     Branches(branches::BranchesArgs),
+    /// Judge a commit message, title, or body against the content guards.
+    Message(message::MessageArgs),
     /// Inspect, create, and prune the linked worktrees beside a checkout.
     Worktree(worktree::WorktreeArgs),
     /// Inspect and prune the run journals.

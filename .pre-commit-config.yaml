@@ -12,6 +12,13 @@ repos:
       - id: conventional-pre-commit
         stages: [commit-msg]
         args: [--strict, --force-scope, --scopes, 'bindings,ci,cli,deps,distribution,docs,forges,guides,guides/release,instance,landing,method,output,runbooks,setup,skills,snippets']
+  - repo: local
+    hooks:
+      - id: rk-message
+        name: rk message content
+        stages: [commit-msg]
+        language: system
+        entry: rk message --check
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
