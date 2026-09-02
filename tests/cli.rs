@@ -8252,3 +8252,23 @@ fn a_report_that_owes_nothing_drops_the_operator_line() {
         "a finished worktree apply closes without the line: {text}"
     );
 }
+
+/// A registered branch whose canonical directory was deleted by hand is
+/// a stale record, not a standing seat: add refuses naming the prune
+/// recovery instead of reporting satisfied over a path that is gone.
+#[test]
+fn worktree_add_refuses_a_stale_canonical_record() {
+    let (_parent, repo) = worktree_fixture();
+    git_in(&repo, &["branch", "feat/x"]);
+    let path = seat(&repo, "feat/x");
+    std::fs::remove_dir_all(&path).expect("the directory disappears");
+    rk_scrubbed()
+        .args(["worktree", "add", "feat/x", "--apply", "--target"])
+        .arg(&repo)
+        .assert()
+        .code(73)
+        .stderr(
+            predicate::str::contains("directory is missing")
+                .and(predicate::str::contains("rk worktree prune --apply")),
+        );
+}

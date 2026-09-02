@@ -392,6 +392,25 @@ fn add(
         .find(|worktree| worktree.branch.as_deref() == Some(branch));
     if let Some(seat) = registered {
         if seat.path == path {
+            // Satisfied only while the seat actually stands: a record
+            // whose directory was deleted by hand is a stale record, not
+            // a standing worktree, and reporting it satisfied would print
+            // a path that does not exist.
+            if seat.prunable.is_some() || !path.is_dir() {
+                return Err(RkError::refusal(
+                    Diagnostic::new(
+                        Reason::StateDrift,
+                        format!(
+                            "{path} is registered to {branch} and its directory is missing"
+                        ),
+                    )
+                    .expected("the canonical worktree standing, or its stale record cleared")
+                    .action(
+                        "rk worktree prune --apply clears the stale record, then re-run; git worktree repair recovers a moved directory instead",
+                    )
+                    .target_state("unchanged"),
+                ));
+            }
             return report_satisfied(out, branch, &path, apply);
         }
         let move_hint = if seat.path == layout.main {
