@@ -46,7 +46,7 @@ The wrong instinct is to fix it on `release/1.1`. Instead, the fix lands on the 
 git checkout release/1.1 && git cherry-pick M && git push
 ```
 
-In the worktree mode the checkout is the line's worktree — `cd ../<project>-release-1.1` — and the cherry-pick and push run there.
+In the worktree mode the checkout is the line's worktree — `cd ../<project>@release-1.1` — and the cherry-pick and push run there.
 
 ```text
 master:  A──B──…──H──J──K──L──M

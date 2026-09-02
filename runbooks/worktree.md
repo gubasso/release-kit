@@ -7,7 +7,7 @@ The four steps of [worktrees](../method/08-worktrees.md) as commands: the chapte
 ```bash
 rk worktree add <type>/<slug>            # preview: names the derived path and the source
 rk worktree add <type>/<slug> --apply
-cd ../<project>-<type>-<slug>
+cd ../<project>@<type>-<slug>
 # check: the apply prints the absolute path, and rk worktree list shows the seat
 ```
 

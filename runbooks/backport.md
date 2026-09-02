@@ -17,7 +17,7 @@ On worktree:
 
 ```bash
 git fetch origin --tags --force
-rk worktree add release/<line> --base "v<version>" --apply && cd ../<project>-release-<line>
+rk worktree add release/<line> --base "v<version>" --apply && cd ../<project>@release-<line>
 git push -u origin release/<line>
 # check: the line takes its explicit base and its own seat; the main checkout stays on master
 # already cut: the add adopts the existing branch instead, and reports satisfied when its seat stands
@@ -55,7 +55,7 @@ git checkout release/<line> && git cherry-pick <commit> && git push
 On worktree:
 
 ```bash
-cd ../<project>-release-<line> && git cherry-pick <commit> && git push
+cd ../<project>@release-<line> && git cherry-pick <commit> && git push
 # check: the pick lands in the line's own seat; nothing else travels
 ```
 
@@ -107,7 +107,7 @@ git push origin --delete release/<line>
 Then the local half — a release line is protected from every automatic prune, so its seat and branch retire by hand:
 
 ```bash
-git worktree remove ../<project>-release-<line>
+git worktree remove ../<project>@release-<line>
 git branch -D release/<line>
 # check: rk worktree list no longer names the seat
 ```

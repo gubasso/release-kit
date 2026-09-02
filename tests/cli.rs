@@ -7052,7 +7052,7 @@ fn seat(repo: &Path, branch: &str) -> PathBuf {
     let path = repo
         .parent()
         .expect("a parent")
-        .join(format!("widget-{}", branch.replace('/', "-")));
+        .join(format!("widget@{}", branch.replace('/', "-")));
     git_in(
         repo,
         &[
@@ -7126,7 +7126,7 @@ fn worktree_list_reports_main_linked_drift_and_missing() {
         .clone();
     let text = String::from_utf8_lossy(&human);
     assert!(
-        text.contains("off-path: expected ../widget-fix-y"),
+        text.contains("off-path: expected ../widget@fix-y"),
         "{text}"
     );
     assert!(text.contains("rk worktree prune"), "{text}");
@@ -7146,7 +7146,7 @@ fn worktree_add_previews_and_writes_nothing() {
         .clone();
     let text = String::from_utf8_lossy(&out);
     assert!(
-        text.contains("path:   ../widget-feat-oauth-login"),
+        text.contains("path:   ../widget@feat-oauth-login"),
         "{text}"
     );
     assert!(text.contains("would run: git worktree add"), "{text}");
@@ -7155,7 +7155,7 @@ fn worktree_add_previews_and_writes_nothing() {
         !repo
             .parent()
             .expect("a parent")
-            .join("widget-feat-oauth-login")
+            .join("widget@feat-oauth-login")
             .exists(),
         "a preview creates no worktree"
     );
@@ -7168,7 +7168,7 @@ fn worktree_add_applies_creates_branch_and_prints_the_path() {
     let expected = repo
         .parent()
         .expect("a parent")
-        .join("widget-feat-oauth-login");
+        .join("widget@feat-oauth-login");
     let out = rk_scrubbed()
         .args([
             "worktree",
@@ -7209,7 +7209,7 @@ fn worktree_add_applies_creates_branch_and_prints_the_path() {
     assert!(
         text.lines()
             .next()
-            .is_some_and(|line| line.ends_with("widget-fix-second")),
+            .is_some_and(|line| line.ends_with("widget@fix-second")),
         "the result line is the absolute path: {text}"
     );
 }
@@ -7397,6 +7397,7 @@ fn worktree_add_refuses_a_git_invalid_ref_and_an_unresolvable_base() {
     assert_eq!(branch_names(&repo), before, "every refusal mutates nothing");
 }
 
+/// SATISFIES maintenance:a-worktree-path-derives-from-project-and-branch
 #[test]
 fn worktree_add_refuses_a_branch_checked_out_elsewhere() {
     let (_parent, repo) = worktree_fixture();
@@ -7412,14 +7413,25 @@ fn worktree_add_refuses_a_branch_checked_out_elsewhere() {
             "feat/held",
         ],
     );
+    // The linked seat names the move to the derived path.
     rk_scrubbed()
         .args(["worktree", "add", "feat/held", "--apply", "--target"])
         .arg(&repo)
         .assert()
         .code(73)
-        .stderr(predicate::str::contains("held-elsewhere"));
+        .stderr(predicate::str::contains("held-elsewhere"))
+        .stderr(predicate::str::contains("git worktree move"))
+        .stderr(predicate::str::contains("widget@feat-held"));
+    assert!(
+        !repo
+            .parent()
+            .expect("a parent")
+            .join("widget@feat-held")
+            .exists(),
+        "a refusal creates nothing"
+    );
 
-    // The main-checkout seat names the move.
+    // The main-checkout seat names the switch instead: it is never moved.
     git_in(&repo, &["checkout", "-qb", "feat/mine"]);
     rk_scrubbed()
         .args(["worktree", "add", "feat/mine", "--apply", "--target"])
@@ -7619,7 +7631,7 @@ fn worktree_prune_apply_reads_the_stale_sweep_per_row() {
     // A record the sweep cannot clear — its administrative directory made
     // read-only — stands in for a lock arriving mid-run: the per-row
     // re-observation reports it truthfully instead of a blanket claim.
-    let record_dir = repo.join(".git/worktrees/widget-fix-gone-too");
+    let record_dir = repo.join(".git/worktrees/widget@fix-gone-too");
     assert!(record_dir.is_dir(), "the record directory exists");
     let readonly = std::fs::Permissions::from_mode(0o555);
     std::fs::set_permissions(&record_dir, readonly).expect("the permissions set");
@@ -7645,14 +7657,14 @@ fn worktree_prune_apply_reads_the_stale_sweep_per_row() {
             })
             .unwrap_or_else(|| panic!("a row ending {suffix}"))
     };
-    assert_eq!(row("widget-fix-gone")["status"], "pruned", "{report}");
+    assert_eq!(row("widget@fix-gone")["status"], "pruned", "{report}");
     assert_eq!(
-        row("widget-fix-gone-too")["status"],
+        row("widget@fix-gone-too")["status"],
         "remove-failed",
         "{report}"
     );
     assert!(
-        row("widget-fix-gone-too")["detail"]
+        row("widget@fix-gone-too")["detail"]
             .as_str()
             .is_some_and(|detail| detail.contains("re-run rk worktree prune --apply")),
         "a failure row names its recovery: {report}"
@@ -7668,7 +7680,7 @@ fn worktree_prune_apply_reads_the_stale_sweep_per_row() {
         .expect("git runs");
     let listing = String::from_utf8_lossy(&registered.stdout).into_owned();
     assert!(
-        !listing.contains("widget-fix-gone\n") && listing.contains("widget-fix-gone-too"),
+        !listing.contains("widget@fix-gone\n") && listing.contains("widget@fix-gone-too"),
         "the locked record is intact, the stale one is cleared: {listing}"
     );
 }
@@ -7764,7 +7776,7 @@ fn worktree_prune_verify_confirms_against_the_forge() {
     assert!(
         repo.parent()
             .expect("a parent")
-            .join("widget-feat-merged")
+            .join("widget@feat-merged")
             .is_dir(),
         "verify removes nothing"
     );

@@ -27,7 +27,7 @@ pub enum WorktreeAction {
     },
 
     /// Create or adopt one branch's worktree at the sibling path
-    /// `../<project>-<flattened branch>`; preview by default.
+    /// `../<project>@<flattened branch>`; preview by default.
     Add {
         /// The branch to seat: an existing local branch is adopted, a
         /// lone matching remote tip becomes a tracking branch, and
