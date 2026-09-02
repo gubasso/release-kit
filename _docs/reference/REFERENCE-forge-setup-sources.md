@@ -186,6 +186,15 @@ GitLab's project attribute `squash_commit_template` defaults to `%{title}`, the 
 
 Bearing: `forge-setup:the-setup-asserts-the-squash-title-source`. The stated no-default plus the observed single-commit fallback is why the setting is asserted rather than assumed, and why the assertion sits in `protect-trunk` beside the squash-only merge rule it completes.
 
+## The squash message source
+
+Verified 2026-09-02. The same repository update endpoint takes `squash_merge_commit_message` with the values `PR_BODY`, `COMMIT_MESSAGES`, and `BLANK`; `PR_BODY` is documented as the default message being the pull request's body. GitLab is structurally different: `squash_commit_template` defaults to `%{title}`, so the merge request's description never reaches the trunk commit and no body assertion or gate is needed there.
+
+- <https://docs.github.com/en/rest/repos/repos#update-a-repository>
+- <https://docs.gitlab.com/user/project/merge_requests/commit_templates/>
+
+Bearing: `forge-setup:the-setup-asserts-the-squash-body-source`. `PR_BODY` making the request's description the trunk commit's body is why the description passes through the content gates and why the observation faults any other value.
+
 ## The title check beside the merge gate
 
 Verified 2026-09-01. A required status check on GitHub matches by context name — for an Actions job, the job's name — so a workflow job named `pr-title` can be required by the trunk ruleset beside the project's own check. GitLab names no check: `only_allow_merge_if_pipeline_succeeds` requires the whole pipeline, so a title job in the merge request pipeline is blocking without registration, and it also gives every merge request the pipeline that setting waits on.

@@ -663,13 +663,13 @@ fn github_trunk_ruleset(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkErro
             faults.push(format!("the {TITLE_CHECK} check is not required"));
         }
     }
-    match squash_title_source(ctx, run)? {
-        TitleSource::Owned => {}
-        TitleSource::Fault(fault) => faults.push(fault),
+    match squash_merge_sources(ctx, run)? {
+        MergeSources::Owned => {}
+        MergeSources::Faults(proven) => faults.extend(proven),
         // Proven drift wins over an outage: an unreadable settings read
         // downgrades the answer to unknown only when nothing above it was
         // proven wrong.
-        TitleSource::Unreadable(err) => {
+        MergeSources::Unreadable(err) => {
             if faults.is_empty() {
                 return Ok(StepState::unknown(err));
             }
@@ -682,33 +682,46 @@ fn github_trunk_ruleset(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkErro
     })
 }
 
-/// What the repository's squash title setting holds.
-enum TitleSource {
-    /// The request's title, as the setup owns.
+/// What the repository's squash message settings hold.
+enum MergeSources {
+    /// The request's title and body, as the setup owns.
     Owned,
-    /// A proven other value, as one fault line.
-    Fault(String),
+    /// Proven other values, one fault line each.
+    Faults(Vec<String>),
     /// The settings could not be read.
     Unreadable(String),
 }
 
-/// The squash title source, a repository setting beside the ruleset: left
-/// unset, a one-commit request offers that commit's own subject as the
-/// trunk's message, which the bot then reads for the version.
-fn squash_title_source(ctx: &Ctx, run: &mut Runner) -> Result<TitleSource, RkError> {
+/// The squash message sources, repository settings beside the ruleset:
+/// with the title source unset, a one-commit request offers that commit's
+/// own subject as the trunk's message, which the bot then reads for the
+/// version; with the message source on another value, the trunk's body is
+/// not the request's description the content gates judged. One GET
+/// answers for both, each faulted by name.
+fn squash_merge_sources(ctx: &Ctx, run: &mut Runner) -> Result<MergeSources, RkError> {
     Ok(match api_get(ctx, run, &format!("repos/{}", ctx.repo))? {
         Api::Ok(body) => {
-            if body["squash_merge_commit_title"] == "PR_TITLE" {
-                TitleSource::Owned
-            } else {
-                TitleSource::Fault(format!(
+            let mut faults = Vec::new();
+            if body["squash_merge_commit_title"] != "PR_TITLE" {
+                faults.push(format!(
                     "the squash title source is {} where the setup owns PR_TITLE",
                     body["squash_merge_commit_title"]
-                ))
+                ));
+            }
+            if body["squash_merge_commit_message"] != "PR_BODY" {
+                faults.push(format!(
+                    "the squash message source is {} where the setup owns PR_BODY",
+                    body["squash_merge_commit_message"]
+                ));
+            }
+            if faults.is_empty() {
+                MergeSources::Owned
+            } else {
+                MergeSources::Faults(faults)
             }
         }
-        Api::Missing => TitleSource::Fault(format!("the forge does not know {}", ctx.repo)),
-        Api::Failed(err) => TitleSource::Unreadable(err),
+        Api::Missing => MergeSources::Faults(vec![format!("the forge does not know {}", ctx.repo)]),
+        Api::Failed(err) => MergeSources::Unreadable(err),
     })
 }
 

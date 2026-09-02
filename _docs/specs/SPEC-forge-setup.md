@@ -11,6 +11,7 @@
   - [`forge-setup:every-supported-forge-runs-every-step` — Every supported forge runs every step](#forge-setupevery-supported-forge-runs-every-step--every-supported-forge-runs-every-step)
   - [`forge-setup:a-check-reports-what-the-forge-enforces` — A check reports what the forge enforces](#forge-setupa-check-reports-what-the-forge-enforces--a-check-reports-what-the-forge-enforces)
   - [`forge-setup:the-setup-asserts-the-squash-title-source` — The setup asserts the squash title source](#forge-setupthe-setup-asserts-the-squash-title-source--the-setup-asserts-the-squash-title-source)
+  - [`forge-setup:the-setup-asserts-the-squash-body-source` — The setup asserts the squash body source](#forge-setupthe-setup-asserts-the-squash-body-source--the-setup-asserts-the-squash-body-source)
 
 <!--TOC-->
 
@@ -115,5 +116,23 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 - GIVEN a repository whose squash title source is unset, holding a pull request with one commit whose subject is `wip`
 - WHEN `rk setup step protect-trunk --apply` runs and `rk setup check` reads the repository back
 - THEN the apply sets the title source to the request's title, and a check against a repository holding any other value reports `protect-trunk` unsatisfied naming the setting
+
+Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `forge-setup:the-setup-asserts-the-squash-body-source` — The setup asserts the squash body source
+
+`protect-trunk` MUST assert `squash_merge_commit_message=PR_BODY` on GitHub and the observation MUST fault any other value, because the request's description becomes the trunk commit's body there and the content gates judge that description, not whatever another source would substitute.
+
+#### Scenario: The message source drifts to another value
+
+- GIVEN a repository whose squash title source is `PR_TITLE` and whose squash message source holds any other value
+- WHEN `rk setup check` reads the repository back
+- THEN the check reports `protect-trunk` unsatisfied naming the squash message source
+
+#### Scenario: GitLab needs no body assertion
+
+- GIVEN a GitLab project whose squash template is `%{title}`
+- WHEN the setup asserts and observes the squash settings
+- THEN the title template alone is asserted, because the template puts no request description on the trunk
 
 Verify: `cargo nextest run -E 'binary(cli)'`
