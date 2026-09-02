@@ -168,7 +168,7 @@ checked = 2026-09-02
 name = "conventional-pre-commit"
 version = "4.4.0"
 used_by = ["rust", "python", "bash"]
-purpose = "holds every commit message to the scoped convention through the landed commit-msg hook"
+purpose = "holds every commit header to the scoped convention through the landed commit-msg hook; rk message guards the content"
 check = "https://api.github.com/repos/compilerla/conventional-pre-commit/releases/latest"
 checked = 2026-09-02
 

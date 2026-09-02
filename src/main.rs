@@ -58,6 +58,7 @@ fn run(cli: &Cli) -> Result<(), RkError> {
         Commands::Adopt(args) => commands::adopt::run(args),
         Commands::Setup(args) => commands::setup::run(args),
         Commands::Branches(args) => commands::branches::run(args),
+        Commands::Message(args) => commands::message::run(args),
         Commands::Worktree(args) => commands::worktree::run(args),
         Commands::Runs(args) => commands::runs::run(args),
         Commands::Skill(args) => commands::skill::run(args),
@@ -115,6 +116,7 @@ const fn name(command: &Commands) -> &'static str {
         Commands::Adopt(_) => "adopt",
         Commands::Setup(_) => "setup",
         Commands::Branches(_) => "branches",
+        Commands::Message(_) => "message",
         Commands::Worktree(_) => "worktree",
         Commands::Runs(_) => "runs",
         Commands::Skill(_) => "skill",
@@ -149,6 +151,7 @@ const fn wants_json(command: &Commands) -> bool {
         Commands::Branches(args) => match &args.action {
             BranchesAction::Prune { json, .. } => *json,
         },
+        Commands::Message(args) => args.json,
         // An explicit nested match over all three actions: a `_ => false`
         // arm would silently swallow a new one.
         Commands::Worktree(args) => match &args.action {

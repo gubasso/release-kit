@@ -1,0 +1,12 @@
+# The message-content guards: what no commit message or request body may
+# carry. One POSIX extended regular expression per non-comment line; a
+# `# class:` comment names the class every line below it reports as,
+# until the next class comment. rk message reads this file; the forge
+# body gate greps a duplicated copy, held equal by an agreement test.
+# class: attribution
+[Gg]enerated with \[?Claude
+🤖 Generated with
+[Cc]o-[Aa]uthored-[Bb]y:.*([Cc]laude|[Cc]opilot|Codex|ChatGPT)
+noreply@anthropic\.com
+# class: internal-path
+(^|[^A-Za-z0-9])\.draft/

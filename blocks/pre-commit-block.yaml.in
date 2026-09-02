@@ -9,6 +9,13 @@
       - id: conventional-pre-commit
         stages: [commit-msg]
         args: [--strict, --force-scope, --scopes, 'RK_SCOPES_CSV']
+  - repo: local
+    hooks:
+      - id: rk-message
+        name: rk message content
+        stages: [commit-msg]
+        language: system
+        entry: rk message --check
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
