@@ -31,3 +31,16 @@ github-attestations-phase = "host"
 # The host phase's permissions are job-scoped, so the release must be created
 # in the same phase; cargo-dist's documentation asks for this pairing outright.
 github-release = "host"
+
+# The build that signs is itself pinned by digest: cargo-dist references
+# these actions by movable tag unless told otherwise, and the attest step
+# is among them, so a moved tag could swap the code that mints the
+# signature. The commit is the immutable execution reference; the tag it
+# came from stays readable in the registry, as the discovery ref a
+# freshness check reads. These are dist's own default versions, which are
+# not the tags the hand-written workflows pin.
+[dist.github-action-commits]
+"actions/checkout" = "d23441a48e516b6c34aea4fa41551a30e30af803" # v6
+"actions/download-artifact" = "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c" # v8
+"actions/upload-artifact" = "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" # v7
+"actions/attest" = "1e69f48acb82d1966a394da916b4c1698aa569d6" # v4

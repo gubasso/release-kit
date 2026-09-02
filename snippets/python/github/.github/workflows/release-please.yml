@@ -28,12 +28,12 @@ jobs:
       group: release-please-${{ github.ref }}
       cancel-in-progress: false
     steps:
-      - uses: actions/create-github-app-token@v3
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         id: app-token
         with:
           app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
           private-key: ${{ secrets.RELEASE_BOT_APP_PRIVATE_KEY }}
-      - uses: googleapis/release-please-action@v5
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5
         with:
           token: ${{ steps.app-token.outputs.token }}
           target-branch: ${{ github.ref_name }}
@@ -52,7 +52,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -80,7 +80,7 @@ jobs:
           fi
           echo "pending=true" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-      - uses: actions/create-github-app-token@v3
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         if: steps.bump.outputs.pending == 'true'
         id: app-token
         with:
@@ -98,7 +98,7 @@ jobs:
           gh api -X POST "repos/$GH_REPO/git/refs" \
             -f "ref=refs/tags/v$VERSION" -f "sha=$SHA" >/dev/null
           echo "tagged v$VERSION at $SHA."
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         if: steps.bump.outputs.pending == 'true'
         with:
           python-version: "3.x"
@@ -109,6 +109,6 @@ jobs:
           python -m build
       - name: publish over OIDC
         if: steps.bump.outputs.pending == 'true'
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
         with:
           skip-existing: true
