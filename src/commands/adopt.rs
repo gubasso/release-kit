@@ -16,7 +16,7 @@ use crate::cli::adopt::AdoptArgs;
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::digest::Digest;
 use crate::error::RkError;
-use crate::landing::manifest::{self, FileRecord, Manifest, Parameters};
+use crate::landing::manifest::{self, FileRecord, Manifest, Parameters, Workflow};
 use crate::landing::{self, Kind};
 use crate::output::Output;
 use crate::registry;
@@ -47,6 +47,9 @@ struct Report {
     forge: String,
     /// The parameter the candidate was rendered under.
     repo: String,
+    /// The working-copy mode the candidate was rendered under and the
+    /// record carries.
+    workflow: &'static str,
     /// Every destination, with its verification result.
     files: Vec<FileEntry>,
     /// What plausibly follows.
@@ -95,8 +98,9 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
     let repo = resolved.repo.ok_or_else(landing::repo_unresolved)?;
     let tech = resolved_tech(args)?;
     let scopes = required_scopes(args.scopes.as_deref())?;
-    let entries = landing::projection(&tech, &resolved.forge, &repo, &scopes)?;
-    let (files, records) = verify(args, &entries)?;
+    let workflow = Workflow::parse(&args.workflow)?;
+    let entries = landing::projection(&tech, &resolved.forge, &repo, &scopes, workflow)?;
+    let (files, records) = verify(args, workflow, &entries)?;
 
     for file in &files {
         out.result_line(match file.action {
@@ -119,6 +123,7 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
                 parameters: Parameters {
                     repo: repo.clone(),
                     scopes,
+                    workflow,
                 },
                 files: records,
                 pins: registry::pins_for(&tech)
@@ -143,12 +148,13 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
     };
     out.next(&next);
     out.emit(&Report {
-        schema: "rk.adopt/1",
+        schema: "rk.adopt/2",
         mode: if args.apply { "apply" } else { "preview" },
         target: args.target.to_string(),
         tech,
         forge: resolved.forge,
         repo,
+        workflow: workflow.as_str(),
         files,
         next,
     })
@@ -159,6 +165,7 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
 /// operator resolves everything and re-runs once.
 fn verify(
     args: &AdoptArgs,
+    workflow: Workflow,
     entries: &[landing::Entry],
 ) -> Result<(Vec<FileEntry>, Vec<FileRecord>), RkError> {
     let mut mismatches: Vec<String> = Vec::new();
@@ -224,9 +231,12 @@ fn verify(
                 listed.join(", ")
             ),
         )
-        .expected("every rendered destination matching this payload's candidate, byte for byte")
+        .expected(format!(
+            "every rendered destination matching the {} candidate, byte for byte",
+            workflow.as_str()
+        ))
         .action(
-            "restore each file to the candidate's bytes — rk snippet prints them — or take the difference deliberately through a fresh landing and a reviewed diff",
+            "align first: rk adopt without --apply lists every differing destination; bring each to the selected candidate's bytes — rk snippet and rk payload print them — then re-run, or select the other candidate with --workflow",
         )
         .target_state("unchanged"),
     ))
@@ -270,16 +280,17 @@ mod tests {
 
     use super::{FileEntry, Report};
 
-    /// The complete `rk.adopt/1` shape, held by snapshot.
+    /// The complete `rk.adopt/2` shape, held by snapshot.
     #[test]
     fn the_adopt_report_schema_snapshot_holds() {
         let report = Report {
-            schema: "rk.adopt/1",
+            schema: "rk.adopt/2",
             mode: "apply",
             target: "/tmp/t".into(),
             tech: "rust".into(),
             forge: "github".into(),
             repo: "acme/widget".into(),
+            workflow: "branches",
             files: vec![FileEntry {
                 path: "release-plz.toml".into(),
                 kind: "seeded",
@@ -289,7 +300,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.adopt/1","mode":"apply","target":"/tmp/t","tech":"rust","forge":"github","repo":"acme/widget","files":[{"path":"release-plz.toml","kind":"seeded","action":"differs"}],"next":["commit the record"]}"#
+            r#"{"schema":"rk.adopt/2","mode":"apply","target":"/tmp/t","tech":"rust","forge":"github","repo":"acme/widget","workflow":"branches","files":[{"path":"release-plz.toml","kind":"seeded","action":"differs"}],"next":["commit the record"]}"#
         );
     }
 }

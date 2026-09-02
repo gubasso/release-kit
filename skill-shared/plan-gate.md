@@ -6,7 +6,7 @@ Hold all three phases for the rest of the task, and apply them to every further 
 
 ## What a request authorizes
 
-The gate governs how a skill acts; it never widens what the operator asked for. A request authorizes the file writes and the `rk` verbs it names, and nothing else: creating, switching or deleting a branch, committing, pushing, tagging, and opening, updating or merging a pull request are the operator's moves. Plan each of those as a gated step, state its exact command, and run it only where the operator's request named that action or they answer the gate for it.
+The gate governs how a skill acts; it never widens what the operator asked for. A request authorizes the file writes and the `rk` verbs it names, and nothing else: creating, switching or deleting a branch, creating or removing a worktree, committing, pushing, tagging, and opening, updating or merging a pull request are the operator's moves. Plan each of those as a gated step, state its exact command, and run it only where the operator's request named that action or they answer the gate for it.
 
 An approved plan approves its shape, not a standing licence over the repository's git and forge state. A request to implement or change code authorizes the file changes alone: where the work then needs a branch or a commit, say which step comes next, name its command, and stop there.
 
@@ -31,7 +31,7 @@ When the request carries `--no-plan`, replace this phase's approval turn: do not
 
 The plan is a claim about what will happen. Check it against something that knows, never against your own confidence.
 
-1. Preview every verb that has one. `rk init`, `rk setup`, `rk upgrade`, `rk adopt`, `rk skill install`, and `rk branches prune` write nothing without `--apply`; run each and read what it reports.
+1. Preview every verb that has one. `rk init`, `rk setup`, `rk upgrade`, `rk adopt`, `rk skill install`, `rk branches prune`, `rk worktree add`, and `rk worktree prune` write nothing without `--apply`; run each and read what it reports.
 2. Validate every action that has no preview — a merge, a tag, a publish, a forge or registry mutation — against what states it instead: `rk guide <topic>` for the commands, the owning method chapter for their order, and a read-only observation of the current state. `rk status --check --target .` and `rk setup check --target .` observe and never write.
 3. Compare both against the plan: the destinations, their count, and the steps in their order.
 4. Where they disagree, stop. Say what differs, and return to phase 1. Never reconcile a surprise by widening the plan silently.

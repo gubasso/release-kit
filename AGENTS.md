@@ -57,6 +57,7 @@ This repository is the canonical knowledge product for the release-kit workflow.
 - This repository's overlay over `rk guide setup` and `rk guide release` — its coordinates, its deviations, and the proof transcript: `_docs/guides/release/README.md`. It names no account, repository, or crate: the guides are public and carry no operator's particulars.
 - The executable repository-side setup: `rk setup`, with `rk runs` over its journals.
 - The branches a squash merge retires in this clone: `rk branches prune`, preview by default; the post-merge reminder lands with `rk setup step branch-reminder`, bound by `_docs/specs/SPEC-maintenance.md`.
+- The worktree lifecycle and the workflow mode: `rk worktree`, with `rk guide worktree` as the procedure.
 - What lands in a target: `snippets/`, served by `rk snippet --list`.
 - What a landed target reports about itself: `rk status`, with `--check` as the judging mode; `rk upgrade` takes it to a newer payload; `rk adopt` records a pre-record target.
 - Pinned tools and freshness: `versions.toml`, served by `rk versions`; `rk versions --check` is the one verb that fetches.

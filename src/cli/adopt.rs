@@ -37,6 +37,13 @@ pub struct AdoptArgs {
     #[arg(long)]
     pub scopes: Option<String>,
 
+    /// The working-copy mode the candidate is rendered under: worktree or
+    /// branches. It chooses which candidate adoption verifies against and
+    /// never blesses the disk; the default is branches, the
+    /// compatibility-safe reading of a pre-record target.
+    #[arg(long, default_value = "branches")]
+    pub workflow: String,
+
     /// Write the record; without it the verification runs and nothing is
     /// touched.
     #[arg(long)]

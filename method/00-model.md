@@ -25,7 +25,7 @@ The branch dies at the squash merge and its name never enters history, so the na
 - The type prefix, `<type>/<slug>`, with the type mirroring the Conventional Commit type the squash title will carry: `feat/oauth-login`, `fix/empty-csv-upload`.
 - The issue-linked name, `<issue-id>-<slug>`, the shape both supported forges mint when they generate the branch from an issue. Prefer letting the forge mint it — one command links the branch, its pull request, and the issue's closing, and the forge document carries that command.
 
-A tracker outside the forge, Jira being the common case, matches its issue keys anywhere in a branch name, so its key rides inside either form: `fix/PROJ-412-empty-csv`. Whichever form a project picks, the branch name binds nothing downstream: the squash title, not the branch name, is what the bot and the history read. The landed branch-name hook holds the routing to these two forms while the branch lives — it changes nothing about what the name binds.
+A tracker outside the forge, Jira being the common case, matches its issue keys anywhere in a branch name, so its key rides inside either form: `fix/PROJ-412-empty-csv`. Where the branch is checked out is the project's workflow mode, worktree by default; [worktrees](./08-worktrees.md) owns it. Whichever form a project picks, the branch name binds nothing downstream: the squash title, not the branch name, is what the bot and the history read. The landed branch-name hook holds the routing to these two forms while the branch lives — it changes nothing about what the name binds.
 
 ## The one pull request
 

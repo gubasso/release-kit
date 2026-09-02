@@ -15,7 +15,7 @@ use crate::cli::upgrade::UpgradeArgs;
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::digest::Digest;
 use crate::error::RkError;
-use crate::landing::manifest::{self, Alignment, FileRecord, Manifest};
+use crate::landing::manifest::{self, Alignment, FileRecord, Manifest, Workflow};
 use crate::landing::{self, Entry, Kind};
 use crate::output::Output;
 use crate::{embedded, registry};
@@ -49,6 +49,9 @@ struct Report {
     from_version: String,
     /// This binary's version.
     to_version: &'static str,
+    /// The working-copy mode the rewritten record carries — the recorded
+    /// mode, or the `--workflow` override this run applies.
+    workflow: &'static str,
     /// Every destination, with its action.
     files: Vec<FileEntry>,
     /// What plausibly follows.
@@ -75,11 +78,18 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
     let out = Output::new(args.json);
     let mut recorded = load_upgradable(&args.target)?;
     resolve_scopes(&mut recorded, args.scopes.as_deref())?;
+    // The mode change is an upgrade with exactly one overridden
+    // parameter; everything else — tech, forge, repo, scopes, lineage —
+    // comes from the record, untouched.
+    if let Some(raw) = args.workflow.as_deref() {
+        recorded.parameters.workflow = Workflow::parse(raw)?;
+    }
     let entries = landing::projection(
         &recorded.tech,
         &recorded.forge,
         &recorded.parameters.repo,
         &recorded.parameters.scopes,
+        recorded.parameters.workflow,
     )?;
     refuse_non_regular(&args.target, &entries)?;
 
@@ -138,13 +148,14 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
     let next = next_lines(args, conflicts.is_empty());
     out.next(&next);
     out.emit(&Report {
-        schema: "rk.upgrade/1",
+        schema: "rk.upgrade/2",
         mode: if args.apply { "apply" } else { "preview" },
         target: args.target.to_string(),
         tech: recorded.tech.clone(),
         forge: recorded.forge.clone(),
         from_version: recorded.rk_version.clone(),
         to_version: env!("CARGO_PKG_VERSION"),
+        workflow: recorded.parameters.workflow.as_str(),
         files: decisions
             .iter()
             .map(|decision| FileEntry {
@@ -179,8 +190,14 @@ fn refuse_conflicts(conflicts: &[String]) -> RkError {
     )
 }
 
-/// The `Next:` lines for each outcome.
+/// The `Next:` lines for each outcome. A behavior-defining flag the
+/// preview was run with rides into the follow-up command, so following
+/// it applies the decision that was previewed, never a different one.
 fn next_lines(args: &UpgradeArgs, clean: bool) -> Vec<String> {
+    let workflow_flag = args
+        .workflow
+        .as_deref()
+        .map_or_else(String::new, |mode| format!(" --workflow {mode}"));
     if args.apply {
         vec![
             "commit the upgraded files, the record included".to_owned(),
@@ -188,12 +205,12 @@ fn next_lines(args: &UpgradeArgs, clean: bool) -> Vec<String> {
         ]
     } else if clean {
         vec![format!(
-            "rk upgrade --target {} --apply writes",
+            "rk upgrade{workflow_flag} --target {} --apply writes",
             args.target
         )]
     } else {
         vec![format!(
-            "resolve each conflict above; rk upgrade --target {} --apply refuses until then",
+            "resolve each conflict above; rk upgrade{workflow_flag} --target {} --apply refuses until then",
             args.target
         )]
     }
@@ -220,6 +237,7 @@ fn rewrite_record(
             parameters: manifest::Parameters {
                 repo: recorded.parameters.repo.clone(),
                 scopes: recorded.parameters.scopes.clone(),
+                workflow: recorded.parameters.workflow,
             },
             files: decisions
                 .iter()
@@ -524,17 +542,18 @@ mod tests {
 
     use super::{FileEntry, Report};
 
-    /// The complete `rk.upgrade/1` shape, held by snapshot.
+    /// The complete `rk.upgrade/2` shape, held by snapshot.
     #[test]
     fn the_upgrade_report_schema_snapshot_holds() {
         let report = Report {
-            schema: "rk.upgrade/1",
+            schema: "rk.upgrade/2",
             mode: "preview",
             target: "/tmp/t".into(),
             tech: "rust".into(),
             forge: "github".into(),
             from_version: "0.1.0".into(),
             to_version: "0.2.0",
+            workflow: "branches",
             files: vec![FileEntry {
                 path: "release-plz.toml".into(),
                 kind: "seeded",
@@ -544,7 +563,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.upgrade/1","mode":"preview","target":"/tmp/t","tech":"rust","forge":"github","from_version":"0.1.0","to_version":"0.2.0","files":[{"path":"release-plz.toml","kind":"seeded","action":"drift"}],"next":["rk upgrade --target /tmp/t --apply writes"]}"#
+            r#"{"schema":"rk.upgrade/2","mode":"preview","target":"/tmp/t","tech":"rust","forge":"github","from_version":"0.1.0","to_version":"0.2.0","workflow":"branches","files":[{"path":"release-plz.toml","kind":"seeded","action":"drift"}],"next":["rk upgrade --target /tmp/t --apply writes"]}"#
         );
     }
 }

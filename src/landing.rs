@@ -15,6 +15,8 @@ pub mod manifest;
 use camino::Utf8Path;
 use serde::{Deserialize, Serialize};
 
+pub use manifest::Workflow;
+
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
 use crate::{atomic, embedded};
@@ -193,19 +195,22 @@ pub const HOOKS_END: &str = "# END release-kit";
 /// hook types are installed.
 pub const HOOK_TYPES_LINE: &str = "default_install_hook_types: [pre-commit, commit-msg, pre-push]";
 
-/// The routing block template: the whole of target-side governance. Eight
+/// The routing block template: the whole of target-side governance. Nine
 /// lines of operational discovery — the agent guides and never drives, work
-/// branches before it starts, the commit contract, the files are owned, a
-/// convention governs them, and where the convention lives — spliced into
-/// the target's `AGENTS.md` and never grown into a method chapter. The scope
-/// token renders from the landing's `scopes` parameter.
+/// branches before it starts, where the branch is checked out, the commit
+/// contract, the files are owned, a convention governs them, and where the
+/// convention lives — spliced into the target's `AGENTS.md` and never grown
+/// into a method chapter. The scope token renders from the landing's
+/// `scopes` parameter, and the workflow token renders per mode in
+/// [`routing_block`].
 const ROUTING_BLOCK: &str = "<!-- BEGIN release-kit -->
 
 ## Releases
 
 - This repository runs the release-kit convention; `rk method invariants` states what must stay true.
-- An agent here guides and never drives: it reads this convention, tells the operator which step comes next, and takes no git or forge action — creating, switching or deleting a branch, committing, pushing, tagging, opening or updating or merging a pull request — unless the operator's request named that action. A request to change code authorizes the file changes alone.
+- An agent here guides and never drives: it reads this convention, tells the operator which step comes next, and takes no git or forge action — creating, switching or deleting a branch, creating or removing a worktree, committing, pushing, tagging, opening or updating or merging a pull request — unless the operator's request named that action. A request to change code authorizes the file changes alone.
 - Work reaches the trunk only through a squash-merged pull request from a short-lived branch — `<type>/<slug>` mirroring the squash title's type, or the forge-minted `<issue-id>-<slug>`. Nothing is committed on `master`.
+RK_WORKFLOW_LINE
 - The request's title becomes the trunk's commit message, so it MUST be a scoped Conventional Commit; the body carries the context.
 - Every commit follows the same scoped convention; the landed commit-msg hook enforces it, and the scopes this project accepts are `RK_SCOPES_CSV`.
 - Never author a tag, and never hand-edit a generated artifact workflow.
@@ -214,18 +219,34 @@ const ROUTING_BLOCK: &str = "<!-- BEGIN release-kit -->
 
 <!-- END release-kit -->";
 
+/// The routing block's one mode-dependent line, worktree form.
+const ROUTING_WORKTREE_LINE: &str = "- This project works in worktrees: every code-changing branch lives in its linked worktree (`rk worktree add <branch>` creates or adopts it beside the checkout), the main checkout commits nothing, and `rk worktree prune` retires a merged worktree. One branch, one writer.";
+
+/// The routing block's one mode-dependent line, branches form.
+const ROUTING_BRANCHES_LINE: &str = "- Branches are worked in the main checkout or in linked worktrees (`rk worktree add <branch>`); parallel work takes worktrees, one branch one writer, and `rk worktree prune` retires a merged worktree.";
+
+/// The one branch grammar.
+///
+/// The extended regular expression the landed
+/// `rk-branch-name` hook tests, and the same anchored language
+/// `rk worktree add` validates before creating anything. One owner by
+/// token — `concat!` cannot interpolate a const, so [`hooks_block`]
+/// substitutes it for the template's `RK_BRANCH_GRAMMAR` token.
+pub const BRANCH_GRAMMAR: &str = r"^((build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)/[A-Za-z0-9._/-]+|([0-9]+|[A-Z][A-Z0-9]+-[0-9]+)-[A-Za-z0-9._-]+|release[-/].+)$";
+
 /// The hook block template: the commit contract and the local mirrors of
 /// the forge protections, as list items under the target's `repos:` key.
 /// Each hook mirrors one named rule; every mirror dies to `--no-verify`,
 /// so the forge protections stay the enforcement and these exist for the
 /// refusal at the desk. The third-party hooks are pinned in
 /// `versions.toml`; the scope token renders from the landing's `scopes`
-/// parameter.
+/// parameter, and the grammar, skip, and guard tokens render in
+/// [`hooks_block`].
 const HOOKS_BLOCK: &str = r#"# BEGIN release-kit
 # The release convention's hooks. Install every stage they run at:
 # pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push
 # A CI sweep commits nothing, so a job running pre-commit against a trunk
-# checkout sets SKIP=no-commit-to-branch in its environment.
+# checkout sets SKIP=RK_SWEEP_SKIP in its environment.
   - repo: https://github.com/compilerla/conventional-pre-commit
     rev: v4.4.0
     hooks:
@@ -244,8 +265,8 @@ const HOOKS_BLOCK: &str = r#"# BEGIN release-kit
         language: system
         always_run: true
         pass_filenames: false
-        entry: sh -c 'branch=$(git symbolic-ref --quiet --short HEAD) || exit 0; [ "$branch" = master ] && exit 0; printf %s "$branch" | grep -Eq "^((build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)/[A-Za-z0-9._/-]+|([0-9]+|[A-Z][A-Z0-9]+-[0-9]+)-[A-Za-z0-9._-]+|release[-/].+)$" && exit 0; echo "branch $branch is neither <type>/<slug> nor <issue-id>-<slug>; gh issue develop <issue> --checkout or its glab counterpart mints the linked form" >&2; exit 1'
-      - id: rk-no-push-to-trunk
+        entry: sh -c 'branch=$(git symbolic-ref --quiet --short HEAD) || exit 0; [ "$branch" = master ] && exit 0; printf %s "$branch" | grep -Eq "RK_BRANCH_GRAMMAR" && exit 0; echo "branch $branch is neither <type>/<slug> nor <issue-id>-<slug>; gh issue develop <issue> --checkout or its glab counterpart mints the linked form" >&2; exit 1'
+RK_WORKTREE_GUARD      - id: rk-no-push-to-trunk
         name: rk no push to trunk
         stages: [pre-push]
         language: system
@@ -267,18 +288,57 @@ const HOOKS_BLOCK: &str = r#"# BEGIN release-kit
         files: '^(\.github/workflows/|\.gitlab-ci\.yml$|\.gitlab/ci/|AGENTS\.md$|\.release-kit/|\.pre-commit-config\.yaml$|release-plz\.toml$|dist-workspace\.toml$|release-please-config\.json$|cliff\.toml$|\.release-please-manifest\.json$|VERSION$)'
 # END release-kit"#;
 
-/// The routing block template, markers included, without a trailing
-/// newline and with its scope token unrendered.
+/// The `rk-worktree-location` entry the worktree mode's hook block
+/// carries, directly after `rk-branch-name`. Topology is tested first, so
+/// the invariant is whole: the main checkout commits nothing — not on a
+/// branch, not detached — while every linked worktree commits wherever it
+/// sits; the path convention binds at creation, not here. A worktree-mode
+/// sweep on a detached main checkout sets the skip pair the block's
+/// comment names.
+const WORKTREE_GUARD_ENTRY: &str = r#"      - id: rk-worktree-location
+        name: rk worktree location
+        language: system
+        always_run: true
+        pass_filenames: false
+        entry: sh -c '[ "$(git rev-parse --git-dir)" = "$(git rev-parse --git-common-dir)" ] || exit 0; branch=$(git symbolic-ref --quiet --short HEAD) || { echo "this project works in worktrees: the main checkout takes no commit, detached included; rk worktree add <branch> seats work in its own worktree" >&2; exit 1; }; [ "$branch" = master ] && exit 0; echo "this project works in worktrees: the main checkout takes no branch commit, as the forge trunk takes no direct push; rk worktree add $branch gives this branch its own worktree" >&2; exit 1'"#;
+
+/// The routing block for one workflow mode.
+///
+/// Markers included, without a
+/// trailing newline and with its scope token unrendered: the template
+/// with the mode's one orientation line substituted, everything else —
+/// the agent-boundary line included — byte-identical across modes.
 #[must_use]
-pub const fn routing_block() -> &'static str {
-    ROUTING_BLOCK
+pub fn routing_block(workflow: Workflow) -> String {
+    let line = match workflow {
+        Workflow::Worktree => ROUTING_WORKTREE_LINE,
+        Workflow::Branches => ROUTING_BRANCHES_LINE,
+    };
+    ROUTING_BLOCK.replacen("RK_WORKFLOW_LINE", line, 1)
 }
 
-/// The hook block template, markers included, without a trailing newline
-/// and with its scope token unrendered.
+/// The hook block for one workflow mode.
+///
+/// Markers included, without a
+/// trailing newline and with its scope token unrendered. What is landed
+/// is what runs: the worktree mode's block carries the location guard and
+/// names the sweep-skip pair, and the branches mode's block carries no
+/// guard entry at all — never an entry that reads local state to decide
+/// whether to enforce. The one branch grammar substitutes here from
+/// [`BRANCH_GRAMMAR`].
 #[must_use]
-pub const fn hooks_block() -> &'static str {
+pub fn hooks_block(workflow: Workflow) -> String {
+    let (guard, skip) = match workflow {
+        Workflow::Worktree => (
+            format!("{WORKTREE_GUARD_ENTRY}\n"),
+            "no-commit-to-branch,rk-worktree-location",
+        ),
+        Workflow::Branches => (String::new(), "no-commit-to-branch"),
+    };
     HOOKS_BLOCK
+        .replacen("RK_BRANCH_GRAMMAR", BRANCH_GRAMMAR, 1)
+        .replacen("RK_SWEEP_SKIP", skip, 1)
+        .replacen("RK_WORKTREE_GUARD", &guard, 1)
 }
 
 /// The markers of a block destination, or `None` for a whole-file one.
@@ -479,9 +539,12 @@ pub fn pair_files(tech: &str, forge: &str) -> Result<Vec<(String, &'static [u8])
     Ok(files)
 }
 
-/// The whole payload projection for one pair under the `repo` and
-/// `scopes` parameters: every snippet with its kind and rendered bytes,
-/// plus the routing block and the hook block, sorted by destination.
+/// The whole payload projection for one pair.
+///
+/// Under the `repo`, `scopes`,
+/// and `workflow` parameters: every snippet with its kind and rendered
+/// bytes, plus the routing block and the hook block — each a pure
+/// function of the recorded mode — sorted by destination.
 ///
 /// # Errors
 ///
@@ -493,6 +556,7 @@ pub fn projection(
     forge: &str,
     repo: &str,
     scopes: &[String],
+    workflow: Workflow,
 ) -> Result<Vec<Entry>, RkError> {
     let mut entries = Vec::new();
     for (destination, baseline) in pair_files(tech, forge)? {
@@ -512,8 +576,8 @@ pub fn projection(
         });
     }
     for (destination, template) in [
-        (AGENTS_DESTINATION, ROUTING_BLOCK),
-        (HOOKS_DESTINATION, HOOKS_BLOCK),
+        (AGENTS_DESTINATION, routing_block(workflow)),
+        (HOOKS_DESTINATION, hooks_block(workflow)),
     ] {
         entries.push(Entry {
             destination: destination.to_owned(),
@@ -718,9 +782,10 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use super::{
-        AGENTS_DESTINATION, BLOCK_BEGIN, BLOCK_END, HOOK_TYPES_LINE, HOOKS_BEGIN,
-        HOOKS_DESTINATION, HOOKS_END, Kind, extract_block, hooks_block, kind_of, pair_files,
-        parse_scopes, projection, render, routing_block, splice_agents_block, splice_hooks_block,
+        AGENTS_DESTINATION, BLOCK_BEGIN, BLOCK_END, BRANCH_GRAMMAR, HOOK_TYPES_LINE, HOOKS_BEGIN,
+        HOOKS_DESTINATION, HOOKS_END, Kind, Workflow, extract_block, hooks_block, kind_of,
+        pair_files, parse_scopes, projection, render, routing_block, splice_agents_block,
+        splice_hooks_block,
     };
     use crate::embedded;
 
@@ -818,8 +883,14 @@ mod tests {
     /// file.
     #[test]
     fn a_projection_renders_owned_files_and_keeps_seeded_judgment() {
-        let entries = projection("rust", "github", "acme/widget", &scopes(&["api", "cli"]))
-            .expect("the pair projects");
+        let entries = projection(
+            "rust",
+            "github",
+            "acme/widget",
+            &scopes(&["api", "cli"]),
+            Workflow::Branches,
+        )
+        .expect("the pair projects");
         let workflow = entries
             .iter()
             .find(|entry| entry.destination.ends_with("release-plz.yml"))
@@ -859,7 +930,8 @@ mod tests {
 
     #[test]
     fn the_block_splices_into_every_agents_shape() {
-        let block = routing_block();
+        let owned = routing_block(Workflow::Branches);
+        let block = owned.as_str();
         let fresh = splice_agents_block(None, block);
         assert_eq!(fresh, format!("{block}\n"));
         assert_eq!(extract_block(&fresh, BLOCK_BEGIN, BLOCK_END), Some(block));
@@ -889,7 +961,8 @@ mod tests {
     /// refuses the one dishonest shape by name.
     #[test]
     fn the_hook_block_splices_under_repos() {
-        let block = hooks_block();
+        let owned = hooks_block(Workflow::Branches);
+        let block = owned.as_str();
         let fresh = splice_hooks_block(None, block).expect("a fresh file splices");
         assert!(fresh.starts_with(HOOK_TYPES_LINE));
         assert!(fresh.contains("\nrepos:\n# BEGIN release-kit\n"));
@@ -929,12 +1002,69 @@ mod tests {
         assert!(err.contains("unmatched"), "{err}");
     }
 
+    /// Both modes of both blocks: the guard entry and the skip pair exist
+    /// exactly in the worktree mode, one orientation line differs in the
+    /// routing block, the rest is byte-identical, no mode token survives
+    /// substitution, and the rendered grammar is [`BRANCH_GRAMMAR`], the
+    /// one owner.
+    #[test]
+    fn the_blocks_render_per_mode_and_carry_the_one_grammar() {
+        let worktree_hooks = hooks_block(Workflow::Worktree);
+        let branches_hooks = hooks_block(Workflow::Branches);
+        assert!(worktree_hooks.contains("- id: rk-worktree-location"));
+        assert!(
+            worktree_hooks.contains("SKIP=no-commit-to-branch,rk-worktree-location"),
+            "{worktree_hooks}"
+        );
+        assert!(!branches_hooks.contains("rk-worktree-location"));
+        assert!(branches_hooks.contains("SKIP=no-commit-to-branch in"));
+        for block in [&worktree_hooks, &branches_hooks] {
+            assert!(block.contains(BRANCH_GRAMMAR), "the grammar has one owner");
+            for token in ["RK_BRANCH_GRAMMAR", "RK_SWEEP_SKIP", "RK_WORKTREE_GUARD"] {
+                assert!(!block.contains(token), "{token} survived: {block}");
+            }
+        }
+        let guard_line = worktree_hooks
+            .lines()
+            .position(|line| line.contains("id: rk-worktree-location"))
+            .expect("the guard entry exists");
+        let name_line = worktree_hooks
+            .lines()
+            .position(|line| line.contains("id: rk-branch-name"))
+            .expect("the name hook exists");
+        assert!(
+            guard_line > name_line,
+            "the guard lands directly after rk-branch-name"
+        );
+
+        let worktree_routing = routing_block(Workflow::Worktree);
+        let branches_routing = routing_block(Workflow::Branches);
+        assert!(worktree_routing.contains("This project works in worktrees"));
+        assert!(branches_routing.contains("Branches are worked in the main checkout"));
+        for block in [&worktree_routing, &branches_routing] {
+            assert!(block.contains("creating or removing a worktree"));
+            assert!(block.contains("`rk worktree add <branch>`"));
+            assert!(!block.contains("RK_WORKFLOW_LINE"), "{block}");
+        }
+        let differing: Vec<(&str, &str)> = worktree_routing
+            .lines()
+            .zip(branches_routing.lines())
+            .filter(|(a, b)| a != b)
+            .collect();
+        assert_eq!(
+            differing.len(),
+            1,
+            "exactly one routing line differs per mode: {differing:?}"
+        );
+    }
+
     /// One definition of an ill-formed hook file, for every reader: the
     /// well-formed shapes pass and each ambiguous shape names a defect.
     #[test]
     fn the_hook_marker_defects_are_named() {
         use super::hooks_marker_defect;
-        let block = hooks_block();
+        let owned = hooks_block(Workflow::Branches);
+        let block = owned.as_str();
         assert_eq!(hooks_marker_defect(""), None);
         assert_eq!(hooks_marker_defect(&format!("repos:\n{block}\n")), None);
         for (case, text) in [

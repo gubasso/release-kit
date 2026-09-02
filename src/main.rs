@@ -58,6 +58,7 @@ fn run(cli: &Cli) -> Result<(), RkError> {
         Commands::Adopt(args) => commands::adopt::run(args),
         Commands::Setup(args) => commands::setup::run(args),
         Commands::Branches(args) => commands::branches::run(args),
+        Commands::Worktree(args) => commands::worktree::run(args),
         Commands::Runs(args) => commands::runs::run(args),
         Commands::Skill(args) => commands::skill::run(args),
         Commands::Doctor(args) => commands::doctor::run(args),
@@ -114,6 +115,7 @@ const fn name(command: &Commands) -> &'static str {
         Commands::Adopt(_) => "adopt",
         Commands::Setup(_) => "setup",
         Commands::Branches(_) => "branches",
+        Commands::Worktree(_) => "worktree",
         Commands::Runs(_) => "runs",
         Commands::Skill(_) => "skill",
         Commands::Doctor(_) => "doctor",
@@ -130,6 +132,7 @@ const fn wants_json(command: &Commands) -> bool {
     use release_kit::cli::runs::RunsAction;
     use release_kit::cli::setup::SetupAction;
     use release_kit::cli::skill::SkillAction;
+    use release_kit::cli::worktree::WorktreeAction;
     match command {
         Commands::Payload(args) => args.json,
         Commands::Init(args) => args.json,
@@ -145,6 +148,13 @@ const fn wants_json(command: &Commands) -> bool {
         },
         Commands::Branches(args) => match &args.action {
             BranchesAction::Prune { json, .. } => *json,
+        },
+        // An explicit nested match over all three actions: a `_ => false`
+        // arm would silently swallow a new one.
+        Commands::Worktree(args) => match &args.action {
+            WorktreeAction::List { json, .. }
+            | WorktreeAction::Add { json, .. }
+            | WorktreeAction::Prune { json, .. } => *json,
         },
         Commands::Runs(args) => match &args.action {
             RunsAction::List { json } | RunsAction::Show { json, .. } => *json,

@@ -27,20 +27,24 @@ When the request carries `--no-plan`, skip the approval turn only. Still state t
 
 ## What runs unattended
 
-| Finding                                               | Act                                                                                         |
-| ----------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| A target with no landing record                       | `rk adopt --target . --scopes <list> --apply`                                               |
-| A landed payload older than the binary                | `rk upgrade --target . --apply`                                                             |
-| A record without the scopes parameter                 | `rk upgrade --target . --scopes <list> --apply`, the list confirmed with the operator first |
-| A missing hook block in `.pre-commit-config.yaml`     | The upgrade lands it; reconcile the config first, as below                                  |
-| A missing or drifted forge protection                 | `rk setup step <name> --apply`                                                              |
-| A squash title source that is not the request's title | `rk setup step protect-trunk --apply` re-asserts it                                         |
-| An unfilled `TODO(release-kit)` sentinel              | Resolve it in the seeded file, from the project                                             |
-| Stale installed skills                                | `rk skill install --apply`                                                                  |
+| Finding                                               | Act                                                                                                                                                  |
+| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A target with no landing record                       | Preview first: `rk adopt --target . --scopes <list> --workflow <mode>` lists what differs from the selected candidate; align, then `--apply` (below) |
+| A landed payload older than the binary                | `rk upgrade --target . --apply`                                                                                                                      |
+| A record without the scopes parameter                 | `rk upgrade --target . --scopes <list> --apply`, the list confirmed with the operator first                                                          |
+| A missing hook block in `.pre-commit-config.yaml`     | The upgrade lands it; reconcile the config first, as below                                                                                           |
+| A missing or drifted forge protection                 | `rk setup step <name> --apply`                                                                                                                       |
+| A squash title source that is not the request's title | `rk setup step protect-trunk --apply` re-asserts it                                                                                                  |
+| An unfilled `TODO(release-kit)` sentinel              | Resolve it in the seeded file, from the project                                                                                                      |
+| Stale installed skills                                | `rk skill install --apply`                                                                                                                           |
 
 Mechanical file edits can go to a subagent; every forge mutation stays in this loop, where its observation lives.
 
 Before an upgrade lands the hook block into an existing `.pre-commit-config.yaml`, reconcile it as `rk guide setup` step 4 directs, and gate the choice between an existing hook and the landed one for the operator rather than stacking a second hook on one job.
+
+An adoption is a verification pass against one rendered candidate, and `--workflow` selects which candidate — `branches` by default, the compatibility-safe reading of a pre-record target; it never blesses the disk. Run the preview first: it lists every destination that differs from the selected candidate, and the pre-adoption alignment is to bring the two marked blocks to the candidate's bytes — `rk payload` and `rk snippet` print them — then re-run and apply. A refusal naming the blocks is that alignment still owed, not an error to force past.
+
+The skill reads the recorded mode from `rk status` and routes by it. A mode change is a named migration, never a side effect of a code-change request: `rk upgrade --workflow <mode>` previewed, applied on the operator's approval, committed through a pull request — then the transition for branches open across the change, each step stated and gated: main checkout to `master` and pulled, each open bare branch adopted with `rk worktree add <branch> --apply`. Under worktree mode, an off-path worktree or a bare-worked branch is a named step the same way, with `rk worktree add` as the move.
 
 ## What waits for the operator
 
