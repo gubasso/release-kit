@@ -5104,6 +5104,13 @@ fn versions_check_reports_each_pin_and_mutates_nothing() {
         r#"#!/usr/bin/env bash
 url="${@: -1}"
 case "$url" in
+  */commits/*) case "$url" in
+    *release-plz/action*) printf '%s' '{"sha":"2eb1d8bcb770b4c48ccfaad919734b38b51958c9"}';;
+    *create-github-app-token*) printf '%s' '{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}';;
+    *rust-toolchain*) printf '%s' '{"sha":"4360b52568e2003a75bf9bc1d59f33a8e3fc893c"}';;
+    *actions/checkout*) exit 22;;
+    *) printf '%s' 'not json at all';;
+  esac;;
   *crates.io*) printf '%s' '{"crate":{"max_stable_version":"0.3.160"}}';;
   *cargo-dist*) printf '%s' '{"tag_name":"v999.0.0"}';;
   *git-cliff*) printf '%s' 'not json at all';;
@@ -5150,12 +5157,55 @@ esac
         .stdout
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["schema"], "rk.versions-check/1");
+    assert_eq!(report["schema"], "rk.versions-check/2");
     assert!(
         report["pins"]
             .as_array()
             .is_some_and(|pins| !pins.is_empty()),
         "{report}"
+    );
+    // The whole ref vocabulary, behaviorally: a matching sha is
+    // ref-unmoved, a different sha is ref-moved with the commit named, a
+    // failed fetch is ref-unreachable, a body with no sha is
+    // ref-unparsable, and a pin with no version source still reports —
+    // every one a result at exit 0, never an error.
+    let pin_named = |tool: &str| {
+        report["pins"]
+            .as_array()
+            .and_then(|pins| pins.iter().find(|pin| pin["tool"] == tool).cloned())
+            .unwrap_or_else(|| panic!("the {tool} pin reports"))
+    };
+    let unmoved = pin_named("release-plz");
+    assert_eq!(unmoved["ref_class"], "moving-minor-tag", "{unmoved}");
+    assert_eq!(unmoved["ref_result"], "ref-unmoved", "{unmoved}");
+    assert!(
+        unmoved["commit"]
+            .as_str()
+            .is_some_and(|commit| commit.len() == 40),
+        "{unmoved}"
+    );
+    let moved = pin_named("create-github-app-token");
+    assert_eq!(moved["ref_result"], "ref-moved", "{moved}");
+    assert_eq!(
+        moved["ref_commit"], "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "{moved}"
+    );
+    assert_eq!(
+        pin_named("checkout")["ref_result"],
+        "ref-unreachable",
+        "a failed ref fetch is a reported result"
+    );
+    assert_eq!(
+        pin_named("attest")["ref_result"],
+        "ref-unparsable",
+        "a body with no sha is a reported result"
+    );
+    let ref_only = pin_named("rust-toolchain");
+    assert_eq!(ref_only["result"], "no-version-source", "{ref_only}");
+    assert_eq!(ref_only["ref_result"], "ref-unmoved", "{ref_only}");
+    assert!(
+        pin_named("git-cliff")["ref_result"].is_null(),
+        "a non-action pin resolves no ref"
     );
 }
 
@@ -6232,7 +6282,15 @@ fn status_judges_a_seeded_file_that_dropped_the_invariants() {
     );
 
     // A tuned targets list is seeded drift, informational as ever.
-    let tuned = "[workspace]\nmembers = [\"cargo:.\"]\n\n[dist]\ncargo-dist-version = \"0.32.0\"\nci = \"github\"\ntargets = [\"x86_64-unknown-linux-gnu\"]\ngithub-attestations = true\ngithub-attestations-phase = \"host\"\ngithub-release = \"host\"\n";
+    let table = std::fs::read_to_string(repo_path("snippets/rust/github/dist-workspace.toml"))
+        .expect("the seed reads");
+    let table = table
+        .split_once("[dist.github-action-commits]")
+        .map(|(_, rest)| format!("[dist.github-action-commits]{rest}"))
+        .expect("the seed carries the action-commit table");
+    let tuned = format!(
+        "[workspace]\nmembers = [\"cargo:.\"]\n\n[dist]\ncargo-dist-version = \"0.32.0\"\nci = \"github\"\ntargets = [\"x86_64-unknown-linux-gnu\"]\ngithub-attestations = true\ngithub-attestations-phase = \"host\"\ngithub-release = \"host\"\n\n{table}"
+    );
     std::fs::write(&seeded, tuned).expect("the tune writes");
     rk().args(["status", "--check", "--target"])
         .arg(target.path())
@@ -6309,5 +6367,274 @@ fn status_reports_a_missing_invariant_bearing_file_as_missing() {
     assert!(
         !target.path().join("dist-workspace.toml").exists(),
         "the judgment rewrites nothing"
+    );
+}
+
+/// Every `uses:` line across the snippet payload, as `(file, owner/action,
+/// ref, trailing comment)`.
+fn snippet_action_refs() -> Vec<(String, String, String, Option<String>)> {
+    let mut refs = Vec::new();
+    let root = repo_path("snippets");
+    let mut stack = vec![root.clone()];
+    while let Some(path) = stack.pop() {
+        if path.is_dir() {
+            for entry in std::fs::read_dir(&path).expect("the dir reads") {
+                stack.push(entry.expect("an entry").path());
+            }
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let file = path
+            .strip_prefix(&root)
+            .expect("a path under snippets")
+            .display()
+            .to_string();
+        for line in text.lines() {
+            let Some(spec) = line
+                .trim_start()
+                .strip_prefix("- uses: ")
+                .or_else(|| line.trim_start().strip_prefix("uses: "))
+            else {
+                continue;
+            };
+            let (spec, comment) = spec
+                .split_once('#')
+                .map_or((spec, None), |(spec, comment)| {
+                    (spec, Some(comment.trim().to_owned()))
+                });
+            let spec = spec.trim();
+            let (action, reference) = spec.split_once('@').expect("a uses ref carries an @");
+            refs.push((
+                file.clone(),
+                action.to_owned(),
+                reference.to_owned(),
+                comment,
+            ));
+        }
+    }
+    assert!(!refs.is_empty(), "the payload carries uses: references");
+    refs
+}
+
+/// SATISFIES: the signer runs no movable code. Every action reference in
+/// the payload is a full lowercase commit SHA with the readable discovery
+/// ref kept as a trailing comment — the form that keeps a moved tag from
+/// changing what executes before someone reviews it.
+#[test]
+fn every_snippet_action_is_pinned_by_full_commit() {
+    for (file, action, reference, comment) in snippet_action_refs() {
+        assert!(
+            reference.len() == 40
+                && reference
+                    .chars()
+                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            "{file}: {action}@{reference} is not pinned to a full commit SHA"
+        );
+        assert!(
+            comment.is_some_and(|comment| !comment.is_empty()),
+            "{file}: {action} carries no readable ref comment beside its pin"
+        );
+    }
+}
+
+/// Every action the payload executes maps to exactly one registry entry
+/// whose execution commit is the pinned SHA and whose discovery ref is the
+/// readable comment; every entry with an action carries a valid commit and
+/// a classified ref, and a non-action entry carries neither.
+#[test]
+fn every_payload_action_maps_to_one_registry_entry() {
+    let registry = std::fs::read_to_string(repo_path("versions.toml")).expect("the registry reads");
+    let registry: toml::Table = registry.parse().expect("the registry parses");
+    let tools = registry
+        .get("tool")
+        .and_then(toml::Value::as_array)
+        .expect("tool entries");
+    let classes = [
+        "moving-major-tag",
+        "moving-minor-tag",
+        "exact-tag",
+        "maintained-branch",
+    ];
+    for tool in tools {
+        let name = tool
+            .get("name")
+            .and_then(toml::Value::as_str)
+            .expect("a name");
+        let action = tool.get("action").and_then(toml::Value::as_str);
+        let commit = tool.get("commit").and_then(toml::Value::as_str);
+        let ref_class = tool.get("ref_class").and_then(toml::Value::as_str);
+        if action.is_some() {
+            let commit = commit.unwrap_or_else(|| panic!("{name}: an action entry pins no commit"));
+            assert!(
+                commit.len() == 40 && commit.chars().all(|c| c.is_ascii_hexdigit()),
+                "{name}: the commit is not a full SHA"
+            );
+            assert!(
+                ref_class.is_some_and(|class| classes.contains(&class)),
+                "{name}: the discovery ref is not classified"
+            );
+        } else {
+            assert!(
+                commit.is_none() && ref_class.is_none(),
+                "{name}: a non-action entry carries action-only fields"
+            );
+        }
+    }
+    for (file, action, reference, comment) in snippet_action_refs() {
+        let matching: Vec<&toml::Value> = tools
+            .iter()
+            .filter(|tool| {
+                tool.get("action")
+                    .and_then(toml::Value::as_str)
+                    .is_some_and(|spec| spec.split_once('@').is_some_and(|(a, _)| a == action))
+                    && tool.get("commit").and_then(toml::Value::as_str) == Some(reference.as_str())
+            })
+            .collect();
+        assert_eq!(
+            matching.len(),
+            1,
+            "{file}: {action}@{reference} must map to exactly one registry entry"
+        );
+        let entry = matching[0];
+        assert_eq!(
+            entry.get("commit").and_then(toml::Value::as_str),
+            Some(reference.as_str()),
+            "{file}: {action} pins a commit the registry does not carry"
+        );
+        let discovery = entry
+            .get("action")
+            .and_then(toml::Value::as_str)
+            .and_then(|spec| spec.split_once('@'))
+            .map(|(_, reference)| reference)
+            .expect("a discovery ref");
+        assert_eq!(
+            comment.as_deref(),
+            Some(discovery),
+            "{file}: {action}'s readable comment must be the registry's discovery ref"
+        );
+    }
+}
+
+/// The cargo-dist action-commit table covers every action the pinned
+/// backend actually emits, at the same commits: read from the generated
+/// workflow, which `dist generate --mode ci --check` holds to the
+/// configuration.
+#[test]
+fn the_action_commit_table_covers_what_dist_emits() {
+    let seed = std::fs::read_to_string(repo_path("snippets/rust/github/dist-workspace.toml"))
+        .expect("the seed reads");
+    let seed: toml::Table = seed.parse().expect("the seed parses");
+    let table = seed
+        .get("dist")
+        .and_then(toml::Value::as_table)
+        .and_then(|dist| dist.get("github-action-commits"))
+        .and_then(toml::Value::as_table)
+        .expect("the seed pins the actions dist injects");
+    let generated = std::fs::read_to_string(repo_path(".github/workflows/release.yml"))
+        .expect("the generated workflow reads");
+    let mut emitted = std::collections::BTreeSet::new();
+    for line in generated.lines() {
+        let Some(spec) = line
+            .trim_start()
+            .strip_prefix("- uses: ")
+            .or_else(|| line.trim_start().strip_prefix("uses: "))
+        else {
+            continue;
+        };
+        let (action, reference) = spec
+            .trim()
+            .split_once('@')
+            .expect("a uses ref carries an @");
+        emitted.insert(action.to_owned());
+        assert_eq!(
+            table.get(action).and_then(toml::Value::as_str),
+            Some(reference),
+            "the generated workflow runs {action}@{reference}, which the table does not pin"
+        );
+    }
+    for action in table.keys() {
+        assert!(
+            emitted.contains(action),
+            "the table pins {action}, which the pinned dist backend does not emit"
+        );
+    }
+    // Every table pin is also a registry record, so the dist-injected
+    // actions share the freshness model instead of bypassing it: their
+    // discovery refs resolve under rk versions --check like every other.
+    let registry = std::fs::read_to_string(repo_path("versions.toml")).expect("the registry reads");
+    let registry: toml::Table = registry.parse().expect("the registry parses");
+    let tools = registry
+        .get("tool")
+        .and_then(toml::Value::as_array)
+        .expect("tool entries");
+    for (action, commit) in table {
+        let matched: Vec<&toml::Value> = tools
+            .iter()
+            .filter(|tool| {
+                tool.get("action")
+                    .and_then(toml::Value::as_str)
+                    .is_some_and(|spec| spec.split_once('@').is_some_and(|(a, _)| a == action))
+                    && tool.get("commit").and_then(toml::Value::as_str) == commit.as_str()
+            })
+            .collect();
+        assert_eq!(
+            matched.len(),
+            1,
+            "the table's {action} pin must map to exactly one registry entry"
+        );
+        assert!(
+            matched[0]
+                .get("used_by")
+                .and_then(toml::Value::as_array)
+                .is_some_and(|users| users.iter().any(|user| user.as_str() == Some("rust"))),
+            "the table's {action} pin runs in the rust binding's workflow, so its registry entry must say so"
+        );
+    }
+}
+
+/// The boundary of the pillar, tested rather than implied: fetched CI
+/// code is pinned by commit, and the GitLab payload fetches none — no
+/// CI/CD catalog component is included, so there is nothing there to pin.
+/// Container images stay pinned by version tag, not digest; they are the
+/// execution environment, not fetched steps, and the ADR states it.
+#[test]
+fn the_gitlab_payload_includes_no_catalog_component() {
+    for name in ["bash/gitlab/.gitlab-ci.yml", "rust/gitlab/.gitlab-ci.yml"] {
+        let text = std::fs::read_to_string(repo_path("snippets").join(name)).expect("reads");
+        assert!(
+            !text.contains("component:"),
+            "{name} includes a catalog component, which this pillar requires pinning by commit"
+        );
+    }
+}
+
+/// This repository's own landing record carries every pin the registry
+/// declares for its technology: a record refreshed by an older binary
+/// would silently lose the newer pins' offline staleness baseline, and
+/// status iterates the record, not the registry.
+#[test]
+fn this_repos_own_record_carries_every_rust_pin() {
+    let manifest =
+        std::fs::read_to_string(repo_path(".release-kit/manifest.json")).expect("the record reads");
+    let manifest: serde_json::Value = serde_json::from_str(&manifest).expect("the record parses");
+    let recorded = manifest["pins"].as_object().expect("a pin map");
+    let expected: std::collections::BTreeMap<String, String> =
+        release_kit::registry::pins_for("rust")
+            .into_iter()
+            .map(|pin| (pin.name, pin.version))
+            .collect();
+    let recorded: std::collections::BTreeMap<String, String> = recorded
+        .iter()
+        .filter_map(|(name, version)| {
+            version
+                .as_str()
+                .map(|version| (name.clone(), version.to_owned()))
+        })
+        .collect();
+    assert_eq!(
+        recorded, expected,
+        "the record's pin map must equal the registry's rust pins — nothing missing, nothing obsolete; refresh it with this binary's rk upgrade --target . --apply"
     );
 }

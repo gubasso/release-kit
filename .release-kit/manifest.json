@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "rk_version": "0.2.1",
-  "payload_sha256": "2fc61c5ac823ddac964054f5ae3b1c65a64c5854b98a6bd6d1c9181d6370049c",
+  "rk_version": "0.2.2",
+  "payload_sha256": "02bf073e229cc4e695eb65ff12c014216701255888685329726dfa6b2ca6bd39",
   "origin": "adopt",
   "tech": "rust",
   "forge": "github",
@@ -38,8 +38,8 @@
     {
       "destination": ".github/workflows/release-plz.yml",
       "kind": "rendered",
-      "sha256": "e371d21171bbb91f99b07eb0e226d097c2d4f8e9d0df22a27b67721429d11d33",
-      "baseline_sha256": "d79a7a1a68181fe9ef9cbb6a79ed3a335eeaad157cec85839bd25cdadcf61acf"
+      "sha256": "319cd6699bd166e6c03fe1ca4ed70034659f93b6e480fe1599102742e1fc077c",
+      "baseline_sha256": "f1c0f656480a3b653ba4cd9409b453fbf3a6650279bd9b1b1b4ae87202547dea"
     },
     {
       "destination": ".pre-commit-config.yaml",
@@ -56,7 +56,7 @@
     {
       "destination": "dist-workspace.toml",
       "kind": "seeded",
-      "sha256": "3ddf5d24ea08060e8aa9d090081c4c82ddc714f0def5a1dd6e7048221d937afd",
+      "sha256": "d51e679ff879c46e87d722fc3572a52a2e9e2ca85796c0635a580506622c47bb",
       "baseline_sha256": "eae26fd9dfe93105726202da221a6ccd61545ef9c51b9f5f7e2bc7375ee08e6b"
     },
     {
@@ -67,11 +67,16 @@
     }
   ],
   "pins": {
+    "attest": "4",
     "cargo-dist": "0.32.0",
     "checkout": "4",
     "conventional-pre-commit": "4.4.0",
     "create-github-app-token": "3",
+    "dist-checkout": "6",
+    "dist-download-artifact": "8",
+    "dist-upload-artifact": "7",
     "pre-commit-hooks": "6.0.0",
-    "release-plz": "0.3.160"
+    "release-plz": "0.3.160",
+    "rust-toolchain": "stable"
   }
 }

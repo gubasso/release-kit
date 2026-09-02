@@ -76,3 +76,13 @@ SLSA v1.0 Build Level 2 requires a hosted build platform that generates signed p
 - <https://slsa.dev/spec/v1.0/levels>
 
 Bearing: the level sentence in the invariants chapter.
+
+## GitHub and the ecosystem, on pinning actions by commit
+
+GitHub's security hardening guidance names pinning an action to a full-length commit SHA as the only way to use an action as an immutable release, and exposes repository, organization, and enterprise policies enforcing it. The March 2025 tj-actions/changed-files compromise (CVE-2025-30066) moved existing version tags to a commit that dumped CI secrets from runner memory, so every repository referencing the action by tag ran the payload — the incident class the SHA pin closes. cargo-dist's `github-action-commits` setting is the documented override replacing its default action tags with a pinned set of commits.
+
+- <https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions>
+- <https://www.cve.org/CVERecord?id=CVE-2025-30066>
+- <https://axodotdev.github.io/cargo-dist/book/reference/config.html>
+
+Bearing: the SHA-with-comment form across `snippets/`, the `commit` and `ref_class` fields in `versions.toml`, the `[dist.github-action-commits]` table, and the invariants chapter's pinned-signer paragraph.

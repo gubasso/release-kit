@@ -18,6 +18,20 @@ pub struct Pin {
     pub name: String,
     /// The pinned version.
     pub version: String,
+    /// The workflow reference — `owner/action@ref` — where the tool is a
+    /// GitHub Action. The ref here is the discovery ref a freshness check
+    /// reads; the commit below is what the workflows execute.
+    #[serde(default)]
+    pub action: Option<String>,
+    /// The immutable execution commit the workflows pin, where the tool
+    /// is an action.
+    #[serde(default)]
+    pub commit: Option<String>,
+    /// How the discovery ref moves: a moving major or minor tag, an
+    /// exact tag, or a maintained branch. Movement is an update signal,
+    /// never evidence of an attack.
+    #[serde(default)]
+    pub ref_class: Option<String>,
     /// The bindings that use the tool.
     #[serde(default)]
     pub used_by: Vec<String>,
@@ -81,7 +95,11 @@ mod tests {
         for pin in &pins {
             assert!(!pin.version.is_empty(), "{}: no version", pin.name);
             assert!(!pin.used_by.is_empty(), "{}: no used_by", pin.name);
-            assert!(pin.check.is_some(), "{}: no check URL", pin.name);
+            assert!(
+                pin.check.is_some() || (pin.action.is_some() && pin.commit.is_some()),
+                "{}: no check URL and no ref to resolve",
+                pin.name
+            );
         }
     }
 
