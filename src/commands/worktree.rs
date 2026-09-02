@@ -1180,6 +1180,44 @@ mod tests {
         );
     }
 
+    /// The complete `rk.worktree-add/1` shape, held by snapshot in the
+    /// apply form with every optional field present and the preview form
+    /// with each absent — so a field rename, removal, or a null leaking
+    /// from an optional fails here, not at some agent's parser.
+    #[test]
+    fn the_worktree_add_schema_snapshot_holds() {
+        let apply = super::AddReport {
+            schema: "rk.worktree-add/1",
+            mode: "apply",
+            branch: "feat/x".into(),
+            path: "/srv/widget-feat-x".into(),
+            created: "branch",
+            source: "remote",
+            base: Some("origin/feat/x".into()),
+            upstream: Some("origin/feat/x".into()),
+            detail: Some("the fetch failed; the run proceeded on local refs".into()),
+            next: vec!["cd /srv/widget-feat-x".into()],
+        };
+        assert_eq!(
+            serde_json::to_string(&apply).expect("a report serializes"),
+            r#"{"schema":"rk.worktree-add/1","mode":"apply","branch":"feat/x","path":"/srv/widget-feat-x","created":"branch","source":"remote","base":"origin/feat/x","upstream":"origin/feat/x","detail":"the fetch failed; the run proceeded on local refs","next":["cd /srv/widget-feat-x"]}"#
+        );
+        let preview = super::AddReport {
+            mode: "preview",
+            created: "nothing",
+            source: "adopted",
+            base: None,
+            upstream: None,
+            detail: None,
+            ..apply
+        };
+        assert_eq!(
+            serde_json::to_string(&preview).expect("a report serializes"),
+            r#"{"schema":"rk.worktree-add/1","mode":"preview","branch":"feat/x","path":"/srv/widget-feat-x","created":"nothing","source":"adopted","next":["cd /srv/widget-feat-x"]}"#,
+            "an absent option must be omitted rather than serializing null"
+        );
+    }
+
     /// The complete `rk.worktree-prune/1` shape, held by snapshot in the
     /// populated and clean forms.
     #[test]
