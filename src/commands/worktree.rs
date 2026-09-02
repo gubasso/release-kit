@@ -941,16 +941,23 @@ fn retire(target: &Utf8Path, row: &mut PruneRow) -> Result<(), usize> {
         keep(row, "the tip moved");
         return Ok(());
     }
+    // The fresh inventory fails closed: an unobservable state clears no
+    // removal, and the record must still be the same resource — the very
+    // branch the merge proof named, unlocked, its directory standing.
     let path = Utf8PathBuf::from(&row.path);
     let fresh = git(target, &["worktree", "list", "--porcelain", "-z"]).map_err(|_| 1usize)?;
-    if let Ok(inventory) = crate::worktree::parse_worktrees(&fresh.stdout) {
-        if inventory
-            .iter()
-            .any(|worktree| worktree.path == path && worktree.locked.is_some())
-        {
-            keep(row, "a lock arrived");
-            return Ok(());
-        }
+    if !fresh.status.success() {
+        keep(row, "the worktree inventory could not be re-read");
+        return Ok(());
+    }
+    let Ok(inventory) = crate::worktree::parse_worktrees(&fresh.stdout) else {
+        keep(row, "the worktree inventory could not be re-read");
+        return Ok(());
+    };
+    let seat = inventory.iter().find(|worktree| worktree.path == path);
+    if let Some(reason) = crate::worktree::reobservation(seat, &branch) {
+        keep(row, &reason);
+        return Ok(());
     }
     if is_dirty(&path) {
         keep(row, "uncommitted changes arrived");
@@ -999,20 +1006,30 @@ fn sweep_stale(target: &Utf8Path, rows: &mut [PruneRow]) -> Result<usize, RkErro
     }
     let mut failures = 0usize;
     let swept = git(target, &["worktree", "prune", "--expire", "now"])?;
-    let survivors: Vec<Utf8PathBuf> = git(target, &["worktree", "list", "--porcelain", "-z"])
-        .ok()
-        .and_then(|fresh| crate::worktree::parse_worktrees(&fresh.stdout).ok())
-        .map(|inventory| {
-            inventory
-                .into_iter()
-                .map(|worktree| worktree.path)
-                .collect()
-        })
-        .unwrap_or_default();
+    // Fail closed: only an inventory that was actually re-read proves a
+    // record gone, so an unreadable one marks every stale row failed
+    // rather than claiming a sweep nothing observed.
+    let survivors: Option<Vec<Utf8PathBuf>> =
+        git(target, &["worktree", "list", "--porcelain", "-z"])
+            .ok()
+            .filter(|fresh| fresh.status.success())
+            .and_then(|fresh| crate::worktree::parse_worktrees(&fresh.stdout).ok())
+            .map(|inventory| {
+                inventory
+                    .into_iter()
+                    .map(|worktree| worktree.path)
+                    .collect()
+            });
     for row in rows.iter_mut().filter(|row| row.status == "stale") {
-        if survivors.iter().any(|path| *path == row.path) {
+        let survived = survivors
+            .as_ref()
+            .is_none_or(|paths| paths.iter().any(|path| *path == row.path));
+        if survived {
             row.status = "remove-failed";
-            row.detail = Some(if swept.status.success() {
+            row.detail = Some(if survivors.is_none() {
+                "the record's fate could not be observed; re-run rk worktree prune --apply"
+                    .to_owned()
+            } else if swept.status.success() {
                 "the record survived the sweep; re-run rk worktree prune --apply".to_owned()
             } else {
                 format!(

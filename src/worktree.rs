@@ -318,6 +318,34 @@ pub enum WtClass {
     Stale,
 }
 
+/// Judge the last-moment re-observation of one confirmed worktree:
+/// `None` clears the removal, `Some(reason)` keeps it.
+///
+/// Verification
+/// authorized only the state it saw, so the fresh record must still be
+/// the same resource — present, unlocked, its directory standing, and
+/// seating the very branch the merge proof named; a seat that switched
+/// branches keeps, because the proof would otherwise authorize removing
+/// a different resource. The caller passes `None` for a record the fresh
+/// inventory no longer carries, and keeps on its own when the inventory
+/// itself could not be read — an unobservable state clears nothing.
+#[must_use]
+pub fn reobservation(seat: Option<&Worktree>, branch: &str) -> Option<String> {
+    let Some(seat) = seat else {
+        return Some("the worktree record vanished".to_owned());
+    };
+    if seat.locked.is_some() {
+        return Some("a lock arrived".to_owned());
+    }
+    if seat.prunable.is_some() {
+        return Some("the directory vanished".to_owned());
+    }
+    if seat.branch.as_deref() != Some(branch) {
+        return Some(format!("the seat switched off {branch}"));
+    }
+    None
+}
+
 /// Classify one worktree for the prune report.
 ///
 /// The guards run in order
@@ -608,6 +636,49 @@ mod tests {
             gone,
             worktree: None,
         }
+    }
+
+    /// The last-moment re-observation fails closed: a vanished record, a
+    /// fresh lock, a vanished directory, and a seat that switched off the
+    /// confirmed branch each keep; only the very resource verification
+    /// saw clears the removal.
+    #[test]
+    fn a_reobservation_clears_only_the_verified_resource() {
+        let seat = fixture("/srv/widget-feat-x", Some("feat/x"));
+        assert_eq!(super::reobservation(Some(&seat), "feat/x"), None);
+        assert!(
+            super::reobservation(None, "feat/x").is_some_and(|reason| reason.contains("vanished"))
+        );
+        let locked = Worktree {
+            locked: Some(String::new()),
+            ..seat.clone()
+        };
+        assert!(
+            super::reobservation(Some(&locked), "feat/x")
+                .is_some_and(|reason| reason.contains("lock"))
+        );
+        let gone = Worktree {
+            prunable: Some("gone".into()),
+            ..seat.clone()
+        };
+        assert!(
+            super::reobservation(Some(&gone), "feat/x")
+                .is_some_and(|reason| reason.contains("directory"))
+        );
+        let switched = Worktree {
+            branch: Some("feat/other".into()),
+            ..seat.clone()
+        };
+        assert!(
+            super::reobservation(Some(&switched), "feat/x")
+                .is_some_and(|reason| reason.contains("switched")),
+            "a merge proof authorizes no other resource"
+        );
+        let detached = Worktree {
+            branch: None,
+            ..seat
+        };
+        assert!(super::reobservation(Some(&detached), "feat/x").is_some());
     }
 
     /// The nine guards hold in order: main, seat, locked (missing
