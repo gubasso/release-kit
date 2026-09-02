@@ -18,5 +18,6 @@ pub mod status;
 pub mod upgrade;
 pub mod usage;
 pub mod versions;
+pub mod worktree;
 
 pub(crate) use crate::embedded::walk;

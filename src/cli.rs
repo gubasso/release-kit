@@ -16,6 +16,7 @@ pub mod skill;
 pub mod status;
 pub mod upgrade;
 pub mod versions;
+pub mod worktree;
 
 use clap::{Parser, Subcommand};
 
@@ -57,6 +58,8 @@ pub enum Commands {
     Setup(setup::SetupArgs),
     /// Report and prune local branches the forge already merged.
     Branches(branches::BranchesArgs),
+    /// Inspect, create, and prune the linked worktrees beside a checkout.
+    Worktree(worktree::WorktreeArgs),
     /// Inspect and prune the run journals.
     Runs(runs::RunsArgs),
     /// Manage the agent skills at user scope.
