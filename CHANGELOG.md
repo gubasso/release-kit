@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.9](https://github.com/gubasso/release-kit/compare/v0.2.8...v0.2.9) - 2026-09-02
+
+### Added
+
+- *(distribution)* probe the installed skills and gate on the host ([#41](https://github.com/gubasso/release-kit/pull/41))
+
 ## [0.2.8](https://github.com/gubasso/release-kit/compare/v0.2.7...v0.2.8) - 2026-09-02
 
 ### Added
