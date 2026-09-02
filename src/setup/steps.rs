@@ -9,6 +9,8 @@ pub enum Mutates {
     Nothing,
     /// The step writes forge configuration.
     Forge,
+    /// The step writes local repository state in the target.
+    Local,
 }
 
 /// One step of the setup, in canonical order.
@@ -33,10 +35,13 @@ pub struct StepSpec {
     pub prereqs: &'static [&'static str],
 }
 
-/// The eleven steps, in the chapter's order. `package-check` belongs to no
-/// forge tree — it reads its command from the technology binding — which
-/// makes it the one step outside the parity rule.
-pub const STEPS: [StepSpec; 11] = [
+/// The twelve steps, in the chapter's order.
+///
+/// `package-check` and `branch-reminder` belong to no forge tree — one
+/// reads its command from the technology binding, the other writes an
+/// embedded hook body into the target's own git directory — which makes
+/// them the two steps outside the parity rule.
+pub const STEPS: [StepSpec; 12] = [
     StepSpec {
         name: "package-check",
         chapter: "§0",
@@ -72,6 +77,15 @@ pub const STEPS: [StepSpec; 11] = [
         destructive: false,
         optional: false,
         prereqs: &["default-branch"],
+    },
+    StepSpec {
+        name: "branch-reminder",
+        chapter: "§1",
+        mutates: Mutates::Local,
+        proves: "a pull reminds the operator when a merged branch lingers locally",
+        destructive: false,
+        optional: false,
+        prereqs: &[],
     },
     StepSpec {
         name: "ci-permissions",

@@ -117,6 +117,9 @@ pub fn observe(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkE
     if step == "package-check" {
         return package_check(ctx, run);
     }
+    if step == "branch-reminder" {
+        return Ok(branch_reminder_state(ctx));
+    }
     match ctx.forge {
         Forge::Github => github(ctx, step, run),
         Forge::Gitlab => gitlab(ctx, step, run),
@@ -161,6 +164,23 @@ fn package_check(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkError> {
             last_line(&outcome.stderr)
         ))
     })
+}
+
+/// §1: the post-merge reminder hook, judged from the target's own files;
+/// the one step whose observation asks no forge and spawns no CLI.
+fn branch_reminder_state(ctx: &Ctx) -> StepState {
+    use crate::setup::branch_reminder::{HookState, observe_hook};
+    match observe_hook(&ctx.target) {
+        HookState::Installed => {
+            StepState::ok("the post-merge hook carries the release-kit reminder")
+        }
+        HookState::Absent => StepState::not("no post-merge hook is installed"),
+        HookState::Foreign => {
+            StepState::not("a post-merge hook exists without the release-kit marker")
+        }
+        HookState::Drifted => StepState::not("the reminder hook drifted from this binary's body"),
+        HookState::Unreadable(detail) => StepState::unknown(detail),
+    }
 }
 
 /// The destructive step's own guard: whether deleting a candidate branch

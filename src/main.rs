@@ -57,6 +57,7 @@ fn run(cli: &Cli) -> Result<(), RkError> {
         Commands::Upgrade(args) => commands::upgrade::run(args),
         Commands::Adopt(args) => commands::adopt::run(args),
         Commands::Setup(args) => commands::setup::run(args),
+        Commands::Branches(args) => commands::branches::run(args),
         Commands::Runs(args) => commands::runs::run(args),
         Commands::Skill(args) => commands::skill::run(args),
         Commands::Doctor(args) => commands::doctor::run(args),
@@ -112,6 +113,7 @@ const fn name(command: &Commands) -> &'static str {
         Commands::Upgrade(_) => "upgrade",
         Commands::Adopt(_) => "adopt",
         Commands::Setup(_) => "setup",
+        Commands::Branches(_) => "branches",
         Commands::Runs(_) => "runs",
         Commands::Skill(_) => "skill",
         Commands::Doctor(_) => "doctor",
@@ -124,6 +126,7 @@ const fn name(command: &Commands) -> &'static str {
 /// Whether the invocation asked for machine output, which decides how an
 /// error renders on stderr.
 const fn wants_json(command: &Commands) -> bool {
+    use release_kit::cli::branches::BranchesAction;
     use release_kit::cli::runs::RunsAction;
     use release_kit::cli::setup::SetupAction;
     use release_kit::cli::skill::SkillAction;
@@ -139,6 +142,9 @@ const fn wants_json(command: &Commands) -> bool {
             Some(SetupAction::Check { json, .. } | SetupAction::Step { json, .. }) => *json,
             Some(SetupAction::Script { .. }) => false,
             None => args.json,
+        },
+        Commands::Branches(args) => match &args.action {
+            BranchesAction::Prune { json, .. } => *json,
         },
         Commands::Runs(args) => match &args.action {
             RunsAction::List { json } | RunsAction::Show { json, .. } => *json,

@@ -50,3 +50,4 @@ A release line flows one direction: fix on the trunk first, cherry-pick only the
 - A verify step that fails right after the release merge is usually timing: the artifact builder creates the release page minutes after the tag.
 - Prefer the smallest recovery that returns to the happy path; never surgery on tags, published versions, or the trunk.
 - A hand-uploaded artifact carries no provenance, even when CI built the file. Treat that release as unfinished and re-run the artifact workflow on its tag once CI is back.
+- After a release merges, `rk branches prune` reports the retired local branch; state the command and let the operator run the deletion.

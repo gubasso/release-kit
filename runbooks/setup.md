@@ -81,6 +81,24 @@ gh api "repos/<repo>" -q .delete_branch_on_merge
 # check: prints true, whether the run set it or found it set
 ```
 
+### 1d. Remind this clone after a pull
+
+Automated: `rk setup step branch-reminder --apply`. 1c deletes the remote copy; this clone's own copy survives with its upstream marked gone, and no forge can reach it. The step writes a post-merge hook that runs `rk branches prune --quiet` after every pull: silent when the clone is clean, a report naming the retired branches otherwise, and never a deletion — `rk branches prune --apply` is the operator's own call. The step refuses over an existing post-merge hook it did not write; merge by hand there, guarding the same command behind `command -v rk`. Like every setup step it resolves the forge, so it runs where the forge CLI is installed.
+
+```bash
+cat > "$(git rev-parse --git-path hooks)/post-merge" <<'HOOK'
+#!/bin/sh
+# release-kit branch reminder
+if command -v rk >/dev/null 2>&1; then
+  rk branches prune --quiet || :
+fi
+exit 0
+HOOK
+chmod 0755 "$(git rev-parse --git-path hooks)/post-merge"
+grep -F '# release-kit branch reminder' "$(git rev-parse --git-path hooks)/post-merge"
+# check: prints the marker line
+```
+
 ## 2. Let automation act
 
 ### 2a. Let CI write and open requests
@@ -226,7 +244,7 @@ git config --local --get-regexp '^(pull\.rebase|fetch\.prune)$'
 ```
 
 - `pull.rebase` replays a topic branch onto the trunk rather than merging back, which is what keeps one pull request one commit.
-- `fetch.prune` drops the remote-tracking ref 1c taught the forge to delete, so a merged branch stops appearing in this clone.
+- `fetch.prune` drops the remote-tracking ref 1c taught the forge to delete, so a merged branch stops appearing in this clone — which is what marks the local copy gone for the reminder 1d installed.
 - Neither applies to the trunk itself: the trunk is never pulled, only reset, which 4g does.
 
 ### 4f. Land one change through the trunk's one path

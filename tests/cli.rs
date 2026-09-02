@@ -1318,6 +1318,7 @@ fn usage_dumps_every_verb_in_one_call() {
         "rk setup check",
         "rk setup step",
         "rk setup script",
+        "rk branches prune",
         "rk runs list",
         "rk runs show",
         "rk runs prune",
@@ -1628,7 +1629,8 @@ fn the_two_setup_trees_hold_identical_step_sets() {
 }
 
 /// Every step in `rk setup --list` resolves to an embedded script in every
-/// tree, except `package-check`, the one step outside the parity rule.
+/// tree, except `package-check` and `branch-reminder`, the two steps
+/// outside the parity rule.
 #[test]
 fn every_listed_step_resolves_to_a_script_in_every_tree() {
     let out = rk().args(["setup", "--list"]).assert().success();
@@ -1642,8 +1644,8 @@ fn every_listed_step_resolves_to_a_script_in_every_tree() {
             Some(rest.split_whitespace().next()?.to_owned())
         })
         .collect();
-    assert_eq!(listed.len(), 11, "eleven steps list: {text}");
-    listed.retain(|name| name != "package-check");
+    assert_eq!(listed.len(), 12, "twelve steps list: {text}");
+    listed.retain(|name| !["package-check", "branch-reminder"].contains(&name.as_str()));
     listed.sort();
     let filed: Vec<String> = script_files("github").into_iter().map(|(n, _)| n).collect();
     assert_eq!(listed, filed, "the list and the tree disagree");
@@ -2035,6 +2037,10 @@ fn setup_script_prints_the_embedded_script() {
         .assert()
         .code(64)
         .stderr(predicate::str::contains("binding"));
+    rk().args(["setup", "script", "branch-reminder"])
+        .assert()
+        .code(64)
+        .stderr(predicate::str::contains("no script"));
 }
 
 /// The new roots must never leak into a target.
@@ -2518,6 +2524,15 @@ impl ForgeFixture {
         fixture.seed("branch_develop", "abc123");
         fixture.seed("branch_main", "abc123");
         std::fs::write(fixture.target.path().join("VERSION"), "0.1.0\n").expect("VERSION writes");
+        // A real repository, so the branch-reminder step has a hooks
+        // directory to write into; it has no remote, so detection still
+        // resolves nothing and every test passes --repo and --forge.
+        let init = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(fixture.target.path())
+            .status()
+            .expect("git runs");
+        assert!(init.success(), "the fixture target initializes");
         fixture
     }
 
@@ -5139,5 +5154,434 @@ esac
             .as_array()
             .is_some_and(|pins| !pins.is_empty()),
         "{report}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// rk branches prune and the post-merge reminder step
+
+/// The variables a running git hook exports; a scratch-repo test under
+/// pre-commit inherits them and must not let them retarget its git.
+const GIT_HOOK_VARS: [&str; 4] = [
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_COMMON_DIR",
+];
+
+/// Run git in a scratch repository, asserting success.
+fn git_in(dir: &Path, args: &[&str]) {
+    let mut command = std::process::Command::new("git");
+    for var in GIT_HOOK_VARS {
+        command.env_remove(var);
+    }
+    let status = command
+        .args(args)
+        .current_dir(dir)
+        .status()
+        .expect("git runs");
+    assert!(status.success(), "git {args:?} failed");
+}
+
+/// A scratch repository: one commit on master, a github origin.
+fn branch_fixture() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("a scratch repo exists");
+    git_in(dir.path(), &["init", "-q", "-b", "master"]);
+    git_in(dir.path(), &["config", "user.email", "rk@example.invalid"]);
+    git_in(dir.path(), &["config", "user.name", "rk test"]);
+    git_in(
+        dir.path(),
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/widget.git",
+        ],
+    );
+    std::fs::write(dir.path().join("seed"), "x\n").expect("the seed writes");
+    git_in(dir.path(), &["add", "seed"]);
+    git_in(dir.path(), &["commit", "-qm", "chore: seed"]);
+    dir
+}
+
+/// A branch whose configured upstream no longer exists: upstream config
+/// with no remote-tracking ref renders `[gone]`.
+fn gone_branch(dir: &Path, name: &str) {
+    git_in(dir, &["branch", name]);
+    git_in(dir, &["config", &format!("branch.{name}.remote"), "origin"]);
+    git_in(
+        dir,
+        &[
+            "config",
+            &format!("branch.{name}.merge"),
+            &format!("refs/heads/{name}"),
+        ],
+    );
+}
+
+/// A gone branch one commit ahead of the trunk, so its tip is its own.
+fn advanced_gone_branch(dir: &Path, name: &str) {
+    gone_branch(dir, name);
+    git_in(dir, &["checkout", "-q", name]);
+    std::fs::write(dir.join(format!("{}.txt", name.replace('/', "-"))), "y\n")
+        .expect("the extra file writes");
+    git_in(dir, &["add", "-A"]);
+    git_in(dir, &["commit", "-qm", "chore: advance"]);
+    git_in(dir, &["checkout", "-q", "master"]);
+}
+
+/// The full object name at a ref.
+fn tip_of(dir: &Path, name: &str) -> String {
+    let mut command = std::process::Command::new("git");
+    for var in GIT_HOOK_VARS {
+        command.env_remove(var);
+    }
+    let out = command
+        .args(["rev-parse", name])
+        .current_dir(dir)
+        .output()
+        .expect("git runs");
+    assert!(out.status.success());
+    String::from_utf8_lossy(&out.stdout).trim().to_owned()
+}
+
+/// A mock forge CLI named `gh`, wired through `RK_GH_BIN`.
+fn mock_gh(body: &str) -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().expect("a mock dir exists");
+    let path = dir.path().join("gh");
+    std::fs::write(&path, body).expect("the mock writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .expect("the mock is executable");
+    }
+    (dir, path)
+}
+
+/// The names `git branch` reports.
+fn branch_names(dir: &Path) -> String {
+    let mut command = std::process::Command::new("git");
+    for var in GIT_HOOK_VARS {
+        command.env_remove(var);
+    }
+    let out = command
+        .args(["for-each-ref", "refs/heads", "--format", "%(refname:short)"])
+        .current_dir(dir)
+        .output()
+        .expect("git runs");
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// An rk command with the hook variables scrubbed, so the suite behaves
+/// the same under a pre-commit run as it does standalone.
+fn rk_scrubbed() -> Command {
+    let mut command = rk();
+    for var in GIT_HOOK_VARS {
+        command.env_remove(var);
+    }
+    command
+}
+
+#[test]
+fn branches_prune_preview_reports_candidates_and_writes_nothing() {
+    let repo = branch_fixture();
+    gone_branch(repo.path(), "feat/x");
+    git_in(repo.path(), &["branch", "local-only"]);
+    let out = rk_scrubbed()
+        .args(["branches", "prune", "--target"])
+        .arg(repo.path())
+        .assert()
+        .success();
+    let text = String::from_utf8_lossy(&out.get_output().stdout).into_owned();
+    assert!(text.contains("feat/x"), "{text}");
+    assert!(text.contains("candidate"), "{text}");
+    assert!(
+        !text.contains("local-only"),
+        "a branch with no upstream never reaches the report: {text}"
+    );
+    assert!(text.contains("--verify"), "{text}");
+    assert!(text.contains("--apply"), "{text}");
+    assert!(
+        text.contains("Deleting a branch is the operator's action"),
+        "{text}"
+    );
+    assert!(
+        branch_names(repo.path()).contains("feat/x"),
+        "a preview deletes nothing"
+    );
+}
+
+#[test]
+fn branches_prune_quiet_prints_nothing_when_clean_and_reports_otherwise() {
+    let repo = branch_fixture();
+    let clean = rk_scrubbed()
+        .args(["branches", "prune", "--quiet", "--target"])
+        .arg(repo.path())
+        .assert()
+        .success();
+    assert!(clean.get_output().stdout.is_empty(), "quiet and clean");
+    assert!(clean.get_output().stderr.is_empty(), "quiet and clean");
+    gone_branch(repo.path(), "feat/x");
+    rk_scrubbed()
+        .args(["branches", "prune", "--quiet", "--target"])
+        .arg(repo.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("feat/x"));
+}
+
+#[test]
+fn branches_prune_json_is_one_object_with_schema_and_next() {
+    let repo = branch_fixture();
+    gone_branch(repo.path(), "feat/x");
+    let out = rk_scrubbed()
+        .args(["branches", "prune", "--json", "--target"])
+        .arg(repo.path())
+        .assert()
+        .success();
+    let report: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stdout).expect("one JSON object");
+    assert_eq!(report["schema"], "rk.branches-prune/1");
+    assert_eq!(report["mode"], "preview");
+    assert_eq!(report["branches"][0]["name"], "feat/x");
+    assert_eq!(report["branches"][0]["status"], "candidate");
+    assert!(
+        report["next"].as_array().is_some_and(|n| !n.is_empty()),
+        "the report carries a next block"
+    );
+}
+
+#[test]
+fn branches_prune_json_failure_is_one_diagnostic_line() {
+    let output = rk_scrubbed()
+        .args(["branches", "prune", "--json", "--target", "/no/such/dir"])
+        .assert()
+        .code(66)
+        .get_output()
+        .clone();
+    assert!(output.stdout.is_empty(), "no result on a missing target");
+    let diagnostic: serde_json::Value =
+        serde_json::from_slice(&output.stderr).expect("stderr is one JSON diagnostic");
+    assert_eq!(diagnostic["schema"], "rk.diagnostic/1");
+    assert_eq!(diagnostic["reason"], "target-not-found");
+}
+
+#[test]
+fn branches_prune_never_offers_the_current_checked_out_or_protected_branch() {
+    let repo = branch_fixture();
+    gone_branch(repo.path(), "release/1.0");
+    gone_branch(repo.path(), "feat/held");
+    let worktree = tempfile::tempdir().expect("a worktree parent exists");
+    let wt = worktree.path().join("held");
+    git_in(
+        repo.path(),
+        &[
+            "worktree",
+            "add",
+            "-q",
+            wt.to_str().expect("utf8"),
+            "feat/held",
+        ],
+    );
+    // The checked-out master is gone-configured too: the worktree guard
+    // covers it before the protected-branch guard would.
+    git_in(repo.path(), &["config", "branch.master.remote", "origin"]);
+    git_in(
+        repo.path(),
+        &["config", "branch.master.merge", "refs/heads/master"],
+    );
+    let out = rk_scrubbed()
+        .args(["branches", "prune", "--target"])
+        .arg(repo.path())
+        // Every gone branch is guarded, so no candidate exists and an
+        // apply resolves no forge and deletes nothing.
+        .arg("--apply")
+        .assert()
+        .success();
+    let text = String::from_utf8_lossy(&out.get_output().stdout).into_owned();
+    assert!(text.contains("kept"), "{text}");
+    assert!(!text.contains("deleted"), "{text}");
+    let names = branch_names(repo.path());
+    for name in ["master", "release/1.0", "feat/held"] {
+        assert!(names.contains(name), "{name} survives: {names}");
+    }
+}
+
+#[test]
+fn branches_prune_verify_confirms_against_the_forge() {
+    let repo = branch_fixture();
+    gone_branch(repo.path(), "feat/merged");
+    advanced_gone_branch(repo.path(), "feat/advanced");
+    let merged_tip = tip_of(repo.path(), "feat/merged");
+    let body = format!(
+        "#!/bin/sh\ncase \"$2\" in\n*/commits/{merged_tip}/pulls) printf '[{{\"number\":8,\"merged_at\":\"2026-01-01T00:00:00Z\",\"head\":{{\"sha\":\"{merged_tip}\"}}}}]' ;;\n*) printf '[]' ;;\nesac\n"
+    );
+    let (_mock, gh) = mock_gh(&body);
+    let out = rk_scrubbed()
+        .args(["branches", "prune", "--verify", "--target"])
+        .arg(repo.path())
+        .env("RK_GH_BIN", &gh)
+        .assert()
+        .success();
+    let text = String::from_utf8_lossy(&out.get_output().stdout).into_owned();
+    assert!(text.contains("confirmed: merged request #8"), "{text}");
+    assert!(text.contains("unconfirmed"), "{text}");
+    let names = branch_names(repo.path());
+    assert!(
+        names.contains("feat/merged") && names.contains("feat/advanced"),
+        "verify deletes nothing: {names}"
+    );
+}
+
+#[test]
+fn branches_prune_apply_deletes_confirmed_and_keeps_unknown() {
+    let repo = branch_fixture();
+    gone_branch(repo.path(), "feat/merged");
+    advanced_gone_branch(repo.path(), "feat/opaque");
+    let merged_tip = tip_of(repo.path(), "feat/merged");
+    // The forge proves the merged tip and errors on everything else.
+    let body = format!(
+        "#!/bin/sh\ncase \"$2\" in\n*/commits/{merged_tip}/pulls) printf '[{{\"number\":8,\"merged_at\":\"2026-01-01T00:00:00Z\",\"head\":{{\"sha\":\"{merged_tip}\"}}}}]' ;;\n*) echo 'the forge is down' >&2; exit 1 ;;\nesac\n"
+    );
+    let (_mock, gh) = mock_gh(&body);
+    let out = rk_scrubbed()
+        .args(["branches", "prune", "--apply", "--target"])
+        .arg(repo.path())
+        .env("RK_GH_BIN", &gh)
+        .assert()
+        .success();
+    let text = String::from_utf8_lossy(&out.get_output().stdout).into_owned();
+    assert!(text.contains("deleted (merged request #8)"), "{text}");
+    assert!(text.contains("unknown"), "{text}");
+    let names = branch_names(repo.path());
+    assert!(!names.contains("feat/merged"), "the proven branch goes");
+    assert!(
+        names.contains("feat/opaque"),
+        "an unanswerable branch stays: {names}"
+    );
+}
+
+#[test]
+fn branches_prune_quiet_conflicts_with_json() {
+    rk_scrubbed()
+        .args(["branches", "prune", "--quiet", "--json"])
+        .assert()
+        .code(64);
+}
+
+#[test]
+fn branch_reminder_installs_the_hook_and_reapplies_idempotently() {
+    let repo = branch_fixture();
+    let home = tempfile::tempdir().expect("a scratch home exists");
+    let (_mock, gh) = mock_gh("#!/bin/sh\nexit 0\n");
+    let apply = || {
+        let mut command = rk_scrubbed();
+        command
+            .env("HOME", home.path())
+            .env("XDG_STATE_HOME", home.path())
+            .env("RK_GH_BIN", &gh)
+            .args(["setup", "step", "branch-reminder", "--apply", "--target"])
+            .arg(repo.path());
+        command
+    };
+    apply().assert().success().stderr(predicate::str::contains(
+        "wrote the post-merge reminder hook",
+    ));
+    let hook = repo.path().join(".git/hooks/post-merge");
+    let written = std::fs::read_to_string(&hook).expect("the hook reads");
+    assert!(written.contains("# release-kit branch reminder"));
+    assert!(written.contains("rk branches prune --quiet"));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = std::fs::metadata(&hook)
+            .expect("metadata")
+            .permissions()
+            .mode();
+        assert!(mode & 0o111 != 0, "the hook is executable: {mode:o}");
+    }
+    apply()
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("is installed"));
+    // A drifted body that kept the marker is rewritten, not refused.
+    std::fs::write(&hook, "#!/bin/sh\n# release-kit branch reminder\n").expect("the drift writes");
+    apply().assert().success();
+    assert_eq!(
+        std::fs::read_to_string(&hook).expect("the hook reads"),
+        written,
+        "a drifted reminder is restored to this binary's body"
+    );
+}
+
+#[test]
+fn branch_reminder_refuses_a_foreign_post_merge_hook() {
+    let repo = branch_fixture();
+    let home = tempfile::tempdir().expect("a scratch home exists");
+    let (_mock, gh) = mock_gh("#!/bin/sh\nexit 0\n");
+    let hook = repo.path().join(".git/hooks/post-merge");
+    std::fs::create_dir_all(hook.parent().expect("a parent")).expect("hooks dir");
+    let foreign = "#!/bin/sh\necho mine\n";
+    std::fs::write(&hook, foreign).expect("the foreign hook writes");
+    let output = rk_scrubbed()
+        .env("HOME", home.path())
+        .env("XDG_STATE_HOME", home.path())
+        .env("RK_GH_BIN", &gh)
+        .args(["setup", "step", "branch-reminder", "--apply", "--target"])
+        .arg(repo.path())
+        .assert()
+        .code(73)
+        .get_output()
+        .clone();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("foreign"), "{stderr}");
+    assert_eq!(
+        std::fs::read_to_string(&hook).expect("the hook reads"),
+        foreign,
+        "a foreign hook is never written over"
+    );
+}
+
+#[test]
+fn branch_reminder_honors_core_hooks_path() {
+    let repo = branch_fixture();
+    let home = tempfile::tempdir().expect("a scratch home exists");
+    let (_mock, gh) = mock_gh("#!/bin/sh\nexit 0\n");
+    git_in(repo.path(), &["config", "core.hooksPath", ".husky"]);
+    rk_scrubbed()
+        .env("HOME", home.path())
+        .env("XDG_STATE_HOME", home.path())
+        .env("RK_GH_BIN", &gh)
+        .args(["setup", "step", "branch-reminder", "--apply", "--target"])
+        .arg(repo.path())
+        .assert()
+        .success();
+    assert!(
+        repo.path().join(".husky/post-merge").is_file(),
+        "the hook lands where git says it will look"
+    );
+    assert!(!repo.path().join(".git/hooks/post-merge").exists());
+}
+
+#[test]
+fn setup_preview_names_the_branch_reminder_write() {
+    let repo = branch_fixture();
+    let home = tempfile::tempdir().expect("a scratch home exists");
+    let (_mock, gh) = mock_gh("#!/bin/sh\nexit 0\n");
+    rk_scrubbed()
+        .env("HOME", home.path())
+        .env("XDG_STATE_HOME", home.path())
+        .env("RK_GH_BIN", &gh)
+        .args(["setup", "step", "branch-reminder", "--target"])
+        .arg(repo.path())
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("would write").and(predicate::str::contains("post-merge")),
+        );
+    assert!(
+        !repo.path().join(".git/hooks/post-merge").exists(),
+        "a preview writes nothing"
     );
 }

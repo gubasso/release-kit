@@ -140,6 +140,7 @@ One caveat remains, on the write alone: adding a repository an existing installa
 | Create the branch for an issue       | `gh issue develop <issue> --checkout`                                             |
 | List the branches an issue links     | `gh issue develop --list <issue>`                                                 |
 | Wait on a build                      | `gh run watch --exit-status`                                                      |
+| Find the merged request for a commit | `gh api /repos/{owner}/{repo}/commits/{sha}/pulls`                                |
 | Protect a branch                     | rulesets: `POST` or `PUT /repos/{owner}/{repo}/rulesets`                          |
 | Require the trunk's checks           | a ruleset rule naming a status-check context                                      |
 | Restrict the merge method            | a ruleset `pull_request` rule listing `allowed_merge_methods`                     |

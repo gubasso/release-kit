@@ -8,6 +8,7 @@
 
 pub mod applog;
 pub mod atomic;
+pub mod branches;
 pub mod cli;
 pub mod commands;
 pub mod detect;
