@@ -78,6 +78,12 @@ pub enum Class {
     },
     /// Gone upstream and unguarded: a candidate, not proof.
     Candidate,
+    /// Checked out in a worktree: the worktree owns the cleanup, and
+    /// the worktree verb is the one that performs it.
+    WorktreeBound {
+        /// The worktree's path, as `for-each-ref` reports it.
+        path: String,
+    },
     /// A merged request's recorded head equals this tip.
     Confirmed {
         /// The request, as the forge names it: `#N` or `!N`.
@@ -98,9 +104,11 @@ pub enum Class {
 /// Classify one branch: `None` when its upstream is live or unset — the
 /// branch never reaches the report — and the guard's verdict otherwise.
 ///
-/// The guards run in order and the first one holds: the current branch,
-/// a branch checked out in any worktree, then the trunk and the release
-/// lines. What survives is a candidate.
+/// The guards run in order and the first one holds: the current branch
+/// stays kept — it is the operator's own seat — a branch checked out in
+/// any other worktree is worktree-bound and belongs to the worktree
+/// verb, then the trunk and the release lines stay kept. What survives
+/// is a candidate.
 #[must_use]
 pub fn classify(branch: &Branch, current: Option<&str>, trunk: &str) -> Option<Class> {
     if !branch.gone {
@@ -112,8 +120,8 @@ pub fn classify(branch: &Branch, current: Option<&str>, trunk: &str) -> Option<C
         });
     }
     if let Some(worktree) = &branch.worktree {
-        return Some(Class::Kept {
-            reason: format!("checked out at {worktree}"),
+        return Some(Class::WorktreeBound {
+            path: worktree.clone(),
         });
     }
     if branch.name == trunk || branch.name.starts_with(PROTECTED_PREFIX) {
@@ -195,8 +203,12 @@ pub fn merged_request_for(cli: &Path, target: &Path, forge: Forge, repo: &str, t
             |body| confirmation(forge, &body, tip),
         );
     }
+    // A definite not-found is proof of absence; anything less specific
+    // stays unknown. `gh` renders "HTTP 404", `glab` "404 Not Found" -
+    // a bare substring would read an outage message mentioning 404 as
+    // an answer.
     let stderr = String::from_utf8_lossy(&output.stderr);
-    if stderr.contains("404") {
+    if stderr.contains("HTTP 404") || stderr.contains("404 Not Found") {
         return Class::Unconfirmed {
             detail: "the forge does not know this commit".to_owned(),
         };
@@ -271,9 +283,14 @@ mod tests {
         );
         assert_eq!(
             classify(&gone("feat/x", Some("/wt")), Some("master"), "master"),
+            Some(Class::WorktreeBound { path: "/wt".into() })
+        );
+        assert_eq!(
+            classify(&gone("feat/x", Some("/wt")), Some("feat/x"), "master"),
             Some(Class::Kept {
-                reason: "checked out at /wt".into()
-            })
+                reason: "the current branch".into()
+            }),
+            "the current branch wins over its own worktree"
         );
         assert_eq!(
             classify(&gone("master", None), None, "master"),

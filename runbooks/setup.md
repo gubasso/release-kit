@@ -86,7 +86,9 @@ gh api "repos/<repo>" -q .delete_branch_on_merge
 Automated: `rk setup step branch-reminder --apply`. 1c deletes the remote copy; this clone's own copy survives with its upstream marked gone, and no forge can reach it. The step writes a post-merge hook that runs `rk branches prune --quiet` after every pull: silent when the clone is clean, a report naming the retired branches otherwise, and never a deletion — `rk branches prune --apply` is the operator's own call. The step refuses over an existing post-merge hook it did not write; merge by hand there, guarding the same command behind `command -v rk`. Like every setup step it resolves the forge, so it runs where the forge CLI is installed.
 
 ```bash
-cat > "$(git rev-parse --git-path hooks)/post-merge" <<'HOOK'
+hook="$(git rev-parse --git-path hooks)/post-merge"
+if [ ! -e "$hook" ] && [ ! -L "$hook" ] || { [ -f "$hook" ] && [ ! -L "$hook" ] && grep -qF '# release-kit branch reminder' "$hook"; }; then
+  cat > "$hook" <<'HOOK'
 #!/bin/sh
 # release-kit branch reminder
 if command -v rk >/dev/null 2>&1; then
@@ -94,9 +96,10 @@ if command -v rk >/dev/null 2>&1; then
 fi
 exit 0
 HOOK
-chmod 0755 "$(git rev-parse --git-path hooks)/post-merge"
-grep -F '# release-kit branch reminder' "$(git rev-parse --git-path hooks)/post-merge"
-# check: prints the marker line
+  chmod 0755 "$hook"
+fi
+grep -F '# release-kit branch reminder' "$hook"
+# check: prints the marker line; no print means a foreign hook survived untouched - merge by hand there
 ```
 
 ## 2. Let automation act

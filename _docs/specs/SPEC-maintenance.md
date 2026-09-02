@@ -26,7 +26,7 @@ The prune verb MUST keep the current branch, a branch checked out in any worktre
 
 - GIVEN a branch whose upstream is gone and whose checkout lives in a linked worktree
 - WHEN `rk branches prune --apply` runs
-- THEN the branch is reported kept with its worktree path and is not deleted
+- THEN the branch is reported worktree-bound with its worktree path and is not deleted, because its worktree owns the cleanup
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 

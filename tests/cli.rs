@@ -5401,11 +5401,66 @@ fn branches_prune_never_offers_the_current_checked_out_or_protected_branch() {
         .success();
     let text = String::from_utf8_lossy(&out.get_output().stdout).into_owned();
     assert!(text.contains("kept"), "{text}");
+    assert!(text.contains("worktree-bound"), "{text}");
     assert!(!text.contains("deleted"), "{text}");
     let names = branch_names(repo.path());
     for name in ["master", "release/1.0", "feat/held"] {
         assert!(names.contains(name), "{name} survives: {names}");
     }
+}
+
+#[test]
+fn branches_prune_reports_a_worktree_bound_branch_as_actionable() {
+    let repo = branch_fixture();
+    gone_branch(repo.path(), "feat/x");
+    let worktree = tempfile::tempdir().expect("a worktree parent exists");
+    let wt = worktree.path().join("release-kit-feat-x");
+    git_in(
+        repo.path(),
+        &[
+            "worktree",
+            "add",
+            "-q",
+            wt.to_str().expect("utf8"),
+            "feat/x",
+        ],
+    );
+    // A worktree-bound branch is exactly what the reminder surfaces, so
+    // --quiet reports it rather than staying silent.
+    let out = rk_scrubbed()
+        .args(["branches", "prune", "--quiet", "--target"])
+        .arg(repo.path())
+        .assert()
+        .success();
+    let text = String::from_utf8_lossy(&out.get_output().stdout).into_owned();
+    assert!(text.contains("worktree-bound: checked out at"), "{text}");
+    // An apply spends no forge call on it and never touches it: with no
+    // candidate at all, no forge CLI is even resolved.
+    rk_scrubbed()
+        .args(["branches", "prune", "--apply", "--target"])
+        .arg(repo.path())
+        .assert()
+        .success();
+    assert!(
+        branch_names(repo.path()).contains("feat/x"),
+        "a worktree-bound branch survives an apply"
+    );
+    let report = rk_scrubbed()
+        .args(["branches", "prune", "--json", "--target"])
+        .arg(repo.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&report).expect("one JSON object");
+    assert_eq!(report["branches"][0]["status"], "worktree-bound");
+    assert!(
+        report["branches"][0]["worktree"]
+            .as_str()
+            .is_some_and(|path| path.contains("release-kit-feat-x")),
+        "{report}"
+    );
 }
 
 #[test]
@@ -5584,4 +5639,171 @@ fn setup_preview_names_the_branch_reminder_write() {
         !repo.path().join(".git/hooks/post-merge").exists(),
         "a preview writes nothing"
     );
+}
+
+#[test]
+fn branches_prune_apply_refuses_a_branch_that_moved_after_verification() {
+    let repo = branch_fixture();
+    gone_branch(repo.path(), "feat/moved");
+    let old_tip = tip_of(repo.path(), "feat/moved");
+    let master_tip = tip_of(repo.path(), "master");
+    // The forge confirms the enumerated tip, then the mock advances the
+    // branch before answering - the race the compare-and-delete refuses.
+    // A distinct object to move to: an empty-tree commit made on the spot.
+    let new_commit = {
+        let out = std::process::Command::new("git")
+            .args([
+                "commit-tree",
+                "-m",
+                "moved",
+                &format!("{master_tip}^{{tree}}"),
+            ])
+            .current_dir(repo.path())
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_INDEX_FILE")
+            .output()
+            .expect("git runs");
+        assert!(out.status.success());
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    };
+    let body = format!(
+        "#!/bin/sh\ngit -C {repo} update-ref refs/heads/feat/moved {new_commit}\nprintf '[{{\"number\":9,\"merged_at\":\"2026-01-01T00:00:00Z\",\"head\":{{\"sha\":\"{old_tip}\"}}}}]'\n",
+        repo = repo.path().display()
+    );
+    let (_mock, gh) = mock_gh(&body);
+    let out = rk_scrubbed()
+        .args(["branches", "prune", "--apply", "--target"])
+        .arg(repo.path())
+        .env("RK_GH_BIN", &gh)
+        .assert()
+        .code(70);
+    let text = String::from_utf8_lossy(&out.get_output().stdout).into_owned();
+    assert!(text.contains("delete failed"), "{text}");
+    assert_eq!(
+        tip_of(repo.path(), "feat/moved"),
+        new_commit,
+        "the moved branch survives at its new tip"
+    );
+}
+
+#[test]
+fn branch_reminder_refuses_a_dangling_hook_symlink() {
+    let repo = branch_fixture();
+    let home = tempfile::tempdir().expect("a scratch home exists");
+    let (_mock, gh) = mock_gh("#!/bin/sh\nexit 0\n");
+    let hook = repo.path().join(".git/hooks/post-merge");
+    std::fs::create_dir_all(hook.parent().expect("a parent")).expect("hooks dir");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("/no/such/manager/post-merge", &hook)
+        .expect("the dangling symlink writes");
+    #[cfg(not(unix))]
+    return;
+    rk_scrubbed()
+        .env("HOME", home.path())
+        .env("XDG_STATE_HOME", home.path())
+        .env("RK_GH_BIN", &gh)
+        .args(["setup", "step", "branch-reminder", "--apply", "--target"])
+        .arg(repo.path())
+        .assert()
+        .code(73);
+    assert!(
+        std::fs::symlink_metadata(&hook).is_ok(),
+        "the symlink survives untouched"
+    );
+    assert!(
+        std::fs::symlink_metadata(&hook)
+            .expect("metadata")
+            .file_type()
+            .is_symlink(),
+        "still a symlink, not a written file"
+    );
+}
+
+#[test]
+fn branches_prune_apply_spares_a_branch_checked_out_mid_run() {
+    let repo = branch_fixture();
+    gone_branch(repo.path(), "feat/raced");
+    let tip = tip_of(repo.path(), "feat/raced");
+    let worktree = tempfile::tempdir().expect("a worktree parent exists");
+    let wt = worktree.path().join("raced");
+    // The mock forge checks the branch out into a worktree before
+    // answering: the last-instant recheck must route it to the worktree
+    // verb instead of deleting under a HEAD that now depends on it.
+    let body = format!(
+        "#!/bin/sh\ngit -C {repo} worktree add -q {wt} feat/raced >/dev/null 2>&1\nprintf '[{{\"number\":11,\"merged_at\":\"2026-01-01T00:00:00Z\",\"head\":{{\"sha\":\"{tip}\"}}}}]'\n",
+        repo = repo.path().display(),
+        wt = wt.display()
+    );
+    let (_mock, gh) = mock_gh(&body);
+    let out = rk_scrubbed()
+        .args(["branches", "prune", "--apply", "--json", "--target"])
+        .arg(repo.path())
+        .env("RK_GH_BIN", &gh)
+        .assert()
+        .success();
+    let report: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stdout).expect("one JSON object");
+    assert_eq!(
+        report["branches"][0]["status"], "worktree-bound",
+        "{report}"
+    );
+    assert!(
+        branch_names(repo.path()).contains("feat/raced"),
+        "the raced branch survives"
+    );
+}
+
+#[test]
+fn branches_prune_apply_removes_the_deleted_branch_configuration() {
+    let repo = branch_fixture();
+    gone_branch(repo.path(), "feat/merged");
+    let tip = tip_of(repo.path(), "feat/merged");
+    let body = format!(
+        "#!/bin/sh\nprintf '[{{\"number\":8,\"merged_at\":\"2026-01-01T00:00:00Z\",\"head\":{{\"sha\":\"{tip}\"}}}}]'\n"
+    );
+    let (_mock, gh) = mock_gh(&body);
+    rk_scrubbed()
+        .args(["branches", "prune", "--apply", "--target"])
+        .arg(repo.path())
+        .env("RK_GH_BIN", &gh)
+        .assert()
+        .success();
+    assert!(!branch_names(repo.path()).contains("feat/merged"));
+    let leftover = std::process::Command::new("git")
+        .args(["config", "--get-regexp", "^branch\\.feat/merged\\."])
+        .current_dir(repo.path())
+        .env_remove("GIT_DIR")
+        .output()
+        .expect("git runs");
+    assert!(
+        !leftover.status.success() && leftover.stdout.is_empty(),
+        "no branch configuration survives the prune: {}",
+        String::from_utf8_lossy(&leftover.stdout)
+    );
+}
+
+#[test]
+fn branches_prune_apply_reports_a_surviving_branch_configuration() {
+    let repo = branch_fixture();
+    gone_branch(repo.path(), "feat/merged");
+    let tip = tip_of(repo.path(), "feat/merged");
+    let body = format!(
+        "#!/bin/sh\nprintf '[{{\"number\":8,\"merged_at\":\"2026-01-01T00:00:00Z\",\"head\":{{\"sha\":\"{tip}\"}}}}]'\n"
+    );
+    let (_mock, gh) = mock_gh(&body);
+    // A held config lock: the ref deletion succeeds, the section removal
+    // cannot, and the report says so instead of claiming a clean delete.
+    std::fs::write(repo.path().join(".git/config.lock"), "").expect("the lock writes");
+    let out = rk_scrubbed()
+        .args(["branches", "prune", "--apply", "--target"])
+        .arg(repo.path())
+        .env("RK_GH_BIN", &gh)
+        .assert()
+        .success();
+    let text = String::from_utf8_lossy(&out.get_output().stdout).into_owned();
+    assert!(
+        text.contains("deleted (merged request #8); the branch configuration could not be removed"),
+        "{text}"
+    );
+    assert!(!branch_names(repo.path()).contains("feat/merged"));
 }

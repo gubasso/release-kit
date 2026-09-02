@@ -82,9 +82,18 @@ pub fn observe_hook(target: &Utf8Path) -> HookState {
         Ok(path) => path,
         Err(detail) => return HookState::Unreadable(detail),
     };
+    // Judge the entry itself, not what it points at: a symlink - dangling
+    // or not - is another manager's installation style, and a read
+    // through it would misclassify the dangling case as absent and let
+    // the atomic writer's rename replace the link.
+    match std::fs::symlink_metadata(&path) {
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return HookState::Absent,
+        Err(source) => return HookState::Unreadable(format!("{}: {source}", path.display())),
+        Ok(meta) if !meta.is_file() => return HookState::Foreign,
+        Ok(_) => {}
+    }
     let bytes = match std::fs::read(&path) {
         Ok(bytes) => bytes,
-        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return HookState::Absent,
         Err(source) => return HookState::Unreadable(format!("{}: {source}", path.display())),
     };
     if !String::from_utf8_lossy(&bytes).contains(MARKER) {
