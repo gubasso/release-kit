@@ -18,8 +18,11 @@ use crate::maintenance;
 use crate::output::Output;
 use crate::setup::context::{TRUNK_BRANCH, resolve_cli};
 
-/// The closing line every non-quiet report ends with; it states who owns
-/// the deletion, in the same voice as the landed routing block.
+/// The closing line a report ends with while some reported row still
+/// names a move the operator may make; it states who owns the deletion,
+/// in the same voice as the landed routing block. An apply that finished
+/// everything it named, and an empty report, drop it —
+/// [`maintenance::row_owes`] is the shared predicate.
 const OPERATOR_LINE: &str = "Deleting a branch is the operator's action: an agent reading this states the command and waits to be asked.";
 
 /// The machine form of a prune report.
@@ -352,7 +355,7 @@ fn next_lines(mode: &str) -> Vec<String> {
 
 /// The human report: silent under `--quiet` when nothing is reportable,
 /// one judged line per gone branch otherwise, closed by who owns the
-/// deletion.
+/// deletion only while some row still names a move.
 fn render(out: Output, rows: &[Row], next: &[String], quiet: bool) {
     if quiet && rows.is_empty() {
         return;
@@ -368,7 +371,12 @@ fn render(out: Output, rows: &[Row], next: &[String], quiet: bool) {
         }
     }
     out.next(next);
-    out.result_line(OPERATOR_LINE);
+    if rows
+        .iter()
+        .any(|row| maintenance::row_owes(row.status, row.detail.as_deref()))
+    {
+        out.result_line(OPERATOR_LINE);
+    }
 }
 
 /// The count-bearing first line.
