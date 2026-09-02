@@ -2,6 +2,8 @@
 
 This page maps the release workflow this repository runs on itself; the detailed commands are in the linked guides. Every page here is parameterized: fill the coordinates in once, and nothing below names a particular account, repository, or crate.
 
+Every page here is operator procedure. An agent reads one to say which step comes next and to check that a step was done, and runs a git, forge, or registry step only where the operator's request named that step.
+
 ## Coordinates
 
 The two operating pages open with a shell block exporting these; fill it in once per repository and every command in them runs as written.

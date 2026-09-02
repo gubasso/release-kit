@@ -1,6 +1,6 @@
 # Runbooks
 
-The human-facing step by step: the method rendered as commands, in order, with the traps called out. A runbook carries commands, their order, and the check each one prints; every why belongs to a method chapter or a binding, and the runbook links to it. A runbook never introduces a step the method does not have — its step count and order match the chapter it renders, and a test holds that.
+The human-facing step by step: the method rendered as commands, in order, with the traps called out. A runbook carries commands, their order, and the check each one prints; every why belongs to a method chapter or a binding, and the runbook links to it. A runbook never introduces a step the method does not have — its step count and order match the chapter it renders, and a test holds that. The commands are the operator's to run: an agent serves a runbook and states the command, and runs one only where the operator's request named that step.
 
 | Runbook                 | Renders             | Serve with         |
 | ----------------------- | ------------------- | ------------------ |

@@ -140,13 +140,19 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `distribution:a-skill-plans-before-it-acts` — A skill plans before it acts
 
-Every skill MUST route to the shared plan gate in a section preceding every other section, and MUST state what `--no-plan` changes, because each one drives operations that write files, mutate a forge, or publish a version, and an agent that starts acting before it has stated the sequence has no point left at which the operator can stop it.
+Every skill MUST route to the shared plan gate in a section preceding every other section, and MUST state what `--no-plan` changes, because each one drives operations that write files, mutate a forge, or publish a version, and an agent that starts acting before it has stated the sequence has no point left at which the operator can stop it. The gate itself MUST bound what a request authorizes — the file writes and `rk` verbs it names — leaving every branch, commit, push, tag, and pull request action to the operator unless their request named it, because a plan the operator approves states a shape and grants no standing licence over the repository's git and forge state.
 
 #### Scenario: A skill is authored with its steps ahead of the gate
 
 - GIVEN a skill whose first section is a step list rather than the gate
 - WHEN the test suite runs
 - THEN the conformance test fails and names the skill, because an agent reading top to bottom would act before reaching the gate
+
+#### Scenario: The gate is read for what it authorizes
+
+- GIVEN the shared plan gate every skill names
+- WHEN the test suite reads it
+- THEN it carries the section bounding a request's authority, so every skill holding the gate holds that boundary
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 

@@ -13,7 +13,7 @@ Take a repository from wherever it is to the current release-kit convention. The
 
 Read `~/.local/state/release-kit/skills/shared/plan-gate.md` before the first action of a task, and hold it for the whole task. It binds three phases: plan and present the plan for approval, validate that plan against every preview and read-only source phase 2 names, then execute it.
 
-The gate is the whole reason this skill is safe to run unattended: every verb below writes files, changes a forge, or publishes a version.
+The gate is why this skill is safe to run: every verb below writes files, changes a forge, or publishes a version, and the gate states which of those steps stay the operator's own.
 
 When the request carries `--no-plan`, skip the approval turn only. Still state the ordered plan before acting, and still validate it as phase 2 directs.
 
@@ -65,7 +65,6 @@ A repository still running an integration branch plus a gated release branch mig
 
 ## Defaults
 
-- Before any code or file change, check the current branch. On `master` or any long-lived ref, branch first — `<type>/<slug>` matching the intended squash type, or minted from the issue the work serves (`gh issue develop <issue> --checkout`, or the glab counterpart) — and reach the trunk only through a squash-merged request.
 - Never author a tag, and never hand-edit a generated artifact workflow.
 - Prefer an rk verb over a raw forge call; where no verb covers the gap, use the forge CLI and say that the loop is outside the convention there.
 - Report every gated step's outcome from observation, never from the operator's word alone.

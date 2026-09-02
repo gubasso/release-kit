@@ -4,6 +4,12 @@ Standing instructions for the whole task, not one-time steps. Every release-kit 
 
 Hold all three phases for the rest of the task, and apply them to every further request in the same session. Without `--no-plan`, phase 3 runs in a later turn than phase 1, after the plan is approved; with it, the phases run in order in the current turn.
 
+## What a request authorizes
+
+The gate governs how a skill acts; it never widens what the operator asked for. A request authorizes the file writes and the `rk` verbs it names, and nothing else: creating, switching or deleting a branch, committing, pushing, tagging, and opening, updating or merging a pull request are the operator's moves. Plan each of those as a gated step, state its exact command, and run it only where the operator's request named that action or they answer the gate for it.
+
+An approved plan approves its shape, not a standing licence over the repository's git and forge state. A request to implement or change code authorizes the file changes alone: where the work then needs a branch or a commit, say which step comes next, name its command, and stop there.
+
 ## 1. Plan
 
 Do this before the first change of any kind: a file landed in a target, a forge or registry mutation, or any verb run with `--apply`. The agent's own plan file is not such a change — Claude Code's plan mode writes one, and this phase depends on it.
@@ -34,6 +40,6 @@ The plan is a claim about what will happen. Check it against something that know
 
 1. Run the verbs in the planned order, one at a time. Never batch an `--apply` behind another.
 2. Re-observe after each one, and report what the command returned rather than that it succeeded.
-3. Gate every step the operator must run by hand: print the exact command, say what it changes and why, wait, then re-observe before continuing.
+3. Gate every step the boundary above leaves to the operator, and every other step they must run by hand: print the exact command, say what it changes and why, wait, then re-observe before continuing.
 4. Close on the verification command the plan named. `rk status --check --target .` is the judging mode and exits nonzero while anything is unresolved.
 5. Where execution shows the plan was wrong, stop and re-plan. Do not expand the scope of an approved plan.

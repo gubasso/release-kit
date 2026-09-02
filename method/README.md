@@ -15,4 +15,6 @@ Start with [the model](./00-model.md), hold [the invariants](./01-invariants.md)
 | [06 — Release from trunk](./06-release-from-trunk.md) | The default style, walked through one release and one fix |
 | [07 — Branch for release](./07-branch-for-release.md) | The whole life of an older line, cut to deletion          |
 
+Every chapter is operator procedure. An agent reads one to say which step comes next and to check that a step was done; it runs a git or forge step only where the operator's request named that step.
+
 Per-technology bindings live under [bindings](../bindings/README.md). The deterministic files a binding lands come from `rk init`; the pinned tool versions they assume are declared once, in the versions registry, readable with `rk versions`.
