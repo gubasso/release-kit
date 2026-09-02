@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.5](https://github.com/gubasso/release-kit/compare/v0.2.4...v0.2.5) - 2026-09-02
+
+### Fixed
+
+- *(landing)* Render the worktree guard as valid YAML and act on the named target from hooks ([#29](https://github.com/gubasso/release-kit/pull/29))
+
 ## [0.2.4](https://github.com/gubasso/release-kit/compare/v0.2.3...v0.2.4) - 2026-09-02
 
 ### Added
