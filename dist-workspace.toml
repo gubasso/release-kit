@@ -19,3 +19,15 @@ pr-run-mode = "plan"
 install-path = "CARGO_HOME"
 # Whether to install an updater program
 install-updater = false
+# Sign every built artifact with a GitHub Artifact Attestation, so a consumer
+# can check which workflow and commit produced it. crates.io stores no
+# provenance, so the release page is the only place it can live.
+github-attestations = true
+# Attest in the host phase, not the default build phase. The default attests
+# only the per-platform archives; the installers a consumer actually curls are
+# global artifacts built later, and the host phase is the first point where
+# every file that will reach the release page exists in one place.
+github-attestations-phase = "host"
+# The host phase's permissions are job-scoped, so the release must be created
+# in the same phase; cargo-dist's documentation asks for this pairing outright.
+github-release = "host"

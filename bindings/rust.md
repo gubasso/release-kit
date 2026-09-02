@@ -109,7 +109,10 @@ The package then has exactly one publishing path.
 ## Provenance
 
 - crates.io offers none. Trusted publishing authenticates the upload and stores no signature and no attestation, so a published crate gives a consumer nothing beyond the SHA-256 that `Cargo.lock` already records. Sigstore signing for crates.io remains a proposal, so this is the state to design around rather than wait out.
-- The release artifacts carry it instead, which makes them the only verifiable half of a Rust release. `github-attestations = true` in `dist-workspace.toml` turns on GitHub Artifact Attestations; `github-attestations-phase` chooses where they are minted and defaults to `build-local-artifacts`, the phase that builds the binaries. Only public repositories, and private repositories of an Enterprise-plan organization, are supported.
+- The release artifacts carry it instead, which makes them the only verifiable half of a Rust release. `github-attestations = true` in `dist-workspace.toml` turns on GitHub Artifact Attestations. Only public repositories, and private repositories of an Enterprise-plan organization, are supported.
+- The flag alone is not enough. Its default phase, `build-local-artifacts`, attests only the per-platform archives, because that phase's attest glob is scoped to the matrix target. The installers and the source tarball are global artifacts built in a later job, so the default leaves the documented `curl … | sh` install path unattested.
+- The binding therefore sets `github-attestations-phase = "host"`: the host phase is the first point where every asset that will reach the release page is gathered in one place, and its attest step runs before the release is created, so nothing publicly reachable ever points at an unattested file. `github-release = "host"` pairs the release creation with that phase, as cargo-dist's reference asks.
+- A second benefit of the host phase: the `host` job runs no project build steps, so the job holding the signing identity is isolated from the code it signs, which the default build phase is not.
 - A consumer verifies with `gh attestation verify <file> --repo <owner>/<repo>`. Nothing in the default install path does this for them: `cargo binstall` supports minisign signatures only and does not check attestations, so the evidence is available on demand and enforced by no installer.
 
 ## Recovery specifics
