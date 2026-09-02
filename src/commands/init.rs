@@ -102,7 +102,7 @@ pub fn run(args: &InitArgs) -> Result<(), RkError> {
                 "an apply renders the scope-bearing files; pass --scopes <list>, the Conventional Commit scopes this project accepts".into(),
             )
         })?)?;
-        let entries = landing::projection(&args.tech, &forge, &repo, &scopes)?;
+        let entries = landing::projection(&args.tech, &forge, &repo, &scopes, Workflow::Branches)?;
         apply(out, args, &forge, &repo, &scopes, &entries)
     } else {
         // A preview lists destinations and compares nothing, so an
@@ -126,6 +126,7 @@ pub fn run(args: &InitArgs) -> Result<(), RkError> {
             &forge,
             repo.as_deref().unwrap_or("OWNER"),
             &scopes,
+            Workflow::Branches,
         )?;
         preview(out, args, &forge, repo, &entries)
     }

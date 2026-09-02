@@ -1548,22 +1548,28 @@ fn the_payload_carries_the_shared_plan_gate() {
 /// carries no sentence ordering one to branch, commit, or merge on its own.
 #[test]
 fn the_routing_block_bounds_the_agents_initiative() {
-    let block = release_kit::landing::routing_block();
-    for phrase in [
-        "guides and never drives",
-        "unless the operator's request named that action",
-        "authorizes the file changes alone",
+    for workflow in [
+        release_kit::landing::Workflow::Worktree,
+        release_kit::landing::Workflow::Branches,
     ] {
-        assert!(
-            block.contains(phrase),
-            "the block drops '{phrase}': {block}"
-        );
-    }
-    for order in ["branch first", "Land work through"] {
-        assert!(
-            !block.contains(order),
-            "the block still orders the agent to act: '{order}'"
-        );
+        let block = release_kit::landing::routing_block(workflow);
+        for phrase in [
+            "guides and never drives",
+            "unless the operator's request named that action",
+            "authorizes the file changes alone",
+            "creating or removing a worktree",
+        ] {
+            assert!(
+                block.contains(phrase),
+                "the block drops '{phrase}': {block}"
+            );
+        }
+        for order in ["branch first", "Land work through"] {
+            assert!(
+                !block.contains(order),
+                "the block still orders the agent to act: '{order}'"
+            );
+        }
     }
 }
 

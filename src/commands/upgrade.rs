@@ -80,6 +80,7 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
         &recorded.forge,
         &recorded.parameters.repo,
         &recorded.parameters.scopes,
+        recorded.parameters.workflow,
     )?;
     refuse_non_regular(&args.target, &entries)?;
 

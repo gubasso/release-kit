@@ -95,7 +95,7 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
     let repo = resolved.repo.ok_or_else(landing::repo_unresolved)?;
     let tech = resolved_tech(args)?;
     let scopes = required_scopes(args.scopes.as_deref())?;
-    let entries = landing::projection(&tech, &resolved.forge, &repo, &scopes)?;
+    let entries = landing::projection(&tech, &resolved.forge, &repo, &scopes, Workflow::Branches)?;
     let (files, records) = verify(args, &entries)?;
 
     for file in &files {

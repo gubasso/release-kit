@@ -405,6 +405,58 @@ mod tests {
     use super::{Layout, Worktree, WtClass, classify, derived_path, flatten, parse_worktrees};
     use crate::branches::Branch;
 
+    /// The hand-rolled matcher speaks the one grammar: on a spread of
+    /// admitted and refused names it agrees with `grep -E` over
+    /// [`crate::landing::BRANCH_GRAMMAR`], the const the hook block
+    /// renders — so the two validators cannot drift apart silently.
+    #[test]
+    fn the_matcher_agrees_with_the_one_branch_grammar() {
+        let cases = [
+            ("feat/oauth-login", true),
+            ("fix/PROJ-412-empty-csv", true),
+            ("guides/release", false),
+            ("chore/deps/bump", true),
+            ("feat/", false),
+            ("412-empty-csv", true),
+            ("PROJ-412-empty-csv", true),
+            ("A-1-x", false),
+            ("AB-1-x", true),
+            ("412-", false),
+            ("release/1.2", true),
+            ("release-1.2", true),
+            ("release-", false),
+            ("release", false),
+            ("master", false),
+            ("worktree-session", false),
+            ("feature/x", false),
+            ("123", false),
+        ];
+        for (name, expected) in cases {
+            assert_eq!(
+                super::matches_grammar(name),
+                expected,
+                "matcher disagrees on {name}"
+            );
+            let grepped = std::process::Command::new("sh")
+                .args([
+                    "-c",
+                    &format!(
+                        "printf %s \"$1\" | grep -Eq \"{}\"",
+                        crate::landing::BRANCH_GRAMMAR
+                    ),
+                    "sh",
+                    name,
+                ])
+                .status()
+                .expect("grep runs");
+            assert_eq!(
+                grepped.success(),
+                expected,
+                "the regex itself disagrees on {name}"
+            );
+        }
+    }
+
     /// Flattening replaces every slash; the collision pair derives equal —
     /// documented, refused at `add`, never suffixed.
     #[test]
