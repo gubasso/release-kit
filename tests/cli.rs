@@ -8272,3 +8272,43 @@ fn worktree_add_refuses_a_stale_canonical_record() {
                 .and(predicate::str::contains("rk worktree prune --apply")),
         );
 }
+
+/// A behavior-defining flag the preview was run with rides into the
+/// emitted follow-up command, for both verbs that preview a decision:
+/// following the Next line applies what was previewed, never a default.
+#[test]
+fn a_preview_follow_up_keeps_the_previewed_decision() {
+    let (_parent, repo) = worktree_fixture();
+    let tag_tip = tip_of(&repo, "master");
+    let out = rk_scrubbed()
+        .args(["worktree", "add", "release/1.2", "--base"])
+        .arg(&tag_tip)
+        .args(["--target"])
+        .arg(&repo)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert!(
+        String::from_utf8_lossy(&out).contains(&format!("--base {tag_tip}")),
+        "the add follow-up carries the base: {}",
+        String::from_utf8_lossy(&out)
+    );
+
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+    let out = rk()
+        .args(["upgrade", "--workflow", "branches", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert!(
+        String::from_utf8_lossy(&out).contains("rk upgrade --workflow branches --target"),
+        "the upgrade follow-up carries the mode change: {}",
+        String::from_utf8_lossy(&out)
+    );
+}

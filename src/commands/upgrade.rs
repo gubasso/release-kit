@@ -190,8 +190,14 @@ fn refuse_conflicts(conflicts: &[String]) -> RkError {
     )
 }
 
-/// The `Next:` lines for each outcome.
+/// The `Next:` lines for each outcome. A behavior-defining flag the
+/// preview was run with rides into the follow-up command, so following
+/// it applies the decision that was previewed, never a different one.
 fn next_lines(args: &UpgradeArgs, clean: bool) -> Vec<String> {
+    let workflow_flag = args
+        .workflow
+        .as_deref()
+        .map_or_else(String::new, |mode| format!(" --workflow {mode}"));
     if args.apply {
         vec![
             "commit the upgraded files, the record included".to_owned(),
@@ -199,12 +205,12 @@ fn next_lines(args: &UpgradeArgs, clean: bool) -> Vec<String> {
         ]
     } else if clean {
         vec![format!(
-            "rk upgrade --target {} --apply writes",
+            "rk upgrade{workflow_flag} --target {} --apply writes",
             args.target
         )]
     } else {
         vec![format!(
-            "resolve each conflict above; rk upgrade --target {} --apply refuses until then",
+            "resolve each conflict above; rk upgrade{workflow_flag} --target {} --apply refuses until then",
             args.target
         )]
     }

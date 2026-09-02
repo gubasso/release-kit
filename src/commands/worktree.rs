@@ -487,8 +487,9 @@ fn add(
             out.result_line(format!("base:   {base}"));
         }
         out.result_line(format!("would run: git {}", source.command.join(" ")));
+        let base_flag = base.map_or_else(String::new, |base| format!(" --base {base}"));
         let next = vec![format!(
-            "rk worktree add {branch} --target {target} --apply creates it; the apply refreshes the remote refs and re-resolves"
+            "rk worktree add {branch}{base_flag} --target {target} --apply creates it; the apply refreshes the remote refs and re-resolves"
         )];
         out.next(&next);
         return out.emit(&AddReport {
