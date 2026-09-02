@@ -1833,6 +1833,7 @@ fn the_runbooks_match_their_method_chapters() {
     for (chapter, runbook) in [
         ("method/03-operate.md", "runbooks/release.md"),
         ("method/07-branch-for-release.md", "runbooks/backport.md"),
+        ("method/08-worktrees.md", "runbooks/worktree.md"),
     ] {
         let rendered = std::fs::read_to_string(repo_path(runbook)).expect("reads");
         assert_eq!(

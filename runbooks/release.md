@@ -80,16 +80,17 @@ Nothing missing: skip to step 4. Something missing: continue.
 
 ### 3b. Correct it on the request's branch
 
-On github:
+On branches:
 
 ```bash
-gh pr checkout <release pr> --repo <repo>
+gh pr checkout <release pr> --repo <repo>        # or glab mr checkout <release mr>
 ```
 
-On gitlab:
+On worktree:
 
 ```bash
-glab mr checkout <release mr>
+rk worktree add "<bot branch>" --apply && cd "../<project>-<bot branch flattened>"
+# check: the source line reports remote — the bot's branch fits the grammar's release arm and is seated from origin's tip, never recreated from the trunk; step 4's merge retires the worktree through step 4 of rk guide worktree
 ```
 
 Then edit the changelog and push the correction:

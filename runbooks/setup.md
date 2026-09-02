@@ -83,7 +83,7 @@ gh api "repos/<repo>" -q .delete_branch_on_merge
 
 ### 1d. Remind this clone after a pull
 
-Automated: `rk setup step branch-reminder --apply`. 1c deletes the remote copy; this clone's own copy survives with its upstream marked gone, and no forge can reach it. The step writes a post-merge hook that runs `rk branches prune --quiet` after every pull: silent when the clone is clean, a report naming the retired branches otherwise, and never a deletion — `rk branches prune --apply` is the operator's own call. The step refuses over an existing post-merge hook it did not write; merge by hand there, guarding the same command behind `command -v rk`. Like every setup step it resolves the forge, so it runs where the forge CLI is installed.
+Automated: `rk setup step branch-reminder --apply`. 1c deletes the remote copy; this clone's own copy survives with its upstream marked gone, and no forge can reach it. The step writes a post-merge hook that runs `rk branches prune --quiet` and `rk worktree prune --quiet` after every pull: silent when the clone is clean, a report naming the retired branches and worktrees otherwise, and never a deletion — the `--apply` forms are the operator's own call. Each call sits behind a capability probe on its own verb, `rk <verb> --help`, so an `rk` that is missing or too old for a verb keeps the hook silent while a genuine refusal still reaches the operator. The step refuses over an existing post-merge hook it did not write; merge by hand there, guarding each call behind its probe as below. Like every setup step it resolves the forge, so it runs where the forge CLI is installed.
 
 ```bash
 hook="$(git rev-parse --git-path hooks)/post-merge"
@@ -91,8 +91,11 @@ if [ ! -e "$hook" ] && [ ! -L "$hook" ] || { [ -f "$hook" ] && [ ! -L "$hook" ] 
   cat > "$hook" <<'HOOK'
 #!/bin/sh
 # release-kit branch reminder
-if command -v rk >/dev/null 2>&1; then
+if rk branches prune --help >/dev/null 2>&1; then
   rk branches prune --quiet || :
+fi
+if rk worktree prune --help >/dev/null 2>&1; then
+  rk worktree prune --quiet || :
 fi
 exit 0
 HOOK
@@ -191,7 +194,7 @@ Where the forge enforces less than a step claims, the check names the weaker gua
 
 ### 4a. Land the payload
 
-`--scopes` is required on the apply: the Conventional Commit vocabulary the project accepts, rendered into the title check and the commit hook, because a vocabulary is a decision rather than a default.
+`--scopes` is required on the apply: the Conventional Commit vocabulary the project accepts, rendered into the title check and the commit hook, because a vocabulary is a decision rather than a default. `--workflow` chooses the working-copy mode and defaults to `worktree` — every code-changing branch in a linked worktree, the main checkout commits nothing; `--workflow branches` leaves branches workable in the main checkout, with worktrees optional beside them (check: `rk status` prints the mode).
 
 ```bash
 rk init --tech <tech> --target .             # preview every destination
@@ -228,7 +231,7 @@ git push origin master
 
 ### 4d. Install the hooks, last
 
-Last, because two of them refuse exactly what 4c just did. The landing splices a marked block of release-convention hooks into `.pre-commit-config.yaml`, under `repos:`, leaving the rest of the file the target's own. A hook already doing one of these jobs — `committed`, `commitlint`, `gitlint`, another conventional-commit or branch-guard hook — is a duplicate to name, and the choice between it and the landed hook is the operator's, never a silent second hook doing the same job. On an existing config, verify the top level carries `default_install_hook_types: [pre-commit, commit-msg, pre-push]` — the splice cannot add a top-level key. Where the target's CI runs a `pre-commit run` sweep, set `SKIP=no-commit-to-branch` in that job's environment: CI commits nothing, so the commit-time branch guard would refuse every trunk checkout it sweeps.
+Last, because two of them refuse exactly what 4c just did. The landing splices a marked block of release-convention hooks into `.pre-commit-config.yaml`, under `repos:`, leaving the rest of the file the target's own. A hook already doing one of these jobs — `committed`, `commitlint`, `gitlint`, another conventional-commit or branch-guard hook — is a duplicate to name, and the choice between it and the landed hook is the operator's, never a silent second hook doing the same job. On an existing config, verify the top level carries `default_install_hook_types: [pre-commit, commit-msg, pre-push]` — the splice cannot add a top-level key. Where the target's CI runs a `pre-commit run` sweep, set `SKIP=no-commit-to-branch` in that job's environment — and on a worktree-mode target the pair `SKIP=no-commit-to-branch,rk-worktree-location`, because a CI checkout is commonly detached on the main worktree: CI commits nothing, so the commit-time guards would refuse every trunk checkout they sweep.
 
 ```bash
 pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push

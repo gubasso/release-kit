@@ -4,11 +4,23 @@ The nine steps of [branch for release](../method/07-branch-for-release.md) as co
 
 ## 1. Cut the line from its tag
 
+On branches:
+
 ```bash
 git fetch origin --tags --force
 git checkout -b release/<line> "v<version>" && git push -u origin release/<line>
 # check: the branch is created at the tag and pushed with its upstream set
 # already cut: the checkout refuses the existing branch; git checkout release/<line> and go to 2
+```
+
+On worktree:
+
+```bash
+git fetch origin --tags --force
+rk worktree add release/<line> --base "v<version>" --apply && cd ../<project>-release-<line>
+git push -u origin release/<line>
+# check: the line takes its explicit base and its own seat; the main checkout stays on master
+# already cut: the add adopts the existing branch instead, and reports satisfied when its seat stands
 ```
 
 ## 2. Protect the release lines
@@ -33,9 +45,18 @@ Test plus fix, one request, squash-merged through the trunk's one path — `rk g
 
 ## 5. Cherry-pick only that commit onto the line
 
+On branches:
+
 ```bash
 git checkout release/<line> && git cherry-pick <commit> && git push
 # check: the pick lands cleanly and the push is a plain push; nothing else travels
+```
+
+On worktree:
+
+```bash
+cd ../<project>-release-<line> && git cherry-pick <commit> && git push
+# check: the pick lands in the line's own seat; nothing else travels
 ```
 
 ## 6. Wait for the line's CI
@@ -81,4 +102,12 @@ Run `rk guide release` steps 3 to 6 against the line, with `--base release/<line
 ```bash
 git push origin --delete release/<line>
 # check: the line's tags still resolve; the chapter owns why they make the deletion safe
+```
+
+Then the local half — a release line is protected from every automatic prune, so its seat and branch retire by hand:
+
+```bash
+git worktree remove ../<project>-release-<line>
+git branch -D release/<line>
+# check: rk worktree list no longer names the seat
 ```

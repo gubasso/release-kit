@@ -24,6 +24,8 @@ A few days before the planned v1.1.0 release:
 git checkout -b release/1.1 <commit> && git push -u origin release/1.1
 ```
 
+In the worktree mode the line takes a seat instead of the main checkout: `rk worktree add release/1.1 --base <commit> --apply`, then push from that worktree — the same cut, at the desk the mode names.
+
 ```text
 master:  A──B──C──D──E──F──G──H──J──K──L──…   work continues, no freeze
                               |
@@ -43,6 +45,8 @@ The wrong instinct is to fix it on `release/1.1`. Instead, the fix lands on the 
 ```bash
 git checkout release/1.1 && git cherry-pick M && git push
 ```
+
+In the worktree mode the checkout is the line's worktree — `cd ../<project>-release-1.1` — and the cherry-pick and push run there.
 
 ```text
 master:  A──B──…──H──J──K──L──M
