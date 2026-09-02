@@ -89,8 +89,8 @@ sequenceDiagram
   - prevents the installer workflow becoming the publisher
 - Tag: automation writes the annotated immutable tag
   - prevents manual or movable tags
-- Done: wait for `release.yml`, then verify registry, assets, and two equal SHAs
-  - prevents a premature or split-brain handoff
+- Done: wait for `release.yml`, then verify registry, assets, two equal SHAs, and provenance — every downloaded asset passes `gh attestation verify`
+  - prevents a premature or split-brain handoff, and a release that violates the provenance invariant while reading as verified
 
 ## The overlay pages
 

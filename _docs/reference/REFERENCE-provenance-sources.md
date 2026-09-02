@@ -58,3 +58,21 @@ Sigstore's installation guidance has release binaries verified against their pub
 - <https://github.com/sigstore/cosign/releases/tag/v3.0.1>
 
 Bearing: the pinned, digest-verified cosign download in the `provenance` job, and the command forms differing from the component's v2-era ones.
+
+## The three verifiers
+
+`gh attestation verify <file-path> --repo <owner>/<repo>` takes a local file and checks its attestation against the repository that built it, so the GitHub form needs an explicit download first. `cosign verify-blob-attestation --type slsaprovenance1 --bundle <bundle> --certificate-identity <identity> --certificate-oidc-issuer <issuer> <blob>` verifies a keylessly signed bundle against a blob; identity and issuer are required for keyless flows. `pypi-attestations verify pypi --repository https://github.com/<owner>/<repo> pypi:<distribution filename>` downloads the distribution and its provenance from PyPI and checks the signing identity against the named repository. pypi-attestations lives in the `pypi/pypi-attestations` repository (its releases answer the freshness check), and installs at a pin with `pipx install pypi-attestations==<version>`.
+
+- <https://cli.github.com/manual/gh_attestation_verify>
+- <https://github.com/sigstore/cosign> — flag surface confirmed against the v3.1.3 binary's help
+- <https://github.com/pypi/pypi-attestations>
+
+Bearing: the runbook's step 6 provenance substep, the verifier bullets in the bindings, and the `versions.toml` entries for cosign and pypi-attestations.
+
+## SLSA, on the level the channels reach
+
+SLSA v1.0 Build Level 2 requires a hosted build platform that generates signed provenance; Build Level 3 additionally requires the build to run with hardened isolation — provenance unforgeable by the build's own steps, in practice a trusted, separately controlled build definition such as a reusable workflow, with ephemeral build environments. GitHub artifact attestations from an ordinary workflow and GitLab's signed runner statement both meet Level 2 and neither meets Level 3, which is what `method/01-invariants.md` names.
+
+- <https://slsa.dev/spec/v1.0/levels>
+
+Bearing: the level sentence in the invariants chapter.

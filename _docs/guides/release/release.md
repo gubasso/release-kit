@@ -63,4 +63,18 @@ c3d8e10f4b2a9e7d1c5b8a3f6e9d2c4b7a1f0e5d
 c3d8e10f4b2a9e7d1c5b8a3f6e9d2c4b7a1f0e5d
 ```
 
+The release is not done until its provenance verifies — the runbook's step 6 closes on the pair's own verifier, here `gh attestation verify` over everything a consumer downloads:
+
+```bash
+$ tmp="$(mktemp -d)"
+$ gh release download v0.2.0 --repo "$OWNER/$REPO" --dir "$tmp"
+$ ( for f in "$tmp"/*; do
+    gh attestation verify "$f" --repo "$OWNER/$REPO" \
+      --source-digest "$(git rev-parse 'v0.2.0^{commit}')" \
+      --signer-workflow "$OWNER/$REPO/.github/workflows/release.yml" \
+      || exit 1
+  done )
+✓ Verification succeeded! ... and so on, once per asset — the installers included; one failure fails the loop
+```
+
 The `--event push` filter on the second watch is what keeps it off the pull-request `plan` run `release.yml` also produces.

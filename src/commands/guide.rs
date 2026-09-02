@@ -85,8 +85,14 @@ pub fn run(args: &GuideArgs) -> Result<(), RkError> {
     Ok(())
 }
 
-/// Which axis a variant label selects on.
+/// Which axis a variant label selects on. A `tech/forge` pair selects on
+/// both at once, for the steps whose answer differs per pair rather than
+/// per axis — the provenance verifier is one.
 fn axis_of(selector: &str) -> Option<&'static str> {
+    if let Some((tech, forge)) = selector.split_once('/') {
+        return (axis_of(tech) == Some("tech") && axis_of(forge) == Some("forge"))
+            .then_some("pair");
+    }
     match selector {
         "github" | "gitlab" => Some("forge"),
         "rust" | "python" | "bash" => Some("tech"),
@@ -115,8 +121,14 @@ fn render(text: &str, forge: Option<&str>, tech: Option<&str>, repo: Option<&str
             continue;
         };
         let resolved = match axis_of(selector) {
-            Some("forge") => forge,
-            Some("tech") => tech,
+            Some("forge") => forge.map(str::to_owned),
+            Some("tech") => tech.map(str::to_owned),
+            // A pair resolves only once both halves have: with either axis
+            // open, every pair variant stays visible, label and all.
+            Some("pair") => match (tech, forge) {
+                (Some(tech), Some(forge)) => Some(format!("{tech}/{forge}")),
+                _ => None,
+            },
             _ => None,
         };
         let Some(resolved) = resolved else {
@@ -202,6 +214,24 @@ mod tests {
         let doc = "On github:\n\nthe force-push refresh survives.\n\nOn gitlab:\n\nthe request is replaced.\n\nend\n";
         let rendered = render(doc, Some("gitlab"), None, None);
         assert_eq!(rendered, "the request is replaced.\n\nend\n");
+    }
+
+    /// A pair variant renders only for its exact pair, drops for every
+    /// other resolved pair, and stays visible — label and all — while
+    /// either axis is open, so an unresolved render still shows every
+    /// pair's answer.
+    #[test]
+    fn a_pair_variant_selects_on_both_axes() {
+        let doc = "On bash/gitlab:\n\n```bash\ncosign verify-blob-attestation\n```\n\nOn rust/gitlab:\n\nno provenance surface.\n\nend\n";
+        let matched = render(doc, Some("gitlab"), Some("bash"), None);
+        assert!(matched.contains("cosign verify-blob-attestation"));
+        assert!(!matched.contains("no provenance surface"));
+        assert!(!matched.contains("On bash/gitlab:"));
+        let sibling = render(doc, Some("gitlab"), Some("rust"), None);
+        assert!(!sibling.contains("cosign"));
+        assert!(sibling.contains("no provenance surface."));
+        let open_axis = render(doc, Some("gitlab"), None, None);
+        assert_eq!(open_axis, doc, "an open axis keeps every pair variant");
     }
 
     /// A resolved tech fills `<tech>` everywhere; unresolved it stays.

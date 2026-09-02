@@ -31,6 +31,7 @@ release-please knows the `python` release type and deterministically bumps `pypr
 
 - PyPI carries it, by default and with no configuration to write. From 1.11.0 onward `pypa/gh-action-pypi-publish` generates and uploads PEP 740 attestations for every project publishing over trusted publishing, so the pinned action already does this and the binding adds nothing.
 - The attestation is Sigstore-signed and the index serves it beside the distribution, so a consumer verifies against PyPI itself rather than against the forge that built the file.
+- The release verify step proves it with `pypi-attestations verify pypi --repository https://github.com/<owner>/<repo> pypi:<distribution filename>`, once per sdist and wheel; obtain the tool reproducibly at its `versions.toml` pin, `pipx install pypi-attestations==<version>`.
 - No installer checks it today: `pip install` does not verify attestations. The attestation is published evidence, not an install-time gate.
 
 ## Recovery specifics
