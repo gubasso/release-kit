@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.4](https://github.com/gubasso/release-kit/compare/v0.2.3...v0.2.4) - 2026-09-02
+
+### Added
+
+- *(cli)* Land the worktree workflow ([#27](https://github.com/gubasso/release-kit/pull/27))
+
 ## [0.2.3](https://github.com/gubasso/release-kit/compare/v0.2.2...v0.2.3) - 2026-09-02
 
 ### Added
