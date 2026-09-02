@@ -680,7 +680,7 @@ fn apply_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
             }
         }
         "branch-reminder" => {
-            use crate::setup::branch_reminder::{HOOK_BODY, HookState, hook_path, observe_hook};
+            use crate::setup::branch_reminder::{HookState, hook_body, hook_path, observe_hook};
             match observe_hook(&engine.ctx.target) {
                 HookState::Installed => Ok(Done::Satisfied(
                     "the post-merge reminder hook is installed".into(),
@@ -716,7 +716,7 @@ fn apply_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
                             .step(step.name),
                         )
                     })?;
-                    crate::atomic::write(&path, HOOK_BODY.as_bytes())?;
+                    crate::atomic::write(&path, hook_body())?;
                     #[cfg(unix)]
                     {
                         use std::os::unix::fs::PermissionsExt as _;

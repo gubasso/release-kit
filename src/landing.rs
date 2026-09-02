@@ -195,35 +195,28 @@ pub const HOOKS_END: &str = "# END release-kit";
 /// hook types are installed.
 pub const HOOK_TYPES_LINE: &str = "default_install_hook_types: [pre-commit, commit-msg, pre-push]";
 
-/// The routing block template: the whole of target-side governance. Nine
-/// lines of operational discovery — the agent guides and never drives, work
-/// branches before it starts, where the branch is checked out, the commit
-/// contract, the files are owned, a convention governs them, and where the
-/// convention lives — spliced into the target's `AGENTS.md` and never grown
-/// into a method chapter. The scope token renders from the landing's
-/// `scopes` parameter, and the workflow token renders per mode in
-/// [`routing_block`].
-const ROUTING_BLOCK: &str = "<!-- BEGIN release-kit -->
+/// The authored routing-block template, `blocks/agents-block.md.in`.
+static AGENTS_BLOCK: &str = include_str!("../blocks/agents-block.md.in");
 
-## Releases
+/// The routing block's mode line, worktree form.
+static AGENTS_LINE_WORKTREE: &str = include_str!("../blocks/agents-line-worktree.md.in");
 
-- This repository runs the release-kit convention; `rk method invariants` states what must stay true.
-- An agent here guides and never drives: it reads this convention, tells the operator which step comes next, and takes no git or forge action — creating, switching or deleting a branch, creating or removing a worktree, committing, pushing, tagging, opening or updating or merging a pull request — unless the operator's request named that action. A request to change code authorizes the file changes alone.
-- Work reaches the trunk only through a squash-merged pull request from a short-lived branch — `<type>/<slug>` mirroring the squash title's type, or the forge-minted `<issue-id>-<slug>`. Nothing is committed on `master`.
-RK_WORKFLOW_LINE
-- The request's title becomes the trunk's commit message, so it MUST be a scoped Conventional Commit; the body carries the context.
-- Every commit follows the same scoped convention; the landed commit-msg hook enforces it, and the scopes this project accepts are `RK_SCOPES_CSV`.
-- Never author a tag, and never hand-edit a generated artifact workflow.
-- Run `rk status` before changing anything under `.github/workflows/` or `.gitlab-ci.yml`, or any file `.release-kit/manifest.json` names.
-- The full method is `rk method --list`; the recovery paths are `rk method recovery`.
+/// The routing block's mode line, branches form.
+static AGENTS_LINE_BRANCHES: &str = include_str!("../blocks/agents-line-branches.md.in");
 
-<!-- END release-kit -->";
+/// The authored hook-block template, `blocks/pre-commit-block.yaml.in`.
+static PRE_COMMIT_BLOCK: &str = include_str!("../blocks/pre-commit-block.yaml.in");
 
-/// The routing block's one mode-dependent line, worktree form.
-const ROUTING_WORKTREE_LINE: &str = "- This project works in worktrees: every code-changing branch lives in its linked worktree (`rk worktree add <branch>` creates or adopts it beside the checkout), the main checkout commits nothing, and `rk worktree prune` retires a merged worktree. One branch, one writer.";
+/// The worktree mode's guard entry, `blocks/pre-commit-worktree-guard.yaml.in`.
+static PRE_COMMIT_WORKTREE_GUARD: &str =
+    include_str!("../blocks/pre-commit-worktree-guard.yaml.in");
 
-/// The routing block's one mode-dependent line, branches form.
-const ROUTING_BRANCHES_LINE: &str = "- Branches are worked in the main checkout or in linked worktrees (`rk worktree add <branch>`); parallel work takes worktrees, one branch one writer, and `rk worktree prune` retires a merged worktree.";
+/// An authored block without the one final newline the repository's
+/// hooks enforce on every file under `blocks/`; a test in
+/// `src/embedded.rs` holds each file to exactly one.
+fn authored(text: &str) -> &str {
+    text.strip_suffix('\n').unwrap_or(text)
+}
 
 /// The one branch grammar.
 ///
@@ -234,75 +227,9 @@ const ROUTING_BRANCHES_LINE: &str = "- Branches are worked in the main checkout 
 /// substitutes it for the template's `RK_BRANCH_GRAMMAR` token.
 pub const BRANCH_GRAMMAR: &str = r"^((build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)/[A-Za-z0-9._/-]+|([0-9]+|[A-Z][A-Z0-9]+-[0-9]+)-[A-Za-z0-9._-]+|release[-/].+)$";
 
-/// The hook block template: the commit contract and the local mirrors of
-/// the forge protections, as list items under the target's `repos:` key.
-/// Each hook mirrors one named rule; every mirror dies to `--no-verify`,
-/// so the forge protections stay the enforcement and these exist for the
-/// refusal at the desk. The third-party hooks are pinned in
-/// `versions.toml`; the scope token renders from the landing's `scopes`
-/// parameter, and the grammar, skip, and guard tokens render in
-/// [`hooks_block`].
-const HOOKS_BLOCK: &str = r#"# BEGIN release-kit
-# The release convention's hooks. Install every stage they run at:
-# pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push
-# A CI sweep commits nothing, so a job running pre-commit against a trunk
-# checkout sets SKIP=RK_SWEEP_SKIP in its environment.
-  - repo: https://github.com/compilerla/conventional-pre-commit
-    rev: v4.4.0
-    hooks:
-      - id: conventional-pre-commit
-        stages: [commit-msg]
-        args: [--strict, --force-scope, --scopes, 'RK_SCOPES_CSV']
-  - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v6.0.0
-    hooks:
-      - id: no-commit-to-branch
-        args: [--branch, master]
-  - repo: local
-    hooks:
-      - id: rk-branch-name
-        name: rk branch name
-        language: system
-        always_run: true
-        pass_filenames: false
-        entry: sh -c 'branch=$(git symbolic-ref --quiet --short HEAD) || exit 0; [ "$branch" = master ] && exit 0; printf %s "$branch" | grep -Eq "RK_BRANCH_GRAMMAR" && exit 0; echo "branch $branch is neither <type>/<slug> nor <issue-id>-<slug>; gh issue develop <issue> --checkout or its glab counterpart mints the linked form" >&2; exit 1'
-RK_WORKTREE_GUARD      - id: rk-no-push-to-trunk
-        name: rk no push to trunk
-        stages: [pre-push]
-        language: system
-        always_run: true
-        pass_filenames: false
-        entry: sh -c '[ "$PRE_COMMIT_REMOTE_BRANCH" != refs/heads/master ] || { echo "the trunk takes no direct push; it is written through squash-merged pull requests alone" >&2; exit 1; }'
-      - id: rk-no-hand-authored-tag
-        name: rk no hand-authored tag
-        stages: [pre-push]
-        language: system
-        always_run: true
-        pass_filenames: false
-        entry: sh -c 'case "$PRE_COMMIT_REMOTE_BRANCH" in refs/tags/v*) echo "never author a tag; the release automation mints every v* tag" >&2; exit 1;; esac'
-      - id: rk-status-check
-        name: rk status check
-        language: system
-        pass_filenames: false
-        entry: rk status --check --target .
-        files: '^(\.github/workflows/|\.gitlab-ci\.yml$|\.gitlab/ci/|AGENTS\.md$|\.release-kit/|\.pre-commit-config\.yaml$|release-plz\.toml$|dist-workspace\.toml$|release-please-config\.json$|cliff\.toml$|\.release-please-manifest\.json$|VERSION$)'
-# END release-kit"#;
-
-/// The `rk-worktree-location` entry the worktree mode's hook block
-/// carries, directly after `rk-branch-name`. Topology is tested first, so
-/// the invariant is whole: the main checkout commits nothing — not on a
-/// branch, not detached — while every linked worktree commits wherever it
-/// sits; the path convention binds at creation, not here. A worktree-mode
-/// sweep on a detached main checkout sets the skip pair the block's
-/// comment names.
-const WORKTREE_GUARD_ENTRY: &str = r#"      - id: rk-worktree-location
-        name: rk worktree location
-        language: system
-        always_run: true
-        pass_filenames: false
-        entry: sh -c '[ "$(git rev-parse --git-dir)" = "$(git rev-parse --git-common-dir)" ] || exit 0; branch=$(git symbolic-ref --quiet --short HEAD) || { echo "this project works in worktrees — the main checkout takes no commit, detached included; rk worktree add <branch> seats work in its own worktree" >&2; exit 1; }; [ "$branch" = master ] && exit 0; echo "this project works in worktrees — the main checkout takes no branch commit, as the forge trunk takes no direct push; rk worktree add $branch gives this branch its own worktree" >&2; exit 1'"#;
-
-/// The routing block for one workflow mode.
+/// The routing block for one workflow mode: the whole of target-side
+/// governance, authored as `blocks/agents-block.md.in` and never grown
+/// into a method chapter.
 ///
 /// Markers included, without a
 /// trailing newline and with its scope token unrendered: the template
@@ -311,13 +238,15 @@ const WORKTREE_GUARD_ENTRY: &str = r#"      - id: rk-worktree-location
 #[must_use]
 pub fn routing_block(workflow: Workflow) -> String {
     let line = match workflow {
-        Workflow::Worktree => ROUTING_WORKTREE_LINE,
-        Workflow::Branches => ROUTING_BRANCHES_LINE,
+        Workflow::Worktree => authored(AGENTS_LINE_WORKTREE),
+        Workflow::Branches => authored(AGENTS_LINE_BRANCHES),
     };
-    ROUTING_BLOCK.replacen("RK_WORKFLOW_LINE", line, 1)
+    authored(AGENTS_BLOCK).replacen("RK_WORKFLOW_LINE", line, 1)
 }
 
-/// The hook block for one workflow mode.
+/// The hook block for one workflow mode, authored as
+/// `blocks/pre-commit-block.yaml.in` with the worktree mode's guard entry
+/// beside it in `blocks/pre-commit-worktree-guard.yaml.in`.
 ///
 /// Markers included, without a
 /// trailing newline and with its scope token unrendered. What is landed
@@ -330,12 +259,12 @@ pub fn routing_block(workflow: Workflow) -> String {
 pub fn hooks_block(workflow: Workflow) -> String {
     let (guard, skip) = match workflow {
         Workflow::Worktree => (
-            format!("{WORKTREE_GUARD_ENTRY}\n"),
+            format!("{}\n", authored(PRE_COMMIT_WORKTREE_GUARD)),
             "no-commit-to-branch,rk-worktree-location",
         ),
         Workflow::Branches => (String::new(), "no-commit-to-branch"),
     };
-    HOOKS_BLOCK
+    authored(PRE_COMMIT_BLOCK)
         .replacen("RK_BRANCH_GRAMMAR", BRANCH_GRAMMAR, 1)
         .replacen("RK_SWEEP_SKIP", skip, 1)
         .replacen("RK_WORKTREE_GUARD", &guard, 1)
@@ -744,7 +673,7 @@ pub fn hooks_file_defect(target: &Utf8Path) -> std::io::Result<Option<String>> {
     match std::fs::read(&path) {
         Ok(bytes) => {
             let text = String::from_utf8_lossy(&bytes);
-            Ok(splice_hooks_block(Some(&text), HOOKS_BLOCK).err())
+            Ok(splice_hooks_block(Some(&text), authored(PRE_COMMIT_BLOCK)).err())
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e),

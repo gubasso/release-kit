@@ -10,12 +10,13 @@
 // comments only — no `use`, no inner doc comments, no other modules.
 
 /// Every authored root the binary carries, in one place.
-pub const PAYLOAD_ROOTS: [&str; 9] = [
+pub const PAYLOAD_ROOTS: [&str; 10] = [
     "method",
     "bindings",
     "runbooks",
     "forges",
     "snippets",
+    "blocks",
     "setup",
     "skills",
     "skill-shared",

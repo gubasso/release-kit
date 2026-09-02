@@ -10,10 +10,11 @@
 //! actually has — can this `rk` prune this resource? — so a missing
 //! binary, one too old for the verb, and one that renamed it all fail
 //! identically and print nothing, while the real invocations keep their
-//! stderr so a genuine refusal still reaches the operator. The body is a
-//! Rust const rather than a `setup/<forge>/` script: it belongs to no
-//! forge, and the forge trees hold one script per forge step by the
-//! parity rule.
+//! stderr so a genuine refusal still reaches the operator. The body is
+//! authored as `blocks/post-merge-hook.sh` and embedded verbatim: it
+//! belongs to no forge, so it lives with the other host-written texts
+//! rather than in a `setup/<forge>/` tree, per
+//! `ADR-author-every-host-written-text-as-payload`.
 
 use std::path::PathBuf;
 
@@ -23,26 +24,21 @@ use camino::Utf8Path;
 /// foreign, and a foreign hook is never written over.
 pub const MARKER: &str = "# release-kit branch reminder";
 
-/// The whole hook, byte for byte.
+/// The authored hook body, `blocks/post-merge-hook.sh`, embedded whole.
+static BODY: &str = include_str!("../../blocks/post-merge-hook.sh");
+
+/// The whole hook, byte for byte: `blocks/post-merge-hook.sh` verbatim,
+/// final newline included.
 ///
 /// No `set -eu` on purpose: the contract
 /// is exit 0 always, and the `|| :` plus the final line hold it. The
 /// probes are per verb, because during a transition a binary exists that
 /// carries one prune verb and not the other; one probe for both would
 /// silence the half that works or admit the half that does not.
-pub const HOOK_BODY: &str = "#!/bin/sh
-# release-kit branch reminder
-# Installed by rk setup step branch-reminder; rerunning that step rewrites it.
-# After a merge arrives, report the branches and worktrees the forge already
-# merged and retired. Prints nothing when there are none, never blocks a pull.
-if rk branches prune --help >/dev/null 2>&1; then
-  rk branches prune --quiet || :
-fi
-if rk worktree prune --help >/dev/null 2>&1; then
-  rk worktree prune --quiet || :
-fi
-exit 0
-";
+#[must_use]
+pub fn hook_body() -> &'static [u8] {
+    BODY.as_bytes()
+}
 
 /// What the hook file holds today.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -128,7 +124,7 @@ pub fn observe_hook(target: &Utf8Path) -> HookState {
             true
         }
     };
-    if bytes == HOOK_BODY.as_bytes() && executable {
+    if bytes == hook_body() && executable {
         HookState::Installed
     } else {
         HookState::Drifted
@@ -137,28 +133,41 @@ pub fn observe_hook(target: &Utf8Path) -> HookState {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)]
+
     /// The body opens with a shebang, carries the marker, probes each
     /// verb separately before its quiet prune, and ends by succeeding
     /// whatever happened above.
+    /// The body is `blocks/post-merge-hook.sh` byte for byte — no strip,
+    /// no render — so what the step writes is exactly what is authored.
+    #[test]
+    fn the_hook_body_is_the_authored_file_verbatim() {
+        let disk = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("blocks/post-merge-hook.sh"),
+        )
+        .expect("the authored hook body exists");
+        assert_eq!(super::hook_body(), disk.as_slice());
+    }
+
     #[test]
     fn the_hook_body_carries_the_marker_and_never_fails() {
-        assert!(super::HOOK_BODY.starts_with("#!/bin/sh\n"));
-        assert!(super::HOOK_BODY.contains(super::MARKER));
+        let body = std::str::from_utf8(super::hook_body()).expect("the hook body is UTF-8");
+        assert!(body.starts_with("#!/bin/sh\n"));
+        assert!(body.contains(super::MARKER));
         for verb in ["branches", "worktree"] {
             assert!(
-                super::HOOK_BODY
-                    .contains(&format!("if rk {verb} prune --help >/dev/null 2>&1; then")),
+                body.contains(&format!("if rk {verb} prune --help >/dev/null 2>&1; then")),
                 "the {verb} call is guarded by its own capability probe"
             );
             assert!(
-                super::HOOK_BODY.contains(&format!("rk {verb} prune --quiet || :")),
+                body.contains(&format!("rk {verb} prune --quiet || :")),
                 "the {verb} prune runs quiet and never fails the pull"
             );
         }
         assert!(
-            !super::HOOK_BODY.contains("command -v"),
+            !body.contains("command -v"),
             "a presence check answers the wrong question; the probe is per verb"
         );
-        assert!(super::HOOK_BODY.ends_with("exit 0\n"));
+        assert!(body.ends_with("exit 0\n"));
     }
 }

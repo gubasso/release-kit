@@ -18,6 +18,7 @@ This repository is the canonical knowledge product for the release-kit workflow.
 - `runbooks/`, `forges/`, and `setup/<forge>/` are host-side payload: served by `rk guide` and `rk forge`, executed by `rk setup`, and landed into no target. `SPEC-forge-setup.md` binds how the setup acts on a forge.
 - `snippets/` is scoped by `(technology, forge)` pair, and `rk init` selects the pair; a pair may honestly land fewer files than another.
 - `snippets/_shared/<forge>` holds a forge's technology-independent files, composed into every pair at landing; it is not a technology, and a destination it shares with a pair is a payload defect.
+- `blocks/` holds the whole texts the binary writes outside `snippets/` — the spliced blocks and the host-side hook body — authored as files so no human-faced artifact lives as a source literal.
 - Every landable file has a declared kind in `src/landing.rs` — `rendered`, `seeded`, or `state` — and a landing writes `.release-kit/manifest.json` into the target, last. `SPEC-landing.md` binds the record and every verb that reads it.
 - `src/` is the distribution: the `rk` binary embeds every root in `src/payload_roots.rs` and the licenses at compile time, so canon and binary cannot drift.
 - `skills/` installs at user scope only, and `rk init` lands none: an agent resolves a skill by name across scopes, so a second copy is a second entry under one name. `SPEC-distribution.md` binds what the installer may write there.
