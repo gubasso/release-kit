@@ -153,7 +153,12 @@ repos:
         stages: [pre-push]
         types: [markdown]
         exclude: 'CHANGELOG\.md$'
-        args: [--no-progress]
+        # The version is passed rather than discovered. The hook's shim reads it
+        # by running git describe inside its own checkout, and git exports an
+        # absolute GIT_DIR to a pre-push hook run from a linked worktree, which
+        # redirects that describe at this repository, where no lychee-v* tag
+        # exists. Keep it equal to the rev above.
+        args: [LYCHEE_VERSION=0.24.2, --no-progress]
 # BEGIN spec-driven-docs managed
   - repo: local
     hooks:
