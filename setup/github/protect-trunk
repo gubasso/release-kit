@@ -66,6 +66,7 @@ JSON
 gh api -X PATCH "repos/$RK_REPO" \
   -f squash_merge_commit_title=PR_TITLE -f squash_merge_commit_message=PR_BODY >/dev/null
 
-echo "check: prints $name and the squash title source"
+echo "check: prints $name and the squash message sources"
 gh api "repos/$RK_REPO/rulesets" -q ".[] | select(.name == \"$name\") | .name"
 gh api "repos/$RK_REPO" -q .squash_merge_commit_title
+gh api "repos/$RK_REPO" -q .squash_merge_commit_message

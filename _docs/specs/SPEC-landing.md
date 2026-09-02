@@ -199,7 +199,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `landing:the-landed-guards-hold-the-message-content` — The landed guards hold the message content
 
-The landed commit-msg hook MUST refuse a message referencing a git-ignored path or carrying agent attribution, exempting only the release bot's request, recognized by exactly the title shape the landed title check admits for the bot.
+The landed commit-msg hook MUST refuse a message referencing a git-ignored path or carrying agent attribution, exempting only the release bot's request, recognized by exactly the title shape the landed title check admits for the bot. Where the forge carries the request's description onto the trunk, the landed required check MUST refuse a body matching the same patterns — the bot's request exempt whole, since the check has no ignore rules to consult — and the two pattern copies MUST be held equal by test.
 
 #### Scenario: A message references an internal planning artifact
 
@@ -212,6 +212,12 @@ The landed commit-msg hook MUST refuse a message referencing a git-ignored path 
 - GIVEN release-plz's request titled `chore: release v0.3.0` whose body carries its own generated-with line and bot co-author trailer
 - WHEN the landed rk-message hook judges the message
 - THEN the attribution class is exempt by the title, the ignored-path class still runs, and a clean body passes
+
+#### Scenario: The forge gate refuses a leaking body before the merge
+
+- GIVEN a pull request on a forge whose squash message source is the request's body, its description naming a `.draft/` path or carrying attribution
+- WHEN the landed pr-title check runs its body step
+- THEN the check fails naming the finding's class, and the same body under the bot's title passes whole
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 

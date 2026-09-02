@@ -8,7 +8,7 @@ Hold all three phases for the rest of the task, and apply them to every further 
 
 The gate governs how a skill acts; it never widens what the operator asked for. A request authorizes the file writes and the `rk` verbs it names, and nothing else: creating, switching or deleting a branch, creating or removing a worktree, committing, pushing, tagging, and opening, updating or merging a pull request are the operator's moves. Plan each of those as a gated step, state its exact command, and run it only where the operator's request named that action or they answer the gate for it.
 
-An approved plan approves its shape, not a standing licence over the repository's git and forge state. A request to implement or change code authorizes the file changes alone: where the work then needs a branch or a commit, say which step comes next, name its command, and stop there.
+An approved plan approves its shape, not a standing licence over the repository's git and forge state. A request to implement or change code authorizes the file changes alone: where the work then needs a branch or a commit, say which step comes next, name its command, and stop there. An agent authorized to author a commit, request, or issue writes no agent attribution into it and references no internal planning artifact — the message names the work, never the scaffolding behind it.
 
 ## 1. Plan
 

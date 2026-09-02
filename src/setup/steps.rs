@@ -118,7 +118,7 @@ pub const STEPS: [StepSpec; 12] = [
         name: "protect-trunk",
         chapter: "§3",
         mutates: Mutates::Forge,
-        proves: "the trunk takes no direct push, merges only by squash, and requires the named check",
+        proves: "the trunk takes no direct push, merges only by squash with the request's title and body as the message, and requires the named check",
         destructive: false,
         optional: false,
         prereqs: &["default-branch"],

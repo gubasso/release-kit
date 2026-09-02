@@ -1564,6 +1564,7 @@ fn the_routing_block_bounds_the_agents_initiative() {
             "unless the operator's request named that action",
             "authorizes the file changes alone",
             "creating or removing a worktree",
+            "names no internal planning artifact and carries no agent attribution",
         ] {
             assert!(
                 block.contains(phrase),
@@ -2290,10 +2291,13 @@ api)
     deleting="$(cat "$STATE/delete_branch_on_merge" 2>/dev/null || echo false)"
     squash_title="null"
     [[ -f "$STATE/squash_merge_commit_title" ]] && squash_title="\"$(cat "$STATE/squash_merge_commit_title")\""
+    squash_message="null"
+    [[ -f "$STATE/squash_merge_commit_message" ]] && squash_message="\"$(cat "$STATE/squash_merge_commit_message")\""
     if [[ "$query" == ".id" ]]; then echo 1
     elif [[ "$query" == ".delete_branch_on_merge" ]]; then echo "$deleting"
     elif [[ "$query" == ".squash_merge_commit_title" ]]; then echo "${squash_title//\"/}"
-    else echo "{\"id\":1,\"default_branch\":\"$(cat "$STATE/default_branch")\",\"delete_branch_on_merge\":$deleting,\"squash_merge_commit_title\":$squash_title}"; fi;;
+    elif [[ "$query" == ".squash_merge_commit_message" ]]; then echo "${squash_message//\"/}"
+    else echo "{\"id\":1,\"default_branch\":\"$(cat "$STATE/default_branch")\",\"delete_branch_on_merge\":$deleting,\"squash_merge_commit_title\":$squash_title,\"squash_merge_commit_message\":$squash_message}"; fi;;
   "PATCH repos/acme/widget")
     for f in "${fields[@]}"; do
       case "$f" in
@@ -2750,6 +2754,11 @@ fn a_full_github_apply_lands_reasserts_and_checks_clean() {
         std::fs::read_to_string(fixture.state("squash_merge_commit_title")).expect("state reads"),
         "PR_TITLE\n",
         "the squash title source is the request's title"
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture.state("squash_merge_commit_message")).expect("state reads"),
+        "PR_BODY\n",
+        "the squash message source is the request's body"
     );
 
     // The key reached stdin and nothing else — not an argument list, and
@@ -8553,4 +8562,194 @@ fn a_nested_draft_reference_is_reported_once() {
             .contains("is git-ignored"),
         "the repository judgment wins"
     );
+}
+
+/// A drifted squash message source is proven drift on an otherwise clean
+/// trunk: the title source is owned, the body source is not, and the
+/// check names the setting.
+#[test]
+fn check_reports_a_drifted_squash_message_source() {
+    let fixture = ForgeFixture::new();
+    fixture.seed("default_branch", "master");
+    fixture.seed("rulesets.index", "master-protection\n");
+    fixture.seed(
+        "ruleset_master-protection",
+        r#"{
+  "name": "master-protection",
+  "target": "branch",
+  "enforcement": "active",
+  "bypass_actors": [],
+  "conditions": {
+    "ref_name": { "include": ["refs/heads/master"], "exclude": [] }
+  },
+  "rules": [
+    { "type": "deletion" },
+    { "type": "non_fast_forward" },
+    {
+      "type": "pull_request",
+      "parameters": { "required_approving_review_count": 0, "allowed_merge_methods": ["squash"] }
+    },
+    {
+      "type": "required_status_checks",
+      "parameters": { "required_status_checks": [{ "context": "test" }, { "context": "pr-title" }] }
+    }
+  ]
+}"#,
+    );
+    fixture.seed("squash_merge_commit_title", "PR_TITLE");
+    fixture.seed("squash_merge_commit_message", "BLANK");
+    let out = fixture
+        .rk(&["setup", "check"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8_lossy(&out);
+    assert!(
+        text.contains("the squash message source is \"BLANK\" where the setup owns PR_BODY"),
+        "the drifted body source is named: {text}"
+    );
+    assert!(
+        !text.contains("the squash title source is"),
+        "the owned title source is not faulted: {text}"
+    );
+}
+
+/// The forge body gate greps a duplicated copy of the guard patterns —
+/// it cannot read `blocks/message-guards` at run time — so every
+/// non-comment guard line must appear verbatim, with its class, in the
+/// embedded pr-title workflow bytes.
+#[test]
+fn the_forge_body_gate_carries_every_guard_pattern_verbatim() {
+    let workflow = release_kit::embedded::SNIPPETS
+        .get_file("_shared/github/.github/workflows/pr-title.yml")
+        .expect("the shared workflow is embedded")
+        .contents_utf8()
+        .expect("the workflow is UTF-8");
+    let patterns = release_kit::commands::message::guard_patterns();
+    assert!(!patterns.is_empty(), "the guard file declares patterns");
+    for (class, pattern) in patterns {
+        assert!(
+            workflow.contains(&format!("{class}|{pattern}")),
+            "the body gate must carry {class}|{pattern} verbatim"
+        );
+    }
+}
+
+/// The second run block of the embedded shared pr-title workflow — the
+/// body gate — dedented to a runnable script.
+fn body_gate_script() -> String {
+    let workflow = release_kit::embedded::SNIPPETS
+        .get_file("_shared/github/.github/workflows/pr-title.yml")
+        .expect("the shared workflow is embedded")
+        .contents_utf8()
+        .expect("the workflow is UTF-8");
+    let mut blocks = workflow.split("run: |");
+    let _ = blocks.next();
+    let _ = blocks.next();
+    let body = blocks
+        .next()
+        .expect("the workflow carries a second run block");
+    body.lines()
+        .skip(1)
+        .take_while(|line| line.is_empty() || line.starts_with("          "))
+        .map(|line| line.strip_prefix("          ").unwrap_or(line))
+        .fold(String::new(), |mut script, line| {
+            script.push_str(line);
+            script.push('\n');
+            script
+        })
+}
+
+/// Run the body gate as the forge would: bash, TITLE and BODY through the
+/// environment, in a scratch directory.
+fn run_body_gate(dir: &Path, title: &str, body: &str) -> (bool, String) {
+    let script = body_gate_script();
+    let out = std::process::Command::new("bash")
+        .args(["-c", &script])
+        .env("TITLE", title)
+        .env("BODY", body)
+        .current_dir(dir)
+        .output()
+        .expect("bash runs the gate");
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+    )
+}
+
+/// The forge body gate behaves: a clean body passes, attribution and an
+/// internal path are refused naming their class, and the bot's request
+/// passes whole with the very body an operator could not merge.
+#[test]
+fn the_forge_body_gate_refuses_the_guarded_content() {
+    let dir = tempfile::tempdir().expect("a scratch dir exists");
+    let (ok, _) = run_body_gate(
+        dir.path(),
+        "feat(api): add",
+        "a clean body about src/main.rs",
+    );
+    assert!(ok, "a clean body passes");
+    let (ok, out) = run_body_gate(
+        dir.path(),
+        "feat(api): add",
+        "Generated with [Claude Code](https://claude.com/claude-code)",
+    );
+    assert!(!ok, "attribution is refused");
+    assert!(out.contains("attribution"), "{out}");
+    let (ok, out) = run_body_gate(dir.path(), "feat(api): add", "see .draft/plan.md");
+    assert!(!ok, "an internal path is refused");
+    assert!(out.contains("internal-path"), "{out}");
+    // The same body proves the exemption: guarded content under a normal
+    // title fails, and only the bot's title lets it pass whole.
+    let attributed =
+        "\u{1f916} Generated with release-plz\nsee .draft/release-notes.md\nCo-authored-by: Claude";
+    let (ok, _) = run_body_gate(dir.path(), "feat(api): add", attributed);
+    assert!(!ok, "the guarded body fails under an operator's title");
+    let (ok, _) = run_body_gate(dir.path(), "chore: release v0.3.0", attributed);
+    assert!(ok, "the bot's request passes whole");
+}
+
+/// Attacker-controlled title and body reach the gate through the
+/// environment alone: shell metacharacters execute nothing.
+#[test]
+fn the_forge_body_gate_expands_no_body_content() {
+    let dir = tempfile::tempdir().expect("a scratch dir exists");
+    let (ok, _) = run_body_gate(
+        dir.path(),
+        "feat(api): $(touch title-pwned) `touch title-tick`",
+        "$(touch body-pwned) `touch body-tick` && touch chained",
+    );
+    assert!(ok, "metacharacters are content, not commands");
+    for probe in [
+        "title-pwned",
+        "title-tick",
+        "body-pwned",
+        "body-tick",
+        "chained",
+    ] {
+        assert!(
+            !dir.path().join(probe).exists(),
+            "{probe}: body content was executed"
+        );
+    }
+}
+
+/// The gate's here-doc and `blocks/message-guards` hold the same set, in
+/// both directions: no guard missing from the gate, no extra guard the
+/// file does not declare.
+#[test]
+fn the_gate_and_the_guard_file_hold_the_same_set() {
+    let script = body_gate_script();
+    let heredoc: Vec<(&str, &str)> = script
+        .lines()
+        .skip_while(|line| !line.ends_with("<<'GUARDS'"))
+        .skip(1)
+        .take_while(|line| *line != "GUARDS")
+        .map(|line| line.split_once('|').expect("a class|pattern line"))
+        .collect();
+    let declared = release_kit::commands::message::guard_patterns();
+    assert_eq!(heredoc, declared, "the two copies must hold the same set");
 }

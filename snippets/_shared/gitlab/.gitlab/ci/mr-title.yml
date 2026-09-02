@@ -1,7 +1,9 @@
 # The squash-title gate. protect-trunk sets squash_commit_template to
 # %{title}, so the merge request's title becomes the trunk's commit message,
 # and the bot derives the version and the changelog from that message; this
-# job holds the title to a scoped Conventional Commit. The project setting
+# job holds the title to a scoped Conventional Commit. The template also
+# means the request's description never reaches the trunk, so this forge
+# needs no body gate. The project setting
 # requiring the whole pipeline is what makes it blocking — this forge names
 # no check — and running it also gives every merge request the pipeline
 # that requirement waits on. It stops accident, not authority: the job runs
