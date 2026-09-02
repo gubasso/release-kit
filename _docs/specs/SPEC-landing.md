@@ -198,7 +198,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `landing:the-routing-block-bounds-the-agents-initiative` — The routing block bounds the agent's initiative
 
-The routing block MUST state that an agent acting in the target guides and never drives: that a request to change code authorizes the file changes alone, and that creating, switching or deleting a branch, committing, pushing, tagging, and opening, updating or merging a pull request happen only where the operator's request named that action. It is the one landed line no mechanism enforces — a hook and a forge protection bound the end state and cannot tell an agent from a person — so the target carries it as a sentence rather than leaving an agent to discover it by refusal.
+The routing block MUST state that an agent acting in the target guides and never drives: that a request to change code authorizes the file changes alone, and that creating, switching or deleting a branch, creating or removing a worktree, committing, pushing, tagging, and opening, updating or merging a pull request happen only where the operator's request named that action. It is the one landed line no mechanism enforces — a hook and a forge protection bound the end state and cannot tell an agent from a person — so the target carries it as a sentence rather than leaving an agent to discover it by refusal.
 
 #### Scenario: The block is read for what it authorizes
 
