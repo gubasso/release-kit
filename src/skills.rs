@@ -16,9 +16,51 @@
 pub mod installer;
 pub mod record;
 
+use std::path::PathBuf;
+
+use camino::Utf8PathBuf;
+
 pub use crate::digest::Digest;
 use crate::embedded;
 use crate::error::RkError;
+
+/// The root Claude Code reads, relative to the home directory.
+pub const CLAUDE_ROOT: &str = ".claude/skills";
+
+/// The root Codex, Gemini CLI, and Copilot read, relative to the home
+/// directory.
+pub const AGENTS_ROOT: &str = ".agents/skills";
+
+/// The root holding what the skills share, relative to the home directory.
+///
+/// Home-relative rather than `XDG_STATE_HOME`-relative for the reason the
+/// record states: the skills naming these artifacts live under `$HOME/.claude`
+/// and `$HOME/.agents`, which no XDG variable moves, and a shared file
+/// reachable under a different home than the skills reading it would be worse
+/// than no shared file at all.
+pub const SHARED_ROOT: &str = ".local/state/release-kit/skills/shared";
+
+/// The home directory, from the environment.
+///
+/// A home that is not UTF-8 refuses rather than proceeding: the record names
+/// its destinations as text, so a path it cannot write down is a path it
+/// cannot later vouch for.
+///
+/// # Errors
+///
+/// Returns [`RkError::Refused`] when no home variable is set, and when the
+/// home directory is not UTF-8.
+pub fn home() -> Result<Utf8PathBuf, RkError> {
+    let raw = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .ok_or_else(|| RkError::Refused("neither HOME nor USERPROFILE is set".into()))?;
+    Utf8PathBuf::from_path_buf(PathBuf::from(raw)).map_err(|path| {
+        RkError::Refused(format!(
+            "the home directory is not UTF-8: {}",
+            path.display()
+        ))
+    })
+}
 
 /// One embedded skill: its directory name and its `SKILL.md` text.
 #[derive(Debug)]

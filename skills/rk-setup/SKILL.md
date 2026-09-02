@@ -11,16 +11,20 @@ Land the release-kit convention in a project. The CLI carries the whole canon: e
 
 ## Before acting
 
-Read `~/.local/state/release-kit/skills/shared/plan-gate.md` before the first action of a task, and hold it for the whole task. It binds three phases: plan and present the plan for approval, validate that plan against every preview and read-only source phase 2 names, then execute it.
+Read two shared files before the first action of a task, in this order, and hold both for the whole task.
 
-The gate is why this skill is safe to run: every verb below writes files, changes a forge, or publishes a version, and the gate states which of those steps stay the operator's own.
+1. `~/.local/state/release-kit/skills/shared/pre-flight-gate.md` — run it whatever the request carries. It checks this host with `rk doctor` and stops the task on what no plan can work around. No flag skips it.
+2. `~/.local/state/release-kit/skills/shared/plan-gate.md` — it binds three phases: plan and present the plan for approval, validate that plan against every preview and read-only source phase 2 names, then execute it.
 
-When the request carries `--no-plan`, skip the approval turn only. Still state the ordered plan before acting, and still validate it as phase 2 directs.
+The two gates are why this skill is safe to run: every verb below writes files, changes a forge, or publishes a version, the pre-flight says whether this host can run it at all, and the plan gate states which of those steps stay the operator's own.
+
+When the request carries `--no-plan`, skip the plan gate's approval turn only. Still run the pre-flight, still state the ordered plan before acting, and still validate it as phase 2 directs.
 
 ## Route to the canon
 
 | Need                                       | Command                    |
 | ------------------------------------------ | -------------------------- |
+| Judge this host's readiness                | `rk doctor`                |
 | List method chapters                       | `rk method --list`         |
 | Read a chapter                             | `rk method <chapter>`      |
 | List bindings                              | `rk binding --list`        |

@@ -16,7 +16,9 @@
   - [`distribution:a-skill-has-one-owner` — A skill has one owner](#distributiona-skill-has-one-owner--a-skill-has-one-owner)
   - [`distribution:a-skill-obeys-the-portable-format` — A skill obeys the portable format](#distributiona-skill-obeys-the-portable-format--a-skill-obeys-the-portable-format)
   - [`distribution:a-skill-plans-before-it-acts` — A skill plans before it acts](#distributiona-skill-plans-before-it-acts--a-skill-plans-before-it-acts)
+  - [`distribution:a-skill-checks-its-host-before-it-plans` — A skill checks its host before it plans](#distributiona-skill-checks-its-host-before-it-plans--a-skill-checks-its-host-before-it-plans)
   - [`distribution:shared-skill-artifacts-have-one-home` — Shared skill artifacts have one home](#distributionshared-skill-artifacts-have-one-home--shared-skill-artifacts-have-one-home)
+  - [`distribution:the-doctor-answers-for-the-installed-skills` — The doctor answers for the installed skills](#distributionthe-doctor-answers-for-the-installed-skills--the-doctor-answers-for-the-installed-skills)
   - [`distribution:skill-install-previews-before-writing` — A skill install previews before writing](#distributionskill-install-previews-before-writing--a-skill-install-previews-before-writing)
   - [`distribution:a-stale-skill-is-not-a-conflict` — A stale skill is not a conflict](#distributiona-stale-skill-is-not-a-conflict--a-stale-skill-is-not-a-conflict)
   - [`distribution:a-skill-install-restores-on-failure` — A skill install restores on failure](#distributiona-skill-install-restores-on-failure--a-skill-install-restores-on-failure)
@@ -188,9 +190,27 @@ Every skill MUST route to the shared plan gate in a section preceding every othe
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 
+### `distribution:a-skill-checks-its-host-before-it-plans` — A skill checks its host before it plans
+
+The distribution MUST carry a shared pre-flight gate as its own artifact beside the plan gate, and every skill MUST route to it ahead of the plan gate, because a skill routes to verbs whose dependencies live outside the repository — a forge CLI, a signing tool, the skills and shared artifacts installed under the home — and a plan written without observing them fails at the step nobody checked. It MUST be shared rather than authored per skill, because `distribution:a-skill-plans-before-it-acts` puts the gate section ahead of every other section, so a per-skill pre-flight would be either unreachable or ahead of the gate bounding it. It MUST run whatever the request carries, and no flag MUST waive it — `--no-plan` moves the plan gate's approval turn and nothing else — because a check a request can decline is one no skill can rely on having run. It MUST name every probe judging the skill installation itself, so the catalog and the gate cannot drift into checking different things, and it MUST hand the task to the plan gate, so the two are one sequence rather than two entry points.
+
+#### Scenario: A skill probe is added to the catalog and the pre-flight is not updated
+
+- GIVEN a probe judging the skill installation that the pre-flight gate does not name
+- WHEN the test suite reads the catalog's declaration and the gate
+- THEN it fails and names the probe, because an agent following the gate would never read that probe's answer
+
+#### Scenario: A skill routes to both gates
+
+- GIVEN a skill's gate section
+- WHEN the test suite reads it
+- THEN it names both shared artifacts by the absolute path they install to, and states that no flag skips the pre-flight
+
+Verify: `cargo nextest run -E 'binary(cli)'`
+
 ### `distribution:shared-skill-artifacts-have-one-home` — Shared skill artifacts have one home
 
-The distribution MUST install what the skills share once, outside the agent skill roots and under the invoking user's home, whichever agent a run selects; and `rk skill uninstall --apply` MUST keep those artifacts while any agent root still holds a skill that names them.
+The distribution MUST install what the skills share once, outside the agent skill roots and under the invoking user's home, whichever agent a run selects; and `rk skill uninstall --apply` MUST keep those artifacts while any agent root still holds a skill that names them. A skill MUST name each of them by that absolute path, because the two agent roots make no relative path reach one file from both.
 
 The location is home-relative rather than `XDG_STATE_HOME`-relative for the reason the record already states: the skills reading these artifacts live under `$HOME/.claude` and `$HOME/.agents`, which no XDG variable moves.
 
@@ -199,6 +219,32 @@ The location is home-relative rather than `XDG_STATE_HOME`-relative for the reas
 - GIVEN a home carrying the skills under both agent roots
 - WHEN `rk skill uninstall --agent codex --apply` runs
 - THEN the shared artifacts remain, because the skills under `.claude/skills` still name them, and a later uninstall of the last root removes them
+
+Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `distribution:the-doctor-answers-for-the-installed-skills` — The doctor answers for the installed skills
+
+The probe catalog MUST report whether the shared artifacts and the skills installed under the invoking user's home are the ones the running binary carries, and whether the roots an install writes accept writes at all. One installed binary serves every repository while its skills sit in three separate directories under a home, so the two can be updated apart and the home can be shared — into a container, a sandbox, or across machines — with some of those directories carried and others not. The failures that produces are silent in exactly the wrong way: a skill resolves by name and then cannot read the gate it is told to read first, or it follows a routing table naming verbs the binary on PATH does not answer. Prose cannot catch either, because the artifact that would carry the warning is the missing one.
+
+A difference the record vouches for is a stale install and its remediation MUST be the plain apply; a difference the record cannot account for is the operator's own and its remediation MUST be the forcing one, per `distribution:a-stale-skill-is-not-a-conflict`. An absent agent root MUST NOT be a failure on its own, because `--agent` selects one family and leaves the other's root untouched. These probes MUST NOT create any destination they judge, because a preview must still be able to report a root as absent.
+
+#### Scenario: A home carries the skills and not what they share
+
+- GIVEN a home whose agent roots hold the skills while the shared root does not
+- WHEN `rk doctor` runs
+- THEN the gate probe fails, names the missing artifact, and gives the install that lands it, while the payload probe still reports the skills as installed
+
+#### Scenario: An installed skill is not the running binary's
+
+- GIVEN a home holding a skill whose bytes differ from the payload
+- WHEN `rk doctor` runs
+- THEN the payload probe fails and names the running version, asking for the forcing apply only where the record cannot vouch for the bytes it would overwrite
+
+#### Scenario: A skill root refuses writes
+
+- GIVEN a home whose agent root is mounted read-only
+- WHEN `rk doctor` runs
+- THEN the roots probe fails and names the directory, because the install that would fix the other two probes cannot run there
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 

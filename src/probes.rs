@@ -9,7 +9,11 @@
 
 use std::process::Command;
 
+use camino::{Utf8Path, Utf8PathBuf};
 use serde::Serialize;
+
+use crate::skills::record::{RECORD_PATH, Record};
+use crate::skills::{AGENTS_ROOT, CLAUDE_ROOT, Digest, SHARED_ROOT};
 
 /// How a failure weighs at the doctor level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -74,12 +78,23 @@ impl ProbeResult {
     }
 }
 
+/// The probes judging the skill installation itself, in catalog order.
+///
+/// Declared here rather than derived by running the catalog: the shared plan
+/// gate's pre-flight phase must name each of these, and the test holding it to
+/// that must not have to spawn a forge CLI or write into the operator's home
+/// to learn what they are.
+pub const SKILL_PROBES: [&str; 3] = ["skill-roots", "skill-gate", "skill-payload"];
+
 /// Run the whole catalog, in its stable order.
 #[must_use]
 pub fn run_all() -> Vec<ProbeResult> {
     vec![
         shell(),
         state_root(),
+        skill_roots(),
+        skill_gate(),
+        skill_payload(),
         git_remote(),
         forge_cli(
             "gh-auth",
@@ -207,6 +222,256 @@ fn state_root() -> ProbeResult {
             format!("make {display} writable"),
         ),
     }
+}
+
+/// The destinations `rk skill install` writes accept writes: the two agent
+/// roots and the shared root, all under the invoking user's home.
+///
+/// A root can exist and still refuse, which is what a read-only bind of an
+/// agent directory produces, so what is tested is the nearest existing
+/// ancestor — the directory an install would actually have to write
+/// through. The probe creates nothing: a preview must still be able to
+/// report a root as absent, and a probe that made it exist would take that
+/// answer away.
+fn skill_roots() -> ProbeResult {
+    let id = SKILL_PROBES[0];
+    let Ok(home) = crate::skills::home() else {
+        return ProbeResult::failed(
+            id,
+            ProbeClass::Soft,
+            "neither HOME nor USERPROFILE is set, so no skill root resolves",
+            "export HOME",
+        );
+    };
+    let mut refused = Vec::new();
+    for root in [CLAUDE_ROOT, AGENTS_ROOT, SHARED_ROOT] {
+        let root = home.join(root);
+        let Some(existing) = nearest_existing(&root) else {
+            refused.push(format!("no ancestor of {root} exists"));
+            continue;
+        };
+        if let Err(source) = accepts_a_write(&existing) {
+            refused.push(format!("{existing} is not writable: {source}"));
+        }
+    }
+    if refused.is_empty() {
+        ProbeResult::ok(
+            id,
+            ProbeClass::Soft,
+            format!("the skill roots under {home} accept writes"),
+        )
+    } else {
+        ProbeResult::failed(
+            id,
+            ProbeClass::Soft,
+            refused.join("; "),
+            format!("make the skill roots under {home} writable"),
+        )
+    }
+}
+
+/// The artifacts every skill shares are installed, and are this binary's.
+///
+/// This is the probe that answers the one failure a shared home produces.
+/// The agent roots and the shared root are separate directories, so a
+/// container, a sandbox, or a sync that carries one and not the other
+/// leaves every skill resolvable by name and unable to read the gates it is
+/// told to read first. A skill that cannot read them runs neither its
+/// pre-flight nor its plan phase, which is the whole reason they are files
+/// rather than prose.
+fn skill_gate() -> ProbeResult {
+    let id = SKILL_PROBES[1];
+    let Ok(home) = crate::skills::home() else {
+        return ProbeResult::failed(
+            id,
+            ProbeClass::Soft,
+            "neither HOME nor USERPROFILE is set, so the shared root does not resolve",
+            "export HOME",
+        );
+    };
+    let root = home.join(SHARED_ROOT);
+    let record = Record::load(&home.join(RECORD_PATH));
+    let planned: Vec<(Utf8PathBuf, &'static [u8])> = crate::skills::shared()
+        .into_iter()
+        .map(|artifact| (root.join(&artifact.path), artifact.bytes))
+        .collect();
+    let found = judge(planned, &record);
+    if let Some(first) = found.missing.first() {
+        return ProbeResult::failed(
+            id,
+            ProbeClass::Soft,
+            format!("a shared artifact every skill reads before acting is not installed: {first}"),
+            "rk skill install --apply",
+        );
+    }
+    if !found.differing.is_empty() {
+        return ProbeResult::failed(
+            id,
+            ProbeClass::Soft,
+            format!(
+                "{} shared artifact(s) under {root} are not this binary's",
+                found.differing.len()
+            ),
+            reinstall(found.all_recorded),
+        );
+    }
+    ProbeResult::ok(
+        id,
+        ProbeClass::Soft,
+        format!("{root} holds this binary's shared artifacts"),
+    )
+}
+
+/// The skills installed under this home are the ones this binary carries.
+///
+/// One binary serves every repository, so a skill under an agent root and
+/// the `rk` on PATH are two artifacts that can be updated apart: a home
+/// shared with a container, a sandbox, or another machine can hold skills
+/// some other build installed. The probe names that drift rather than
+/// leaving an agent to follow instructions the binary no longer answers.
+fn skill_payload() -> ProbeResult {
+    let id = SKILL_PROBES[2];
+    let Ok(home) = crate::skills::home() else {
+        return ProbeResult::failed(
+            id,
+            ProbeClass::Soft,
+            "neither HOME nor USERPROFILE is set, so no agent root resolves",
+            "export HOME",
+        );
+    };
+    let Ok(skills) = crate::skills::all() else {
+        return ProbeResult::failed(
+            id,
+            ProbeClass::Soft,
+            "this binary's embedded skills do not read",
+            "reinstall rk; the payload it was built from is defective",
+        );
+    };
+    let record = Record::load(&home.join(RECORD_PATH));
+    let mut planned = Vec::new();
+    for root in [CLAUDE_ROOT, AGENTS_ROOT] {
+        let root = home.join(root);
+        // An absent agent root is a choice, not a defect: `--agent` selects
+        // one family and leaves the other's root untouched.
+        if !root.is_dir() {
+            continue;
+        }
+        for skill in &skills {
+            planned.push((
+                root.join(&skill.name).join("SKILL.md"),
+                skill.text.as_bytes(),
+            ));
+        }
+    }
+    if planned.is_empty() {
+        return ProbeResult::failed(
+            id,
+            ProbeClass::Soft,
+            format!("no agent skill root exists under {home}"),
+            "rk skill install --apply",
+        );
+    }
+    let found = judge(planned, &record);
+    if let Some(first) = found.missing.first() {
+        return ProbeResult::failed(
+            id,
+            ProbeClass::Soft,
+            format!(
+                "{} of this binary's skills are not installed, the first at {first}",
+                found.missing.len()
+            ),
+            "rk skill install --apply",
+        );
+    }
+    if !found.differing.is_empty() {
+        return ProbeResult::failed(
+            id,
+            ProbeClass::Soft,
+            format!(
+                "{} installed skill(s) are not this binary's; rk is {}",
+                found.differing.len(),
+                env!("CARGO_PKG_VERSION")
+            ),
+            reinstall(found.all_recorded),
+        );
+    }
+    ProbeResult::ok(
+        id,
+        ProbeClass::Soft,
+        format!(
+            "{} installed skill destination(s) are this binary's",
+            found.matching
+        ),
+    )
+}
+
+/// What sits at each destination the payload names.
+struct Installed {
+    /// Destinations the payload names that hold no readable file.
+    missing: Vec<Utf8PathBuf>,
+    /// Destinations holding bytes that are not this binary's.
+    differing: Vec<Utf8PathBuf>,
+    /// How many destinations hold exactly this binary's bytes.
+    matching: usize,
+    /// Whether the record vouches for every differing destination, which
+    /// makes the difference a stale install rather than the operator's own
+    /// edit — and decides whether the fix needs `--force`.
+    all_recorded: bool,
+}
+
+/// Judge each destination the payload names against what sits on disk.
+fn judge(planned: Vec<(Utf8PathBuf, &'static [u8])>, record: &Record) -> Installed {
+    let mut found = Installed {
+        missing: Vec::new(),
+        differing: Vec::new(),
+        matching: 0,
+        all_recorded: true,
+    };
+    for (destination, bytes) in planned {
+        match std::fs::read(&destination) {
+            Ok(held) if held == bytes => found.matching += 1,
+            Ok(held) => {
+                if !record.wrote(&destination, &Digest::of(&held)) {
+                    found.all_recorded = false;
+                }
+                found.differing.push(destination);
+            }
+            Err(_) => found.missing.push(destination),
+        }
+    }
+    found
+}
+
+/// The install that corrects a difference. Bytes the record vouches for are
+/// an older release's and go without asking; bytes it cannot account for are
+/// the operator's own, and overwriting those is what `--force` is.
+const fn reinstall(all_recorded: bool) -> &'static str {
+    if all_recorded {
+        "rk skill install --apply"
+    } else {
+        "rk skill install --apply --force"
+    }
+}
+
+/// The nearest ancestor of `path`, itself included, that exists as a
+/// directory.
+fn nearest_existing(path: &Utf8Path) -> Option<Utf8PathBuf> {
+    let mut current = Some(path);
+    while let Some(dir) = current {
+        if dir.is_dir() {
+            return Some(dir.to_owned());
+        }
+        current = dir.parent();
+    }
+    None
+}
+
+/// A directory accepts a write, leaving nothing behind.
+fn accepts_a_write(dir: &Utf8Path) -> std::io::Result<()> {
+    let probe = dir.join(format!(".rk-probe-{}", std::process::id()));
+    let written = std::fs::write(&probe, b"probe");
+    let _ = std::fs::remove_file(&probe);
+    written
 }
 
 /// The working directory's `origin` remote parses to a host, which is

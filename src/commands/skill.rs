@@ -6,8 +6,6 @@
 //! Install and uninstall semantics live in `skills::installer`; nothing
 //! here decides them.
 
-use std::path::PathBuf;
-
 use camino::{Utf8Path, Utf8PathBuf};
 use serde::Serialize;
 
@@ -17,22 +15,7 @@ use crate::output::Output;
 use crate::skills;
 use crate::skills::installer::{self, Action, Layout};
 use crate::skills::record::RECORD_PATH;
-
-/// The root Claude Code reads, relative to the home directory.
-const CLAUDE_ROOT: &str = ".claude/skills";
-
-/// The root Codex, Gemini CLI, and Copilot read, relative to the home
-/// directory.
-const AGENTS_ROOT: &str = ".agents/skills";
-
-/// The root holding what the skills share, relative to the home directory.
-///
-/// Home-relative rather than `XDG_STATE_HOME`-relative for the reason the
-/// record states: the skills naming these artifacts live under `$HOME/.claude`
-/// and `$HOME/.agents`, which no XDG variable moves, and a shared file
-/// reachable under a different home than the skills reading it would be worse
-/// than no shared file at all.
-const SHARED_ROOT: &str = ".local/state/release-kit/skills/shared";
+use crate::skills::{AGENTS_ROOT, CLAUDE_ROOT, SHARED_ROOT, home};
 
 /// The machine form of an install or uninstall report.
 #[derive(Debug, Serialize)]
@@ -220,23 +203,6 @@ fn roots(home: &Utf8Path, agent: Agent) -> Vec<Utf8PathBuf> {
         roots.push(home.join(AGENTS_ROOT));
     }
     roots
-}
-
-/// The home directory, from the environment.
-///
-/// A home that is not UTF-8 refuses rather than proceeding: the record names
-/// its destinations as text, so a path it cannot write down is a path it
-/// cannot later vouch for.
-fn home() -> Result<Utf8PathBuf, RkError> {
-    let raw = std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .ok_or_else(|| RkError::Refused("neither HOME nor USERPROFILE is set".into()))?;
-    Utf8PathBuf::from_path_buf(PathBuf::from(raw)).map_err(|path| {
-        RkError::Refused(format!(
-            "the home directory is not UTF-8: {}",
-            path.display()
-        ))
-    })
 }
 
 #[cfg(test)]
