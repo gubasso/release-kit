@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.11](https://github.com/gubasso/release-kit/compare/v0.2.10...v0.2.11) - 2026-09-03
+
+### Fixed
+
+- *(landing)* keep the arm off the lines and complete the replayed commands ([#45](https://github.com/gubasso/release-kit/pull/45))
+
 ## [0.2.10](https://github.com/gubasso/release-kit/compare/v0.2.9...v0.2.10) - 2026-09-03
 
 ### Added
