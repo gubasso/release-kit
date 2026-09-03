@@ -1,7 +1,7 @@
 {
-  "schema_version": 2,
-  "rk_version": "0.2.6",
-  "payload_sha256": "3d6e4d92d09d7d2b52df7813a9e6e611834cfed0e1cc02abb535f902422a6a3f",
+  "schema_version": 3,
+  "rk_version": "0.2.11",
+  "payload_sha256": "00e0bc392ef706f61aa050901c3c9b9d9909c55103f98846fd9375c20d6f955b",
   "origin": "adopt",
   "tech": "rust",
   "forge": "github",
@@ -27,7 +27,8 @@
       "skills",
       "snippets"
     ],
-    "workflow": "worktree"
+    "workflow": "worktree",
+    "style": "trunk"
   },
   "files": [
     {
@@ -39,8 +40,8 @@
     {
       "destination": ".github/workflows/release-plz.yml",
       "kind": "rendered",
-      "sha256": "319cd6699bd166e6c03fe1ca4ed70034659f93b6e480fe1599102742e1fc077c",
-      "baseline_sha256": "f1c0f656480a3b653ba4cd9409b453fbf3a6650279bd9b1b1b4ae87202547dea"
+      "sha256": "c6caff0323bb4489ea637178c99ac836c3c55c40ac4b4437e1345da12be272b7",
+      "baseline_sha256": "f67151adc5f1c8a215e2320edef81151435c71a837e175e7f4aeed5cf8d77ff1"
     },
     {
       "destination": ".pre-commit-config.yaml",

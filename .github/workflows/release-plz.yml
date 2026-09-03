@@ -72,3 +72,36 @@ jobs:
           command: release-pr
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+      # Arm the request the moment it exists: the forge merges it once every
+      # required check is green, which is the trunk style's release decision,
+      # made once at landing rather than per release; the lines style leaves
+      # every request for a human and this step steps aside. Two things keep
+      # the arm correct. The app token is one: auto-merge enabled under
+      # GITHUB_TOKEN would merge a bump whose push starts no workflow,
+      # leaving it untagged and unpublished with nothing reporting a failure.
+      # Re-arming is the other: arming an armed request is a no-op, so every
+      # refresh re-arms and the arm cannot drift out of sync.
+      - name: arm the release request
+        env:
+          RELEASE_STYLE: trunk
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+          REF: ${{ github.ref_name }}
+          RELEASE_PR: ${{ steps.release-pr.outputs.pr }}
+        run: |
+          set -eu
+          if [ "$RELEASE_STYLE" != "trunk" ]; then
+            echo "the lines style merges each release by hand; not arming."
+            exit 0
+          fi
+          if [ "$REF" != "master" ]; then
+            echo "a line's request is never armed; its candidate is what a human validated."
+            exit 0
+          fi
+          number="$(printf '%s' "${RELEASE_PR:-}" | sed -n 's/.*"number":[[:space:]]*\([0-9]*\).*/\1/p' | head -n 1)"
+          if [ -z "$number" ]; then
+            echo "no release request to arm."
+            exit 0
+          fi
+          gh pr merge "$number" --auto --squash --delete-branch
+          echo "armed pull request #$number."
