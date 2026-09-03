@@ -35,13 +35,13 @@ pub struct StepSpec {
     pub prereqs: &'static [&'static str],
 }
 
-/// The twelve steps, in the chapter's order.
+/// The thirteen steps, in the chapter's order.
 ///
 /// `package-check` and `branch-reminder` belong to no forge tree — one
 /// reads its command from the technology binding, the other writes an
 /// embedded hook body into the target's own git directory — which makes
 /// them the two steps outside the parity rule.
-pub const STEPS: [StepSpec; 12] = [
+pub const STEPS: [StepSpec; 13] = [
     StepSpec {
         name: "package-check",
         chapter: "§0",
@@ -140,6 +140,15 @@ pub const STEPS: [StepSpec; 12] = [
         destructive: false,
         optional: true,
         prereqs: &[],
+    },
+    StepSpec {
+        name: "auto-merge",
+        chapter: "§3",
+        mutates: Mutates::Forge,
+        proves: "a request may merge itself once its required checks pass",
+        destructive: false,
+        optional: false,
+        prereqs: &["default-branch"],
     },
     StepSpec {
         name: "protections-check",

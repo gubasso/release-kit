@@ -1777,7 +1777,8 @@ fn init_propagates_an_unreadable_destination_and_writes_nothing() {
 
 /// The forge-mutating step names: every one exists in both trees under the
 /// same name, per `forge-setup:every-supported-forge-runs-every-step`.
-const FORGE_STEPS: [&str; 10] = [
+const FORGE_STEPS: [&str; 11] = [
+    "auto-merge",
     "bot-secrets",
     "ci-permissions",
     "default-branch",
@@ -1838,7 +1839,7 @@ fn every_listed_step_resolves_to_a_script_in_every_tree() {
             Some(rest.split_whitespace().next()?.to_owned())
         })
         .collect();
-    assert_eq!(listed.len(), 12, "twelve steps list: {text}");
+    assert_eq!(listed.len(), 13, "thirteen steps list: {text}");
     listed.retain(|name| !["package-check", "branch-reminder"].contains(&name.as_str()));
     listed.sort();
     let filed: Vec<String> = script_files("github").into_iter().map(|(n, _)| n).collect();
@@ -2469,19 +2470,22 @@ api)
   "GET repos/acme/widget")
     if [[ -f "$STATE/fail_repo" ]]; then echo "gh: Internal Server Error (HTTP 500)" >&2; exit 1; fi
     deleting="$(cat "$STATE/delete_branch_on_merge" 2>/dev/null || echo false)"
+    self_merging="$(cat "$STATE/allow_auto_merge" 2>/dev/null || echo false)"
     squash_title="null"
     [[ -f "$STATE/squash_merge_commit_title" ]] && squash_title="\"$(cat "$STATE/squash_merge_commit_title")\""
     squash_message="null"
     [[ -f "$STATE/squash_merge_commit_message" ]] && squash_message="\"$(cat "$STATE/squash_merge_commit_message")\""
     if [[ "$query" == ".id" ]]; then echo 1
     elif [[ "$query" == ".delete_branch_on_merge" ]]; then echo "$deleting"
+    elif [[ "$query" == ".allow_auto_merge" ]]; then echo "$self_merging"
     elif [[ "$query" == ".squash_merge_commit_title" ]]; then echo "${squash_title//\"/}"
     elif [[ "$query" == ".squash_merge_commit_message" ]]; then echo "${squash_message//\"/}"
-    else echo "{\"id\":1,\"default_branch\":\"$(cat "$STATE/default_branch")\",\"delete_branch_on_merge\":$deleting,\"squash_merge_commit_title\":$squash_title,\"squash_merge_commit_message\":$squash_message}"; fi;;
+    else echo "{\"id\":1,\"default_branch\":\"$(cat "$STATE/default_branch")\",\"delete_branch_on_merge\":$deleting,\"allow_auto_merge\":$self_merging,\"squash_merge_commit_title\":$squash_title,\"squash_merge_commit_message\":$squash_message}"; fi;;
   "PATCH repos/acme/widget")
     for f in "${fields[@]}"; do
       case "$f" in
         delete_branch_on_merge=*) echo "${f#delete_branch_on_merge=}" > "$STATE/delete_branch_on_merge";;
+        allow_auto_merge=*) echo "${f#allow_auto_merge=}" > "$STATE/allow_auto_merge";;
         squash_merge_commit_title=*) echo "${f#squash_merge_commit_title=}" > "$STATE/squash_merge_commit_title";;
         squash_merge_commit_message=*) echo "${f#squash_merge_commit_message=}" > "$STATE/squash_merge_commit_message";;
       esac
@@ -3368,6 +3372,7 @@ fn setup_check_reports_per_step_and_exits_1_on_violations() {
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.contains("ok package-check"), "{text}");
     assert!(text.contains("unsatisfied default-branch"), "{text}");
+    assert!(text.contains("unsatisfied auto-merge"), "{text}");
     assert!(text.contains("unsatisfied protect-tags"), "{text}");
     assert!(text.contains("skipped protect-release-lines"), "{text}");
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -8944,4 +8949,26 @@ fn the_gate_and_the_guard_file_hold_the_same_set() {
         .collect();
     let declared = release_kit::commands::message::guard_patterns();
     assert_eq!(heredoc, declared, "the two copies must hold the same set");
+}
+
+/// SATISFIES forge-setup:the-setup-permits-a-request-to-merge-itself: the
+/// forge with no project-level switch reports the pipeline requirement as
+/// the stand-in, never a bare pass.
+#[test]
+fn a_gitlab_check_reports_the_auto_merge_limitation() {
+    let fixture = ForgeFixture::new();
+    fixture.seed("pipeline_required", "true");
+    let out = fixture
+        .rk(&["setup", "check"])
+        .args(["--repo", "acme/widget", "--forge", "gitlab"])
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8_lossy(&out);
+    assert!(
+        text.contains("ok auto-merge") && text.contains("no project-level auto-merge switch"),
+        "the check must name the stand-in for the missing switch: {text}"
+    );
 }
