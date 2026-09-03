@@ -22,4 +22,4 @@ Chosen option: `just-in-time lines` — `release/<major>.<minor>` is cut from a 
 
 ## Status
 
-Accepted.
+Implemented — the release style is a recorded landing parameter, `rk setup step protect-release-lines` wires the forge, and `rk lines` drives a line's life.

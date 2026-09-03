@@ -1,8 +1,10 @@
 # Backport runbook
 
-The nine steps of [branch for release](../method/07-branch-for-release.md) as commands: the chapter owns each step's why, this page owns its how. Only when someone on an older version needs a fix without the newer work — the line is a second trunk, taking the same protection, the same release request, and the same verification, and only the cut and the cherry-pick are new. `<line>` is the line's `major.minor`, and `<repo>` is the project path, filled in by `rk guide backport` where detection resolves it. The commands are the operator's to run: an agent serves a runbook and states the command, and runs one only where the operator's request named that step.
+The nine steps of [branch for release](../method/07-branch-for-release.md) as commands: the chapter owns each step's why, this page owns its how. Only when someone on an older version needs a fix without the newer work — the line is a second trunk, taking the same protection, the same release request, and the same verification, and only the cut and the cherry-pick are new; the line's own life, candidate cycle and retirement included, is `rk guide release-lines`, and this page is the fix crossing over. `<line>` is the line's `major.minor`, and `<repo>` is the project path, filled in by `rk guide backport` where detection resolves it. The commands are the operator's to run: an agent serves a runbook and states the command, and runs one only where the operator's request named that step.
 
 ## 1. Cut the line from its tag
+
+Automated: `rk lines open <line> --base "v<version>" --apply`, which seats the line per the workflow mode; the hand forms below are what it runs.
 
 On branches:
 
@@ -95,9 +97,11 @@ glab mr list
 
 ## 8. Release the line
 
-Run `rk guide release` steps 3 to 6 against the line, with `--base release/<line>` and `origin/release/<line>` wherever they name the trunk; the same automation tags the line's patch there.
+Run `rk guide release` steps 3 to 6 against the line, with `--base release/<line>` and `origin/release/<line>` wherever they name the trunk; the same automation tags the line's patch there. A line's request is never armed, so its merge is yours: step 4 renders the unarmed form when the style resolves to `lines`.
 
 ## 9. Delete the branch when the line dies
+
+Automated: `rk lines retire <line> --apply` covers the local half below and refuses while a commit the line holds is unreachable from its tags; the remote deletion stays yours.
 
 ```bash
 git push origin --delete release/<line>

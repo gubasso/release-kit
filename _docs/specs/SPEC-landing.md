@@ -7,6 +7,7 @@
   - [`landing:a-landing-leaves-a-record` — A landing leaves a record](#landinga-landing-leaves-a-record--a-landing-leaves-a-record)
   - [`landing:a-record-states-its-schema` — A record states its schema](#landinga-record-states-its-schema--a-record-states-its-schema)
   - [`landing:a-rendered-file-is-reproducible` — A rendered file is reproducible](#landinga-rendered-file-is-reproducible--a-rendered-file-is-reproducible)
+  - [`landing:the-release-style-is-a-landing-parameter` — The release style is a landing parameter](#landingthe-release-style-is-a-landing-parameter--the-release-style-is-a-landing-parameter)
   - [`landing:a-rendered-file-carries-no-judgment` — A rendered file carries no judgment](#landinga-rendered-file-carries-no-judgment--a-rendered-file-carries-no-judgment)
   - [`landing:an-upgrade-refuses-on-owned-drift` — An upgrade refuses on owned drift](#landingan-upgrade-refuses-on-owned-drift--an-upgrade-refuses-on-owned-drift)
   - [`landing:a-seeded-file-is-never-rewritten` — A seeded file is never rewritten](#landinga-seeded-file-is-never-rewritten--a-seeded-file-is-never-rewritten)
@@ -19,6 +20,8 @@
   - [`landing:the-shared-zone-composes-into-every-pair` — The shared zone composes into every pair](#landingthe-shared-zone-composes-into-every-pair--the-shared-zone-composes-into-every-pair)
   - [`landing:a-landed-hook-serves-the-release-convention-alone` — A landed hook serves the release convention alone](#landinga-landed-hook-serves-the-release-convention-alone--a-landed-hook-serves-the-release-convention-alone)
   - [`landing:the-landed-guards-hold-the-message-content` — The landed guards hold the message content](#landingthe-landed-guards-hold-the-message-content--the-landed-guards-hold-the-message-content)
+  - [`landing:the-arming-identity-is-the-bot` — The arming identity is the bot](#landingthe-arming-identity-is-the-bot--the-arming-identity-is-the-bot)
+  - [`landing:the-changelog-quality-gate-is-the-squash-message` — The changelog quality gate is the squash message](#landingthe-changelog-quality-gate-is-the-squash-message--the-changelog-quality-gate-is-the-squash-message)
   - [`landing:the-routing-block-bounds-the-agents-initiative` — The routing block bounds the agent's initiative](#landingthe-routing-block-bounds-the-agents-initiative--the-routing-block-bounds-the-agents-initiative)
 
 <!--TOC-->
@@ -62,6 +65,18 @@ A `rendered` file's landed bytes MUST be a deterministic function of the payload
 - GIVEN a landing run with `--repo acme/widget`
 - WHEN the workflow file lands
 - THEN no `OWNER` token survives in it, the owner reads `acme`, and the record's `parameters.repo` carries `acme/widget` whole
+
+Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `landing:the-release-style-is-a-landing-parameter` — The release style is a landing parameter
+
+The release style MUST be recorded in the manifest as `trunk` or `lines`, reported by every parameter-bearing report, rendered into the landed release workflow as the one value that arms or does not arm the bot's request, resolved as the runbooks' style axis, and changed only through the landing verbs; a record predating the field carries no style, and `rk upgrade` MUST refuse until one names it, because neither value is a compatibility-safe reading of a target nobody asked.
+
+#### Scenario: A pre-style record upgrades
+
+- GIVEN a landed target whose record predates the style parameter
+- WHEN `rk upgrade --apply` runs with no `--style`
+- THEN it refuses naming the parameter and the two values, nothing is written, and a rerun naming `--style trunk` records the answer
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 
@@ -218,6 +233,36 @@ The landed commit-msg hook MUST refuse a message referencing a git-ignored path 
 - GIVEN a pull request on a forge whose squash message source is the request's body, its description naming a `.draft/` path or carrying attribution
 - WHEN the landed pr-title check runs its body step
 - THEN the check fails naming the finding's class, and the same body under the bot's title passes whole
+
+Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `landing:the-arming-identity-is-the-bot` — The arming identity is the bot
+
+Where the recorded style arms the release request, the landed workflow MUST arm it with the bot identity's token, MUST NOT arm it with the forge's default CI token, and MUST re-arm on every refresh of the request, because a merge made under the default token starts no workflow — leaving the bump merged, untagged, and unpublished with nothing reporting a failure — and because a forge that refreshes by replacing the request drops the arming with the request it replaces.
+
+#### Scenario: The arm is made with the default CI token
+
+- GIVEN a release request armed by a job authenticating as the forge's default CI token
+- WHEN every required check passes and the forge merges
+- THEN the bump lands, no workflow run starts, no tag and no publish follow, and nothing reports it — which arming under the bot identity is what prevents
+
+#### Scenario: The forge replaces the request instead of refreshing it
+
+- GIVEN a forge on which the bot closes an outdated request and opens a fresh one
+- WHEN new work lands on the trunk
+- THEN the same job arms the fresh request under the same bot identity, because the arming died with the request it was made on
+
+Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `landing:the-changelog-quality-gate-is-the-squash-message` — The changelog quality gate is the squash message
+
+Where the recorded style arms the release request, the changelog's quality MUST be held at the point the entry is generated from — the squash title the landed title check holds to the scoped convention and the body the landed content guard judges — because an armed request offers no window in which a human edit on its branch survives to the merge.
+
+#### Scenario: An entry reads badly on an armed request
+
+- GIVEN an armed trunk-style project whose generated entry misstates a change
+- WHEN the operator looks for the correction window
+- THEN there is none while the request stands armed: the correction is a disarm before the checks finish, or a changelog commit landed on the trunk that ships with the next release
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 

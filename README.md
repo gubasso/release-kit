@@ -26,7 +26,7 @@ The binary is `rk`.
 - Prove what the binary carries: `rk payload`, with `--json` for the machine form.
 - Check the host and load the whole surface: `rk doctor` and `rk usage`.
 - Install the agent skills at user scope: `rk skill install` previews; `--apply` writes `~/.claude/skills/` and `~/.agents/skills/`, plus what they share at `~/.local/state/release-kit/skills/shared/`.
-- Follow the recipe: `rk guide setup` once per repository, `rk guide release` for every release, `rk guide backport` for an older line.
+- Follow the recipe: `rk guide setup` once per repository, `rk guide release` for every release, `rk guide backport` for a fix crossing to an older line, `rk guide release-lines` for the line's own life.
 - Execute the repository-side setup: `rk setup --target .` previews; `--apply` runs; `rk setup check` proves it.
 - Read a forge's specifics: `rk forge github` or `rk forge gitlab`.
 - Audit what a setup run did: `rk runs list` and `rk runs show <id>`.

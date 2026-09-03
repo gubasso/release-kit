@@ -2,7 +2,7 @@
 
 External sources behind the registry walkthroughs in `bindings/rust.md` and the shipped runbooks: what the registry's token form carries, what its scopes and crate patterns mean, and where cargo keeps the credential the bootstrap publish uses. Each entry states what the source says and where it bears.
 
-Verified against the listed sources on 2026-09-01, the version-derivation entry included.
+Verified against the listed sources on 2026-09-01, the version-derivation entry included; the auto-merge verbs verified on 2026-09-03.
 
 ## The Cargo book, on version numbers below 1.0.0
 
@@ -40,3 +40,13 @@ Publishing requires a crates.io account with a verified email. `cargo login` pro
 - <https://doc.rust-lang.org/cargo/reference/publishing.html>
 
 Bearing: the setup runbook's verified-email prerequisite, `cargo login` on stdin in the binding's bootstrap-token walkthrough, and the host-side half of its token revocation.
+
+## The auto-merge verbs on the release request
+
+`gh pr merge --auto` enables auto-merge so the request merges once its requirements are met, and `--disable-auto` disarms a pending one; `--match-head-commit <SHA>` merges only while the head still names that commit. `glab mr merge` sets auto-merge by default while a pipeline is running, with `--auto-merge=false` merging immediately and `--sha` pinning the reviewed head. The GitLab API merges with `PUT /projects/:id/merge_requests/:merge_request_iid/merge` carrying `merge_when_pipeline_succeeds=true` — the parameter name predates the feature's auto-merge label — and cancels a pending auto-merge with `POST /projects/:id/merge_requests/:merge_request_iid/cancel_merge_when_pipeline_succeeds`, which is the disarm on a forge whose CLI carries no cancel verb.
+
+- <https://cli.github.com/manual/gh_pr_merge>
+- <https://gitlab.com/gitlab-org/cli/-/blob/main/docs/source/mr/merge.md>
+- <https://docs.gitlab.com/api/merge_requests/>
+
+Bearing: the release runbook's hold substep and its armed merge step, and the arming steps the landed workflows carry. The cancel endpoint keeping the old name is why the runbook's GitLab disarm goes through `glab api` rather than a dedicated verb.

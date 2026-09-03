@@ -1,0 +1,19 @@
+#!/usr/bin/env sh
+# Let a merge request merge itself once its pipeline passes. This forge has
+# no project-level auto-merge switch: availability follows from the
+# pipeline requirement protect-trunk asserts, so this step asserts that
+# requirement rather than a switch that does not exist, and rk setup check
+# names the weaker guarantee instead of claiming one. Idempotent: the write
+# is convergent and a rerun re-asserts the same value.
+set -eu
+: "${RK_REPO:?rk sets this; run this script through rk setup}"
+
+project="$(printf '%s' "$RK_REPO" | sed 's|/|%2F|g')"
+
+# The forge CLI may pretty-print JSON; stripping whitespace makes the
+# pattern below hold for the compact and the pretty form alike.
+compact() { tr -d ' \t\r\n'; }
+
+glab api -X PUT "projects/$project" -F only_allow_merge_if_pipeline_succeeds=true >/dev/null
+echo 'check: prints "only_allow_merge_if_pipeline_succeeds":true'
+glab api "projects/$project" | compact | grep -o '"only_allow_merge_if_pipeline_succeeds":[a-z]*'

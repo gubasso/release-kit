@@ -32,4 +32,10 @@ pub struct GuideArgs {
     /// states; without a record, every variant prints with its label.
     #[arg(long)]
     pub workflow: Option<String>,
+
+    /// Select the release style's lines where the runbook branches: trunk
+    /// or lines. Defaults to the style the landing record states; without
+    /// one, every variant prints with its label.
+    #[arg(long)]
+    pub style: Option<String>,
 }

@@ -44,6 +44,13 @@ pub struct AdoptArgs {
     #[arg(long, default_value = "branches")]
     pub workflow: String,
 
+    /// The release style the candidate is rendered under: trunk or lines.
+    /// Required: the style changes the release workflow's bytes, and an
+    /// adoption verifies bytes against exactly one rendered candidate, so
+    /// neither value is a safe guess.
+    #[arg(long)]
+    pub style: Option<String>,
+
     /// Write the record; without it the verification runs and nothing is
     /// touched.
     #[arg(long)]

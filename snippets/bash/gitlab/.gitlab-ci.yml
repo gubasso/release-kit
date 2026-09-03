@@ -48,6 +48,8 @@ release-request:
   rules:
     - if: '$CI_COMMIT_BRANCH == "master" || $CI_COMMIT_BRANCH =~ /^release\//'
   resource_group: release-request
+  variables:
+    RELEASE_STYLE: RK_STYLE
   script:
     - |
       set -eu
@@ -79,6 +81,26 @@ release-request:
           --data-urlencode "target_branch=$CI_COMMIT_BRANCH" \
           --data-urlencode "title=chore(release): v$next" \
           --data-urlencode "description=Bumps VERSION to $next and rewrites the changelog. Merging this request is the release: the bump push tags v$next and attaches the tarball." >/dev/null
+      fi
+      # The trunk style's standing arm, re-applied on every refresh under the
+      # bot token — a merge under the job token would land a bump that
+      # releases nothing — and filtered by the exact request branch this job
+      # owns. An arm the forge cannot take yet — the request's first pipeline
+      # not started — waits for the next push rather than failing the job;
+      # the lines style merges by hand and arms nothing.
+      if [ "$RELEASE_STYLE" != "trunk" ]; then
+        echo "the lines style merges each release by hand; not arming."
+        exit 0
+      fi
+      iid="$(api "$project/merge_requests?state=opened&source_branch=chore%2Frelease-v$next&target_branch=$CI_COMMIT_BRANCH" | grep -o '"iid":[0-9]*' | head -n 1 | cut -d : -f 2)"
+      if [ -z "$iid" ]; then
+        echo "no release request to arm."
+        exit 0
+      fi
+      if api -X PUT "$project/merge_requests/$iid/merge?auto_merge=true&merge_when_pipeline_succeeds=true&squash=true&should_remove_source_branch=true" >/dev/null 2>&1; then
+        echo "armed merge request !$iid."
+      else
+        echo "could not arm !$iid yet — its pipeline has not started; the next trunk push re-arms."
       fi
 
 # The release build. Only the push that lands the bot's own bump releases —

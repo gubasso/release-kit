@@ -35,6 +35,8 @@ When the request carries `--no-plan`, skip the plan gate's approval turn only. S
 | A target with no landing record                        | Preview first: `rk adopt --target . --scopes <list> --workflow <mode>` lists what differs from the selected candidate; align, then `--apply` (below) |
 | A landed payload older than the binary                 | `rk upgrade --target . --apply`                                                                                                                      |
 | A record without the scopes parameter                  | `rk upgrade --target . --scopes <list> --apply`, the list confirmed with the operator first                                                          |
+| A record without the style parameter                   | `rk upgrade --target . --style <style> --apply`, the style asked of the operator first (below)                                                       |
+| A forge that forbids a request merging itself          | `rk setup step auto-merge --apply`                                                                                                                   |
 | A missing hook block in `.pre-commit-config.yaml`      | The upgrade lands it; reconcile the config first, as below                                                                                           |
 | A missing or drifted forge protection                  | `rk setup step <name> --apply`                                                                                                                       |
 | A squash title source that is not the request's title  | `rk setup step protect-trunk --apply` re-asserts it                                                                                                  |
@@ -49,7 +51,7 @@ Before an upgrade lands the hook block into an existing `.pre-commit-config.yaml
 
 An adoption is a verification pass against one rendered candidate, and `--workflow` selects which candidate — `branches` by default, the compatibility-safe reading of a pre-record target; it never blesses the disk. Run the preview first: it lists every destination that differs from the selected candidate, and the pre-adoption alignment is to bring the two marked blocks to the candidate's bytes — `rk payload` and `rk snippet` print them — then re-run and apply. A refusal naming the blocks is that alignment still owed, not an error to force past.
 
-The skill reads the recorded mode from `rk status` and routes by it. A mode change is a named migration, never a side effect of a code-change request: `rk upgrade --workflow <mode>` previewed, applied on the operator's approval, committed through a pull request — then the transition for branches open across the change, each step stated and gated: main checkout to `master` and pulled, each open bare branch adopted with `rk worktree add <branch> --apply`. Under worktree mode, an off-path worktree or a bare-worked branch is a named step the same way — `rk worktree add` seats a bare branch, and `git worktree move`, named by the add refusal, brings an off-path seat home. The skill may also state the container layout from the worktree chapter as an option and render the promotion commands from the worktree runbook, and runs none of them: moving directories on the operator's disk is never a code change.
+The skill reads the recorded mode and style from `rk status` and routes by both. A mode or style change is a named migration, never a side effect of a code-change request: `rk upgrade --workflow <mode>` or `rk upgrade --style <style>` previewed, applied on the operator's approval, committed through a pull request — then the transition for branches open across the change, each step stated and gated: main checkout to `master` and pulled, each open bare branch adopted with `rk worktree add <branch> --apply`. Under worktree mode, an off-path worktree or a bare-worked branch is a named step the same way — `rk worktree add` seats a bare branch, and `git worktree move`, named by the add refusal, brings an off-path seat home. The skill may also state the container layout from the worktree chapter as an option and render the promotion commands from the worktree runbook, and runs none of them: moving directories on the operator's disk is never a code change.
 
 ## What waits for the operator
 
@@ -59,6 +61,7 @@ Gate each of these: print the exact command, say what it changes and why, wait, 
 - `install-bot` and `bot-secrets` — the bot identity and its credentials; `rk forge <name>` carries the walkthrough.
 - Registry actions: the first hand publish, registering the trusted publisher, turning on enforcement. `rk guide setup` names each with its reason.
 - Removing an existing protection from a live branch, on any forge.
+- The release style, on a record that predates it. Ask it with `AskUserQuestion` the way rk-setup's step 6 states, because arming an existing project's release request changes what a green trunk does; then `rk upgrade --style <style>`, previewed, and the visible diff is the arming line in the release workflow.
 
 ## From the retired two-branch flow
 

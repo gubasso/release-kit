@@ -1,6 +1,6 @@
 # 00 — Model
 
-A release is a promotion, not a push. Work integrates continuously on one trunk; releasing is a separate decision a human approves by merging one pull request, and automation executes everything after that merge.
+A release is a promotion, not a push. Work integrates continuously on one trunk; releasing is a decision a human makes about one pull request — per release by merging it, or once and standing, by instructing the forge to merge it the moment every required check is green — and automation executes everything after that merge.
 
 ## The spine
 
@@ -8,7 +8,7 @@ Five stages. No technology changes them.
 
 1. Capture intent. Every change lands with a machine-readable statement of its release impact: Conventional Commits, or per-pull-request changeset files.
 2. A bot maintains a release request. It keeps one pull request open against the trunk, carrying the version bump and the rewritten changelog, and refreshes it as work lands, so the proposed release always describes the trunk's tip. While the request is open, nothing is public.
-3. Merging the release request is the release decision. The trunk takes no direct push and requires its passing check, so the quality bar and the release decision sit on the same merge button, and closing the request abandons a release at no cost.
+3. Merging the release request is the release decision. The trunk takes no direct push and requires its passing check, so the quality bar and the release decision sit on the same merge button. A project makes that decision per release or once: under the trunk style's standing arm the forge holds the merge until every required check passes and merges then, so the check bar never moves — what moves is when the human answered, not whether.
 4. Tag and publish. Automation tags the push that lands the bump and publishes to the registry. The tag mirrors the committed version; no hand ever authors it.
 5. Build, attest, and attach artifacts. What the artifacts are is the binding's answer: a dedicated builder in its own workflow, the registry distributions themselves, or a tarball the release page carries. Whatever they are, the run that builds them also signs a statement of where they came from, so a consumer can check the origin without trusting the page the download came from.
 
@@ -29,7 +29,7 @@ A tracker outside the forge, Jira being the common case, matches its issue keys 
 
 ## The one pull request
 
-The bot's release request is the gate. Nothing is public until its one reviewed merge: the changelog entry can still be corrected on the request's branch while it is open, merging it is what the tag, the publish, and the artifact build key on, and a release abandoned before the merge is a closed pull request with nothing to clean up.
+The bot's release request is the gate. Nothing is public until its one checked merge: merging it is what the tag, the publish, and the artifact build key on. What the request costs to stop depends on the style. An unarmed request is abandoned by closing it, with nothing to clean up, and its changelog entry can still be corrected on its branch while it is open. An armed request — the trunk style's default — is stopped by disarming it first, one command before the last check goes green, and a release that has already merged is not stopped at all: it is withdrawn, which [recovery](./04-recovery.md) owns and which costs a yank and a fix-forward. That is the trunk style's real price, and it buys a release that ships without waiting on anyone.
 
 ## The two styles
 
@@ -44,6 +44,8 @@ Branching for a release exists for older lines. A `release/<major>.<minor>` bran
 | Do customers self-host or pin versions?        | Branch for release |
 | Do you owe someone a patch-only release?       | Branch for release |
 | Does a sign-off gate stand before a ship?      | Branch for release |
+
+Which style a project runs is a recorded landing parameter: `rk status` reports it, the runbooks resolve their `On trunk:` and `On lines:` variants from it, and `rk upgrade --style <style>` changes it — the same axis the workflow mode already rides. [Release lines](./09-release-lines.md) owns the second style's whole life.
 
 Default to the trunk. Cut the first release branch the day someone actually needs a backport — retroactively, from the tag — never ahead of the need.
 

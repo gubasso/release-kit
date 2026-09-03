@@ -2,7 +2,7 @@
 
 External sources behind `SPEC-forge-setup.md`: what each forge's API actually offers, which setup actions are scriptable at all, and how an embedded script is executed safely. Each entry states what the source says and which rule or file it bears on.
 
-Verified against the listed sources on 2026-08-28, re-checked on 2026-08-29, the GitHub App entries re-checked on 2026-08-31 and again on 2026-09-01 when the token-class findings below were also confirmed against a live account, and the merged-branch deletion and default-workflow-permissions entries verified on 2026-09-01. A source marked corroborating was reported by a parallel review and not independently fetched. Forge APIs move; re-check an entry before trusting it to design something new.
+Verified against the listed sources on 2026-08-28, re-checked on 2026-08-29, the GitHub App entries re-checked on 2026-08-31 and again on 2026-09-01 when the token-class findings below were also confirmed against a live account, and the merged-branch deletion and default-workflow-permissions entries verified on 2026-09-01, the auto-merge entries on 2026-09-03. A source marked corroborating was reported by a parallel review and not independently fetched. Forge APIs move; re-check an entry before trusting it to design something new.
 
 ## GitHub rulesets
 
@@ -24,6 +24,16 @@ Events triggered by the default `GITHUB_TOKEN` do not start new workflow runs.
 - <https://docs.github.com/en/actions/concepts/security/github_token>
 
 Bearing: this is the whole reason a bot identity exists. A tag pushed under the default token would never retrigger the artifact workflow, which is what `method/01-invariants.md` states as an invariant rather than a preference.
+
+## Auto-merge on a pull request
+
+GitHub gates the feature on the repository setting `allow_auto_merge`, readable and writable on `GET`/`PATCH /repos/{owner}/{repo}`; auto-merge is offered only on a request that cannot merge immediately — a branch protection with at least one unmet requirement — and is disabled when someone without write permission pushes to the head branch or the base branch changes. GitLab carries no project-level switch: auto-merge is generally available since 17.7, and its availability follows from pipelines running and the merge checks the project requires, of which `only_allow_merge_if_pipeline_succeeds` is the one the setup asserts.
+
+- <https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/incorporating-changes-from-a-pull-request/automatically-merging-a-pull-request>
+- <https://docs.github.com/en/rest/repos/repos>
+- <https://docs.gitlab.com/user/project/merge_requests/auto_merge/>
+
+Bearing: `forge-setup:the-setup-permits-a-request-to-merge-itself` and the `auto-merge` step. The missing GitLab switch is why that forge's observation reports a limitation rather than a pass, and the unmet-requirement precondition is why the step needs no ordering against `protect-trunk`: a repository whose checks are all green simply merges immediately.
 
 ## Default workflow permissions for GITHUB_TOKEN
 

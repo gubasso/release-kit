@@ -10,6 +10,7 @@
   - [`forge-setup:key-material-never-reaches-the-environment` — Key material never reaches the environment](#forge-setupkey-material-never-reaches-the-environment--key-material-never-reaches-the-environment)
   - [`forge-setup:every-supported-forge-runs-every-step` — Every supported forge runs every step](#forge-setupevery-supported-forge-runs-every-step--every-supported-forge-runs-every-step)
   - [`forge-setup:a-check-reports-what-the-forge-enforces` — A check reports what the forge enforces](#forge-setupa-check-reports-what-the-forge-enforces--a-check-reports-what-the-forge-enforces)
+  - [`forge-setup:the-setup-permits-a-request-to-merge-itself` — The setup permits a request to merge itself](#forge-setupthe-setup-permits-a-request-to-merge-itself--the-setup-permits-a-request-to-merge-itself)
   - [`forge-setup:the-setup-asserts-the-squash-title-source` — The setup asserts the squash title source](#forge-setupthe-setup-asserts-the-squash-title-source--the-setup-asserts-the-squash-title-source)
   - [`forge-setup:the-setup-asserts-the-squash-body-source` — The setup asserts the squash body source](#forge-setupthe-setup-asserts-the-squash-body-source--the-setup-asserts-the-squash-body-source)
 
@@ -104,6 +105,18 @@ Where a forge cannot enforce what a step's proof claims, `rk setup check` MUST r
 - GIVEN a protected `v*` pattern on a forge whose Owners can still delete a protected tag
 - WHEN `rk setup check` runs
 - THEN the step reports satisfied with the limitation named, so nobody believes an immutability the forge does not provide
+
+Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `forge-setup:the-setup-permits-a-request-to-merge-itself` — The setup permits a request to merge itself
+
+The `auto-merge` step MUST assert that the forge permits a pull request to merge itself once every required check passes, and where a forge carries no such switch the observation MUST name what stands in for it rather than reporting a bare pass, because the trunk style's release decision is a standing instruction the forge executes and a repository that forbids it fails silently — the request simply never offers the option.
+
+#### Scenario: One forge carries the switch and the other does not
+
+- GIVEN a GitHub repository whose `allow_auto_merge` is false and a GitLab project gated only by its pipeline requirement
+- WHEN `rk setup step auto-merge --apply` runs on each and `rk setup check` reads each back
+- THEN the GitHub setting reads back true, and the GitLab step reports satisfied with the limitation naming that the forge offers no project-level switch and availability follows the pipeline requirement `protect-trunk` asserts
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 

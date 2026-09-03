@@ -363,6 +363,17 @@ fn github(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
             Api::Missing => StepState::not(format!("the forge does not know {repo}")),
             Api::Failed(err) => StepState::unknown(err),
         }),
+        "auto-merge" => Ok(match api_get(ctx, run, &format!("repos/{repo}"))? {
+            Api::Ok(body) => {
+                if body["allow_auto_merge"].as_bool().unwrap_or(false) {
+                    StepState::ok("a request may merge itself once its checks pass")
+                } else {
+                    StepState::not("a request cannot merge itself; the auto-merge switch is off")
+                }
+            }
+            Api::Missing => StepState::not(format!("the forge does not know {repo}")),
+            Api::Failed(err) => StepState::unknown(err),
+        }),
         "ci-permissions" => Ok(
             match api_get(
                 ctx,
@@ -772,6 +783,11 @@ fn github_ruleset_body(ctx: &Ctx, run: &mut Runner, name: &str) -> Result<Rulese
     }
 }
 
+/// The GitLab limitation the `auto-merge` step reports: the forge has no
+/// project-level switch, so the observation reads the pipeline requirement
+/// the trunk protection asserts.
+const GITLAB_AUTO_MERGE_LIMITATION: &str = "the forge offers no project-level auto-merge switch: availability follows the pipeline requirement protect-trunk asserts, and turning that requirement off removes auto-merge with nothing here reporting it";
+
 /// The GitLab limitation `protect-tags` and `protections-check` report.
 const GITLAB_TAG_LIMITATION: &str =
     "an Owner or Maintainer can still delete a protected tag through the UI or API";
@@ -826,6 +842,25 @@ fn gitlab(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
                     StepState::ok("a merged branch is deleted by the forge")
                 } else {
                     StepState::not("a merged branch outlives its merge")
+                }
+            }
+            Api::Missing => StepState::not(format!("the forge does not know {}", ctx.repo)),
+            Api::Failed(err) => StepState::unknown(err),
+        }),
+        "auto-merge" => Ok(match api_get(ctx, run, &format!("projects/{project}"))? {
+            Api::Ok(body) => {
+                if body["only_allow_merge_if_pipeline_succeeds"]
+                    .as_bool()
+                    .unwrap_or(false)
+                {
+                    StepState::ok_with_limitation(
+                        "a request may merge itself once its pipeline passes",
+                        GITLAB_AUTO_MERGE_LIMITATION,
+                    )
+                } else {
+                    StepState::not(
+                        "the pipeline requirement auto-merge rides on is off; protect-trunk asserts it",
+                    )
                 }
             }
             Api::Missing => StepState::not(format!("the forge does not know {}", ctx.repo)),

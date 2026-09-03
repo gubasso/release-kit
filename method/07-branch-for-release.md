@@ -13,7 +13,7 @@ The command form of this chapter is the backport runbook, `rk guide backport`; t
 5. Cherry-pick only that commit onto the line; a cherry-pick is not a merge, and nothing else travels.
 6. Wait for the line's own CI: the pipeline runs twice per fix, once guarding the trunk and once guarding the line, which is this style's real cost.
 7. Read the line's own release request, which the bot opens because the publish workflow watches the release lines too.
-8. Release the line the way the trunk releases: correct, merge, wait, verify, each against the line.
+8. Release the line the way the trunk releases: correct, merge, wait, verify, each against the line — and merge it yourself, because a line's request is never armed: the candidate is what a human validated, so the promotion is a human's.
 9. Delete the branch when the line dies; the tags outlive it and keep its commits recoverable.
 
 ## Cutting the branch
@@ -38,7 +38,7 @@ The branch point is chosen, and chosen need not mean latest. With Carol's unflag
 
 ## Harden, then release
 
-Validation runs against the branch. Automation tags `v1.1.0-rc.1` there, which builds the installers and publishes nothing to any registry; a human installs them and uses them. Suppose validation finds a pagination bug.
+Validation runs against the branch, through the rc cycle [release lines](./09-release-lines.md) owns: automation tags `v1.1.0-rc.1` there, which builds the installers and publishes nothing to any registry, and a human installs them and uses them. Suppose validation finds a pagination bug.
 
 The wrong instinct is to fix it on `release/1.1`. Instead, the fix lands on the trunk first — test, fix, pull request, squash-merge as commit M — and then that one commit crosses:
 

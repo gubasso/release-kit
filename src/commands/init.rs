@@ -17,7 +17,7 @@ use serde::Serialize;
 use crate::cli::init::InitArgs;
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
-use crate::landing::manifest::{self, FileRecord, Manifest, Parameters, Workflow};
+use crate::landing::manifest::{self, FileRecord, Manifest, Parameters, Style, Workflow};
 use crate::landing::{self, Entry, Kind};
 use crate::output::Output;
 use crate::{digest::Digest, embedded, registry};
@@ -62,6 +62,7 @@ struct Report {
     repo: Option<String>,
     /// The working-copy mode the landing records and renders under.
     workflow: &'static str,
+    style: &'static str,
     /// Every destination, with its kind and action.
     files: Vec<FileEntry>,
     /// The sentinels an apply left to fill; absent in a preview.
@@ -98,6 +99,7 @@ pub fn run(args: &InitArgs) -> Result<(), RkError> {
     let resolved = landing::resolve(&args.target, args.forge.as_deref(), args.repo.as_deref())?;
     let forge = resolved.forge;
     let workflow = Workflow::parse(&args.workflow)?;
+    let style = Style::parse(&args.style)?;
     if args.apply {
         let repo = resolved.repo.ok_or_else(landing::repo_unresolved)?;
         let scopes = landing::parse_scopes(args.scopes.as_deref().ok_or_else(|| {
@@ -105,8 +107,9 @@ pub fn run(args: &InitArgs) -> Result<(), RkError> {
                 "an apply renders the scope-bearing files; pass --scopes <list>, the Conventional Commit scopes this project accepts".into(),
             )
         })?)?;
-        let entries = landing::projection(&args.tech, &forge, &repo, &scopes, workflow)?;
-        apply(out, args, &forge, &repo, &scopes, workflow, &entries)
+        let entries =
+            landing::projection(&args.tech, &forge, &repo, &scopes, workflow, Some(style))?;
+        apply(out, args, &forge, &repo, &scopes, workflow, style, &entries)
     } else {
         // A preview lists destinations and compares nothing, so an
         // unresolved repository only means the owner substitution is
@@ -130,26 +133,30 @@ pub fn run(args: &InitArgs) -> Result<(), RkError> {
             repo.as_deref().unwrap_or("OWNER"),
             &scopes,
             workflow,
+            Some(style),
         )?;
-        preview(out, args, &forge, repo, workflow, &entries)
+        preview(out, args, &forge, repo, workflow, style, &entries)
     }
 }
 
 /// List every destination and write nothing.
+#[allow(clippy::too_many_arguments)]
 fn preview(
     out: Output,
     args: &InitArgs,
     forge: &str,
     repo: Option<String>,
     workflow: Workflow,
+    style: Style,
     entries: &[Entry],
 ) -> Result<(), RkError> {
     let repo_argument = repo.as_deref().unwrap_or("<owner/name>");
     let scopes_argument = args.scopes.as_deref().unwrap_or("<scope,scope>");
     let next = vec![format!(
-        "rk init --tech {} --forge {forge} --repo {repo_argument} --scopes {scopes_argument} --workflow {} --target {} --apply",
+        "rk init --tech {} --forge {forge} --repo {repo_argument} --scopes {scopes_argument} --workflow {} --style {} --target {} --apply",
         args.tech,
         workflow.as_str(),
+        style.as_str(),
         args.target
     )];
     out.result_line(format!(
@@ -161,13 +168,14 @@ fn preview(
     }
     out.next(&next);
     out.emit(&Report {
-        schema: "rk.init/2",
+        schema: "rk.init/3",
         mode: "preview",
         tech: args.tech.clone(),
         forge: forge.to_owned(),
         target: args.target.to_string(),
         repo,
         workflow: workflow.as_str(),
+        style: style.as_str(),
         files: entries
             .iter()
             .map(|entry| FileEntry {
@@ -184,6 +192,7 @@ fn preview(
 /// Land the files — all-or-nothing against `rendered` conflicts — write
 /// the record last, and report the judgment sentinels the operator still
 /// owes.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn apply(
     out: Output,
     args: &InitArgs,
@@ -191,6 +200,7 @@ fn apply(
     repo: &str,
     scopes: &[String],
     workflow: Workflow,
+    style: Style,
     entries: &[Entry],
 ) -> Result<(), RkError> {
     refuse_a_recorded_target(args)?;
@@ -255,6 +265,7 @@ fn apply(
                 repo: repo.to_owned(),
                 scopes: scopes.to_vec(),
                 workflow,
+                style: Some(style),
             },
             files: records,
             pins: registry::pins_for(&args.tech)
@@ -287,13 +298,14 @@ fn apply(
     ];
     out.next(&next);
     out.emit(&Report {
-        schema: "rk.init/2",
+        schema: "rk.init/3",
         mode: "apply",
         tech: args.tech.clone(),
         forge: forge.to_owned(),
         target: args.target.to_string(),
         repo: Some(repo.to_owned()),
         workflow: workflow.as_str(),
+        style: style.as_str(),
         files: file_entries,
         sentinels: Some(sentinels),
         next,
@@ -402,19 +414,20 @@ mod tests {
 
     use super::{FileEntry, Report, SentinelEntry};
 
-    /// The complete `rk.init/2` shape, held by snapshot in both modes: a
+    /// The complete `rk.init/3` shape, held by snapshot in both modes: a
     /// field rename or removal fails here and becomes a schema-version
     /// bump instead of a silent parser break at some agent.
     #[test]
     fn the_init_report_schema_snapshot_holds() {
         let apply = Report {
-            schema: "rk.init/2",
+            schema: "rk.init/3",
             mode: "apply",
             tech: "rust".into(),
             forge: "github".into(),
             target: "/tmp/t".into(),
             repo: Some("acme/widget".into()),
             workflow: "worktree",
+            style: "trunk",
             files: vec![FileEntry {
                 path: "release-plz.toml".into(),
                 kind: "seeded",
@@ -429,7 +442,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&apply).expect("a report serializes"),
-            r##"{"schema":"rk.init/2","mode":"apply","tech":"rust","forge":"github","target":"/tmp/t","repo":"acme/widget","workflow":"worktree","files":[{"path":"release-plz.toml","kind":"seeded","action":"write"}],"sentinels":[{"path":"/tmp/t/release-plz.toml","line":3,"text":"# TODO(release-kit): keep false for a binary-only crate"}],"next":["commit the landed files, the record included"]}"##
+            r##"{"schema":"rk.init/3","mode":"apply","tech":"rust","forge":"github","target":"/tmp/t","repo":"acme/widget","workflow":"worktree","style":"trunk","files":[{"path":"release-plz.toml","kind":"seeded","action":"write"}],"sentinels":[{"path":"/tmp/t/release-plz.toml","line":3,"text":"# TODO(release-kit): keep false for a binary-only crate"}],"next":["commit the landed files, the record included"]}"##
         );
         let preview = Report {
             sentinels: None,
@@ -439,7 +452,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&preview).expect("a report serializes"),
-            r#"{"schema":"rk.init/2","mode":"preview","tech":"rust","forge":"github","target":"/tmp/t","workflow":"worktree","files":[{"path":"release-plz.toml","kind":"seeded","action":"write"}],"next":["commit the landed files, the record included"]}"#,
+            r#"{"schema":"rk.init/3","mode":"preview","tech":"rust","forge":"github","target":"/tmp/t","workflow":"worktree","style":"trunk","files":[{"path":"release-plz.toml","kind":"seeded","action":"write"}],"next":["commit the landed files, the record included"]}"#,
             "a preview omits the sentinels and unresolved repo rather than serializing null"
         );
     }

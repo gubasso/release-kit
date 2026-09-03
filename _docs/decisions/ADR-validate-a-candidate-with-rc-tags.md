@@ -22,4 +22,4 @@ Chosen option: `rc tags` — automation tags `v<version>-rc.<n>` on the release 
 
 ## Status
 
-Accepted.
+Implemented — `method/09-release-lines.md` states the cycle, `runbooks/release-lines.md` carries its commands, and `rk lines rc` reports a line's candidates.

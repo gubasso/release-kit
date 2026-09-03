@@ -15,7 +15,7 @@ use crate::cli::upgrade::UpgradeArgs;
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::digest::Digest;
 use crate::error::RkError;
-use crate::landing::manifest::{self, Alignment, FileRecord, Manifest, Workflow};
+use crate::landing::manifest::{self, Alignment, FileRecord, Manifest, Style, Workflow};
 use crate::landing::{self, Entry, Kind};
 use crate::output::Output;
 use crate::{embedded, registry};
@@ -52,6 +52,7 @@ struct Report {
     /// The working-copy mode the rewritten record carries — the recorded
     /// mode, or the `--workflow` override this run applies.
     workflow: &'static str,
+    style: &'static str,
     /// Every destination, with its action.
     files: Vec<FileEntry>,
     /// What plausibly follows.
@@ -84,12 +85,25 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
     if let Some(raw) = args.workflow.as_deref() {
         recorded.parameters.workflow = Workflow::parse(raw)?;
     }
+    if let Some(raw) = args.style.as_deref() {
+        recorded.parameters.style = Some(Style::parse(raw)?);
+    }
+    // A pre-style record refuses rather than guessing: neither value is a
+    // compatibility-safe reading of a target nobody asked, because the
+    // style decides whether the landed release workflow arms the bot's
+    // request.
+    let Some(style) = recorded.parameters.style else {
+        return Err(RkError::Usage(
+            "the record carries no style parameter; pass --style <trunk|lines> — trunk arms the bot's release request to merge itself, lines keeps every merge a human's — and the upgrade records it".into(),
+        ));
+    };
     let entries = landing::projection(
         &recorded.tech,
         &recorded.forge,
         &recorded.parameters.repo,
         &recorded.parameters.scopes,
         recorded.parameters.workflow,
+        Some(style),
     )?;
     refuse_non_regular(&args.target, &entries)?;
 
@@ -148,7 +162,7 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
     let next = next_lines(args, conflicts.is_empty());
     out.next(&next);
     out.emit(&Report {
-        schema: "rk.upgrade/2",
+        schema: "rk.upgrade/3",
         mode: if args.apply { "apply" } else { "preview" },
         target: args.target.to_string(),
         tech: recorded.tech.clone(),
@@ -156,6 +170,7 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
         from_version: recorded.rk_version.clone(),
         to_version: env!("CARGO_PKG_VERSION"),
         workflow: recorded.parameters.workflow.as_str(),
+        style: style.as_str(),
         files: decisions
             .iter()
             .map(|decision| FileEntry {
@@ -238,6 +253,7 @@ fn rewrite_record(
                 repo: recorded.parameters.repo.clone(),
                 scopes: recorded.parameters.scopes.clone(),
                 workflow: recorded.parameters.workflow,
+                style: recorded.parameters.style,
             },
             files: decisions
                 .iter()
@@ -542,11 +558,11 @@ mod tests {
 
     use super::{FileEntry, Report};
 
-    /// The complete `rk.upgrade/2` shape, held by snapshot.
+    /// The complete `rk.upgrade/3` shape, held by snapshot.
     #[test]
     fn the_upgrade_report_schema_snapshot_holds() {
         let report = Report {
-            schema: "rk.upgrade/2",
+            schema: "rk.upgrade/3",
             mode: "preview",
             target: "/tmp/t".into(),
             tech: "rust".into(),
@@ -554,6 +570,7 @@ mod tests {
             from_version: "0.1.0".into(),
             to_version: "0.2.0",
             workflow: "branches",
+            style: "trunk",
             files: vec![FileEntry {
                 path: "release-plz.toml".into(),
                 kind: "seeded",
@@ -563,7 +580,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.upgrade/2","mode":"preview","target":"/tmp/t","tech":"rust","forge":"github","from_version":"0.1.0","to_version":"0.2.0","workflow":"branches","files":[{"path":"release-plz.toml","kind":"seeded","action":"drift"}],"next":["rk upgrade --target /tmp/t --apply writes"]}"#
+            r#"{"schema":"rk.upgrade/3","mode":"preview","target":"/tmp/t","tech":"rust","forge":"github","from_version":"0.1.0","to_version":"0.2.0","workflow":"branches","style":"trunk","files":[{"path":"release-plz.toml","kind":"seeded","action":"drift"}],"next":["rk upgrade --target /tmp/t --apply writes"]}"#
         );
     }
 }

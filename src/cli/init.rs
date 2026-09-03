@@ -40,6 +40,14 @@ pub struct InitArgs {
     #[arg(long, default_value = "worktree")]
     pub workflow: String,
 
+    /// The release style this project chooses: trunk (the bot's release
+    /// request carries auto-merge from creation, so a green trunk ships
+    /// itself) or lines (every request waits for a human's merge).
+    /// Recorded as a landing parameter and rendered into the landed
+    /// release workflow.
+    #[arg(long, default_value = "trunk")]
+    pub style: String,
+
     /// Write the files; without it the destinations are listed and nothing
     /// is touched.
     #[arg(long)]

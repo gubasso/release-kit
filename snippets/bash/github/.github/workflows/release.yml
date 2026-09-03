@@ -46,6 +46,7 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
           REF: ${{ github.ref_name }}
+          RELEASE_STYLE: RK_STYLE
         run: |
           set -eu
           current="$(cat VERSION)"
@@ -74,6 +75,16 @@ jobs:
               --title "chore(release): v$next" \
               --body "Bumps VERSION to $next and rewrites the changelog. Merging this request is the release: the bump push tags v$next and attaches the tarball."
           fi
+          # The trunk style's standing arm, re-applied on every refresh; the
+          # app token is what keeps the eventual merge able to start this
+          # workflow's release half, and the lines style leaves the merge a
+          # human's.
+          if [ "$RELEASE_STYLE" != "trunk" ]; then
+            echo "the lines style merges each release by hand; not arming."
+            exit 0
+          fi
+          gh pr merge "$branch" --auto --squash --delete-branch
+          echo "armed the release request for v$next."
 
   # The release itself. Only the push that lands the bot's own bump releases —
   # the VERSION comparison against the parent commit is the guard — so an

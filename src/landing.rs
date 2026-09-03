@@ -15,7 +15,7 @@ pub mod manifest;
 use camino::Utf8Path;
 use serde::{Deserialize, Serialize};
 
-pub use manifest::Workflow;
+pub use manifest::{Style, Workflow};
 
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
@@ -95,16 +95,25 @@ pub const SCOPES_CSV_TOKEN: &[u8] = b"RK_SCOPES_CSV";
 /// The scope list, pipe-joined: the title checks' regular expression.
 pub const SCOPES_PIPE_TOKEN: &[u8] = b"RK_SCOPES_PIPE";
 
+/// The recorded release style: `trunk` arms the bot's request in the
+/// landed release workflow, `lines` leaves every request unarmed.
+pub const STYLE_TOKEN: &[u8] = b"RK_STYLE";
+
 /// Substitute the landing parameters into a `rendered` file's bytes.
 ///
 /// The repository's owner — the project path's first segment — replaces
-/// every `OWNER` occurrence, and the scope list replaces the two scope
-/// tokens. An empty scope list leaves the scope tokens standing, which
-/// only a preview renders under; an apply refuses before reaching here.
+/// every `OWNER` occurrence, the scope list replaces the two scope
+/// tokens, and the recorded style replaces the style token. An empty
+/// scope list — or an unresolved style — leaves its tokens standing,
+/// which only a preview renders under; an apply refuses before reaching
+/// here.
 #[must_use]
-pub fn render(baseline: &[u8], repo: &str, scopes: &[String]) -> Vec<u8> {
+pub fn render(baseline: &[u8], repo: &str, scopes: &[String], style: Option<Style>) -> Vec<u8> {
     let owner = repo.split('/').next().unwrap_or(repo);
     let mut out = substitute(baseline, OWNER_TOKEN, owner.as_bytes());
+    if let Some(style) = style {
+        out = substitute(&out, STYLE_TOKEN, style.as_str().as_bytes());
+    }
     if !scopes.is_empty() {
         out = substitute(&out, SCOPES_CSV_TOKEN, scopes.join(",").as_bytes());
         // The pipe form drops into an extended regular expression, where a
@@ -470,8 +479,8 @@ pub fn pair_files(tech: &str, forge: &str) -> Result<Vec<(String, &'static [u8])
 
 /// The whole payload projection for one pair.
 ///
-/// Under the `repo`, `scopes`,
-/// and `workflow` parameters: every snippet with its kind and rendered
+/// Under the `repo`, `scopes`, `workflow`,
+/// and `style` parameters: every snippet with its kind and rendered
 /// bytes, plus the routing block and the hook block — each a pure
 /// function of the recorded mode — sorted by destination.
 ///
@@ -486,6 +495,7 @@ pub fn projection(
     repo: &str,
     scopes: &[String],
     workflow: Workflow,
+    style: Option<Style>,
 ) -> Result<Vec<Entry>, RkError> {
     let mut entries = Vec::new();
     for (destination, baseline) in pair_files(tech, forge)? {
@@ -493,7 +503,7 @@ pub fn projection(
             anyhow::anyhow!("the payload does not classify {destination}; the kind table is stale")
         })?;
         let rendered = match kind {
-            Kind::Rendered => render(baseline, repo, scopes),
+            Kind::Rendered => render(baseline, repo, scopes, style),
             Kind::Seeded | Kind::State => baseline.to_vec(),
         };
         entries.push(Entry {
@@ -513,7 +523,7 @@ pub fn projection(
             kind: Kind::Rendered,
             placement: Placement::Block,
             baseline: template.as_bytes().to_vec(),
-            rendered: render(template.as_bytes(), repo, scopes),
+            rendered: render(template.as_bytes(), repo, scopes, style),
         });
     }
     entries.sort_by(|a, b| a.destination.cmp(&b.destination));
@@ -712,7 +722,7 @@ mod tests {
 
     use super::{
         AGENTS_DESTINATION, BLOCK_BEGIN, BLOCK_END, BRANCH_GRAMMAR, HOOK_TYPES_LINE, HOOKS_BEGIN,
-        HOOKS_DESTINATION, HOOKS_END, Kind, Workflow, extract_block, hooks_block, kind_of,
+        HOOKS_DESTINATION, HOOKS_END, Kind, Style, Workflow, extract_block, hooks_block, kind_of,
         pair_files, parse_scopes, projection, render, routing_block, splice_agents_block,
         splice_hooks_block,
     };
@@ -750,18 +760,18 @@ mod tests {
     #[test]
     fn rendering_substitutes_every_owner_occurrence() {
         let baseline = b"if: repository_owner == 'OWNER'\n# OWNER again: OWNER\n";
-        let rendered = render(baseline, "acme/sub/widget", &[]);
+        let rendered = render(baseline, "acme/sub/widget", &[], None);
         let text = String::from_utf8(rendered).expect("rendered bytes stay text");
         assert_eq!(text, "if: repository_owner == 'acme'\n# acme again: acme\n");
 
         let baseline = b"scopes 'RK_SCOPES_CSV' match (RK_SCOPES_PIPE)\n";
-        let rendered = render(baseline, "acme/widget", &scopes(&["api", "cli"]));
+        let rendered = render(baseline, "acme/widget", &scopes(&["api", "cli"]), None);
         let text = String::from_utf8(rendered).expect("rendered bytes stay text");
         assert_eq!(text, "scopes 'api,cli' match (api|cli)\n");
 
         // A dot is the one admitted character that is special in the
         // regular expression: it escapes, so `api.v1` matches only itself.
-        let rendered = render(baseline, "acme/widget", &scopes(&["api.v1"]));
+        let rendered = render(baseline, "acme/widget", &scopes(&["api.v1"]), None);
         let text = String::from_utf8(rendered).expect("rendered bytes stay text");
         assert_eq!(text, "scopes 'api.v1' match (api\\.v1)\n");
     }
@@ -818,6 +828,7 @@ mod tests {
             "acme/widget",
             &scopes(&["api", "cli"]),
             Workflow::Branches,
+            Some(Style::Trunk),
         )
         .expect("the pair projects");
         let workflow = entries
