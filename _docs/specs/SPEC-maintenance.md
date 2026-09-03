@@ -19,6 +19,8 @@
   - [`maintenance:an-unobservable-branch-is-never-a-candidate` — An unobservable branch is never a candidate](#maintenancean-unobservable-branch-is-never-a-candidate--an-unobservable-branch-is-never-a-candidate)
   - [`maintenance:a-dirty-or-locked-worktree-is-never-removed` — A dirty or locked worktree is never removed](#maintenancea-dirty-or-locked-worktree-is-never-removed--a-dirty-or-locked-worktree-is-never-removed)
   - [`maintenance:a-branch-deletion-is-compare-and-swap` — A branch deletion is compare-and-swap](#maintenancea-branch-deletion-is-compare-and-swap--a-branch-deletion-is-compare-and-swap)
+  - [`maintenance:a-line-is-cut-from-an-explicit-base` — A line is cut from an explicit base](#maintenancea-line-is-cut-from-an-explicit-base--a-line-is-cut-from-an-explicit-base)
+  - [`maintenance:a-line-is-never-retired-before-its-tags` — A line is never retired before its tags](#maintenancea-line-is-never-retired-before-its-tags--a-line-is-never-retired-before-its-tags)
   - [`maintenance:the-reminder-is-silent-on-a-binary-that-cannot-prune` — The reminder is silent on a binary that cannot prune](#maintenancethe-reminder-is-silent-on-a-binary-that-cannot-prune--the-reminder-is-silent-on-a-binary-that-cannot-prune)
   - [`maintenance:a-foreign-hook-is-never-clobbered` — A foreign hook is never clobbered](#maintenancea-foreign-hook-is-never-clobbered--a-foreign-hook-is-never-clobbered)
   - [`maintenance:the-reminder-never-blocks-a-pull` — The reminder never blocks a pull](#maintenancethe-reminder-never-blocks-a-pull--the-reminder-never-blocks-a-pull)
@@ -214,6 +216,30 @@ Every branch deletion in both prune verbs MUST go through one shared helper: `gi
 - GIVEN a verified tip the branch no longer holds
 - WHEN the shared deletion runs
 - THEN the compare-and-swap refuses, and the branch and its work survive
+
+Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `maintenance:a-line-is-cut-from-an-explicit-base` — A line is cut from an explicit base
+
+`rk lines open` MUST require an explicit base and MUST NOT fall back to the trunk's tip, because a line is a snapshot of a chosen commit and a tip-cut line silently ships whatever landed that morning.
+
+#### Scenario: A line is opened with no base
+
+- GIVEN a request to open `release/1.1` with no `--base`
+- WHEN `rk lines open 1.1` runs
+- THEN it refuses naming the flag and the tag form the chapter recommends, and nothing is created
+
+Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `maintenance:a-line-is-never-retired-before-its-tags` — A line is never retired before its tags
+
+`rk lines retire` MUST refuse while any commit the line holds and the trunk does not is unreachable from the line's tags, and MUST leave the remote branch's deletion to the operator, because a tag is what keeps a line's commits reachable after its branch dies and an untagged retirement garbage-collects the line.
+
+#### Scenario: A line's tip is untagged
+
+- GIVEN `release/1.1` whose tip cherry-pick landed after the last `v1.1.z` tag
+- WHEN `rk lines retire 1.1 --apply` runs
+- THEN it refuses naming the commits no tag reaches, the seat and both branches survive, and the report names tagging as what would make the retirement safe
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 

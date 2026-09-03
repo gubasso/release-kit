@@ -22,4 +22,4 @@ Chosen option: `the release request is the gate` — the bot maintains one pull 
 
 ## Status
 
-Accepted.
+Superseded in part by [standing auto-merge](./ADR-arm-the-release-request-with-standing-auto-merge.md): the one-request gate and its required checks stand, and under the trunk style the merge decision becomes a standing instruction the forge executes once every check is green. A bare trunk push still publishes nothing.

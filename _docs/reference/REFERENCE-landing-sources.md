@@ -2,7 +2,7 @@
 
 External sources behind `SPEC-landing.md`: how comparable tools record what they generated into a project, how they judge whether it is still theirs, and what each one does when it is not. Each entry states what the source says and which rule it bears on.
 
-Verified against the listed sources on 2026-08-28 and re-checked on 2026-08-29.
+Verified against the listed sources on 2026-08-28 and re-checked on 2026-08-29; the arming entries verified on 2026-09-03.
 
 ## cargo-dist, on generated files that refuse to drift
 
@@ -80,3 +80,14 @@ Verified 2026-09-01. A hook declares its `stages`, and a stage's hooks run only 
 - <https://git-scm.com/docs/githooks>
 
 Bearing: `landing:a-landed-hook-serves-the-release-convention-alone`. Every mirror the block carries rests on a documented mechanism above, the two honest limits — `--no-verify` and the invisible force-push — are stated by the same sources, and the two third-party hooks are pinned in `versions.toml` like every other snippet pin.
+
+## Arming the release request
+
+Three upstream facts carry the arming steps the landed release workflows render. GitHub states that with the exception of `workflow_dispatch` and `repository_dispatch`, events triggered by `GITHUB_TOKEN` do not create workflow runs at all, so an arm made with the default token merges a bump that starts no publish. The release-plz action at the pinned commit declares a `pr` output — the release request it opened or refreshed, a JSON object carrying `number`, `head_branch`, `base_branch`, and `html_url` — and release-plz refreshes by force-push on GitHub and by closing the outdated request and opening a fresh one on GitLab, which is why an arm is re-applied on every run. The release-please action sets its outputs dynamically rather than in `action.yml`: `prs_created` is true if any pull request was created or updated, and `pr` is a JSON string of the PullRequest object, unset when none exists.
+
+- <https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows>
+- <https://release-plz.dev/docs/github/output>
+- <https://github.com/release-plz/action/blob/2eb1d8bcb770b4c48ccfaad919734b38b51958c9/action.yml>
+- <https://github.com/googleapis/release-please-action/blob/45996ed1f6d02564a971a2fa1b5860e934307cf7/README.md>
+
+Bearing: `landing:the-arming-identity-is-the-bot`, both scenarios, and the arming steps in every landed release workflow. The default-token fact is the single most load-bearing citation in the arming design: it is why the arm sits in the job that already mints the bot token.
