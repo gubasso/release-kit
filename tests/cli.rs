@@ -9387,6 +9387,7 @@ fn adopt_preview_replays_a_complete_apply_command() {
     .success()
     .stdout(
         predicate::str::contains("--tech rust")
+            .and(predicate::str::contains("--repo acme/widget"))
             .and(predicate::str::contains("--scopes api,cli"))
             .and(predicate::str::contains("--workflow worktree"))
             .and(predicate::str::contains("--style trunk")),

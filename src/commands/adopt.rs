@@ -160,7 +160,7 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
         ]
     } else {
         vec![format!(
-            "rk adopt --tech {tech} --forge {} --scopes {} --workflow {} --style {} --target {} --apply writes the record and nothing else",
+            "rk adopt --tech {tech} --forge {} --repo {repo} --scopes {} --workflow {} --style {} --target {} --apply writes the record and nothing else",
             resolved.forge,
             args.scopes.as_deref().unwrap_or("<scope,scope>"),
             workflow.as_str(),

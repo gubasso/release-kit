@@ -301,12 +301,12 @@ fn rc(line: &str, target: &Utf8Path, out: Output) -> Result<(), RkError> {
             out.result_line(format!("newest candidate {tag}"));
             if let Some(next) = next_candidate {
                 out.result_line(format!(
-                    "a finding would mint rc.{next}; an rc number is single-use"
+                    "the next candidate is rc.{next}; an rc number is single-use"
                 ));
             }
         }
         None => out.result_line(
-            "no candidate is tagged on the line yet; the line's pipeline mints one when its release path runs",
+            "no candidate is tagged on the line; this verb only reads them — a candidate arrives where the binding wires an rc path, and minting one is open work otherwise",
         ),
     }
     if let Some(tag) = &newest_release {
