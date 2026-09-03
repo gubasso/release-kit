@@ -58,6 +58,7 @@ fn run(cli: &Cli) -> Result<(), RkError> {
         Commands::Adopt(args) => commands::adopt::run(args),
         Commands::Setup(args) => commands::setup::run(args),
         Commands::Branches(args) => commands::branches::run(args),
+        Commands::Lines(args) => commands::lines::run(args),
         Commands::Message(args) => commands::message::run(args),
         Commands::Worktree(args) => commands::worktree::run(args),
         Commands::Runs(args) => commands::runs::run(args),
@@ -116,6 +117,7 @@ const fn name(command: &Commands) -> &'static str {
         Commands::Adopt(_) => "adopt",
         Commands::Setup(_) => "setup",
         Commands::Branches(_) => "branches",
+        Commands::Lines(_) => "lines",
         Commands::Message(_) => "message",
         Commands::Worktree(_) => "worktree",
         Commands::Runs(_) => "runs",
@@ -131,6 +133,7 @@ const fn name(command: &Commands) -> &'static str {
 /// error renders on stderr.
 const fn wants_json(command: &Commands) -> bool {
     use release_kit::cli::branches::BranchesAction;
+    use release_kit::cli::lines::LinesAction;
     use release_kit::cli::runs::RunsAction;
     use release_kit::cli::setup::SetupAction;
     use release_kit::cli::skill::SkillAction;
@@ -150,6 +153,14 @@ const fn wants_json(command: &Commands) -> bool {
         },
         Commands::Branches(args) => match &args.action {
             BranchesAction::Prune { json, .. } => *json,
+        },
+        // The same explicit nesting as the worktree arm: every action
+        // named, so a new one cannot be silently swallowed.
+        Commands::Lines(args) => match &args.action {
+            LinesAction::List { json, .. }
+            | LinesAction::Open { json, .. }
+            | LinesAction::Rc { json, .. }
+            | LinesAction::Retire { json, .. } => *json,
         },
         Commands::Message(args) => args.json,
         // An explicit nested match over all three actions: a `_ => false`

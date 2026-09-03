@@ -10,7 +10,8 @@
 #
 # Every job authenticates with RELEASE_BOT_TOKEN, the project access token
 # the setup stores as a masked CI variable: a push made with the default CI
-# job token starts no pipeline, which would silently skip the release half.
+# job token starts no pipeline, which would silently skip the release half,
+# and a merge armed under it would land a bump that releases nothing.
 # Trusted publishing covers GitLab.com only; a self-hosted instance cannot
 # take the OIDC path and falls back to a token, which the method's
 # invariants exist to remove.
@@ -47,8 +48,38 @@ release-request:
   rules:
     - if: '$CI_COMMIT_BRANCH == "master" || $CI_COMMIT_BRANCH =~ /^release\//'
   resource_group: release-request
+  variables:
+    RELEASE_STYLE: RK_STYLE
   script:
     - release-plz release-pr --forge gitlab --git-token "$RELEASE_BOT_TOKEN"
+    - |
+      set -eu
+      # The trunk style's standing arm. It dies with the request it was made
+      # on — this forge refreshes by closing the outdated request and opening
+      # a fresh one — so it is re-applied on every run, and it authenticates
+      # as the bot for the same reason every job here does: a merge under the
+      # job token would land a bump that releases nothing. The bot's own
+      # authorship is the filter, so no other open request can be armed by
+      # mistake, and an arm the forge cannot take yet — the request's first
+      # pipeline not started — waits for the next push rather than failing
+      # the job; the lines style merges by hand and arms nothing.
+      if [ "$RELEASE_STYLE" != "trunk" ]; then
+        echo "the lines style merges each release by hand; not arming."
+        exit 0
+      fi
+      api() { curl -fsS --header "PRIVATE-TOKEN: $RELEASE_BOT_TOKEN" "$@"; }
+      project="$CI_API_V4_URL/projects/$CI_PROJECT_ID"
+      bot="$(api "$CI_API_V4_URL/user" | grep -o '"username":"[^"]*"' | head -n 1 | cut -d '"' -f 4)"
+      iid="$(api "$project/merge_requests?state=opened&target_branch=$CI_COMMIT_BRANCH&author_username=$bot&per_page=1" | grep -o '"iid":[0-9]*' | head -n 1 | cut -d : -f 2)"
+      if [ -z "$iid" ]; then
+        echo "no release request to arm."
+        exit 0
+      fi
+      if api -X PUT "$project/merge_requests/$iid/merge?auto_merge=true&merge_when_pipeline_succeeds=true&squash=true&should_remove_source_branch=true" >/dev/null 2>&1; then
+        echo "armed merge request !$iid."
+      else
+        echo "could not arm !$iid yet — its pipeline has not started; the next trunk push re-arms."
+      fi
 
 # The release itself: tag, GitLab release, and the crates.io publish over
 # OIDC. The job's ID token is exchanged for a short-lived registry token;

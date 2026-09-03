@@ -560,7 +560,7 @@ fn init_preview_human_lines_are_snapshot_held() {
          AGENTS.md\n\
          dist-workspace.toml\n\
          release-plz.toml\n\
-         Next:\n  rk init --tech rust --forge github --repo <owner/name> --scopes <scope,scope> --workflow worktree --target {path} --apply\n"
+         Next:\n  rk init --tech rust --forge github --repo <owner/name> --scopes <scope,scope> --workflow worktree --style trunk --target {path} --apply\n"
     );
     rk().args([
         "init", "--tech", "rust", "--forge", "github", "--target", &path,
@@ -589,7 +589,7 @@ fn init_json_emits_one_object_and_nothing_else() {
             .stdout
             .clone();
         let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-        assert_eq!(report["schema"], "rk.init/2");
+        assert_eq!(report["schema"], "rk.init/3");
         assert_eq!(report["mode"], mode);
         assert!(
             report["files"].as_array().is_some_and(|f| !f.is_empty()),
@@ -4385,7 +4385,7 @@ fn a_landing_writes_the_record_with_its_identity() {
         .success()
         .stdout(predicate::str::contains("wrote .release-kit/manifest.json"));
     let manifest = read_manifest(target.path());
-    assert_eq!(manifest["schema_version"], 2);
+    assert_eq!(manifest["schema_version"], 3);
     assert_eq!(manifest["rk_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(manifest["origin"], "init");
     assert_eq!(manifest["tech"], "rust");
@@ -4394,6 +4394,10 @@ fn a_landing_writes_the_record_with_its_identity() {
     assert_eq!(
         manifest["parameters"]["scopes"],
         serde_json::json!(["api", "cli"])
+    );
+    assert_eq!(
+        manifest["parameters"]["style"], "trunk",
+        "the default style records the armed request"
     );
 
     let payload = rk()
@@ -4596,7 +4600,7 @@ fn a_duplicated_hook_block_is_drift_everywhere() {
     std::fs::remove_file(target.path().join(".github/workflows/release-plz.yml"))
         .expect("the workflow removes");
     rk().args([
-        "adopt", "--tech", "rust", "--forge", "github", "--scopes", "api,cli",
+        "adopt", "--tech", "rust", "--forge", "github", "--scopes", "api,cli", "--style", "trunk",
     ])
     .args(["--repo", "acme/widget", "--target"])
     .arg(target.path())
@@ -4720,9 +4724,10 @@ fn status_json_is_one_object_over_a_fresh_landing() {
         .stdout
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["schema"], "rk.status/3");
+    assert_eq!(report["schema"], "rk.status/4");
     assert_eq!(report["landed"], true);
     assert_eq!(report["tech"], "rust");
+    assert_eq!(report["style"], "trunk");
     assert_eq!(report["forge"], "github");
     assert_eq!(report["alignment"], "aligned");
     assert_eq!(report["drift"]["rendered"], 0);
@@ -5100,7 +5105,8 @@ fn a_matching_target_adopts_writing_only_the_manifest() {
     let adopt = |apply: bool| {
         let mut cmd = rk();
         cmd.args([
-            "adopt", "--tech", "rust", "--forge", "github", "--scopes", "api,cli",
+            "adopt", "--tech", "rust", "--forge", "github", "--scopes", "api,cli", "--style",
+            "trunk",
         ])
         .args([
             "--workflow",
@@ -5167,7 +5173,7 @@ fn an_edited_rendered_file_refuses_adoption_listing_every_mismatch() {
     std::fs::write(&agents, block).expect("the block edit writes");
 
     rk().args([
-        "adopt", "--tech", "rust", "--forge", "github", "--scopes", "api,cli",
+        "adopt", "--tech", "rust", "--forge", "github", "--scopes", "api,cli", "--style", "trunk",
     ])
     .args(["--repo", "acme/widget", "--target"])
     .arg(target.path())
@@ -5196,7 +5202,7 @@ fn a_differing_seeded_file_adopts_with_both_digests() {
     .expect("the tune writes");
 
     rk().args([
-        "adopt", "--tech", "rust", "--forge", "github", "--scopes", "api,cli",
+        "adopt", "--tech", "rust", "--forge", "github", "--scopes", "api,cli", "--style", "trunk",
     ])
     .args([
         "--workflow",
@@ -5234,7 +5240,7 @@ fn a_missing_expected_file_refuses_adoption() {
     std::fs::remove_file(target.path().join("dist-workspace.toml")).expect("the file removes");
 
     rk().args([
-        "adopt", "--tech", "rust", "--forge", "github", "--scopes", "api,cli",
+        "adopt", "--tech", "rust", "--forge", "github", "--scopes", "api,cli", "--style", "trunk",
     ])
     .args(["--repo", "acme/widget", "--target"])
     .arg(target.path())
@@ -5260,7 +5266,7 @@ fn an_agents_file_without_the_block_refuses_naming_the_block() {
     .expect("the rewrite writes");
 
     rk().args([
-        "adopt", "--tech", "rust", "--forge", "github", "--scopes", "api,cli",
+        "adopt", "--tech", "rust", "--forge", "github", "--scopes", "api,cli", "--style", "trunk",
     ])
     .args(["--repo", "acme/widget", "--target"])
     .arg(target.path())
@@ -5279,7 +5285,7 @@ fn an_existing_record_refuses_adoption_naming_upgrade() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
     land_rust(target.path()).success();
     rk().args([
-        "adopt", "--tech", "rust", "--forge", "github", "--scopes", "api,cli",
+        "adopt", "--tech", "rust", "--forge", "github", "--scopes", "api,cli", "--style", "trunk",
     ])
     .args(["--repo", "acme/widget", "--target"])
     .arg(target.path())
@@ -6950,7 +6956,7 @@ fn adopt_records_the_branches_workflow_by_default() {
     land_rust_with_workflow(target.path(), "branches").success();
     std::fs::remove_dir_all(target.path().join(".release-kit")).expect("the record removes");
     rk().args([
-        "adopt", "--tech", "rust", "--forge", "github", "--scopes", "api,cli",
+        "adopt", "--tech", "rust", "--forge", "github", "--scopes", "api,cli", "--style", "trunk",
     ])
     .args(["--repo", "acme/widget", "--target"])
     .arg(target.path())
@@ -6975,7 +6981,8 @@ fn adopt_refuses_a_target_whose_blocks_do_not_match_the_selected_candidate() {
         let before = tree_digests(target.path());
         let output = rk()
             .args([
-                "adopt", "--tech", "rust", "--forge", "github", "--scopes", "api,cli",
+                "adopt", "--tech", "rust", "--forge", "github", "--scopes", "api,cli", "--style",
+                "trunk",
             ])
             .args(["--workflow", selected, "--repo", "acme/widget", "--target"])
             .arg(target.path())
@@ -7047,7 +7054,7 @@ fn status_check_flags_a_manifest_whose_workflow_contradicts_its_landed_blocks() 
 /// absent parameter reads as `branches`, the blocks re-render to that
 /// mode, and the rewrite records schema 2 with the mode stated.
 #[test]
-fn an_upgrade_migrates_a_schema_1_record_to_schema_2() {
+fn an_upgrade_migrates_a_schema_1_record_to_the_current_schema() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
     land_rust(target.path()).success();
     let mut manifest = read_manifest(target.path());
@@ -7057,15 +7064,29 @@ fn an_upgrade_migrates_a_schema_1_record_to_schema_2() {
         .and_then(serde_json::Value::as_object_mut)
         .expect("a parameters object")
         .remove("workflow");
+    manifest
+        .get_mut("parameters")
+        .and_then(serde_json::Value::as_object_mut)
+        .expect("a parameters object")
+        .remove("style");
     write_manifest(target.path(), &manifest);
 
+    // A pre-style record refuses until --style names one: neither value is
+    // a compatibility-safe reading of a target nobody asked.
     rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .code(64)
+        .stderr(predicate::str::contains("--style"));
+
+    rk().args(["upgrade", "--apply", "--style", "trunk", "--target"])
         .arg(target.path())
         .assert()
         .success();
     let migrated = read_manifest(target.path());
-    assert_eq!(migrated["schema_version"], 2);
+    assert_eq!(migrated["schema_version"], 3);
     assert_eq!(migrated["parameters"]["workflow"], "branches");
+    assert_eq!(migrated["parameters"]["style"], "trunk");
     let hooks = std::fs::read_to_string(target.path().join(".pre-commit-config.yaml"))
         .expect("the hook file reads");
     assert!(
@@ -8971,4 +8992,282 @@ fn a_gitlab_check_reports_the_auto_merge_limitation() {
         text.contains("ok auto-merge") && text.contains("no project-level auto-merge switch"),
         "the check must name the stand-in for the missing switch: {text}"
     );
+}
+
+/// SATISFIES landing:the-arming-identity-is-the-bot: every release workflow
+/// that arms the request gates it on the rendered style, authenticates the
+/// arm as the bot — never the forge's default CI token — and re-arms in the
+/// job that maintains the request, so a forge that replaces the request
+/// re-arms the replacement.
+#[test]
+fn every_arming_step_authenticates_as_the_bot() {
+    for path in [
+        "snippets/rust/github/.github/workflows/release-plz.yml",
+        "snippets/python/github/.github/workflows/release-please.yml",
+        "snippets/bash/github/.github/workflows/release.yml",
+    ] {
+        let text = std::fs::read_to_string(repo_path(path)).expect("the snippet reads");
+        assert!(
+            text.contains("RELEASE_STYLE: RK_STYLE"),
+            "{path}: the rendered style is the arm's gate"
+        );
+        assert!(
+            text.contains("gh pr merge") && text.contains("--auto --squash --delete-branch"),
+            "{path}: the arm sets auto-merge with the protected merge method"
+        );
+        let arm_at = text
+            .find("arm the release request")
+            .or_else(|| text.find("standing arm"))
+            .expect("the arming step exists");
+        let arm = &text[arm_at..];
+        assert!(
+            arm.contains("GH_TOKEN: ${{ steps.app-token.outputs.token }}"),
+            "{path}: the arm authenticates as the bot"
+        );
+        assert!(
+            !arm.contains("secrets.GITHUB_TOKEN") && !arm.contains("github.token"),
+            "{path}: an arm under the default token merges a bump that starts no workflow"
+        );
+    }
+    for path in [
+        "snippets/rust/gitlab/.gitlab-ci.yml",
+        "snippets/bash/gitlab/.gitlab-ci.yml",
+    ] {
+        let text = std::fs::read_to_string(repo_path(path)).expect("the snippet reads");
+        assert!(
+            text.contains("RELEASE_STYLE: RK_STYLE"),
+            "{path}: the rendered style is the arm's gate"
+        );
+        assert!(
+            text.contains("auto_merge=true&merge_when_pipeline_succeeds=true"),
+            "{path}: the arm sets auto-merge under both parameter names"
+        );
+        assert!(
+            !text.contains("CI_JOB_TOKEN"),
+            "{path}: an arm under the job token merges a bump that releases nothing"
+        );
+        let arm_at = text.find("standing arm").expect("the arming block exists");
+        assert!(
+            text[arm_at..].contains("PRIVATE-TOKEN: $RELEASE_BOT_TOKEN"),
+            "{path}: the arm authenticates as the bot"
+        );
+    }
+}
+
+/// SATISFIES landing:the-release-style-is-a-landing-parameter: the recorded
+/// style renders into the landed release workflow as the one substituted
+/// value, so a style change is a one-word reviewed diff and the lines style
+/// arms nothing.
+#[test]
+fn init_renders_the_recorded_style_into_the_release_workflow() {
+    let trunk = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(trunk.path()).success();
+    let workflow = std::fs::read_to_string(trunk.path().join(".github/workflows/release-plz.yml"))
+        .expect("the landed workflow reads");
+    assert!(
+        workflow.contains("RELEASE_STYLE: trunk"),
+        "the default style arms the request: {workflow}"
+    );
+    assert!(
+        !workflow.contains("RK_STYLE"),
+        "no style token survives rendering"
+    );
+
+    let lines = tempfile::tempdir().expect("a scratch dir exists");
+    rk().args(["init", "--tech", "rust", "--forge", "github"])
+        .args([
+            "--repo",
+            "acme/widget",
+            "--scopes",
+            "api,cli",
+            "--style",
+            "lines",
+            "--target",
+        ])
+        .arg(lines.path())
+        .arg("--apply")
+        .assert()
+        .success();
+    let workflow = std::fs::read_to_string(lines.path().join(".github/workflows/release-plz.yml"))
+        .expect("the landed workflow reads");
+    assert!(
+        workflow.contains("RELEASE_STYLE: lines"),
+        "the lines style renders unarmed"
+    );
+    let manifest = read_manifest(lines.path());
+    assert_eq!(manifest["parameters"]["style"], "lines");
+}
+
+/// Git against a scratch repository with the hook environment scrubbed:
+/// the suite itself sometimes runs under a commit hook, and the exported
+/// GIT_* variables would otherwise point every child at the outer
+/// repository.
+fn scrubbed_git(dir: &Path, args: &[&str]) -> std::process::Output {
+    let mut command = std::process::Command::new("git");
+    for var in [
+        "GIT_COMMON_DIR",
+        "GIT_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_WORK_TREE",
+    ] {
+        command.env_remove(var);
+    }
+    command
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .expect("git runs")
+}
+
+/// One scratch repository with a trunk, a tag, and a release line —
+/// the fixture the `rk lines` verbs read and retire.
+fn line_repo() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("a scratch repo exists");
+    let run = |args: &[&str]| {
+        let out = scrubbed_git(dir.path(), args);
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    run(&["init", "-q", "-b", "master"]);
+    run(&["config", "user.name", "t"]);
+    run(&["config", "user.email", "t@invalid"]);
+    std::fs::write(dir.path().join("f"), "1\n").expect("writes");
+    run(&["add", "."]);
+    run(&["commit", "-q", "-m", "feat(api): one"]);
+    run(&["tag", "-a", "v1.1.0", "-m", "v1.1.0"]);
+    run(&["branch", "release/1.1", "v1.1.0"]);
+    std::fs::write(dir.path().join("f"), "2\n").expect("writes");
+    run(&["add", "."]);
+    run(&["commit", "-q", "-m", "feat(api): two"]);
+    dir
+}
+
+/// SATISFIES maintenance:a-line-is-cut-from-an-explicit-base: no base, no
+/// line, and the refusal names the flag and the tag form.
+#[test]
+fn lines_open_refuses_without_a_base_and_adopts_an_existing_line() {
+    let repo = line_repo();
+    rk().args(["lines", "open", "1.2", "--target"])
+        .arg(repo.path())
+        .assert()
+        .code(64)
+        .stderr(predicate::str::contains("--base").and(predicate::str::contains("v<version>")));
+    rk().args(["lines", "open", "9.9", "--base", "vnope", "--target"])
+        .arg(repo.path())
+        .arg("--apply")
+        .assert()
+        .code(73);
+    // An existing line adopts and reports satisfied.
+    rk().args(["lines", "open", "1.1", "--base", "v1.1.0", "--target"])
+        .arg(repo.path())
+        .arg("--apply")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("satisfied"));
+    // A fresh line previews, then lands at its base.
+    rk().args(["lines", "open", "1.2", "--base", "v1.1.0", "--target"])
+        .arg(repo.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("DRY RUN"));
+    rk().args(["lines", "open", "1.2", "--base", "v1.1.0", "--target"])
+        .arg(repo.path())
+        .arg("--apply")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("created release/1.2"));
+}
+
+/// The inventory reports each line's tags, coverage, and seat, offline.
+#[test]
+fn lines_list_reports_the_inventory_offline() {
+    let repo = line_repo();
+    let out = rk()
+        .args(["lines", "list", "--json", "--target"])
+        .arg(repo.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["schema"], "rk.lines-list/1");
+    let row = &report["lines"][0];
+    assert_eq!(row["branch"], "release/1.1");
+    assert_eq!(row["presence"], "local");
+    assert_eq!(row["newest_release"], "v1.1.0");
+    assert_eq!(row["tag_covered"], true);
+}
+
+/// `rc` reads the newest candidate and the next single-use number, and
+/// never authors a tag.
+#[test]
+fn lines_rc_reports_the_newest_candidate_and_the_next_number() {
+    let repo = line_repo();
+    let git = |args: &[&str]| {
+        assert!(scrubbed_git(repo.path(), args).status.success());
+    };
+    git(&["tag", "-a", "v1.1.1-rc.1", "-m", "rc", "release/1.1"]);
+    git(&["tag", "-a", "v1.1.1-rc.2", "-m", "rc", "release/1.1"]);
+    let out = rk()
+        .args(["lines", "rc", "1.1", "--json", "--target"])
+        .arg(repo.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["schema"], "rk.lines-rc/1");
+    assert_eq!(report["newest_candidate"], "v1.1.1-rc.2");
+    assert_eq!(report["next_candidate"], 3);
+    assert_eq!(report["newest_release"], "v1.1.0");
+}
+
+/// SATISFIES maintenance:a-line-is-never-retired-before-its-tags: an
+/// uncovered commit refuses the retirement, tagging it makes the same run
+/// pass, and the remote deletion stays the operator's.
+#[test]
+fn lines_retire_refuses_on_an_untagged_commit_and_needs_apply() {
+    let repo = line_repo();
+    let git = |args: &[&str]| {
+        assert!(scrubbed_git(repo.path(), args).status.success());
+    };
+    // A line-only commit no tag reaches.
+    git(&["checkout", "-q", "release/1.1"]);
+    std::fs::write(repo.path().join("g"), "x\n").expect("writes");
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "fix(api): crossed"]);
+    git(&["checkout", "-q", "master"]);
+    rk().args(["lines", "retire", "1.1", "--target"])
+        .arg(repo.path())
+        .arg("--apply")
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("no tag reaches"));
+    // Tagged, the preview reports and writes nothing; the apply deletes.
+    git(&["tag", "-a", "v1.1.1", "-m", "v1.1.1", "release/1.1"]);
+    rk().args(["lines", "retire", "1.1", "--target"])
+        .arg(repo.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("would delete release/1.1"));
+    rk().args(["lines", "retire", "1.1", "--target"])
+        .arg(repo.path())
+        .arg("--apply")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("deleted release/1.1"))
+        .stdout(predicate::str::contains(
+            "git push origin --delete release/1.1",
+        ));
+    let gone = scrubbed_git(
+        repo.path(),
+        &["show-ref", "--verify", "--quiet", "refs/heads/release/1.1"],
+    );
+    assert!(!gone.status.success(), "the local branch is gone");
 }

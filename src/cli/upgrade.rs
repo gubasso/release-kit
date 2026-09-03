@@ -26,6 +26,13 @@ pub struct UpgradeArgs {
     #[arg(long)]
     pub workflow: Option<String>,
 
+    /// Change the recorded release style: trunk or lines. A record that
+    /// already carries one needs no flag; a record from before the
+    /// parameter existed refuses until one names it, and the answer is
+    /// recorded.
+    #[arg(long)]
+    pub style: Option<String>,
+
     /// Write the upgrade; without it every file's action is listed and
     /// nothing is touched.
     #[arg(long)]

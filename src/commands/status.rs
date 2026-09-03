@@ -54,6 +54,9 @@ struct Report {
     /// The recorded working-copy mode.
     #[serde(skip_serializing_if = "Option::is_none")]
     workflow: Option<&'static str>,
+    /// The recorded release style; absent on a record predating it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    style: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     rk_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -124,11 +127,12 @@ pub fn run(args: &StatusArgs) -> Result<(), RkError> {
             ),
         ]);
         out.emit(&Report {
-            schema: "rk.status/3",
+            schema: "rk.status/4",
             landed: false,
             tech: None,
             forge: None,
             workflow: None,
+            style: None,
             rk_version: None,
             binary_version: None,
             alignment: None,
@@ -158,11 +162,12 @@ pub fn run(args: &StatusArgs) -> Result<(), RkError> {
 
     let violations = violations_of(&observed);
     out.emit(&Report {
-        schema: "rk.status/3",
+        schema: "rk.status/4",
         landed: true,
         tech: Some(manifest.tech),
         forge: Some(manifest.forge),
         workflow: Some(manifest.parameters.workflow.as_str()),
+        style: manifest.parameters.style.map(manifest::Style::as_str),
         rk_version: Some(manifest.rk_version),
         binary_version: Some(env!("CARGO_PKG_VERSION")),
         alignment: Some(alignment),
@@ -319,6 +324,7 @@ fn observe(args: &StatusArgs, manifest: &Manifest) -> Result<Observed, RkError> 
             template.as_bytes(),
             &manifest.parameters.repo,
             &manifest.parameters.scopes,
+            manifest.parameters.style,
         );
         if Digest::of(&candidate) != record.sha256 {
             observed
@@ -352,11 +358,15 @@ fn render_human(
     observed: &Observed,
 ) {
     out.result_line(format!(
-        "release-kit {} ({}, {}, {} workflow) at {}",
+        "release-kit {} ({}, {}, {} workflow, {} style) at {}",
         manifest.rk_version,
         manifest.tech,
         manifest.forge,
         manifest.parameters.workflow.as_str(),
+        manifest
+            .parameters
+            .style
+            .map_or("unrecorded", manifest::Style::as_str),
         args.target
     ));
     match alignment {
@@ -423,16 +433,17 @@ mod tests {
 
     use super::{Drift, InvariantFailure, Report, StalePin};
 
-    /// The complete `rk.status/1` shape, held by snapshot in both the
+    /// The complete `rk.status/4` shape, held by snapshot in both the
     /// landed and absent forms.
     #[test]
     fn the_status_report_schema_snapshot_holds() {
         let landed = Report {
-            schema: "rk.status/3",
+            schema: "rk.status/4",
             landed: true,
             tech: Some("rust".into()),
             forge: Some("github".into()),
             workflow: Some("worktree"),
+            style: Some("trunk"),
             rk_version: Some("0.1.0".into()),
             binary_version: Some("0.2.0"),
             alignment: Some(crate::landing::manifest::Alignment::BinaryNewer),
@@ -457,13 +468,14 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&landed).expect("a report serializes"),
-            r#"{"schema":"rk.status/3","landed":true,"tech":"rust","forge":"github","workflow":"worktree","rk_version":"0.1.0","binary_version":"0.2.0","alignment":"binary-newer","drift":{"rendered":0,"seeded":1},"missing":[],"stale_pins":[{"tool":"release-plz","landed":"0.3.160","available":"0.3.170"}],"sentinels":1,"invariant_failures":[{"code":"attestations-disabled","destination":"dist-workspace.toml","reason":"github-attestations is not effectively true","remediation":"set github-attestations = true in [dist]"}]}"#
+            r#"{"schema":"rk.status/4","landed":true,"tech":"rust","forge":"github","workflow":"worktree","style":"trunk","rk_version":"0.1.0","binary_version":"0.2.0","alignment":"binary-newer","drift":{"rendered":0,"seeded":1},"missing":[],"stale_pins":[{"tool":"release-plz","landed":"0.3.160","available":"0.3.170"}],"sentinels":1,"invariant_failures":[{"code":"attestations-disabled","destination":"dist-workspace.toml","reason":"github-attestations is not effectively true","remediation":"set github-attestations = true in [dist]"}]}"#
         );
         let absent = Report {
             landed: false,
             tech: None,
             forge: None,
             workflow: None,
+            style: None,
             rk_version: None,
             binary_version: None,
             alignment: None,
@@ -477,7 +489,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&absent).expect("a report serializes"),
-            r#"{"schema":"rk.status/3","landed":false}"#,
+            r#"{"schema":"rk.status/4","landed":false}"#,
             "an absent landing reports one field a caller can branch on"
         );
     }

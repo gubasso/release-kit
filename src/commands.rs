@@ -9,6 +9,7 @@ pub mod forge;
 pub mod guide;
 pub mod init;
 pub mod license;
+pub mod lines;
 pub mod message;
 pub mod payload;
 pub mod read;

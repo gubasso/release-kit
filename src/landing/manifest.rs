@@ -23,10 +23,13 @@ use crate::landing::Kind;
 /// Where the record lives, relative to the target root.
 pub const MANIFEST_PATH: &str = ".release-kit/manifest.json";
 
-/// The schema this binary writes. It also reads schema 1 — the pre-mode
-/// record, whose absent `workflow` parameter reads as `branches` — and
-/// refuses anything else by name.
-pub const SCHEMA_VERSION: u64 = 2;
+/// The schema this binary writes.
+///
+/// It also reads schema 1 — the pre-mode record, whose absent `workflow`
+/// parameter reads as `branches` — and schema 2 — the pre-style record,
+/// whose absent `style` parameter reads as none and holds an upgrade
+/// until `--style` names one — and refuses anything else by name.
+pub const SCHEMA_VERSION: u64 = 3;
 
 /// The oldest schema this binary still reads.
 const OLDEST_READABLE_SCHEMA: u64 = 1;
@@ -73,6 +76,48 @@ impl Workflow {
 /// The serde default for a record from before the parameter existed.
 const fn workflow_branches() -> Workflow {
     Workflow::Branches
+}
+
+/// The release style a landing records.
+///
+/// Whether the bot's release request stands armed to merge itself: a
+/// project decision, rendered into the landed release workflow and
+/// changed only through the landing verbs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Style {
+    /// The trunk style: the release request carries auto-merge from
+    /// creation, so a green trunk ships itself.
+    Trunk,
+    /// The lines style: every request waits for a human's merge, because
+    /// a line's candidate is validated by hand.
+    Lines,
+}
+
+impl Style {
+    /// The flag, wire, and report form.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Trunk => "trunk",
+            Self::Lines => "lines",
+        }
+    }
+
+    /// Parse a `--style` flag value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RkError::Usage`] naming the two values.
+    pub fn parse(raw: &str) -> Result<Self, RkError> {
+        match raw {
+            "trunk" => Ok(Self::Trunk),
+            "lines" => Ok(Self::Lines),
+            other => Err(RkError::Usage(format!(
+                "unknown style '{other}'; the styles are: trunk, lines"
+            ))),
+        }
+    }
 }
 
 /// The record a landing writes and every target-side verb reads.
@@ -122,6 +167,13 @@ pub struct Parameters {
     /// a guard the project did not choose.
     #[serde(default = "workflow_branches")]
     pub workflow: Workflow,
+    /// The release style the project chose: the bot's request armed to
+    /// merge itself (`trunk`), or every merge a human's (`lines`). A
+    /// record predating the field carries none, and an upgrade refuses
+    /// until `--style` names one: neither value is a compatibility-safe
+    /// reading of a target nobody asked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<Style>,
 }
 
 /// One landed destination.
@@ -335,17 +387,17 @@ fn numeric_core(version: &str) -> Vec<u64> {
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use super::{Alignment, FileRecord, Manifest, Parameters, Workflow, alignment};
+    use super::{Alignment, FileRecord, Manifest, Parameters, Style, Workflow, alignment};
     use crate::digest::Digest;
     use crate::landing::Kind;
 
-    /// The complete record shape at schema 2, held by snapshot: a field
+    /// The complete record shape at schema 3, held by snapshot: a field
     /// rename or removal fails here and becomes a schema-version bump
     /// instead of a silent break at every reader.
     #[test]
     fn the_manifest_schema_snapshot_holds() {
         let manifest = Manifest {
-            schema_version: 2,
+            schema_version: 3,
             rk_version: "0.1.0".into(),
             payload_sha256: Digest::of(b""),
             origin: "init".into(),
@@ -356,6 +408,7 @@ mod tests {
                 repo: "acme/widget".into(),
                 scopes: vec!["api".into(), "cli".into()],
                 workflow: Workflow::Worktree,
+                style: Some(Style::Trunk),
             },
             files: vec![
                 FileRecord {
@@ -377,7 +430,7 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&manifest).expect("a manifest serializes"),
             format!(
-                r#"{{"schema_version":2,"rk_version":"0.1.0","payload_sha256":"{empty}","origin":"init","tech":"rust","forge":"github","landed_at":"2026-08-29T00:00:00Z","parameters":{{"repo":"acme/widget","scopes":["api","cli"],"workflow":"worktree"}},"files":[{{"destination":"release-plz.toml","kind":"seeded","sha256":"{empty}","baseline_sha256":"{empty}"}},{{"destination":"VERSION","kind":"state","sha256":"{empty}"}}],"pins":{{"release-plz":"0.3.160"}}}}"#
+                r#"{{"schema_version":3,"rk_version":"0.1.0","payload_sha256":"{empty}","origin":"init","tech":"rust","forge":"github","landed_at":"2026-08-29T00:00:00Z","parameters":{{"repo":"acme/widget","scopes":["api","cli"],"workflow":"worktree","style":"trunk"}},"files":[{{"destination":"release-plz.toml","kind":"seeded","sha256":"{empty}","baseline_sha256":"{empty}"}},{{"destination":"VERSION","kind":"state","sha256":"{empty}"}}],"pins":{{"release-plz":"0.3.160"}}}}"#
             ),
             "a state file must omit baseline_sha256 rather than serializing null"
         );
@@ -401,11 +454,15 @@ mod tests {
             .expect("a schema-1 record loads")
             .expect("the record exists");
         assert_eq!(manifest.parameters.workflow, Workflow::Branches);
+        assert_eq!(
+            manifest.parameters.style, None,
+            "a pre-style record carries no style; the upgrade demands one"
+        );
 
-        std::fs::write(target.join(super::MANIFEST_PATH), record(3)).expect("the record writes");
-        let refused = super::load(target).expect_err("a schema-3 record refuses");
+        std::fs::write(target.join(super::MANIFEST_PATH), record(4)).expect("the record writes");
+        let refused = super::load(target).expect_err("a schema-4 record refuses");
         let message = refused.to_string();
-        assert!(message.contains('3'), "{message}");
+        assert!(message.contains('4'), "{message}");
     }
 
     #[test]

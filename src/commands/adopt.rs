@@ -16,7 +16,7 @@ use crate::cli::adopt::AdoptArgs;
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::digest::Digest;
 use crate::error::RkError;
-use crate::landing::manifest::{self, FileRecord, Manifest, Parameters, Workflow};
+use crate::landing::manifest::{self, FileRecord, Manifest, Parameters, Style, Workflow};
 use crate::landing::{self, Kind};
 use crate::output::Output;
 use crate::registry;
@@ -50,6 +50,7 @@ struct Report {
     /// The working-copy mode the candidate was rendered under and the
     /// record carries.
     workflow: &'static str,
+    style: &'static str,
     /// Every destination, with its verification result.
     files: Vec<FileEntry>,
     /// What plausibly follows.
@@ -65,6 +66,7 @@ struct Report {
 /// `rendered` mismatch or missing expected file — listing every one in
 /// one run — and [`RkError::Missing`] where detection resolves no
 /// technology, forge, or repository and no flag covers the gap.
+#[allow(clippy::too_many_lines)]
 pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
     let out = Output::new(args.json);
     if !args.target.is_dir() {
@@ -99,7 +101,22 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
     let tech = resolved_tech(args)?;
     let scopes = required_scopes(args.scopes.as_deref())?;
     let workflow = Workflow::parse(&args.workflow)?;
-    let entries = landing::projection(&tech, &resolved.forge, &repo, &scopes, workflow)?;
+    // The style is required rather than defaulted: it changes the release
+    // workflow's bytes, and an adoption verifies bytes against exactly one
+    // rendered candidate, so neither value is a safe guess.
+    let style = Style::parse(args.style.as_deref().ok_or_else(|| {
+        RkError::Usage(
+            "an adoption verifies against one rendered candidate; pass --style <trunk|lines>, the release style this target runs".into(),
+        )
+    })?)?;
+    let entries = landing::projection(
+        &tech,
+        &resolved.forge,
+        &repo,
+        &scopes,
+        workflow,
+        Some(style),
+    )?;
     let (files, records) = verify(args, workflow, &entries)?;
 
     for file in &files {
@@ -124,6 +141,7 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
                     repo: repo.clone(),
                     scopes,
                     workflow,
+                    style: Some(style),
                 },
                 files: records,
                 pins: registry::pins_for(&tech)
@@ -148,13 +166,14 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
     };
     out.next(&next);
     out.emit(&Report {
-        schema: "rk.adopt/2",
+        schema: "rk.adopt/3",
         mode: if args.apply { "apply" } else { "preview" },
         target: args.target.to_string(),
         tech,
         forge: resolved.forge,
         repo,
         workflow: workflow.as_str(),
+        style: style.as_str(),
         files,
         next,
     })
@@ -280,17 +299,18 @@ mod tests {
 
     use super::{FileEntry, Report};
 
-    /// The complete `rk.adopt/2` shape, held by snapshot.
+    /// The complete `rk.adopt/3` shape, held by snapshot.
     #[test]
     fn the_adopt_report_schema_snapshot_holds() {
         let report = Report {
-            schema: "rk.adopt/2",
+            schema: "rk.adopt/3",
             mode: "apply",
             target: "/tmp/t".into(),
             tech: "rust".into(),
             forge: "github".into(),
             repo: "acme/widget".into(),
             workflow: "branches",
+            style: "trunk",
             files: vec![FileEntry {
                 path: "release-plz.toml".into(),
                 kind: "seeded",
@@ -300,7 +320,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.adopt/2","mode":"apply","target":"/tmp/t","tech":"rust","forge":"github","repo":"acme/widget","workflow":"branches","files":[{"path":"release-plz.toml","kind":"seeded","action":"differs"}],"next":["commit the record"]}"#
+            r#"{"schema":"rk.adopt/3","mode":"apply","target":"/tmp/t","tech":"rust","forge":"github","repo":"acme/widget","workflow":"branches","style":"trunk","files":[{"path":"release-plz.toml","kind":"seeded","action":"differs"}],"next":["commit the record"]}"#
         );
     }
 }
