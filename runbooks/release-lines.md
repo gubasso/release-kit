@@ -28,10 +28,11 @@ On worktree:
 
 ```bash
 git fetch origin --tags --force
-rk lines open <line> --base "v<version>" --apply && cd "../<project>@release-<line>"
+rk lines open <line> --base "v<version>" --apply
+rk worktree add release/<line> --apply && cd "../<project>@release-<line>"
 git push -u origin release/<line>
 # check: the line stands at its explicit base in its own seat, and the push publishes it with its upstream set
-# already open: the open adopts the existing line and reports satisfied when its seat stands
+# already open: the open adopts the existing branch, the add adopts the existing seat, and each reports satisfied
 ```
 
 On branches:
@@ -55,13 +56,13 @@ git log --oneline -1 origin/release/<line>
 
 ## 5. Read the candidate
 
-The line's automation mints `v<version>-rc.<n>` there, which builds the installers and publishes to no registry.
+A candidate is `v<version>-rc.<n>` on the line, minted by the binding's rc automation where one is wired; the landed release workflows tag releases, not candidates, and this verb reads what exists.
 
 ```bash
 git fetch origin --tags --force
 rk lines rc <line>
 # check: names the newest candidate on the line and the next number a finding would mint
-# nothing listed: no candidate is tagged yet; the line's pipeline mints one when its release path runs
+# nothing listed: no candidate is tagged; where the binding wires no rc path, the line's release request stays the human gate and this step reads empty
 ```
 
 ## 6. Validate the candidate
@@ -82,7 +83,7 @@ glab release view "v<version>-rc.<n>"
 
 ## 7. Answer a finding with the next rc
 
-The finding crosses like any fix — step 4 — and the line's automation mints the next number.
+The finding crosses like any fix — step 4 — and the rc path that minted the last candidate mints the next number.
 
 ```bash
 rk lines rc <line>

@@ -213,6 +213,10 @@ fn next_lines(args: &UpgradeArgs, clean: bool) -> Vec<String> {
         .workflow
         .as_deref()
         .map_or_else(String::new, |mode| format!(" --workflow {mode}"));
+    let style_flag = args
+        .style
+        .as_deref()
+        .map_or_else(String::new, |style| format!(" --style {style}"));
     if args.apply {
         vec![
             "commit the upgraded files, the record included".to_owned(),
@@ -220,12 +224,12 @@ fn next_lines(args: &UpgradeArgs, clean: bool) -> Vec<String> {
         ]
     } else if clean {
         vec![format!(
-            "rk upgrade{workflow_flag} --target {} --apply writes",
+            "rk upgrade{workflow_flag}{style_flag} --target {} --apply writes",
             args.target
         )]
     } else {
         vec![format!(
-            "resolve each conflict above; rk upgrade{workflow_flag} --target {} --apply refuses until then",
+            "resolve each conflict above; rk upgrade{workflow_flag}{style_flag} --target {} --apply refuses until then",
             args.target
         )]
     }

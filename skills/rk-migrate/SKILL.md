@@ -30,20 +30,20 @@ When the request carries `--no-plan`, skip the plan gate's approval turn only. S
 
 ## What runs unattended
 
-| Finding                                                | Act                                                                                                                                                  |
-| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A target with no landing record                        | Preview first: `rk adopt --target . --scopes <list> --workflow <mode>` lists what differs from the selected candidate; align, then `--apply` (below) |
-| A landed payload older than the binary                 | `rk upgrade --target . --apply`                                                                                                                      |
-| A record without the scopes parameter                  | `rk upgrade --target . --scopes <list> --apply`, the list confirmed with the operator first                                                          |
-| A record without the style parameter                   | `rk upgrade --target . --style <style> --apply`, the style asked of the operator first (below)                                                       |
-| A forge that forbids a request merging itself          | `rk setup step auto-merge --apply`                                                                                                                   |
-| A missing hook block in `.pre-commit-config.yaml`      | The upgrade lands it; reconcile the config first, as below                                                                                           |
-| A missing or drifted forge protection                  | `rk setup step <name> --apply`                                                                                                                       |
-| A squash title source that is not the request's title  | `rk setup step protect-trunk --apply` re-asserts it                                                                                                  |
-| A squash message source that is not the request's body | `rk setup step protect-trunk --apply` re-asserts it                                                                                                  |
-| A hook block lacking the `rk-message` content guard    | `rk upgrade --target . --apply` re-renders the block; reconcile a hand-edited block first                                                            |
-| An unfilled `TODO(release-kit)` sentinel               | Resolve it in the seeded file, from the project                                                                                                      |
-| Stale installed skills                                 | `rk skill install --apply`                                                                                                                           |
+| Finding                                                | Act                                                                                                                                                                  |
+| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A target with no landing record                        | Preview first: `rk adopt --target . --scopes <list> --workflow <mode> --style <style>` lists what differs from the selected candidate; align, then `--apply` (below) |
+| A landed payload older than the binary                 | `rk upgrade --target . --apply`                                                                                                                                      |
+| A record without the scopes parameter                  | `rk upgrade --target . --scopes <list> --apply`, the list confirmed with the operator first                                                                          |
+| A record without the style parameter                   | `rk upgrade --target . --style <style> --apply`, the style asked of the operator first (below)                                                                       |
+| A forge that forbids a request merging itself          | `rk setup step auto-merge --apply`                                                                                                                                   |
+| A missing hook block in `.pre-commit-config.yaml`      | The upgrade lands it; reconcile the config first, as below                                                                                                           |
+| A missing or drifted forge protection                  | `rk setup step <name> --apply`                                                                                                                                       |
+| A squash title source that is not the request's title  | `rk setup step protect-trunk --apply` re-asserts it                                                                                                                  |
+| A squash message source that is not the request's body | `rk setup step protect-trunk --apply` re-asserts it                                                                                                                  |
+| A hook block lacking the `rk-message` content guard    | `rk upgrade --target . --apply` re-renders the block; reconcile a hand-edited block first                                                                            |
+| An unfilled `TODO(release-kit)` sentinel               | Resolve it in the seeded file, from the project                                                                                                                      |
+| Stale installed skills                                 | `rk skill install --apply`                                                                                                                                           |
 
 Mechanical file edits can go to a subagent; every forge mutation stays in this loop, where its observation lives.
 

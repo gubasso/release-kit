@@ -22,4 +22,4 @@ Chosen option: `rc tags` — automation tags `v<version>-rc.<n>` on the release 
 
 ## Status
 
-Implemented — `method/09-release-lines.md` states the cycle, `runbooks/release-lines.md` carries its commands, and `rk lines rc` reports a line's candidates.
+Implemented in part — `method/09-release-lines.md` states the cycle, `runbooks/release-lines.md` carries its commands, and `rk lines rc` reads a line's candidates; the per-binding rc automation remains open, and the chapter names the gap.

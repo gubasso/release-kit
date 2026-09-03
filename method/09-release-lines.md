@@ -8,14 +8,14 @@ The line as an object, across its whole life. [Branch for release](./07-branch-f
 2. Wire the repository for lines, once: `release/*` takes no force-push and no deletion while a line is alive, and the landed release workflow already watches `release/**`, so a line gets its own release request with no further configuration.
 3. Open the line from the tag it patches. The base is chosen and stated — never the trunk's tip by default — and a line can be cut retroactively, days later, from any commit or tag.
 4. Cross the fix from the trunk. Fix on the trunk first, cherry-pick only that commit; [branch for release](./07-branch-for-release.md) owns the path and its four failure modes.
-5. Mint a candidate. Automation tags `v<version>-rc.<n>` on the line; the tag builds the installers and publishes to no registry, so a candidate can never shadow the version it precedes.
+5. Mint a candidate, `v<version>-rc.<n>` on the line. The binding's automation tags it where an rc path is wired; the landed release workflows tag releases, not candidates, and this chapter names that gap rather than papering over it — until a binding wires the path, the line's own release request is the human gate. A candidate publishes to no registry either way, so it can never shadow the version it precedes.
 6. Validate the candidate by using it. Install what the rc built and exercise it; the point of the style is that a human, not a check, says the line is ready.
 7. Answer a finding with the next rc. A finding lands on the trunk, crosses by cherry-pick, and mints the next number: an rc number is single-use, because the tag protection makes a candidate immutable.
 8. Promote, then retire. The line's release request is merged by hand once the candidate stands, and when the line leaves production its branch is deleted only after a tag names every commit it holds, because a tag outlives its branch and is what makes the deletion safe.
 
 ## Why the request is never armed on a line
 
-The trunk style's standing arm exists because every trunk commit is already releasable, so a green check is the whole decision. A line inverts that: the thing being released is a candidate a human validated by hand, and the checks cannot see the validation. An armed line request would promote on CI's word alone, which is exactly the judgment this style exists to keep human. The style parameter is what the landed workflow reads: `lines` renders no arming step, so nothing on a line merges itself.
+The trunk style's standing arm exists because every trunk commit is already releasable, so a green check is the whole decision. A line inverts that: the thing being released is a candidate a human validated by hand, and the checks cannot see the validation. An armed line request would promote on CI's word alone, which is exactly the judgment this style exists to keep human. The style parameter is what the landed workflow reads — `lines` renders the arm inert — and the arm itself steps aside off the trunk, so nothing on a line merges itself under either style.
 
 ## The cost of a line
 
