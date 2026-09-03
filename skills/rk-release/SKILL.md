@@ -22,28 +22,29 @@ When the request carries `--no-plan`, skip the plan gate's approval turn only. S
 
 ## The shape
 
-One pull request. The bot maintains the release request against the trunk — the version bump and the changelog — and merging it is the release: the bump push tags and publishes. Never author a tag, never push the trunk directly, never re-author a published version.
+One pull request. The bot maintains the release request against the trunk — the version bump and the changelog — and merging it is the release: the bump push tags and publishes. Whether that merge is yours or the forge's is the project's recorded release style, read from `rk status`: under `trunk` the request stands armed and merges itself on the last green check; under `lines` it waits for a human. Never author a tag, never push the trunk directly, never re-author a published version.
 
 ## Cut a release
 
 1. Read the sequence once per session: `rk method operate`. Then follow `rk guide release`, which renders it as commands with the project path and technology filled in and the forge's variants selected.
 2. Run `rk status --check --target .` before anything ships: drift on a file release-kit owns, or an unfilled sentinel, is fixed before a release, not during one.
-3. Follow the guide's six steps in order and by number, running each check it prints; this skill adds no step of its own. The merge in its step 4 is the release itself, so it stays the operator's unless their request named it. Route the changelog correction and any checkout by the project's workflow mode, read from `rk status`: under `worktree` the request's branch takes `rk worktree add "<bot branch>" --apply`, under `branches` the forge CLI's checkout — `rk guide release` renders the right form.
-4. An older line takes `rk guide backport` the same way.
+3. Follow the guide's six steps in order and by number, running each check it prints; this skill adds no step of its own. The merge in its step 4 is the release itself, so it stays the operator's unless their request named it — and under `trunk` there is no merge to run: the operator's equivalent decision is whether to hold, which the guide's step 3b carries as one disarm command. Route the changelog correction and any checkout by the project's workflow mode, read from `rk status`: under `worktree` the request's branch takes `rk worktree add "<bot branch>" --apply`, under `branches` the forge CLI's checkout — `rk guide release` renders the right form.
+4. An older line takes `rk guide backport` for the fix crossing over and `rk guide release-lines` for the line's own life, the same way.
 
 ## When it goes wrong
 
 Route by symptom through `rk method recovery`:
 
-| Symptom                                          | Path                                                  |
-| ------------------------------------------------ | ----------------------------------------------------- |
-| A published version is defective                 | Fix forward, then withdraw the bad version            |
-| The release request merged and nothing published | Re-run the release job on the same trunk commit       |
-| The changelog shipped wrong                      | Amend on the trunk; ships next release                |
-| An older line needs a patch                      | Cut release/<major>.<minor> from the tag, cherry-pick |
-| CI is down and the release cannot wait           | The three-move hand-publish, enforcement off first    |
-| The release page is empty                        | Re-run the artifact workflow on the same tag          |
-| A released artifact has no attestation           | Re-run the artifact workflow on the same tag          |
+| Symptom                                          | Path                                                                |
+| ------------------------------------------------ | ------------------------------------------------------------------- |
+| A release must not ship                          | Disarm before the last check goes green; merged, it is a withdrawal |
+| A published version is defective                 | Fix forward, then withdraw the bad version                          |
+| The release request merged and nothing published | Re-run the release job on the same trunk commit                     |
+| The changelog shipped wrong                      | Amend on the trunk; ships next release                              |
+| An older line needs a patch                      | Cut release/<major>.<minor> from the tag, cherry-pick               |
+| CI is down and the release cannot wait           | The three-move hand-publish, enforcement off first                  |
+| The release page is empty                        | Re-run the artifact workflow on the same tag                        |
+| A released artifact has no attestation           | Re-run the artifact workflow on the same tag                        |
 
 A release line flows one direction: fix on the trunk first, cherry-pick only the fix, never merge the line back, and let automation tag the line's patch. `rk method branch-for-release` owns the walkthrough and the four ways the pattern breaks.
 
@@ -53,4 +54,5 @@ A release line flows one direction: fix on the trunk first, cherry-pick only the
 - A verify step that fails right after the release merge is usually timing: the artifact builder creates the release page minutes after the tag.
 - Prefer the smallest recovery that returns to the happy path; never surgery on tags, published versions, or the trunk.
 - A hand-uploaded artifact carries no provenance, even when CI built the file. Treat that release as unfinished and re-run the artifact workflow on its tag once CI is back.
+- Never re-arm a request the operator disarmed. A disarm is a decision, the next bot refresh may re-arm it, and saying so is part of the report.
 - After a release merges, `rk branches prune` reports the retired local branch and `rk worktree prune --verify` confirms the retired worktree; state each command and let the operator run the `--apply`.
