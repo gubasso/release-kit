@@ -9329,3 +9329,66 @@ fn upgrade_preview_replays_the_style_override() {
         .success()
         .stdout(predicate::str::contains("--style lines"));
 }
+
+/// A remote-only line adopts the remote tip as a tracking branch instead
+/// of being recreated from the supplied base, which could sit behind it.
+#[test]
+fn lines_open_adopts_a_remote_only_line_at_its_tip() {
+    let origin = line_repo();
+    let clone = tempfile::tempdir().expect("a scratch clone exists");
+    let cloned = scrubbed_git(
+        clone.path(),
+        &[
+            "clone",
+            "-q",
+            origin.path().to_str().expect("utf-8"),
+            "work",
+        ],
+    );
+    assert!(cloned.status.success());
+    let work = clone.path().join("work");
+    rk().args([
+        "lines", "open", "1.1", "--base", "v1.1.0", "--json", "--target",
+    ])
+    .arg(&work)
+    .arg("--apply")
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("rk.lines-open/1"));
+    let tracked = scrubbed_git(&work, &["rev-parse", "release/1.1", "origin/release/1.1"]);
+    let out = String::from_utf8_lossy(&tracked.stdout);
+    let mut shas = out.lines();
+    assert_eq!(
+        shas.next(),
+        shas.next(),
+        "the local line tracks the remote tip, not the base"
+    );
+}
+
+/// The adopt preview's replayed apply command carries every parameter the
+/// replay needs, so following it reproduces the previewed candidate.
+#[test]
+fn adopt_preview_replays_a_complete_apply_command() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+    std::fs::remove_dir_all(target.path().join(".release-kit")).expect("the record removes");
+    rk().args([
+        "adopt", "--tech", "rust", "--forge", "github", "--scopes", "api,cli", "--style", "trunk",
+    ])
+    .args([
+        "--workflow",
+        "worktree",
+        "--repo",
+        "acme/widget",
+        "--target",
+    ])
+    .arg(target.path())
+    .assert()
+    .success()
+    .stdout(
+        predicate::str::contains("--tech rust")
+            .and(predicate::str::contains("--scopes api,cli"))
+            .and(predicate::str::contains("--workflow worktree"))
+            .and(predicate::str::contains("--style trunk")),
+    );
+}

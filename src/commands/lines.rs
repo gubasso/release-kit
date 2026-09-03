@@ -186,6 +186,48 @@ fn open(
             next,
         });
     }
+    // A remote-only line is adopted at its own tip, never recreated from
+    // the base: the line may have advanced past the tag it was cut from,
+    // and a local branch behind the remote cannot push.
+    let remote = format!("origin/{branch}");
+    if remote_exists(target, &branch)? {
+        if !apply {
+            out.result_line(format!(
+                "DRY RUN: would adopt {branch} from {remote}, tracking it at the remote tip; --base is not used, because the line already exists"
+            ));
+            let next = vec![format!(
+                "rk lines open {line} --base \"{base}\" --target {target} --apply"
+            )];
+            out.next(&next);
+            return out.emit(&OpenReport {
+                schema: "rk.lines-open/1",
+                mode: "preview",
+                branch,
+                next,
+            });
+        }
+        let tracked = git(target, &["branch", "--track", &branch, &remote])?;
+        if !tracked.status.success() {
+            return Err(RkError::refusal(
+                Diagnostic::new(Reason::StateDrift, last_line(&tracked.stderr))
+                    .expected("a tracking branch git can create from the remote line")
+                    .target_state("unchanged"),
+            ));
+        }
+        out.result_line(format!(
+            "adopted {branch} from {remote} at the remote tip; --base was not used, because the line already exists"
+        ));
+        let next = vec![format!(
+            "rk worktree add {branch} --apply seats it; in the branches mode, git checkout {branch} works in the main checkout"
+        )];
+        out.next(&next);
+        return out.emit(&OpenReport {
+            schema: "rk.lines-open/1",
+            mode: "created",
+            branch,
+            next,
+        });
+    }
     let resolved = resolve_commit(target, base)?;
     if !apply {
         out.result_line(format!(
@@ -480,6 +522,16 @@ fn uncovered_commits(target: &Utf8Path, branch: &str) -> Result<Vec<String>, RkE
 /// Whether a local branch exists.
 fn branch_exists(target: &Utf8Path, branch: &str) -> Result<bool, RkError> {
     let ref_name = format!("refs/heads/{branch}");
+    Ok(
+        git(target, &["show-ref", "--verify", "--quiet", &ref_name])?
+            .status
+            .success(),
+    )
+}
+
+/// Whether the origin remote tracks the branch.
+fn remote_exists(target: &Utf8Path, branch: &str) -> Result<bool, RkError> {
+    let ref_name = format!("refs/remotes/origin/{branch}");
     Ok(
         git(target, &["show-ref", "--verify", "--quiet", &ref_name])?
             .status
