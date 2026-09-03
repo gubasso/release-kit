@@ -83,6 +83,10 @@ jobs:
             echo "the lines style merges each release by hand; not arming."
             exit 0
           fi
+          if [ "$REF" != "master" ]; then
+            echo "a line's request is never armed; its candidate is what a human validated."
+            exit 0
+          fi
           gh pr merge "$branch" --auto --squash --delete-branch
           echo "armed the release request for v$next."
 

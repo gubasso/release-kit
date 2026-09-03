@@ -9025,6 +9025,10 @@ fn every_arming_step_authenticates_as_the_bot() {
             "{path}: the arm authenticates as the bot"
         );
         assert!(
+            arm.contains("a line's request is never armed"),
+            "{path}: the arm must step aside off the trunk"
+        );
+        assert!(
             !arm.contains("secrets.GITHUB_TOKEN") && !arm.contains("github.token"),
             "{path}: an arm under the default token merges a bump that starts no workflow"
         );
@@ -9050,6 +9054,10 @@ fn every_arming_step_authenticates_as_the_bot() {
         assert!(
             text[arm_at..].contains("PRIVATE-TOKEN: $RELEASE_BOT_TOKEN"),
             "{path}: the arm authenticates as the bot"
+        );
+        assert!(
+            text[arm_at..].contains("a line's request is never armed"),
+            "{path}: the arm must step aside off the trunk"
         );
     }
 }
@@ -9249,6 +9257,15 @@ fn lines_retire_refuses_on_an_untagged_commit_and_needs_apply() {
         .assert()
         .code(73)
         .stderr(predicate::str::contains("no tag reaches"));
+    // An unrelated tag reaching the tip authorizes nothing: only the
+    // line's own v<line>.* tags make a retirement safe.
+    git(&["tag", "-a", "v9.9.9", "-m", "unrelated", "release/1.1"]);
+    rk().args(["lines", "retire", "1.1", "--target"])
+        .arg(repo.path())
+        .arg("--apply")
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("no tag reaches"));
     // Tagged, the preview reports and writes nothing; the apply deletes.
     git(&["tag", "-a", "v1.1.1", "-m", "v1.1.1", "release/1.1"]);
     rk().args(["lines", "retire", "1.1", "--target"])
@@ -9270,4 +9287,45 @@ fn lines_retire_refuses_on_an_untagged_commit_and_needs_apply() {
         &["show-ref", "--verify", "--quiet", "refs/heads/release/1.1"],
     );
     assert!(!gone.status.success(), "the local branch is gone");
+}
+
+/// SATISFIES distribution:machine-output-declares-its-schema for the open
+/// verb: one schema on every path, the workflow mode included, with the
+/// seat named as the worktree verb's own next action.
+#[test]
+fn lines_open_json_keeps_its_own_schema() {
+    let repo = line_repo();
+    let out = rk()
+        .args([
+            "lines", "open", "1.3", "--base", "v1.1.0", "--json", "--target",
+        ])
+        .arg(repo.path())
+        .arg("--apply")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["schema"], "rk.lines-open/1");
+    assert_eq!(report["mode"], "created");
+    assert!(
+        report["next"][0]
+            .as_str()
+            .is_some_and(|line| line.contains("rk worktree add release/1.3")),
+        "the seat is the worktree verb's job, named as the next action: {report}"
+    );
+}
+
+/// A style override rides into the replayed apply command, so following
+/// the preview's own next line applies the previewed decision.
+#[test]
+fn upgrade_preview_replays_the_style_override() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+    rk().args(["upgrade", "--style", "lines", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--style lines"));
 }

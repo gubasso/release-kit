@@ -160,7 +160,8 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
         ]
     } else {
         vec![format!(
-            "rk adopt --target {} --apply writes the record and nothing else",
+            "rk adopt --style {} --target {} --apply writes the record and nothing else",
+            style.as_str(),
             args.target
         )]
     };
@@ -255,7 +256,7 @@ fn verify(
             workflow.as_str()
         ))
         .action(
-            "align first: rk adopt without --apply lists every differing destination; bring each to the selected candidate's bytes — rk snippet and rk payload print them — then re-run, or select the other candidate with --workflow",
+            "align first: rk adopt without --apply lists every differing destination; bring each to the selected candidate's bytes — rk snippet and rk payload print them — then re-run, or select the other candidate with --workflow or --style",
         )
         .target_state("unchanged"),
     ))

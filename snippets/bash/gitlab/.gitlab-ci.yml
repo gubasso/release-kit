@@ -92,6 +92,10 @@ release-request:
         echo "the lines style merges each release by hand; not arming."
         exit 0
       fi
+      if [ "$CI_COMMIT_BRANCH" != "master" ]; then
+        echo "a line's request is never armed; its candidate is what a human validated."
+        exit 0
+      fi
       iid="$(api "$project/merge_requests?state=opened&source_branch=chore%2Frelease-v$next&target_branch=$CI_COMMIT_BRANCH" | grep -o '"iid":[0-9]*' | head -n 1 | cut -d : -f 2)"
       if [ -z "$iid" ]; then
         echo "no release request to arm."

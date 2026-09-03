@@ -16,7 +16,6 @@ use serde::Serialize;
 use crate::cli::lines::{LinesAction, LinesArgs};
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
-use crate::landing::manifest::{self, Workflow};
 use crate::maintenance::{self, Deletion};
 use crate::output::Output;
 use crate::worktree::{Worktree, parse_worktrees};
@@ -145,8 +144,9 @@ fn list(target: &Utf8Path, out: Output) -> Result<(), RkError> {
     })
 }
 
-/// The machine form of `rk lines open` in the branches mode; the worktree
-/// mode delegates to `rk worktree add`, whose report is its own.
+/// The machine form of `rk lines open`, on every path: the seat is the
+/// worktree verb's own job, named as the next action rather than run here,
+/// so the verb's one schema holds in both workflow modes.
 #[derive(Debug, Serialize)]
 struct OpenReport {
     /// The shape version of this document.
@@ -172,29 +172,13 @@ fn open(
             "a line is a snapshot of a chosen commit, so {branch} takes no default base; pass --base \"v<version>\", the tag it patches"
         )));
     };
-    // The worktree mode's open is the seat verb it already has: the add
-    // requires a base for a release line, adopts an existing one, and
-    // derives the sibling path — one implementation, one behavior.
-    let workflow = manifest::load(target)
-        .ok()
-        .flatten()
-        .map_or(Workflow::Branches, |record| record.parameters.workflow);
-    if workflow == Workflow::Worktree {
-        return crate::commands::worktree::run(&crate::cli::worktree::WorktreeArgs {
-            action: crate::cli::worktree::WorktreeAction::Add {
-                branch,
-                target: target.to_owned(),
-                base: Some(base.to_owned()),
-                apply,
-                json: out.is_json(),
-            },
-        });
-    }
     if branch_exists(target, &branch)? {
         out.result_line(format!(
             "satisfied: {branch} already exists; the open adopts it"
         ));
-        let next = vec![format!("git checkout {branch} works in it")];
+        let next = vec![format!(
+            "rk worktree add {branch} --apply seats it; in the branches mode, git checkout {branch} works in the main checkout"
+        )];
         return out.emit(&OpenReport {
             schema: "rk.lines-open/1",
             mode: "satisfied",
@@ -228,7 +212,10 @@ fn open(
     }
     out.result_line(format!("created {branch} at {base} ({resolved})"));
     let next = vec![
-        format!("git checkout {branch} && git push -u origin {branch} publishes it"),
+        format!(
+            "rk worktree add {branch} --apply seats it; in the branches mode, git checkout {branch} works in the main checkout"
+        ),
+        format!("git push -u origin {branch} publishes it with its upstream set"),
         "rk setup step protect-release-lines --apply protects every line, once per repository"
             .to_owned(),
     ];
@@ -458,13 +445,18 @@ fn newest_tag(target: &Utf8Path, line: &str, candidates: bool) -> Result<Option<
         .map(str::to_owned))
 }
 
-/// The commits the branch holds that no tag and no trunk ref reaches.
+/// The commits the branch holds that neither the line's own tags nor a
+/// trunk ref reaches. The negation is the line's `v<line>.*` pattern, not
+/// every tag: an unrelated tag that happens to reach the tip is not what
+/// makes a retirement safe, per
+/// `maintenance:a-line-is-never-retired-before-its-tags`.
 fn uncovered_commits(target: &Utf8Path, branch: &str) -> Result<Vec<String>, RkError> {
+    let line = branch.strip_prefix("release/").unwrap_or(branch);
     let mut args = vec![
         "rev-list".to_owned(),
         branch.to_owned(),
         "--not".to_owned(),
-        "--tags".to_owned(),
+        format!("--tags=v{line}.*"),
     ];
     for trunk in ["master", "origin/master"] {
         if resolve_commit(target, trunk).is_ok() {

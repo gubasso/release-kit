@@ -67,6 +67,10 @@ release-request:
         echo "the lines style merges each release by hand; not arming."
         exit 0
       fi
+      if [ "$CI_COMMIT_BRANCH" != "master" ]; then
+        echo "a line's request is never armed; its candidate is what a human validated."
+        exit 0
+      fi
       api() { curl -fsS --header "PRIVATE-TOKEN: $RELEASE_BOT_TOKEN" "$@"; }
       project="$CI_API_V4_URL/projects/$CI_PROJECT_ID"
       bot="$(api "$CI_API_V4_URL/user" | grep -o '"username":"[^"]*"' | head -n 1 | cut -d '"' -f 4)"

@@ -86,11 +86,16 @@ jobs:
           RELEASE_STYLE: RK_STYLE
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           GH_REPO: ${{ github.repository }}
+          REF: ${{ github.ref_name }}
           RELEASE_PR: ${{ steps.release-pr.outputs.pr }}
         run: |
           set -eu
           if [ "$RELEASE_STYLE" != "trunk" ]; then
             echo "the lines style merges each release by hand; not arming."
+            exit 0
+          fi
+          if [ "$REF" != "master" ]; then
+            echo "a line's request is never armed; its candidate is what a human validated."
             exit 0
           fi
           number="$(printf '%s' "${RELEASE_PR:-}" | sed -n 's/.*"number":[[:space:]]*\([0-9]*\).*/\1/p' | head -n 1)"
