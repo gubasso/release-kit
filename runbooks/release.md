@@ -12,10 +12,11 @@ just check                                    # or the binding's check command
 rk setup step package-check --target .
 # 2. read the release request the bot keeps open
 gh pr list --repo <repo> --state open
-# 3. correct the changelog on its branch, last
-# 4. merge the release request; this is the release
-gh pr checks <release pr> --repo <repo> --watch \
-  && gh pr merge <release pr> --repo <repo> --squash --delete-branch
+# 3. hold it, or correct the changelog on an unarmed request
+gh pr view <release pr> --repo <repo> --json autoMergeRequest
+# 4. let it merge; on an unarmed request, merge it
+gh pr checks <release pr> --repo <repo> --watch
+gh pr merge <release pr> --repo <repo> --squash --delete-branch   # unarmed only
 # 5. wait for the publish workflow on the merge commit, then the artifact workflow on its tag
 # 6. verify
 ```
@@ -28,15 +29,16 @@ just check                                    # or the binding's check command
 rk setup step package-check --target .
 # 2. read the release request the bot keeps open
 glab mr list
-# 3. correct the changelog on its branch, then merge with nothing landing in between
-# 4. merge the release request; this is the release
-glab ci status --wait \
-  && glab mr merge <release mr> --squash --remove-source-branch
+# 3. hold it, or correct the changelog on an unarmed request
+glab mr view <release mr>
+# 4. let it merge; on an unarmed request, merge it
+glab ci status --wait
+glab mr merge <release mr> --squash --remove-source-branch   # unarmed only
 # 5. wait for the release pipeline
 # 6. verify
 ```
 
-Three traps, and the chapter's [own warnings](../method/03-operate.md) explain the first two. Step 3 is the last point a changelog correction reaches the release, and a correction does not survive a later refresh. Step 5 is why a check run straight after the merge reports the release as missing under a dedicated artifact builder: the release page arrives only when the slowest platform build finishes. And where the artifact workflow also runs on pull requests, its newest run is usually not this release's: select runs by commit, never by recency.
+Four traps, and the chapter's [own warnings](../method/03-operate.md) explain the first three. An armed request has no correction window, and a stop is a disarm run before the last check turns green, never a close raced after it. Step 3 is the last point a changelog correction reaches an unarmed release, and a correction does not survive a later refresh. Step 5 is why a check run straight after the merge reports the release as missing under a dedicated artifact builder: the release page arrives only when the slowest platform build finishes. And where the artifact workflow also runs on pull requests, its newest run is usually not this release's: select runs by commit, never by recency.
 
 ## 1. Land the work
 
@@ -64,11 +66,50 @@ On gitlab:
 glab mr list                                  # check: the release request is open
 ```
 
-## 3. Correct the changelog
+## 3. Hold, or correct the changelog
 
-Correct on the request's branch, last, with nothing landing between the correction and the merge; the chapter owns why an early correction is dropped, and the forge document owns how the bot refreshes the request.
+The style decides what this step is: on an armed request it is the hold window, on an unarmed one the correction window. The chapter owns why, and the forge document owns how the bot refreshes the request.
 
-### 3a. Compare the entry against the range
+### 3a. Read whether the request stands armed
+
+On github:
+
+```bash
+gh pr view <release pr> --repo <repo> --json autoMergeRequest \
+  -q '.autoMergeRequest.enabledBy.login // "not armed"'
+# check: prints the arming login on an armed request, or "not armed"
+```
+
+On gitlab:
+
+```bash
+glab mr view <release mr>
+# check: the view reports auto-merge as enabled, or does not
+```
+
+Armed and this release ships: go to 4. Armed and it must not ship yet: 3b. Not armed: 3c.
+
+### 3b. Hold the release
+
+Run it before the last check turns green; the chapter owns why a later stop is a withdrawal instead.
+
+On github:
+
+```bash
+gh pr merge <release pr> --repo <repo> --disable-auto
+# check: 3a now prints "not armed"; the next bot refresh may re-arm, so say where the team reads that the release is held
+# already merged: nothing is held; rk method recovery owns the withdrawal
+```
+
+On gitlab:
+
+```bash
+glab api -X POST "projects/:id/merge_requests/<release mr>/cancel_merge_when_pipeline_succeeds"
+# check: 3a no longer reports auto-merge; the next bot refresh may re-arm, so say where the team reads that the release is held
+# already merged: nothing is held; rk method recovery owns the withdrawal
+```
+
+### 3c. Compare the entry against the range
 
 ```bash
 git fetch origin --tags --force
@@ -76,9 +117,9 @@ git log --oneline "v<previous version>^{commit}..origin/master"
 # check: every commit that should appear in the entry is listed
 ```
 
-Nothing missing: skip to step 4. Something missing: continue.
+Nothing missing: skip to step 4. Something missing: continue — and on a request still armed, run 3b first, because a correction pushed to an armed request races the checks it restarts.
 
-### 3b. Correct it on the request's branch
+### 3d. Correct it on the request's branch
 
 On branches:
 
@@ -100,7 +141,7 @@ git commit -am "docs(changelog): Complete the entry for v<version>"
 git push
 ```
 
-### 3c. Confirm the request survived
+### 3e. Confirm the request survived
 
 On github:
 
@@ -118,24 +159,36 @@ glab mr view <release mr>
 
 A new number means the bot reopened the request and took the fix: redo the correction on the new request and merge without waiting.
 
-## 4. Merge the release request
+## 4. Let it merge, or merge it
 
-This is the release decision. The named check gates the merge, and squash is the only allowed method, so `master` stays linear.
+This is the release. The named check gates the merge either way, and squash is the only allowed method, so `master` stays linear.
 
-### 4a. Wait for the checks, then merge
+On trunk:
+
+The request stands armed: the forge merges it the moment the last required check passes, and 4a is a watch, not an action. A request disarmed in 3b takes the unarmed form until the bot re-arms it.
+
+On lines:
+
+The merge is yours: watch the checks, then merge, because a line's request is never armed.
+
+### 4a. Watch the checks, and merge where the merge is yours
 
 On github:
 
 ```bash
-gh pr checks <release pr> --repo <repo> --watch \
-  && gh pr merge <release pr> --repo <repo> --squash --delete-branch
+gh pr checks <release pr> --repo <repo> --watch
+# check: on an armed request the forge merges when the last check passes; there is nothing to run
+# not armed, or disarmed: merge it yourself once the checks pass
+gh pr merge <release pr> --repo <repo> --squash --delete-branch
 ```
 
 On gitlab:
 
 ```bash
-glab ci status --wait \
-  && glab mr merge <release mr> --squash --remove-source-branch
+glab ci status --wait
+# check: on an armed request the forge merges when the pipeline passes; there is nothing to run
+# not armed, or disarmed: merge it yourself once the pipeline passes
+glab mr merge <release mr> --squash --remove-source-branch
 ```
 
 ### 4b. Bind the merge commit
@@ -287,4 +340,4 @@ gh run rerun --repo <repo> --failed \
 
 ## An older line
 
-A patch-only release for users on an older version is not this sequence: the command form is `rk guide backport`, and [branch for release](../method/07-branch-for-release.md) owns the path's why; [recovery](../method/04-recovery.md) carries the entry point for a line whose branch does not exist yet.
+A patch-only release for users on an older version is not this sequence: a fix crosses by `rk guide backport`, the line's own life — candidate cycle and retirement included — is `rk guide release-lines`, and [branch for release](../method/07-branch-for-release.md) owns the path's why; [recovery](../method/04-recovery.md) carries the entry point for a line whose branch does not exist yet.

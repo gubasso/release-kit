@@ -180,11 +180,26 @@ Automated: `rk setup step protect-trunk --apply --required-check <name>` — on 
 
 Automated: `rk setup step protect-tags --apply`, and — only when an older line exists — `rk setup step protect-release-lines --apply`, which a full apply skips.
 
-### 3d. Prove the protections
+### 3d. Let a request merge itself
+
+Automated: `rk setup step auto-merge --apply`. The switch is what the trunk style's standing release instruction needs, and it changes nothing for a project that merges by hand: a request that could merge immediately is never offered the option anyway.
+
+On github:
+
+```bash
+gh api "repos/<repo>" -q .allow_auto_merge
+# check: prints true, whether the run set it or found it set
+```
+
+On gitlab:
+
+The forge carries no project-level switch; availability follows from the pipeline requirement `protect-trunk` asserts, and 3e's check names that limitation rather than claiming a switch.
+
+### 3e. Prove the protections
 
 ```bash
 rk setup check --target .
-# check: every step reports satisfied; protect-release-lines reports skipped while no line exists
+# check: every step reports satisfied — auto-merge with a limitation on the forge that has no switch — and protect-release-lines reports skipped while no line exists
 # install-bot unknown: rerun with 2b's exports in the environment; rk forge <forge> owns why only the bot reads its own installation
 ```
 
@@ -194,13 +209,14 @@ Where the forge enforces less than a step claims, the check names the weaker gua
 
 ### 4a. Land the payload
 
-`--scopes` is required on the apply: the Conventional Commit vocabulary the project accepts, rendered into the title check and the commit hook, because a vocabulary is a decision rather than a default. `--workflow` chooses the working-copy mode and defaults to `worktree` — every code-changing branch in a linked worktree, the main checkout commits nothing; `--workflow branches` leaves branches workable in the main checkout, with worktrees optional beside them (check: `rk status` prints the mode).
+`--scopes` is required on the apply: the Conventional Commit vocabulary the project accepts, rendered into the title check and the commit hook, because a vocabulary is a decision rather than a default. `--workflow` chooses the working-copy mode and defaults to `worktree` — every code-changing branch in a linked worktree, the main checkout commits nothing; `--workflow branches` leaves branches workable in the main checkout, with worktrees optional beside them. `--style` chooses the release style and defaults to `trunk` — the bot's request carries auto-merge from creation, so a green trunk ships itself; `--style lines` leaves every request unarmed, for a project that keeps older lines and validates a candidate by hand (check: `rk status` prints the mode and the style).
 
 ```bash
 rk init --tech <tech> --target .             # preview every destination
 rk init --tech <tech> --target . --apply     # write the files and the landing record
 # check: the apply reports each written file and every sentinel left to fill
 # already landed: the apply refuses; rk upgrade --target . --apply takes an existing landing to a newer payload
+# a record from before the style parameter: the upgrade refuses until --style names one
 ```
 
 Then answer every reported sentinel and confirm the record:

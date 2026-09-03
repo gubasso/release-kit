@@ -49,7 +49,7 @@ Branch lifetime: under an hour.
 
 ## Release
 
-The bot has been maintaining the release request all along, and merging it is the release: automation tags the push that lands the bump and publishes.
+The bot has been maintaining the release request all along, and it has stood armed since it was opened: the moment the fix's merge refreshes it and its own check goes green, the forge merges it. Nobody clicks anything, and nobody waits for whoever would have. That merge is the release: automation tags the push that lands the bump and publishes.
 
 ```text
 master:  A──B──C──D──E──F──G──H──I──R
@@ -67,6 +67,10 @@ Shipping the fix meant shipping E, F, G, and H too. That is acceptable only unde
 - No code freeze existed. Alice and Bob kept merging while the fix was in flight, and whatever landed before the release request merged simply shipped with it.
 - The version follows the trunk. The release is v1.1.0 rather than v1.0.1, because it contains features, not only the fix. A truly patch-only release is unreachable in this style; that is what [branch for release](./07-branch-for-release.md) exists for.
 
+## Holding one
+
+A release that must not ship is stopped at the request, before its last check turns green: disarm it, and it waits like any unarmed request. After the merge there is nothing to stop — the version is public — and the answer is the withdrawal in [recovery](./04-recovery.md). That is the trade the style makes, and a project that needs a human between every green trunk and every publish is describing a sign-off gate, which is [branch for release](./07-branch-for-release.md)'s precondition, not this one's.
+
 ## A timeline
 
 ```text
@@ -74,7 +78,8 @@ Shipping the fix meant shipping E, F, G, and H too. That is acceptable only unde
 09:30  reproduced at the trunk's tip; failing test written
 09:52  pull request opened
 10:05  CI green, review approved, squash-merged as commit I
-10:07  release request merged; automation tags v1.1.0
+10:07  the release request's check goes green; the forge merges it and
+       automation tags v1.1.0 — no one was asked
 10:19  publish and artifact pipeline finish
        Bob merged an unrelated pull request at 09:58; it shipped in the same
        release, and nobody cared.
