@@ -1174,6 +1174,8 @@ fn doctor_reports_every_probe_and_exits_0() {
             "glab-auth",
             "openssl",
             "curl",
+            "nix",
+            "direnv",
             "cosign",
             "pypi-attestations"
         ]
@@ -1611,6 +1613,10 @@ fn usage_dumps_every_verb_in_one_call() {
         "rk runs prune",
         "rk skill install",
         "rk skill uninstall",
+        "rk devshell status",
+        "rk devshell add",
+        "rk devshell clean",
+        "rk devshell sync",
         "rk status",
         "rk upgrade",
         "rk adopt",
@@ -10227,4 +10233,312 @@ fn a_dep_edge_suppresses_the_implicit_feature() {
             "requires features a default build does not enable",
         ));
     assert!(!target.path().join("nix/package.nix").exists());
+}
+
+// ---------------------------------------------------------------------------
+// rk devshell
+
+/// The nix stand-in: logs every argv, answers the system probe and the
+/// version call, writes a lock naming the pinned tag on a flake update,
+/// and fails the verb a seeded file names.
+const MOCK_NIX: &str = r#"#!/usr/bin/env bash
+STATE="__STATE__"
+printf '%s\n' "$*" >> "$STATE/nix-log"
+if [[ "$1" == "--version" ]]; then echo "nix (Nix) 2.34.8"; exit 0; fi
+if [[ "$*" == "eval --raw --impure --expr builtins.currentSystem" ]]; then printf 'x86_64-linux'; exit 0; fi
+if [[ "$1" == "flake" ]]; then
+  if [[ -f "$STATE/nix_fail_update" ]]; then echo "error: could not update the lock" >&2; exit 1; fi
+  tag=$(sed -n 's/.*release-kit\/\(v[^"]*\)".*/\1/p' flake.nix | head -1)
+  printf '{"nodes":{"release-kit":{"locked":{"rev":"rev-of-%s","ref":"refs/tags/%s"}},"root":{}},"version":7}\n' "$tag" "$tag" > flake.lock
+  exit 0
+fi
+if [[ "$1" == "build" ]]; then
+  if [[ -f "$STATE/nix_fail_build" ]]; then echo "error: builder failed" >&2; exit 1; fi
+  exit 0
+fi
+exit 0
+"#;
+
+/// The curl stand-in for the release redirect: logs argv, fails on
+/// demand, and prints the release URL of the seeded latest tag.
+const MOCK_RELEASE_CURL: &str = r#"#!/usr/bin/env bash
+STATE="__STATE__"
+printf '%s\n' "$*" >> "$STATE/curl-log"
+if [[ -f "$STATE/curl_fail" ]]; then
+  echo "curl: (6) Could not resolve host: github.com" >&2
+  exit 6
+fi
+tag=$(cat "$STATE/latest_tag" 2>/dev/null || echo v0.2.16)
+printf 'https://github.com/owner/release-kit/releases/tag/%s' "$tag"
+"#;
+
+/// The direnv stand-in: logs argv and answers the version call.
+const MOCK_DIRENV: &str = r#"#!/usr/bin/env bash
+STATE="__STATE__"
+printf '%s\n' "$*" >> "$STATE/direnv-log"
+echo "2.32.0"
+"#;
+
+/// One devshell fixture: a scratch home that is also the state root, a
+/// scratch target under git, and the three mocked tools.
+struct DevshellFixture {
+    home: tempfile::TempDir,
+    target: tempfile::TempDir,
+    mock: tempfile::TempDir,
+}
+
+impl DevshellFixture {
+    fn new() -> Self {
+        let fixture = Self {
+            home: tempfile::tempdir().expect("a scratch home exists"),
+            target: tempfile::tempdir().expect("a scratch target exists"),
+            mock: tempfile::tempdir().expect("a scratch mock dir exists"),
+        };
+        for (name, body) in [
+            ("nix", MOCK_NIX),
+            ("curl", MOCK_RELEASE_CURL),
+            ("direnv", MOCK_DIRENV),
+        ] {
+            let path = fixture.mock.path().join(name);
+            std::fs::write(
+                &path,
+                body.replace("__STATE__", &fixture.mock.path().to_string_lossy()),
+            )
+            .expect("the mock writes");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                    .expect("the mock is executable");
+            }
+        }
+        git_in(fixture.target.path(), &["init", "-q", "-b", "master"]);
+        git_in(
+            fixture.target.path(),
+            &["config", "user.email", "rk@example.invalid"],
+        );
+        git_in(fixture.target.path(), &["config", "user.name", "rk test"]);
+        fixture
+    }
+
+    fn target(&self) -> &Path {
+        self.target.path()
+    }
+
+    fn state(&self, name: &str) -> String {
+        std::fs::read_to_string(self.mock.path().join(name)).unwrap_or_default()
+    }
+
+    fn nix_log(&self) -> String {
+        self.state("nix-log")
+    }
+
+    fn curl_log(&self) -> String {
+        self.state("curl-log")
+    }
+
+    /// A wired flake pinned at `tag`, and a lock naming it.
+    fn write_flake(&self, tag: &str) {
+        std::fs::write(
+            self.target().join("flake.nix"),
+            format!(
+                "{{\n  inputs = {{\n    nixpkgs.url = \"github:NixOS/nixpkgs/nixos-unstable\";\n    release-kit = {{\n      url = \"github:gubasso/release-kit/{tag}\";\n      inputs.nixpkgs.follows = \"nixpkgs\";\n    }};\n  }};\n  outputs = {{ self, nixpkgs, release-kit }}: {{ }};\n}}\n"
+            ),
+        )
+        .expect("the flake writes");
+        std::fs::write(
+            self.target().join("flake.lock"),
+            format!(
+                "{{\"nodes\":{{\"release-kit\":{{\"locked\":{{\"rev\":\"rev-of-{tag}\",\"ref\":\"refs/tags/{tag}\"}}}},\"root\":{{}}}},\"version\":7}}\n"
+            ),
+        )
+        .expect("the lock writes");
+    }
+
+    fn read(&self, rel: &str) -> String {
+        std::fs::read_to_string(self.target().join(rel)).expect("the file reads")
+    }
+
+    fn rk(&self, args: &[&str]) -> Command {
+        let mut command = rk_scrubbed();
+        command
+            .env("HOME", self.home.path())
+            .env("XDG_STATE_HOME", self.home.path())
+            .env("RK_NIX_BIN", self.mock.path().join("nix"))
+            .env("RK_CURL_BIN", self.mock.path().join("curl"))
+            .env("RK_DIRENV_BIN", self.mock.path().join("direnv"))
+            .env_remove("RK_DEVSHELL_SYNC");
+        for var in [
+            "CI",
+            "GITHUB_ACTIONS",
+            "GITLAB_CI",
+            "BUILDKITE",
+            "CIRCLECI",
+            "TF_BUILD",
+        ] {
+            command.env_remove(var);
+        }
+        command.args(args).arg("--target").arg(self.target());
+        command
+    }
+
+    fn json(&self, args: &[&str]) -> serde_json::Value {
+        let out = self.rk(args).arg("--json").output().expect("rk runs");
+        assert!(
+            out.status.success(),
+            "rk {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice(&out.stdout).expect("one JSON object")
+    }
+}
+
+#[test]
+fn devshell_status_reports_a_target_with_no_flake() {
+    let fixture = DevshellFixture::new();
+    fixture
+        .rk(&["devshell", "status"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("state no-flake")
+                .and(predicate::str::contains("flake absent, lock absent"))
+                .and(predicate::str::contains("rk devshell add")),
+        );
+    let report = fixture.json(&["devshell", "status"]);
+    assert_eq!(report["schema"], "rk.devshell-status/1");
+    assert_eq!(report["state"], "no-flake");
+    assert_eq!(report["input"], "absent");
+    assert!(
+        report.get("pin_tag").is_none(),
+        "an unknown value is omitted"
+    );
+    assert_eq!(report["pending"], false);
+}
+
+#[test]
+fn devshell_status_reports_a_wired_target_offline() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.16");
+    std::fs::write(
+        fixture.target().join(".envrc"),
+        "use flake\nrk devshell sync --apply || true\n",
+    )
+    .expect(".envrc writes");
+    let report = fixture.json(&["devshell", "status"]);
+    assert_eq!(report["state"], "ready");
+    assert_eq!(report["input"], "pinned");
+    assert_eq!(report["pin_tag"], "v0.2.16");
+    assert_eq!(report["pin_lines"], 1);
+    assert_eq!(report["locked_rev"], "rev-of-v0.2.16");
+    assert_eq!(report["locked_ref"], "refs/tags/v0.2.16");
+    assert_eq!(report["envrc"], "present");
+    assert_eq!(report["envrc_sync"], true);
+    assert_eq!(report["host"]["nix"], "ok");
+    assert_eq!(report["host"]["direnv"], "ok");
+    assert!(fixture.curl_log().is_empty(), "status fetches nothing");
+    assert!(
+        !fixture.nix_log().contains("flake") && !fixture.nix_log().contains("build"),
+        "status spawns no nix beyond the probe: {}",
+        fixture.nix_log()
+    );
+}
+
+#[test]
+fn devshell_status_names_an_ambiguous_pin_with_its_count() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.16");
+    let flake = fixture.read("flake.nix");
+    std::fs::write(
+        fixture.target().join("flake.nix"),
+        format!("{flake}  url = \"github:gubasso/release-kit/v0.2.15\";\n"),
+    )
+    .expect("the flake writes");
+    fixture
+        .rk(&["devshell", "status"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("state ambiguous-pin")
+                .and(predicate::str::contains("2 lines name it")),
+        );
+    let report = fixture.json(&["devshell", "status"]);
+    assert_eq!(report["input"], "ambiguous");
+    assert_eq!(report["pin_lines"], 2);
+    assert!(report.get("pin_tag").is_none());
+}
+
+#[test]
+fn devshell_status_reports_the_two_host_probes() {
+    let fixture = DevshellFixture::new();
+    let report = fixture.json(&["devshell", "status"]);
+    assert_eq!(report["host"]["nix"], "ok");
+    let failed = {
+        let out = fixture
+            .rk(&["devshell", "status"])
+            .arg("--json")
+            .env("RK_NIX_BIN", "/no/such/nix")
+            .env("RK_DIRENV_BIN", "/no/such/direnv")
+            .output()
+            .expect("rk runs");
+        assert!(out.status.success(), "a failed probe is a result");
+        serde_json::from_slice::<serde_json::Value>(&out.stdout).expect("one JSON object")
+    };
+    assert_eq!(failed["host"]["nix"], "failed");
+    assert_eq!(failed["host"]["direnv"], "failed");
+    // The doctor carries the same two probes, Soft, in catalog order after curl.
+    let doctor = {
+        let out = rk_scrubbed()
+            .args(["doctor", "--json"])
+            .env("HOME", fixture.home.path())
+            .env("XDG_STATE_HOME", fixture.home.path())
+            .env("RK_NIX_BIN", fixture.mock.path().join("nix"))
+            .env("RK_DIRENV_BIN", fixture.mock.path().join("direnv"))
+            .output()
+            .expect("rk runs");
+        serde_json::from_slice::<serde_json::Value>(&out.stdout).expect("one JSON object")
+    };
+    let ids: Vec<&str> = doctor["probes"]
+        .as_array()
+        .expect("probes")
+        .iter()
+        .map(|probe| probe["id"].as_str().expect("an id"))
+        .collect();
+    let curl = ids
+        .iter()
+        .position(|id| *id == "curl")
+        .expect("curl probed");
+    assert_eq!(ids[curl + 1], "nix");
+    assert_eq!(ids[curl + 2], "direnv");
+    for probe in doctor["probes"].as_array().expect("probes") {
+        if probe["id"] == "nix" || probe["id"] == "direnv" {
+            assert_eq!(probe["class"], "soft", "{}", probe["id"]);
+        }
+    }
+}
+
+/// Nix stays out of the Hard tool registry — and therefore out of the
+/// package wrapper — because wrapping it would put Nix inside the Nix
+/// package's own closure on every host.
+#[test]
+fn nix_is_not_a_hard_runtime_tool() {
+    assert!(
+        release_kit::probes::HARD_RUNTIME_TOOLS
+            .iter()
+            .all(|(executable, package)| *executable != "nix" && *package != "nix"),
+        "nix must stay a Soft probe"
+    );
+    let nix =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("nix/package.nix"))
+            .expect("nix/package.nix reads");
+    let marker = "makeBinPath [";
+    let start = nix.find(marker).expect("the wrapper names a package list");
+    let rest = &nix[start + marker.len()..];
+    let end = rest.find(']').expect("the package list closes");
+    assert!(
+        !rest[..end]
+            .split_whitespace()
+            .any(|package| package == "nix"),
+        "the wrapper must not carry nix"
+    );
 }

@@ -63,6 +63,7 @@ fn run(cli: &Cli) -> Result<(), RkError> {
         Commands::Worktree(args) => commands::worktree::run(args),
         Commands::Runs(args) => commands::runs::run(args),
         Commands::Skill(args) => commands::skill::run(args),
+        Commands::Devshell(args) => commands::devshell::run(args),
         Commands::Doctor(args) => commands::doctor::run(args),
         Commands::Usage => commands::usage::run(),
         Commands::License => commands::license::run(),
@@ -122,6 +123,7 @@ const fn name(command: &Commands) -> &'static str {
         Commands::Worktree(_) => "worktree",
         Commands::Runs(_) => "runs",
         Commands::Skill(_) => "skill",
+        Commands::Devshell(_) => "devshell",
         Commands::Doctor(_) => "doctor",
         Commands::Usage => "usage",
         Commands::License => "license",
@@ -133,6 +135,7 @@ const fn name(command: &Commands) -> &'static str {
 /// error renders on stderr.
 const fn wants_json(command: &Commands) -> bool {
     use release_kit::cli::branches::BranchesAction;
+    use release_kit::cli::devshell::DevshellAction;
     use release_kit::cli::lines::LinesAction;
     use release_kit::cli::runs::RunsAction;
     use release_kit::cli::setup::SetupAction;
@@ -177,6 +180,14 @@ const fn wants_json(command: &Commands) -> bool {
         Commands::Skill(args) => match &args.action {
             SkillAction::Install { json, .. } | SkillAction::Uninstall { json, .. } => *json,
             SkillAction::List | SkillAction::Show { .. } => false,
+        },
+        // Every action named: a `_ => false` arm would render a JSON
+        // caller's failure as human prose the moment a new one lands.
+        Commands::Devshell(args) => match &args.action {
+            DevshellAction::Status(args) => args.json,
+            DevshellAction::Add(args) => args.json,
+            DevshellAction::Clean(args) => args.json,
+            DevshellAction::Sync(args) => args.json,
         },
         _ => false,
     }

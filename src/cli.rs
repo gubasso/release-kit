@@ -5,6 +5,7 @@
 pub mod adopt;
 pub mod branches;
 pub mod completions;
+pub mod devshell;
 pub mod doctor;
 pub mod guide;
 pub mod init;
@@ -70,6 +71,8 @@ pub enum Commands {
     Runs(runs::RunsArgs),
     /// Manage the agent skills at user scope.
     Skill(skill::SkillArgs),
+    /// Wire release-kit as a consumer's devshell dependency and keep its pin fresh.
+    Devshell(devshell::DevshellArgs),
     /// Run every environment probe and report by class.
     Doctor(doctor::DoctorArgs),
     /// Print the whole command surface in one call.
