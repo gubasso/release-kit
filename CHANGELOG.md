@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.16](https://github.com/gubasso/release-kit/compare/v0.2.15...v0.2.16) - 2026-09-04
+
+### Added
+
+- *(snippets)* render the nix workflow and pin its actions ([#57](https://github.com/gubasso/release-kit/pull/57))
+
+### Fixed
+
+- *(landing)* honor dep-edge suppression of the implicit feature ([#64](https://github.com/gubasso/release-kit/pull/64))
+- *(landing)* enable a strong edge's implicit feature only when optional ([#63](https://github.com/gubasso/release-kit/pull/63))
+- *(landing)* honor strong dependency edges in the default features ([#62](https://github.com/gubasso/release-kit/pull/62))
+- *(landing)* judge required features against the default set ([#61](https://github.com/gubasso/release-kit/pull/61))
+- *(landing)* refine the shape gate and the record-drift count ([#60](https://github.com/gubasso/release-kit/pull/60))
+- *(landing)* close the review findings on the nix capability ([#59](https://github.com/gubasso/release-kit/pull/59))
+
 ## [0.2.15](https://github.com/gubasso/release-kit/compare/v0.2.14...v0.2.15) - 2026-09-04
 
 ### Added
