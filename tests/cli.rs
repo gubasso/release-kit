@@ -9393,3 +9393,41 @@ fn adopt_preview_replays_a_complete_apply_command() {
             .and(predicate::str::contains("--style trunk")),
     );
 }
+
+/// Every third-party destination the payload names — the two agent skill
+/// roots — is justified in `_docs/reference/` by a dated citation to the
+/// owning application's documentation, and the recorded matrix matches the
+/// roots the code declares, per
+/// placement:a-third-party-destination-names-its-source.
+#[test]
+fn every_third_party_destination_names_its_source() {
+    let reference = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("_docs/reference/REFERENCE-skill-scopes-sources.md"),
+    )
+    .expect("the skill scopes reference reads");
+    for root in [
+        release_kit::skills::CLAUDE_ROOT,
+        release_kit::skills::AGENTS_ROOT,
+    ] {
+        assert!(
+            reference.contains(root),
+            "the reference records the destination {root}"
+        );
+    }
+    assert!(
+        reference.contains("Verified against the listed sources on 20"),
+        "the reference carries a dated verification line"
+    );
+    for source in [
+        "code.claude.com",
+        "learn.chatgpt.com",
+        "gemini-cli",
+        "docs.github.com",
+    ] {
+        assert!(
+            reference.contains(source),
+            "the reference cites the owning application's documentation at {source}"
+        );
+    }
+}
