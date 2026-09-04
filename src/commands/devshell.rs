@@ -4,14 +4,16 @@
 //! The producer half already ships: the flake at every tag, and the
 //! landed package expression. This handler serves a consumer that pins
 //! that flake as a devshell input. `status` is the offline reporter and
-//! fetches nothing; the mutating actions land in their own phases and
-//! refuse honestly until then. Every report goes through the output
-//! boundary with a versioned schema.
+//! fetches nothing; `add` serves the fragments and seeds the pair where a
+//! target has neither file, never editing a file the target owns. Every
+//! report goes through the output boundary with a versioned schema.
 
 use serde::Serialize;
 
-use crate::cli::devshell::{DevshellAction, DevshellArgs, StatusArgs};
+use crate::cli::devshell::{AddArgs, DevshellAction, DevshellArgs, StatusArgs};
+use crate::devshell::fragments::{self, Fragment};
 use crate::devshell::{self, Observed, Presence, pin};
+use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
 use crate::output::Output;
 use crate::probes::{self, ProbeStatus};
@@ -59,6 +61,35 @@ struct StatusReport<'a> {
     next: &'a [String],
 }
 
+/// The `rk.devshell-add/1` document.
+#[derive(Debug, Serialize)]
+struct AddReport<'a> {
+    /// The shape version of this document.
+    schema: &'static str,
+    /// `preview` or `apply`.
+    mode: &'static str,
+    /// The target, canonical.
+    target: &'a str,
+    /// The tag the fragments pin.
+    tag: &'a str,
+    /// `binary` or `argument`: where the tag came from.
+    tag_source: &'static str,
+    /// Whether `flake.nix` existed before the run.
+    flake: Presence,
+    /// Whether `.envrc` existed before the run.
+    envrc: Presence,
+    /// The seed files this run wrote, relative to the target; empty in
+    /// preview.
+    written: &'a [String],
+    /// Why an owned file was refused, where one was.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    refusal: Option<&'a str>,
+    /// The four fragments, in application order.
+    fragments: &'a [Fragment],
+    /// What plausibly follows.
+    next: &'a [String],
+}
+
 /// The two Soft probes the sync spawns, as `ok` or `failed`.
 #[derive(Debug, Serialize)]
 struct Host {
@@ -78,9 +109,7 @@ struct Host {
 pub fn run(args: &DevshellArgs) -> Result<(), RkError> {
     match &args.action {
         DevshellAction::Status(args) => status(args),
-        DevshellAction::Add(_) => Err(RkError::Usage(
-            "rk devshell add is not in this build; the fragments phase lands it".to_owned(),
-        )),
+        DevshellAction::Add(args) => add(args),
         DevshellAction::Clean(_) => Err(RkError::Usage(
             "rk devshell clean is not in this build; the cleanup phase lands it".to_owned(),
         )),
@@ -138,6 +167,137 @@ fn status(args: &StatusArgs) -> Result<(), RkError> {
         host,
         next: &next,
     })
+}
+
+/// Serve the fragments; seed the files a target lacks under `--apply`.
+fn add(args: &AddArgs) -> Result<(), RkError> {
+    let out = Output::new(args.json);
+    let observed = devshell::observe(&args.target)?;
+    let (tag, tag_source) = resolve_tag(args.tag.as_deref())?;
+    let fragments = fragments::fragments(&tag, &observed);
+    let mode = if args.apply { "apply" } else { "preview" };
+    let mut written = Vec::new();
+    let mut owned = Vec::new();
+    if args.apply {
+        for (name, present, seed) in [
+            ("flake.nix", observed.flake, fragments::seed_flake(&tag)),
+            (".envrc", observed.envrc, fragments::seed_envrc()),
+        ] {
+            if present.is_present() {
+                owned.push(name);
+            } else {
+                crate::atomic::write(observed.target.join(name).as_std_path(), seed.as_bytes())?;
+                written.push(name.to_owned());
+            }
+        }
+    }
+    let refusal = (!owned.is_empty()).then(|| {
+        format!(
+            "the target already carries {}; rk devshell add never edits a file the target owns",
+            owned.join(" and ")
+        )
+    });
+    if args.apply {
+        for name in &written {
+            out.result_line(format!("wrote {name}"));
+        }
+    } else {
+        out.result_line("DRY RUN: rk devshell add prints the fragments; --apply seeds only the files the target lacks");
+    }
+    out.result_line(format!("tag {tag} (from the {tag_source})"));
+    for (name, present) in [("flake.nix", observed.flake), (".envrc", observed.envrc)] {
+        out.result_line(match present {
+            Presence::Present => {
+                format!("{name} present: the target owns it, so its fragments are applied by hand")
+            }
+            Presence::Absent => format!("{name} absent: --apply seeds it"),
+        });
+    }
+    for fragment in &fragments {
+        out.result_line(format!(
+            "--- {} into {} ({} at {}){}",
+            fragment.id,
+            fragment.file,
+            fragment.placement,
+            fragment.anchor.path,
+            match fragment.present {
+                Some(true) => ": already present",
+                Some(false) => ": missing",
+                None => ": not judged",
+            }
+        ));
+        out.result_line(&fragment.text);
+    }
+    let next = add_next(&observed, args.apply, &written);
+    out.next(&next);
+    out.emit(&AddReport {
+        schema: "rk.devshell-add/1",
+        mode,
+        target: observed.target.as_str(),
+        tag: &tag,
+        tag_source,
+        flake: observed.flake,
+        envrc: observed.envrc,
+        written: &written,
+        refusal: refusal.as_deref(),
+        fragments: &fragments,
+        next: &next,
+    })?;
+    let Some(message) = refusal else {
+        return Ok(());
+    };
+    let state = if written.is_empty() {
+        "nothing was written".to_owned()
+    } else {
+        format!(
+            "wrote {}; the owned file is byte-identical",
+            written.join(", ")
+        )
+    };
+    Err(RkError::refusal(
+        Diagnostic::new(Reason::DestructiveRefusal, message)
+            .expected("a target with no flake.nix and no .envrc, or the fragments applied by hand")
+            .target_state(state),
+    ))
+}
+
+/// The tag an `add` pins: the argument, normalized, or this binary's own
+/// version, so the fragments stay offline and deterministic.
+fn resolve_tag(argument: Option<&str>) -> Result<(String, &'static str), RkError> {
+    let Some(raw) = argument else {
+        return Ok((format!("v{}", env!("CARGO_PKG_VERSION")), "binary"));
+    };
+    devshell::normalize_tag(raw)
+        .map(|tag| (tag, "argument"))
+        .ok_or_else(|| {
+            RkError::Usage(format!(
+                "--tag {raw} is not a release tag; pass v0.2.16, 0.2.16, or the release URL"
+            ))
+        })
+}
+
+/// What plausibly follows an add.
+fn add_next(observed: &Observed, apply: bool, written: &[String]) -> Vec<String> {
+    let target = &observed.target;
+    let mut next = Vec::new();
+    if !apply {
+        next.push(format!(
+            "rk devshell add --target {target} --apply seeds the files the target lacks; an owned file takes its fragments by hand, in the order above"
+        ));
+        next.push(
+            "run rk init --nix before the apply where the landed packaging capability is also wanted: a seeded flake.nix withholds it later".to_owned(),
+        );
+    }
+    if !written.is_empty() {
+        next.push(format!(
+            "git -C {target} add {} — nix reads only tracked files — then direnv allow",
+            written.join(" ")
+        ));
+    }
+    next.push(format!(
+        "rk devshell sync --caller operator --target {target} locks the pin and proves the build"
+    ));
+    next
 }
 
 /// The human line for the input.
@@ -215,8 +375,65 @@ fn status_next(observed: &Observed) -> Vec<String> {
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use super::{Host, StatusReport};
+    use super::{AddReport, Host, StatusReport};
     use crate::devshell::Presence;
+    use crate::devshell::fragments::{Anchor, Fragment};
+
+    /// The complete `rk.devshell-add/1` shape, held by snapshot, the
+    /// fragment carrying every field the agent contract names.
+    #[test]
+    fn the_devshell_add_schema_snapshot_holds() {
+        let fragments = vec![Fragment {
+            id: "flake-input",
+            file: "flake.nix",
+            role: "the pinned release-kit input",
+            placement: "insert-into-attrset",
+            anchor: Anchor {
+                kind: "attrset",
+                path: "inputs",
+                needle: Some("inputs = {"),
+            },
+            text: "release-kit = {};".to_owned(),
+            present: Some(false),
+        }];
+        let written = vec![".envrc".to_owned()];
+        let next = vec!["direnv allow".to_owned()];
+        let report = AddReport {
+            schema: "rk.devshell-add/1",
+            mode: "apply",
+            target: "/srv/widget",
+            tag: "v0.2.16",
+            tag_source: "binary",
+            flake: Presence::Present,
+            envrc: Presence::Absent,
+            written: &written,
+            refusal: Some("the target already carries flake.nix"),
+            fragments: &fragments,
+            next: &next,
+        };
+        assert_eq!(
+            serde_json::to_string(&report).expect("a report serializes"),
+            r#"{"schema":"rk.devshell-add/1","mode":"apply","target":"/srv/widget","tag":"v0.2.16","tag_source":"binary","flake":"present","envrc":"absent","written":[".envrc"],"refusal":"the target already carries flake.nix","fragments":[{"id":"flake-input","file":"flake.nix","role":"the pinned release-kit input","placement":"insert-into-attrset","anchor":{"kind":"attrset","path":"inputs","needle":"inputs = {"},"text":"release-kit = {};","present":false}],"next":["direnv allow"]}"#
+        );
+        let bare = Fragment {
+            id: "envrc-sync",
+            file: ".envrc",
+            role: "the daily sync on directory entry",
+            placement: "append-line",
+            anchor: Anchor {
+                kind: "file",
+                path: ".envrc",
+                needle: None,
+            },
+            text: "line".to_owned(),
+            present: None,
+        };
+        assert_eq!(
+            serde_json::to_string(&bare).expect("a fragment serializes"),
+            r#"{"id":"envrc-sync","file":".envrc","role":"the daily sync on directory entry","placement":"append-line","anchor":{"kind":"file","path":".envrc"},"text":"line"}"#,
+            "an unjudged presence and a missing needle are omitted, never null"
+        );
+    }
 
     /// The complete `rk.devshell-status/1` shape, held by snapshot.
     #[test]

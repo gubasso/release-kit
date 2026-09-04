@@ -1,0 +1,4 @@
+release-kit = {
+  url = "RK_DEVSHELL_PIN";
+  inputs.nixpkgs.follows = "nixpkgs";
+};

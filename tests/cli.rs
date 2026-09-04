@@ -10542,3 +10542,243 @@ fn nix_is_not_a_hard_runtime_tool() {
         "the wrapper must not carry nix"
     );
 }
+
+#[test]
+fn devshell_add_previews_four_fragments_and_writes_nothing() {
+    let fixture = DevshellFixture::new();
+    fixture.rk(&["devshell", "add"]).assert().success().stdout(
+        predicate::str::contains("DRY RUN")
+            .and(predicate::str::contains("--- flake-input into flake.nix"))
+            .and(predicate::str::contains(
+                "--- outputs-argument into flake.nix",
+            ))
+            .and(predicate::str::contains(
+                "--- devshell-package into flake.nix",
+            ))
+            .and(predicate::str::contains("--- envrc-sync into .envrc"))
+            .and(predicate::str::contains(format!(
+                "github:gubasso/release-kit/v{}",
+                env!("CARGO_PKG_VERSION")
+            )))
+            .and(predicate::str::contains("rk devshell sync --apply || true")),
+    );
+    assert!(!fixture.target().join("flake.nix").exists());
+    assert!(!fixture.target().join(".envrc").exists());
+    assert!(fixture.curl_log().is_empty(), "add fetches nothing");
+    assert!(fixture.nix_log().is_empty(), "add spawns no nix");
+}
+
+#[test]
+fn devshell_add_json_carries_each_fragment_with_its_anchor_and_placement() {
+    let fixture = DevshellFixture::new();
+    let report = fixture.json(&["devshell", "add", "--tag", "0.2.15"]);
+    assert_eq!(report["schema"], "rk.devshell-add/1");
+    assert_eq!(report["mode"], "preview");
+    assert_eq!(report["tag"], "v0.2.15");
+    assert_eq!(report["tag_source"], "argument");
+    assert_eq!(report["written"], serde_json::json!([]));
+    let fragments = report["fragments"].as_array().expect("fragments");
+    let ids: Vec<&str> = fragments
+        .iter()
+        .map(|f| f["id"].as_str().expect("an id"))
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            "flake-input",
+            "outputs-argument",
+            "devshell-package",
+            "envrc-sync"
+        ]
+    );
+    let placements: Vec<&str> = fragments
+        .iter()
+        .map(|f| f["placement"].as_str().expect("a placement"))
+        .collect();
+    assert_eq!(
+        placements,
+        [
+            "insert-into-attrset",
+            "add-to-function-head",
+            "append-to-list",
+            "append-line"
+        ]
+    );
+    assert_eq!(fragments[0]["anchor"]["kind"], "attrset");
+    assert_eq!(fragments[0]["anchor"]["path"], "inputs");
+    assert!(
+        fragments[0]["text"]
+            .as_str()
+            .expect("text")
+            .contains("github:gubasso/release-kit/v0.2.15")
+    );
+    assert_eq!(
+        fragments[2]["text"],
+        "release-kit.packages.${system}.default"
+    );
+    assert_eq!(fragments[3]["text"], "rk devshell sync --apply || true");
+    // No flake and no .envrc: every fragment is known to be missing.
+    for fragment in fragments {
+        assert_eq!(fragment["present"], false, "{}", fragment["id"]);
+    }
+}
+
+#[test]
+fn devshell_add_marks_the_fragments_a_half_wired_flake_already_has() {
+    let fixture = DevshellFixture::new();
+    std::fs::write(
+        fixture.target().join("flake.nix"),
+        "{\n  inputs = {\n    nixpkgs.url = \"github:NixOS/nixpkgs/nixos-unstable\";\n    release-kit = {\n      url = \"github:gubasso/release-kit/v0.2.16\";\n      inputs.nixpkgs.follows = \"nixpkgs\";\n    };\n  };\n  outputs = { self, nixpkgs }: {\n    devShells.x86_64-linux.default = nixpkgs.legacyPackages.x86_64-linux.mkShell { packages = [ ]; };\n  };\n}\n",
+    )
+    .expect("the flake writes");
+    std::fs::write(fixture.target().join(".envrc"), "use flake\n").expect(".envrc writes");
+    let report = fixture.json(&["devshell", "add"]);
+    let by_id = |id: &str| {
+        report["fragments"]
+            .as_array()
+            .expect("fragments")
+            .iter()
+            .find(|f| f["id"] == id)
+            .expect("the fragment")
+            .clone()
+    };
+    assert_eq!(by_id("flake-input")["present"], true);
+    assert_eq!(by_id("flake-input")["anchor"]["needle"], "inputs = {");
+    assert_eq!(by_id("outputs-argument")["present"], false);
+    assert_eq!(by_id("outputs-argument")["anchor"]["needle"], "outputs =");
+    assert_eq!(by_id("devshell-package")["present"], false);
+    assert_eq!(
+        by_id("devshell-package")["anchor"]["needle"],
+        "packages = ["
+    );
+    assert_eq!(by_id("envrc-sync")["present"], false);
+    assert!(by_id("envrc-sync").get("needle").is_none());
+    // An ellipsis in the head cannot be judged: the field is omitted.
+    std::fs::write(
+        fixture.target().join("flake.nix"),
+        "{\n  inputs = { };\n  outputs = { self, ... }: { };\n}\n",
+    )
+    .expect("the flake writes");
+    let report = fixture.json(&["devshell", "add"]);
+    let head = report["fragments"]
+        .as_array()
+        .expect("fragments")
+        .iter()
+        .find(|f| f["id"] == "outputs-argument")
+        .expect("the fragment")
+        .clone();
+    assert!(head.get("present").is_none(), "{head}");
+}
+
+#[test]
+fn devshell_add_apply_seeds_a_flake_and_envrc_where_there_is_none() {
+    let fixture = DevshellFixture::new();
+    let report = fixture.json(&["devshell", "add", "--apply", "--tag", "v0.2.15"]);
+    assert_eq!(report["mode"], "apply");
+    assert_eq!(
+        report["written"],
+        serde_json::json!(["flake.nix", ".envrc"])
+    );
+    assert!(report.get("refusal").is_none());
+    let flake = fixture.read("flake.nix");
+    assert!(flake.contains("url = \"github:gubasso/release-kit/v0.2.15\";"));
+    assert!(flake.contains("release-kit.packages.${system}.default"));
+    assert!(flake.contains("inputs.nixpkgs.follows = \"nixpkgs\";"));
+    assert_eq!(
+        fixture.read(".envrc"),
+        "use flake\nrk devshell sync --apply || true\n"
+    );
+    let status = fixture.json(&["devshell", "status"]);
+    assert_eq!(status["state"], "ready");
+    assert_eq!(status["pin_tag"], "v0.2.15");
+    assert_eq!(status["envrc_sync"], true);
+    assert_eq!(
+        status["lock"], "absent",
+        "the seed carries no lock; sync writes it"
+    );
+}
+
+#[test]
+fn devshell_add_apply_refuses_a_flake_the_target_owns() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    let before = fixture.read("flake.nix");
+    let out = fixture
+        .rk(&["devshell", "add", "--apply"])
+        .output()
+        .expect("rk runs");
+    assert_eq!(out.status.code(), Some(73));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("--- flake-input into flake.nix"),
+        "the fragments still print: {stdout}"
+    );
+    assert!(
+        stdout.contains("wrote .envrc"),
+        "the absent file is seeded: {stdout}"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("never edits a file the target owns"),
+        "the refusal names the reason: {stderr}"
+    );
+    assert_eq!(
+        fixture.read("flake.nix"),
+        before,
+        "the owned flake is byte-identical"
+    );
+    assert!(fixture.target().join(".envrc").exists());
+    // The JSON form carries the refusal in the report and the diagnostic on stderr.
+    let out = fixture
+        .rk(&["devshell", "add", "--apply", "--json"])
+        .output()
+        .expect("rk runs");
+    assert_eq!(out.status.code(), Some(73));
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one JSON object");
+    assert!(
+        report["refusal"]
+            .as_str()
+            .expect("a refusal")
+            .contains("flake.nix and .envrc")
+    );
+    assert_eq!(report["written"], serde_json::json!([]));
+    let diagnostic: serde_json::Value = serde_json::from_slice(&out.stderr).expect("a diagnostic");
+    assert_eq!(diagnostic["reason"], "destructive-refusal");
+}
+
+#[test]
+fn devshell_add_apply_creates_only_absent_files() {
+    let fixture = DevshellFixture::new();
+    std::fs::write(fixture.target().join(".envrc"), "use flake\nexport FOO=1\n")
+        .expect(".envrc writes");
+    let out = fixture
+        .rk(&["devshell", "add", "--apply", "--json"])
+        .output()
+        .expect("rk runs");
+    assert_eq!(out.status.code(), Some(73), "the owned .envrc is refused");
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one JSON object");
+    assert_eq!(report["written"], serde_json::json!(["flake.nix"]));
+    assert_eq!(fixture.read(".envrc"), "use flake\nexport FOO=1\n");
+    assert!(fixture.read("flake.nix").contains("release-kit"));
+    let envrc = report["fragments"]
+        .as_array()
+        .expect("fragments")
+        .iter()
+        .find(|f| f["id"] == "envrc-sync")
+        .expect("the fragment")
+        .clone();
+    assert_eq!(
+        envrc["present"], false,
+        "the owned .envrc still lacks the line"
+    );
+}
+
+#[test]
+fn devshell_add_refuses_a_tag_that_is_not_a_release() {
+    let fixture = DevshellFixture::new();
+    fixture
+        .rk(&["devshell", "add", "--tag", "latest"])
+        .assert()
+        .code(64)
+        .stderr(predicate::str::contains("is not a release tag"));
+}

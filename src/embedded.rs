@@ -209,6 +209,10 @@ mod tests {
             "HOOKS_BLOCK",
             "WORKTREE_GUARD_ENTRY",
             "HOOK_BODY",
+            "use flake",
+            "rk devshell sync --apply",
+            "release-kit.packages.",
+            "inputs.nixpkgs.follows",
         ];
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut offenders = Vec::new();

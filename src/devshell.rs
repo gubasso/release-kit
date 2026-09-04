@@ -6,8 +6,9 @@
 //! `flake.nix` is the version, and the `release-kit` node in
 //! `flake.lock` is the content. This module owns the offline observation
 //! of that wiring and the per-checkout state key; `pin` owns the line
-//! grammar.
+//! grammar and `fragments` the authored texts `add` serves.
 
+pub mod fragments;
 pub mod pin;
 
 use std::path::PathBuf;
