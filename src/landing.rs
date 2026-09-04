@@ -607,21 +607,56 @@ pub fn nix_unsupported_shape(target: &Utf8Path) -> Option<String> {
             "the target declares no binary — no effective src/main.rs and no [[bin]] entry — and the seed flake's smoke check runs one; no Nix file lands".to_owned(),
         );
     }
-    // The seed's mainProgram is the first [[bin]] entry; one gated behind
-    // required-features produces no executable in a default build, so the
-    // smoke check would fail on a green landing.
+    // The seed's mainProgram is the first [[bin]] entry; one whose
+    // required-features a default build does not enable produces no
+    // executable, so the smoke check would fail on a green landing. A
+    // requirement the default feature set covers builds normally and
+    // passes.
     if let Some(bins) = explicit_bins {
-        let first_gated = bins
+        let required = bins
             .first()
             .and_then(toml::Value::as_table)
-            .is_some_and(|bin| bin.contains_key("required-features"));
-        if first_gated {
-            return Some(
-                "the target's first [[bin]] entry is gated behind required-features, which a default build does not enable; no Nix file lands".to_owned(),
-            );
+            .and_then(|bin| bin.get("required-features"))
+            .and_then(toml::Value::as_array);
+        if let Some(required) = required {
+            let enabled = default_features(&table);
+            let missing = required
+                .iter()
+                .filter_map(toml::Value::as_str)
+                .any(|feature| !enabled.contains(feature));
+            if missing {
+                return Some(
+                    "the target's first [[bin]] entry requires features a default build does not enable; no Nix file lands".to_owned(),
+                );
+            }
         }
     }
     None
+}
+
+/// The features a default build enables: the `default` feature resolved
+/// through the `[features]` table's own enables. Dependency forms —
+/// `dep:name`, `name/feature` — are not feature names here and are
+/// skipped; the closure is bounded by the table's size.
+fn default_features(table: &toml::Table) -> std::collections::BTreeSet<String> {
+    let Some(features) = table.get("features").and_then(toml::Value::as_table) else {
+        return std::collections::BTreeSet::new();
+    };
+    let mut enabled = std::collections::BTreeSet::new();
+    let mut queue = vec!["default".to_owned()];
+    while let Some(name) = queue.pop() {
+        if !enabled.insert(name.clone()) {
+            continue;
+        }
+        if let Some(implies) = features.get(&name).and_then(toml::Value::as_array) {
+            for implied in implies.iter().filter_map(toml::Value::as_str) {
+                if !implied.contains(':') && !implied.contains('/') {
+                    queue.push(implied.to_owned());
+                }
+            }
+        }
+    }
+    enabled
 }
 
 /// Why the flake half of the Nix capability stays out of this landing, or

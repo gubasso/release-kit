@@ -10115,7 +10115,9 @@ fn a_nominal_binary_does_not_pass_the_shape_gate() {
     std::fs::write(target.path().join("src/main.rs"), "fn main() {}\n").expect("the main writes");
     land_rust_nix(target.path())
         .success()
-        .stdout(predicate::str::contains("required-features"));
+        .stdout(predicate::str::contains(
+            "requires features a default build does not enable",
+        ));
     assert!(!target.path().join("nix/package.nix").exists());
 }
 
@@ -10146,4 +10148,22 @@ fn record_drift_counts_apart_from_file_drift() {
             .is_some_and(|count| count > 0),
         "{report}"
     );
+}
+
+/// A first [[bin]] entry whose required features the default set enables
+/// — directly or through a feature the default implies — passes the
+/// shape gate; the gate withholds only what a default build truly skips.
+#[test]
+fn default_enabled_required_features_pass_the_shape_gate() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    std::fs::write(
+        target.path().join("Cargo.toml"),
+        "[package]\nname = \"widget\"\nversion = \"0.1.0\"\n\n[features]\ndefault = [\"full\"]\nfull = [\"cli\"]\ncli = []\n\n[[bin]]\nname = \"widget\"\npath = \"src/main.rs\"\nrequired-features = [\"cli\"]\n",
+    )
+    .expect("the crate manifest writes");
+    std::fs::write(target.path().join("Cargo.lock"), "version = 4\n").expect("the lock writes");
+    std::fs::create_dir_all(target.path().join("src")).expect("the src dir exists");
+    std::fs::write(target.path().join("src/main.rs"), "fn main() {}\n").expect("the main writes");
+    land_rust_nix(target.path()).success();
+    assert!(target.path().join("nix/package.nix").is_file());
 }
