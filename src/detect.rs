@@ -68,7 +68,7 @@ pub struct Detection {
 /// Read the `origin` remote of `dir` and map it, without judging.
 #[must_use]
 pub fn detect(dir: &Path) -> Detection {
-    let out = Command::new("git")
+    let out = Command::new(crate::probes::git_bin())
         .args(["-C"])
         .arg(dir)
         .args(["remote", "get-url", "origin"])

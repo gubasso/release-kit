@@ -332,7 +332,7 @@ fn path_token(token: &str) -> Option<String> {
 /// fill its stdout pipe while this process is still writing stdin — the
 /// buffering deadlock its documentation assigns the caller.
 fn check_ignore(target: &Utf8Path, candidates: &[(usize, String)]) -> Option<Vec<(usize, String)>> {
-    let mut command = std::process::Command::new("git");
+    let mut command = std::process::Command::new(crate::probes::git_bin());
     let mut child = command
         .arg("-C")
         .arg(target.as_std_path())

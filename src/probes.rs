@@ -86,11 +86,40 @@ impl ProbeResult {
 /// to learn what they are.
 pub const SKILL_PROBES: [&str; 3] = ["skill-roots", "skill-gate", "skill-payload"];
 
+/// Every executable a Hard probe requires, paired with the nixpkgs package
+/// whose `bin/` supplies it in the installed package's wrapper.
+///
+/// `nix/package.nix` mirrors this list by hand — Nix cannot read this
+/// registry, and generating one list from the other is more machinery than
+/// two entries earn — so the mirror test in `tests/cli.rs` holds the two
+/// lists to agreement and a divergence fails by name instead of shipping.
+pub const HARD_RUNTIME_TOOLS: [(&str, &str); 2] = [("git", "git"), ("sh", "bash")];
+
+/// One owner for the git binary every production launcher spawns.
+///
+/// `RK_GIT_BIN` substitutes it — the same contract every soft tool's
+/// override states, and what lets an operator's own git win over the one
+/// the installed package's wrapper supplies.
+#[must_use]
+pub fn git_bin() -> std::ffi::OsString {
+    std::env::var_os("RK_GIT_BIN").unwrap_or_else(|| "git".into())
+}
+
+/// One owner for the POSIX shell every setup step spawns through.
+///
+/// `RK_SH_BIN` substitutes it, which is also what keeps tests hermetic on
+/// a host whose `sh` is not the one under test.
+#[must_use]
+pub fn sh_bin() -> std::ffi::OsString {
+    std::env::var_os("RK_SH_BIN").unwrap_or_else(|| "sh".into())
+}
+
 /// Run the whole catalog, in its stable order.
 #[must_use]
 pub fn run_all() -> Vec<ProbeResult> {
     vec![
         shell(),
+        git(),
         state_root(),
         skill_roots(),
         skill_gate(),
@@ -180,7 +209,7 @@ fn tool(
 /// A POSIX shell runs; every setup step spawns through it.
 fn shell() -> ProbeResult {
     let id = "sh";
-    match Command::new("sh").args(["-c", "exit 0"]).status() {
+    match Command::new(sh_bin()).args(["-c", "exit 0"]).status() {
         Ok(status) if status.success() => ProbeResult::ok(id, ProbeClass::Hard, "sh runs"),
         Ok(status) => ProbeResult::failed(
             id,
@@ -194,6 +223,22 @@ fn shell() -> ProbeResult {
             format!("sh does not spawn: {source}"),
             "install a POSIX shell on PATH",
         ),
+    }
+}
+
+/// Version control answers; every branch, worktree, landing, and setup
+/// verb launches it.
+fn git() -> ProbeResult {
+    let id = "git";
+    match Command::new(git_bin()).arg("--version").output() {
+        Ok(out) if out.status.success() => ProbeResult::ok(id, ProbeClass::Hard, "git runs"),
+        Ok(_) => ProbeResult::failed(
+            id,
+            ProbeClass::Hard,
+            "git does not answer --version",
+            "repair the git on PATH, or point RK_GIT_BIN at a working one",
+        ),
+        Err(_) => ProbeResult::failed(id, ProbeClass::Hard, "git is not on PATH", "install git"),
     }
 }
 
@@ -478,7 +523,7 @@ fn accepts_a_write(dir: &Utf8Path) -> std::io::Result<()> {
 /// what forge and slug detection read.
 fn git_remote() -> ProbeResult {
     let id = "git-remote";
-    let out = Command::new("git")
+    let out = Command::new(git_bin())
         .args(["remote", "get-url", "origin"])
         .output();
     let url = match out {

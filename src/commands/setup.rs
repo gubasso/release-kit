@@ -1337,7 +1337,7 @@ fn restrict(path: &std::path::Path, mode: u32) {
 /// A POSIX shell must spawn before anything else does; every step runs
 /// through it.
 fn guard_sh() -> Result<(), RkError> {
-    let ok = std::process::Command::new("sh")
+    let ok = std::process::Command::new(crate::probes::sh_bin())
         .args(["-c", "exit 0"])
         .status()
         .is_ok_and(|status| status.success());

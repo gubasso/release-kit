@@ -574,7 +574,7 @@ fn inventory(target: &Utf8Path) -> Result<Vec<Worktree>, RkError> {
 
 /// Run one git command against the target, spawn failure typed.
 fn git(target: &Utf8Path, args: &[&str]) -> Result<std::process::Output, RkError> {
-    let mut command = std::process::Command::new("git");
+    let mut command = std::process::Command::new(crate::probes::git_bin());
     for var in maintenance::GIT_HOOK_VARS {
         command.env_remove(var);
     }

@@ -1,4 +1,10 @@
-{ lib, rustPlatform }:
+{
+  lib,
+  rustPlatform,
+  makeBinaryWrapper,
+  git,
+  bash,
+}:
 
 let
   cargoToml = lib.importTOML ../Cargo.toml;
@@ -18,6 +24,26 @@ rustPlatform.buildRustPackage {
   # check owns validation, and the flake's checks.smoke carries the
   # Nix-side signal.
   doCheck = false;
+
+  # makeBinaryWrapper, not makeWrapper: rk runs inside git hooks, where a
+  # compiled exec wrapper beats a shell trampoline.
+  nativeBuildInputs = [ makeBinaryWrapper ];
+
+  # The Hard probe class from src/probes.rs, mirrored by hand and held to
+  # agreement by the mirror test in tests/cli.rs; bash also supplies sh.
+  # --suffix so an operator's own git wins, the same courtesy every
+  # RK_*_BIN override extends to the soft tools, which stay out: rk doctor
+  # reports each soft tool with its repair line, and wrapping them would
+  # multiply the closure for capabilities most invocations never reach.
+  postInstall = ''
+    wrapProgram $out/bin/rk \
+      --suffix PATH : ${
+        lib.makeBinPath [
+          git
+          bash
+        ]
+      }
+  '';
 
   # Every payload root, read from its one declaration rather than restated
   # here, plus the license files src/embedded.rs embeds from outside that

@@ -404,7 +404,7 @@ fn header(count: usize) -> String {
 /// git hook, and the child must act on the named target, never on the
 /// hook's exported repository.
 fn git(target: &Utf8Path, args: &[&str]) -> Result<std::process::Output, RkError> {
-    let mut command = std::process::Command::new("git");
+    let mut command = std::process::Command::new(crate::probes::git_bin());
     for var in maintenance::GIT_HOOK_VARS {
         command.env_remove(var);
     }
