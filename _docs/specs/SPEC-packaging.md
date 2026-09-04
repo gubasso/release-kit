@@ -13,12 +13,18 @@
   - [`packaging:the-derivation-mirrors-the-probe-registry` — The derivation mirrors the probe registry](#packagingthe-derivation-mirrors-the-probe-registry--the-derivation-mirrors-the-probe-registry)
   - [`packaging:a-launcher-resolves-through-one-owner` — A launcher resolves through one owner](#packaginga-launcher-resolves-through-one-owner--a-launcher-resolves-through-one-owner)
   - [`packaging:the-landable-capability-promises-a-buildable-flake` — The landable capability promises a buildable flake](#packagingthe-landable-capability-promises-a-buildable-flake--the-landable-capability-promises-a-buildable-flake)
+  - [`packaging:the-consumer-pin-has-two-facts-and-one-mover` — The consumer pin has two facts and one mover](#packagingthe-consumer-pin-has-two-facts-and-one-mover--the-consumer-pin-has-two-facts-and-one-mover)
+  - [`packaging:a-devshell-bump-is-all-or-nothing` — A devshell bump is all or nothing](#packaginga-devshell-bump-is-all-or-nothing--a-devshell-bump-is-all-or-nothing)
+  - [`packaging:the-unattended-caller-never-fails-the-shell` — The unattended caller never fails the shell](#packagingthe-unattended-caller-never-fails-the-shell--the-unattended-caller-never-fails-the-shell)
+  - [`packaging:add-serves-a-template-and-edits-no-owned-flake` — Add serves a template and edits no owned flake](#packagingadd-serves-a-template-and-edits-no-owned-flake--add-serves-a-template-and-edits-no-owned-flake)
+  - [`packaging:a-wired-target-runs-one-bump-mechanism` — A wired target runs one bump mechanism](#packaginga-wired-target-runs-one-bump-mechanism--a-wired-target-runs-one-bump-mechanism)
+  - [`packaging:the-cleanup-removes-only-what-it-can-judge` — The cleanup removes only what it can judge](#packagingthe-cleanup-removes-only-what-it-can-judge--the-cleanup-removes-only-what-it-can-judge)
 
 <!--TOC-->
 
 ## Purpose
 
-Rules governing the Nix packaging surface of this repository: the flake outputs, the package expression under `nix/`, and the CI proof behind the support claim. The boundary against `SPEC-distribution.md` is the artifact: that spec binds what the installed `rk` binary carries and writes, and this one binds how a consumer obtains that binary through the flake. The files `rk init` lands into a target are bound by `SPEC-landing.md`.
+Rules governing the Nix packaging surface of this repository: the flake outputs, the package expression under `nix/`, the CI proof behind the support claim, and the consumer half — how a project pins that flake as its devshell dependency through `rk devshell` and keeps the pin fresh. The boundary against `SPEC-distribution.md` is the artifact: that spec binds what the installed `rk` binary carries and writes, and this one binds how a consumer obtains that binary through the flake. The files `rk init` lands into a target are bound by `SPEC-landing.md`.
 
 ## Requirements
 
@@ -129,3 +135,75 @@ The landed Nix capability MUST promise exactly a package expression that evaluat
 - THEN the promise is the build and its proof, with registry distribution named as the target's own later step
 
 Verify: `cargo nextest run -E 'test(nix)'`
+
+### `packaging:the-consumer-pin-has-two-facts-and-one-mover` — The consumer pin has two facts and one mover
+
+Where a consumer pins release-kit as a flake input, the binary MUST treat the tag in `flake.nix` as the version and the `release-kit` node in `flake.lock` as the content, and `rk devshell sync` MUST move both in one run, because a tag without its lock is a promise the shell has not kept and nothing else in the tree may name an rk version.
+
+#### Scenario: A sync moves the pin
+
+- GIVEN a consumer whose pin is behind the latest release
+- WHEN `rk devshell sync --apply` runs
+- THEN the tag in `flake.nix` and the locked node in `flake.lock` both name the new release, and the report names the same `from` and `to`
+
+Verify: `cargo nextest run -E 'test(devshell_sync_apply_rewrites_the_pin_updates_the_lock_and_builds)'`
+
+### `packaging:a-devshell-bump-is-all-or-nothing` — A devshell bump is all or nothing
+
+Where any step of a bump fails — the pin rewrite, the lock refresh, the system probe, or the build that fences it — the binary MUST return both files to their previous contents and name the failing step; an interrupted run MUST recover on the next run from its marker, because the crate forbids the signal handler a shell trap would need, and that is the one departure from the shell version.
+
+#### Scenario: The build fails against the consumer's nixpkgs
+
+- GIVEN a pin that does not build against the consumer's own nixpkgs
+- WHEN the sync reaches the build step
+- THEN both files are byte-identical to what they held before, the report names `build` as the failed step, and the next run finds no marker
+
+Verify: `cargo nextest run -E 'test(a_failed_devshell_build_restores_both_files) or test(an_interrupted_transaction_is_recovered_on_the_next_run)'`
+
+### `packaging:the-unattended-caller-never-fails-the-shell` — The unattended caller never fails the shell
+
+Under `--caller envrc`, every reported outcome of `rk devshell sync` MUST exit 0 with the outcome in the report, because the line runs on every directory entry and a shell that refuses to start over a stale pin is worse than one that says so.
+
+#### Scenario: The network is down on directory entry
+
+- GIVEN a consumer entering the directory with no network
+- WHEN the `.envrc` line runs
+- THEN the run reports `unreachable`, writes nothing, and exits 0, and the shell starts
+
+Verify: `cargo nextest run -E 'test(every_envrc_path_exits_zero)'`
+
+### `packaging:add-serves-a-template-and-edits-no-owned-flake` — Add serves a template and edits no owned flake
+
+`rk devshell add` MUST print the fragments with their anchors and placements and MUST NOT edit a `flake.nix` or `.envrc` the target owns, seeding a file only where the target has none, because a lexical observation does not justify a write into another project's Nix file and the splice into Nix attrsets was rejected by decision.
+
+#### Scenario: A target owns its flake
+
+- GIVEN a target with a `flake.nix` of its own
+- WHEN `rk devshell add --apply` runs
+- THEN the flake is byte-identical, the run exits 73 naming the reason, and the fragments still print for the operator or the agent to apply
+
+Verify: `cargo nextest run -E 'test(devshell_add_apply_refuses_a_flake_the_target_owns)'`
+
+### `packaging:a-wired-target-runs-one-bump-mechanism` — A wired target runs one bump mechanism
+
+The binary MUST report a target as `ready` only where the pin is wired and no artifact of a predecessor bump mechanism remains, because two mechanisms over the same two files fight or silently undo each other and the wiring is a replacement, never an addition.
+
+#### Scenario: A hand-rolled bump sits beside a wired pin
+
+- GIVEN a target whose `flake.nix` carries the pin and whose `scripts/` still holds the hand-rolled bump
+- WHEN `rk devshell status` runs
+- THEN the state is `superseded` and the leftovers list names the script, and `ready` follows only once the list is empty
+
+Verify: `cargo nextest run -E 'test(devshell_status_names_a_predecessor_mechanism_beside_a_wired_pin) or test(a_clean_target_reports_ready_and_an_empty_manual_list)'`
+
+### `packaging:the-cleanup-removes-only-what-it-can-judge` — The cleanup removes only what it can judge
+
+`rk devshell clean` MUST remove a catalog file only when its content matches, rewrite only the `.envrc` line the verb owns, and, where it leaves a leftover in place, name its file, its line, and the reason with the file byte-identical, because a recipe body, a Nix package list, and a CI step carry structure a line scan cannot judge.
+
+#### Scenario: The justfile recipe stays
+
+- GIVEN a target whose justfile carries the hand-rolled bump recipe
+- WHEN `rk devshell clean --apply` runs
+- THEN the justfile is byte-identical and the report's `manual` list names it by file, line, and reason
+
+Verify: `cargo nextest run -E 'test(devshell_clean_apply_leaves_the_justfile_and_the_flake_and_names_them) or test(a_catalog_file_matches_on_its_content_and_not_on_its_name_alone)'`

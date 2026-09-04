@@ -4,6 +4,7 @@
 pub mod adopt;
 pub mod branches;
 pub mod completions;
+pub mod devshell;
 pub mod doctor;
 pub mod forge;
 pub mod guide;

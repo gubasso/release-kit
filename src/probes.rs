@@ -105,6 +105,47 @@ pub fn git_bin() -> std::ffi::OsString {
     std::env::var_os("RK_GIT_BIN").unwrap_or_else(|| "git".into())
 }
 
+/// One owner for the nix binary every devshell launch spawns: the lock
+/// refresh, the system probe, and the build. `RK_NIX_BIN` substitutes it.
+#[must_use]
+pub fn nix_bin() -> std::ffi::OsString {
+    std::env::var_os("RK_NIX_BIN").unwrap_or_else(|| "nix".into())
+}
+
+/// One owner for the direnv binary, which nothing here spawns but the
+/// doctor probes: it is what loads a consumer's devshell on entry.
+/// `RK_DIRENV_BIN` substitutes it.
+#[must_use]
+pub fn direnv_bin() -> std::ffi::OsString {
+    std::env::var_os("RK_DIRENV_BIN").unwrap_or_else(|| "direnv".into())
+}
+
+/// Nix answers; `rk devshell sync` updates and builds the pinned devshell
+/// with it. Soft, and deliberately outside the wrapper: wrapping nix
+/// would put it inside the package's own closure on every host.
+#[must_use]
+pub fn nix() -> ProbeResult {
+    tool(
+        "nix",
+        "RK_NIX_BIN",
+        "nix",
+        "Nix; rk devshell sync updates and builds the pinned devshell with it",
+        &["--version"],
+    )
+}
+
+/// direnv answers; it loads the devshell on directory entry.
+#[must_use]
+pub fn direnv() -> ProbeResult {
+    tool(
+        "direnv",
+        "RK_DIRENV_BIN",
+        "direnv",
+        "direnv; it loads the devshell on directory entry",
+        &["version"],
+    )
+}
+
 /// One owner for the POSIX shell every setup step spawns through.
 ///
 /// `RK_SH_BIN` substitutes it, which is also what keeps tests hermetic on
@@ -156,9 +197,11 @@ pub fn run_all() -> Vec<ProbeResult> {
             "curl",
             "RK_CURL_BIN",
             "curl",
-            "curl; install-bot reads the installation and rk versions --check fetches with it",
+            "curl; install-bot reads the installation, and rk versions --check and rk devshell sync fetch with it",
             &["--version"],
         ),
+        nix(),
+        direnv(),
         tool(
             "cosign",
             "RK_COSIGN_BIN",

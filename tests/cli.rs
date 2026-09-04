@@ -1174,6 +1174,8 @@ fn doctor_reports_every_probe_and_exits_0() {
             "glab-auth",
             "openssl",
             "curl",
+            "nix",
+            "direnv",
             "cosign",
             "pypi-attestations"
         ]
@@ -1611,6 +1613,10 @@ fn usage_dumps_every_verb_in_one_call() {
         "rk runs prune",
         "rk skill install",
         "rk skill uninstall",
+        "rk devshell status",
+        "rk devshell add",
+        "rk devshell clean",
+        "rk devshell sync",
         "rk status",
         "rk upgrade",
         "rk adopt",
@@ -10227,4 +10233,2030 @@ fn a_dep_edge_suppresses_the_implicit_feature() {
             "requires features a default build does not enable",
         ));
     assert!(!target.path().join("nix/package.nix").exists());
+}
+
+// ---------------------------------------------------------------------------
+// rk devshell
+
+/// The nix stand-in: logs every argv, answers the system probe and the
+/// version call, writes a lock naming the pinned tag on a flake update,
+/// and fails the verb a seeded file names.
+const MOCK_NIX: &str = r#"#!/usr/bin/env bash
+STATE="__STATE__"
+printf '%s\n' "$*" >> "$STATE/nix-log"
+if [[ "$1" == "--version" ]]; then echo "nix (Nix) 2.34.8"; exit 0; fi
+if [[ "$*" == "eval --raw --impure --expr builtins.currentSystem" ]]; then printf 'x86_64-linux'; exit 0; fi
+if [[ "$1" == "flake" ]]; then
+  if [[ -f "$STATE/nix_fail_update" ]]; then echo "error: could not update the lock" >&2; exit 1; fi
+  tag=$(sed -n 's/.*release-kit\/\(v[^"]*\)".*/\1/p' flake.nix | head -1)
+  printf '{"nodes":{"release-kit":{"locked":{"rev":"rev-of-%s","ref":"refs/tags/%s"}},"root":{}},"version":7}\n' "$tag" "$tag" > flake.lock
+  exit 0
+fi
+if [[ "$1" == "build" ]]; then
+  if [[ -f "$STATE/nix_fail_build" ]]; then echo "error: builder failed" >&2; exit 1; fi
+  exit 0
+fi
+exit 0
+"#;
+
+/// The curl stand-in for the release redirect: logs argv, fails on
+/// demand, and prints the release URL of the seeded latest tag.
+const MOCK_RELEASE_CURL: &str = r#"#!/usr/bin/env bash
+STATE="__STATE__"
+printf '%s\n' "$*" >> "$STATE/curl-log"
+if [[ -f "$STATE/curl_fail" ]]; then
+  echo "curl: (6) Could not resolve host: github.com" >&2
+  exit 6
+fi
+tag=$(cat "$STATE/latest_tag" 2>/dev/null || echo v0.2.16)
+printf 'https://github.com/owner/release-kit/releases/tag/%s' "$tag"
+"#;
+
+/// The direnv stand-in: logs argv and answers the version call.
+const MOCK_DIRENV: &str = r#"#!/usr/bin/env bash
+STATE="__STATE__"
+printf '%s\n' "$*" >> "$STATE/direnv-log"
+echo "2.32.0"
+"#;
+
+/// One devshell fixture: a scratch home that is also the state root, a
+/// scratch target under git, and the three mocked tools.
+struct DevshellFixture {
+    home: tempfile::TempDir,
+    target: tempfile::TempDir,
+    mock: tempfile::TempDir,
+}
+
+impl DevshellFixture {
+    fn new() -> Self {
+        let fixture = Self {
+            home: tempfile::tempdir().expect("a scratch home exists"),
+            target: tempfile::tempdir().expect("a scratch target exists"),
+            mock: tempfile::tempdir().expect("a scratch mock dir exists"),
+        };
+        for (name, body) in [
+            ("nix", MOCK_NIX),
+            ("curl", MOCK_RELEASE_CURL),
+            ("direnv", MOCK_DIRENV),
+        ] {
+            let path = fixture.mock.path().join(name);
+            std::fs::write(
+                &path,
+                body.replace("__STATE__", &fixture.mock.path().to_string_lossy()),
+            )
+            .expect("the mock writes");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                    .expect("the mock is executable");
+            }
+        }
+        git_in(fixture.target.path(), &["init", "-q", "-b", "master"]);
+        git_in(
+            fixture.target.path(),
+            &["config", "user.email", "rk@example.invalid"],
+        );
+        git_in(fixture.target.path(), &["config", "user.name", "rk test"]);
+        fixture
+    }
+
+    fn target(&self) -> &Path {
+        self.target.path()
+    }
+
+    fn state(&self, name: &str) -> String {
+        std::fs::read_to_string(self.mock.path().join(name)).unwrap_or_default()
+    }
+
+    fn nix_log(&self) -> String {
+        self.state("nix-log")
+    }
+
+    fn curl_log(&self) -> String {
+        self.state("curl-log")
+    }
+
+    /// A wired flake pinned at `tag`, and a lock naming it.
+    fn write_flake(&self, tag: &str) {
+        std::fs::write(
+            self.target().join("flake.nix"),
+            format!(
+                "{{\n  inputs = {{\n    nixpkgs.url = \"github:NixOS/nixpkgs/nixos-unstable\";\n    release-kit = {{\n      url = \"github:gubasso/release-kit/{tag}\";\n      inputs.nixpkgs.follows = \"nixpkgs\";\n    }};\n  }};\n  outputs = {{ self, nixpkgs, release-kit }}: {{ }};\n}}\n"
+            ),
+        )
+        .expect("the flake writes");
+        std::fs::write(
+            self.target().join("flake.lock"),
+            format!(
+                "{{\"nodes\":{{\"release-kit\":{{\"locked\":{{\"rev\":\"rev-of-{tag}\",\"ref\":\"refs/tags/{tag}\"}}}},\"root\":{{}}}},\"version\":7}}\n"
+            ),
+        )
+        .expect("the lock writes");
+    }
+
+    fn read(&self, rel: &str) -> String {
+        std::fs::read_to_string(self.target().join(rel)).expect("the file reads")
+    }
+
+    fn seed(&self, name: &str, value: &str) {
+        std::fs::write(self.mock.path().join(name), value).expect("the state seeds");
+    }
+
+    /// A regular file where the state directory must be: nothing under
+    /// it can be created.
+    fn block_state_root(&self) {
+        std::fs::create_dir_all(self.home.path().join("release-kit")).expect("creates");
+        std::fs::write(self.state_dir(), "blocker\n").expect("writes");
+    }
+
+    /// A directory where the transaction marker is: it exists and cannot
+    /// be read.
+    fn block_marker(&self) {
+        std::fs::create_dir_all(self.state_dir().join(self.key()).join("pending.json"))
+            .expect("the blocking marker creates");
+    }
+
+    fn commit_all(&self) {
+        git_in(self.target(), &["add", "-A"]);
+        git_in(self.target(), &["commit", "-qm", "chore: seed"]);
+    }
+
+    /// The per-checkout state directory under the scratch state root.
+    fn state_dir(&self) -> PathBuf {
+        self.home.path().join("release-kit/devshell")
+    }
+
+    fn key(&self) -> String {
+        let canonical = std::fs::canonicalize(self.target()).expect("the target canonicalizes");
+        release_kit::devshell::state_key(&utf8(&canonical))
+    }
+
+    /// A sync run's parsed report, whatever its exit code.
+    fn sync_json(&self, args: &[&str]) -> (Option<i32>, serde_json::Value) {
+        let out = self.rk(args).arg("--json").output().expect("rk runs");
+        let report = serde_json::from_slice(&out.stdout).unwrap_or_else(|_| {
+            panic!(
+                "one JSON object expected on stdout: {}\n{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            )
+        });
+        (out.status.code(), report)
+    }
+
+    /// The hand-rolled recipe the catalog knows, planted whole: the two
+    /// scripts, the two suites, the `.envrc` invocation with its comment,
+    /// the switch example, the justfile recipe, the devshell tooling, and
+    /// a host install line in the README and in a workflow.
+    fn write_predecessor(&self) {
+        let target = self.target();
+        std::fs::create_dir_all(target.join("scripts")).expect("scripts creates");
+        std::fs::create_dir_all(target.join("tests")).expect("tests creates");
+        std::fs::create_dir_all(target.join(".github/workflows")).expect("workflows creates");
+        std::fs::write(
+            target.join("scripts/rk-bump.sh"),
+            "#!/usr/bin/env bash\nPIN_PREFIX='github:gubasso/release-kit/'\nflock -n \"$LOCK\" true\n",
+        )
+        .expect("writes");
+        std::fs::write(
+            target.join("scripts/rk-autobump.sh"),
+            "#!/usr/bin/env bash\nexec \"$(dirname \"$0\")/rk-bump.sh\"\n",
+        )
+        .expect("writes");
+        std::fs::write(
+            target.join("tests/rk-bump.bats"),
+            "@test \"rk-bump moves the pin\" { true; }\n",
+        )
+        .expect("writes");
+        std::fs::write(
+            target.join("tests/rk-autobump.bats"),
+            "@test \"rk-autobump stamps the day\" { true; }\n",
+        )
+        .expect("writes");
+        std::fs::write(
+            target.join(".envrc"),
+            "use flake\n\n# Bump the release-kit pin once a day on entry.\n# scripts/rk-autobump.sh holds the transaction; RK_SKIP_AUTOBUMP=1 skips it.\nscripts/rk-autobump.sh || true\n\nsource_env_if_exists .envrc.local\n",
+        )
+        .expect("writes");
+        std::fs::write(
+            target.join(".envrc.local.example"),
+            "# export RK_SKIP_AUTOBUMP=1\n",
+        )
+        .expect("writes");
+        std::fs::write(
+            target.join("justfile"),
+            "# Move the release-kit pin by hand.\nrk-bump tag='':\n    scripts/rk-bump.sh {{tag}}\n\ntest:\n    bats tests\n",
+        )
+        .expect("writes");
+        std::fs::write(
+            target.join("flake.nix"),
+            "{\n  inputs = {\n    nixpkgs.url = \"github:NixOS/nixpkgs/nixos-unstable\";\n    release-kit = {\n      url = \"github:gubasso/release-kit/v0.2.16\";\n      inputs.nixpkgs.follows = \"nixpkgs\";\n    };\n  };\n  outputs = { self, nixpkgs, release-kit }: {\n    devShells.x86_64-linux.default = nixpkgs.legacyPackages.x86_64-linux.mkShell {\n      packages = [\n        release-kit.packages.x86_64-linux.default\n        nixpkgs.legacyPackages.x86_64-linux.flock # for scripts/rk-bump.sh\n        nixpkgs.legacyPackages.x86_64-linux.bats\n      ];\n    };\n  };\n}\n",
+        )
+        .expect("writes");
+        std::fs::write(
+            target.join("README.md"),
+            "# widget\n\nInstall the tool: `cargo install release-kit`.\n",
+        )
+        .expect("writes");
+        std::fs::write(
+            target.join(".github/workflows/ci.yml"),
+            "jobs:\n  test:\n    steps:\n      - run: cargo binstall release-kit\n",
+        )
+        .expect("writes");
+    }
+
+    fn rk(&self, args: &[&str]) -> Command {
+        let mut command = rk_scrubbed();
+        command
+            .env("HOME", self.home.path())
+            .env("XDG_STATE_HOME", self.home.path())
+            .env("RK_NIX_BIN", self.mock.path().join("nix"))
+            .env("RK_CURL_BIN", self.mock.path().join("curl"))
+            .env("RK_DIRENV_BIN", self.mock.path().join("direnv"))
+            .env_remove("RK_DEVSHELL_SYNC");
+        for var in [
+            "CI",
+            "GITHUB_ACTIONS",
+            "GITLAB_CI",
+            "BUILDKITE",
+            "CIRCLECI",
+            "TF_BUILD",
+        ] {
+            command.env_remove(var);
+        }
+        command.args(args).arg("--target").arg(self.target());
+        command
+    }
+
+    fn json(&self, args: &[&str]) -> serde_json::Value {
+        let out = self.rk(args).arg("--json").output().expect("rk runs");
+        assert!(
+            out.status.success(),
+            "rk {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice(&out.stdout).expect("one JSON object")
+    }
+}
+
+#[test]
+fn devshell_status_reports_a_target_with_no_flake() {
+    let fixture = DevshellFixture::new();
+    fixture
+        .rk(&["devshell", "status"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("state no-flake")
+                .and(predicate::str::contains("flake absent, lock absent"))
+                .and(predicate::str::contains("rk devshell add")),
+        );
+    let report = fixture.json(&["devshell", "status"]);
+    assert_eq!(report["schema"], "rk.devshell-status/1");
+    assert_eq!(report["state"], "no-flake");
+    assert_eq!(report["input"], "absent");
+    assert!(
+        report.get("pin_tag").is_none(),
+        "an unknown value is omitted"
+    );
+    assert_eq!(report["pending"], false);
+}
+
+#[test]
+fn devshell_status_reports_a_wired_target_offline() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.16");
+    std::fs::write(
+        fixture.target().join(".envrc"),
+        "use flake\nrk devshell sync --apply || true\n",
+    )
+    .expect(".envrc writes");
+    let report = fixture.json(&["devshell", "status"]);
+    assert_eq!(report["state"], "ready");
+    assert_eq!(report["input"], "pinned");
+    assert_eq!(report["pin_tag"], "v0.2.16");
+    assert_eq!(report["pin_lines"], 1);
+    assert_eq!(report["locked_rev"], "rev-of-v0.2.16");
+    assert_eq!(report["locked_ref"], "refs/tags/v0.2.16");
+    assert_eq!(report["envrc"], "present");
+    assert_eq!(report["envrc_sync"], true);
+    assert_eq!(report["host"]["nix"], "ok");
+    assert_eq!(report["host"]["direnv"], "ok");
+    assert!(fixture.curl_log().is_empty(), "status fetches nothing");
+    assert!(
+        !fixture.nix_log().contains("flake") && !fixture.nix_log().contains("build"),
+        "status spawns no nix beyond the probe: {}",
+        fixture.nix_log()
+    );
+}
+
+#[test]
+fn devshell_status_names_an_ambiguous_pin_with_its_count() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.16");
+    let flake = fixture.read("flake.nix");
+    std::fs::write(
+        fixture.target().join("flake.nix"),
+        format!("{flake}  url = \"github:gubasso/release-kit/v0.2.15\";\n"),
+    )
+    .expect("the flake writes");
+    fixture
+        .rk(&["devshell", "status"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("state ambiguous-pin")
+                .and(predicate::str::contains("2 lines name it")),
+        );
+    let report = fixture.json(&["devshell", "status"]);
+    assert_eq!(report["input"], "ambiguous");
+    assert_eq!(report["pin_lines"], 2);
+    assert!(report.get("pin_tag").is_none());
+}
+
+#[test]
+fn devshell_status_reports_the_two_host_probes() {
+    let fixture = DevshellFixture::new();
+    let report = fixture.json(&["devshell", "status"]);
+    assert_eq!(report["host"]["nix"], "ok");
+    let failed = {
+        let out = fixture
+            .rk(&["devshell", "status"])
+            .arg("--json")
+            .env("RK_NIX_BIN", "/no/such/nix")
+            .env("RK_DIRENV_BIN", "/no/such/direnv")
+            .output()
+            .expect("rk runs");
+        assert!(out.status.success(), "a failed probe is a result");
+        serde_json::from_slice::<serde_json::Value>(&out.stdout).expect("one JSON object")
+    };
+    assert_eq!(failed["host"]["nix"], "failed");
+    assert_eq!(failed["host"]["direnv"], "failed");
+    // The doctor carries the same two probes, Soft, in catalog order after curl.
+    let doctor = {
+        let out = rk_scrubbed()
+            .args(["doctor", "--json"])
+            .env("HOME", fixture.home.path())
+            .env("XDG_STATE_HOME", fixture.home.path())
+            .env("RK_NIX_BIN", fixture.mock.path().join("nix"))
+            .env("RK_DIRENV_BIN", fixture.mock.path().join("direnv"))
+            .output()
+            .expect("rk runs");
+        serde_json::from_slice::<serde_json::Value>(&out.stdout).expect("one JSON object")
+    };
+    let ids: Vec<&str> = doctor["probes"]
+        .as_array()
+        .expect("probes")
+        .iter()
+        .map(|probe| probe["id"].as_str().expect("an id"))
+        .collect();
+    let curl = ids
+        .iter()
+        .position(|id| *id == "curl")
+        .expect("curl probed");
+    assert_eq!(ids[curl + 1], "nix");
+    assert_eq!(ids[curl + 2], "direnv");
+    for probe in doctor["probes"].as_array().expect("probes") {
+        if probe["id"] == "nix" || probe["id"] == "direnv" {
+            assert_eq!(probe["class"], "soft", "{}", probe["id"]);
+        }
+    }
+}
+
+/// Nix stays out of the Hard tool registry — and therefore out of the
+/// package wrapper — because wrapping it would put Nix inside the Nix
+/// package's own closure on every host.
+#[test]
+fn nix_is_not_a_hard_runtime_tool() {
+    assert!(
+        release_kit::probes::HARD_RUNTIME_TOOLS
+            .iter()
+            .all(|(executable, package)| *executable != "nix" && *package != "nix"),
+        "nix must stay a Soft probe"
+    );
+    let nix =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("nix/package.nix"))
+            .expect("nix/package.nix reads");
+    let marker = "makeBinPath [";
+    let start = nix.find(marker).expect("the wrapper names a package list");
+    let rest = &nix[start + marker.len()..];
+    let end = rest.find(']').expect("the package list closes");
+    assert!(
+        !rest[..end]
+            .split_whitespace()
+            .any(|package| package == "nix"),
+        "the wrapper must not carry nix"
+    );
+}
+
+#[test]
+fn devshell_add_previews_four_fragments_and_writes_nothing() {
+    let fixture = DevshellFixture::new();
+    fixture.rk(&["devshell", "add"]).assert().success().stdout(
+        predicate::str::contains("DRY RUN")
+            .and(predicate::str::contains("--- flake-input into flake.nix"))
+            .and(predicate::str::contains(
+                "--- outputs-argument into flake.nix",
+            ))
+            .and(predicate::str::contains(
+                "--- devshell-package into flake.nix",
+            ))
+            .and(predicate::str::contains("--- envrc-sync into .envrc"))
+            .and(predicate::str::contains(format!(
+                "github:gubasso/release-kit/v{}",
+                env!("CARGO_PKG_VERSION")
+            )))
+            .and(predicate::str::contains("rk devshell sync --apply || true")),
+    );
+    assert!(!fixture.target().join("flake.nix").exists());
+    assert!(!fixture.target().join(".envrc").exists());
+    assert!(fixture.curl_log().is_empty(), "add fetches nothing");
+    assert!(fixture.nix_log().is_empty(), "add spawns no nix");
+}
+
+#[test]
+fn devshell_add_json_carries_each_fragment_with_its_anchor_and_placement() {
+    let fixture = DevshellFixture::new();
+    let report = fixture.json(&["devshell", "add", "--tag", "0.2.15"]);
+    assert_eq!(report["schema"], "rk.devshell-add/1");
+    assert_eq!(report["mode"], "preview");
+    assert_eq!(report["tag"], "v0.2.15");
+    assert_eq!(report["tag_source"], "argument");
+    assert_eq!(report["written"], serde_json::json!([]));
+    let fragments = report["fragments"].as_array().expect("fragments");
+    let ids: Vec<&str> = fragments
+        .iter()
+        .map(|f| f["id"].as_str().expect("an id"))
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            "flake-input",
+            "outputs-argument",
+            "devshell-package",
+            "envrc-sync"
+        ]
+    );
+    let placements: Vec<&str> = fragments
+        .iter()
+        .map(|f| f["placement"].as_str().expect("a placement"))
+        .collect();
+    assert_eq!(
+        placements,
+        [
+            "insert-into-attrset",
+            "add-to-function-head",
+            "append-to-list",
+            "append-line"
+        ]
+    );
+    assert_eq!(fragments[0]["anchor"]["kind"], "attrset");
+    assert_eq!(fragments[0]["anchor"]["path"], "inputs");
+    assert!(
+        fragments[0]["text"]
+            .as_str()
+            .expect("text")
+            .contains("github:gubasso/release-kit/v0.2.15")
+    );
+    assert_eq!(
+        fragments[2]["text"],
+        "release-kit.packages.${system}.default"
+    );
+    assert_eq!(fragments[3]["text"], "rk devshell sync --apply || true");
+    // No flake and no .envrc: every fragment is known to be missing.
+    for fragment in fragments {
+        assert_eq!(fragment["present"], false, "{}", fragment["id"]);
+    }
+}
+
+#[test]
+fn devshell_add_marks_the_fragments_a_half_wired_flake_already_has() {
+    let fixture = DevshellFixture::new();
+    std::fs::write(
+        fixture.target().join("flake.nix"),
+        "{\n  inputs = {\n    nixpkgs.url = \"github:NixOS/nixpkgs/nixos-unstable\";\n    release-kit = {\n      url = \"github:gubasso/release-kit/v0.2.16\";\n      inputs.nixpkgs.follows = \"nixpkgs\";\n    };\n  };\n  outputs = { self, nixpkgs }: {\n    devShells.x86_64-linux.default = nixpkgs.legacyPackages.x86_64-linux.mkShell { packages = [ ]; };\n  };\n}\n",
+    )
+    .expect("the flake writes");
+    std::fs::write(fixture.target().join(".envrc"), "use flake\n").expect(".envrc writes");
+    let report = fixture.json(&["devshell", "add"]);
+    let by_id = |id: &str| {
+        report["fragments"]
+            .as_array()
+            .expect("fragments")
+            .iter()
+            .find(|f| f["id"] == id)
+            .expect("the fragment")
+            .clone()
+    };
+    assert_eq!(by_id("flake-input")["present"], true);
+    assert_eq!(by_id("flake-input")["anchor"]["needle"], "inputs = {");
+    assert_eq!(by_id("outputs-argument")["present"], false);
+    assert_eq!(by_id("outputs-argument")["anchor"]["needle"], "outputs =");
+    assert_eq!(by_id("devshell-package")["present"], false);
+    assert_eq!(
+        by_id("devshell-package")["anchor"]["needle"],
+        "packages = ["
+    );
+    assert_eq!(by_id("envrc-sync")["present"], false);
+    assert!(by_id("envrc-sync").get("needle").is_none());
+    // An ellipsis in the head cannot be judged: the field is omitted.
+    std::fs::write(
+        fixture.target().join("flake.nix"),
+        "{\n  inputs = { };\n  outputs = { self, ... }: { };\n}\n",
+    )
+    .expect("the flake writes");
+    let report = fixture.json(&["devshell", "add"]);
+    let head = report["fragments"]
+        .as_array()
+        .expect("fragments")
+        .iter()
+        .find(|f| f["id"] == "outputs-argument")
+        .expect("the fragment")
+        .clone();
+    assert!(head.get("present").is_none(), "{head}");
+}
+
+#[test]
+fn devshell_add_apply_seeds_a_flake_and_envrc_where_there_is_none() {
+    let fixture = DevshellFixture::new();
+    let report = fixture.json(&["devshell", "add", "--apply", "--tag", "v0.2.15"]);
+    assert_eq!(report["mode"], "apply");
+    assert_eq!(
+        report["written"],
+        serde_json::json!(["flake.nix", ".envrc"])
+    );
+    assert!(report.get("refusal").is_none());
+    let flake = fixture.read("flake.nix");
+    assert!(flake.contains("url = \"github:gubasso/release-kit/v0.2.15\";"));
+    assert!(flake.contains("release-kit.packages.${system}.default"));
+    assert!(flake.contains("inputs.nixpkgs.follows = \"nixpkgs\";"));
+    assert_eq!(
+        fixture.read(".envrc"),
+        "use flake\nrk devshell sync --apply || true\n"
+    );
+    let status = fixture.json(&["devshell", "status"]);
+    assert_eq!(status["state"], "ready");
+    assert_eq!(status["pin_tag"], "v0.2.15");
+    assert_eq!(status["envrc_sync"], true);
+    assert_eq!(
+        status["lock"], "absent",
+        "the seed carries no lock; sync writes it"
+    );
+}
+
+#[test]
+fn devshell_add_apply_refuses_a_flake_the_target_owns() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    let before = fixture.read("flake.nix");
+    let out = fixture
+        .rk(&["devshell", "add", "--apply"])
+        .output()
+        .expect("rk runs");
+    assert_eq!(out.status.code(), Some(73));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("--- flake-input into flake.nix"),
+        "the fragments still print: {stdout}"
+    );
+    assert!(
+        stdout.contains("wrote .envrc"),
+        "the absent file is seeded: {stdout}"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("never edits a file the target owns"),
+        "the refusal names the reason: {stderr}"
+    );
+    assert_eq!(
+        fixture.read("flake.nix"),
+        before,
+        "the owned flake is byte-identical"
+    );
+    assert!(fixture.target().join(".envrc").exists());
+    // The JSON form carries the refusal in the report and the diagnostic on stderr.
+    let out = fixture
+        .rk(&["devshell", "add", "--apply", "--json"])
+        .output()
+        .expect("rk runs");
+    assert_eq!(out.status.code(), Some(73));
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one JSON object");
+    assert!(
+        report["refusal"]
+            .as_str()
+            .expect("a refusal")
+            .contains("flake.nix and .envrc")
+    );
+    assert_eq!(report["written"], serde_json::json!([]));
+    let diagnostic: serde_json::Value = serde_json::from_slice(&out.stderr).expect("a diagnostic");
+    assert_eq!(diagnostic["reason"], "destructive-refusal");
+}
+
+#[test]
+fn devshell_add_apply_creates_only_absent_files() {
+    let fixture = DevshellFixture::new();
+    std::fs::write(fixture.target().join(".envrc"), "use flake\nexport FOO=1\n")
+        .expect(".envrc writes");
+    let out = fixture
+        .rk(&["devshell", "add", "--apply", "--json"])
+        .output()
+        .expect("rk runs");
+    assert_eq!(out.status.code(), Some(73), "the owned .envrc is refused");
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one JSON object");
+    assert_eq!(report["written"], serde_json::json!(["flake.nix"]));
+    assert_eq!(fixture.read(".envrc"), "use flake\nexport FOO=1\n");
+    assert!(fixture.read("flake.nix").contains("release-kit"));
+    let envrc = report["fragments"]
+        .as_array()
+        .expect("fragments")
+        .iter()
+        .find(|f| f["id"] == "envrc-sync")
+        .expect("the fragment")
+        .clone();
+    assert_eq!(
+        envrc["present"], false,
+        "the owned .envrc still lacks the line"
+    );
+}
+
+#[test]
+fn devshell_add_refuses_a_tag_that_is_not_a_release() {
+    let fixture = DevshellFixture::new();
+    fixture
+        .rk(&["devshell", "add", "--tag", "latest"])
+        .assert()
+        .code(64)
+        .stderr(predicate::str::contains("is not a release tag"));
+}
+
+#[test]
+fn devshell_status_names_a_predecessor_mechanism_beside_a_wired_pin() {
+    let fixture = DevshellFixture::new();
+    fixture.write_predecessor();
+    fixture
+        .rk(&["devshell", "status"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("state superseded")
+                .and(predicate::str::contains(
+                    "leftover remove-file scripts/rk-bump.sh",
+                ))
+                .and(predicate::str::contains("leftover replace-line .envrc:5"))
+                .and(predicate::str::contains(
+                    "leftover manual justfile:2 rk-bump tag='':",
+                ))
+                .and(predicate::str::contains("rk devshell clean")),
+        );
+    let report = fixture.json(&["devshell", "status"]);
+    assert_eq!(report["state"], "superseded");
+    assert_eq!(report["pin_tag"], "v0.2.16");
+    let leftovers = report["leftovers"].as_array().expect("leftovers");
+    let rows: Vec<(String, String, String)> = leftovers
+        .iter()
+        .map(|l| {
+            (
+                l["id"].as_str().unwrap().to_owned(),
+                l["file"].as_str().unwrap().to_owned(),
+                l["action"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    let expect = |id: &str, file: &str, action: &str| {
+        assert!(
+            rows.contains(&(id.to_owned(), file.to_owned(), action.to_owned())),
+            "{id} at {file} as {action} is missing from {rows:?}"
+        );
+    };
+    expect("bump-script", "scripts/rk-bump.sh", "remove-file");
+    expect("autobump-script", "scripts/rk-autobump.sh", "remove-file");
+    expect("bump-suite", "tests/rk-bump.bats", "remove-file");
+    expect("autobump-suite", "tests/rk-autobump.bats", "remove-file");
+    expect("envrc-invocation", ".envrc", "replace-line");
+    expect("envrc-switch", ".envrc.local.example", "manual");
+    expect("just-recipe", "justfile", "manual");
+    expect("devshell-tooling", "flake.nix", "manual");
+    expect("host-install", "README.md", "manual");
+    expect("host-install", ".github/workflows/ci.yml", "manual");
+    // The three .envrc lines naming the scripts are three replace-line rows.
+    assert_eq!(
+        rows.iter()
+            .filter(|(id, _, _)| id == "envrc-invocation")
+            .count(),
+        2
+    );
+    let switch = leftovers
+        .iter()
+        .find(|l| l["id"] == "envrc-switch")
+        .expect("the switch row");
+    assert_eq!(switch["line"], 1);
+    assert_eq!(switch["text"], "# export RK_SKIP_AUTOBUMP=1");
+}
+
+#[test]
+fn devshell_status_names_leftovers_in_an_unwired_target() {
+    let fixture = DevshellFixture::new();
+    fixture.write_predecessor();
+    std::fs::write(
+        fixture.target().join("flake.nix"),
+        "{\n  inputs = { };\n  outputs = { self }: { };\n}\n",
+    )
+    .expect("the flake writes");
+    let report = fixture.json(&["devshell", "status"]);
+    assert_eq!(
+        report["state"], "not-wired",
+        "the rollup keeps its first-match order"
+    );
+    assert!(
+        !report["leftovers"]
+            .as_array()
+            .expect("leftovers")
+            .is_empty(),
+        "the leftovers are reported whatever the state is"
+    );
+    let add = fixture.json(&["devshell", "add"]);
+    assert!(
+        add["next"]
+            .as_array()
+            .expect("next")
+            .iter()
+            .any(|line| line.as_str().unwrap().contains("rk devshell clean")),
+        "add routes to the cleanup first: {}",
+        add["next"]
+    );
+}
+
+#[test]
+fn devshell_clean_previews_every_leftover_and_removes_nothing() {
+    let fixture = DevshellFixture::new();
+    fixture.write_predecessor();
+    let envrc = fixture.read(".envrc");
+    fixture
+        .rk(&["devshell", "clean"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("DRY RUN")
+                .and(predicate::str::contains(
+                    "leftover remove-file scripts/rk-bump.sh",
+                ))
+                .and(predicate::str::contains("leftover replace-line .envrc"))
+                .and(predicate::str::contains("leftover manual flake.nix"))
+                .and(predicate::str::contains("rk devshell clean"))
+                .and(predicate::str::contains("--apply")),
+        );
+    let report = fixture.json(&["devshell", "clean"]);
+    assert_eq!(report["schema"], "rk.devshell-clean/1");
+    assert_eq!(report["mode"], "preview");
+    assert_eq!(report["removed"], serde_json::json!([]));
+    assert_eq!(report["rewritten"], serde_json::json!([]));
+    assert_eq!(report["manual"], serde_json::json!([]));
+    assert!(!report["leftovers"].as_array().unwrap().is_empty());
+    assert!(fixture.target().join("scripts/rk-bump.sh").exists());
+    assert_eq!(fixture.read(".envrc"), envrc);
+}
+
+#[test]
+fn devshell_clean_apply_removes_the_scripts_and_the_suites() {
+    let fixture = DevshellFixture::new();
+    fixture.write_predecessor();
+    let report = fixture.json(&["devshell", "clean", "--apply"]);
+    assert_eq!(report["mode"], "apply");
+    assert_eq!(
+        report["removed"],
+        serde_json::json!([
+            "scripts/rk-bump.sh",
+            "scripts/rk-autobump.sh",
+            "tests/rk-bump.bats",
+            "tests/rk-autobump.bats"
+        ])
+    );
+    for rel in [
+        "scripts/rk-bump.sh",
+        "scripts/rk-autobump.sh",
+        "tests/rk-bump.bats",
+        "tests/rk-autobump.bats",
+    ] {
+        assert!(!fixture.target().join(rel).exists(), "{rel} is removed");
+    }
+}
+
+#[test]
+fn devshell_clean_apply_swaps_the_envrc_invocation_for_the_sync_line() {
+    let fixture = DevshellFixture::new();
+    fixture.write_predecessor();
+    let report = fixture.json(&["devshell", "clean", "--apply"]);
+    assert_eq!(report["rewritten"], serde_json::json!([".envrc"]));
+    assert_eq!(
+        fixture.read(".envrc"),
+        "use flake\n\n# Bump the release-kit pin once a day on entry.\nrk devshell sync --apply || true\n\nsource_env_if_exists .envrc.local\n",
+        "the sync line takes the first removed position and every other line is byte-identical"
+    );
+}
+
+#[test]
+fn devshell_clean_apply_leaves_the_justfile_and_the_flake_and_names_them() {
+    let fixture = DevshellFixture::new();
+    fixture.write_predecessor();
+    let justfile = fixture.read("justfile");
+    let flake = fixture.read("flake.nix");
+    let readme = fixture.read("README.md");
+    let report = fixture.json(&["devshell", "clean", "--apply"]);
+    assert_eq!(fixture.read("justfile"), justfile);
+    assert_eq!(fixture.read("flake.nix"), flake);
+    assert_eq!(fixture.read("README.md"), readme);
+    let manual = report["manual"].as_array().expect("manual");
+    let files: Vec<&str> = manual
+        .iter()
+        .map(|entry| entry["file"].as_str().unwrap())
+        .collect();
+    assert!(files.contains(&"justfile"), "{files:?}");
+    assert_eq!(
+        files.iter().filter(|f| **f == "flake.nix").count(),
+        2,
+        "flock and bats are two entries: {files:?}"
+    );
+    let recipe = manual
+        .iter()
+        .find(|entry| entry["id"] == "just-recipe")
+        .expect("the recipe row");
+    assert_eq!(recipe["line"], 2);
+    assert_eq!(recipe["text"], "rk-bump tag='':");
+    assert!(
+        recipe["reason"]
+            .as_str()
+            .unwrap()
+            .contains("a line scan cannot judge")
+    );
+    assert!(
+        report["next"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|line| line.as_str().unwrap().contains("edit by hand")),
+        "{}",
+        report["next"]
+    );
+}
+
+#[test]
+fn devshell_clean_names_a_host_install_line_in_ci() {
+    let fixture = DevshellFixture::new();
+    fixture.write_predecessor();
+    let report = fixture.json(&["devshell", "clean", "--apply"]);
+    let ci = report["manual"]
+        .as_array()
+        .expect("manual")
+        .iter()
+        .find(|entry| entry["file"] == ".github/workflows/ci.yml")
+        .expect("the CI row")
+        .clone();
+    assert_eq!(ci["id"], "host-install");
+    assert_eq!(ci["line"], 4);
+    assert_eq!(ci["text"], "- run: cargo binstall release-kit");
+    assert_eq!(
+        fixture.read(".github/workflows/ci.yml"),
+        "jobs:\n  test:\n    steps:\n      - run: cargo binstall release-kit\n"
+    );
+}
+
+#[test]
+fn devshell_clean_also_refuses_a_path_outside_the_target() {
+    let fixture = DevshellFixture::new();
+    fixture.write_predecessor();
+    let outside = fixture.home.path().join("elsewhere.sh");
+    std::fs::write(&outside, "x\n").expect("writes");
+    fixture
+        .rk(&[
+            "devshell",
+            "clean",
+            "--apply",
+            "--also",
+            outside.to_str().expect("utf-8"),
+        ])
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("outside the target"));
+    assert!(outside.exists());
+    assert!(
+        fixture.target().join("scripts/rk-bump.sh").exists(),
+        "a refused --also writes nothing at all"
+    );
+    fixture
+        .rk(&["devshell", "clean", "--apply", "--also", "scripts"])
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("a directory"));
+    fixture
+        .rk(&["devshell", "clean", "--apply", "--also", "no-such-file"])
+        .assert()
+        .code(73);
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(
+            fixture.target().join("README.md"),
+            fixture.target().join("link.md"),
+        )
+        .expect("the symlink creates");
+        fixture
+            .rk(&["devshell", "clean", "--apply", "--also", "link.md"])
+            .assert()
+            .code(73)
+            .stderr(predicate::str::contains("a symlink"));
+        assert!(fixture.target().join("README.md").exists());
+    }
+    // A regular file inside the target is removed beside the catalog.
+    std::fs::write(fixture.target().join("scripts/old-bump.sh"), "x\n").expect("writes");
+    let report = fixture.json(&[
+        "devshell",
+        "clean",
+        "--apply",
+        "--also",
+        "scripts/old-bump.sh",
+    ]);
+    assert!(
+        report["removed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f == "scripts/old-bump.sh")
+    );
+    assert!(!fixture.target().join("scripts/old-bump.sh").exists());
+}
+
+#[test]
+fn a_clean_target_reports_ready_and_an_empty_manual_list() {
+    let fixture = DevshellFixture::new();
+    fixture.write_predecessor();
+    fixture.json(&["devshell", "clean", "--apply"]);
+    // The operator finishes the manual entries by hand.
+    std::fs::write(fixture.target().join("justfile"), "test:\n    cargo test\n").expect("writes");
+    std::fs::write(
+        fixture.target().join("flake.nix"),
+        "{\n  inputs = {\n    release-kit = {\n      url = \"github:gubasso/release-kit/v0.2.16\";\n      inputs.nixpkgs.follows = \"nixpkgs\";\n    };\n  };\n  outputs = { self, nixpkgs, release-kit }: { };\n}\n",
+    )
+    .expect("writes");
+    std::fs::write(fixture.target().join("README.md"), "# widget\n").expect("writes");
+    std::fs::write(
+        fixture.target().join(".github/workflows/ci.yml"),
+        "jobs: {}\n",
+    )
+    .expect("writes");
+    std::fs::write(
+        fixture.target().join(".envrc.local.example"),
+        "# export RK_DEVSHELL_SYNC=0\n",
+    )
+    .expect("writes");
+    let status = fixture.json(&["devshell", "status"]);
+    assert_eq!(status["state"], "ready");
+    assert_eq!(status["leftovers"], serde_json::json!([]));
+    let clean = fixture.json(&["devshell", "clean", "--apply"]);
+    assert_eq!(clean["manual"], serde_json::json!([]));
+    assert_eq!(clean["removed"], serde_json::json!([]));
+}
+
+#[test]
+fn devshell_clean_is_idempotent() {
+    let fixture = DevshellFixture::new();
+    fixture.write_predecessor();
+    let first = fixture.json(&["devshell", "clean", "--apply"]);
+    assert_eq!(first["removed"].as_array().unwrap().len(), 4);
+    let envrc = fixture.read(".envrc");
+    let second = fixture.json(&["devshell", "clean", "--apply"]);
+    assert_eq!(second["removed"], serde_json::json!([]));
+    assert_eq!(second["rewritten"], serde_json::json!([]));
+    assert_eq!(fixture.read(".envrc"), envrc);
+    assert_eq!(
+        second["manual"].as_array().unwrap().len(),
+        first["manual"].as_array().unwrap().len(),
+        "the manual entries are reported again until the operator edits them"
+    );
+    fixture
+        .rk(&["devshell", "clean", "--apply"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn devshell_sync_preview_reports_the_bump_and_spawns_no_nix() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    let flake = fixture.read("flake.nix");
+    let lock = fixture.read("flake.lock");
+    fixture
+        .rk(&["devshell", "sync", "--caller", "operator"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("would-bump v0.2.15 -> v0.2.16"));
+    let (code, report) = fixture.sync_json(&["devshell", "sync"]);
+    assert_eq!(code, Some(0));
+    assert_eq!(report["schema"], "rk.devshell-sync/1");
+    assert_eq!(report["mode"], "preview");
+    assert_eq!(report["caller"], "envrc");
+    assert_eq!(report["outcome"], "would-bump");
+    assert_eq!(report["from"], "v0.2.15");
+    assert_eq!(report["to"], "v0.2.16");
+    assert!(report.get("steps").is_none());
+    assert!(fixture.nix_log().is_empty(), "a preview spawns no nix");
+    assert_eq!(fixture.read("flake.nix"), flake);
+    assert_eq!(fixture.read("flake.lock"), lock);
+}
+
+#[test]
+fn devshell_sync_apply_rewrites_the_pin_updates_the_lock_and_builds() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    let (code, report) =
+        fixture.sync_json(&["devshell", "sync", "--apply", "--caller", "operator"]);
+    assert_eq!(code, Some(0), "{report}");
+    assert_eq!(report["outcome"], "bumped");
+    assert_eq!(report["from"], "v0.2.15");
+    assert_eq!(report["to"], "v0.2.16");
+    let steps: Vec<(&str, &str)> = report["steps"]
+        .as_array()
+        .expect("steps")
+        .iter()
+        .map(|s| (s["step"].as_str().unwrap(), s["status"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        steps,
+        [
+            ("rewrite-pin", "ok"),
+            ("flake-update", "ok"),
+            ("build", "ok")
+        ]
+    );
+    assert!(report.get("restored").is_none());
+    assert!(
+        fixture
+            .read("flake.nix")
+            .contains("url = \"github:gubasso/release-kit/v0.2.16\";")
+    );
+    assert!(fixture.read("flake.lock").contains("rev-of-v0.2.16"));
+    let nix = fixture.nix_log();
+    assert!(nix.contains("flake update release-kit"), "{nix}");
+    assert!(
+        nix.contains("eval --raw --impure --expr builtins.currentSystem"),
+        "{nix}"
+    );
+    assert!(
+        nix.contains("build --no-link .#devShells.x86_64-linux.default"),
+        "{nix}"
+    );
+    assert!(
+        !fixture.target().join("result").exists(),
+        "--no-link drops no result symlink"
+    );
+    assert!(
+        !fixture.state_dir().join(fixture.key()).exists(),
+        "a committed transaction leaves no backup"
+    );
+    let status = fixture.json(&["devshell", "status"]);
+    assert_eq!(status["pin_tag"], "v0.2.16");
+    assert_eq!(status["locked_rev"], "rev-of-v0.2.16");
+}
+
+#[test]
+fn a_same_version_sync_writes_nothing_and_spawns_no_nix() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.16");
+    fixture.commit_all();
+    let flake = fixture.read("flake.nix");
+    let lock = fixture.read("flake.lock");
+    let (code, report) =
+        fixture.sync_json(&["devshell", "sync", "--apply", "--caller", "operator"]);
+    assert_eq!(code, Some(0));
+    assert_eq!(report["outcome"], "current");
+    assert_eq!(fixture.read("flake.nix"), flake);
+    assert_eq!(fixture.read("flake.lock"), lock);
+    assert!(fixture.nix_log().is_empty(), "nothing to do spawns no nix");
+    // The same run from .envrc is silent on stdout.
+    fixture
+        .rk(&["devshell", "sync", "--apply"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn a_pin_ahead_of_the_latest_release_is_reported_and_never_rewritten() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.3.0");
+    fixture.commit_all();
+    let flake = fixture.read("flake.nix");
+    let (code, report) =
+        fixture.sync_json(&["devshell", "sync", "--apply", "--caller", "operator"]);
+    assert_eq!(code, Some(0));
+    assert_eq!(report["outcome"], "ahead");
+    assert_eq!(report["from"], "v0.3.0");
+    assert_eq!(report["to"], "v0.2.16");
+    assert_eq!(fixture.read("flake.nix"), flake);
+    assert!(fixture.nix_log().is_empty());
+}
+
+#[test]
+fn a_failed_flake_update_restores_both_files() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    fixture.seed("nix_fail_update", "1");
+    let flake = fixture.read("flake.nix");
+    let lock = fixture.read("flake.lock");
+    let (code, report) =
+        fixture.sync_json(&["devshell", "sync", "--apply", "--caller", "operator"]);
+    assert_eq!(code, Some(70), "{report}");
+    assert_eq!(report["outcome"], "update-failed");
+    assert_eq!(
+        report["restored"],
+        serde_json::json!(["flake.nix", "flake.lock"])
+    );
+    let failed = report["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["status"] == "failed")
+        .expect("a failed step");
+    assert_eq!(failed["step"], "flake-update");
+    assert_eq!(failed["detail"], "error: could not update the lock");
+    assert_eq!(fixture.read("flake.nix"), flake, "the pin is back");
+    assert_eq!(fixture.read("flake.lock"), lock, "the lock is back");
+    assert!(!fixture.nix_log().contains("build"), "the build never ran");
+    assert!(!fixture.state_dir().join(fixture.key()).exists());
+    let out = fixture
+        .rk(&[
+            "devshell", "sync", "--apply", "--caller", "operator", "--json",
+        ])
+        .output()
+        .expect("rk runs");
+    let diagnostic: serde_json::Value =
+        serde_json::from_slice(&out.stderr).expect("a diagnostic on stderr");
+    assert_eq!(diagnostic["reason"], "subprocess-failed");
+    assert_eq!(diagnostic["step"], "flake-update");
+    assert_eq!(
+        diagnostic["target_state"],
+        "restored flake.nix and flake.lock"
+    );
+}
+
+#[test]
+fn a_failed_devshell_build_restores_both_files() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    fixture.seed("nix_fail_build", "1");
+    let flake = fixture.read("flake.nix");
+    let lock = fixture.read("flake.lock");
+    let (code, report) =
+        fixture.sync_json(&["devshell", "sync", "--apply", "--caller", "operator"]);
+    assert_eq!(code, Some(70), "{report}");
+    assert_eq!(report["outcome"], "build-failed");
+    assert_eq!(
+        report["restored"],
+        serde_json::json!(["flake.nix", "flake.lock"])
+    );
+    assert_eq!(fixture.read("flake.nix"), flake);
+    assert_eq!(
+        fixture.read("flake.lock"),
+        lock,
+        "the lock the update wrote is rolled back"
+    );
+    assert!(fixture.nix_log().contains("flake update release-kit"));
+    // From .envrc the same failure is reported and exits 0.
+    fixture
+        .rk(&["devshell", "sync", "--apply"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("build-failed v0.2.15 -> v0.2.16"));
+    assert_eq!(fixture.read("flake.nix"), flake);
+}
+
+#[test]
+fn devshell_sync_refuses_a_flake_with_more_than_one_pin_line() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    let flake = fixture.read("flake.nix");
+    std::fs::write(
+        fixture.target().join("flake.nix"),
+        format!("{flake}  url = \"github:gubasso/release-kit/v0.2.14\";\n"),
+    )
+    .expect("the flake writes");
+    fixture.commit_all();
+    let (code, report) =
+        fixture.sync_json(&["devshell", "sync", "--apply", "--caller", "operator"]);
+    assert_eq!(code, Some(73));
+    assert_eq!(report["outcome"], "ambiguous-pin");
+    assert!(report["detail"].as_str().unwrap().contains("2 lines"));
+    assert!(
+        fixture.curl_log().is_empty(),
+        "an ambiguous pin fetches nothing"
+    );
+    assert!(fixture.nix_log().is_empty());
+    fixture
+        .rk(&["devshell", "sync", "--apply"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ambiguous-pin"));
+}
+
+#[test]
+fn an_explicit_tag_makes_no_network_request() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    let (code, report) = fixture.sync_json(&[
+        "devshell", "sync", "--apply", "--caller", "operator", "--tag", "0.9.0",
+    ]);
+    assert_eq!(code, Some(0), "{report}");
+    assert_eq!(report["outcome"], "bumped");
+    assert_eq!(report["to"], "v0.9.0");
+    assert!(
+        fixture.curl_log().is_empty(),
+        "an explicit tag fetches nothing"
+    );
+    assert!(fixture.read("flake.nix").contains("release-kit/v0.9.0\""));
+    assert!(fixture.read("flake.lock").contains("rev-of-v0.9.0"));
+    // An explicit tag is the operator's choice and pins in either direction.
+    fixture.commit_all();
+    let (code, report) = fixture.sync_json(&[
+        "devshell", "sync", "--apply", "--caller", "operator", "--tag", "v0.2.15",
+    ]);
+    assert_eq!(code, Some(0), "{report}");
+    assert_eq!(report["outcome"], "bumped");
+    assert_eq!(report["from"], "v0.9.0");
+    assert_eq!(report["to"], "v0.2.15");
+    assert!(fixture.read("flake.lock").contains("rev-of-v0.2.15"));
+}
+
+#[test]
+fn each_tag_shape_folds_to_one_tag() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    for shape in [
+        "v0.9.0",
+        "0.9.0",
+        "https://github.com/gubasso/release-kit/releases/tag/v0.9.0",
+    ] {
+        let (code, report) = fixture.sync_json(&["devshell", "sync", "--tag", shape]);
+        assert_eq!(code, Some(0), "{shape}: {report}");
+        assert_eq!(report["outcome"], "would-bump", "{shape}");
+        assert_eq!(report["to"], "v0.9.0", "{shape}");
+    }
+    fixture
+        .rk(&["devshell", "sync", "--tag", "latest"])
+        .assert()
+        .code(64);
+}
+
+#[test]
+fn discovery_reads_the_redirect_and_spends_no_api_call() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    fixture.seed("latest_tag", "v0.2.17");
+    let (_, report) = fixture.sync_json(&["devshell", "sync"]);
+    assert_eq!(report["to"], "v0.2.17");
+    let curl = fixture.curl_log();
+    let lines: Vec<&str> = curl.lines().collect();
+    assert_eq!(lines.len(), 1, "one curl call: {curl}");
+    let line = lines[0];
+    for needle in [
+        "-o /dev/null",
+        "-w %{url_effective}",
+        "--max-time",
+        "releases/latest",
+    ] {
+        assert!(line.contains(needle), "{line} lacks {needle}");
+    }
+    assert!(!line.contains("api.github.com"), "no API host: {line}");
+    // A network failure is a reported outcome that writes nothing.
+    fixture.seed("curl_fail", "1");
+    let (code, report) =
+        fixture.sync_json(&["devshell", "sync", "--apply", "--caller", "operator"]);
+    assert_eq!(code, Some(70));
+    assert_eq!(report["outcome"], "unreachable");
+    assert!(
+        report["detail"]
+            .as_str()
+            .unwrap()
+            .contains("Could not resolve host")
+    );
+    assert!(fixture.nix_log().is_empty());
+    assert!(fixture.read("flake.nix").contains("v0.2.15"));
+    fixture
+        .rk(&["devshell", "sync", "--apply"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("unreachable"));
+}
+
+#[test]
+fn an_interrupted_transaction_is_recovered_on_the_next_run() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    let flake = fixture.read("flake.nix");
+    let lock = fixture.read("flake.lock");
+    // Plant what a killed run leaves: the backups, the marker with a
+    // dead owner, and the two files half-moved.
+    let backup = fixture.state_dir().join(fixture.key()).join("backup");
+    std::fs::create_dir_all(&backup).expect("the backup dir creates");
+    std::fs::write(backup.join("flake.nix"), &flake).expect("writes");
+    std::fs::write(backup.join("flake.lock"), &lock).expect("writes");
+    std::fs::write(
+        fixture.state_dir().join(fixture.key()).join("pending.json"),
+        r#"{"target":"x","pid":4294967295}"#,
+    )
+    .expect("the marker writes");
+    std::fs::write(
+        fixture.target().join("flake.nix"),
+        flake.replace("v0.2.15", "v0.2.16"),
+    )
+    .expect("writes");
+    std::fs::remove_file(fixture.target().join("flake.lock")).expect("the lock goes");
+    let status = fixture.json(&["devshell", "status"]);
+    assert_eq!(status["state"], "pending-recovery");
+    assert_eq!(status["pending"], true);
+    // A preview names the pending run and touches nothing.
+    let (code, report) = fixture.sync_json(&["devshell", "sync", "--caller", "operator"]);
+    assert_eq!(code, Some(0));
+    assert_eq!(report["outcome"], "pending-recovery");
+    assert!(fixture.read("flake.nix").contains("v0.2.16"));
+    // The apply recovers first, then continues to the bump.
+    let (code, report) =
+        fixture.sync_json(&["devshell", "sync", "--apply", "--caller", "operator"]);
+    assert_eq!(code, Some(0), "{report}");
+    assert_eq!(
+        report["recovered"],
+        serde_json::json!(["flake.nix", "flake.lock"])
+    );
+    assert_eq!(report["outcome"], "bumped");
+    assert_eq!(
+        report["from"], "v0.2.15",
+        "the recovered pin is what the bump starts from"
+    );
+    assert!(
+        !fixture
+            .state_dir()
+            .join(fixture.key())
+            .join("pending.json")
+            .exists()
+    );
+    assert!(fixture.read("flake.lock").contains("rev-of-v0.2.16"));
+}
+
+/// One arrangement of a devshell fixture, for the outcome tables.
+type Arrange = Box<dyn Fn(&DevshellFixture)>;
+
+/// Today as the binary stamps it: the first ten characters of UTC now.
+fn today_utc() -> String {
+    release_kit::applog::now_utc()[..10].to_owned()
+}
+
+#[test]
+fn devshell_sync_refuses_uncommitted_edits_to_the_two_files() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    std::fs::write(
+        fixture.target().join("flake.lock"),
+        "{\"nodes\":{},\"version\":7}\n",
+    )
+    .expect("the lock edits");
+    let (code, report) =
+        fixture.sync_json(&["devshell", "sync", "--apply", "--caller", "operator"]);
+    assert_eq!(code, Some(73), "{report}");
+    assert_eq!(report["outcome"], "refused-dirty");
+    assert_eq!(report["from"], "v0.2.15");
+    assert!(
+        fixture.curl_log().is_empty(),
+        "a dirty tree fetches nothing"
+    );
+    assert!(fixture.nix_log().is_empty());
+    assert!(fixture.read("flake.nix").contains("v0.2.15"));
+    // A preview reports the same refusal, so the operator learns it before an apply.
+    let (code, report) = fixture.sync_json(&["devshell", "sync", "--caller", "operator"]);
+    assert_eq!(code, Some(73));
+    assert_eq!(report["outcome"], "refused-dirty");
+    // An untracked file, as a fresh seed leaves, counts too.
+    let fresh = DevshellFixture::new();
+    fresh.json(&["devshell", "add", "--apply", "--tag", "v0.2.15"]);
+    let (_, report) = fresh.sync_json(&["devshell", "sync", "--apply"]);
+    assert_eq!(report["outcome"], "refused-dirty");
+}
+
+#[test]
+fn devshell_sync_judges_the_target_repo_from_inside_a_git_hook() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    std::fs::write(fixture.target().join("flake.lock"), "{}\n").expect("the lock edits");
+    // A clean decoy repository whose hook variables a running hook would export.
+    let decoy = branch_fixture();
+    let out = fixture
+        .rk(&[
+            "devshell", "sync", "--apply", "--caller", "operator", "--json",
+        ])
+        .env("GIT_DIR", decoy.path().join(".git"))
+        .env("GIT_WORK_TREE", decoy.path())
+        .env("GIT_INDEX_FILE", decoy.path().join(".git/index"))
+        .output()
+        .expect("rk runs");
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one JSON object");
+    assert_eq!(
+        report["outcome"], "refused-dirty",
+        "the target's own dirt is judged, not the decoy's cleanliness: {report}"
+    );
+}
+
+#[test]
+fn a_second_sync_skips_quietly_while_the_first_holds_the_lock() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    std::fs::create_dir_all(fixture.state_dir()).expect("the state dir creates");
+    std::fs::write(
+        fixture.state_dir().join(format!("{}.lock", fixture.key())),
+        format!(
+            "pid={}\nstarted={}\n",
+            std::process::id(),
+            release_kit::applog::now_utc()
+        ),
+    )
+    .expect("the lock plants");
+    fixture
+        .rk(&["devshell", "sync", "--apply"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::is_empty());
+    assert!(fixture.curl_log().is_empty(), "contention fetches nothing");
+    assert!(fixture.nix_log().is_empty());
+    let (code, report) =
+        fixture.sync_json(&["devshell", "sync", "--apply", "--caller", "operator"]);
+    assert_eq!(code, Some(0), "contention is normal, even for the operator");
+    assert_eq!(report["outcome"], "skipped-locked");
+    assert!(
+        fixture
+            .state_dir()
+            .join(format!("{}.lock", fixture.key()))
+            .exists(),
+        "the live lock is left alone"
+    );
+}
+
+#[test]
+fn a_lock_that_cannot_be_taken_at_all_is_reported_loudly() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    // A regular file where the state directory must be: nothing can be created under it.
+    std::fs::create_dir_all(fixture.home.path().join("release-kit")).expect("creates");
+    std::fs::write(fixture.state_dir(), "not a directory\n").expect("the blocker writes");
+    let out = fixture
+        .rk(&["devshell", "sync", "--apply"])
+        .output()
+        .expect("rk runs");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "the .envrc caller still exits 0"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("warning: rk devshell sync: the lock cannot be taken"),
+        "unavailability is loud on stderr: {stderr}"
+    );
+    let (code, report) =
+        fixture.sync_json(&["devshell", "sync", "--apply", "--caller", "operator"]);
+    assert_eq!(code, Some(74), "{report}");
+    assert_eq!(report["outcome"], "lock-unavailable");
+    assert!(fixture.curl_log().is_empty());
+}
+
+#[test]
+fn a_stale_lock_whose_owner_is_gone_is_taken() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    std::fs::create_dir_all(fixture.state_dir()).expect("the state dir creates");
+    let lock = fixture.state_dir().join(format!("{}.lock", fixture.key()));
+    std::fs::write(&lock, "pid=4294967295\nstarted=2020-01-01T00:00:00Z\n").expect("plants");
+    let (code, report) =
+        fixture.sync_json(&["devshell", "sync", "--apply", "--caller", "operator"]);
+    assert_eq!(code, Some(0), "{report}");
+    assert_eq!(report["outcome"], "bumped", "the stale lock was taken over");
+    assert!(!lock.exists(), "the lock is released after the run");
+}
+
+#[test]
+fn the_daily_stamp_is_written_before_a_failing_attempt() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    fixture.seed("nix_fail_build", "1");
+    let stamp = fixture.state_dir().join(format!("{}.stamp", fixture.key()));
+    assert!(!stamp.exists());
+    fixture
+        .rk(&["devshell", "sync", "--apply"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("build-failed"));
+    assert_eq!(
+        std::fs::read_to_string(&stamp)
+            .expect("the stamp exists")
+            .trim(),
+        today_utc(),
+        "a failing attempt still costs one fetch and one build a day"
+    );
+    // The next entry skips without a fetch.
+    fixture.seed("curl-log", "");
+    fixture
+        .rk(&["devshell", "sync", "--apply"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+    assert!(fixture.curl_log().is_empty());
+}
+
+#[test]
+fn a_stamped_day_skips_the_next_directory_entry() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    std::fs::create_dir_all(fixture.state_dir()).expect("the state dir creates");
+    std::fs::write(
+        fixture.state_dir().join(format!("{}.stamp", fixture.key())),
+        format!("{}\n", today_utc()),
+    )
+    .expect("the stamp plants");
+    fixture
+        .rk(&["devshell", "sync", "--apply"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+    assert!(
+        fixture.curl_log().is_empty(),
+        "a stamped day fetches nothing"
+    );
+    assert!(fixture.nix_log().is_empty());
+    let (_, report) = fixture.sync_json(&["devshell", "sync", "--apply"]);
+    assert_eq!(report["outcome"], "skipped-stamped");
+    assert_eq!(report["stamp"], today_utc());
+    // An older stamp lets the attempt run and is rewritten to today.
+    std::fs::write(
+        fixture.state_dir().join(format!("{}.stamp", fixture.key())),
+        "2020-01-01\n",
+    )
+    .expect("the stamp plants");
+    let (_, report) = fixture.sync_json(&["devshell", "sync", "--apply"]);
+    assert_eq!(report["outcome"], "bumped");
+    assert_eq!(report["stamp"], today_utc());
+}
+
+#[test]
+fn an_operator_run_ignores_the_daily_stamp() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    std::fs::create_dir_all(fixture.state_dir()).expect("the state dir creates");
+    let stamp = fixture.state_dir().join(format!("{}.stamp", fixture.key()));
+    std::fs::write(&stamp, format!("{}\n", today_utc())).expect("the stamp plants");
+    let (code, report) =
+        fixture.sync_json(&["devshell", "sync", "--apply", "--caller", "operator"]);
+    assert_eq!(code, Some(0), "{report}");
+    assert_eq!(report["outcome"], "bumped");
+    assert_eq!(
+        report["stamp"],
+        today_utc(),
+        "the stamp is reported, not consulted"
+    );
+    assert!(!fixture.curl_log().is_empty(), "the operator run fetched");
+}
+
+/// Every reported failure outcome from the `.envrc` caller exits 0: the
+/// outcome lives in the report, never in the exit code.
+#[test]
+fn every_envrc_path_exits_zero() {
+    let cases: Vec<(&str, Arrange)> = vec![
+        ("no-flake", Box::new(|_| {})),
+        (
+            "not-wired",
+            Box::new(|f| {
+                std::fs::write(f.target().join("flake.nix"), "{ }\n").expect("writes");
+                f.commit_all();
+            }),
+        ),
+        (
+            "ambiguous-pin",
+            Box::new(|f| {
+                f.write_flake("v0.2.15");
+                let flake = f.read("flake.nix");
+                std::fs::write(
+                    f.target().join("flake.nix"),
+                    format!("{flake}  url = \"github:gubasso/release-kit/v0.2.14\";\n"),
+                )
+                .expect("writes");
+                f.commit_all();
+            }),
+        ),
+        (
+            "refused-dirty",
+            Box::new(|f| {
+                f.write_flake("v0.2.15");
+            }),
+        ),
+        (
+            "unreachable",
+            Box::new(|f| {
+                f.write_flake("v0.2.15");
+                f.commit_all();
+                f.seed("curl_fail", "1");
+            }),
+        ),
+        (
+            "update-failed",
+            Box::new(|f| {
+                f.write_flake("v0.2.15");
+                f.commit_all();
+                f.seed("nix_fail_update", "1");
+            }),
+        ),
+        (
+            "build-failed",
+            Box::new(|f| {
+                f.write_flake("v0.2.15");
+                f.commit_all();
+                f.seed("nix_fail_build", "1");
+            }),
+        ),
+        (
+            "lock-unavailable",
+            Box::new(|f| {
+                f.write_flake("v0.2.15");
+                f.commit_all();
+                f.block_state_root();
+            }),
+        ),
+        (
+            "recovery-failed",
+            Box::new(|f| {
+                f.write_flake("v0.2.15");
+                f.commit_all();
+                // A directory where the marker is: it exists and cannot be read.
+                f.block_marker();
+                std::fs::write(
+                    f.state_dir().join(format!("{}.stamp", f.key())),
+                    format!("{}\n", today_utc()),
+                )
+                .expect("the stamp plants");
+            }),
+        ),
+    ];
+    for (expected, arrange) in cases {
+        let fixture = DevshellFixture::new();
+        arrange(&fixture);
+        let (code, report) = fixture.sync_json(&["devshell", "sync", "--apply"]);
+        assert_eq!(report["outcome"], expected, "{report}");
+        assert_eq!(code, Some(0), "{expected} must exit 0 from .envrc");
+    }
+}
+
+/// The same outcomes under `--caller operator` take the exit-code matrix.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn an_operator_run_fails_loudly_where_the_envrc_run_reports() {
+    let cases: Vec<(&str, i32, &str, Arrange)> = vec![
+        (
+            "ambiguous-pin",
+            73,
+            "state-drift",
+            Box::new(|f| {
+                f.write_flake("v0.2.15");
+                let flake = f.read("flake.nix");
+                std::fs::write(
+                    f.target().join("flake.nix"),
+                    format!("{flake}  url = \"github:gubasso/release-kit/v0.2.14\";\n"),
+                )
+                .expect("writes");
+                f.commit_all();
+            }),
+        ),
+        (
+            "refused-dirty",
+            73,
+            "state-drift",
+            Box::new(|f| {
+                f.write_flake("v0.2.15");
+            }),
+        ),
+        (
+            "unreachable",
+            70,
+            "forge-temporary",
+            Box::new(|f| {
+                f.write_flake("v0.2.15");
+                f.commit_all();
+                f.seed("curl_fail", "1");
+            }),
+        ),
+        (
+            "update-failed",
+            70,
+            "subprocess-failed",
+            Box::new(|f| {
+                f.write_flake("v0.2.15");
+                f.commit_all();
+                f.seed("nix_fail_update", "1");
+            }),
+        ),
+        (
+            "build-failed",
+            70,
+            "subprocess-failed",
+            Box::new(|f| {
+                f.write_flake("v0.2.15");
+                f.commit_all();
+                f.seed("nix_fail_build", "1");
+            }),
+        ),
+        (
+            "lock-unavailable",
+            74,
+            "io",
+            Box::new(|f| {
+                f.write_flake("v0.2.15");
+                f.commit_all();
+                f.block_state_root();
+            }),
+        ),
+        (
+            "recovery-failed",
+            74,
+            "io",
+            Box::new(|f| {
+                f.write_flake("v0.2.15");
+                f.commit_all();
+                f.block_marker();
+            }),
+        ),
+    ];
+    for (expected, code, reason, arrange) in cases {
+        let fixture = DevshellFixture::new();
+        arrange(&fixture);
+        let out = fixture
+            .rk(&[
+                "devshell", "sync", "--apply", "--caller", "operator", "--json",
+            ])
+            .output()
+            .expect("rk runs");
+        let report: serde_json::Value =
+            serde_json::from_slice(&out.stdout).expect("one JSON object");
+        assert_eq!(report["outcome"], expected, "{report}");
+        assert_eq!(out.status.code(), Some(code), "{expected}");
+        // The diagnostic is the last stderr line; a warning may precede it.
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let last = stderr.lines().last().unwrap_or_default();
+        let diagnostic: serde_json::Value = serde_json::from_str(last)
+            .unwrap_or_else(|_| panic!("{expected}: a diagnostic on stderr: {stderr}"));
+        assert_eq!(diagnostic["reason"], reason, "{expected}");
+        if expected == "unreachable" {
+            assert_eq!(diagnostic["retry"], true);
+        }
+        if expected == "update-failed" || expected == "build-failed" {
+            assert_eq!(
+                diagnostic["target_state"],
+                "restored flake.nix and flake.lock"
+            );
+        }
+    }
+}
+
+#[test]
+fn ci_never_bumps() {
+    for var in [
+        "CI",
+        "GITHUB_ACTIONS",
+        "GITLAB_CI",
+        "BUILDKITE",
+        "CIRCLECI",
+        "TF_BUILD",
+    ] {
+        let fixture = DevshellFixture::new();
+        fixture.write_flake("v0.2.15");
+        fixture.commit_all();
+        fixture
+            .rk(&["devshell", "sync", "--apply"])
+            .env(var, "true")
+            .assert()
+            .success()
+            .stdout(predicate::str::is_empty());
+        assert!(fixture.curl_log().is_empty(), "{var}: CI fetches nothing");
+        assert!(fixture.nix_log().is_empty(), "{var}: CI spawns nothing");
+        let out = fixture
+            .rk(&[
+                "devshell", "sync", "--apply", "--caller", "operator", "--json",
+            ])
+            .env(var, "1")
+            .output()
+            .expect("rk runs");
+        let report: serde_json::Value =
+            serde_json::from_slice(&out.stdout).expect("one JSON object");
+        assert_eq!(report["outcome"], "skipped-ci", "{var}");
+        assert_eq!(out.status.code(), Some(0));
+    }
+    // An explicit no is not CI.
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    let out = fixture
+        .rk(&["devshell", "sync", "--json"])
+        .env("CI", "false")
+        .output()
+        .expect("rk runs");
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one JSON object");
+    assert_eq!(report["outcome"], "would-bump");
+}
+
+#[test]
+fn rk_devshell_sync_is_disabled_by_its_env_switch() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    fixture
+        .rk(&["devshell", "sync", "--apply"])
+        .env("RK_DEVSHELL_SYNC", "0")
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+    assert!(fixture.curl_log().is_empty());
+    assert!(fixture.nix_log().is_empty());
+    let out = fixture
+        .rk(&[
+            "devshell", "sync", "--apply", "--caller", "operator", "--json",
+        ])
+        .env("RK_DEVSHELL_SYNC", "0")
+        .output()
+        .expect("rk runs");
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one JSON object");
+    assert_eq!(report["outcome"], "skipped-disabled");
+    assert!(
+        !fixture
+            .state_dir()
+            .join(format!("{}.stamp", fixture.key()))
+            .exists(),
+        "a switched-off run stamps nothing"
+    );
+}
+
+/// Every devshell action answers `--json` with exactly one object on
+/// stdout, in every mode.
+#[test]
+fn every_devshell_action_emits_one_json_object() {
+    let fixture = DevshellFixture::new();
+    fixture.write_predecessor();
+    fixture.commit_all();
+    for args in [
+        vec!["devshell", "status"],
+        vec!["devshell", "add"],
+        vec!["devshell", "add", "--apply"],
+        vec!["devshell", "clean"],
+        vec!["devshell", "clean", "--apply"],
+        vec!["devshell", "sync"],
+        vec!["devshell", "sync", "--apply"],
+        vec!["devshell", "sync", "--caller", "operator"],
+    ] {
+        let out = fixture.rk(&args).arg("--json").output().expect("rk runs");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let value: serde_json::Value = serde_json::from_str(&stdout)
+            .unwrap_or_else(|_| panic!("{args:?}: one JSON object on stdout: {stdout}"));
+        assert!(
+            value["schema"]
+                .as_str()
+                .is_some_and(|schema| schema.starts_with("rk.devshell-")),
+            "{args:?}: {value}"
+        );
+    }
+}
+
+/// A stale lock that cannot be removed is not held by anyone, so it is
+/// reported as unavailable rather than skipped as contention.
+#[cfg(unix)]
+#[test]
+fn a_stale_lock_that_cannot_be_removed_is_reported_loudly() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    std::fs::create_dir_all(fixture.state_dir()).expect("the state dir creates");
+    let lock = fixture.state_dir().join(format!("{}.lock", fixture.key()));
+    std::fs::write(&lock, "pid=4294967295\nstarted=2020-01-01T00:00:00Z\n").expect("plants");
+    std::fs::set_permissions(fixture.state_dir(), std::fs::Permissions::from_mode(0o555))
+        .expect("the state dir turns read-only");
+    let out = fixture
+        .rk(&[
+            "devshell", "sync", "--apply", "--caller", "operator", "--json",
+        ])
+        .output()
+        .expect("rk runs");
+    std::fs::set_permissions(fixture.state_dir(), std::fs::Permissions::from_mode(0o755))
+        .expect("the state dir is writable again");
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one JSON object");
+    assert_eq!(report["outcome"], "lock-unavailable", "{report}");
+    assert_eq!(out.status.code(), Some(74));
+    assert!(fixture.curl_log().is_empty());
+}
+
+/// The recovery runs under the checkout's lock: a live lock holder keeps
+/// a second entry from restoring the same marker.
+#[test]
+fn recovery_waits_for_the_lock() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    let backup = fixture.state_dir().join(fixture.key()).join("backup");
+    std::fs::create_dir_all(&backup).expect("the backup dir creates");
+    std::fs::write(backup.join("flake.nix"), fixture.read("flake.nix")).expect("writes");
+    std::fs::write(
+        fixture.state_dir().join(fixture.key()).join("pending.json"),
+        r#"{"target":"x","pid":4294967295,"present":{"flake.nix":true,"flake.lock":false}}"#,
+    )
+    .expect("the marker writes");
+    std::fs::write(
+        fixture.state_dir().join(format!("{}.lock", fixture.key())),
+        format!(
+            "pid={}\nstarted={}\n",
+            std::process::id(),
+            release_kit::applog::now_utc()
+        ),
+    )
+    .expect("the lock plants");
+    let (code, report) =
+        fixture.sync_json(&["devshell", "sync", "--apply", "--caller", "operator"]);
+    assert_eq!(code, Some(0));
+    assert_eq!(report["outcome"], "skipped-locked");
+    assert!(
+        report.get("recovered").is_none(),
+        "nothing was restored under a live lock"
+    );
+    assert!(
+        fixture
+            .state_dir()
+            .join(fixture.key())
+            .join("pending.json")
+            .exists(),
+        "the marker waits for the lock holder"
+    );
+}
+
+/// An interrupted run recovers on the next `.envrc` entry even on a day
+/// the stamp already marks: the marker outranks the stamp.
+#[test]
+fn a_pending_marker_outranks_the_daily_stamp() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    let flake = fixture.read("flake.nix");
+    let lock = fixture.read("flake.lock");
+    let backup = fixture.state_dir().join(fixture.key()).join("backup");
+    std::fs::create_dir_all(&backup).expect("the backup dir creates");
+    std::fs::write(backup.join("flake.nix"), &flake).expect("writes");
+    std::fs::write(backup.join("flake.lock"), &lock).expect("writes");
+    std::fs::write(
+        fixture.state_dir().join(fixture.key()).join("pending.json"),
+        r#"{"target":"x","pid":4294967295,"present":{"flake.nix":true,"flake.lock":true}}"#,
+    )
+    .expect("the marker writes");
+    std::fs::write(
+        fixture.state_dir().join(format!("{}.stamp", fixture.key())),
+        format!("{}\n", today_utc()),
+    )
+    .expect("the stamp plants");
+    std::fs::write(
+        fixture.target().join("flake.nix"),
+        flake.replace("v0.2.15", "v0.2.16"),
+    )
+    .expect("half-moved");
+    let (code, report) = fixture.sync_json(&["devshell", "sync", "--apply"]);
+    assert_eq!(code, Some(0));
+    assert_eq!(
+        report["recovered"],
+        serde_json::json!(["flake.nix", "flake.lock"]),
+        "{report}"
+    );
+    // The recovered run continues: the restored v0.2.15 pin is what the
+    // bump starts from, and the transaction moves it forward whole.
+    assert_eq!(report["outcome"], "bumped", "{report}");
+    assert_eq!(report["from"], "v0.2.15");
+    assert!(fixture.read("flake.lock").contains("rev-of-v0.2.16"));
+    assert!(
+        !fixture
+            .state_dir()
+            .join(fixture.key())
+            .join("pending.json")
+            .exists()
+    );
 }

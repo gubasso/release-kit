@@ -6,11 +6,36 @@ The steps of [setup](../method/02-setup.md) as commands, once per repository, in
 
 Every step below assumes these; each is a probe, not a change.
 
-- `rk` on `PATH`: `rk --version`
+- `rk` on `PATH`: `rk --version`. Two ways to get it there: a host install, `cargo install release-kit`, which serves one version to the whole host; or the devshell pin below, which gives each project its own `rk` from its flake and keeps the pin fresh. One project runs one of the two, never both.
 - This binary's skills, installed once per user, at user scope — the only mode there is: `rk doctor` reports the skill probes ok, and `rk skill install --apply` is the repair. The two roots are `~/.claude/skills`, which Claude Code reads, and `~/.agents/skills`, which Codex, Gemini CLI, and Copilot CLI read. No system-wide mode exists, by decision rather than gap. Every install channel takes the same step: `just install` runs it as its second line; cargo, the curl-pipe installer, and a packaged `rk` leave it to the operator.
 - The forge CLI, `openssl`, and `curl`: `rk doctor` reports each ok
 - OS keyring where the forge bootstrap needs one: `secret-tool --version`, on a host shell and never in a container
 - Clean trunk: `git status --porcelain` empty, `HEAD` equal to the remote trunk
+
+The devshell pin, in the order that makes it a replacement — detect, clean, add, apply the fragments, verify:
+
+```bash
+rk devshell status --target .
+# check: state, and every leftover of a predecessor bump mechanism by file and line; superseded means a predecessor is still there
+rk devshell clean --target .                 # preview: what goes, what is rewritten, and what a line scan must not touch
+rk devshell clean --target . --apply
+# check: the scripts and suites are removed and the .envrc invocation became the one sync line; every manual entry is edited by hand or accepted on the record, and the rerun reports an empty leftovers list
+rk devshell add --target . --json            # the four fragments with their anchors, in application order; the tag is this binary's version
+rk devshell add --target . --apply
+# check: seeds flake.nix and .envrc where the target has neither; an owned file is refused with the fragments still printed, and takes them by hand
+# a flake of its own plus rk init --nix: run the init first, because a flake this seed wrote is withheld by the landing
+git add flake.nix .envrc && git commit -m 'chore(<scope>): pin rk in the devshell'
+# check: the pair is committed; nix reads only tracked files, and the sync refuses uncommitted edits to flake.nix or flake.lock
+rk devshell sync --target . --caller operator --apply
+# check: bumped or current; the pin in flake.nix is the version, the release-kit node in flake.lock is the content, and the build proved the pair
+git add flake.lock && git commit -m 'chore(<scope>): lock the rk devshell pin'
+direnv allow
+# check: the shell loads and rk --version answers from the devshell
+rk devshell status --target . --json
+# check: ready, with an empty leftovers list; nothing else in the tree names an rk version
+```
+
+From then on the `.envrc` line runs the sync on directory entry, at most once a day per checkout, silently when there is nothing to do, and leaves a two-file diff to review and commit when the pin moved. `RK_DEVSHELL_SYNC=0` in `.envrc.local` switches it off, and a CI variable switches it off on a runner. A failed bump restores both files and the shell still starts; `rk devshell sync --caller operator` retries now and fails loudly.
 
 Where a file lands for a third-party application — an agent root, an editor directory — is this project's own decision, made against that application's current documentation and recorded with a dated citation. Release-kit states where its own artifacts go; it never decides such a placement on a project's behalf.
 
