@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.15](https://github.com/gubasso/release-kit/compare/v0.2.14...v0.2.15) - 2026-09-04
+
+### Added
+
+- *(landing)* land the nix capability as a recorded opt-in ([#55](https://github.com/gubasso/release-kit/pull/55))
+
 ## [0.2.14](https://github.com/gubasso/release-kit/compare/v0.2.13...v0.2.14) - 2026-09-04
 
 ### Other
