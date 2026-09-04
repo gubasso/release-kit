@@ -634,6 +634,20 @@ pub fn nix_unsupported_shape(target: &Utf8Path) -> Option<String> {
     None
 }
 
+/// Whether any feature's list carries a `dep:name` edge, which is what
+/// suppresses the optional dependency's implicit same-named feature.
+fn dep_edge_suppresses(features: &toml::Table, name: &str) -> bool {
+    let edge = format!("dep:{name}");
+    features.values().any(|list| {
+        list.as_array().is_some_and(|entries| {
+            entries
+                .iter()
+                .filter_map(toml::Value::as_str)
+                .any(|entry| entry == edge)
+        })
+    })
+}
+
 /// Whether `name` is declared an optional dependency, in any of the
 /// dependency tables a binary's build reads.
 fn is_optional_dependency(table: &toml::Table, name: &str) -> bool {
@@ -676,11 +690,16 @@ fn default_features(table: &toml::Table) -> std::collections::BTreeSet<String> {
                     continue;
                 }
                 if let Some((package, _)) = implied.split_once('/') {
-                    // A strong `name/feature` edge enables the implicit
-                    // same-named feature only for an optional dependency;
-                    // on a non-optional one it enables a feature of the
+                    // A strong `name/feature` edge activates this crate's
+                    // same-named feature only for an optional dependency,
+                    // and only where that feature exists: declared
+                    // explicitly, or implicit and not suppressed by a
+                    // `dep:` edge anywhere in the table. A non-optional
+                    // dependency's edge enables a feature of the
                     // dependency and nothing of this crate.
-                    if is_optional_dependency(table, package) {
+                    let feature_exists =
+                        features.contains_key(package) || !dep_edge_suppresses(features, package);
+                    if is_optional_dependency(table, package) && feature_exists {
                         queue.push(package.to_owned());
                     }
                 } else {
