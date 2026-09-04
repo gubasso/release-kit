@@ -24,9 +24,13 @@ rk devshell add --target . --json            # the four fragments with their anc
 rk devshell add --target . --apply
 # check: seeds flake.nix and .envrc where the target has neither; an owned file is refused with the fragments still printed, and takes them by hand
 # a flake of its own plus rk init --nix: run the init first, because a flake this seed wrote is withheld by the landing
-git add flake.nix flake.lock .envrc && direnv allow
+git add flake.nix .envrc && git commit -m 'chore(<scope>): pin rk in the devshell'
+# check: the pair is committed; nix reads only tracked files, and the sync refuses uncommitted edits to flake.nix or flake.lock
 rk devshell sync --target . --caller operator --apply
 # check: bumped or current; the pin in flake.nix is the version, the release-kit node in flake.lock is the content, and the build proved the pair
+git add flake.lock && git commit -m 'chore(<scope>): lock the rk devshell pin'
+direnv allow
+# check: the shell loads and rk --version answers from the devshell
 rk devshell status --target . --json
 # check: ready, with an empty leftovers list; nothing else in the tree names an rk version
 ```

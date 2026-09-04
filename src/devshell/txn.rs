@@ -74,9 +74,15 @@ fn open_at(target: &Utf8Path, backup: PathBuf, marker: PathBuf) -> Result<Txn, R
             fs::remove_file(&copy)?;
         }
     }
+    // The marker records which files existed, so a restore never reads a
+    // missing backup as "the file was absent" and deletes a real file.
     let record = serde_json::json!({
         "target": target.as_str(),
         "pid": std::process::id(),
+        "present": {
+            FILES[0]: target.join(FILES[0]).exists(),
+            FILES[1]: target.join(FILES[1]).exists(),
+        },
     });
     crate::atomic::write(&marker, record.to_string().as_bytes())?;
     Ok(Txn {
@@ -95,44 +101,83 @@ impl Txn {
     }
 
     /// Put both files back and clear the marker; the names restored.
-    #[must_use]
-    pub fn abort(mut self) -> Vec<String> {
+    ///
+    /// # Errors
+    ///
+    /// Where a file cannot be put back, the marker and the backups stay
+    /// for the next run's recovery, and the error names the file.
+    pub fn abort(mut self) -> Result<Vec<String>, RestoreFailure> {
         self.committed = true;
-        let restored = restore(&self.target, &self.backup);
+        let restored = restore(&self.target, &self.backup, &self.marker)?;
         clear(&self.backup, &self.marker);
-        restored
+        Ok(restored)
     }
 }
 
 impl Drop for Txn {
     fn drop(&mut self) {
         if !self.committed {
-            let _ = restore(&self.target, &self.backup);
-            clear(&self.backup, &self.marker);
+            // A restore that fails keeps its material: the marker stays
+            // for the next run, which is the one recovery left.
+            if restore(&self.target, &self.backup, &self.marker).is_ok() {
+                clear(&self.backup, &self.marker);
+            }
         }
     }
 }
 
-/// Restore both files from the backup: a backed-up file is copied back,
-/// and a file with no backup — a lock that did not exist before — is
-/// removed. The names touched, in order.
-fn restore(target: &Path, backup: &Path) -> Vec<String> {
+/// A restore that could not put a file back; the backups stay.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestoreFailure {
+    /// The file that is not back.
+    pub file: &'static str,
+    /// Why, one line.
+    pub detail: String,
+}
+
+impl std::fmt::Display for RestoreFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} could not be restored: {}", self.file, self.detail)
+    }
+}
+
+/// Restore both files from the backup. A backed-up file is copied back;
+/// a file the marker records as absent is removed; a file the marker
+/// records as present with no backup to read is corruption, and the
+/// restore stops there with the material kept. The names touched.
+fn restore(target: &Path, backup: &Path, marker: &Path) -> Result<Vec<String>, RestoreFailure> {
+    let record: serde_json::Value = fs::read(marker)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or(serde_json::Value::Null);
     let mut restored = Vec::new();
     for name in FILES {
         let copy = backup.join(name);
         let destination = target.join(name);
+        let was_present = record["present"][name].as_bool();
         let outcome = if copy.exists() {
             fs::read(&copy).and_then(|bytes| crate::atomic::write(&destination, &bytes))
-        } else if destination.exists() {
-            fs::remove_file(&destination)
         } else {
-            continue;
+            match was_present {
+                Some(false) if destination.exists() => fs::remove_file(&destination),
+                Some(true) => Err(std::io::Error::other(
+                    "the backup is missing although the file existed before the run",
+                )),
+                // No marker knowledge and no backup: leave the file alone.
+                _ => continue,
+            }
         };
-        if outcome.is_ok() {
-            restored.push(name.to_owned());
+        match outcome {
+            Ok(()) => restored.push(name.to_owned()),
+            Err(source) => {
+                return Err(RestoreFailure {
+                    file: name,
+                    detail: source.to_string(),
+                });
+            }
         }
     }
-    restored
+    Ok(restored)
 }
 
 /// Remove the backup directory and the marker, then the per-checkout
@@ -145,14 +190,26 @@ fn clear(backup: &Path, marker: &Path) {
     }
 }
 
+/// What a recovery attempt found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Recovery {
+    /// Both files are back and the marker is cleared; the names restored.
+    Restored(Vec<String>),
+    /// A file could not be put back; the marker and backups stay.
+    Failed(RestoreFailure),
+}
+
 /// Recover a transaction an earlier run left open, where its owner is
-/// provably gone: restore both files and clear the marker. `Ok(None)`
-/// where no marker exists or the owner may still be running.
+/// provably gone.
+///
+/// `Ok(None)` where no marker exists or the owner may still be running.
+/// The caller holds the checkout's lock, so two runs never recover the
+/// same marker at once.
 ///
 /// # Errors
 ///
 /// Returns [`RkError::Io`] where the marker exists and does not read.
-pub fn recover_pending(target: &Utf8Path, key: &str) -> Result<Option<Vec<String>>, RkError> {
+pub fn recover_pending(target: &Utf8Path, key: &str) -> Result<Option<Recovery>, RkError> {
     let (Some(backup), Some(marker)) = (backup_dir(key), marker_path(key)) else {
         return Ok(None);
     };
@@ -164,7 +221,7 @@ fn recover_at(
     target: &Utf8Path,
     backup: &Path,
     marker: &Path,
-) -> Result<Option<Vec<String>>, RkError> {
+) -> Result<Option<Recovery>, RkError> {
     if !marker.exists() {
         return Ok(None);
     }
@@ -174,9 +231,13 @@ fn recover_at(
     if !owner_gone(pid, marker) {
         return Ok(None);
     }
-    let restored = restore(target.as_std_path(), backup);
-    clear(backup, marker);
-    Ok(Some(restored))
+    match restore(target.as_std_path(), backup, marker) {
+        Ok(restored) => {
+            clear(backup, marker);
+            Ok(Some(Recovery::Restored(restored)))
+        }
+        Err(failure) => Ok(Some(Recovery::Failed(failure))),
+    }
 }
 
 /// Whether a recorded owner is provably gone. Only a readable procfs
@@ -293,7 +354,7 @@ mod tests {
 
     use camino::Utf8PathBuf;
 
-    use super::{open_at, owner_gone, recover_at};
+    use super::{Recovery, open_at, owner_gone, recover_at};
 
     fn scratch() -> (tempfile::TempDir, Utf8PathBuf) {
         let dir = tempfile::tempdir().expect("a scratch dir exists");
@@ -348,7 +409,10 @@ mod tests {
         std::mem::forget(txn);
         std::fs::write(&marker, r#"{"target":"t","pid":4294967295}"#).expect("writes");
         let restored = recover_at(&target, &backup, &marker).expect("recovers");
-        assert_eq!(restored, Some(vec!["flake.nix".to_owned()]));
+        assert_eq!(
+            restored,
+            Some(Recovery::Restored(vec!["flake.nix".to_owned()]))
+        );
         assert!(!marker.exists());
         assert_eq!(
             recover_at(&target, &backup, &marker).expect("recovers"),
@@ -358,6 +422,53 @@ mod tests {
             std::fs::read_to_string(target.join("flake.nix")).expect("reads"),
             "old\n"
         );
+    }
+
+    /// A marker that records a file as present with no backup to read is
+    /// corruption — never a file to delete — so a second recovery racing
+    /// the first cannot remove what the first just put back.
+    #[test]
+    fn a_missing_backup_for_a_present_file_deletes_nothing() {
+        let (_state, state) = scratch();
+        let (_target, target) = scratch();
+        let backup = state.join("backup").into_std_path_buf();
+        let marker = state.join("pending.json").into_std_path_buf();
+        std::fs::write(target.join("flake.nix"), "kept\n").expect("writes");
+        std::fs::create_dir_all(&backup).expect("creates");
+        std::fs::write(
+            &marker,
+            r#"{"pid":4294967295,"present":{"flake.nix":true,"flake.lock":false}}"#,
+        )
+        .expect("writes");
+        let outcome = recover_at(&target, &backup, &marker).expect("judges");
+        assert!(
+            matches!(outcome, Some(Recovery::Failed(ref failure)) if failure.file == "flake.nix"),
+            "{outcome:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(target.join("flake.nix")).expect("reads"),
+            "kept\n"
+        );
+        assert!(marker.exists(), "the marker stays for a later recovery");
+    }
+
+    /// A restore that cannot write keeps its backups and its marker, and
+    /// says which file is not back.
+    #[test]
+    fn a_failed_restore_keeps_its_material() {
+        let (_state, state) = scratch();
+        let (_target, target) = scratch();
+        let backup = state.join("backup").into_std_path_buf();
+        let marker = state.join("pending.json").into_std_path_buf();
+        std::fs::write(target.join("flake.nix"), "old\n").expect("writes");
+        let txn = open_at(&target, backup.clone(), marker.clone()).expect("opens");
+        // A directory where the file must go back: the rename fails.
+        std::fs::remove_file(target.join("flake.nix")).expect("removes");
+        std::fs::create_dir(target.join("flake.nix")).expect("blocks");
+        let failure = txn.abort().expect_err("the restore fails");
+        assert_eq!(failure.file, "flake.nix");
+        assert!(marker.exists(), "the marker stays");
+        assert!(backup.join("flake.nix").exists(), "the backup stays");
     }
 
     #[test]

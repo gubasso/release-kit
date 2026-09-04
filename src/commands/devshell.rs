@@ -23,7 +23,7 @@ use crate::devshell::discover::{self, Discovery};
 use crate::devshell::fragments::{self, Fragment};
 use crate::devshell::guard::{self, Acquired};
 use crate::devshell::leftovers::{self, Action, Leftover};
-use crate::devshell::txn::{self, StepFailure};
+use crate::devshell::txn::{self, Recovery, StepFailure};
 use crate::devshell::{self, Observed, Presence, pin};
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
@@ -156,11 +156,11 @@ struct SyncReport<'a> {
     /// The target, canonical.
     target: &'a str,
     /// The closed outcome vocabulary: `bumped`, `current`, `ahead`,
-    /// `would-bump`, `pending-recovery`, `skipped-ci`, `skipped-disabled`,
-    /// `skipped-stamped`, `skipped-locked`, `lock-unavailable`,
-    /// `not-wired`, `unpinned`, `no-flake`, `ambiguous-pin`,
-    /// `refused-dirty`, `unreachable`, `unparsable`, `update-failed`, or
-    /// `build-failed`.
+    /// `would-bump`, `pending-recovery`, `recovery-failed`, `skipped-ci`,
+    /// `skipped-disabled`, `skipped-stamped`, `skipped-locked`,
+    /// `lock-unavailable`, `not-wired`, `unpinned`, `no-flake`,
+    /// `ambiguous-pin`, `refused-dirty`, `unreachable`, `unparsable`,
+    /// `update-failed`, `build-failed`, or `restore-failed`.
     outcome: &'static str,
     /// The pinned tag before the run, where the pin was read.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -427,24 +427,20 @@ fn sync(args: &SyncArgs) -> Result<(), RkError> {
         run.outcome = "skipped-ci";
         run.detail = Some("a CI variable is set; the sync never runs on a runner".to_owned());
     } else {
-        if args.apply {
-            if let Some(restored) = txn::recover_pending(&observed.target, &key)? {
-                run.recovered = Some(restored);
-                observed = devshell::observe(&args.target)?;
-            }
-        }
-        gate_and_decide(args, &observed, &key, &mut run, &mut held, out)?;
+        gate_and_decide(args, &mut observed, &key, &mut run, &mut held, out)?;
     }
     render_sync(out, args, &observed, &run)?;
     drop(held);
     exit_for(args.caller, &run)
 }
 
-/// The stamp, the lock, the dirty check, and the decision, in that
-/// order; `held` keeps the lock alive until the report is rendered.
+/// The stamp, the lock, the recovery, the dirty check, and the
+/// decision, in that order; `held` keeps the lock alive until the report
+/// is rendered. The recovery runs under the lock, so two entries never
+/// restore the same marker at once.
 fn gate_and_decide(
     args: &SyncArgs,
-    observed: &Observed,
+    observed: &mut Observed,
     key: &str,
     run: &mut SyncRun,
     held: &mut Option<guard::Lock>,
@@ -480,6 +476,22 @@ fn gate_and_decide(
                 ));
                 return Ok(());
             }
+        }
+    }
+    if args.apply {
+        match txn::recover_pending(&observed.target, key)? {
+            Some(Recovery::Restored(restored)) => {
+                run.recovered = Some(restored);
+                *observed = devshell::observe(&args.target)?;
+            }
+            Some(Recovery::Failed(failure)) => {
+                run.outcome = "recovery-failed";
+                run.detail = Some(format!(
+                    "{failure}; the backups stay under the state root for the next attempt"
+                ));
+                return Ok(());
+            }
+            None => {}
         }
     }
     if observed.pending {
@@ -576,8 +588,20 @@ fn decide(
         run.outcome = "would-bump";
         return Ok(());
     }
+    apply_bump(observed, key, pin, &to, run)
+}
+
+/// Rewrite, refresh, and build inside one transaction; a failure
+/// restores both files, and a restore that cannot is its own outcome.
+fn apply_bump(
+    observed: &Observed,
+    key: &str,
+    pin: &pin::Pin,
+    to: &str,
+    run: &mut SyncRun,
+) -> Result<(), RkError> {
     let flake_text = observed.flake_text.as_deref().unwrap_or_default();
-    let rewritten = pin::rewrite(flake_text, pin, &to);
+    let rewritten = pin::rewrite(flake_text, pin, to);
     let transaction = txn::open(&observed.target, key)?;
     let mut steps = Vec::new();
     let failure = transact(&observed.target, &rewritten, &mut steps);
@@ -587,12 +611,23 @@ fn decide(
             run.outcome = "bumped";
         }
         Some(failed) => {
-            run.restored = Some(transaction.abort());
             run.outcome = match failed.step {
                 "rewrite-pin" | "flake-update" => "update-failed",
                 _ => "build-failed",
             };
-            run.detail = Some(format!("{} failed: {}", failed.step, failed.detail));
+            match transaction.abort() {
+                Ok(restored) => {
+                    run.restored = Some(restored);
+                    run.detail = Some(format!("{} failed: {}", failed.step, failed.detail));
+                }
+                Err(failure) => {
+                    run.outcome = "restore-failed";
+                    run.detail = Some(format!(
+                        "{} failed: {}; then {failure}; the backups stay under the state root for the next run",
+                        failed.step, failed.detail
+                    ));
+                }
+            }
         }
     }
     run.steps = Some(steps);
@@ -776,6 +811,9 @@ fn sync_next(observed: &Observed, run: &SyncRun) -> Vec<String> {
         "unreachable" | "unparsable" => vec![
             "retry when the release page answers; --tag <TAG> makes no request at all".to_owned(),
         ],
+        "recovery-failed" | "restore-failed" => vec![
+            "a file is not back: free the path the detail names, then rerun; the backups wait under the state root".to_owned(),
+        ],
         "update-failed" | "build-failed" => vec![
             "both files are as they were; the failing step's last line is above".to_owned(),
             format!(
@@ -821,10 +859,15 @@ fn exit_for(caller: Caller, run: &SyncRun) -> Result<(), RkError> {
             Err(RkError::subprocess(
                 Diagnostic::new(Reason::SubprocessFailed, detail)
                     .step(step)
-                    .target_state("both files restored"),
+                    .target_state(format!(
+                        "restored {}",
+                        run.restored.as_deref().unwrap_or_default().join(" and ")
+                    )),
             ))
         }
-        "lock-unavailable" => Err(RkError::Io(std::io::Error::other(detail))),
+        "lock-unavailable" | "restore-failed" | "recovery-failed" => {
+            Err(RkError::Io(std::io::Error::other(detail)))
+        }
         _ => Ok(()),
     }
 }
@@ -1036,12 +1079,12 @@ fn add_next(observed: &Observed, apply: bool, written: &[String]) -> Vec<String>
     }
     if !written.is_empty() {
         next.push(format!(
-            "git -C {target} add {} — nix reads only tracked files — then direnv allow",
-            written.join(" ")
+            "commit {} first — nix reads only tracked files, and the sync refuses uncommitted edits to the pair",
+            written.join(" and ")
         ));
     }
     next.push(format!(
-        "rk devshell sync --caller operator --target {target} locks the pin and proves the build"
+        "rk devshell sync --caller operator --apply --target {target} writes the lock and proves the build; commit flake.lock, then direnv allow"
     ));
     next
 }

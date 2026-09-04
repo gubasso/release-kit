@@ -11381,7 +11381,10 @@ fn a_failed_flake_update_restores_both_files() {
         serde_json::from_slice(&out.stderr).expect("a diagnostic on stderr");
     assert_eq!(diagnostic["reason"], "subprocess-failed");
     assert_eq!(diagnostic["step"], "flake-update");
-    assert_eq!(diagnostic["target_state"], "both files restored");
+    assert_eq!(
+        diagnostic["target_state"],
+        "restored flake.nix and flake.lock"
+    );
 }
 
 #[test]
@@ -11987,7 +11990,10 @@ fn an_operator_run_fails_loudly_where_the_envrc_run_reports() {
             assert_eq!(diagnostic["retry"], true);
         }
         if expected == "update-failed" || expected == "build-failed" {
-            assert_eq!(diagnostic["target_state"], "both files restored");
+            assert_eq!(
+                diagnostic["target_state"],
+                "restored flake.nix and flake.lock"
+            );
         }
     }
 }
@@ -12097,4 +12103,74 @@ fn every_devshell_action_emits_one_json_object() {
             "{args:?}: {value}"
         );
     }
+}
+
+/// A stale lock that cannot be removed is not held by anyone, so it is
+/// reported as unavailable rather than skipped as contention.
+#[cfg(unix)]
+#[test]
+fn a_stale_lock_that_cannot_be_removed_is_reported_loudly() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    std::fs::create_dir_all(fixture.state_dir()).expect("the state dir creates");
+    let lock = fixture.state_dir().join(format!("{}.lock", fixture.key()));
+    std::fs::write(&lock, "pid=4294967295\nstarted=2020-01-01T00:00:00Z\n").expect("plants");
+    std::fs::set_permissions(fixture.state_dir(), std::fs::Permissions::from_mode(0o555))
+        .expect("the state dir turns read-only");
+    let out = fixture
+        .rk(&[
+            "devshell", "sync", "--apply", "--caller", "operator", "--json",
+        ])
+        .output()
+        .expect("rk runs");
+    std::fs::set_permissions(fixture.state_dir(), std::fs::Permissions::from_mode(0o755))
+        .expect("the state dir is writable again");
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one JSON object");
+    assert_eq!(report["outcome"], "lock-unavailable", "{report}");
+    assert_eq!(out.status.code(), Some(74));
+    assert!(fixture.curl_log().is_empty());
+}
+
+/// The recovery runs under the checkout's lock: a live lock holder keeps
+/// a second entry from restoring the same marker.
+#[test]
+fn recovery_waits_for_the_lock() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    let backup = fixture.state_dir().join(fixture.key()).join("backup");
+    std::fs::create_dir_all(&backup).expect("the backup dir creates");
+    std::fs::write(backup.join("flake.nix"), fixture.read("flake.nix")).expect("writes");
+    std::fs::write(
+        fixture.state_dir().join(fixture.key()).join("pending.json"),
+        r#"{"target":"x","pid":4294967295,"present":{"flake.nix":true,"flake.lock":false}}"#,
+    )
+    .expect("the marker writes");
+    std::fs::write(
+        fixture.state_dir().join(format!("{}.lock", fixture.key())),
+        format!(
+            "pid={}\nstarted={}\n",
+            std::process::id(),
+            release_kit::applog::now_utc()
+        ),
+    )
+    .expect("the lock plants");
+    let (code, report) =
+        fixture.sync_json(&["devshell", "sync", "--apply", "--caller", "operator"]);
+    assert_eq!(code, Some(0));
+    assert_eq!(report["outcome"], "skipped-locked");
+    assert!(
+        report.get("recovered").is_none(),
+        "nothing was restored under a live lock"
+    );
+    assert!(
+        fixture
+            .state_dir()
+            .join(fixture.key())
+            .join("pending.json")
+            .exists(),
+        "the marker waits for the lock holder"
+    );
 }

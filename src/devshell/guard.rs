@@ -119,7 +119,13 @@ pub fn acquire(key: &str) -> Acquired {
             if !super::txn::owner_gone_after(pid, &path, LOCK_GRACE) {
                 return Acquired::Contended;
             }
-            let _ = fs::remove_file(&path);
+            // A stale lock that cannot be removed is not held by anyone:
+            // silence here would repeat forever without saying why.
+            match fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
+                Err(source) => return Acquired::Unavailable(source),
+            }
             match take(&path) {
                 Ok(lock) => Acquired::Held(lock),
                 Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists => {

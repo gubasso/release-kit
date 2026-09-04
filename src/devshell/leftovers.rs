@@ -130,7 +130,7 @@ pub fn scan(target: &Utf8Path) -> Result<Vec<Leftover>, RkError> {
     }
     if let Some(text) = read("flake.nix") {
         for (index, line) in text.lines().enumerate() {
-            if holds_word(line, "flock") || holds_word(line, "bats") {
+            if names_package(line, "flock") || names_package(line, "bats") {
                 found.push(Leftover {
                     id: "devshell-tooling",
                     file: "flake.nix".to_owned(),
@@ -207,24 +207,22 @@ fn is_recipe_head(line: &str, name: &str) -> bool {
     rest.contains(':') && (head.is_empty() || head.starts_with(' ') || head.starts_with('\t'))
 }
 
-/// Whether a line holds `word` bounded by non-identifier characters.
-fn holds_word(line: &str, word: &str) -> bool {
-    let boundary = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-';
-    let mut from = 0;
-    while let Some(at) = line[from..].find(word) {
-        let start = from + at;
-        let end = start + word.len();
-        let before = line[..start]
-            .chars()
-            .next_back()
-            .is_none_or(|c| !boundary(c));
-        let after = line[end..].chars().next().is_none_or(|c| !boundary(c));
-        if before && after {
-            return true;
-        }
-        from = end;
-    }
-    false
+/// Whether a Nix line names `package` as a list member: outside a
+/// comment, a whitespace-separated token — brackets stripped — that is
+/// an attribute path ending in the package name. A comment, a string,
+/// or an attribute that merely contains the name is not a match.
+fn names_package(line: &str, package: &str) -> bool {
+    let code = line.split('#').next().unwrap_or_default();
+    code.split_whitespace()
+        .map(|token| token.trim_matches(|c| matches!(c, '[' | ']' | '(' | ')' | ';')))
+        .any(|token| {
+            token.strip_suffix(package).is_some_and(|head| {
+                (head.is_empty() || head.ends_with('.'))
+                    && head
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+            })
+        })
 }
 
 /// The workflow files under `.github/workflows`, relative to the target.
@@ -249,7 +247,7 @@ mod tests {
 
     use camino::Utf8PathBuf;
 
-    use super::{Action, holds_word, is_recipe_head, scan, swap_envrc};
+    use super::{Action, is_recipe_head, names_package, scan, swap_envrc};
     use crate::devshell::pin::PIN_PREFIX;
 
     #[test]
@@ -307,9 +305,24 @@ mod tests {
         assert!(is_recipe_head("rk-bump tag='':", "rk-bump"));
         assert!(!is_recipe_head("rk-bump-all:", "rk-bump"));
         assert!(!is_recipe_head("    rk-bump", "rk-bump"));
-        assert!(holds_word("    pkgs.flock", "flock"));
-        assert!(holds_word("bats # the suites", "bats"));
-        assert!(!holds_word("combats", "bats"));
-        assert!(!holds_word("flock-of-seagulls", "flock"));
+        assert!(names_package("    pkgs.flock", "flock"));
+        assert!(names_package("bats # the suites", "bats"));
+        assert!(names_package("[ flock bats ]", "flock"));
+        assert!(names_package(
+            "nixpkgs.legacyPackages.x86_64-linux.bats",
+            "bats"
+        ));
+        assert!(!names_package("combats", "bats"));
+        assert!(!names_package("flock-of-seagulls", "flock"));
+        assert!(
+            !names_package("# flock is gone", "flock"),
+            "a comment is not a package"
+        );
+        assert!(!names_package("checks.flockTest = x;", "flock"));
+        assert!(
+            !names_package("description = \"needs flock\";", "flock"),
+            "a string is not a package"
+        );
+        assert!(!names_package("pkgs.bats-core", "bats"));
     }
 }
