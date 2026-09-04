@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.17](https://github.com/gubasso/release-kit/compare/v0.2.16...v0.2.17) - 2026-09-04
+
+### Added
+
+- *(cli)* add rk devshell, the consumer pin kept fresh from .envrc ([#65](https://github.com/gubasso/release-kit/pull/65))
+
 ## [0.2.16](https://github.com/gubasso/release-kit/compare/v0.2.15...v0.2.16) - 2026-09-04
 
 ### Added
