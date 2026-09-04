@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.13](https://github.com/gubasso/release-kit/compare/v0.2.12...v0.2.13) - 2026-09-04
+
+### Added
+
+- *(distribution)* declare git in the packaged runtime closure ([#52](https://github.com/gubasso/release-kit/pull/52))
+- *(distribution)* package the binary through the nix flake ([#50](https://github.com/gubasso/release-kit/pull/50))
+
 ## [0.2.12](https://github.com/gubasso/release-kit/compare/v0.2.11...v0.2.12) - 2026-09-03
 
 ### Other
