@@ -9880,3 +9880,111 @@ fn an_adoption_records_the_nix_parameter() {
         "a pair no record vouches for stays the target's own"
     );
 }
+
+/// Every action the rendered nix workflow launches is pinned by a full
+/// commit that appears exactly once in `versions.toml`, with a discovery
+/// ref, a freshness URL, and a checked date beside it. Without this test
+/// the pin doctrine holds only as long as whoever edits the workflow
+/// remembers it.
+#[test]
+fn the_nix_workflow_pins_resolve_through_the_registry() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workflow =
+        std::fs::read_to_string(root.join("snippets/rust/github/.github/workflows/nix.yml"))
+            .expect("the workflow snippet reads");
+    let registry = std::fs::read_to_string(root.join("versions.toml")).expect("the registry reads");
+    let table: toml::Table = registry.parse().expect("the registry parses");
+    let tools = table["tool"].as_array().expect("a tool list");
+    let mut pinned = 0;
+    for line in workflow.lines() {
+        let Some(reference) = line.trim().strip_prefix("- uses: ") else {
+            continue;
+        };
+        pinned += 1;
+        let (action, comment) = reference
+            .split_once(" # ")
+            .expect("a discovery comment follows the pin");
+        let (_, commit) = action.split_once('@').expect("an @commit pin");
+        assert_eq!(commit.len(), 40, "{action} is not pinned by a full commit");
+        assert!(
+            commit.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            "{action} is not a commit"
+        );
+        assert!(
+            !comment.trim().is_empty(),
+            "{action} names no discovery ref"
+        );
+        let owners: Vec<&toml::Value> = tools
+            .iter()
+            .filter(|tool| tool.get("commit").and_then(toml::Value::as_str) == Some(commit))
+            .collect();
+        assert_eq!(
+            owners.len(),
+            1,
+            "{action}: the registry must own this commit exactly once"
+        );
+        for field in ["action", "check", "checked"] {
+            assert!(
+                owners[0].get(field).is_some(),
+                "{action}: the registry entry carries no {field}"
+            );
+        }
+    }
+    assert_eq!(pinned, 3, "the workflow launches three pinned actions");
+}
+
+/// The landed capability builds, end to end: a scratch crate opts in and
+/// the seed flake compiles `nix/package.nix` through the same named build
+/// the rendered workflow runs. Ignored by default — it needs the nix CLI
+/// and network access — and run by the build recipe beside the
+/// publish-closure proof.
+#[test]
+#[ignore = "needs the nix CLI and network access; just check runs it"]
+fn the_landed_nix_capability_builds_end_to_end() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    std::fs::write(
+        target.path().join("Cargo.toml"),
+        "[package]\nname = \"widget\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .expect("the crate manifest writes");
+    std::fs::create_dir_all(target.path().join("src")).expect("the src dir exists");
+    std::fs::write(target.path().join("src/main.rs"), "fn main() {}\n").expect("the main writes");
+    let scrubbed = |program: &str| {
+        let mut command = std::process::Command::new(program);
+        for var in GIT_HOOK_VARS {
+            command.env_remove(var);
+        }
+        command.current_dir(target.path());
+        command
+    };
+    assert!(
+        scrubbed("cargo")
+            .args(["generate-lockfile", "--offline"])
+            .status()
+            .expect("cargo runs")
+            .success()
+    );
+    land_rust_nix(target.path()).success();
+    assert!(
+        scrubbed("git")
+            .args(["init", "-q"])
+            .status()
+            .expect("git runs")
+            .success()
+    );
+    assert!(
+        scrubbed("git")
+            .args(["add", "-A"])
+            .status()
+            .expect("git runs")
+            .success()
+    );
+    let build = scrubbed("nix")
+        .args(["build", ".#default", "--no-link"])
+        .status()
+        .expect("the nix CLI runs");
+    assert!(
+        build.success(),
+        "the landed flake must build the seeded package"
+    );
+}

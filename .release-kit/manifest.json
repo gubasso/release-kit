@@ -1,7 +1,7 @@
 {
-  "schema_version": 3,
-  "rk_version": "0.2.11",
-  "payload_sha256": "00e0bc392ef706f61aa050901c3c9b9d9909c55103f98846fd9375c20d6f955b",
+  "schema_version": 4,
+  "rk_version": "0.2.14",
+  "payload_sha256": "07e56b09782fd53778d562a742fd1501863fe504f5eb5813ed45395cd26f135f",
   "origin": "adopt",
   "tech": "rust",
   "forge": "github",
@@ -28,7 +28,8 @@
       "snippets"
     ],
     "workflow": "worktree",
-    "style": "trunk"
+    "style": "trunk",
+    "nix": false
   },
   "files": [
     {
@@ -77,6 +78,8 @@
     "dist-checkout": "6",
     "dist-download-artifact": "8",
     "dist-upload-artifact": "7",
+    "magic-nix-cache-action": "13",
+    "nix-installer-action": "19",
     "pre-commit-hooks": "6.0.0",
     "release-plz": "0.3.160",
     "rust-toolchain": "stable"
