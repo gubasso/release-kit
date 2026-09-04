@@ -51,6 +51,13 @@ pub struct AdoptArgs {
     #[arg(long)]
     pub style: Option<String>,
 
+    /// The target runs the Nix capability: the candidate includes its
+    /// files, and the record carries the parameter. A target whose flake
+    /// pair is its own is verified without the pair and the workflow,
+    /// exactly as a landing would have withheld them.
+    #[arg(long)]
+    pub nix: bool,
+
     /// Write the record; without it the verification runs and nothing is
     /// touched.
     #[arg(long)]

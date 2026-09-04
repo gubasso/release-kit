@@ -26,10 +26,13 @@ pub const MANIFEST_PATH: &str = ".release-kit/manifest.json";
 /// The schema this binary writes.
 ///
 /// It also reads schema 1 — the pre-mode record, whose absent `workflow`
-/// parameter reads as `branches` — and schema 2 — the pre-style record,
+/// parameter reads as `branches` — schema 2 — the pre-style record,
 /// whose absent `style` parameter reads as none and holds an upgrade
-/// until `--style` names one — and refuses anything else by name.
-pub const SCHEMA_VERSION: u64 = 3;
+/// until `--style` names one — and schema 3 — the pre-nix record, whose
+/// absent `nix` parameter reads as opt-out, so an existing target's
+/// upgrade never sprouts files nobody requested — and refuses anything
+/// else by name.
+pub const SCHEMA_VERSION: u64 = 4;
 
 /// The oldest schema this binary still reads.
 const OLDEST_READABLE_SCHEMA: u64 = 1;
@@ -174,6 +177,14 @@ pub struct Parameters {
     /// reading of a target nobody asked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub style: Option<Style>,
+    /// Whether the landing carries the Nix capability: the seeded package
+    /// expression, the flake pair where the target had none, and the
+    /// workflow that proves the build. A record predating the field reads
+    /// as opt-out, so an upgrade adds nothing unrequested; the projection
+    /// stays reproducible from the record because this field is part of
+    /// it.
+    #[serde(default)]
+    pub nix: bool,
 }
 
 /// One landed destination.
@@ -391,13 +402,13 @@ mod tests {
     use crate::digest::Digest;
     use crate::landing::Kind;
 
-    /// The complete record shape at schema 3, held by snapshot: a field
+    /// The complete record shape at schema 4, held by snapshot: a field
     /// rename or removal fails here and becomes a schema-version bump
     /// instead of a silent break at every reader.
     #[test]
     fn the_manifest_schema_snapshot_holds() {
         let manifest = Manifest {
-            schema_version: 3,
+            schema_version: 4,
             rk_version: "0.1.0".into(),
             payload_sha256: Digest::of(b""),
             origin: "init".into(),
@@ -409,6 +420,7 @@ mod tests {
                 scopes: vec!["api".into(), "cli".into()],
                 workflow: Workflow::Worktree,
                 style: Some(Style::Trunk),
+                nix: true,
             },
             files: vec![
                 FileRecord {
@@ -430,7 +442,7 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&manifest).expect("a manifest serializes"),
             format!(
-                r#"{{"schema_version":3,"rk_version":"0.1.0","payload_sha256":"{empty}","origin":"init","tech":"rust","forge":"github","landed_at":"2026-08-29T00:00:00Z","parameters":{{"repo":"acme/widget","scopes":["api","cli"],"workflow":"worktree","style":"trunk"}},"files":[{{"destination":"release-plz.toml","kind":"seeded","sha256":"{empty}","baseline_sha256":"{empty}"}},{{"destination":"VERSION","kind":"state","sha256":"{empty}"}}],"pins":{{"release-plz":"0.3.160"}}}}"#
+                r#"{{"schema_version":4,"rk_version":"0.1.0","payload_sha256":"{empty}","origin":"init","tech":"rust","forge":"github","landed_at":"2026-08-29T00:00:00Z","parameters":{{"repo":"acme/widget","scopes":["api","cli"],"workflow":"worktree","style":"trunk","nix":true}},"files":[{{"destination":"release-plz.toml","kind":"seeded","sha256":"{empty}","baseline_sha256":"{empty}"}},{{"destination":"VERSION","kind":"state","sha256":"{empty}"}}],"pins":{{"release-plz":"0.3.160"}}}}"#
             ),
             "a state file must omit baseline_sha256 rather than serializing null"
         );
@@ -458,11 +470,15 @@ mod tests {
             manifest.parameters.style, None,
             "a pre-style record carries no style; the upgrade demands one"
         );
+        assert!(
+            !manifest.parameters.nix,
+            "a pre-nix record reads as opt-out, so an upgrade adds nothing unrequested"
+        );
 
-        std::fs::write(target.join(super::MANIFEST_PATH), record(4)).expect("the record writes");
-        let refused = super::load(target).expect_err("a schema-4 record refuses");
+        std::fs::write(target.join(super::MANIFEST_PATH), record(5)).expect("the record writes");
+        let refused = super::load(target).expect_err("a schema-5 record refuses");
         let message = refused.to_string();
-        assert!(message.contains('4'), "{message}");
+        assert!(message.contains('5'), "{message}");
     }
 
     #[test]

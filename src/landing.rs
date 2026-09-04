@@ -53,20 +53,45 @@ impl Kind {
 /// OIDC permission, so release-kit owns them; the tool configurations are
 /// per-project judgment; the two state files are rewritten by the release
 /// automation itself.
-const KINDS: [(&str, Kind); 12] = [
+const KINDS: [(&str, Kind); 16] = [
     (".github/workflows/release-plz.yml", Kind::Rendered),
     (".github/workflows/release-please.yml", Kind::Rendered),
     (".github/workflows/release.yml", Kind::Rendered),
     (".github/workflows/pr-title.yml", Kind::Rendered),
+    (".github/workflows/nix.yml", Kind::Rendered),
     (".gitlab-ci.yml", Kind::Rendered),
     (".gitlab/ci/mr-title.yml", Kind::Rendered),
     ("release-plz.toml", Kind::Seeded),
     ("dist-workspace.toml", Kind::Seeded),
     ("release-please-config.json", Kind::Seeded),
     ("cliff.toml", Kind::Seeded),
+    ("nix/package.nix", Kind::Seeded),
+    ("flake.nix", Kind::Seeded),
     (".release-please-manifest.json", Kind::State),
     ("VERSION", Kind::State),
+    ("flake.lock", Kind::State),
 ];
+
+/// The destinations of the opt-in Nix capability, present in a projection
+/// only where the landing's `nix` parameter is on.
+///
+/// The parameter is recorded, so `status`, `upgrade`, and `adopt` can
+/// reconstruct whether these files are supposed to exist: an absent file
+/// under `nix = false` is not wanted, never drifted.
+pub const NIX_DESTINATIONS: [&str; 4] = [
+    "nix/package.nix",
+    "flake.nix",
+    "flake.lock",
+    ".github/workflows/nix.yml",
+];
+
+/// The subset a target with a flake of its own keeps out: the seed pair,
+/// and the workflow whose check would run against a flake release-kit did
+/// not author.
+///
+/// The seeded package expression is not in it — it lands either way, as
+/// the starting point the target integrates by hand.
+pub const NIX_WITHHOLDABLE: [&str; 3] = ["flake.nix", "flake.lock", ".github/workflows/nix.yml"];
 
 /// The declared kind of a destination, or `None` for a file the payload
 /// does not classify.
@@ -480,9 +505,11 @@ pub fn pair_files(tech: &str, forge: &str) -> Result<Vec<(String, &'static [u8])
 /// The whole payload projection for one pair.
 ///
 /// Under the `repo`, `scopes`, `workflow`,
-/// and `style` parameters: every snippet with its kind and rendered
-/// bytes, plus the routing block and the hook block — each a pure
-/// function of the recorded mode — sorted by destination.
+/// `style`, and `nix` parameters: every snippet with its kind and
+/// rendered bytes, plus the routing block and the hook block — each a
+/// pure function of the recorded mode — sorted by destination. The Nix
+/// destinations project only where `nix` is on; a pair that ships none of
+/// them honestly projects the smaller product.
 ///
 /// # Errors
 ///
@@ -496,9 +523,13 @@ pub fn projection(
     scopes: &[String],
     workflow: Workflow,
     style: Option<Style>,
+    nix: bool,
 ) -> Result<Vec<Entry>, RkError> {
     let mut entries = Vec::new();
     for (destination, baseline) in pair_files(tech, forge)? {
+        if !nix && NIX_DESTINATIONS.contains(&destination.as_str()) {
+            continue;
+        }
         let kind = kind_of(&destination).ok_or_else(|| {
             anyhow::anyhow!("the payload does not classify {destination}; the kind table is stale")
         })?;
@@ -528,6 +559,125 @@ pub fn projection(
     }
     entries.sort_by(|a, b| a.destination.cmp(&b.destination));
     Ok(entries)
+}
+
+/// Why the whole Nix capability stays out of a landing, or `None` where
+/// the target's crate shape supports the seed.
+///
+/// The seeded package expression reads the target's `Cargo.toml` through
+/// `importTOML` and supports one crate with a `[package]` table; landing
+/// it into a workspace root — or beside no `Cargo.toml` at all — seeds a
+/// file that throws on its first evaluation, so the landing reports the
+/// smaller product instead.
+#[must_use]
+pub fn nix_unsupported_shape(target: &Utf8Path) -> Option<String> {
+    let Ok(text) = std::fs::read_to_string(target.join("Cargo.toml")) else {
+        return Some(
+            "the target has no readable Cargo.toml, which the seeded package expression reads; no Nix file lands".to_owned(),
+        );
+    };
+    let Ok(table) = text.parse::<toml::Table>() else {
+        return Some(
+            "the target's Cargo.toml does not parse, and the seeded package expression reads it; no Nix file lands".to_owned(),
+        );
+    };
+    if table.contains_key("package") {
+        None
+    } else {
+        Some(
+            "the target's Cargo.toml has no [package] table; the seed supports a single crate, so no Nix file lands".to_owned(),
+        )
+    }
+}
+
+/// Why the flake half of the Nix capability stays out of this landing, or
+/// `None` where the pair lands whole.
+///
+/// The pair is all-or-nothing: a target that already carries a
+/// `flake.nix` or `flake.lock` of its own keeps its pair — a seed lock
+/// beside a foreign flake describes the wrong input graph — and the
+/// rendered workflow is withheld with it, because a green check that
+/// never builds the landed expression proves nothing. A pair the record
+/// names is release-kit's own landing and is never withheld.
+///
+/// # Errors
+///
+/// Any read failure other than the files being absent.
+pub fn nix_withheld(
+    target: &Utf8Path,
+    recorded: Option<&manifest::Manifest>,
+) -> std::io::Result<Option<String>> {
+    if recorded.is_some_and(|record| record.file("flake.nix").is_some()) {
+        return Ok(None);
+    }
+    let mut present = Vec::new();
+    for name in ["flake.nix", "flake.lock"] {
+        match std::fs::symlink_metadata(target.join(name).as_std_path()) {
+            Ok(_) => present.push(name),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+    }
+    if present.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(format!(
+        "the target already carries {}; its flake pair stays its own, and the nix workflow is withheld with it",
+        present.join(" and ")
+    )))
+}
+
+/// One destination a landing withholds, with why.
+#[derive(Debug, Serialize)]
+pub struct Withheld {
+    /// The destination that stays out.
+    pub path: String,
+    /// The reason, stated once per destination so a machine reader needs
+    /// no join.
+    pub reason: String,
+}
+
+/// Drop the Nix destinations this target cannot take from a projection,
+/// naming each with its reason.
+///
+/// The one judgment every landing verb shares, so a preview, an apply, an
+/// upgrade, and an adoption all withhold identically: an unsupported
+/// crate shape withholds the whole capability, and a flake pair of the
+/// target's own withholds the pair and the workflow while the seeded
+/// package expression still lands.
+///
+/// # Errors
+///
+/// Any read failure from the pair check other than absence.
+pub fn withhold_nix(
+    target: &Utf8Path,
+    nix: bool,
+    recorded: Option<&manifest::Manifest>,
+    entries: &mut Vec<Entry>,
+) -> Result<Vec<Withheld>, RkError> {
+    if !nix {
+        return Ok(Vec::new());
+    }
+    let (set, reason): (&[&str], String) = if let Some(reason) = nix_unsupported_shape(target) {
+        (&NIX_DESTINATIONS[..], reason)
+    } else if let Some(reason) = nix_withheld(target, recorded)? {
+        (&NIX_WITHHOLDABLE[..], reason)
+    } else {
+        return Ok(Vec::new());
+    };
+    let mut withheld = Vec::new();
+    entries.retain(|entry| {
+        if set.contains(&entry.destination.as_str()) {
+            withheld.push(Withheld {
+                path: entry.destination.clone(),
+                reason: reason.clone(),
+            });
+            false
+        } else {
+            true
+        }
+    });
+    Ok(withheld)
 }
 
 /// The bytes an entry's destination currently holds: the whole file, or
@@ -829,6 +979,7 @@ mod tests {
             &scopes(&["api", "cli"]),
             Workflow::Branches,
             Some(Style::Trunk),
+            false,
         )
         .expect("the pair projects");
         let workflow = entries
@@ -866,6 +1017,136 @@ mod tests {
             assert!(!text.contains("RK_SCOPES"), "{block} kept a token: {text}");
             assert!(text.contains("api,cli"), "{block} lost the scopes: {text}");
         }
+    }
+
+    /// The Nix destinations project only under the opt-in: off, none of
+    /// them appears; on, the rust pairs carry them — the gitlab pair too,
+    /// minus the workflow, which is a forge file the gitlab payload does
+    /// not ship — and a pair without them projects the smaller product.
+    #[test]
+    fn the_nix_destinations_project_only_under_the_opt_in() {
+        use super::NIX_DESTINATIONS;
+        let paths = |nix: bool, forge: &str| -> Vec<String> {
+            projection(
+                "rust",
+                forge,
+                "acme/widget",
+                &scopes(&["api"]),
+                Workflow::Worktree,
+                Some(Style::Trunk),
+                nix,
+            )
+            .expect("the pair projects")
+            .into_iter()
+            .map(|entry| entry.destination)
+            .collect()
+        };
+        let off = paths(false, "github");
+        for destination in NIX_DESTINATIONS {
+            assert!(!off.contains(&destination.to_owned()), "{destination}");
+        }
+        let on = paths(true, "github");
+        for destination in ["nix/package.nix", "flake.nix", "flake.lock"] {
+            assert!(on.contains(&destination.to_owned()), "{destination}");
+        }
+        let gitlab = paths(true, "gitlab");
+        assert!(gitlab.contains(&"nix/package.nix".to_owned()));
+        assert!(!gitlab.contains(&".github/workflows/nix.yml".to_owned()));
+        let bash = projection(
+            "bash",
+            "github",
+            "acme/widget",
+            &scopes(&["api"]),
+            Workflow::Worktree,
+            Some(Style::Trunk),
+            true,
+        )
+        .expect("an out-of-matrix pair projects the smaller product");
+        assert!(
+            bash.iter()
+                .all(|entry| !NIX_DESTINATIONS.contains(&entry.destination.as_str()))
+        );
+    }
+
+    /// The github and gitlab copies of the forge-independent Nix payload
+    /// stay byte-identical: the loader composes exactly two layers and has
+    /// no technology-wide zone, so the duplication is deliberate and this
+    /// parity test is what keeps it honest.
+    #[test]
+    fn the_nix_seeds_are_identical_across_forge_pairs() {
+        for name in ["nix/package.nix", "flake.nix", "flake.lock"] {
+            let github = embedded::SNIPPETS
+                .get_file(format!("rust/github/{name}"))
+                .expect("the github copy ships")
+                .contents();
+            let gitlab = embedded::SNIPPETS
+                .get_file(format!("rust/gitlab/{name}"))
+                .expect("the gitlab copy ships")
+                .contents();
+            assert_eq!(github, gitlab, "{name} diverged between the pairs");
+        }
+    }
+
+    /// The withhold judgment: a flake pair of the target's own withholds
+    /// the pair and the workflow while the package expression lands, a
+    /// crate shape the seed does not support withholds everything, and a
+    /// clean single-crate target withholds nothing.
+    #[test]
+    fn the_nix_withhold_judgment_covers_the_three_shapes() {
+        use super::{NIX_DESTINATIONS, withhold_nix};
+        let dir = tempfile::tempdir().expect("a scratch target exists");
+        let target = camino::Utf8Path::from_path(dir.path()).expect("utf-8 path");
+        let entries = || {
+            projection(
+                "rust",
+                "github",
+                "acme/widget",
+                &scopes(&["api"]),
+                Workflow::Worktree,
+                Some(Style::Trunk),
+                true,
+            )
+            .expect("the pair projects")
+        };
+
+        // No Cargo.toml: the whole capability is withheld by name.
+        let mut all = entries();
+        let withheld = withhold_nix(target, true, None, &mut all).expect("the judgment runs");
+        let paths: Vec<&str> = withheld.iter().map(|w| w.path.as_str()).collect();
+        assert_eq!(paths, ["flake.lock", "flake.nix", "nix/package.nix"]);
+        assert!(
+            all.iter()
+                .all(|entry| !NIX_DESTINATIONS.contains(&entry.destination.as_str()))
+        );
+
+        // A single crate with its own flake: the pair and the workflow are
+        // withheld, and the package expression still lands.
+        std::fs::write(
+            target.join("Cargo.toml"),
+            "[package]\nname = \"widget\"\nversion = \"0.1.0\"\n",
+        )
+        .expect("the crate manifest writes");
+        std::fs::write(target.join("flake.nix"), "{ }\n").expect("the flake writes");
+        let mut all = entries();
+        let withheld = withhold_nix(target, true, None, &mut all).expect("the judgment runs");
+        let paths: Vec<&str> = withheld.iter().map(|w| w.path.as_str()).collect();
+        assert_eq!(paths, ["flake.lock", "flake.nix"]);
+        assert!(
+            all.iter()
+                .any(|entry| entry.destination == "nix/package.nix")
+        );
+
+        // A clean single crate: nothing is withheld.
+        std::fs::remove_file(target.join("flake.nix")).expect("the flake removes");
+        let mut all = entries();
+        let withheld = withhold_nix(target, true, None, &mut all).expect("the judgment runs");
+        assert!(withheld.is_empty());
+        assert!(all.iter().any(|entry| entry.destination == "flake.nix"));
+
+        // Off, the judgment does not even look.
+        let mut all = entries();
+        let withheld = withhold_nix(target, false, None, &mut all).expect("the judgment runs");
+        assert!(withheld.is_empty());
     }
 
     #[test]

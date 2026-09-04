@@ -53,6 +53,12 @@ struct Report {
     /// mode, or the `--workflow` override this run applies.
     workflow: &'static str,
     style: &'static str,
+    /// Whether the rewritten record carries the Nix capability.
+    nix: bool,
+    /// The Nix destinations this target could not take, each with why;
+    /// absent where nothing was withheld.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    withheld: Option<Vec<landing::Withheld>>,
     /// Every destination, with its action.
     files: Vec<FileEntry>,
     /// What plausibly follows.
@@ -97,14 +103,8 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
             "the record carries no style parameter; pass --style <trunk|lines> — trunk arms the bot's release request to merge itself, lines keeps every merge a human's — and the upgrade records it".into(),
         ));
     };
-    let entries = landing::projection(
-        &recorded.tech,
-        &recorded.forge,
-        &recorded.parameters.repo,
-        &recorded.parameters.scopes,
-        recorded.parameters.workflow,
-        Some(style),
-    )?;
+    resolve_nix(&mut recorded, args.nix.as_deref())?;
+    let (entries, withheld) = project(args, &recorded, style)?;
     refuse_non_regular(&args.target, &entries)?;
 
     let (decisions, conflicts) = decide_all(args, &recorded, &entries)?;
@@ -150,6 +150,9 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
             "dropped {path} (no longer shipped; now target-owned)"
         ));
     }
+    for entry in &withheld {
+        out.result_line(format!("withheld {}: {}", entry.path, entry.reason));
+    }
 
     if args.apply {
         rewrite_record(&args.target, &recorded, &decisions)?;
@@ -162,7 +165,7 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
     let next = next_lines(args, conflicts.is_empty());
     out.next(&next);
     out.emit(&Report {
-        schema: "rk.upgrade/3",
+        schema: "rk.upgrade/4",
         mode: if args.apply { "apply" } else { "preview" },
         target: args.target.to_string(),
         tech: recorded.tech.clone(),
@@ -171,6 +174,8 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
         to_version: env!("CARGO_PKG_VERSION"),
         workflow: recorded.parameters.workflow.as_str(),
         style: style.as_str(),
+        nix: recorded.parameters.nix,
+        withheld: (!withheld.is_empty()).then_some(withheld),
         files: decisions
             .iter()
             .map(|decision| FileEntry {
@@ -186,6 +191,51 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
             .collect(),
         next,
     })
+}
+
+/// The Nix opt-in changes in either direction: `on` adds the capability's
+/// files and records it, `off` drops them from the record while the files
+/// stay the target's own. Omitted, the recorded choice is kept.
+fn resolve_nix(recorded: &mut Manifest, flag: Option<&str>) -> Result<(), RkError> {
+    match flag {
+        None => Ok(()),
+        Some("on") => {
+            recorded.parameters.nix = true;
+            Ok(())
+        }
+        Some("off") => {
+            recorded.parameters.nix = false;
+            Ok(())
+        }
+        Some(other) => Err(RkError::Usage(format!(
+            "unknown --nix value '{other}'; the values are: on, off"
+        ))),
+    }
+}
+
+/// The projection this record produces, with the Nix entries the target
+/// cannot take withheld exactly as a landing would withhold them.
+fn project(
+    args: &UpgradeArgs,
+    recorded: &Manifest,
+    style: Style,
+) -> Result<(Vec<landing::Entry>, Vec<landing::Withheld>), RkError> {
+    let mut entries = landing::projection(
+        &recorded.tech,
+        &recorded.forge,
+        &recorded.parameters.repo,
+        &recorded.parameters.scopes,
+        recorded.parameters.workflow,
+        Some(style),
+        recorded.parameters.nix,
+    )?;
+    let withheld = landing::withhold_nix(
+        &args.target,
+        recorded.parameters.nix,
+        Some(recorded),
+        &mut entries,
+    )?;
+    Ok((entries, withheld))
 }
 
 /// The collect-then-refuse conflict answer: the whole list in one run, so
@@ -217,6 +267,10 @@ fn next_lines(args: &UpgradeArgs, clean: bool) -> Vec<String> {
         .style
         .as_deref()
         .map_or_else(String::new, |style| format!(" --style {style}"));
+    let nix_flag = args
+        .nix
+        .as_deref()
+        .map_or_else(String::new, |value| format!(" --nix {value}"));
     if args.apply {
         vec![
             "commit the upgraded files, the record included".to_owned(),
@@ -224,12 +278,12 @@ fn next_lines(args: &UpgradeArgs, clean: bool) -> Vec<String> {
         ]
     } else if clean {
         vec![format!(
-            "rk upgrade{workflow_flag}{style_flag} --target {} --apply writes",
+            "rk upgrade{workflow_flag}{style_flag}{nix_flag} --target {} --apply writes",
             args.target
         )]
     } else {
         vec![format!(
-            "resolve each conflict above; rk upgrade{workflow_flag}{style_flag} --target {} --apply refuses until then",
+            "resolve each conflict above; rk upgrade{workflow_flag}{style_flag}{nix_flag} --target {} --apply refuses until then",
             args.target
         )]
     }
@@ -258,6 +312,7 @@ fn rewrite_record(
                 scopes: recorded.parameters.scopes.clone(),
                 workflow: recorded.parameters.workflow,
                 style: recorded.parameters.style,
+                nix: recorded.parameters.nix,
             },
             files: decisions
                 .iter()
@@ -566,7 +621,7 @@ mod tests {
     #[test]
     fn the_upgrade_report_schema_snapshot_holds() {
         let report = Report {
-            schema: "rk.upgrade/3",
+            schema: "rk.upgrade/4",
             mode: "preview",
             target: "/tmp/t".into(),
             tech: "rust".into(),
@@ -575,6 +630,8 @@ mod tests {
             to_version: "0.2.0",
             workflow: "branches",
             style: "trunk",
+            nix: false,
+            withheld: None,
             files: vec![FileEntry {
                 path: "release-plz.toml".into(),
                 kind: "seeded",
@@ -584,7 +641,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.upgrade/3","mode":"preview","target":"/tmp/t","tech":"rust","forge":"github","from_version":"0.1.0","to_version":"0.2.0","workflow":"branches","style":"trunk","files":[{"path":"release-plz.toml","kind":"seeded","action":"drift"}],"next":["rk upgrade --target /tmp/t --apply writes"]}"#
+            r#"{"schema":"rk.upgrade/4","mode":"preview","target":"/tmp/t","tech":"rust","forge":"github","from_version":"0.1.0","to_version":"0.2.0","workflow":"branches","style":"trunk","nix":false,"files":[{"path":"release-plz.toml","kind":"seeded","action":"drift"}],"next":["rk upgrade --target /tmp/t --apply writes"]}"#
         );
     }
 }

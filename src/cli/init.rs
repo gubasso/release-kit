@@ -48,6 +48,14 @@ pub struct InitArgs {
     #[arg(long, default_value = "trunk")]
     pub style: String,
 
+    /// Opt the landing into the Nix capability: a seeded package
+    /// expression, a seed flake pair where the target has none, and the
+    /// workflow that proves the build. Recorded as a landing parameter;
+    /// off by default, because a packaging surface is a decision, not a
+    /// default.
+    #[arg(long)]
+    pub nix: bool,
+
     /// Write the files; without it the destinations are listed and nothing
     /// is touched.
     #[arg(long)]

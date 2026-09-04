@@ -91,3 +91,12 @@ Three upstream facts carry the arming steps the landed release workflows render.
 - <https://github.com/googleapis/release-please-action/blob/45996ed1f6d02564a971a2fa1b5860e934307cf7/README.md>
 
 Bearing: `landing:the-arming-identity-is-the-bot`, both scenarios, and the arming steps in every landed release workflow. The default-token fact is the single most load-bearing citation in the arming design: it is why the arm sits in the job that already mints the bot token.
+
+## The Nix capability's destinations
+
+The Nix-owned destinations the payload names, verified against the Nix reference documentation on 2026-09-04. The flake file must be named `flake.nix` and live in the repository's root directory: the reference manual's flake description states that a flake is a filesystem tree whose root directory contains `flake.nix`, and the `nix flake` reference documents resolution of a `github:`/`git+https:` reference to the flake file at the tree's root. `flake.lock` is written beside it by the lock machinery, in the same root, and is maintained by Nix's own commands after landing — which is why it lands as a `state` file. The `nix/` subdirectory for auxiliary expressions is a placement release-kit chooses for its own seed, not a Nix requirement: the seed's `flake.nix` names the path explicitly, so a target may move it and adjust the call.
+
+- <https://nix.dev/manual/nix/latest/command-ref/new-cli/nix3-flake>
+- <https://nix.dev/manual/nix/latest/command-ref/new-cli/nix3-flake-lock>
+
+Bearing: `landing:the-flake-pair-lands-all-or-nothing`, and `placement:a-third-party-destination-names-its-source` for `flake.nix` and `flake.lock`.

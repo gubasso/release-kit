@@ -99,6 +99,10 @@ grep -c crates-io "${CARGO_HOME:-$HOME/.cargo}/credentials.toml" 2>/dev/null || 
 
 The package then has exactly one publishing path.
 
+### The Nix capability
+
+An opt-in beside the release automation, off by default: `rk init --nix` lands `nix/package.nix` (seeded — a starting point the project tunes), a seed `flake.nix` and `flake.lock` pair where the target has none (a target's own flake is never touched, and `rk init` reports what it withholds and why), and on github the rendered workflow that proves the build. The matrix degrades honestly: `(rust, github)` is the full set, `(rust, gitlab)` lands the expression and the pair without a CI job, and a workspace root lands nothing — the seed reads `Cargo.toml` through `importTOML` and supports one crate with a `[package]` table, an implicit `src/main.rs` binary or an explicit `[[bin]]` entry. The capability promises a buildable flake and its proof, never presence in nixpkgs; registry distribution is the target's own later step. After landing: run `nix build .#default` once, resolve the license `TODO(release-kit)` in the seed, and commit the pair with the record.
+
 ## Operate specifics
 
 - `release_always = false` in `release-plz.toml`: the release half fires only on the merge of the bot's own request, which the branch heuristic recognizes by its `release-plz-*` head branch, so an ordinary work merge publishes nothing and the release decision stays on the one merge button.
