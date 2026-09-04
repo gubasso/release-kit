@@ -21,6 +21,7 @@ exclude = [
     # cargo, and the flake serves the consumers who fetch the repository.
     "/flake.nix",
     "/flake.lock",
+    "/nix",
     "/justfile",
     "/deny.toml",
     "/dist-workspace.toml",
