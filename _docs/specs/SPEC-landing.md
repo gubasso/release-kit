@@ -156,7 +156,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `landing:status-judges-only-under-check` — Status judges only under check
 
-Plain `rk status` MUST report and exit 0 for every reportable state — drift, staleness, unresolved sentinels, invariant failures, and no landing at all — and `rk status --check` MUST compute the identical report and exit 1 exactly on a violation: drift to a `rendered` file, an invalid or missing landing, an unresolved judgment sentinel, or an invariant failure under `landing:a-seeded-file-still-carries-the-invariants`. Seeded drift and pin staleness stay informational in both modes.
+Plain `rk status` MUST report and exit 0 for every reportable state — drift, staleness, unresolved sentinels, invariant failures, and no landing at all — and `rk status --check` MUST compute the identical report and exit 1 exactly on a violation: drift to a `rendered` file, a record whose own parameters do not reproduce its recorded bytes or its recorded destination set, an invalid or missing landing, an unresolved judgment sentinel, or an invariant failure under `landing:a-seeded-file-still-carries-the-invariants`. Seeded drift and pin staleness stay informational in both modes.
 
 #### Scenario: The same target, judged and not
 

@@ -14,11 +14,12 @@
   outputs =
     { self, nixpkgs }:
     let
+      # The support claim, not a convenience: an advertised output set is
+      # a promise, and the landed workflow natively proves only this
+      # system. Grow the list together with a native CI runner for each
+      # addition.
       systems = [
         "x86_64-linux"
-        "aarch64-linux"
-        "x86_64-darwin"
-        "aarch64-darwin"
       ];
       eachSystem = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
     in

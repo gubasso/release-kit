@@ -93,6 +93,11 @@ struct Observed {
     /// Recorded block destinations whose recorded digest the record's own
     /// parameters do not reproduce: the record was edited, not the file.
     parameter_drift: Vec<String>,
+    /// Set differences between what the recorded parameters project —
+    /// the withhold judgment applied — and the destinations the record
+    /// names: a record whose parameters and file list disagree, whichever
+    /// of the two was edited or outgrown.
+    record_drift: Vec<String>,
     missing: Vec<String>,
     stale: Vec<StalePin>,
     sentinels: Vec<(String, usize, String)>,
@@ -178,7 +183,9 @@ pub fn run(args: &StatusArgs) -> Result<(), RkError> {
         binary_version: Some(env!("CARGO_PKG_VERSION")),
         alignment: Some(alignment),
         drift: Some(Drift {
-            rendered: observed.drift_rendered.len() + observed.parameter_drift.len(),
+            rendered: observed.drift_rendered.len()
+                + observed.parameter_drift.len()
+                + observed.record_drift.len(),
             seeded: observed.drift_seeded.len(),
         }),
         missing: Some(observed.missing.clone()),
@@ -222,6 +229,12 @@ fn violations_of(observed: &Observed) -> Vec<String> {
         )
         .chain(
             observed
+                .record_drift
+                .iter()
+                .map(|reason| format!("record drift: {reason}")),
+        )
+        .chain(
+            observed
                 .missing
                 .iter()
                 .map(|path| format!("missing: {path}")),
@@ -248,6 +261,7 @@ fn observe(args: &StatusArgs, manifest: &Manifest) -> Result<Observed, RkError> 
         drift_rendered: Vec::new(),
         drift_seeded: Vec::new(),
         parameter_drift: Vec::new(),
+        record_drift: Vec::new(),
         missing: Vec::new(),
         stale: Vec::new(),
         sentinels: Vec::new(),
@@ -338,6 +352,9 @@ fn observe(args: &StatusArgs, manifest: &Manifest) -> Result<Observed, RkError> 
                 .push(format!("{destination} (parameters.workflow)"));
         }
     }
+    if same_payload {
+        observe_record_set(args, manifest, &mut observed.record_drift)?;
+    }
     // Stale means behind, not merely different: a landing from a newer rk
     // can carry pins ahead of this binary's registry, and that is the
     // alignment line's story, not a freshness complaint.
@@ -353,6 +370,57 @@ fn observe(args: &StatusArgs, manifest: &Manifest) -> Result<Observed, RkError> 
         }
     }
     Ok(observed)
+}
+
+/// The record-set consistency step: the recorded digests judge each
+/// named file, and the block re-render judges the two block records, but
+/// neither can see a record whose parameters and file list disagree — a
+/// nix flag flipped in the record with no file landed, or a once-withheld
+/// capability whose target grew into the supported shape. So the
+/// projection is reconstructed from the record's own parameters, the same
+/// withhold judgment applied, and the two destination sets compared both
+/// ways. Called only under this binary's own payload: an older landing's
+/// set legitimately differs, and that is the alignment line's story.
+fn observe_record_set(
+    args: &StatusArgs,
+    manifest: &Manifest,
+    record_drift: &mut Vec<String>,
+) -> Result<(), RkError> {
+    let mut projected = landing::projection(
+        &manifest.tech,
+        &manifest.forge,
+        &manifest.parameters.repo,
+        &manifest.parameters.scopes,
+        manifest.parameters.workflow,
+        manifest.parameters.style,
+        manifest.parameters.nix,
+    )?;
+    landing::withhold_nix(
+        &args.target,
+        manifest.parameters.nix,
+        Some(manifest),
+        &mut projected,
+    )?;
+    for entry in &projected {
+        if manifest.file(&entry.destination).is_none() {
+            record_drift.push(format!(
+                "the recorded parameters project {}, which the record does not name",
+                entry.destination
+            ));
+        }
+    }
+    for file in &manifest.files {
+        if !projected
+            .iter()
+            .any(|entry| entry.destination == file.destination)
+        {
+            record_drift.push(format!(
+                "the record names {}, which the recorded parameters do not project",
+                file.destination
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// The human lines, identical with and without `--check`.
@@ -395,6 +463,9 @@ fn render_human(
             "DRIFT {path}: the recorded parameters do not render the recorded bytes"
         ));
     }
+    for reason in &observed.record_drift {
+        out.result_line(format!("DRIFT record: {reason}"));
+    }
     for path in &observed.drift_seeded {
         out.result_line(format!("DRIFT {path} (seeded, target-owned)"));
     }
@@ -419,6 +490,12 @@ fn render_human(
     let mut next = Vec::new();
     for failure in &observed.invariants {
         next.push(format!("{}: {}", failure.destination, failure.remediation));
+    }
+    if !observed.record_drift.is_empty() {
+        next.push(format!(
+            "rk upgrade --target {} reconciles the record with its parameters",
+            args.target
+        ));
     }
     if alignment == Alignment::BinaryNewer {
         next.push(format!(

@@ -32,8 +32,9 @@ build:
     cargo run -q -- upgrade --target "$d" --apply >/dev/null; \
     grep -q 'semver_check = true' "$d/release-plz.toml"; \
     cargo run -q -- status --check --target "$d" >/dev/null
-    set -eu; n=$(mktemp -d); trap 'rm -rf "$n"' EXIT; mkdir -p "$n/.git"; \
+    set -eu; n=$(mktemp -d); trap 'rm -rf "$n"' EXIT; mkdir -p "$n/.git" "$n/src"; \
     printf '[package]\nname = "widget"\nversion = "0.1.0"\n' > "$n/Cargo.toml"; \
+    printf 'fn main() {}\n' > "$n/src/main.rs"; printf 'version = 4\n' > "$n/Cargo.lock"; \
     cargo run -q -- init --tech rust --forge github --repo acme/widget --scopes api,cli --nix --target "$n" --apply >/dev/null; \
     test -f "$n/nix/package.nix"; test -f "$n/flake.nix"; test -f "$n/flake.lock"; test -f "$n/.github/workflows/nix.yml"; \
     printf '# tuned by the target\n' >> "$n/nix/package.nix"; \
