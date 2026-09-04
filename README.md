@@ -23,6 +23,7 @@ The binary is `rk`.
 - Land the workflow in a project: `rk init --tech rust --target .` previews; `--apply` writes the files and the landing record.
 - Ask a landed project about itself: `rk status`, with `--check` for a CI gate; take a newer payload with `rk upgrade`; record a pre-record project with `rk adopt`.
 - See the pinned tools and their freshness: `rk versions`, and `rk versions --check` to compare each pin upstream.
+- Take `rk` from a project's own flake and keep it fresh: `rk devshell add` prints the fragments and seeds the pair; `rk devshell sync` moves the pin from `.envrc`; `rk devshell clean` removes what a hand-rolled bump left.
 - Prove what the binary carries: `rk payload`, with `--json` for the machine form.
 - Check the host and load the whole surface: `rk doctor` and `rk usage`.
 - Install the agent skills at user scope: `rk skill install` previews; `--apply` writes `~/.claude/skills/` and `~/.agents/skills/`, plus what they share at `~/.local/state/release-kit/skills/shared/`.

@@ -2,6 +2,8 @@
 
 Bootstrapping one repository onto the convention. Once per repository, in this order; every step names what it proves before the next one starts. The binding for the project's technology supplies the concrete tools, files, and registry; `rk init` lands the deterministic files. The command form of this chapter is the setup runbook, `rk guide setup`, and `rk setup` executes the forge-side steps.
 
+Before the first step the project decides how it obtains `rk`: one host install for the whole machine, or its own devshell pin — release-kit as a flake input at a release tag, the tag in `flake.nix` the version and the lock its content, moved forward together by `rk devshell sync` from `.envrc` once a day. One project runs one bump mechanism, because two mechanisms write the same two files on the same trigger with two locks that do not know each other, and the second to run either fights the first or silently undoes it; so the wiring replaces what the project carried, `rk devshell clean` removes what a line scan can judge and names the rest, and a target reads as ready only with nothing of the predecessor left.
+
 ## 0. Gate the package metadata
 
 Run the registry's dry-run packaging check first, before anything that needs credentials. It catches the common rejects — a missing description, an invalid category — with no token and no remote configuration, and every later step assumes the package is publishable.
