@@ -43,6 +43,10 @@ When the request carries `--no-plan`, skip the plan gate's approval turn only. S
 | The line lifecycle verbs                   | `rk lines --help`          |
 | The working-copy forms and the mode        | `rk method worktrees`      |
 
+## Installation scope
+
+Skills and the agent setup install at user scope only — `rk skill install --apply`, once per user; no system mode exists, by decision. The setup runbook's prerequisites own the step and the two roots. Where a file lands for a third-party application is the target project's own decision, made against that application's documentation with a dated citation — never generalized from another application.
+
 ## Land the workflow
 
 1. Detect the technology: `Cargo.toml` means rust, `pyproject.toml` means python, a `VERSION` file or a plain script tree means bash. When none of the bindings fit, stop and say so; the method still applies, the files do not.

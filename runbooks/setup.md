@@ -7,9 +7,12 @@ The steps of [setup](../method/02-setup.md) as commands, once per repository, in
 Every step below assumes these; each is a probe, not a change.
 
 - `rk` on `PATH`: `rk --version`
+- This binary's skills, installed once per user, at user scope — the only mode there is: `rk doctor` reports the skill probes ok, and `rk skill install --apply` is the repair. The two roots are `~/.claude/skills`, which Claude Code reads, and `~/.agents/skills`, which Codex, Gemini CLI, and Copilot CLI read. No system-wide mode exists, by decision rather than gap. Every install channel takes the same step: `just install` runs it as its second line; cargo, the curl-pipe installer, and a packaged `rk` leave it to the operator.
 - The forge CLI, `openssl`, and `curl`: `rk doctor` reports each ok
 - OS keyring where the forge bootstrap needs one: `secret-tool --version`, on a host shell and never in a container
 - Clean trunk: `git status --porcelain` empty, `HEAD` equal to the remote trunk
+
+Where a file lands for a third-party application — an agent root, an editor directory — is this project's own decision, made against that application's current documentation and recorded with a dated citation. Release-kit states where its own artifacts go; it never decides such a placement on a project's behalf.
 
 On github:
 

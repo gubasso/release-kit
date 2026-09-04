@@ -150,7 +150,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `distribution:a-skill-has-one-owner` — A skill has one owner
 
-The distribution MUST install every skill at user scope alone, and `rk init` MUST land no skill into a target, because an agent resolves a skill by name across scopes and a second copy under one name is a second entry offering the same skill.
+The distribution MUST install every skill at user scope alone, and `rk init` MUST land no skill into a target, because an agent resolves a skill by name across scopes and a second copy under one name is a second entry offering the same skill. User scope is the only mode rather than one branch of a choice: the vendors share a user-scope convention and no system-scope one, so `Scope` stays a single-variant enum and no staging mode, vendor tree, or system path exists.
 
 #### Scenario: A project is initialized inside a home that already carries the skills
 
