@@ -218,18 +218,23 @@ fn finish(backup: &Path, marker: &Path) -> Result<(), FinishFailure> {
 /// The bytes a finished marker holds; a recovery reads it as done.
 const FINISHED_MARKER: &[u8] = br#"{"committed":true}"#;
 
-/// Whether a marker names a run still to recover: it exists and is not
-/// a finished one. A finished marker that could not be removed is
-/// residue, never a pending run, so it blocks nothing.
+/// Whether a marker names a run still to recover.
+///
+/// It exists and is not a finished one. A finished marker that could not
+/// be removed is residue, never a pending run, so it blocks nothing. Only
+/// an absent marker reads as not pending; a marker that exists and cannot
+/// be read is pending, because nothing proves it finished.
 #[must_use]
 pub fn marker_is_pending(marker: &Path) -> bool {
-    let Ok(bytes) = fs::read(marker) else {
-        return false;
-    };
-    serde_json::from_slice::<serde_json::Value>(&bytes)
-        .ok()
-        .and_then(|record| record["committed"].as_bool())
-        != Some(true)
+    match fs::read(marker) {
+        Ok(bytes) => {
+            serde_json::from_slice::<serde_json::Value>(&bytes)
+                .ok()
+                .and_then(|record| record["committed"].as_bool())
+                != Some(true)
+        }
+        Err(source) => source.kind() != std::io::ErrorKind::NotFound,
+    }
 }
 
 /// A restore that could not put a file back; the backups stay.
@@ -670,6 +675,12 @@ mod tests {
         );
         std::fs::remove_file(&marker).expect("removes");
         assert!(!super::marker_is_pending(&marker));
+        // A marker that exists and cannot be read proves nothing finished.
+        std::fs::create_dir(&marker).expect("a directory where the marker is");
+        assert!(
+            super::marker_is_pending(&marker),
+            "an unreadable marker is pending"
+        );
     }
 
     /// A finished marker left behind is cleared and reported as such.
