@@ -10359,6 +10359,67 @@ impl DevshellFixture {
         std::fs::read_to_string(self.target().join(rel)).expect("the file reads")
     }
 
+    /// The hand-rolled recipe the catalog knows, planted whole: the two
+    /// scripts, the two suites, the `.envrc` invocation with its comment,
+    /// the switch example, the justfile recipe, the devshell tooling, and
+    /// a host install line in the README and in a workflow.
+    fn write_predecessor(&self) {
+        let target = self.target();
+        std::fs::create_dir_all(target.join("scripts")).expect("scripts creates");
+        std::fs::create_dir_all(target.join("tests")).expect("tests creates");
+        std::fs::create_dir_all(target.join(".github/workflows")).expect("workflows creates");
+        std::fs::write(
+            target.join("scripts/rk-bump.sh"),
+            "#!/usr/bin/env bash\nPIN_PREFIX='github:gubasso/release-kit/'\nflock -n \"$LOCK\" true\n",
+        )
+        .expect("writes");
+        std::fs::write(
+            target.join("scripts/rk-autobump.sh"),
+            "#!/usr/bin/env bash\nexec \"$(dirname \"$0\")/rk-bump.sh\"\n",
+        )
+        .expect("writes");
+        std::fs::write(
+            target.join("tests/rk-bump.bats"),
+            "@test \"rk-bump moves the pin\" { true; }\n",
+        )
+        .expect("writes");
+        std::fs::write(
+            target.join("tests/rk-autobump.bats"),
+            "@test \"rk-autobump stamps the day\" { true; }\n",
+        )
+        .expect("writes");
+        std::fs::write(
+            target.join(".envrc"),
+            "use flake\n\n# Bump the release-kit pin once a day on entry.\n# scripts/rk-autobump.sh holds the transaction; RK_SKIP_AUTOBUMP=1 skips it.\nscripts/rk-autobump.sh || true\n\nsource_env_if_exists .envrc.local\n",
+        )
+        .expect("writes");
+        std::fs::write(
+            target.join(".envrc.local.example"),
+            "# export RK_SKIP_AUTOBUMP=1\n",
+        )
+        .expect("writes");
+        std::fs::write(
+            target.join("justfile"),
+            "# Move the release-kit pin by hand.\nrk-bump tag='':\n    scripts/rk-bump.sh {{tag}}\n\ntest:\n    bats tests\n",
+        )
+        .expect("writes");
+        std::fs::write(
+            target.join("flake.nix"),
+            "{\n  inputs = {\n    nixpkgs.url = \"github:NixOS/nixpkgs/nixos-unstable\";\n    release-kit = {\n      url = \"github:gubasso/release-kit/v0.2.16\";\n      inputs.nixpkgs.follows = \"nixpkgs\";\n    };\n  };\n  outputs = { self, nixpkgs, release-kit }: {\n    devShells.x86_64-linux.default = nixpkgs.legacyPackages.x86_64-linux.mkShell {\n      packages = [\n        release-kit.packages.x86_64-linux.default\n        nixpkgs.legacyPackages.x86_64-linux.flock # for scripts/rk-bump.sh\n        nixpkgs.legacyPackages.x86_64-linux.bats\n      ];\n    };\n  };\n}\n",
+        )
+        .expect("writes");
+        std::fs::write(
+            target.join("README.md"),
+            "# widget\n\nInstall the tool: `cargo install release-kit`.\n",
+        )
+        .expect("writes");
+        std::fs::write(
+            target.join(".github/workflows/ci.yml"),
+            "jobs:\n  test:\n    steps:\n      - run: cargo binstall release-kit\n",
+        )
+        .expect("writes");
+    }
+
     fn rk(&self, args: &[&str]) -> Command {
         let mut command = rk_scrubbed();
         command
@@ -10781,4 +10842,101 @@ fn devshell_add_refuses_a_tag_that_is_not_a_release() {
         .assert()
         .code(64)
         .stderr(predicate::str::contains("is not a release tag"));
+}
+
+#[test]
+fn devshell_status_names_a_predecessor_mechanism_beside_a_wired_pin() {
+    let fixture = DevshellFixture::new();
+    fixture.write_predecessor();
+    fixture
+        .rk(&["devshell", "status"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("state superseded")
+                .and(predicate::str::contains(
+                    "leftover remove-file scripts/rk-bump.sh",
+                ))
+                .and(predicate::str::contains("leftover replace-line .envrc:5"))
+                .and(predicate::str::contains(
+                    "leftover manual justfile:2 rk-bump tag='':",
+                ))
+                .and(predicate::str::contains("rk devshell clean")),
+        );
+    let report = fixture.json(&["devshell", "status"]);
+    assert_eq!(report["state"], "superseded");
+    assert_eq!(report["pin_tag"], "v0.2.16");
+    let leftovers = report["leftovers"].as_array().expect("leftovers");
+    let rows: Vec<(String, String, String)> = leftovers
+        .iter()
+        .map(|l| {
+            (
+                l["id"].as_str().unwrap().to_owned(),
+                l["file"].as_str().unwrap().to_owned(),
+                l["action"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    let expect = |id: &str, file: &str, action: &str| {
+        assert!(
+            rows.contains(&(id.to_owned(), file.to_owned(), action.to_owned())),
+            "{id} at {file} as {action} is missing from {rows:?}"
+        );
+    };
+    expect("bump-script", "scripts/rk-bump.sh", "remove-file");
+    expect("autobump-script", "scripts/rk-autobump.sh", "remove-file");
+    expect("bump-suite", "tests/rk-bump.bats", "remove-file");
+    expect("autobump-suite", "tests/rk-autobump.bats", "remove-file");
+    expect("envrc-invocation", ".envrc", "replace-line");
+    expect("envrc-switch", ".envrc.local.example", "manual");
+    expect("just-recipe", "justfile", "manual");
+    expect("devshell-tooling", "flake.nix", "manual");
+    expect("host-install", "README.md", "manual");
+    expect("host-install", ".github/workflows/ci.yml", "manual");
+    // The three .envrc lines naming the scripts are three replace-line rows.
+    assert_eq!(
+        rows.iter()
+            .filter(|(id, _, _)| id == "envrc-invocation")
+            .count(),
+        2
+    );
+    let switch = leftovers
+        .iter()
+        .find(|l| l["id"] == "envrc-switch")
+        .expect("the switch row");
+    assert_eq!(switch["line"], 1);
+    assert_eq!(switch["text"], "# export RK_SKIP_AUTOBUMP=1");
+}
+
+#[test]
+fn devshell_status_names_leftovers_in_an_unwired_target() {
+    let fixture = DevshellFixture::new();
+    fixture.write_predecessor();
+    std::fs::write(
+        fixture.target().join("flake.nix"),
+        "{\n  inputs = { };\n  outputs = { self }: { };\n}\n",
+    )
+    .expect("the flake writes");
+    let report = fixture.json(&["devshell", "status"]);
+    assert_eq!(
+        report["state"], "not-wired",
+        "the rollup keeps its first-match order"
+    );
+    assert!(
+        !report["leftovers"]
+            .as_array()
+            .expect("leftovers")
+            .is_empty(),
+        "the leftovers are reported whatever the state is"
+    );
+    let add = fixture.json(&["devshell", "add"]);
+    assert!(
+        add["next"]
+            .as_array()
+            .expect("next")
+            .iter()
+            .any(|line| line.as_str().unwrap().contains("rk devshell clean")),
+        "add routes to the cleanup first: {}",
+        add["next"]
+    );
 }

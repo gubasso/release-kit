@@ -6,9 +6,11 @@
 //! `flake.nix` is the version, and the `release-kit` node in
 //! `flake.lock` is the content. This module owns the offline observation
 //! of that wiring and the per-checkout state key; `pin` owns the line
-//! grammar and `fragments` the authored texts `add` serves.
+//! grammar, `fragments` the authored texts `add` serves, and `leftovers`
+//! the predecessor catalog `clean` removes.
 
 pub mod fragments;
+pub mod leftovers;
 pub mod pin;
 
 use std::path::PathBuf;
@@ -75,6 +77,8 @@ pub struct Observed {
     pub pending: bool,
     /// The day of the last sync attempt for this checkout, where stamped.
     pub stamp: Option<String>,
+    /// What a predecessor bump mechanism left in the target.
+    pub leftovers: Vec<leftovers::Leftover>,
 }
 
 impl Observed {
@@ -95,7 +99,7 @@ impl Observed {
 
     /// The rollup state, first match wins.
     #[must_use]
-    pub const fn state(&self) -> &'static str {
+    pub fn state(&self) -> &'static str {
         if self.pending {
             return "pending-recovery";
         }
@@ -108,7 +112,11 @@ impl Observed {
             pin::Scan::Unpinned(_) => return "unpinned",
             pin::Scan::One(_) => {}
         }
-        "ready"
+        if self.leftovers.is_empty() {
+            "ready"
+        } else {
+            "superseded"
+        }
     }
 }
 
@@ -141,6 +149,7 @@ pub fn observe(target: &Utf8Path) -> Result<Observed, RkError> {
     let key = state_key(&target);
     let pending = marker_path(&key).is_some_and(|marker| marker.exists());
     let stamp = read_stamp(&key);
+    let leftovers = leftovers::scan(&target)?;
     Ok(Observed {
         target,
         flake,
@@ -153,6 +162,7 @@ pub fn observe(target: &Utf8Path) -> Result<Observed, RkError> {
         envrc_sync,
         pending,
         stamp,
+        leftovers,
     })
 }
 

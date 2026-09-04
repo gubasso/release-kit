@@ -12,6 +12,7 @@ use serde::Serialize;
 
 use crate::cli::devshell::{AddArgs, DevshellAction, DevshellArgs, StatusArgs};
 use crate::devshell::fragments::{self, Fragment};
+use crate::devshell::leftovers::{Action, Leftover};
 use crate::devshell::{self, Observed, Presence, pin};
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
@@ -25,8 +26,8 @@ struct StatusReport<'a> {
     schema: &'static str,
     /// The target, canonical.
     target: &'a str,
-    /// The rollup: `ready`, `no-flake`, `not-wired`, `unpinned`,
-    /// `ambiguous-pin`, or `pending-recovery`.
+    /// The rollup: `ready`, `superseded`, `no-flake`, `not-wired`,
+    /// `unpinned`, `ambiguous-pin`, or `pending-recovery`.
     state: &'static str,
     /// Whether `flake.nix` exists.
     flake: Presence,
@@ -57,6 +58,8 @@ struct StatusReport<'a> {
     pending: bool,
     /// The two host probes the sync depends on.
     host: Host,
+    /// What a predecessor bump mechanism left, whatever the state.
+    leftovers: &'a [Leftover],
     /// What plausibly follows.
     next: &'a [String],
 }
@@ -147,6 +150,9 @@ fn status(args: &StatusArgs) -> Result<(), RkError> {
         out.result_line("an interrupted sync awaits recovery");
     }
     out.result_line(format!("host nix {}, direnv {}", host.nix, host.direnv));
+    for leftover in &observed.leftovers {
+        out.result_line(leftover_line(leftover));
+    }
     let next = status_next(&observed);
     out.next(&next);
     out.emit(&StatusReport {
@@ -165,8 +171,28 @@ fn status(args: &StatusArgs) -> Result<(), RkError> {
         stamp: observed.stamp.as_deref(),
         pending: observed.pending,
         host,
+        leftovers: &observed.leftovers,
         next: &next,
     })
+}
+
+/// The one human line for a leftover.
+fn leftover_line(leftover: &Leftover) -> String {
+    use std::fmt::Write as _;
+    let action = match leftover.action {
+        Action::RemoveFile => "remove-file",
+        Action::ReplaceLine => "replace-line",
+        Action::Manual => "manual",
+    };
+    let mut line = format!("leftover {action} {}", leftover.file);
+    if let Some(number) = leftover.line {
+        let _ = write!(line, ":{number}");
+    }
+    if let Some(text) = &leftover.text {
+        let _ = write!(line, " {text}");
+    }
+    let _ = write!(line, " ({}: {})", leftover.id, leftover.reason);
+    line
 }
 
 /// Serve the fragments; seed the files a target lacks under `--apply`.
@@ -280,6 +306,11 @@ fn resolve_tag(argument: Option<&str>) -> Result<(String, &'static str), RkError
 fn add_next(observed: &Observed, apply: bool, written: &[String]) -> Vec<String> {
     let target = &observed.target;
     let mut next = Vec::new();
+    if !observed.leftovers.is_empty() {
+        next.push(format!(
+            "rk devshell clean --target {target} first: the target carries a predecessor bump mechanism, and one project runs one"
+        ));
+    }
     if !apply {
         next.push(format!(
             "rk devshell add --target {target} --apply seeds the files the target lacks; an owned file takes its fragments by hand, in the order above"
@@ -365,6 +396,9 @@ fn status_next(observed: &Observed) -> Vec<String> {
         "ambiguous-pin" => vec![format!(
             "leave exactly one release-kit input line in {target}/flake.nix, then rerun"
         )],
+        "superseded" => vec![format!(
+            "rk devshell clean --target {target} previews the removal of the predecessor mechanism; --apply removes it"
+        )],
         _ => vec![format!(
             "rk devshell sync --caller operator --target {target} reports whether the pin is current"
         )],
@@ -378,6 +412,7 @@ mod tests {
     use super::{AddReport, Host, StatusReport};
     use crate::devshell::Presence;
     use crate::devshell::fragments::{Anchor, Fragment};
+    use crate::devshell::leftovers::{Action, Leftover};
 
     /// The complete `rk.devshell-add/1` shape, held by snapshot, the
     /// fragment carrying every field the agent contract names.
@@ -438,6 +473,24 @@ mod tests {
     /// The complete `rk.devshell-status/1` shape, held by snapshot.
     #[test]
     fn the_devshell_status_schema_snapshot_holds() {
+        let leftovers = vec![
+            Leftover {
+                id: "just-recipe",
+                file: "justfile".to_owned(),
+                line: Some(42),
+                text: Some("rk-bump:".to_owned()),
+                action: Action::Manual,
+                reason: "a recipe body carries structure a line scan cannot judge",
+            },
+            Leftover {
+                id: "bump-script",
+                file: "scripts/rk-bump.sh".to_owned(),
+                line: None,
+                text: None,
+                action: Action::RemoveFile,
+                reason: "the file exists only for the predecessor bump mechanism",
+            },
+        ];
         let next = vec!["rk devshell sync --caller operator --target /srv/widget reports whether the pin is current".to_owned()];
         let report = StatusReport {
             schema: "rk.devshell-status/1",
@@ -458,11 +511,12 @@ mod tests {
                 nix: "ok",
                 direnv: "failed",
             },
+            leftovers: &leftovers,
             next: &next,
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.devshell-status/1","target":"/srv/widget","state":"ready","flake":"present","lock":"present","input":"pinned","pin_tag":"v0.2.16","pin_lines":1,"locked_ref":"refs/tags/v0.2.16","locked_rev":"9f3c","envrc":"present","envrc_sync":true,"stamp":"2026-09-04","pending":false,"host":{"nix":"ok","direnv":"failed"},"next":["rk devshell sync --caller operator --target /srv/widget reports whether the pin is current"]}"#
+            r#"{"schema":"rk.devshell-status/1","target":"/srv/widget","state":"ready","flake":"present","lock":"present","input":"pinned","pin_tag":"v0.2.16","pin_lines":1,"locked_ref":"refs/tags/v0.2.16","locked_rev":"9f3c","envrc":"present","envrc_sync":true,"stamp":"2026-09-04","pending":false,"host":{"nix":"ok","direnv":"failed"},"leftovers":[{"id":"just-recipe","file":"justfile","line":42,"text":"rk-bump:","action":"manual","reason":"a recipe body carries structure a line scan cannot judge"},{"id":"bump-script","file":"scripts/rk-bump.sh","action":"remove-file","reason":"the file exists only for the predecessor bump mechanism"}],"next":["rk devshell sync --caller operator --target /srv/widget reports whether the pin is current"]}"#
         );
         let bare = StatusReport {
             schema: "rk.devshell-status/1",
@@ -483,11 +537,12 @@ mod tests {
                 nix: "failed",
                 direnv: "failed",
             },
+            leftovers: &[],
             next: &[],
         };
         assert_eq!(
             serde_json::to_string(&bare).expect("a report serializes"),
-            r#"{"schema":"rk.devshell-status/1","target":"/srv/widget","state":"no-flake","flake":"absent","lock":"absent","input":"absent","envrc":"absent","envrc_sync":false,"pending":false,"host":{"nix":"failed","direnv":"failed"},"next":[]}"#,
+            r#"{"schema":"rk.devshell-status/1","target":"/srv/widget","state":"no-flake","flake":"absent","lock":"absent","input":"absent","envrc":"absent","envrc_sync":false,"pending":false,"host":{"nix":"failed","direnv":"failed"},"leftovers":[],"next":[]}"#,
             "an unknown value must be omitted, not serialized as null"
         );
     }
