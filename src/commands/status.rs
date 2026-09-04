@@ -77,6 +77,11 @@ struct Report {
     /// Unresolved judgment sentinels across the landed files.
     #[serde(skip_serializing_if = "Option::is_none")]
     sentinels: Option<usize>,
+    /// Record-set disagreements between the recorded parameters'
+    /// projection and the recorded destinations — its own count, because
+    /// no file was edited and the kind counts must stay honest.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    record_drift: Option<usize>,
     /// Invariants a landed file's effective configuration violates —
     /// judged, never rewritten, because the file stays the target's.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -136,7 +141,7 @@ pub fn run(args: &StatusArgs) -> Result<(), RkError> {
             ),
         ]);
         out.emit(&Report {
-            schema: "rk.status/5",
+            schema: "rk.status/6",
             landed: false,
             tech: None,
             forge: None,
@@ -150,6 +155,7 @@ pub fn run(args: &StatusArgs) -> Result<(), RkError> {
             missing: None,
             stale_pins: None,
             sentinels: None,
+            record_drift: None,
             invariant_failures: None,
             violations: args.check.then(|| vec!["no landing".to_owned()]),
         })?;
@@ -172,7 +178,7 @@ pub fn run(args: &StatusArgs) -> Result<(), RkError> {
 
     let violations = violations_of(&observed);
     out.emit(&Report {
-        schema: "rk.status/5",
+        schema: "rk.status/6",
         landed: true,
         tech: Some(manifest.tech),
         forge: Some(manifest.forge),
@@ -183,11 +189,10 @@ pub fn run(args: &StatusArgs) -> Result<(), RkError> {
         binary_version: Some(env!("CARGO_PKG_VERSION")),
         alignment: Some(alignment),
         drift: Some(Drift {
-            rendered: observed.drift_rendered.len()
-                + observed.parameter_drift.len()
-                + observed.record_drift.len(),
+            rendered: observed.drift_rendered.len() + observed.parameter_drift.len(),
             seeded: observed.drift_seeded.len(),
         }),
+        record_drift: Some(observed.record_drift.len()),
         missing: Some(observed.missing.clone()),
         stale_pins: Some(observed.stale),
         sentinels: Some(observed.sentinels.len()),
@@ -522,7 +527,7 @@ mod tests {
     #[test]
     fn the_status_report_schema_snapshot_holds() {
         let landed = Report {
-            schema: "rk.status/5",
+            schema: "rk.status/6",
             landed: true,
             tech: Some("rust".into()),
             forge: Some("github".into()),
@@ -543,6 +548,7 @@ mod tests {
                 available: "0.3.170".into(),
             }]),
             sentinels: Some(1),
+            record_drift: Some(0),
             invariant_failures: Some(vec![InvariantFailure {
                 code: "attestations-disabled",
                 destination: "dist-workspace.toml".into(),
@@ -553,7 +559,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&landed).expect("a report serializes"),
-            r#"{"schema":"rk.status/5","landed":true,"tech":"rust","forge":"github","workflow":"worktree","style":"trunk","nix":true,"rk_version":"0.1.0","binary_version":"0.2.0","alignment":"binary-newer","drift":{"rendered":0,"seeded":1},"missing":[],"stale_pins":[{"tool":"release-plz","landed":"0.3.160","available":"0.3.170"}],"sentinels":1,"invariant_failures":[{"code":"attestations-disabled","destination":"dist-workspace.toml","reason":"github-attestations is not effectively true","remediation":"set github-attestations = true in [dist]"}]}"#
+            r#"{"schema":"rk.status/6","landed":true,"tech":"rust","forge":"github","workflow":"worktree","style":"trunk","nix":true,"rk_version":"0.1.0","binary_version":"0.2.0","alignment":"binary-newer","drift":{"rendered":0,"seeded":1},"missing":[],"stale_pins":[{"tool":"release-plz","landed":"0.3.160","available":"0.3.170"}],"sentinels":1,"record_drift":0,"invariant_failures":[{"code":"attestations-disabled","destination":"dist-workspace.toml","reason":"github-attestations is not effectively true","remediation":"set github-attestations = true in [dist]"}]}"#
         );
         let absent = Report {
             landed: false,
@@ -569,13 +575,14 @@ mod tests {
             missing: None,
             stale_pins: None,
             sentinels: None,
+            record_drift: None,
             invariant_failures: None,
             violations: None,
             ..landed
         };
         assert_eq!(
             serde_json::to_string(&absent).expect("a report serializes"),
-            r#"{"schema":"rk.status/5","landed":false}"#,
+            r#"{"schema":"rk.status/6","landed":false}"#,
             "an absent landing reports one field a caller can branch on"
         );
     }
