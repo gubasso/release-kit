@@ -86,11 +86,22 @@
           # nix flake check builds only the checks output; packages are merely
           # evaluated, so the package itself is the first check.
           package = pkg;
-          # The payload canary: a source-filtering regression that survives
-          # the build fails here, offline.
+          # The payload canary plus the wrapper proof, offline. HOME is set
+          # because the state-root probe is Hard by design with no home; only
+          # PATH is cleared, so a failure here means the wrapper lost a tool,
+          # not that the sandbox lost a variable. The greps hold the git
+          # probe's own line, never doctor's exit code, so an unrelated soft
+          # probe cannot flip the result.
           smoke = pkgs.runCommand "release-kit-smoke" { } ''
-            ${pkgs.lib.getExe pkg} --version
-            ${pkgs.lib.getExe pkg} method --list > /dev/null
+            export HOME=$TMPDIR
+            PATH= ${pkgs.lib.getExe pkg} --version
+            PATH= ${pkgs.lib.getExe pkg} method --list > /dev/null
+            # the wrapper's PATH suffix supplies git and sh
+            PATH= ${pkgs.lib.getExe pkg} doctor | grep -E '^  ok +git: '
+            PATH= ${pkgs.lib.getExe pkg} doctor | grep -E '^  ok +sh: '
+            # an operator's own override wins over the wrapped git
+            PATH= RK_GIT_BIN=/nonexistent/git ${pkgs.lib.getExe pkg} doctor \
+              | grep -E '^  failed +git: '
             touch $out
           '';
         }

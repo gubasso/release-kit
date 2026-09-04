@@ -109,7 +109,7 @@ pub(crate) const GIT_HOOK_VARS: [&str; 4] = [
 
 /// Run one git command against the target; a spawn failure is the detail.
 fn git(target: &Utf8Path, args: &[&str]) -> Result<std::process::Output, String> {
-    let mut command = std::process::Command::new("git");
+    let mut command = std::process::Command::new(crate::probes::git_bin());
     for var in GIT_HOOK_VARS {
         command.env_remove(var);
     }

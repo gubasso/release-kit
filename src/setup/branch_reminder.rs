@@ -63,7 +63,7 @@ pub enum HookState {
 ///
 /// The detail of a git that did not run or did not answer.
 pub fn hook_path(target: &Utf8Path) -> Result<PathBuf, String> {
-    let mut command = std::process::Command::new("git");
+    let mut command = std::process::Command::new(crate::probes::git_bin());
     for var in crate::maintenance::GIT_HOOK_VARS {
         command.env_remove(var);
     }

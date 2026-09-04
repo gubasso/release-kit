@@ -465,7 +465,7 @@ mod tests {
                 expected,
                 "matcher disagrees on {name}"
             );
-            let grepped = std::process::Command::new("sh")
+            let grepped = std::process::Command::new(crate::probes::sh_bin())
                 .args([
                     "-c",
                     &format!(

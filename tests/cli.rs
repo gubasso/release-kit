@@ -1164,6 +1164,7 @@ fn doctor_reports_every_probe_and_exits_0() {
         ids,
         [
             "sh",
+            "git",
             "state-root",
             "skill-roots",
             "skill-gate",
@@ -1187,6 +1188,142 @@ fn doctor_reports_every_probe_and_exits_0() {
     assert_eq!(by_id("gh-auth")["status"], "ok");
     assert_eq!(by_id("glab-auth")["status"], "failed");
     assert_eq!(by_id("glab-auth")["remediation"], "run glab auth login");
+    assert_eq!(by_id("git")["class"], "hard");
+    assert_eq!(by_id("sh")["class"], "hard");
+}
+
+/// One doctor report with the forge binaries mocked away and the given
+/// extra environment, parsed.
+fn doctor_with(home: &Home, vars: &[(&str, &str)]) -> serde_json::Value {
+    let mut command = home.rk();
+    command
+        .args(["doctor", "--json"])
+        .env("XDG_STATE_HOME", home.path())
+        .env("RK_GH_BIN", "/no/such/gh")
+        .env("RK_GLAB_BIN", "/no/such/glab")
+        .current_dir(home.path());
+    for (key, value) in vars {
+        command.env(key, value);
+    }
+    let out = command.assert().success().get_output().stdout.clone();
+    serde_json::from_slice(&out).expect("one JSON object")
+}
+
+/// The Hard git probe resolves through `RK_GIT_BIN`: a broken override
+/// fails visibly even while a working git sits on PATH, which is what
+/// proves the override — not the PATH — owns the answer.
+#[test]
+fn the_git_probe_honors_its_override() {
+    let home = Home::new();
+    let report = doctor_with(&home, &[("RK_GIT_BIN", "/no/such/git")]);
+    let git = probe(&report, "git");
+    assert_eq!(git["class"], "hard");
+    assert_eq!(git["status"], "failed");
+    assert_eq!(git["remediation"], "install git");
+    let report = doctor_with(&home, &[]);
+    assert_eq!(probe(&report, "git")["status"], "ok");
+}
+
+/// The Hard sh probe resolves through `RK_SH_BIN` the same way.
+#[test]
+fn the_sh_probe_honors_its_override() {
+    let home = Home::new();
+    let report = doctor_with(&home, &[("RK_SH_BIN", "/no/such/sh")]);
+    let sh = probe(&report, "sh");
+    assert_eq!(sh["class"], "hard");
+    assert_eq!(sh["status"], "failed");
+}
+
+/// A git-launching verb resolves through the shared resolver too: the verb
+/// works in a real repository, and breaking only the override breaks it,
+/// so the PATH's git demonstrably does not answer for it.
+#[test]
+fn a_git_verb_resolves_through_the_override() {
+    let home = Home::new();
+    let mut init = std::process::Command::new(release_kit::probes::git_bin());
+    for var in GIT_HOOK_VARS {
+        init.env_remove(var);
+    }
+    init.args(["init", "-q"])
+        .current_dir(home.path())
+        .status()
+        .expect("git init runs");
+    home.rk()
+        .args(["worktree", "list"])
+        .current_dir(home.path())
+        .assert()
+        .success();
+    home.rk()
+        .args(["worktree", "list"])
+        .env("RK_GIT_BIN", "/no/such/git")
+        .current_dir(home.path())
+        .assert()
+        .failure();
+}
+
+/// The wrapper's package list in `nix/package.nix` agrees with the Hard
+/// tool registry the probes own. Two hand-kept lists in two languages —
+/// Nix cannot read the Rust registry — so this test is what makes the
+/// mirrored contract safe: a divergence fails here, by name.
+#[test]
+fn the_package_wrapper_mirrors_the_hard_tool_registry() {
+    let nix =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("nix/package.nix"))
+            .expect("nix/package.nix reads");
+    let marker = "makeBinPath [";
+    let start = nix.find(marker).expect("the wrapper names a package list");
+    let rest = &nix[start + marker.len()..];
+    let end = rest.find(']').expect("the package list closes");
+    let wrapped: std::collections::BTreeSet<&str> = rest[..end].split_whitespace().collect();
+    let registry: std::collections::BTreeSet<&str> = release_kit::probes::HARD_RUNTIME_TOOLS
+        .iter()
+        .map(|(_, package)| *package)
+        .collect();
+    assert_eq!(
+        wrapped, registry,
+        "nix/package.nix wraps {wrapped:?}; src/probes.rs requires {registry:?}"
+    );
+    let executables: Vec<&str> = release_kit::probes::HARD_RUNTIME_TOOLS
+        .iter()
+        .map(|(executable, _)| *executable)
+        .collect();
+    assert_eq!(executables, ["git", "sh"]);
+}
+
+/// No production code launches git or sh by literal name: every launcher
+/// goes through the shared resolvers, so a new call site cannot bypass
+/// `RK_GIT_BIN` or `RK_SH_BIN` silently. Offenders are named by file and
+/// line.
+#[test]
+fn every_git_and_sh_launch_resolves_through_the_shared_resolver() {
+    fn scan(dir: &Path, offenders: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).expect("src reads") {
+            let path = entry.expect("an entry").path();
+            if path.is_dir() {
+                scan(&path, offenders);
+                continue;
+            }
+            if path.extension().is_none_or(|extension| extension != "rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).expect("a source file reads");
+            for (index, line) in text.lines().enumerate() {
+                if line.contains(r#"Command::new("git")"#) || line.contains(r#"Command::new("sh")"#)
+                {
+                    offenders.push(format!("{}:{}", path.display(), index + 1));
+                }
+            }
+        }
+    }
+    let mut offenders = Vec::new();
+    scan(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+        &mut offenders,
+    );
+    assert!(
+        offenders.is_empty(),
+        "direct launches bypassing the shared resolver: {offenders:?}"
+    );
 }
 
 /// A doctor run against a scratch home, with the forge binaries mocked away
