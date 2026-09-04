@@ -5,14 +5,18 @@
 //! landed package expression. This handler serves a consumer that pins
 //! that flake as a devshell input. `status` is the offline reporter and
 //! fetches nothing; `add` serves the fragments and seeds the pair where a
-//! target has neither file, never editing a file the target owns. Every
-//! report goes through the output boundary with a versioned schema.
+//! target has neither file, never editing a file the target owns;
+//! `clean` removes what a predecessor mechanism left and names the rest,
+//! so the wiring is a replacement and never an addition. Every report
+//! goes through the output boundary with a versioned schema.
 
 use serde::Serialize;
 
-use crate::cli::devshell::{AddArgs, DevshellAction, DevshellArgs, StatusArgs};
+use camino::Utf8Path;
+
+use crate::cli::devshell::{AddArgs, CleanArgs, DevshellAction, DevshellArgs, StatusArgs};
 use crate::devshell::fragments::{self, Fragment};
-use crate::devshell::leftovers::{Action, Leftover};
+use crate::devshell::leftovers::{self, Action, Leftover};
 use crate::devshell::{self, Observed, Presence, pin};
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
@@ -93,6 +97,46 @@ struct AddReport<'a> {
     next: &'a [String],
 }
 
+/// The `rk.devshell-clean/1` document.
+#[derive(Debug, Serialize)]
+struct CleanReport<'a> {
+    /// The shape version of this document.
+    schema: &'static str,
+    /// `preview` or `apply`.
+    mode: &'static str,
+    /// The target, canonical.
+    target: &'a str,
+    /// Every leftover the scan found before the run, in catalog order,
+    /// plus one `also` row per `--also` path.
+    leftovers: &'a [Leftover],
+    /// The files this run removed, relative to the target; empty in preview.
+    removed: &'a [String],
+    /// The files this run rewrote; empty in preview.
+    rewritten: &'a [String],
+    /// What this run left in place by design, for a hand edit; empty in
+    /// preview.
+    manual: &'a [Manual],
+    /// What plausibly follows.
+    next: &'a [String],
+}
+
+/// One leftover the cleanup names and does not touch.
+#[derive(Debug, Clone, Serialize)]
+struct Manual {
+    /// The catalog entry.
+    id: &'static str,
+    /// The file, relative to the target.
+    file: String,
+    /// The one-based line, where the entry is a line.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    line: Option<usize>,
+    /// The matched line, trimmed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    text: Option<String>,
+    /// Why a line scan must not touch it.
+    reason: &'static str,
+}
+
 /// The two Soft probes the sync spawns, as `ok` or `failed`.
 #[derive(Debug, Serialize)]
 struct Host {
@@ -113,9 +157,7 @@ pub fn run(args: &DevshellArgs) -> Result<(), RkError> {
     match &args.action {
         DevshellAction::Status(args) => status(args),
         DevshellAction::Add(args) => add(args),
-        DevshellAction::Clean(_) => Err(RkError::Usage(
-            "rk devshell clean is not in this build; the cleanup phase lands it".to_owned(),
-        )),
+        DevshellAction::Clean(args) => clean(args),
         DevshellAction::Sync(_) => Err(RkError::Usage(
             "rk devshell sync is not in this build; the sync phase lands it".to_owned(),
         )),
@@ -287,6 +329,179 @@ fn add(args: &AddArgs) -> Result<(), RkError> {
     ))
 }
 
+/// Remove what the catalog can judge, name the rest.
+fn clean(args: &CleanArgs) -> Result<(), RkError> {
+    let out = Output::new(args.json);
+    let observed = devshell::observe(&args.target)?;
+    let target = &observed.target;
+    let mut leftovers = observed.leftovers.clone();
+    for path in &args.also {
+        leftovers.push(also_leftover(target, path)?);
+    }
+    let mode = if args.apply { "apply" } else { "preview" };
+    let mut removed = Vec::new();
+    let mut rewritten = Vec::new();
+    let mut manual = Vec::new();
+    if args.apply {
+        for leftover in &leftovers {
+            match leftover.action {
+                Action::RemoveFile => {
+                    std::fs::remove_file(target.join(&leftover.file))?;
+                    removed.push(leftover.file.clone());
+                }
+                Action::ReplaceLine => {}
+                Action::Manual => manual.push(Manual {
+                    id: leftover.id,
+                    file: leftover.file.clone(),
+                    line: leftover.line,
+                    text: leftover.text.clone(),
+                    reason: leftover.reason,
+                }),
+            }
+        }
+        if leftovers.iter().any(|l| l.action == Action::ReplaceLine) {
+            let envrc = target.join(".envrc");
+            let text = std::fs::read_to_string(&envrc)?;
+            if let Some(swapped) = leftovers::swap_envrc(&text, &fragments::envrc_line()) {
+                crate::atomic::write(envrc.as_std_path(), swapped.as_bytes())?;
+                rewritten.push(".envrc".to_owned());
+            }
+        }
+    }
+    if args.apply {
+        for file in &removed {
+            out.result_line(format!("removed {file}"));
+        }
+        for file in &rewritten {
+            out.result_line(format!(
+                "rewrote {file}: the sync line replaces the invocation"
+            ));
+        }
+        for entry in &manual {
+            out.result_line(format!(
+                "manual {}{} {} ({}: {})",
+                entry.file,
+                entry.line.map(|n| format!(":{n}")).unwrap_or_default(),
+                entry.text.as_deref().unwrap_or_default(),
+                entry.id,
+                entry.reason
+            ));
+        }
+        if removed.is_empty() && rewritten.is_empty() && manual.is_empty() {
+            out.result_line("nothing to remove: the target carries no predecessor mechanism");
+        }
+    } else {
+        out.result_line(
+            "DRY RUN: rk devshell clean removes and rewrites these on --apply, and names the rest",
+        );
+        for leftover in &leftovers {
+            out.result_line(leftover_line(leftover));
+        }
+        if leftovers.is_empty() {
+            out.result_line("nothing to remove: the target carries no predecessor mechanism");
+        }
+    }
+    let next = clean_next(&observed, args.apply, &leftovers, &manual);
+    out.next(&next);
+    out.emit(&CleanReport {
+        schema: "rk.devshell-clean/1",
+        mode,
+        target: target.as_str(),
+        leftovers: &leftovers,
+        removed: &removed,
+        rewritten: &rewritten,
+        manual: &manual,
+        next: &next,
+    })
+}
+
+/// One `--also` path as a leftover, or the refusal: it must be a regular
+/// file inside the target, judged before any write.
+fn also_leftover(target: &Utf8Path, path: &Utf8Path) -> Result<Leftover, RkError> {
+    let absolute = if path.is_absolute() {
+        path.to_owned()
+    } else {
+        target.join(path)
+    };
+    let refuse = |why: &str| {
+        RkError::refusal(
+            Diagnostic::new(
+                Reason::DestructiveRefusal,
+                format!("--also {path} is {why}; nothing was removed"),
+            )
+            .expected("a regular file inside the target, named for removal"),
+        )
+    };
+    let Ok(meta) = std::fs::symlink_metadata(&absolute) else {
+        return Err(refuse("not a file that exists"));
+    };
+    if meta.file_type().is_symlink() {
+        return Err(refuse("a symlink, which a file removal never follows"));
+    }
+    if meta.is_dir() {
+        return Err(refuse("a directory, and the cleanup removes files alone"));
+    }
+    let canonical = absolute.canonicalize_utf8()?;
+    let Ok(relative) = canonical.strip_prefix(target) else {
+        return Err(refuse("outside the target"));
+    };
+    Ok(Leftover {
+        id: "also",
+        file: relative.to_string(),
+        line: None,
+        text: None,
+        action: Action::RemoveFile,
+        reason: "named by the operator as a predecessor file the catalog does not know",
+    })
+}
+
+/// What plausibly follows a clean.
+fn clean_next(
+    observed: &Observed,
+    apply: bool,
+    leftovers: &[Leftover],
+    manual: &[Manual],
+) -> Vec<String> {
+    let target = &observed.target;
+    let mut next = Vec::new();
+    if !apply && !leftovers.is_empty() {
+        next.push(format!(
+            "rk devshell clean --target {target} --apply removes the files and rewrites .envrc"
+        ));
+    }
+    let by_hand: Vec<String> = if apply {
+        manual
+            .iter()
+            .map(|entry| entry.file.clone())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    } else {
+        leftovers
+            .iter()
+            .filter(|l| l.action == Action::Manual)
+            .map(|l| l.file.clone())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    };
+    if !by_hand.is_empty() {
+        next.push(format!(
+            "edit by hand what a line scan must not touch: {}",
+            by_hand.join(", ")
+        ));
+    }
+    next.push(format!(
+        "rk devshell status --target {target} reports ready once the leftovers list is empty"
+    ));
+    if matches!(observed.scan, pin::Scan::None) {
+        next.push(format!(
+            "rk devshell add --target {target} wires the native mechanism once the predecessor is gone"
+        ));
+    }
+    next
+}
+
 /// The tag an `add` pins: the argument, normalized, or this binary's own
 /// version, so the fragments stay offline and deterministic.
 fn resolve_tag(argument: Option<&str>) -> Result<(String, &'static str), RkError> {
@@ -409,7 +624,56 @@ fn status_next(observed: &Observed) -> Vec<String> {
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use super::{AddReport, Host, StatusReport};
+    use super::{AddReport, CleanReport, Host, Manual, StatusReport};
+
+    /// The complete `rk.devshell-clean/1` shape, held by snapshot.
+    #[test]
+    fn the_devshell_clean_schema_snapshot_holds() {
+        let leftovers = vec![Leftover {
+            id: "bump-script",
+            file: "scripts/rk-bump.sh".to_owned(),
+            line: None,
+            text: None,
+            action: Action::RemoveFile,
+            reason: "the file exists only for the predecessor bump mechanism",
+        }];
+        let removed = vec!["scripts/rk-bump.sh".to_owned()];
+        let rewritten = vec![".envrc".to_owned()];
+        let manual = vec![Manual {
+            id: "just-recipe",
+            file: "justfile".to_owned(),
+            line: Some(42),
+            text: Some("rk-bump:".to_owned()),
+            reason: "a recipe body carries structure a line scan cannot judge",
+        }];
+        let next = vec!["rk devshell status".to_owned()];
+        let report = CleanReport {
+            schema: "rk.devshell-clean/1",
+            mode: "apply",
+            target: "/srv/widget",
+            leftovers: &leftovers,
+            removed: &removed,
+            rewritten: &rewritten,
+            manual: &manual,
+            next: &next,
+        };
+        assert_eq!(
+            serde_json::to_string(&report).expect("a report serializes"),
+            r#"{"schema":"rk.devshell-clean/1","mode":"apply","target":"/srv/widget","leftovers":[{"id":"bump-script","file":"scripts/rk-bump.sh","action":"remove-file","reason":"the file exists only for the predecessor bump mechanism"}],"removed":["scripts/rk-bump.sh"],"rewritten":[".envrc"],"manual":[{"id":"just-recipe","file":"justfile","line":42,"text":"rk-bump:","reason":"a recipe body carries structure a line scan cannot judge"}],"next":["rk devshell status"]}"#
+        );
+        let bare = Manual {
+            id: "also",
+            file: "old.sh".to_owned(),
+            line: None,
+            text: None,
+            reason: "named by the operator",
+        };
+        assert_eq!(
+            serde_json::to_string(&bare).expect("an entry serializes"),
+            r#"{"id":"also","file":"old.sh","reason":"named by the operator"}"#,
+            "an absent line and text are omitted, never null"
+        );
+    }
     use crate::devshell::Presence;
     use crate::devshell::fragments::{Anchor, Fragment};
     use crate::devshell::leftovers::{Action, Leftover};

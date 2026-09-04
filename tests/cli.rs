@@ -10940,3 +10940,254 @@ fn devshell_status_names_leftovers_in_an_unwired_target() {
         add["next"]
     );
 }
+
+#[test]
+fn devshell_clean_previews_every_leftover_and_removes_nothing() {
+    let fixture = DevshellFixture::new();
+    fixture.write_predecessor();
+    let envrc = fixture.read(".envrc");
+    fixture
+        .rk(&["devshell", "clean"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("DRY RUN")
+                .and(predicate::str::contains(
+                    "leftover remove-file scripts/rk-bump.sh",
+                ))
+                .and(predicate::str::contains("leftover replace-line .envrc"))
+                .and(predicate::str::contains("leftover manual flake.nix"))
+                .and(predicate::str::contains("rk devshell clean"))
+                .and(predicate::str::contains("--apply")),
+        );
+    let report = fixture.json(&["devshell", "clean"]);
+    assert_eq!(report["schema"], "rk.devshell-clean/1");
+    assert_eq!(report["mode"], "preview");
+    assert_eq!(report["removed"], serde_json::json!([]));
+    assert_eq!(report["rewritten"], serde_json::json!([]));
+    assert_eq!(report["manual"], serde_json::json!([]));
+    assert!(!report["leftovers"].as_array().unwrap().is_empty());
+    assert!(fixture.target().join("scripts/rk-bump.sh").exists());
+    assert_eq!(fixture.read(".envrc"), envrc);
+}
+
+#[test]
+fn devshell_clean_apply_removes_the_scripts_and_the_suites() {
+    let fixture = DevshellFixture::new();
+    fixture.write_predecessor();
+    let report = fixture.json(&["devshell", "clean", "--apply"]);
+    assert_eq!(report["mode"], "apply");
+    assert_eq!(
+        report["removed"],
+        serde_json::json!([
+            "scripts/rk-bump.sh",
+            "scripts/rk-autobump.sh",
+            "tests/rk-bump.bats",
+            "tests/rk-autobump.bats"
+        ])
+    );
+    for rel in [
+        "scripts/rk-bump.sh",
+        "scripts/rk-autobump.sh",
+        "tests/rk-bump.bats",
+        "tests/rk-autobump.bats",
+    ] {
+        assert!(!fixture.target().join(rel).exists(), "{rel} is removed");
+    }
+}
+
+#[test]
+fn devshell_clean_apply_swaps_the_envrc_invocation_for_the_sync_line() {
+    let fixture = DevshellFixture::new();
+    fixture.write_predecessor();
+    let report = fixture.json(&["devshell", "clean", "--apply"]);
+    assert_eq!(report["rewritten"], serde_json::json!([".envrc"]));
+    assert_eq!(
+        fixture.read(".envrc"),
+        "use flake\n\n# Bump the release-kit pin once a day on entry.\nrk devshell sync --apply || true\n\nsource_env_if_exists .envrc.local\n",
+        "the sync line takes the first removed position and every other line is byte-identical"
+    );
+}
+
+#[test]
+fn devshell_clean_apply_leaves_the_justfile_and_the_flake_and_names_them() {
+    let fixture = DevshellFixture::new();
+    fixture.write_predecessor();
+    let justfile = fixture.read("justfile");
+    let flake = fixture.read("flake.nix");
+    let readme = fixture.read("README.md");
+    let report = fixture.json(&["devshell", "clean", "--apply"]);
+    assert_eq!(fixture.read("justfile"), justfile);
+    assert_eq!(fixture.read("flake.nix"), flake);
+    assert_eq!(fixture.read("README.md"), readme);
+    let manual = report["manual"].as_array().expect("manual");
+    let files: Vec<&str> = manual
+        .iter()
+        .map(|entry| entry["file"].as_str().unwrap())
+        .collect();
+    assert!(files.contains(&"justfile"), "{files:?}");
+    assert_eq!(
+        files.iter().filter(|f| **f == "flake.nix").count(),
+        2,
+        "flock and bats are two entries: {files:?}"
+    );
+    let recipe = manual
+        .iter()
+        .find(|entry| entry["id"] == "just-recipe")
+        .expect("the recipe row");
+    assert_eq!(recipe["line"], 2);
+    assert_eq!(recipe["text"], "rk-bump tag='':");
+    assert!(
+        recipe["reason"]
+            .as_str()
+            .unwrap()
+            .contains("a line scan cannot judge")
+    );
+    assert!(
+        report["next"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|line| line.as_str().unwrap().contains("edit by hand")),
+        "{}",
+        report["next"]
+    );
+}
+
+#[test]
+fn devshell_clean_names_a_host_install_line_in_ci() {
+    let fixture = DevshellFixture::new();
+    fixture.write_predecessor();
+    let report = fixture.json(&["devshell", "clean", "--apply"]);
+    let ci = report["manual"]
+        .as_array()
+        .expect("manual")
+        .iter()
+        .find(|entry| entry["file"] == ".github/workflows/ci.yml")
+        .expect("the CI row")
+        .clone();
+    assert_eq!(ci["id"], "host-install");
+    assert_eq!(ci["line"], 4);
+    assert_eq!(ci["text"], "- run: cargo binstall release-kit");
+    assert_eq!(
+        fixture.read(".github/workflows/ci.yml"),
+        "jobs:\n  test:\n    steps:\n      - run: cargo binstall release-kit\n"
+    );
+}
+
+#[test]
+fn devshell_clean_also_refuses_a_path_outside_the_target() {
+    let fixture = DevshellFixture::new();
+    fixture.write_predecessor();
+    let outside = fixture.home.path().join("elsewhere.sh");
+    std::fs::write(&outside, "x\n").expect("writes");
+    fixture
+        .rk(&[
+            "devshell",
+            "clean",
+            "--apply",
+            "--also",
+            outside.to_str().expect("utf-8"),
+        ])
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("outside the target"));
+    assert!(outside.exists());
+    assert!(
+        fixture.target().join("scripts/rk-bump.sh").exists(),
+        "a refused --also writes nothing at all"
+    );
+    fixture
+        .rk(&["devshell", "clean", "--apply", "--also", "scripts"])
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("a directory"));
+    fixture
+        .rk(&["devshell", "clean", "--apply", "--also", "no-such-file"])
+        .assert()
+        .code(73);
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(
+            fixture.target().join("README.md"),
+            fixture.target().join("link.md"),
+        )
+        .expect("the symlink creates");
+        fixture
+            .rk(&["devshell", "clean", "--apply", "--also", "link.md"])
+            .assert()
+            .code(73)
+            .stderr(predicate::str::contains("a symlink"));
+        assert!(fixture.target().join("README.md").exists());
+    }
+    // A regular file inside the target is removed beside the catalog.
+    std::fs::write(fixture.target().join("scripts/old-bump.sh"), "x\n").expect("writes");
+    let report = fixture.json(&[
+        "devshell",
+        "clean",
+        "--apply",
+        "--also",
+        "scripts/old-bump.sh",
+    ]);
+    assert!(
+        report["removed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f == "scripts/old-bump.sh")
+    );
+    assert!(!fixture.target().join("scripts/old-bump.sh").exists());
+}
+
+#[test]
+fn a_clean_target_reports_ready_and_an_empty_manual_list() {
+    let fixture = DevshellFixture::new();
+    fixture.write_predecessor();
+    fixture.json(&["devshell", "clean", "--apply"]);
+    // The operator finishes the manual entries by hand.
+    std::fs::write(fixture.target().join("justfile"), "test:\n    cargo test\n").expect("writes");
+    std::fs::write(
+        fixture.target().join("flake.nix"),
+        "{\n  inputs = {\n    release-kit = {\n      url = \"github:gubasso/release-kit/v0.2.16\";\n      inputs.nixpkgs.follows = \"nixpkgs\";\n    };\n  };\n  outputs = { self, nixpkgs, release-kit }: { };\n}\n",
+    )
+    .expect("writes");
+    std::fs::write(fixture.target().join("README.md"), "# widget\n").expect("writes");
+    std::fs::write(
+        fixture.target().join(".github/workflows/ci.yml"),
+        "jobs: {}\n",
+    )
+    .expect("writes");
+    std::fs::write(
+        fixture.target().join(".envrc.local.example"),
+        "# export RK_DEVSHELL_SYNC=0\n",
+    )
+    .expect("writes");
+    let status = fixture.json(&["devshell", "status"]);
+    assert_eq!(status["state"], "ready");
+    assert_eq!(status["leftovers"], serde_json::json!([]));
+    let clean = fixture.json(&["devshell", "clean", "--apply"]);
+    assert_eq!(clean["manual"], serde_json::json!([]));
+    assert_eq!(clean["removed"], serde_json::json!([]));
+}
+
+#[test]
+fn devshell_clean_is_idempotent() {
+    let fixture = DevshellFixture::new();
+    fixture.write_predecessor();
+    let first = fixture.json(&["devshell", "clean", "--apply"]);
+    assert_eq!(first["removed"].as_array().unwrap().len(), 4);
+    let envrc = fixture.read(".envrc");
+    let second = fixture.json(&["devshell", "clean", "--apply"]);
+    assert_eq!(second["removed"], serde_json::json!([]));
+    assert_eq!(second["rewritten"], serde_json::json!([]));
+    assert_eq!(fixture.read(".envrc"), envrc);
+    assert_eq!(
+        second["manual"].as_array().unwrap().len(),
+        first["manual"].as_array().unwrap().len(),
+        "the manual entries are reported again until the operator edits them"
+    );
+    fixture
+        .rk(&["devshell", "clean", "--apply"])
+        .assert()
+        .success();
+}
