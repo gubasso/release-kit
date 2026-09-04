@@ -500,6 +500,9 @@ fn gate_and_decide(
                 run.detail = Some(format!("both files are back, but {failure}"));
                 return Ok(());
             }
+            Some(Recovery::Finished) => {
+                *observed = devshell::observe(&args.target)?;
+            }
             None => {}
         }
     }

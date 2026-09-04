@@ -215,8 +215,8 @@ fn is_recipe_head(line: &str, name: &str) -> bool {
 fn list_members_named(text: &str, packages: &[&str]) -> Vec<(usize, String)> {
     let mut depth = 0usize;
     let mut found = Vec::new();
-    for (index, line) in text.lines().enumerate() {
-        let code = line.split('#').next().unwrap_or_default();
+    let scrubbed = scrub_nix(text);
+    for (index, (line, code)) in text.lines().zip(scrubbed.lines()).enumerate() {
         let mut named = false;
         for token in code.split_whitespace() {
             let opened = token.matches('[').count();
@@ -236,6 +236,51 @@ fn list_members_named(text: &str, packages: &[&str]) -> Vec<(usize, String)> {
         }
     }
     found
+}
+
+/// The double quote as a code point: the source scan that keeps whole
+/// artifacts out of the sources reads a quote literal as a string start.
+const QUOTE: char = '\u{22}';
+
+/// The Nix text with every string and comment blanked to spaces, line
+/// breaks kept, so a bracket inside `"..."`, `\'\'...\'\'`, a `#` line
+/// comment, or a `/* */` block comment never counts as syntax.
+fn scrub_nix(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    let blank = |out: &mut String, slice: &str| {
+        for c in slice.chars() {
+            out.push(if c == '\n' { '\n' } else { ' ' });
+        }
+    };
+    while i < bytes.len() {
+        let rest = &text[i..];
+        let skip = if rest.starts_with('#') {
+            rest.find('\n').unwrap_or(rest.len())
+        } else if rest.starts_with("/*") {
+            rest.find("*/").map_or(rest.len(), |at| at + 2)
+        } else if let Some(body) = rest.strip_prefix("\'\'") {
+            body.find("\'\'").map_or(rest.len(), |at| at + 4)
+        } else if rest.starts_with(QUOTE) {
+            let mut j = 1;
+            while j < rest.len() && !rest[j..].starts_with(QUOTE) {
+                j += if rest[j..].starts_with('\\') { 2 } else { 1 };
+            }
+            (j + 1).min(rest.len())
+        } else {
+            0
+        };
+        if skip == 0 {
+            let c = rest.chars().next().unwrap_or(' ');
+            out.push(c);
+            i += c.len_utf8();
+        } else {
+            blank(&mut out, &rest[..skip]);
+            i += skip;
+        }
+    }
+    out
 }
 
 /// Whether a token is an attribute path whose last segment is `package`.
@@ -338,6 +383,11 @@ mod tests {
         );
         assert_eq!(members("packages = [ flock bats ];\n").len(), 1);
         assert_eq!(
+            members("packages = [\n  \"]\"\n  pkgs.flock # ] in a comment\n];\n"),
+            [(3, "pkgs.flock # ] in a comment".to_owned())],
+            "a bracket in a string or a comment is not syntax"
+        );
+        assert_eq!(
             members("packages = [\n  nixpkgs.legacyPackages.x86_64-linux.bats\n];\n").len(),
             1
         );
@@ -353,6 +403,9 @@ mod tests {
             "formatter =\n  pkgs.bats;\n",
             "someTool =\n  pkgs.flock;\n",
             "packages = with pkgs; [\n];\nformatter = pkgs.bats;\n",
+            "description = \"[\";\nformatter = pkgs.bats;\n",
+            "/* [ */\nformatter = pkgs.flock;\n",
+            "x = \'\'[\'\';\nformatter = pkgs.bats;\n",
         ] {
             assert!(members(not_a_member).is_empty(), "{not_a_member:?}");
         }

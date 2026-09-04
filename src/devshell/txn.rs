@@ -185,11 +185,17 @@ impl std::fmt::Display for FinishFailure {
 /// still active beside its backups, and the caller names it.
 fn finish(backup: &Path, marker: &Path) -> Result<(), FinishFailure> {
     if marker.exists() {
-        let neutralized = fs::write(marker, FINISHED_MARKER).and_then(|()| {
-            fs::OpenOptions::new()
-                .write(true)
-                .open(marker)
-                .and_then(|file| file.sync_all())
+        // Whole or not at all: a temp file and a rename, so no
+        // interruption leaves a truncated marker. Where the directory
+        // refuses the rename, the in-place write is the last resort, and
+        // a malformed marker is read as recoverable anyway.
+        let neutralized = crate::atomic::write(marker, FINISHED_MARKER).or_else(|_| {
+            fs::write(marker, FINISHED_MARKER).and_then(|()| {
+                fs::OpenOptions::new()
+                    .write(true)
+                    .open(marker)
+                    .and_then(|file| file.sync_all())
+            })
         });
         if let Err(source) = neutralized {
             return Err(FinishFailure {
@@ -276,6 +282,9 @@ pub enum Recovery {
     /// Both files are back, and the marker could not be finished: it is
     /// still active, and the next recovery would overwrite later edits.
     Unfinished(FinishFailure),
+    /// A finished transaction's marker was still there and is now gone;
+    /// nothing was restored.
+    Finished,
 }
 
 /// Recover a transaction an earlier run left open, where its owner is
@@ -310,10 +319,14 @@ fn recover_at(
         // A finished transaction whose marker could not be removed at
         // the time: finish it now, and recover nothing.
         let _ = finish(backup, marker);
-        return Ok(None);
+        return Ok(Some(Recovery::Finished));
     }
+    // A marker with no readable owner is a marker no live run wrote —
+    // an open transaction writes its record whole before any step, and
+    // the caller holds the checkout's lock — so it is recovered now
+    // rather than after the grace period.
     let pid = record["pid"].as_u64();
-    if !owner_gone(pid, marker) {
+    if pid.is_some() && !owner_gone(pid, marker) {
         return Ok(None);
     }
     match restore(target.as_std_path(), backup, marker) {
@@ -589,14 +602,59 @@ mod tests {
         std::fs::write(target.join("flake.nix"), "edited later\n").expect("writes");
         assert_eq!(
             recover_at(&target, &backup, &marker).expect("judges"),
-            None,
-            "a neutralized marker is not a pending run"
+            Some(Recovery::Finished),
+            "a neutralized marker is a finished run, not a pending one"
         );
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).expect("unlocks");
         assert_eq!(
             std::fs::read_to_string(target.join("flake.nix")).expect("reads"),
             "edited later\n",
             "a later edit is never overwritten"
+        );
+    }
+
+    /// A truncated marker — an interruption mid-write — with its backups
+    /// intact is recovered on the next run, not after the grace period.
+    #[test]
+    fn a_malformed_marker_with_backups_is_recovered_now() {
+        let (_state, state) = scratch();
+        let (_target, target) = scratch();
+        let backup = state.join("backup").into_std_path_buf();
+        let marker = state.join("pending.json").into_std_path_buf();
+        std::fs::write(target.join("flake.nix"), "old\n").expect("writes");
+        let txn = open_at(&target, backup.clone(), marker.clone()).expect("opens");
+        std::fs::write(target.join("flake.nix"), "half\n").expect("writes");
+        std::mem::forget(txn);
+        std::fs::write(&marker, "").expect("truncates");
+        assert_eq!(
+            recover_at(&target, &backup, &marker).expect("recovers"),
+            Some(Recovery::Restored(vec!["flake.nix".to_owned()]))
+        );
+        assert_eq!(
+            std::fs::read_to_string(target.join("flake.nix")).expect("reads"),
+            "old\n"
+        );
+        assert!(!marker.exists());
+    }
+
+    /// A finished marker left behind is cleared and reported as such.
+    #[test]
+    fn a_finished_marker_is_cleared_and_named() {
+        let (_state, state) = scratch();
+        let (_target, target) = scratch();
+        let backup = state.join("backup").into_std_path_buf();
+        let marker = state.join("pending.json").into_std_path_buf();
+        std::fs::create_dir_all(&state).expect("creates");
+        std::fs::write(&marker, super::FINISHED_MARKER).expect("writes");
+        std::fs::write(target.join("flake.nix"), "new\n").expect("writes");
+        assert_eq!(
+            recover_at(&target, &backup, &marker).expect("judges"),
+            Some(Recovery::Finished)
+        );
+        assert!(!marker.exists());
+        assert_eq!(
+            std::fs::read_to_string(target.join("flake.nix")).expect("reads"),
+            "new\n"
         );
     }
 
@@ -641,7 +699,7 @@ mod tests {
         }
         assert!(
             !owner_gone(None, marker.as_std_path()),
-            "a fresh marker with no pid waits"
+            "with no pid the grace period alone decides"
         );
     }
 }
