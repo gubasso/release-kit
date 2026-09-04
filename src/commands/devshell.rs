@@ -561,13 +561,16 @@ fn decide(
             run.outcome = "current";
             return Ok(());
         }
-        std::cmp::Ordering::Greater => {
+        // A discovered tag moves the pin forward only; an explicit --tag is
+        // the operator's deliberate choice and pins in either direction.
+        std::cmp::Ordering::Greater if args.tag.is_none() => {
             run.outcome = "ahead";
-            run.detail =
-                Some("the pin is ahead of the target tag and is never moved backward".to_owned());
+            run.detail = Some(
+                "the pin is ahead of the latest release and is never moved backward".to_owned(),
+            );
             return Ok(());
         }
-        std::cmp::Ordering::Less => {}
+        std::cmp::Ordering::Greater | std::cmp::Ordering::Less => {}
     }
     if !args.apply {
         run.outcome = "would-bump";

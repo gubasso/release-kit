@@ -83,7 +83,7 @@ pub struct SyncArgs {
     #[arg(long, default_value = ".")]
     pub target: Utf8PathBuf,
 
-    /// The release tag to move to, making no network request; the latest release by default.
+    /// The release tag to pin, in either direction, making no network request; the latest release by default, forward only.
     #[arg(long)]
     pub tag: Option<String>,
 

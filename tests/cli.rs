@@ -11461,6 +11461,16 @@ fn an_explicit_tag_makes_no_network_request() {
     );
     assert!(fixture.read("flake.nix").contains("release-kit/v0.9.0\""));
     assert!(fixture.read("flake.lock").contains("rev-of-v0.9.0"));
+    // An explicit tag is the operator's choice and pins in either direction.
+    fixture.commit_all();
+    let (code, report) = fixture.sync_json(&[
+        "devshell", "sync", "--apply", "--caller", "operator", "--tag", "v0.2.15",
+    ]);
+    assert_eq!(code, Some(0), "{report}");
+    assert_eq!(report["outcome"], "bumped");
+    assert_eq!(report["from"], "v0.9.0");
+    assert_eq!(report["to"], "v0.2.15");
+    assert!(fixture.read("flake.lock").contains("rev-of-v0.2.15"));
 }
 
 #[test]
