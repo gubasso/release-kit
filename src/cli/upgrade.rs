@@ -33,6 +33,13 @@ pub struct UpgradeArgs {
     #[arg(long)]
     pub style: Option<String>,
 
+    /// Change the recorded Nix opt-in: `on` adds the capability's files
+    /// and records it; `off` drops them from the record while the files
+    /// stay on disk as the target's own, like any file this payload stops
+    /// shipping. Omitted, the recorded choice is kept.
+    #[arg(long)]
+    pub nix: Option<String>,
+
     /// Write the upgrade; without it every file's action is listed and
     /// nothing is touched.
     #[arg(long)]

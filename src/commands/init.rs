@@ -63,6 +63,12 @@ struct Report {
     /// The working-copy mode the landing records and renders under.
     workflow: &'static str,
     style: &'static str,
+    /// Whether the landing carries the Nix capability.
+    nix: bool,
+    /// The Nix destinations this target could not take, each with why;
+    /// absent where nothing was withheld.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    withheld: Option<Vec<landing::Withheld>>,
     /// Every destination, with its kind and action.
     files: Vec<FileEntry>,
     /// The sentinels an apply left to fill; absent in a preview.
@@ -107,9 +113,19 @@ pub fn run(args: &InitArgs) -> Result<(), RkError> {
                 "an apply renders the scope-bearing files; pass --scopes <list>, the Conventional Commit scopes this project accepts".into(),
             )
         })?)?;
-        let entries =
-            landing::projection(&args.tech, &forge, &repo, &scopes, workflow, Some(style))?;
-        apply(out, args, &forge, &repo, &scopes, workflow, style, &entries)
+        let mut entries = landing::projection(
+            &args.tech,
+            &forge,
+            &repo,
+            &scopes,
+            workflow,
+            Some(style),
+            args.nix,
+        )?;
+        let withheld = landing::withhold_nix(&args.target, args.nix, None, &mut entries)?;
+        apply(
+            out, args, &forge, &repo, &scopes, workflow, style, &entries, withheld,
+        )
     } else {
         // A preview lists destinations and compares nothing, so an
         // unresolved repository only means the owner substitution is
@@ -127,15 +143,19 @@ pub fn run(args: &InitArgs) -> Result<(), RkError> {
             .map(landing::parse_scopes)
             .transpose()?
             .unwrap_or_default();
-        let entries = landing::projection(
+        let mut entries = landing::projection(
             &args.tech,
             &forge,
             repo.as_deref().unwrap_or("OWNER"),
             &scopes,
             workflow,
             Some(style),
+            args.nix,
         )?;
-        preview(out, args, &forge, repo, workflow, style, &entries)
+        // The preview withholds exactly as the apply would, so what is
+        // listed is what lands.
+        let withheld = landing::withhold_nix(&args.target, args.nix, None, &mut entries)?;
+        preview(out, args, &forge, repo, workflow, style, &entries, withheld)
     }
 }
 
@@ -149,11 +169,13 @@ fn preview(
     workflow: Workflow,
     style: Style,
     entries: &[Entry],
+    withheld: Vec<landing::Withheld>,
 ) -> Result<(), RkError> {
     let repo_argument = repo.as_deref().unwrap_or("<owner/name>");
     let scopes_argument = args.scopes.as_deref().unwrap_or("<scope,scope>");
+    let nix_flag = if args.nix { " --nix" } else { "" };
     let next = vec![format!(
-        "rk init --tech {} --forge {forge} --repo {repo_argument} --scopes {scopes_argument} --workflow {} --style {} --target {} --apply",
+        "rk init --tech {} --forge {forge} --repo {repo_argument} --scopes {scopes_argument} --workflow {} --style {}{nix_flag} --target {} --apply",
         args.tech,
         workflow.as_str(),
         style.as_str(),
@@ -166,9 +188,12 @@ fn preview(
     for entry in entries {
         out.result_line(&entry.destination);
     }
+    for entry in &withheld {
+        out.result_line(format!("withheld {}: {}", entry.path, entry.reason));
+    }
     out.next(&next);
     out.emit(&Report {
-        schema: "rk.init/3",
+        schema: "rk.init/4",
         mode: "preview",
         tech: args.tech.clone(),
         forge: forge.to_owned(),
@@ -176,6 +201,8 @@ fn preview(
         repo,
         workflow: workflow.as_str(),
         style: style.as_str(),
+        nix: args.nix,
+        withheld: (!withheld.is_empty()).then_some(withheld),
         files: entries
             .iter()
             .map(|entry| FileEntry {
@@ -202,6 +229,7 @@ fn apply(
     workflow: Workflow,
     style: Style,
     entries: &[Entry],
+    withheld: Vec<landing::Withheld>,
 ) -> Result<(), RkError> {
     refuse_a_recorded_target(args)?;
     landing::hooks_splice_refusal(&args.target)?;
@@ -249,6 +277,9 @@ fn apply(
             action,
         });
     }
+    for entry in &withheld {
+        out.result_line(format!("withheld {}: {}", entry.path, entry.reason));
+    }
 
     // The record, last, after every file has landed.
     manifest::write(
@@ -266,6 +297,7 @@ fn apply(
                 scopes: scopes.to_vec(),
                 workflow,
                 style: Some(style),
+                nix: args.nix,
             },
             files: records,
             pins: registry::pins_for(&args.tech)
@@ -298,7 +330,7 @@ fn apply(
     ];
     out.next(&next);
     out.emit(&Report {
-        schema: "rk.init/3",
+        schema: "rk.init/4",
         mode: "apply",
         tech: args.tech.clone(),
         forge: forge.to_owned(),
@@ -306,6 +338,8 @@ fn apply(
         repo: Some(repo.to_owned()),
         workflow: workflow.as_str(),
         style: style.as_str(),
+        nix: args.nix,
+        withheld: (!withheld.is_empty()).then_some(withheld),
         files: file_entries,
         sentinels: Some(sentinels),
         next,
@@ -420,7 +454,7 @@ mod tests {
     #[test]
     fn the_init_report_schema_snapshot_holds() {
         let apply = Report {
-            schema: "rk.init/3",
+            schema: "rk.init/4",
             mode: "apply",
             tech: "rust".into(),
             forge: "github".into(),
@@ -428,6 +462,11 @@ mod tests {
             repo: Some("acme/widget".into()),
             workflow: "worktree",
             style: "trunk",
+            nix: true,
+            withheld: Some(vec![crate::landing::Withheld {
+                path: "flake.nix".into(),
+                reason: "the target already carries flake.nix".into(),
+            }]),
             files: vec![FileEntry {
                 path: "release-plz.toml".into(),
                 kind: "seeded",
@@ -442,18 +481,20 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&apply).expect("a report serializes"),
-            r##"{"schema":"rk.init/3","mode":"apply","tech":"rust","forge":"github","target":"/tmp/t","repo":"acme/widget","workflow":"worktree","style":"trunk","files":[{"path":"release-plz.toml","kind":"seeded","action":"write"}],"sentinels":[{"path":"/tmp/t/release-plz.toml","line":3,"text":"# TODO(release-kit): keep false for a binary-only crate"}],"next":["commit the landed files, the record included"]}"##
+            r##"{"schema":"rk.init/4","mode":"apply","tech":"rust","forge":"github","target":"/tmp/t","repo":"acme/widget","workflow":"worktree","style":"trunk","nix":true,"withheld":[{"path":"flake.nix","reason":"the target already carries flake.nix"}],"files":[{"path":"release-plz.toml","kind":"seeded","action":"write"}],"sentinels":[{"path":"/tmp/t/release-plz.toml","line":3,"text":"# TODO(release-kit): keep false for a binary-only crate"}],"next":["commit the landed files, the record included"]}"##
         );
         let preview = Report {
             sentinels: None,
             repo: None,
             mode: "preview",
+            nix: false,
+            withheld: None,
             ..apply
         };
         assert_eq!(
             serde_json::to_string(&preview).expect("a report serializes"),
-            r#"{"schema":"rk.init/3","mode":"preview","tech":"rust","forge":"github","target":"/tmp/t","workflow":"worktree","style":"trunk","files":[{"path":"release-plz.toml","kind":"seeded","action":"write"}],"next":["commit the landed files, the record included"]}"#,
-            "a preview omits the sentinels and unresolved repo rather than serializing null"
+            r#"{"schema":"rk.init/4","mode":"preview","tech":"rust","forge":"github","target":"/tmp/t","workflow":"worktree","style":"trunk","nix":false,"files":[{"path":"release-plz.toml","kind":"seeded","action":"write"}],"next":["commit the landed files, the record included"]}"#,
+            "a preview omits the sentinels, the unresolved repo, and an empty withheld list rather than serializing null"
         );
     }
 }

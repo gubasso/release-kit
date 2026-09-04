@@ -51,6 +51,12 @@ struct Report {
     /// record carries.
     workflow: &'static str,
     style: &'static str,
+    /// Whether the record carries the Nix capability.
+    nix: bool,
+    /// The Nix destinations excluded from the candidate, each with why;
+    /// absent where nothing was withheld.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    withheld: Option<Vec<landing::Withheld>>,
     /// Every destination, with its verification result.
     files: Vec<FileEntry>,
     /// What plausibly follows.
@@ -109,14 +115,19 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
             "an adoption verifies against one rendered candidate; pass --style <trunk|lines>, the release style this target runs".into(),
         )
     })?)?;
-    let entries = landing::projection(
+    let mut entries = landing::projection(
         &tech,
         &resolved.forge,
         &repo,
         &scopes,
         workflow,
         Some(style),
+        args.nix,
     )?;
+    // A target whose flake pair is its own is verified without the pair
+    // and the workflow, exactly as a landing would have withheld them, so
+    // the record an adoption writes is one a later upgrade reproduces.
+    let withheld = landing::withhold_nix(&args.target, args.nix, None, &mut entries)?;
     let (files, records) = verify(args, workflow, &entries)?;
 
     for file in &files {
@@ -124,6 +135,9 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
             "differs" => format!("differs {} (seeded, target-owned)", file.path),
             action => format!("{action} {}", file.path),
         });
+    }
+    for entry in &withheld {
+        out.result_line(format!("withheld {}: {}", entry.path, entry.reason));
     }
 
     if args.apply {
@@ -142,6 +156,7 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
                     scopes,
                     workflow,
                     style: Some(style),
+                    nix: args.nix,
                 },
                 files: records,
                 pins: registry::pins_for(&tech)
@@ -160,17 +175,18 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
         ]
     } else {
         vec![format!(
-            "rk adopt --tech {tech} --forge {} --repo {repo} --scopes {} --workflow {} --style {} --target {} --apply writes the record and nothing else",
+            "rk adopt --tech {tech} --forge {} --repo {repo} --scopes {} --workflow {} --style {}{} --target {} --apply writes the record and nothing else",
             resolved.forge,
             args.scopes.as_deref().unwrap_or("<scope,scope>"),
             workflow.as_str(),
             style.as_str(),
+            if args.nix { " --nix" } else { "" },
             args.target
         )]
     };
     out.next(&next);
     out.emit(&Report {
-        schema: "rk.adopt/3",
+        schema: "rk.adopt/4",
         mode: if args.apply { "apply" } else { "preview" },
         target: args.target.to_string(),
         tech,
@@ -178,6 +194,8 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
         repo,
         workflow: workflow.as_str(),
         style: style.as_str(),
+        nix: args.nix,
+        withheld: (!withheld.is_empty()).then_some(withheld),
         files,
         next,
     })
@@ -303,11 +321,11 @@ mod tests {
 
     use super::{FileEntry, Report};
 
-    /// The complete `rk.adopt/3` shape, held by snapshot.
+    /// The complete `rk.adopt/4` shape, held by snapshot.
     #[test]
     fn the_adopt_report_schema_snapshot_holds() {
         let report = Report {
-            schema: "rk.adopt/3",
+            schema: "rk.adopt/4",
             mode: "apply",
             target: "/tmp/t".into(),
             tech: "rust".into(),
@@ -315,6 +333,8 @@ mod tests {
             repo: "acme/widget".into(),
             workflow: "branches",
             style: "trunk",
+            nix: false,
+            withheld: None,
             files: vec![FileEntry {
                 path: "release-plz.toml".into(),
                 kind: "seeded",
@@ -324,7 +344,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.adopt/3","mode":"apply","target":"/tmp/t","tech":"rust","forge":"github","repo":"acme/widget","workflow":"branches","style":"trunk","files":[{"path":"release-plz.toml","kind":"seeded","action":"differs"}],"next":["commit the record"]}"#
+            r#"{"schema":"rk.adopt/4","mode":"apply","target":"/tmp/t","tech":"rust","forge":"github","repo":"acme/widget","workflow":"branches","style":"trunk","nix":false,"files":[{"path":"release-plz.toml","kind":"seeded","action":"differs"}],"next":["commit the record"]}"#
         );
     }
 }

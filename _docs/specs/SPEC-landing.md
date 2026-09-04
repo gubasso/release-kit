@@ -23,6 +23,8 @@
   - [`landing:the-arming-identity-is-the-bot` — The arming identity is the bot](#landingthe-arming-identity-is-the-bot--the-arming-identity-is-the-bot)
   - [`landing:the-changelog-quality-gate-is-the-squash-message` — The changelog quality gate is the squash message](#landingthe-changelog-quality-gate-is-the-squash-message--the-changelog-quality-gate-is-the-squash-message)
   - [`landing:the-routing-block-bounds-the-agents-initiative` — The routing block bounds the agent's initiative](#landingthe-routing-block-bounds-the-agents-initiative--the-routing-block-bounds-the-agents-initiative)
+  - [`landing:the-nix-capability-is-a-recorded-opt-in` — The Nix capability is a recorded opt-in](#landingthe-nix-capability-is-a-recorded-opt-in--the-nix-capability-is-a-recorded-opt-in)
+  - [`landing:the-flake-pair-lands-all-or-nothing` — The flake pair lands all-or-nothing](#landingthe-flake-pair-lands-all-or-nothing--the-flake-pair-lands-all-or-nothing)
 
 <!--TOC-->
 
@@ -277,3 +279,27 @@ The routing block MUST state that an agent acting in the target guides and never
 - THEN it carries the line bounding the agent's initiative, and no line ordering an agent to branch, commit, or merge on its own
 
 Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `landing:the-nix-capability-is-a-recorded-opt-in` — The Nix capability is a recorded opt-in
+
+A landing MUST include the Nix destinations only under an explicit opt-in recorded as a landing parameter, defaulting off, with a record predating the parameter reading as opt-out, because the projection must stay reproducible from the record: without the parameter, `status` cannot tell an absent-because-not-wanted file from a drifted one, and `upgrade` cannot decide whether to add the files.
+
+#### Scenario: An old record meets a newer binary
+
+- GIVEN a landed target whose record predates the parameter
+- WHEN `rk upgrade` runs
+- THEN no Nix destination joins the landing, and the rewritten record states the opt-out explicitly
+
+Verify: `cargo nextest run -E 'test(a_pre_nix_record_upgrades_to_nothing_unrequested)'`
+
+### `landing:the-flake-pair-lands-all-or-nothing` — The flake pair lands all-or-nothing
+
+A landing MUST land the seed `flake.nix` and its matching `flake.lock` as a pair only where the target carries neither, withholding the pair and the rendered workflow together with the reason named where either exists, because a seed lock beside a foreign flake describes the wrong input graph and a green check that never builds the landed expression proves nothing; the seeded package expression still lands, and a crate shape the seed does not support withholds the whole capability by name.
+
+#### Scenario: A target with its own flake opts in
+
+- GIVEN a rust target carrying a `flake.nix` of its own
+- WHEN `rk init --nix --apply` runs
+- THEN `nix/package.nix` lands, the pair and the workflow are withheld with the reason reported, the withheld destinations stay out of the record, and a later `rk upgrade` reproduces the same decision
+
+Verify: `cargo nextest run -E 'test(a_target_with_its_own_flake_keeps_it_and_the_pair_is_withheld)'`

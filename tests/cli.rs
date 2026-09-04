@@ -589,7 +589,7 @@ fn init_json_emits_one_object_and_nothing_else() {
             .stdout
             .clone();
         let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-        assert_eq!(report["schema"], "rk.init/3");
+        assert_eq!(report["schema"], "rk.init/4");
         assert_eq!(report["mode"], mode);
         assert!(
             report["files"].as_array().is_some_and(|f| !f.is_empty()),
@@ -4522,7 +4522,7 @@ fn a_landing_writes_the_record_with_its_identity() {
         .success()
         .stdout(predicate::str::contains("wrote .release-kit/manifest.json"));
     let manifest = read_manifest(target.path());
-    assert_eq!(manifest["schema_version"], 3);
+    assert_eq!(manifest["schema_version"], 4);
     assert_eq!(manifest["rk_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(manifest["origin"], "init");
     assert_eq!(manifest["tech"], "rust");
@@ -4861,7 +4861,7 @@ fn status_json_is_one_object_over_a_fresh_landing() {
         .stdout
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["schema"], "rk.status/4");
+    assert_eq!(report["schema"], "rk.status/5");
     assert_eq!(report["landed"], true);
     assert_eq!(report["tech"], "rust");
     assert_eq!(report["style"], "trunk");
@@ -7221,7 +7221,7 @@ fn an_upgrade_migrates_a_schema_1_record_to_the_current_schema() {
         .assert()
         .success();
     let migrated = read_manifest(target.path());
-    assert_eq!(migrated["schema_version"], 3);
+    assert_eq!(migrated["schema_version"], 4);
     assert_eq!(migrated["parameters"]["workflow"], "branches");
     assert_eq!(migrated["parameters"]["style"], "trunk");
     let hooks = std::fs::read_to_string(target.path().join(".pre-commit-config.yaml"))
@@ -9567,4 +9567,316 @@ fn every_third_party_destination_names_its_source() {
             "the reference cites the owning application's documentation at {source}"
         );
     }
+}
+
+/// A single-crate manifest the seeded package expression supports.
+fn seed_crate(target: &Path) {
+    std::fs::write(
+        target.join("Cargo.toml"),
+        "[package]\nname = \"widget\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("the crate manifest writes");
+}
+
+/// Land the rust payload with the Nix capability opted in.
+fn land_rust_nix(target: &Path) -> assert_cmd::assert::Assert {
+    rk().args(["init", "--tech", "rust", "--forge", "github"])
+        .args(["--repo", "acme/widget", "--scopes", "api,cli", "--nix"])
+        .arg("--target")
+        .arg(target)
+        .arg("--apply")
+        .assert()
+}
+
+/// The opt-in lands the capability with its kinds recorded, the record
+/// carries the parameter, and the state file is never compared.
+#[test]
+fn the_nix_opt_in_lands_the_capability_with_its_kinds() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    seed_crate(target.path());
+    land_rust_nix(target.path()).success();
+    for name in ["nix/package.nix", "flake.nix", "flake.lock"] {
+        assert!(target.path().join(name).is_file(), "{name} lands");
+    }
+    let manifest = read_manifest(target.path());
+    assert_eq!(manifest["parameters"]["nix"], true);
+    assert_eq!(
+        manifest_file(&manifest, "nix/package.nix")["kind"],
+        "seeded"
+    );
+    assert_eq!(manifest_file(&manifest, "flake.nix")["kind"], "seeded");
+    assert_eq!(manifest_file(&manifest, "flake.lock")["kind"], "state");
+    // The state file is the automation's: editing it is never drift.
+    std::fs::write(target.path().join("flake.lock"), "{}\n").expect("the lock rewrites");
+    let out = rk()
+        .args(["status", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["nix"], true);
+    assert_eq!(report["missing"], serde_json::json!([]));
+    assert_eq!(report["drift"]["rendered"], 0);
+    assert_eq!(
+        report["drift"]["seeded"], 0,
+        "an edited state file is never compared"
+    );
+}
+
+/// Off is the default and the record says so explicitly: no Nix file
+/// lands, nothing is missing, and the report field is false.
+#[test]
+fn a_landing_without_nix_lands_none_and_the_record_says_so() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    seed_crate(target.path());
+    land_rust(target.path()).success();
+    for name in ["nix/package.nix", "flake.nix", "flake.lock"] {
+        assert!(!target.path().join(name).exists(), "{name} must not land");
+    }
+    let manifest = read_manifest(target.path());
+    assert_eq!(manifest["parameters"]["nix"], false);
+    let out = rk()
+        .args(["status", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["nix"], false);
+    assert_eq!(
+        report["missing"],
+        serde_json::json!([]),
+        "an absent-because-not-wanted file is never missing"
+    );
+}
+
+/// A target with a flake of its own keeps the pair: the seeded package
+/// expression lands, the pair and the workflow are withheld with the
+/// reason stated, the preview says the same, and a later upgrade
+/// reproduces the decision instead of reporting drift.
+#[test]
+fn a_target_with_its_own_flake_keeps_it_and_the_pair_is_withheld() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    seed_crate(target.path());
+    let own_flake = "{ description = \"the target's own\"; }\n";
+    std::fs::write(target.path().join("flake.nix"), own_flake).expect("the flake writes");
+    rk().args(["init", "--tech", "rust", "--forge", "github"])
+        .args(["--repo", "acme/widget", "--scopes", "api,cli", "--nix"])
+        .arg("--target")
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("withheld flake.lock"));
+    land_rust_nix(target.path())
+        .success()
+        .stdout(predicate::str::contains("withheld flake.nix"));
+    assert!(target.path().join("nix/package.nix").is_file());
+    assert!(!target.path().join("flake.lock").exists());
+    assert_eq!(
+        std::fs::read_to_string(target.path().join("flake.nix")).expect("the flake reads"),
+        own_flake,
+        "the target's own flake survives byte-identically"
+    );
+    let manifest = read_manifest(target.path());
+    assert_eq!(manifest["parameters"]["nix"], true);
+    assert!(
+        manifest["files"]
+            .as_array()
+            .expect("a file list")
+            .iter()
+            .all(|file| file["destination"] != "flake.nix" && file["destination"] != "flake.lock"),
+        "a withheld destination stays out of the record"
+    );
+    let out = rk()
+        .args(["status", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["missing"], serde_json::json!([]));
+    assert_eq!(report["drift"]["rendered"], 0);
+    rk().args(["upgrade", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("withheld"));
+}
+
+/// The opt-in works after the fact in both directions: `--nix` adds the
+/// files and records it, `--no-nix` drops them from the record while the
+/// files stay the target's own.
+#[test]
+fn an_upgrade_moves_the_nix_opt_in_in_both_directions() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    seed_crate(target.path());
+    land_rust(target.path()).success();
+    rk().args(["upgrade", "--nix", "on", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    assert!(target.path().join("flake.nix").is_file());
+    let manifest = read_manifest(target.path());
+    assert_eq!(manifest["parameters"]["nix"], true);
+    assert_eq!(manifest_file(&manifest, "flake.lock")["kind"], "state");
+    rk().args(["upgrade", "--nix", "off", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("dropped flake.nix"));
+    let manifest = read_manifest(target.path());
+    assert_eq!(manifest["parameters"]["nix"], false);
+    assert!(
+        target.path().join("flake.nix").is_file(),
+        "an opt-out leaves the file as the target's own"
+    );
+    let out = rk()
+        .args(["status", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(
+        report["missing"],
+        serde_json::json!([]),
+        "a dropped destination leaves the record whole"
+    );
+}
+
+/// A record from before the parameter existed reads as opt-out: the
+/// upgrade adds no Nix file nobody requested.
+#[test]
+fn a_pre_nix_record_upgrades_to_nothing_unrequested() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    seed_crate(target.path());
+    land_rust(target.path()).success();
+    let mut manifest = read_manifest(target.path());
+    manifest["schema_version"] = serde_json::json!(3);
+    manifest["parameters"]
+        .as_object_mut()
+        .expect("parameters is an object")
+        .remove("nix");
+    write_manifest(target.path(), &manifest);
+    let out = rk()
+        .args(["upgrade", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["nix"], false);
+    assert!(
+        report["files"]
+            .as_array()
+            .expect("a file list")
+            .iter()
+            .all(|file| file["path"] != "flake.nix" && file["path"] != "nix/package.nix"),
+        "no Nix destination joins an upgrade nobody opted into"
+    );
+}
+
+/// A crate shape the seed does not support withholds the whole
+/// capability by name, and the landing reports the smaller product.
+#[test]
+fn a_workspace_root_withholds_the_whole_nix_capability() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    std::fs::write(
+        target.path().join("Cargo.toml"),
+        "[workspace]\nmembers = [\"widget\"]\n",
+    )
+    .expect("the workspace manifest writes");
+    land_rust_nix(target.path())
+        .success()
+        .stdout(predicate::str::contains("withheld nix/package.nix"));
+    for name in ["nix/package.nix", "flake.nix", "flake.lock"] {
+        assert!(!target.path().join(name).exists(), "{name} must not land");
+    }
+    let manifest = read_manifest(target.path());
+    assert_eq!(manifest["parameters"]["nix"], true);
+    let out = rk()
+        .args(["status", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(
+        report["missing"],
+        serde_json::json!([]),
+        "a withheld capability reports nothing missing"
+    );
+}
+
+/// A tuned seed survives an upgrade untouched and reports as the
+/// target's own drift, never a conflict.
+#[test]
+fn a_tuned_nix_seed_survives_an_upgrade() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    seed_crate(target.path());
+    land_rust_nix(target.path()).success();
+    let tuned = "# tuned by the target\n{ lib, rustPlatform }: null\n";
+    std::fs::write(target.path().join("nix/package.nix"), tuned).expect("the tune writes");
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "drift nix/package.nix (seeded, target-owned)",
+        ));
+    assert_eq!(
+        std::fs::read_to_string(target.path().join("nix/package.nix")).expect("the seed reads"),
+        tuned,
+        "the tune survives the upgrade byte-identically"
+    );
+}
+
+/// An adoption records a Nix landing: the candidate includes the
+/// capability, and a flake pair with no record to vouch for it reads as
+/// the target's own — withheld from the candidate exactly as a landing
+/// would withhold it, because blessing the disk would launder any pair.
+#[test]
+fn an_adoption_records_the_nix_parameter() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    seed_crate(target.path());
+    land_rust_nix(target.path()).success();
+    std::fs::remove_file(target.path().join(".release-kit/manifest.json"))
+        .expect("the record removes");
+    rk().args(["adopt", "--tech", "rust", "--forge", "github"])
+        .args(["--repo", "acme/widget", "--scopes", "api,cli"])
+        .args(["--workflow", "worktree", "--style", "trunk", "--nix"])
+        .arg("--apply")
+        .arg("--target")
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("withheld flake.nix"));
+    let manifest = read_manifest(target.path());
+    assert_eq!(manifest["origin"], "adopt");
+    assert_eq!(manifest["parameters"]["nix"], true);
+    assert_eq!(
+        manifest_file(&manifest, "nix/package.nix")["kind"],
+        "seeded"
+    );
+    assert!(
+        manifest["files"]
+            .as_array()
+            .expect("a file list")
+            .iter()
+            .all(|file| file["destination"] != "flake.nix"),
+        "a pair no record vouches for stays the target's own"
+    );
 }

@@ -12,6 +12,7 @@
   - [`packaging:the-wrapper-carries-the-hard-tools` — The wrapper carries the Hard tools](#packagingthe-wrapper-carries-the-hard-tools--the-wrapper-carries-the-hard-tools)
   - [`packaging:the-derivation-mirrors-the-probe-registry` — The derivation mirrors the probe registry](#packagingthe-derivation-mirrors-the-probe-registry--the-derivation-mirrors-the-probe-registry)
   - [`packaging:a-launcher-resolves-through-one-owner` — A launcher resolves through one owner](#packaginga-launcher-resolves-through-one-owner--a-launcher-resolves-through-one-owner)
+  - [`packaging:the-landable-capability-promises-a-buildable-flake` — The landable capability promises a buildable flake](#packagingthe-landable-capability-promises-a-buildable-flake--the-landable-capability-promises-a-buildable-flake)
 
 <!--TOC-->
 
@@ -116,3 +117,15 @@ Production code MUST NOT launch `git` or `sh` by literal name outside the shared
 - THEN the scan test fails naming the file and line
 
 Verify: `cargo nextest run -E 'test(every_git_and_sh_launch_resolves_through_the_shared_resolver)'`
+
+### `packaging:the-landable-capability-promises-a-buildable-flake` — The landable capability promises a buildable flake
+
+The landed Nix capability MUST promise exactly a package expression that evaluates for the supported crate shape, a flake that builds where the seed pair landed, and a CI check that proves that build — and MUST NOT promise presence in nixpkgs or any registry, because a registry submission carries a human maintainer commitment into someone else's repository. The support matrix degrades honestly: a pair that lands fewer files reports the smaller product, never an error.
+
+#### Scenario: An operator asks what the capability shipped
+
+- GIVEN a target that opted in with `rk init --nix`
+- WHEN the operator reads the landing report and the runbook
+- THEN the promise is the build and its proof, with registry distribution named as the target's own later step
+
+Verify: `cargo nextest run -E 'test(nix)'`
