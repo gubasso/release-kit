@@ -10359,6 +10359,38 @@ impl DevshellFixture {
         std::fs::read_to_string(self.target().join(rel)).expect("the file reads")
     }
 
+    fn seed(&self, name: &str, value: &str) {
+        std::fs::write(self.mock.path().join(name), value).expect("the state seeds");
+    }
+
+    fn commit_all(&self) {
+        git_in(self.target(), &["add", "-A"]);
+        git_in(self.target(), &["commit", "-qm", "chore: seed"]);
+    }
+
+    /// The per-checkout state directory under the scratch state root.
+    fn state_dir(&self) -> PathBuf {
+        self.home.path().join("release-kit/devshell")
+    }
+
+    fn key(&self) -> String {
+        let canonical = std::fs::canonicalize(self.target()).expect("the target canonicalizes");
+        release_kit::devshell::state_key(&utf8(&canonical))
+    }
+
+    /// A sync run's parsed report, whatever its exit code.
+    fn sync_json(&self, args: &[&str]) -> (Option<i32>, serde_json::Value) {
+        let out = self.rk(args).arg("--json").output().expect("rk runs");
+        let report = serde_json::from_slice(&out.stdout).unwrap_or_else(|_| {
+            panic!(
+                "one JSON object expected on stdout: {}\n{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            )
+        });
+        (out.status.code(), report)
+    }
+
     /// The hand-rolled recipe the catalog knows, planted whole: the two
     /// scripts, the two suites, the `.envrc` invocation with its comment,
     /// the switch example, the justfile recipe, the devshell tooling, and
@@ -11190,4 +11222,361 @@ fn devshell_clean_is_idempotent() {
         .rk(&["devshell", "clean", "--apply"])
         .assert()
         .success();
+}
+
+#[test]
+fn devshell_sync_preview_reports_the_bump_and_spawns_no_nix() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    let flake = fixture.read("flake.nix");
+    let lock = fixture.read("flake.lock");
+    fixture
+        .rk(&["devshell", "sync", "--caller", "operator"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("would-bump v0.2.15 -> v0.2.16"));
+    let (code, report) = fixture.sync_json(&["devshell", "sync"]);
+    assert_eq!(code, Some(0));
+    assert_eq!(report["schema"], "rk.devshell-sync/1");
+    assert_eq!(report["mode"], "preview");
+    assert_eq!(report["caller"], "envrc");
+    assert_eq!(report["outcome"], "would-bump");
+    assert_eq!(report["from"], "v0.2.15");
+    assert_eq!(report["to"], "v0.2.16");
+    assert!(report.get("steps").is_none());
+    assert!(fixture.nix_log().is_empty(), "a preview spawns no nix");
+    assert_eq!(fixture.read("flake.nix"), flake);
+    assert_eq!(fixture.read("flake.lock"), lock);
+}
+
+#[test]
+fn devshell_sync_apply_rewrites_the_pin_updates_the_lock_and_builds() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    let (code, report) =
+        fixture.sync_json(&["devshell", "sync", "--apply", "--caller", "operator"]);
+    assert_eq!(code, Some(0), "{report}");
+    assert_eq!(report["outcome"], "bumped");
+    assert_eq!(report["from"], "v0.2.15");
+    assert_eq!(report["to"], "v0.2.16");
+    let steps: Vec<(&str, &str)> = report["steps"]
+        .as_array()
+        .expect("steps")
+        .iter()
+        .map(|s| (s["step"].as_str().unwrap(), s["status"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        steps,
+        [
+            ("rewrite-pin", "ok"),
+            ("flake-update", "ok"),
+            ("build", "ok")
+        ]
+    );
+    assert!(report.get("restored").is_none());
+    assert!(
+        fixture
+            .read("flake.nix")
+            .contains("url = \"github:gubasso/release-kit/v0.2.16\";")
+    );
+    assert!(fixture.read("flake.lock").contains("rev-of-v0.2.16"));
+    let nix = fixture.nix_log();
+    assert!(nix.contains("flake update release-kit"), "{nix}");
+    assert!(
+        nix.contains("eval --raw --impure --expr builtins.currentSystem"),
+        "{nix}"
+    );
+    assert!(
+        nix.contains("build --no-link .#devShells.x86_64-linux.default"),
+        "{nix}"
+    );
+    assert!(
+        !fixture.target().join("result").exists(),
+        "--no-link drops no result symlink"
+    );
+    assert!(
+        !fixture.state_dir().join(fixture.key()).exists(),
+        "a committed transaction leaves no backup"
+    );
+    let status = fixture.json(&["devshell", "status"]);
+    assert_eq!(status["pin_tag"], "v0.2.16");
+    assert_eq!(status["locked_rev"], "rev-of-v0.2.16");
+}
+
+#[test]
+fn a_same_version_sync_writes_nothing_and_spawns_no_nix() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.16");
+    fixture.commit_all();
+    let flake = fixture.read("flake.nix");
+    let lock = fixture.read("flake.lock");
+    let (code, report) =
+        fixture.sync_json(&["devshell", "sync", "--apply", "--caller", "operator"]);
+    assert_eq!(code, Some(0));
+    assert_eq!(report["outcome"], "current");
+    assert_eq!(fixture.read("flake.nix"), flake);
+    assert_eq!(fixture.read("flake.lock"), lock);
+    assert!(fixture.nix_log().is_empty(), "nothing to do spawns no nix");
+    // The same run from .envrc is silent on stdout.
+    fixture
+        .rk(&["devshell", "sync", "--apply"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn a_pin_ahead_of_the_latest_release_is_reported_and_never_rewritten() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.3.0");
+    fixture.commit_all();
+    let flake = fixture.read("flake.nix");
+    let (code, report) =
+        fixture.sync_json(&["devshell", "sync", "--apply", "--caller", "operator"]);
+    assert_eq!(code, Some(0));
+    assert_eq!(report["outcome"], "ahead");
+    assert_eq!(report["from"], "v0.3.0");
+    assert_eq!(report["to"], "v0.2.16");
+    assert_eq!(fixture.read("flake.nix"), flake);
+    assert!(fixture.nix_log().is_empty());
+}
+
+#[test]
+fn a_failed_flake_update_restores_both_files() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    fixture.seed("nix_fail_update", "1");
+    let flake = fixture.read("flake.nix");
+    let lock = fixture.read("flake.lock");
+    let (code, report) =
+        fixture.sync_json(&["devshell", "sync", "--apply", "--caller", "operator"]);
+    assert_eq!(code, Some(70), "{report}");
+    assert_eq!(report["outcome"], "update-failed");
+    assert_eq!(
+        report["restored"],
+        serde_json::json!(["flake.nix", "flake.lock"])
+    );
+    let failed = report["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["status"] == "failed")
+        .expect("a failed step");
+    assert_eq!(failed["step"], "flake-update");
+    assert_eq!(failed["detail"], "error: could not update the lock");
+    assert_eq!(fixture.read("flake.nix"), flake, "the pin is back");
+    assert_eq!(fixture.read("flake.lock"), lock, "the lock is back");
+    assert!(!fixture.nix_log().contains("build"), "the build never ran");
+    assert!(!fixture.state_dir().join(fixture.key()).exists());
+    let out = fixture
+        .rk(&[
+            "devshell", "sync", "--apply", "--caller", "operator", "--json",
+        ])
+        .output()
+        .expect("rk runs");
+    let diagnostic: serde_json::Value =
+        serde_json::from_slice(&out.stderr).expect("a diagnostic on stderr");
+    assert_eq!(diagnostic["reason"], "subprocess-failed");
+    assert_eq!(diagnostic["step"], "flake-update");
+    assert_eq!(diagnostic["target_state"], "both files restored");
+}
+
+#[test]
+fn a_failed_devshell_build_restores_both_files() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    fixture.seed("nix_fail_build", "1");
+    let flake = fixture.read("flake.nix");
+    let lock = fixture.read("flake.lock");
+    let (code, report) =
+        fixture.sync_json(&["devshell", "sync", "--apply", "--caller", "operator"]);
+    assert_eq!(code, Some(70), "{report}");
+    assert_eq!(report["outcome"], "build-failed");
+    assert_eq!(
+        report["restored"],
+        serde_json::json!(["flake.nix", "flake.lock"])
+    );
+    assert_eq!(fixture.read("flake.nix"), flake);
+    assert_eq!(
+        fixture.read("flake.lock"),
+        lock,
+        "the lock the update wrote is rolled back"
+    );
+    assert!(fixture.nix_log().contains("flake update release-kit"));
+    // From .envrc the same failure is reported and exits 0.
+    fixture
+        .rk(&["devshell", "sync", "--apply"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("build-failed v0.2.15 -> v0.2.16"));
+    assert_eq!(fixture.read("flake.nix"), flake);
+}
+
+#[test]
+fn devshell_sync_refuses_a_flake_with_more_than_one_pin_line() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    let flake = fixture.read("flake.nix");
+    std::fs::write(
+        fixture.target().join("flake.nix"),
+        format!("{flake}  url = \"github:gubasso/release-kit/v0.2.14\";\n"),
+    )
+    .expect("the flake writes");
+    fixture.commit_all();
+    let (code, report) =
+        fixture.sync_json(&["devshell", "sync", "--apply", "--caller", "operator"]);
+    assert_eq!(code, Some(73));
+    assert_eq!(report["outcome"], "ambiguous-pin");
+    assert!(report["detail"].as_str().unwrap().contains("2 lines"));
+    assert!(
+        fixture.curl_log().is_empty(),
+        "an ambiguous pin fetches nothing"
+    );
+    assert!(fixture.nix_log().is_empty());
+    fixture
+        .rk(&["devshell", "sync", "--apply"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ambiguous-pin"));
+}
+
+#[test]
+fn an_explicit_tag_makes_no_network_request() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    let (code, report) = fixture.sync_json(&[
+        "devshell", "sync", "--apply", "--caller", "operator", "--tag", "0.9.0",
+    ]);
+    assert_eq!(code, Some(0), "{report}");
+    assert_eq!(report["outcome"], "bumped");
+    assert_eq!(report["to"], "v0.9.0");
+    assert!(
+        fixture.curl_log().is_empty(),
+        "an explicit tag fetches nothing"
+    );
+    assert!(fixture.read("flake.nix").contains("release-kit/v0.9.0\""));
+    assert!(fixture.read("flake.lock").contains("rev-of-v0.9.0"));
+}
+
+#[test]
+fn each_tag_shape_folds_to_one_tag() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    for shape in [
+        "v0.9.0",
+        "0.9.0",
+        "https://github.com/gubasso/release-kit/releases/tag/v0.9.0",
+    ] {
+        let (code, report) = fixture.sync_json(&["devshell", "sync", "--tag", shape]);
+        assert_eq!(code, Some(0), "{shape}: {report}");
+        assert_eq!(report["outcome"], "would-bump", "{shape}");
+        assert_eq!(report["to"], "v0.9.0", "{shape}");
+    }
+    fixture
+        .rk(&["devshell", "sync", "--tag", "latest"])
+        .assert()
+        .code(64);
+}
+
+#[test]
+fn discovery_reads_the_redirect_and_spends_no_api_call() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    fixture.seed("latest_tag", "v0.2.17");
+    let (_, report) = fixture.sync_json(&["devshell", "sync"]);
+    assert_eq!(report["to"], "v0.2.17");
+    let curl = fixture.curl_log();
+    let lines: Vec<&str> = curl.lines().collect();
+    assert_eq!(lines.len(), 1, "one curl call: {curl}");
+    let line = lines[0];
+    for needle in [
+        "-o /dev/null",
+        "-w %{url_effective}",
+        "--max-time",
+        "releases/latest",
+    ] {
+        assert!(line.contains(needle), "{line} lacks {needle}");
+    }
+    assert!(!line.contains("api.github.com"), "no API host: {line}");
+    // A network failure is a reported outcome that writes nothing.
+    fixture.seed("curl_fail", "1");
+    let (code, report) =
+        fixture.sync_json(&["devshell", "sync", "--apply", "--caller", "operator"]);
+    assert_eq!(code, Some(70));
+    assert_eq!(report["outcome"], "unreachable");
+    assert!(
+        report["detail"]
+            .as_str()
+            .unwrap()
+            .contains("Could not resolve host")
+    );
+    assert!(fixture.nix_log().is_empty());
+    assert!(fixture.read("flake.nix").contains("v0.2.15"));
+    fixture
+        .rk(&["devshell", "sync", "--apply"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("unreachable"));
+}
+
+#[test]
+fn an_interrupted_transaction_is_recovered_on_the_next_run() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    let flake = fixture.read("flake.nix");
+    let lock = fixture.read("flake.lock");
+    // Plant what a killed run leaves: the backups, the marker with a
+    // dead owner, and the two files half-moved.
+    let backup = fixture.state_dir().join(fixture.key()).join("backup");
+    std::fs::create_dir_all(&backup).expect("the backup dir creates");
+    std::fs::write(backup.join("flake.nix"), &flake).expect("writes");
+    std::fs::write(backup.join("flake.lock"), &lock).expect("writes");
+    std::fs::write(
+        fixture.state_dir().join(fixture.key()).join("pending.json"),
+        r#"{"target":"x","pid":4294967295}"#,
+    )
+    .expect("the marker writes");
+    std::fs::write(
+        fixture.target().join("flake.nix"),
+        flake.replace("v0.2.15", "v0.2.16"),
+    )
+    .expect("writes");
+    std::fs::remove_file(fixture.target().join("flake.lock")).expect("the lock goes");
+    let status = fixture.json(&["devshell", "status"]);
+    assert_eq!(status["state"], "pending-recovery");
+    assert_eq!(status["pending"], true);
+    // A preview names the pending run and touches nothing.
+    let (code, report) = fixture.sync_json(&["devshell", "sync", "--caller", "operator"]);
+    assert_eq!(code, Some(0));
+    assert_eq!(report["outcome"], "pending-recovery");
+    assert!(fixture.read("flake.nix").contains("v0.2.16"));
+    // The apply recovers first, then continues to the bump.
+    let (code, report) =
+        fixture.sync_json(&["devshell", "sync", "--apply", "--caller", "operator"]);
+    assert_eq!(code, Some(0), "{report}");
+    assert_eq!(
+        report["recovered"],
+        serde_json::json!(["flake.nix", "flake.lock"])
+    );
+    assert_eq!(report["outcome"], "bumped");
+    assert_eq!(
+        report["from"], "v0.2.15",
+        "the recovered pin is what the bump starts from"
+    );
+    assert!(
+        !fixture
+            .state_dir()
+            .join(fixture.key())
+            .join("pending.json")
+            .exists()
+    );
+    assert!(fixture.read("flake.lock").contains("rev-of-v0.2.16"));
 }

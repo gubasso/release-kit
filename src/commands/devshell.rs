@@ -7,16 +7,22 @@
 //! fetches nothing; `add` serves the fragments and seeds the pair where a
 //! target has neither file, never editing a file the target owns;
 //! `clean` removes what a predecessor mechanism left and names the rest,
-//! so the wiring is a replacement and never an addition. Every report
-//! goes through the output boundary with a versioned schema.
+//! so the wiring is a replacement and never an addition; `sync` moves
+//! the pin to the latest release inside a fenced transaction, both files
+//! or neither. Every report goes through the output boundary with a
+//! versioned schema.
 
 use serde::Serialize;
 
 use camino::Utf8Path;
 
-use crate::cli::devshell::{AddArgs, CleanArgs, DevshellAction, DevshellArgs, StatusArgs};
+use crate::cli::devshell::{
+    AddArgs, Caller, CleanArgs, DevshellAction, DevshellArgs, StatusArgs, SyncArgs,
+};
+use crate::devshell::discover::{self, Discovery};
 use crate::devshell::fragments::{self, Fragment};
 use crate::devshell::leftovers::{self, Action, Leftover};
+use crate::devshell::txn::{self, StepFailure};
 use crate::devshell::{self, Observed, Presence, pin};
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
@@ -137,6 +143,76 @@ struct Manual {
     reason: &'static str,
 }
 
+/// The `rk.devshell-sync/1` document.
+#[derive(Debug, Serialize)]
+struct SyncReport<'a> {
+    /// The shape version of this document.
+    schema: &'static str,
+    /// `preview` or `apply`.
+    mode: &'static str,
+    /// `envrc` or `operator`.
+    caller: &'static str,
+    /// The target, canonical.
+    target: &'a str,
+    /// The closed outcome vocabulary: `bumped`, `current`, `ahead`,
+    /// `would-bump`, `pending-recovery`, `skipped-ci`, `skipped-disabled`,
+    /// `skipped-stamped`, `skipped-locked`, `lock-unavailable`,
+    /// `not-wired`, `unpinned`, `no-flake`, `ambiguous-pin`,
+    /// `refused-dirty`, `unreachable`, `unparsable`, `update-failed`, or
+    /// `build-failed`.
+    outcome: &'static str,
+    /// The pinned tag before the run, where the pin was read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    from: Option<&'a str>,
+    /// The tag the run moved to or would move to, where one was resolved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    to: Option<&'a str>,
+    /// One line of detail for an outcome that has one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<&'a str>,
+    /// The transaction's steps, once it opened.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    steps: Option<&'a [Step]>,
+    /// The files a failure rolled back.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    restored: Option<&'a [String]>,
+    /// The files an earlier interrupted run left half-moved, restored
+    /// before this run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recovered: Option<&'a [String]>,
+    /// The day this checkout's last attempt was stamped.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stamp: Option<&'a str>,
+    /// What plausibly follows.
+    next: &'a [String],
+}
+
+/// One transaction step.
+#[derive(Debug, Clone, Serialize)]
+#[allow(clippy::struct_field_names)]
+struct Step {
+    /// `rewrite-pin`, `flake-update`, `current-system`, or `build`.
+    step: &'static str,
+    /// `ok` or `failed`.
+    status: &'static str,
+    /// The child's last stderr line, for a failed step.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
+}
+
+/// Everything one sync run decided, before rendering.
+#[derive(Debug, Default)]
+struct SyncRun {
+    outcome: &'static str,
+    from: Option<String>,
+    to: Option<String>,
+    detail: Option<String>,
+    steps: Option<Vec<Step>>,
+    restored: Option<Vec<String>>,
+    recovered: Option<Vec<String>>,
+    stamp: Option<String>,
+}
+
 /// The two Soft probes the sync spawns, as `ok` or `failed`.
 #[derive(Debug, Serialize)]
 struct Host {
@@ -158,9 +234,7 @@ pub fn run(args: &DevshellArgs) -> Result<(), RkError> {
         DevshellAction::Status(args) => status(args),
         DevshellAction::Add(args) => add(args),
         DevshellAction::Clean(args) => clean(args),
-        DevshellAction::Sync(_) => Err(RkError::Usage(
-            "rk devshell sync is not in this build; the sync phase lands it".to_owned(),
-        )),
+        DevshellAction::Sync(args) => sync(args),
     }
 }
 
@@ -327,6 +401,343 @@ fn add(args: &AddArgs) -> Result<(), RkError> {
             .expected("a target with no flake.nix and no .envrc, or the fragments applied by hand")
             .target_state(state),
     ))
+}
+
+/// Move the pin forward, both files or neither.
+fn sync(args: &SyncArgs) -> Result<(), RkError> {
+    let out = Output::new(args.json);
+    let mut observed = devshell::observe(&args.target)?;
+    let key = observed.key();
+    let mut run = SyncRun {
+        stamp: observed.stamp.clone(),
+        ..SyncRun::default()
+    };
+    if args.apply {
+        if let Some(restored) = txn::recover_pending(&observed.target, &key)? {
+            run.recovered = Some(restored);
+            observed = devshell::observe(&args.target)?;
+        }
+    }
+    decide(args, &observed, &key, &mut run)?;
+    render_sync(out, args, &observed, &run)?;
+    exit_for(args.caller, &run)
+}
+
+/// The decision sequence: the wiring, the target tag, the comparison,
+/// and — under `--apply` on a behind pin — the transaction.
+fn decide(
+    args: &SyncArgs,
+    observed: &Observed,
+    key: &str,
+    run: &mut SyncRun,
+) -> Result<(), RkError> {
+    if observed.pending {
+        run.outcome = "pending-recovery";
+        run.detail =
+            Some("an interrupted run left its marker; --apply recovers it first".to_owned());
+        return Ok(());
+    }
+    if !observed.flake.is_present() {
+        run.outcome = "no-flake";
+        return Ok(());
+    }
+    let pin = match &observed.scan {
+        pin::Scan::Many(count) => {
+            run.outcome = "ambiguous-pin";
+            run.detail = Some(format!(
+                "{count} lines name the release-kit input in flake.nix"
+            ));
+            return Ok(());
+        }
+        pin::Scan::None => {
+            run.outcome = "not-wired";
+            return Ok(());
+        }
+        pin::Scan::Unpinned(line) => {
+            run.outcome = "unpinned";
+            run.detail = Some(format!("flake.nix line {line} names the input with no tag"));
+            return Ok(());
+        }
+        pin::Scan::One(pin) => pin,
+    };
+    run.from = Some(pin.tag.clone());
+    let to = match args.tag.as_deref() {
+        Some(raw) => devshell::normalize_tag(raw).ok_or_else(|| {
+            RkError::Usage(format!(
+                "--tag {raw} is not a release tag; pass v0.2.16, 0.2.16, or the release URL"
+            ))
+        })?,
+        None => match discover::latest_tag() {
+            Discovery::Tag(tag) => tag,
+            Discovery::Unreachable(detail) => {
+                run.outcome = "unreachable";
+                run.detail = Some(detail);
+                return Ok(());
+            }
+            Discovery::Unparsable(answer) => {
+                run.outcome = "unparsable";
+                run.detail = Some(format!("the release page answered no tag: {answer}"));
+                return Ok(());
+            }
+        },
+    };
+    run.to = Some(to.clone());
+    match discover::version_order(&pin.tag, &to) {
+        std::cmp::Ordering::Equal => {
+            run.outcome = "current";
+            return Ok(());
+        }
+        std::cmp::Ordering::Greater => {
+            run.outcome = "ahead";
+            run.detail =
+                Some("the pin is ahead of the target tag and is never moved backward".to_owned());
+            return Ok(());
+        }
+        std::cmp::Ordering::Less => {}
+    }
+    if !args.apply {
+        run.outcome = "would-bump";
+        return Ok(());
+    }
+    let flake_text = observed.flake_text.as_deref().unwrap_or_default();
+    let rewritten = pin::rewrite(flake_text, pin, &to);
+    let transaction = txn::open(&observed.target, key)?;
+    let mut steps = Vec::new();
+    let failure = transact(&observed.target, &rewritten, &mut steps);
+    match failure {
+        None => {
+            transaction.commit();
+            run.outcome = "bumped";
+        }
+        Some(failed) => {
+            run.restored = Some(transaction.abort());
+            run.outcome = match failed.step {
+                "rewrite-pin" | "flake-update" => "update-failed",
+                _ => "build-failed",
+            };
+            run.detail = Some(format!("{} failed: {}", failed.step, failed.detail));
+        }
+    }
+    run.steps = Some(steps);
+    Ok(())
+}
+
+/// One step's work, boxed so the three steps sit in one ordered table.
+type Attempt<'a> = Box<dyn Fn() -> Result<(), StepFailure> + 'a>;
+
+/// The ordered steps inside an open transaction; the first failure ends
+/// the sequence and is returned.
+fn transact(target: &Utf8Path, rewritten: &str, steps: &mut Vec<Step>) -> Option<StepFailure> {
+    let attempts: [(&'static str, Attempt<'_>); 3] = [
+        (
+            "rewrite-pin",
+            Box::new(|| {
+                crate::atomic::write(target.join("flake.nix").as_std_path(), rewritten.as_bytes())
+                    .map_err(|source| StepFailure {
+                        step: "rewrite-pin",
+                        detail: source.to_string(),
+                    })
+            }),
+        ),
+        ("flake-update", Box::new(|| txn::flake_update(target))),
+        (
+            "build",
+            Box::new(|| {
+                let system = txn::current_system(target)?;
+                txn::build_devshell(target, &system)
+            }),
+        ),
+    ];
+    for (name, attempt) in attempts {
+        match attempt() {
+            Ok(()) => steps.push(Step {
+                step: name,
+                status: "ok",
+                detail: None,
+            }),
+            Err(failed) => {
+                steps.push(Step {
+                    step: failed.step,
+                    status: "failed",
+                    detail: Some(failed.detail.clone()),
+                });
+                return Some(failed);
+            }
+        }
+    }
+    None
+}
+
+/// Whether an outcome is "nothing to do", which the `.envrc` caller
+/// reports in silence.
+const fn is_quiet(outcome: &str) -> bool {
+    matches!(
+        outcome.as_bytes(),
+        b"current"
+            | b"ahead"
+            | b"no-flake"
+            | b"not-wired"
+            | b"unpinned"
+            | b"skipped-ci"
+            | b"skipped-disabled"
+            | b"skipped-stamped"
+            | b"skipped-locked"
+    )
+}
+
+/// Render the human lines and emit the document.
+fn render_sync(
+    out: Output,
+    args: &SyncArgs,
+    observed: &Observed,
+    run: &SyncRun,
+) -> Result<(), RkError> {
+    use std::fmt::Write as _;
+    let quiet = args.caller == Caller::Envrc && is_quiet(run.outcome);
+    if let Some(recovered) = &run.recovered {
+        out.result_line(format!(
+            "recovered an interrupted sync: restored {}",
+            recovered.join(", ")
+        ));
+    }
+    if !quiet {
+        out.result_line(sync_line(run));
+        if let Some(steps) = &run.steps {
+            for step in steps {
+                let mut line = format!("  {} {}", step.status, step.step);
+                if let Some(detail) = &step.detail {
+                    let _ = write!(line, ": {detail}");
+                }
+                out.result_line(line);
+            }
+        }
+        if let Some(restored) = &run.restored {
+            out.result_line(format!("restored {}", restored.join(", ")));
+        }
+    }
+    let next = if quiet {
+        Vec::new()
+    } else {
+        sync_next(observed, run)
+    };
+    out.next(&next);
+    out.emit(&SyncReport {
+        schema: "rk.devshell-sync/1",
+        mode: if args.apply { "apply" } else { "preview" },
+        caller: match args.caller {
+            Caller::Envrc => "envrc",
+            Caller::Operator => "operator",
+        },
+        target: observed.target.as_str(),
+        outcome: run.outcome,
+        from: run.from.as_deref(),
+        to: run.to.as_deref(),
+        detail: run.detail.as_deref(),
+        steps: run.steps.as_deref(),
+        restored: run.restored.as_deref(),
+        recovered: run.recovered.as_deref(),
+        stamp: run.stamp.as_deref(),
+        next: &next,
+    })
+}
+
+/// The one human line for an outcome.
+fn sync_line(run: &SyncRun) -> String {
+    use std::fmt::Write as _;
+    let movement = match (&run.from, &run.to) {
+        (Some(from), Some(to)) if from != to => format!(" {from} -> {to}"),
+        (Some(from), _) => format!(" {from}"),
+        _ => String::new(),
+    };
+    let mut line = format!("{}{movement}", run.outcome);
+    if let Some(detail) = &run.detail {
+        let _ = write!(line, ": {detail}");
+    }
+    line
+}
+
+/// What plausibly follows a sync.
+fn sync_next(observed: &Observed, run: &SyncRun) -> Vec<String> {
+    let target = &observed.target;
+    let mut next = match run.outcome {
+        "bumped" => vec![
+            format!(
+                "git -C {target} diff -- flake.nix flake.lock shows the two-file change to review and commit"
+            ),
+            "the next direnv reload takes the new rk; nothing here commits".to_owned(),
+        ],
+        "would-bump" => vec![format!(
+            "rk devshell sync --caller operator --apply --target {target} moves the pin, locks it, and proves the build"
+        )],
+        "current" => vec![format!(
+            "rk devshell status --target {target} reports the wiring"
+        )],
+        "ahead" => vec![
+            "a pin past the latest release is a deliberate state; nothing moves it back".to_owned(),
+        ],
+        "pending-recovery" => vec![format!(
+            "rk devshell sync --caller operator --apply --target {target} restores both files first"
+        )],
+        "no-flake" | "not-wired" | "unpinned" => vec![format!(
+            "rk devshell add --target {target} prints the fragments; --apply seeds the files a target lacks"
+        )],
+        "ambiguous-pin" => vec![format!(
+            "leave exactly one release-kit input line in {target}/flake.nix, then rerun"
+        )],
+        "unreachable" | "unparsable" => vec![
+            "retry when the release page answers; --tag <TAG> makes no request at all".to_owned(),
+        ],
+        "update-failed" | "build-failed" => vec![
+            "both files are as they were; the failing step's last line is above".to_owned(),
+            format!(
+                "rk devshell sync --caller operator --apply --target {target} retries after the fix"
+            ),
+        ],
+        _ => Vec::new(),
+    };
+    if !observed.leftovers.is_empty() {
+        next.push(format!(
+            "rk devshell clean --target {target}: the target still carries a predecessor bump mechanism"
+        ));
+    }
+    next
+}
+
+/// The exit for a finished run: the `.envrc` caller exits 0 on every
+/// reported outcome, and the operator caller takes the matrix.
+fn exit_for(caller: Caller, run: &SyncRun) -> Result<(), RkError> {
+    if caller == Caller::Envrc {
+        return Ok(());
+    }
+    let detail = run.detail.clone().unwrap_or_default();
+    match run.outcome {
+        "ambiguous-pin" | "refused-dirty" => Err(RkError::refusal(
+            Diagnostic::new(Reason::StateDrift, detail)
+                .expected("exactly one committed pin line in flake.nix")
+                .target_state("nothing was written"),
+        )),
+        "unreachable" | "unparsable" => {
+            let mut diagnostic = Diagnostic::new(Reason::ForgeTemporary, detail)
+                .action("rerun when the release page answers, or pass --tag")
+                .target_state("nothing was written");
+            diagnostic.retry = Some(true);
+            Err(RkError::subprocess(diagnostic))
+        }
+        "update-failed" | "build-failed" => {
+            let step = run
+                .steps
+                .as_ref()
+                .and_then(|steps| steps.iter().find(|s| s.status == "failed"))
+                .map_or("transaction", |s| s.step);
+            Err(RkError::subprocess(
+                Diagnostic::new(Reason::SubprocessFailed, detail)
+                    .step(step)
+                    .target_state("both files restored"),
+            ))
+        }
+        "lock-unavailable" => Err(RkError::Io(std::io::Error::other(detail))),
+        _ => Ok(()),
+    }
 }
 
 /// Remove what the catalog can judge, name the rest.
@@ -624,7 +1035,66 @@ fn status_next(observed: &Observed) -> Vec<String> {
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use super::{AddReport, CleanReport, Host, Manual, StatusReport};
+    use super::{AddReport, CleanReport, Host, Manual, StatusReport, Step, SyncReport};
+
+    /// The complete `rk.devshell-sync/1` shape, held by snapshot.
+    #[test]
+    fn the_devshell_sync_schema_snapshot_holds() {
+        let steps = vec![
+            Step {
+                step: "rewrite-pin",
+                status: "ok",
+                detail: None,
+            },
+            Step {
+                step: "build",
+                status: "failed",
+                detail: Some("error: builder failed".to_owned()),
+            },
+        ];
+        let restored = vec!["flake.nix".to_owned(), "flake.lock".to_owned()];
+        let recovered = vec!["flake.nix".to_owned()];
+        let next = vec!["both files are as they were".to_owned()];
+        let report = SyncReport {
+            schema: "rk.devshell-sync/1",
+            mode: "apply",
+            caller: "operator",
+            target: "/srv/widget",
+            outcome: "build-failed",
+            from: Some("v0.2.15"),
+            to: Some("v0.2.16"),
+            detail: Some("build failed: error: builder failed"),
+            steps: Some(&steps),
+            restored: Some(&restored),
+            recovered: Some(&recovered),
+            stamp: Some("2026-09-04"),
+            next: &next,
+        };
+        assert_eq!(
+            serde_json::to_string(&report).expect("a report serializes"),
+            r#"{"schema":"rk.devshell-sync/1","mode":"apply","caller":"operator","target":"/srv/widget","outcome":"build-failed","from":"v0.2.15","to":"v0.2.16","detail":"build failed: error: builder failed","steps":[{"step":"rewrite-pin","status":"ok"},{"step":"build","status":"failed","detail":"error: builder failed"}],"restored":["flake.nix","flake.lock"],"recovered":["flake.nix"],"stamp":"2026-09-04","next":["both files are as they were"]}"#
+        );
+        let bare = SyncReport {
+            schema: "rk.devshell-sync/1",
+            mode: "preview",
+            caller: "envrc",
+            target: "/srv/widget",
+            outcome: "no-flake",
+            from: None,
+            to: None,
+            detail: None,
+            steps: None,
+            restored: None,
+            recovered: None,
+            stamp: None,
+            next: &[],
+        };
+        assert_eq!(
+            serde_json::to_string(&bare).expect("a report serializes"),
+            r#"{"schema":"rk.devshell-sync/1","mode":"preview","caller":"envrc","target":"/srv/widget","outcome":"no-flake","next":[]}"#,
+            "an unknown value is omitted, never null"
+        );
+    }
 
     /// The complete `rk.devshell-clean/1` shape, held by snapshot.
     #[test]

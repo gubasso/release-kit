@@ -7,13 +7,14 @@
 //! `flake.lock` is the content. This module owns the offline observation
 //! of that wiring and the per-checkout state key; `pin` owns the line
 //! grammar, `fragments` the authored texts `add` serves, `leftovers` the
-//! predecessor catalog `clean` removes, and `discover` the one network
-//! call.
+//! predecessor catalog `clean` removes, `discover` the one network call,
+//! and `txn` the fenced two-file transaction.
 
 pub mod discover;
 pub mod fragments;
 pub mod leftovers;
 pub mod pin;
+pub mod txn;
 
 use std::path::PathBuf;
 
