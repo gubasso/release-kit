@@ -263,11 +263,21 @@ fn scrub_nix(text: &str) -> String {
         } else if let Some(body) = rest.strip_prefix("\'\'") {
             body.find("\'\'").map_or(rest.len(), |at| at + 4)
         } else if rest.starts_with(QUOTE) {
-            let mut j = 1;
-            while j < rest.len() && !rest[j..].starts_with(QUOTE) {
-                j += if rest[j..].starts_with('\\') { 2 } else { 1 };
+            // Walk by character, never by byte: a multibyte character
+            // inside the string must not land a slice off a boundary.
+            let mut escaped = false;
+            let mut close = None;
+            for (at, c) in rest.char_indices().skip(1) {
+                if escaped {
+                    escaped = false;
+                } else if c == '\\' {
+                    escaped = true;
+                } else if c == QUOTE {
+                    close = Some(at + c.len_utf8());
+                    break;
+                }
             }
-            (j + 1).min(rest.len())
+            close.unwrap_or(rest.len())
         } else {
             0
         };
@@ -404,6 +414,9 @@ mod tests {
             "someTool =\n  pkgs.flock;\n",
             "packages = with pkgs; [\n];\nformatter = pkgs.bats;\n",
             "description = \"[\";\nformatter = pkgs.bats;\n",
+            "description = \"café [\";\nformatter = pkgs.bats;\n",
+            "description = \"a \\\\é[\";\nformatter = pkgs.bats;\n",
+            "description = \"日本語 [\"; # ] café\nformatter = pkgs.flock;\n",
             "/* [ */\nformatter = pkgs.flock;\n",
             "x = \'\'[\'\';\nformatter = pkgs.bats;\n",
         ] {

@@ -218,6 +218,20 @@ fn finish(backup: &Path, marker: &Path) -> Result<(), FinishFailure> {
 /// The bytes a finished marker holds; a recovery reads it as done.
 const FINISHED_MARKER: &[u8] = br#"{"committed":true}"#;
 
+/// Whether a marker names a run still to recover: it exists and is not
+/// a finished one. A finished marker that could not be removed is
+/// residue, never a pending run, so it blocks nothing.
+#[must_use]
+pub fn marker_is_pending(marker: &Path) -> bool {
+    let Ok(bytes) = fs::read(marker) else {
+        return false;
+    };
+    serde_json::from_slice::<serde_json::Value>(&bytes)
+        .ok()
+        .and_then(|record| record["committed"].as_bool())
+        != Some(true)
+}
+
 /// A restore that could not put a file back; the backups stay.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RestoreFailure {
@@ -282,8 +296,9 @@ pub enum Recovery {
     /// Both files are back, and the marker could not be finished: it is
     /// still active, and the next recovery would overwrite later edits.
     Unfinished(FinishFailure),
-    /// A finished transaction's marker was still there and is now gone;
-    /// nothing was restored.
+    /// A finished transaction's marker was still there; nothing was
+    /// restored, and the marker is gone or stays as residue that never
+    /// reads as pending.
     Finished,
 }
 
@@ -317,7 +332,8 @@ fn recover_at(
         serde_json::from_slice(&fs::read(marker)?).unwrap_or(serde_json::Value::Null);
     if record["committed"].as_bool() == Some(true) {
         // A finished transaction whose marker could not be removed at
-        // the time: finish it now, and recover nothing.
+        // the time: finish it now, and recover nothing. Where it still
+        // cannot go, it stays as residue that never reads as pending.
         let _ = finish(backup, marker);
         return Ok(Some(Recovery::Finished));
     }
@@ -635,6 +651,25 @@ mod tests {
             "old\n"
         );
         assert!(!marker.exists());
+    }
+
+    /// A finished marker is residue, never a pending run, whether or not
+    /// it can be removed.
+    #[test]
+    fn a_finished_marker_is_not_pending() {
+        let (_state, state) = scratch();
+        let marker = state.join("pending.json").into_std_path_buf();
+        std::fs::write(&marker, super::FINISHED_MARKER).expect("writes");
+        assert!(!super::marker_is_pending(&marker));
+        std::fs::write(&marker, r#"{"pid":1}"#).expect("writes");
+        assert!(super::marker_is_pending(&marker));
+        std::fs::write(&marker, "").expect("writes");
+        assert!(
+            super::marker_is_pending(&marker),
+            "a truncated marker is pending"
+        );
+        std::fs::remove_file(&marker).expect("removes");
+        assert!(!super::marker_is_pending(&marker));
     }
 
     /// A finished marker left behind is cleared and reported as such.

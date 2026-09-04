@@ -152,7 +152,7 @@ pub fn observe(target: &Utf8Path) -> Result<Observed, RkError> {
     let envrc = Presence::of(&envrc_path);
     let envrc_sync = envrc.is_present() && has_sync_line(&std::fs::read_to_string(&envrc_path)?);
     let key = state_key(&target);
-    let pending = marker_path(&key).is_some_and(|marker| marker.exists());
+    let pending = marker_path(&key).is_some_and(|marker| txn::marker_is_pending(&marker));
     let stamp = read_stamp(&key);
     let leftovers = leftovers::scan(&target)?;
     Ok(Observed {
