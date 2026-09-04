@@ -1308,7 +1308,13 @@ fn every_git_and_sh_launch_resolves_through_the_shared_resolver() {
             }
             let text = std::fs::read_to_string(&path).expect("a source file reads");
             for (index, line) in text.lines().enumerate() {
-                if line.contains(r#"Command::new("git")"#) || line.contains(r#"Command::new("sh")"#)
+                // Both launcher forms: a direct spawn, and an Exec built
+                // with a literal program that src/setup/process.rs later
+                // launches.
+                if line.contains(r#"Command::new("git")"#)
+                    || line.contains(r#"Command::new("sh")"#)
+                    || line.contains(r#"program: "git""#)
+                    || line.contains(r#"program: "sh""#)
                 {
                     offenders.push(format!("{}:{}", path.display(), index + 1));
                 }
@@ -9569,13 +9575,18 @@ fn every_third_party_destination_names_its_source() {
     }
 }
 
-/// A single-crate manifest the seeded package expression supports.
+/// A single-crate shape the seeded package expression supports: the
+/// `[package]` table, the implicit binary, and the committed lock the
+/// seed builds from.
 fn seed_crate(target: &Path) {
     std::fs::write(
         target.join("Cargo.toml"),
         "[package]\nname = \"widget\"\nversion = \"0.1.0\"\n",
     )
     .expect("the crate manifest writes");
+    std::fs::create_dir_all(target.join("src")).expect("the src dir exists");
+    std::fs::write(target.join("src/main.rs"), "fn main() {}\n").expect("the main writes");
+    std::fs::write(target.join("Cargo.lock"), "version = 4\n").expect("the lock writes");
 }
 
 /// Land the rust payload with the Nix capability opted in.
@@ -9987,4 +9998,89 @@ fn the_landed_nix_capability_builds_end_to_end() {
         build.success(),
         "the landed flake must build the seeded package"
     );
+}
+
+/// The shape gate holds every structural prerequisite the seed relies
+/// on: a lib-only crate and a crate without a committed lock are each
+/// withheld with the missing piece named, because the seed would build
+/// nothing runnable or throw on first evaluation.
+#[test]
+fn a_crate_the_seed_cannot_build_withholds_the_capability_by_name() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    std::fs::write(
+        target.path().join("Cargo.toml"),
+        "[package]\nname = \"widget\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("the crate manifest writes");
+    std::fs::write(target.path().join("Cargo.lock"), "version = 4\n").expect("the lock writes");
+    std::fs::create_dir_all(target.path().join("src")).expect("the src dir exists");
+    std::fs::write(target.path().join("src/lib.rs"), "\n").expect("the lib writes");
+    land_rust_nix(target.path())
+        .success()
+        .stdout(predicate::str::contains("declares no binary"));
+    assert!(!target.path().join("nix/package.nix").exists());
+
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    std::fs::write(
+        target.path().join("Cargo.toml"),
+        "[package]\nname = \"widget\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("the crate manifest writes");
+    std::fs::create_dir_all(target.path().join("src")).expect("the src dir exists");
+    std::fs::write(target.path().join("src/main.rs"), "fn main() {}\n").expect("the main writes");
+    land_rust_nix(target.path())
+        .success()
+        .stdout(predicate::str::contains("no Cargo.lock"));
+    assert!(!target.path().join("nix/package.nix").exists());
+}
+
+/// A record whose parameters and file list disagree is drift the check
+/// judges: flipping the recorded nix flag without landing a file, and a
+/// once-withheld capability whose target grew into the supported shape,
+/// both surface instead of reading as clean.
+#[test]
+fn a_record_whose_parameters_and_files_disagree_is_drift() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    seed_crate(target.path());
+    land_rust(target.path()).success();
+    let mut manifest = read_manifest(target.path());
+    manifest["parameters"]["nix"] = serde_json::json!(true);
+    write_manifest(target.path(), &manifest);
+    let out = rk()
+        .args(["status", "--check", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert!(
+        report["violations"]
+            .as_array()
+            .expect("a violation list")
+            .iter()
+            .any(|violation| {
+                violation
+                    .as_str()
+                    .is_some_and(|line| line.contains("record drift") && line.contains("flake.nix"))
+            }),
+        "{report}"
+    );
+
+    // The other direction: an opted-in workspace grew into a supported
+    // crate, so the recorded withhold no longer reproduces.
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    std::fs::write(
+        target.path().join("Cargo.toml"),
+        "[workspace]\nmembers = [\"widget\"]\n",
+    )
+    .expect("the workspace manifest writes");
+    land_rust_nix(target.path()).success();
+    seed_crate(target.path());
+    rk().args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("DRIFT record"));
 }

@@ -214,7 +214,7 @@ mod tests {
 
     fn sh(script: &str, stdin: Option<Vec<u8>>) -> Exec {
         Exec {
-            program: "sh".into(),
+            program: crate::probes::sh_bin(),
             args: vec!["-c".into(), script.into()],
             env: vec![(
                 "PATH".into(),

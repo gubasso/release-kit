@@ -564,11 +564,14 @@ pub fn projection(
 /// Why the whole Nix capability stays out of a landing, or `None` where
 /// the target's crate shape supports the seed.
 ///
-/// The seeded package expression reads the target's `Cargo.toml` through
-/// `importTOML` and supports one crate with a `[package]` table; landing
-/// it into a workspace root — or beside no `Cargo.toml` at all — seeds a
-/// file that throws on its first evaluation, so the landing reports the
-/// smaller product instead.
+/// The gate holds every structural prerequisite the seed relies on, not
+/// only evaluation: the package expression reads `Cargo.toml` through
+/// `importTOML` and throws without `../Cargo.lock`, and the seed flake's
+/// smoke check runs the crate's binary, which only an implicit
+/// `src/main.rs` or an explicit `[[bin]]` entry produces. A shape
+/// missing any of these would land files that fail on their first
+/// evaluation or first check, so the landing reports the smaller product
+/// with the missing piece named instead.
 #[must_use]
 pub fn nix_unsupported_shape(target: &Utf8Path) -> Option<String> {
     let Ok(text) = std::fs::read_to_string(target.join("Cargo.toml")) else {
@@ -581,13 +584,22 @@ pub fn nix_unsupported_shape(target: &Utf8Path) -> Option<String> {
             "the target's Cargo.toml does not parse, and the seeded package expression reads it; no Nix file lands".to_owned(),
         );
     };
-    if table.contains_key("package") {
-        None
-    } else {
-        Some(
+    if !table.contains_key("package") {
+        return Some(
             "the target's Cargo.toml has no [package] table; the seed supports a single crate, so no Nix file lands".to_owned(),
-        )
+        );
     }
+    if !target.join("Cargo.lock").is_file() {
+        return Some(
+            "the target has no Cargo.lock, which the seeded package expression builds from; commit one, then opt in".to_owned(),
+        );
+    }
+    if !table.contains_key("bin") && !target.join("src/main.rs").is_file() {
+        return Some(
+            "the target declares no binary — no src/main.rs and no [[bin]] entry — and the seed flake's smoke check runs one; no Nix file lands".to_owned(),
+        );
+    }
+    None
 }
 
 /// Why the flake half of the Nix capability stays out of this landing, or
@@ -1134,6 +1146,9 @@ mod tests {
             "[package]\nname = \"widget\"\nversion = \"0.1.0\"\n",
         )
         .expect("the crate manifest writes");
+        std::fs::write(target.join("Cargo.lock"), "version = 4\n").expect("the lock writes");
+        std::fs::create_dir_all(target.join("src")).expect("the src dir exists");
+        std::fs::write(target.join("src/main.rs"), "fn main() {}\n").expect("the main writes");
         std::fs::write(target.join("flake.nix"), "{ }\n").expect("the flake writes");
         let mut all = entries();
         let withheld = withhold_nix(target, true, None, &mut all).expect("the judgment runs");

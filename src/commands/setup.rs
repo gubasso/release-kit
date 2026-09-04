@@ -1169,7 +1169,7 @@ fn run_script_with(
     let mut env = engine.ctx.child_env(step.name);
     env.extend(extra_env);
     let exec = Exec {
-        program: "sh".into(),
+        program: crate::probes::sh_bin(),
         args: vec![path.clone().into_os_string()],
         env,
         cwd: engine.ctx.target.as_std_path().to_path_buf(),
