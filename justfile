@@ -22,7 +22,8 @@ test:
 
 # The scratch round trip, end to end with the real binary: land, tune the
 # seeded file, upgrade, and assert the tune survived with the record moved
-# — then assert the published crate carries every payload root.
+# — the same again for the nix opt-in — then assert the published crate
+# carries every payload root and the landed seed actually builds.
 build:
     set -eu; d=$(mktemp -d); trap 'rm -rf "$d"' EXIT; mkdir -p "$d/.git"; \
     cargo run -q -- init --tech rust --forge github --repo acme/widget --scopes api,cli --target "$d" --apply >/dev/null; \
@@ -31,7 +32,14 @@ build:
     cargo run -q -- upgrade --target "$d" --apply >/dev/null; \
     grep -q 'semver_check = true' "$d/release-plz.toml"; \
     cargo run -q -- status --check --target "$d" >/dev/null
-    cargo nextest run --run-ignored ignored-only -E 'test(the_published_crate_carries_every_root)'
+    set -eu; n=$(mktemp -d); trap 'rm -rf "$n"' EXIT; mkdir -p "$n/.git"; \
+    printf '[package]\nname = "widget"\nversion = "0.1.0"\n' > "$n/Cargo.toml"; \
+    cargo run -q -- init --tech rust --forge github --repo acme/widget --scopes api,cli --nix --target "$n" --apply >/dev/null; \
+    test -f "$n/nix/package.nix"; test -f "$n/flake.nix"; test -f "$n/flake.lock"; test -f "$n/.github/workflows/nix.yml"; \
+    printf '# tuned by the target\n' >> "$n/nix/package.nix"; \
+    cargo run -q -- upgrade --target "$n" --apply >/dev/null; \
+    grep -q '# tuned by the target' "$n/nix/package.nix"
+    cargo nextest run --run-ignored ignored-only -E 'test(the_published_crate_carries_every_root) or test(the_landed_nix_capability_builds_end_to_end)'
 
 check: lint test build
 

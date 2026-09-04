@@ -179,3 +179,25 @@ used_by = ["rust", "python", "bash"]
 purpose = "refuses a commit made on the trunk through the landed no-commit-to-branch hook"
 check = "https://api.github.com/repos/pre-commit/pre-commit-hooks/releases/latest"
 checked = 2026-09-02
+
+[[tool]]
+name = "nix-installer-action"
+version = "19"
+action = "DeterminateSystems/nix-installer-action@v19"
+commit = "90bb610b90bf290cad97484ba341453bd1cbefea"
+ref_class = "moving-major-tag"
+used_by = ["rust"]
+purpose = "installs Nix in the landed nix workflow"
+check = "https://api.github.com/repos/DeterminateSystems/nix-installer-action/releases/latest"
+checked = 2026-09-04
+
+[[tool]]
+name = "magic-nix-cache-action"
+version = "13"
+action = "DeterminateSystems/magic-nix-cache-action@v13"
+commit = "565684385bcd71bad329742eefe8d12f2e765b39"
+ref_class = "moving-major-tag"
+used_by = ["rust"]
+purpose = "caches store paths through the GitHub Actions cache in the landed nix workflow"
+check = "https://api.github.com/repos/DeterminateSystems/magic-nix-cache-action/releases/latest"
+checked = 2026-09-04

@@ -1113,7 +1113,15 @@ mod tests {
         let mut all = entries();
         let withheld = withhold_nix(target, true, None, &mut all).expect("the judgment runs");
         let paths: Vec<&str> = withheld.iter().map(|w| w.path.as_str()).collect();
-        assert_eq!(paths, ["flake.lock", "flake.nix", "nix/package.nix"]);
+        assert_eq!(
+            paths,
+            [
+                ".github/workflows/nix.yml",
+                "flake.lock",
+                "flake.nix",
+                "nix/package.nix"
+            ]
+        );
         assert!(
             all.iter()
                 .all(|entry| !NIX_DESTINATIONS.contains(&entry.destination.as_str()))
@@ -1130,7 +1138,10 @@ mod tests {
         let mut all = entries();
         let withheld = withhold_nix(target, true, None, &mut all).expect("the judgment runs");
         let paths: Vec<&str> = withheld.iter().map(|w| w.path.as_str()).collect();
-        assert_eq!(paths, ["flake.lock", "flake.nix"]);
+        assert_eq!(
+            paths,
+            [".github/workflows/nix.yml", "flake.lock", "flake.nix"]
+        );
         assert!(
             all.iter()
                 .any(|entry| entry.destination == "nix/package.nix")

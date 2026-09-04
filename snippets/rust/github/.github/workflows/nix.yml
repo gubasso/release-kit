@@ -1,0 +1,27 @@
+# The Nix-side proof of the landed capability. The named build is not
+# redundant with the flake check: nix flake check builds only the checks
+# output, so without it a repository whose flake release-kit did not
+# author could go green having never compiled nix/package.nix. Actions
+# are pinned by commit; versions.toml carries each pin's discovery ref
+# and freshness check.
+name: nix
+
+permissions: {}
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+jobs:
+  flake:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: DeterminateSystems/nix-installer-action@90bb610b90bf290cad97484ba341453bd1cbefea # v19
+      - uses: DeterminateSystems/magic-nix-cache-action@565684385bcd71bad329742eefe8d12f2e765b39 # v13
+        with:
+          use-flakehub: false
+          use-gha-cache: true
+      - run: nix build .#default
+      - run: nix flake check
