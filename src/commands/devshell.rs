@@ -483,7 +483,19 @@ fn gate_and_decide(
         }
     }
     if args.apply {
-        match txn::recover_pending(&observed.target, key)? {
+        // A marker that cannot be read is a reported outcome, never an
+        // error: the unattended caller must still exit 0.
+        let recovery = match txn::recover_pending(&observed.target, key) {
+            Ok(recovery) => recovery,
+            Err(source) => {
+                run.outcome = "recovery-failed";
+                run.detail = Some(format!(
+                    "the transaction marker under the state root cannot be read: {source}; remove or repair it by hand"
+                ));
+                return Ok(());
+            }
+        };
+        match recovery {
             Some(Recovery::Restored(restored)) => {
                 run.recovered = Some(restored);
                 *observed = devshell::observe(&args.target)?;

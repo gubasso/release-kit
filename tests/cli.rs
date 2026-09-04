@@ -10363,6 +10363,20 @@ impl DevshellFixture {
         std::fs::write(self.mock.path().join(name), value).expect("the state seeds");
     }
 
+    /// A regular file where the state directory must be: nothing under
+    /// it can be created.
+    fn block_state_root(&self) {
+        std::fs::create_dir_all(self.home.path().join("release-kit")).expect("creates");
+        std::fs::write(self.state_dir(), "blocker\n").expect("writes");
+    }
+
+    /// A directory where the transaction marker is: it exists and cannot
+    /// be read.
+    fn block_marker(&self) {
+        std::fs::create_dir_all(self.state_dir().join(self.key()).join("pending.json"))
+            .expect("the blocking marker creates");
+    }
+
     fn commit_all(&self) {
         git_in(self.target(), &["add", "-A"]);
         git_in(self.target(), &["commit", "-qm", "chore: seed"]);
@@ -11884,8 +11898,21 @@ fn every_envrc_path_exits_zero() {
             Box::new(|f| {
                 f.write_flake("v0.2.15");
                 f.commit_all();
-                std::fs::create_dir_all(f.home.path().join("release-kit")).expect("creates");
-                std::fs::write(f.state_dir(), "blocker\n").expect("writes");
+                f.block_state_root();
+            }),
+        ),
+        (
+            "recovery-failed",
+            Box::new(|f| {
+                f.write_flake("v0.2.15");
+                f.commit_all();
+                // A directory where the marker is: it exists and cannot be read.
+                f.block_marker();
+                std::fs::write(
+                    f.state_dir().join(format!("{}.stamp", f.key())),
+                    format!("{}\n", today_utc()),
+                )
+                .expect("the stamp plants");
             }),
         ),
     ];
@@ -11900,6 +11927,7 @@ fn every_envrc_path_exits_zero() {
 
 /// The same outcomes under `--caller operator` take the exit-code matrix.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn an_operator_run_fails_loudly_where_the_envrc_run_reports() {
     let cases: Vec<(&str, i32, &str, Arrange)> = vec![
         (
@@ -11962,8 +11990,17 @@ fn an_operator_run_fails_loudly_where_the_envrc_run_reports() {
             Box::new(|f| {
                 f.write_flake("v0.2.15");
                 f.commit_all();
-                std::fs::create_dir_all(f.home.path().join("release-kit")).expect("creates");
-                std::fs::write(f.state_dir(), "blocker\n").expect("writes");
+                f.block_state_root();
+            }),
+        ),
+        (
+            "recovery-failed",
+            74,
+            "io",
+            Box::new(|f| {
+                f.write_flake("v0.2.15");
+                f.commit_all();
+                f.block_marker();
             }),
         ),
     ];
