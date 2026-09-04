@@ -183,6 +183,15 @@ fn recover_at(
 /// answer decides; where it cannot, a marker past the grace period is
 /// treated as abandoned.
 pub(crate) fn owner_gone(pid: Option<u64>, marker: &Path) -> bool {
+    owner_gone_after(pid, marker, PENDING_GRACE)
+}
+
+/// [`owner_gone`] with the grace period named, for the lock's shorter one.
+pub(crate) fn owner_gone_after(
+    pid: Option<u64>,
+    marker: &Path,
+    grace: std::time::Duration,
+) -> bool {
     if let Some(pid) = pid {
         if Path::new("/proc/self").is_dir() {
             match Path::new(&format!("/proc/{pid}")).try_exists() {
@@ -196,7 +205,7 @@ pub(crate) fn owner_gone(pid: Option<u64>, marker: &Path) -> bool {
         .and_then(|meta| meta.modified())
         .ok()
         .and_then(|modified| modified.elapsed().ok())
-        .is_some_and(|age| age > PENDING_GRACE)
+        .is_some_and(|age| age > grace)
 }
 
 /// `nix flake update release-kit`, refreshing the one node.

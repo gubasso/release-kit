@@ -11580,3 +11580,511 @@ fn an_interrupted_transaction_is_recovered_on_the_next_run() {
     );
     assert!(fixture.read("flake.lock").contains("rev-of-v0.2.16"));
 }
+
+/// One arrangement of a devshell fixture, for the outcome tables.
+type Arrange = Box<dyn Fn(&DevshellFixture)>;
+
+/// Today as the binary stamps it: the first ten characters of UTC now.
+fn today_utc() -> String {
+    release_kit::applog::now_utc()[..10].to_owned()
+}
+
+#[test]
+fn devshell_sync_refuses_uncommitted_edits_to_the_two_files() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    std::fs::write(
+        fixture.target().join("flake.lock"),
+        "{\"nodes\":{},\"version\":7}\n",
+    )
+    .expect("the lock edits");
+    let (code, report) =
+        fixture.sync_json(&["devshell", "sync", "--apply", "--caller", "operator"]);
+    assert_eq!(code, Some(73), "{report}");
+    assert_eq!(report["outcome"], "refused-dirty");
+    assert_eq!(report["from"], "v0.2.15");
+    assert!(
+        fixture.curl_log().is_empty(),
+        "a dirty tree fetches nothing"
+    );
+    assert!(fixture.nix_log().is_empty());
+    assert!(fixture.read("flake.nix").contains("v0.2.15"));
+    // A preview reports the same refusal, so the operator learns it before an apply.
+    let (code, report) = fixture.sync_json(&["devshell", "sync", "--caller", "operator"]);
+    assert_eq!(code, Some(73));
+    assert_eq!(report["outcome"], "refused-dirty");
+    // An untracked file, as a fresh seed leaves, counts too.
+    let fresh = DevshellFixture::new();
+    fresh.json(&["devshell", "add", "--apply", "--tag", "v0.2.15"]);
+    let (_, report) = fresh.sync_json(&["devshell", "sync", "--apply"]);
+    assert_eq!(report["outcome"], "refused-dirty");
+}
+
+#[test]
+fn devshell_sync_judges_the_target_repo_from_inside_a_git_hook() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    std::fs::write(fixture.target().join("flake.lock"), "{}\n").expect("the lock edits");
+    // A clean decoy repository whose hook variables a running hook would export.
+    let decoy = branch_fixture();
+    let out = fixture
+        .rk(&[
+            "devshell", "sync", "--apply", "--caller", "operator", "--json",
+        ])
+        .env("GIT_DIR", decoy.path().join(".git"))
+        .env("GIT_WORK_TREE", decoy.path())
+        .env("GIT_INDEX_FILE", decoy.path().join(".git/index"))
+        .output()
+        .expect("rk runs");
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one JSON object");
+    assert_eq!(
+        report["outcome"], "refused-dirty",
+        "the target's own dirt is judged, not the decoy's cleanliness: {report}"
+    );
+}
+
+#[test]
+fn a_second_sync_skips_quietly_while_the_first_holds_the_lock() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    std::fs::create_dir_all(fixture.state_dir()).expect("the state dir creates");
+    std::fs::write(
+        fixture.state_dir().join(format!("{}.lock", fixture.key())),
+        format!(
+            "pid={}\nstarted={}\n",
+            std::process::id(),
+            release_kit::applog::now_utc()
+        ),
+    )
+    .expect("the lock plants");
+    fixture
+        .rk(&["devshell", "sync", "--apply"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::is_empty());
+    assert!(fixture.curl_log().is_empty(), "contention fetches nothing");
+    assert!(fixture.nix_log().is_empty());
+    let (code, report) =
+        fixture.sync_json(&["devshell", "sync", "--apply", "--caller", "operator"]);
+    assert_eq!(code, Some(0), "contention is normal, even for the operator");
+    assert_eq!(report["outcome"], "skipped-locked");
+    assert!(
+        fixture
+            .state_dir()
+            .join(format!("{}.lock", fixture.key()))
+            .exists(),
+        "the live lock is left alone"
+    );
+}
+
+#[test]
+fn a_lock_that_cannot_be_taken_at_all_is_reported_loudly() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    // A regular file where the state directory must be: nothing can be created under it.
+    std::fs::create_dir_all(fixture.home.path().join("release-kit")).expect("creates");
+    std::fs::write(fixture.state_dir(), "not a directory\n").expect("the blocker writes");
+    let out = fixture
+        .rk(&["devshell", "sync", "--apply"])
+        .output()
+        .expect("rk runs");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "the .envrc caller still exits 0"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("warning: rk devshell sync: the lock cannot be taken"),
+        "unavailability is loud on stderr: {stderr}"
+    );
+    let (code, report) =
+        fixture.sync_json(&["devshell", "sync", "--apply", "--caller", "operator"]);
+    assert_eq!(code, Some(74), "{report}");
+    assert_eq!(report["outcome"], "lock-unavailable");
+    assert!(fixture.curl_log().is_empty());
+}
+
+#[test]
+fn a_stale_lock_whose_owner_is_gone_is_taken() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    std::fs::create_dir_all(fixture.state_dir()).expect("the state dir creates");
+    let lock = fixture.state_dir().join(format!("{}.lock", fixture.key()));
+    std::fs::write(&lock, "pid=4294967295\nstarted=2020-01-01T00:00:00Z\n").expect("plants");
+    let (code, report) =
+        fixture.sync_json(&["devshell", "sync", "--apply", "--caller", "operator"]);
+    assert_eq!(code, Some(0), "{report}");
+    assert_eq!(report["outcome"], "bumped", "the stale lock was taken over");
+    assert!(!lock.exists(), "the lock is released after the run");
+}
+
+#[test]
+fn the_daily_stamp_is_written_before_a_failing_attempt() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    fixture.seed("nix_fail_build", "1");
+    let stamp = fixture.state_dir().join(format!("{}.stamp", fixture.key()));
+    assert!(!stamp.exists());
+    fixture
+        .rk(&["devshell", "sync", "--apply"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("build-failed"));
+    assert_eq!(
+        std::fs::read_to_string(&stamp)
+            .expect("the stamp exists")
+            .trim(),
+        today_utc(),
+        "a failing attempt still costs one fetch and one build a day"
+    );
+    // The next entry skips without a fetch.
+    fixture.seed("curl-log", "");
+    fixture
+        .rk(&["devshell", "sync", "--apply"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+    assert!(fixture.curl_log().is_empty());
+}
+
+#[test]
+fn a_stamped_day_skips_the_next_directory_entry() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    std::fs::create_dir_all(fixture.state_dir()).expect("the state dir creates");
+    std::fs::write(
+        fixture.state_dir().join(format!("{}.stamp", fixture.key())),
+        format!("{}\n", today_utc()),
+    )
+    .expect("the stamp plants");
+    fixture
+        .rk(&["devshell", "sync", "--apply"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+    assert!(
+        fixture.curl_log().is_empty(),
+        "a stamped day fetches nothing"
+    );
+    assert!(fixture.nix_log().is_empty());
+    let (_, report) = fixture.sync_json(&["devshell", "sync", "--apply"]);
+    assert_eq!(report["outcome"], "skipped-stamped");
+    assert_eq!(report["stamp"], today_utc());
+    // An older stamp lets the attempt run and is rewritten to today.
+    std::fs::write(
+        fixture.state_dir().join(format!("{}.stamp", fixture.key())),
+        "2020-01-01\n",
+    )
+    .expect("the stamp plants");
+    let (_, report) = fixture.sync_json(&["devshell", "sync", "--apply"]);
+    assert_eq!(report["outcome"], "bumped");
+    assert_eq!(report["stamp"], today_utc());
+}
+
+#[test]
+fn an_operator_run_ignores_the_daily_stamp() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    std::fs::create_dir_all(fixture.state_dir()).expect("the state dir creates");
+    let stamp = fixture.state_dir().join(format!("{}.stamp", fixture.key()));
+    std::fs::write(&stamp, format!("{}\n", today_utc())).expect("the stamp plants");
+    let (code, report) =
+        fixture.sync_json(&["devshell", "sync", "--apply", "--caller", "operator"]);
+    assert_eq!(code, Some(0), "{report}");
+    assert_eq!(report["outcome"], "bumped");
+    assert_eq!(
+        report["stamp"],
+        today_utc(),
+        "the stamp is reported, not consulted"
+    );
+    assert!(!fixture.curl_log().is_empty(), "the operator run fetched");
+}
+
+/// Every reported failure outcome from the `.envrc` caller exits 0: the
+/// outcome lives in the report, never in the exit code.
+#[test]
+fn every_envrc_path_exits_zero() {
+    let cases: Vec<(&str, Arrange)> = vec![
+        ("no-flake", Box::new(|_| {})),
+        (
+            "not-wired",
+            Box::new(|f| {
+                std::fs::write(f.target().join("flake.nix"), "{ }\n").expect("writes");
+                f.commit_all();
+            }),
+        ),
+        (
+            "ambiguous-pin",
+            Box::new(|f| {
+                f.write_flake("v0.2.15");
+                let flake = f.read("flake.nix");
+                std::fs::write(
+                    f.target().join("flake.nix"),
+                    format!("{flake}  url = \"github:gubasso/release-kit/v0.2.14\";\n"),
+                )
+                .expect("writes");
+                f.commit_all();
+            }),
+        ),
+        (
+            "refused-dirty",
+            Box::new(|f| {
+                f.write_flake("v0.2.15");
+            }),
+        ),
+        (
+            "unreachable",
+            Box::new(|f| {
+                f.write_flake("v0.2.15");
+                f.commit_all();
+                f.seed("curl_fail", "1");
+            }),
+        ),
+        (
+            "update-failed",
+            Box::new(|f| {
+                f.write_flake("v0.2.15");
+                f.commit_all();
+                f.seed("nix_fail_update", "1");
+            }),
+        ),
+        (
+            "build-failed",
+            Box::new(|f| {
+                f.write_flake("v0.2.15");
+                f.commit_all();
+                f.seed("nix_fail_build", "1");
+            }),
+        ),
+        (
+            "lock-unavailable",
+            Box::new(|f| {
+                f.write_flake("v0.2.15");
+                f.commit_all();
+                std::fs::create_dir_all(f.home.path().join("release-kit")).expect("creates");
+                std::fs::write(f.state_dir(), "blocker\n").expect("writes");
+            }),
+        ),
+    ];
+    for (expected, arrange) in cases {
+        let fixture = DevshellFixture::new();
+        arrange(&fixture);
+        let (code, report) = fixture.sync_json(&["devshell", "sync", "--apply"]);
+        assert_eq!(report["outcome"], expected, "{report}");
+        assert_eq!(code, Some(0), "{expected} must exit 0 from .envrc");
+    }
+}
+
+/// The same outcomes under `--caller operator` take the exit-code matrix.
+#[test]
+fn an_operator_run_fails_loudly_where_the_envrc_run_reports() {
+    let cases: Vec<(&str, i32, &str, Arrange)> = vec![
+        (
+            "ambiguous-pin",
+            73,
+            "state-drift",
+            Box::new(|f| {
+                f.write_flake("v0.2.15");
+                let flake = f.read("flake.nix");
+                std::fs::write(
+                    f.target().join("flake.nix"),
+                    format!("{flake}  url = \"github:gubasso/release-kit/v0.2.14\";\n"),
+                )
+                .expect("writes");
+                f.commit_all();
+            }),
+        ),
+        (
+            "refused-dirty",
+            73,
+            "state-drift",
+            Box::new(|f| {
+                f.write_flake("v0.2.15");
+            }),
+        ),
+        (
+            "unreachable",
+            70,
+            "forge-temporary",
+            Box::new(|f| {
+                f.write_flake("v0.2.15");
+                f.commit_all();
+                f.seed("curl_fail", "1");
+            }),
+        ),
+        (
+            "update-failed",
+            70,
+            "subprocess-failed",
+            Box::new(|f| {
+                f.write_flake("v0.2.15");
+                f.commit_all();
+                f.seed("nix_fail_update", "1");
+            }),
+        ),
+        (
+            "build-failed",
+            70,
+            "subprocess-failed",
+            Box::new(|f| {
+                f.write_flake("v0.2.15");
+                f.commit_all();
+                f.seed("nix_fail_build", "1");
+            }),
+        ),
+        (
+            "lock-unavailable",
+            74,
+            "io",
+            Box::new(|f| {
+                f.write_flake("v0.2.15");
+                f.commit_all();
+                std::fs::create_dir_all(f.home.path().join("release-kit")).expect("creates");
+                std::fs::write(f.state_dir(), "blocker\n").expect("writes");
+            }),
+        ),
+    ];
+    for (expected, code, reason, arrange) in cases {
+        let fixture = DevshellFixture::new();
+        arrange(&fixture);
+        let out = fixture
+            .rk(&[
+                "devshell", "sync", "--apply", "--caller", "operator", "--json",
+            ])
+            .output()
+            .expect("rk runs");
+        let report: serde_json::Value =
+            serde_json::from_slice(&out.stdout).expect("one JSON object");
+        assert_eq!(report["outcome"], expected, "{report}");
+        assert_eq!(out.status.code(), Some(code), "{expected}");
+        // The diagnostic is the last stderr line; a warning may precede it.
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let last = stderr.lines().last().unwrap_or_default();
+        let diagnostic: serde_json::Value = serde_json::from_str(last)
+            .unwrap_or_else(|_| panic!("{expected}: a diagnostic on stderr: {stderr}"));
+        assert_eq!(diagnostic["reason"], reason, "{expected}");
+        if expected == "unreachable" {
+            assert_eq!(diagnostic["retry"], true);
+        }
+        if expected == "update-failed" || expected == "build-failed" {
+            assert_eq!(diagnostic["target_state"], "both files restored");
+        }
+    }
+}
+
+#[test]
+fn ci_never_bumps() {
+    for var in [
+        "CI",
+        "GITHUB_ACTIONS",
+        "GITLAB_CI",
+        "BUILDKITE",
+        "CIRCLECI",
+        "TF_BUILD",
+    ] {
+        let fixture = DevshellFixture::new();
+        fixture.write_flake("v0.2.15");
+        fixture.commit_all();
+        fixture
+            .rk(&["devshell", "sync", "--apply"])
+            .env(var, "true")
+            .assert()
+            .success()
+            .stdout(predicate::str::is_empty());
+        assert!(fixture.curl_log().is_empty(), "{var}: CI fetches nothing");
+        assert!(fixture.nix_log().is_empty(), "{var}: CI spawns nothing");
+        let out = fixture
+            .rk(&[
+                "devshell", "sync", "--apply", "--caller", "operator", "--json",
+            ])
+            .env(var, "1")
+            .output()
+            .expect("rk runs");
+        let report: serde_json::Value =
+            serde_json::from_slice(&out.stdout).expect("one JSON object");
+        assert_eq!(report["outcome"], "skipped-ci", "{var}");
+        assert_eq!(out.status.code(), Some(0));
+    }
+    // An explicit no is not CI.
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    let out = fixture
+        .rk(&["devshell", "sync", "--json"])
+        .env("CI", "false")
+        .output()
+        .expect("rk runs");
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one JSON object");
+    assert_eq!(report["outcome"], "would-bump");
+}
+
+#[test]
+fn rk_devshell_sync_is_disabled_by_its_env_switch() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    fixture
+        .rk(&["devshell", "sync", "--apply"])
+        .env("RK_DEVSHELL_SYNC", "0")
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+    assert!(fixture.curl_log().is_empty());
+    assert!(fixture.nix_log().is_empty());
+    let out = fixture
+        .rk(&[
+            "devshell", "sync", "--apply", "--caller", "operator", "--json",
+        ])
+        .env("RK_DEVSHELL_SYNC", "0")
+        .output()
+        .expect("rk runs");
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one JSON object");
+    assert_eq!(report["outcome"], "skipped-disabled");
+    assert!(
+        !fixture
+            .state_dir()
+            .join(format!("{}.stamp", fixture.key()))
+            .exists(),
+        "a switched-off run stamps nothing"
+    );
+}
+
+/// Every devshell action answers `--json` with exactly one object on
+/// stdout, in every mode.
+#[test]
+fn every_devshell_action_emits_one_json_object() {
+    let fixture = DevshellFixture::new();
+    fixture.write_predecessor();
+    fixture.commit_all();
+    for args in [
+        vec!["devshell", "status"],
+        vec!["devshell", "add"],
+        vec!["devshell", "add", "--apply"],
+        vec!["devshell", "clean"],
+        vec!["devshell", "clean", "--apply"],
+        vec!["devshell", "sync"],
+        vec!["devshell", "sync", "--apply"],
+        vec!["devshell", "sync", "--caller", "operator"],
+    ] {
+        let out = fixture.rk(&args).arg("--json").output().expect("rk runs");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let value: serde_json::Value = serde_json::from_str(&stdout)
+            .unwrap_or_else(|_| panic!("{args:?}: one JSON object on stdout: {stdout}"));
+        assert!(
+            value["schema"]
+                .as_str()
+                .is_some_and(|schema| schema.starts_with("rk.devshell-")),
+            "{args:?}: {value}"
+        );
+    }
+}

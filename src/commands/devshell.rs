@@ -21,6 +21,7 @@ use crate::cli::devshell::{
 };
 use crate::devshell::discover::{self, Discovery};
 use crate::devshell::fragments::{self, Fragment};
+use crate::devshell::guard::{self, Acquired};
 use crate::devshell::leftovers::{self, Action, Leftover};
 use crate::devshell::txn::{self, StepFailure};
 use crate::devshell::{self, Observed, Presence, pin};
@@ -403,7 +404,13 @@ fn add(args: &AddArgs) -> Result<(), RkError> {
     ))
 }
 
-/// Move the pin forward, both files or neither.
+/// Move the pin forward, both files or neither, behind the gates.
+///
+/// The gate order is the design: the off switches first, so CI and a
+/// switched-off shell fetch nothing and spawn nothing; then the recovery
+/// of an interrupted run; then the daily stamp, which under the `.envrc`
+/// caller ends a stamped day before the lock, the fetch, and nix; then
+/// the lock; then the observation and the dirty check; then the decision.
 fn sync(args: &SyncArgs) -> Result<(), RkError> {
     let out = Output::new(args.json);
     let mut observed = devshell::observe(&args.target)?;
@@ -412,15 +419,82 @@ fn sync(args: &SyncArgs) -> Result<(), RkError> {
         stamp: observed.stamp.clone(),
         ..SyncRun::default()
     };
-    if args.apply {
-        if let Some(restored) = txn::recover_pending(&observed.target, &key)? {
-            run.recovered = Some(restored);
-            observed = devshell::observe(&args.target)?;
+    let mut held = None;
+    if guard::switched_off() {
+        run.outcome = "skipped-disabled";
+        run.detail = Some(format!("{}=0 is set", guard::SWITCH_VAR));
+    } else if guard::in_ci() {
+        run.outcome = "skipped-ci";
+        run.detail = Some("a CI variable is set; the sync never runs on a runner".to_owned());
+    } else {
+        if args.apply {
+            if let Some(restored) = txn::recover_pending(&observed.target, &key)? {
+                run.recovered = Some(restored);
+                observed = devshell::observe(&args.target)?;
+            }
+        }
+        gate_and_decide(args, &observed, &key, &mut run, &mut held, out)?;
+    }
+    render_sync(out, args, &observed, &run)?;
+    drop(held);
+    exit_for(args.caller, &run)
+}
+
+/// The stamp, the lock, the dirty check, and the decision, in that
+/// order; `held` keeps the lock alive until the report is rendered.
+fn gate_and_decide(
+    args: &SyncArgs,
+    observed: &Observed,
+    key: &str,
+    run: &mut SyncRun,
+    held: &mut Option<guard::Lock>,
+    out: Output,
+) -> Result<(), RkError> {
+    let envrc = args.caller == Caller::Envrc;
+    let today = guard::today();
+    if args.apply && envrc && observed.stamp.as_deref() == Some(today.as_str()) {
+        run.outcome = "skipped-stamped";
+        run.detail = Some(format!("today's attempt already happened ({today})"));
+        return Ok(());
+    }
+    if args.apply && envrc {
+        // A stamp that cannot be written is not the run's failure: the
+        // lock under the same root answers for the broken state root.
+        if guard::write_stamp(key).is_ok() {
+            run.stamp = Some(today);
         }
     }
-    decide(args, &observed, &key, &mut run)?;
-    render_sync(out, args, &observed, &run)?;
-    exit_for(args.caller, &run)
+    if args.apply {
+        match guard::acquire(key) {
+            Acquired::Held(lock) => *held = Some(lock),
+            Acquired::Contended => {
+                run.outcome = "skipped-locked";
+                run.detail = Some("another run holds this checkout".to_owned());
+                return Ok(());
+            }
+            Acquired::Unavailable(source) => {
+                run.outcome = "lock-unavailable";
+                run.detail = Some(format!("the lock cannot be taken: {source}"));
+                out.warn(format!(
+                    "rk devshell sync: the lock cannot be taken: {source}"
+                ));
+                return Ok(());
+            }
+        }
+    }
+    if observed.pending {
+        return decide(args, observed, key, run);
+    }
+    if observed.flake.is_present() && guard::two_files_dirty(&observed.target) {
+        run.outcome = "refused-dirty";
+        run.from = observed.pin_tag().map(str::to_owned);
+        run.detail = Some(
+            "flake.nix or flake.lock carries uncommitted edits; commit or stash them first"
+                .to_owned(),
+        );
+        return Ok(());
+    }
+    decide(args, observed, key, run)
 }
 
 /// The decision sequence: the wiring, the target tag, the comparison,
@@ -684,6 +758,18 @@ fn sync_next(observed: &Observed, run: &SyncRun) -> Vec<String> {
         "ambiguous-pin" => vec![format!(
             "leave exactly one release-kit input line in {target}/flake.nix, then rerun"
         )],
+        "refused-dirty" => vec![format!(
+            "git -C {target} status -- flake.nix flake.lock names the edits; commit or stash them, then rerun"
+        )],
+        "skipped-disabled" => vec![format!(
+            "unset {} to let the sync run again",
+            guard::SWITCH_VAR
+        )],
+        "skipped-stamped" => vec![format!(
+            "rk devshell sync --caller operator --apply --target {target} runs the attempt now, whatever the stamp says"
+        )],
+        "skipped-locked" => vec!["let the other run finish; nothing here is owed".to_owned()],
+        "lock-unavailable" => vec!["make the state root writable: rk doctor reports it".to_owned()],
         "unreachable" | "unparsable" => vec![
             "retry when the release page answers; --tag <TAG> makes no request at all".to_owned(),
         ],

@@ -8,10 +8,12 @@
 //! of that wiring and the per-checkout state key; `pin` owns the line
 //! grammar, `fragments` the authored texts `add` serves, `leftovers` the
 //! predecessor catalog `clean` removes, `discover` the one network call,
-//! and `txn` the fenced two-file transaction.
+//! `txn` the fenced two-file transaction, and `guard` the gates around
+//! it.
 
 pub mod discover;
 pub mod fragments;
+pub mod guard;
 pub mod leftovers;
 pub mod pin;
 pub mod txn;
