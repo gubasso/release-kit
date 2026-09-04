@@ -4867,7 +4867,7 @@ fn status_json_is_one_object_over_a_fresh_landing() {
         .stdout
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["schema"], "rk.status/5");
+    assert_eq!(report["schema"], "rk.status/6");
     assert_eq!(report["landed"], true);
     assert_eq!(report["tech"], "rust");
     assert_eq!(report["style"], "trunk");
@@ -10083,4 +10083,67 @@ fn a_record_whose_parameters_and_files_disagree_is_drift() {
         .assert()
         .failure()
         .stdout(predicate::str::contains("DRIFT record"));
+}
+
+/// The shape gate refuses a package whose binary is only nominal: an
+/// autobins = false library keeping a stray src/main.rs, and a first
+/// [[bin]] entry gated behind required-features, each withheld by name.
+#[test]
+fn a_nominal_binary_does_not_pass_the_shape_gate() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    std::fs::write(
+        target.path().join("Cargo.toml"),
+        "[package]\nname = \"widget\"\nversion = \"0.1.0\"\nautobins = false\n",
+    )
+    .expect("the crate manifest writes");
+    std::fs::write(target.path().join("Cargo.lock"), "version = 4\n").expect("the lock writes");
+    std::fs::create_dir_all(target.path().join("src")).expect("the src dir exists");
+    std::fs::write(target.path().join("src/main.rs"), "fn main() {}\n").expect("the main writes");
+    land_rust_nix(target.path())
+        .success()
+        .stdout(predicate::str::contains("declares no binary"));
+    assert!(!target.path().join("nix/package.nix").exists());
+
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    std::fs::write(
+        target.path().join("Cargo.toml"),
+        "[package]\nname = \"widget\"\nversion = \"0.1.0\"\n\n[features]\nextra = []\n\n[[bin]]\nname = \"widget\"\npath = \"src/main.rs\"\nrequired-features = [\"extra\"]\n",
+    )
+    .expect("the crate manifest writes");
+    std::fs::write(target.path().join("Cargo.lock"), "version = 4\n").expect("the lock writes");
+    std::fs::create_dir_all(target.path().join("src")).expect("the src dir exists");
+    std::fs::write(target.path().join("src/main.rs"), "fn main() {}\n").expect("the main writes");
+    land_rust_nix(target.path())
+        .success()
+        .stdout(predicate::str::contains("required-features"));
+    assert!(!target.path().join("nix/package.nix").exists());
+}
+
+/// Record drift carries its own count in the report: no file was edited,
+/// so the kind counts stay honest while the disagreement is visible.
+#[test]
+fn record_drift_counts_apart_from_file_drift() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    seed_crate(target.path());
+    land_rust(target.path()).success();
+    let mut manifest = read_manifest(target.path());
+    manifest["parameters"]["nix"] = serde_json::json!(true);
+    write_manifest(target.path(), &manifest);
+    let out = rk()
+        .args(["status", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["drift"]["rendered"], 0, "{report}");
+    assert_eq!(report["drift"]["seeded"], 0, "{report}");
+    assert!(
+        report["record_drift"]
+            .as_u64()
+            .is_some_and(|count| count > 0),
+        "{report}"
+    );
 }

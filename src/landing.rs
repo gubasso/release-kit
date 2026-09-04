@@ -594,10 +594,32 @@ pub fn nix_unsupported_shape(target: &Utf8Path) -> Option<String> {
             "the target has no Cargo.lock, which the seeded package expression builds from; commit one, then opt in".to_owned(),
         );
     }
-    if !table.contains_key("bin") && !target.join("src/main.rs").is_file() {
+    let implicit_bin = target.join("src/main.rs").is_file()
+        && table
+            .get("package")
+            .and_then(toml::Value::as_table)
+            .and_then(|package| package.get("autobins"))
+            .and_then(toml::Value::as_bool)
+            != Some(false);
+    let explicit_bins = table.get("bin").and_then(toml::Value::as_array);
+    if explicit_bins.is_none() && !implicit_bin {
         return Some(
-            "the target declares no binary — no src/main.rs and no [[bin]] entry — and the seed flake's smoke check runs one; no Nix file lands".to_owned(),
+            "the target declares no binary — no effective src/main.rs and no [[bin]] entry — and the seed flake's smoke check runs one; no Nix file lands".to_owned(),
         );
+    }
+    // The seed's mainProgram is the first [[bin]] entry; one gated behind
+    // required-features produces no executable in a default build, so the
+    // smoke check would fail on a green landing.
+    if let Some(bins) = explicit_bins {
+        let first_gated = bins
+            .first()
+            .and_then(toml::Value::as_table)
+            .is_some_and(|bin| bin.contains_key("required-features"));
+        if first_gated {
+            return Some(
+                "the target's first [[bin]] entry is gated behind required-features, which a default build does not enable; no Nix file lands".to_owned(),
+            );
+        }
     }
     None
 }
