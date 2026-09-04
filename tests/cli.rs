@@ -10185,3 +10185,24 @@ fn a_strong_dependency_edge_satisfies_a_required_feature() {
     land_rust_nix(target.path()).success();
     assert!(target.path().join("nix/package.nix").is_file());
 }
+
+/// A strong dependency edge on a non-optional dependency enables no
+/// local feature: the requirement stays unmet and the gate withholds.
+#[test]
+fn a_non_optional_dependency_edge_satisfies_nothing() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    std::fs::write(
+        target.path().join("Cargo.toml"),
+        "[package]\nname = \"widget\"\nversion = \"0.1.0\"\n\n[dependencies]\nserde = \"1\"\n\n[features]\ndefault = [\"serde/derive\"]\nserde = []\n\n[[bin]]\nname = \"widget\"\npath = \"src/main.rs\"\nrequired-features = [\"serde\"]\n",
+    )
+    .expect("the crate manifest writes");
+    std::fs::write(target.path().join("Cargo.lock"), "version = 4\n").expect("the lock writes");
+    std::fs::create_dir_all(target.path().join("src")).expect("the src dir exists");
+    std::fs::write(target.path().join("src/main.rs"), "fn main() {}\n").expect("the main writes");
+    land_rust_nix(target.path())
+        .success()
+        .stdout(predicate::str::contains(
+            "requires features a default build does not enable",
+        ));
+    assert!(!target.path().join("nix/package.nix").exists());
+}

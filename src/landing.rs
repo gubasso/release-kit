@@ -634,9 +634,28 @@ pub fn nix_unsupported_shape(target: &Utf8Path) -> Option<String> {
     None
 }
 
+/// Whether `name` is declared an optional dependency, in any of the
+/// dependency tables a binary's build reads.
+fn is_optional_dependency(table: &toml::Table, name: &str) -> bool {
+    ["dependencies", "build-dependencies"]
+        .iter()
+        .any(|section| {
+            table
+                .get(*section)
+                .and_then(toml::Value::as_table)
+                .and_then(|dependencies| dependencies.get(name))
+                .and_then(toml::Value::as_table)
+                .and_then(|dependency| dependency.get("optional"))
+                .and_then(toml::Value::as_bool)
+                == Some(true)
+        })
+}
+
 /// The features a default build enables: the `default` feature resolved
-/// through the `[features]` table's own enables. Dependency forms —
-/// `dep:name`, `name/feature` — are not feature names here and are
+/// through the `[features]` table's own enables — an approximation of
+/// cargo's default resolution for the documented supported shapes, erring
+/// toward withholding where the semantics run deeper. Dependency forms —
+/// `dep:name`, weak `name?/feature` — are not feature names here and are
 /// skipped; the closure is bounded by the table's size.
 fn default_features(table: &toml::Table) -> std::collections::BTreeSet<String> {
     let Some(features) = table.get("features").and_then(toml::Value::as_table) else {
@@ -657,10 +676,13 @@ fn default_features(table: &toml::Table) -> std::collections::BTreeSet<String> {
                     continue;
                 }
                 if let Some((package, _)) = implied.split_once('/') {
-                    // A strong `name/feature` edge also enables the
-                    // optional package and, with it, the implicit feature
-                    // of the same name.
-                    queue.push(package.to_owned());
+                    // A strong `name/feature` edge enables the implicit
+                    // same-named feature only for an optional dependency;
+                    // on a non-optional one it enables a feature of the
+                    // dependency and nothing of this crate.
+                    if is_optional_dependency(table, package) {
+                        queue.push(package.to_owned());
+                    }
                 } else {
                     queue.push(implied.to_owned());
                 }
