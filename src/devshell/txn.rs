@@ -94,55 +94,123 @@ fn open_at(target: &Utf8Path, backup: PathBuf, marker: PathBuf) -> Result<Txn, R
 }
 
 impl Txn {
-    /// Keep the new contents: clear the marker, then the backup.
+    /// Keep the new contents and finish the transaction.
     ///
     /// # Errors
     ///
-    /// The marker's removal failure. The new contents are kept either
-    /// way; the backups are dropped so a later recovery cannot roll the
-    /// finished bump back, and the caller names the marker to remove.
-    pub fn commit(mut self) -> std::io::Result<()> {
+    /// The finishing failure: the marker could be neither neutralized
+    /// nor removed, so it is still active beside its backups, and the
+    /// caller must name it, because the next recovery would roll the
+    /// finished bump back.
+    pub fn commit(mut self) -> Result<(), FinishFailure> {
         self.committed = true;
-        if let Err(source) = clear(&self.backup, &self.marker) {
-            // The marker cannot go: neutralize it in place, so a later
-            // recovery reads a finished bump and never rolls it back,
-            // and drop the backups it would have read.
-            for name in FILES {
-                let _ = fs::remove_file(self.backup.join(name));
-            }
-            let _ = fs::remove_dir(&self.backup);
-            fs::write(&self.marker, br#"{"committed":true}"#).map_err(|_| source)?;
-        }
-        Ok(())
+        finish(&self.backup, &self.marker)
     }
 
-    /// Put both files back and clear the marker; the names restored.
+    /// Put both files back and finish the transaction; the names restored.
     ///
     /// # Errors
     ///
     /// Where a file cannot be put back, the marker and the backups stay
-    /// for the next run's recovery, and the error names the file.
-    pub fn abort(mut self) -> Result<Vec<String>, RestoreFailure> {
+    /// active for the next run's recovery. Where the files are back and
+    /// the marker cannot be finished, the error says so: an active marker
+    /// beside its backups would overwrite later edits on the next
+    /// recovery.
+    pub fn abort(mut self) -> Result<Vec<String>, AbortFailure> {
         self.committed = true;
-        let restored = restore(&self.target, &self.backup, &self.marker)?;
-        // Both files are back; a marker that stays is recovered again,
-        // harmlessly, on the next run.
-        let _ = clear(&self.backup, &self.marker);
+        let restored =
+            restore(&self.target, &self.backup, &self.marker).map_err(AbortFailure::Restore)?;
+        finish(&self.backup, &self.marker).map_err(AbortFailure::Finish)?;
         Ok(restored)
+    }
+
+    /// The marker's path, for a report that must name it.
+    #[must_use]
+    pub fn marker(&self) -> &Path {
+        &self.marker
     }
 }
 
 impl Drop for Txn {
     fn drop(&mut self) {
         if !self.committed {
-            // A restore that fails keeps its material: the marker stays
-            // for the next run, which is the one recovery left.
+            // Best effort on an unwinding path: a restore that fails, or a
+            // finish that fails, keeps the material for the next run.
             if restore(&self.target, &self.backup, &self.marker).is_ok() {
-                let _ = clear(&self.backup, &self.marker);
+                let _ = finish(&self.backup, &self.marker);
             }
         }
     }
 }
+
+/// Why an abort did not leave the target clean.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AbortFailure {
+    /// A file is not back; the marker and backups stay for recovery.
+    Restore(RestoreFailure),
+    /// Both files are back, and the marker is still active.
+    Finish(FinishFailure),
+}
+
+/// A marker that could be neither neutralized nor removed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FinishFailure {
+    /// The marker still active.
+    pub marker: PathBuf,
+    /// Why, one line.
+    pub detail: String,
+}
+
+impl std::fmt::Display for FinishFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "the transaction marker {} is still active and must be removed by hand: {}",
+            self.marker.display(),
+            self.detail
+        )
+    }
+}
+
+/// Finish a transaction whose files are final — new after a commit, old
+/// after a restore. The order is the discipline: first neutralize the
+/// marker durably in place, so an interruption anywhere after this
+/// point leaves a marker every later run reads as finished; then drop
+/// the backups; then remove the marker. Nothing is deleted before the
+/// marker is safe.
+///
+/// # Errors
+///
+/// The neutralizing write's failure: nothing was deleted, the marker is
+/// still active beside its backups, and the caller names it.
+fn finish(backup: &Path, marker: &Path) -> Result<(), FinishFailure> {
+    if marker.exists() {
+        let neutralized = fs::write(marker, FINISHED_MARKER).and_then(|()| {
+            fs::OpenOptions::new()
+                .write(true)
+                .open(marker)
+                .and_then(|file| file.sync_all())
+        });
+        if let Err(source) = neutralized {
+            return Err(FinishFailure {
+                marker: marker.to_path_buf(),
+                detail: source.to_string(),
+            });
+        }
+    }
+    for name in FILES {
+        let _ = fs::remove_file(backup.join(name));
+    }
+    let _ = fs::remove_dir(backup);
+    let _ = fs::remove_file(marker);
+    if let Some(parent) = marker.parent() {
+        let _ = fs::remove_dir(parent);
+    }
+    Ok(())
+}
+
+/// The bytes a finished marker holds; a recovery reads it as done.
+const FINISHED_MARKER: &[u8] = br#"{"committed":true}"#;
 
 /// A restore that could not put a file back; the backups stay.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -198,28 +266,6 @@ fn restore(target: &Path, backup: &Path, marker: &Path) -> Result<Vec<String>, R
     Ok(restored)
 }
 
-/// Clear the transaction material: the marker first, because a marker
-/// that outlives its backups would read as a corrupt recovery forever,
-/// and backups that outlive a committed marker would roll a finished
-/// bump back. The backups go only once the marker is gone; the
-/// per-checkout directory follows once empty.
-///
-/// # Errors
-///
-/// The marker's removal failure; the backups then stay with it.
-fn clear(backup: &Path, marker: &Path) -> std::io::Result<()> {
-    match fs::remove_file(marker) {
-        Ok(()) => {}
-        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
-        Err(source) => return Err(source),
-    }
-    let _ = fs::remove_dir_all(backup);
-    if let Some(parent) = marker.parent() {
-        let _ = fs::remove_dir(parent);
-    }
-    Ok(())
-}
-
 /// What a recovery attempt found.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Recovery {
@@ -227,6 +273,9 @@ pub enum Recovery {
     Restored(Vec<String>),
     /// A file could not be put back; the marker and backups stay.
     Failed(RestoreFailure),
+    /// Both files are back, and the marker could not be finished: it is
+    /// still active, and the next recovery would overwrite later edits.
+    Unfinished(FinishFailure),
 }
 
 /// Recover a transaction an earlier run left open, where its owner is
@@ -258,8 +307,9 @@ fn recover_at(
     let record: serde_json::Value =
         serde_json::from_slice(&fs::read(marker)?).unwrap_or(serde_json::Value::Null);
     if record["committed"].as_bool() == Some(true) {
-        // A finished bump whose marker could not be removed at the time.
-        let _ = clear(backup, marker);
+        // A finished transaction whose marker could not be removed at
+        // the time: finish it now, and recover nothing.
+        let _ = finish(backup, marker);
         return Ok(None);
     }
     let pid = record["pid"].as_u64();
@@ -267,10 +317,10 @@ fn recover_at(
         return Ok(None);
     }
     match restore(target.as_std_path(), backup, marker) {
-        Ok(restored) => {
-            let _ = clear(backup, marker);
-            Ok(Some(Recovery::Restored(restored)))
-        }
+        Ok(restored) => match finish(backup, marker) {
+            Ok(()) => Ok(Some(Recovery::Restored(restored))),
+            Err(failure) => Ok(Some(Recovery::Unfinished(failure))),
+        },
         Err(failure) => Ok(Some(Recovery::Failed(failure))),
     }
 }
@@ -501,17 +551,20 @@ mod tests {
         std::fs::remove_file(target.join("flake.nix")).expect("removes");
         std::fs::create_dir(target.join("flake.nix")).expect("blocks");
         let failure = txn.abort().expect_err("the restore fails");
-        assert_eq!(failure.file, "flake.nix");
+        assert!(
+            matches!(failure, super::AbortFailure::Restore(ref inner) if inner.file == "flake.nix"),
+            "{failure:?}"
+        );
         assert!(marker.exists(), "the marker stays");
         assert!(backup.join("flake.nix").exists(), "the backup stays");
     }
 
-    /// A marker that cannot be removed keeps its backups beside it, so
-    /// the next recovery still has what it needs; a commit drops the
-    /// backups regardless, so nothing rolls the finished bump back.
+    /// A marker that cannot be removed is neutralized in place before
+    /// any backup goes: a later recovery reads it as finished and never
+    /// rolls the committed bump back, and never overwrites a later edit.
     #[cfg(unix)]
     #[test]
-    fn a_marker_that_cannot_be_cleared_keeps_its_backups_until_commit() {
+    fn an_unremovable_marker_is_neutralized_before_the_backups_go() {
         use std::os::unix::fs::PermissionsExt as _;
         let (_state, state) = scratch();
         let (_target, target) = scratch();
@@ -521,8 +574,8 @@ mod tests {
         let marker = dir.join("pending.json").into_std_path_buf();
         std::fs::write(target.join("flake.nix"), "old\n").expect("writes");
         let txn = open_at(&target, backup.clone(), marker.clone()).expect("opens");
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).expect("locks");
         std::fs::write(target.join("flake.nix"), "new\n").expect("writes");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).expect("locks");
         let outcome = txn.commit();
         assert!(
             outcome.is_ok(),
@@ -531,8 +584,9 @@ mod tests {
         assert!(marker.exists(), "the marker could not be removed");
         assert!(
             !backup.join("flake.nix").exists(),
-            "a committed bump keeps no backup a recovery could roll it back with"
+            "no backup survives a commit"
         );
+        std::fs::write(target.join("flake.nix"), "edited later\n").expect("writes");
         assert_eq!(
             recover_at(&target, &backup, &marker).expect("judges"),
             None,
@@ -541,9 +595,36 @@ mod tests {
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).expect("unlocks");
         assert_eq!(
             std::fs::read_to_string(target.join("flake.nix")).expect("reads"),
-            "new\n",
-            "the finished bump is not rolled back"
+            "edited later\n",
+            "a later edit is never overwritten"
         );
+    }
+
+    /// A marker that can be neither removed nor rewritten keeps every
+    /// backup and is reported as still active; nothing is deleted first.
+    #[cfg(unix)]
+    #[test]
+    fn a_marker_that_cannot_be_finished_keeps_its_backups_and_is_reported() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let (_state, state) = scratch();
+        let (_target, target) = scratch();
+        let dir = state.join("txn");
+        std::fs::create_dir_all(&dir).expect("creates");
+        let backup = dir.join("backup").into_std_path_buf();
+        let marker = dir.join("pending.json").into_std_path_buf();
+        std::fs::write(target.join("flake.nix"), "old\n").expect("writes");
+        let txn = open_at(&target, backup.clone(), marker.clone()).expect("opens");
+        std::fs::set_permissions(&marker, std::fs::Permissions::from_mode(0o444)).expect("locks");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).expect("locks");
+        let outcome = txn.abort();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).expect("unlocks");
+        std::fs::set_permissions(&marker, std::fs::Permissions::from_mode(0o644)).expect("unlocks");
+        assert!(
+            matches!(outcome, Err(super::AbortFailure::Finish(_))),
+            "{outcome:?}"
+        );
+        assert!(backup.join("flake.nix").exists(), "nothing was deleted");
+        assert!(marker.exists());
     }
 
     #[test]

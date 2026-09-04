@@ -23,7 +23,7 @@ use crate::devshell::discover::{self, Discovery};
 use crate::devshell::fragments::{self, Fragment};
 use crate::devshell::guard::{self, Acquired};
 use crate::devshell::leftovers::{self, Action, Leftover};
-use crate::devshell::txn::{self, Recovery, StepFailure};
+use crate::devshell::txn::{self, AbortFailure, Recovery, StepFailure};
 use crate::devshell::{self, Observed, Presence, pin};
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
@@ -160,7 +160,8 @@ struct SyncReport<'a> {
     /// `skipped-disabled`, `skipped-stamped`, `skipped-locked`,
     /// `lock-unavailable`, `not-wired`, `unpinned`, `no-flake`,
     /// `ambiguous-pin`, `refused-dirty`, `unreachable`, `unparsable`,
-    /// `update-failed`, `build-failed`, or `restore-failed`.
+    /// `update-failed`, `build-failed`, `restore-failed`, or
+    /// `cleanup-failed`.
     outcome: &'static str,
     /// The pinned tag before the run, where the pin was read.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -494,6 +495,11 @@ fn gate_and_decide(
                 ));
                 return Ok(());
             }
+            Some(Recovery::Unfinished(failure)) => {
+                run.outcome = "cleanup-failed";
+                run.detail = Some(format!("both files are back, but {failure}"));
+                return Ok(());
+            }
             None => {}
         }
     }
@@ -611,10 +617,9 @@ fn apply_bump(
     match failure {
         None => {
             run.outcome = "bumped";
-            if let Err(source) = transaction.commit() {
-                run.detail = Some(format!(
-                    "the pin moved, but the transaction marker could not be cleared: {source}; remove it under the state root before the next run"
-                ));
+            if let Err(failure) = transaction.commit() {
+                run.outcome = "cleanup-failed";
+                run.detail = Some(format!("the pin moved, but {failure}"));
             }
         }
         Some(failed) => {
@@ -627,10 +632,17 @@ fn apply_bump(
                     run.restored = Some(restored);
                     run.detail = Some(format!("{} failed: {}", failed.step, failed.detail));
                 }
-                Err(failure) => {
+                Err(AbortFailure::Restore(failure)) => {
                     run.outcome = "restore-failed";
                     run.detail = Some(format!(
                         "{} failed: {}; then {failure}; the backups stay under the state root for the next run",
+                        failed.step, failed.detail
+                    ));
+                }
+                Err(AbortFailure::Finish(failure)) => {
+                    run.outcome = "cleanup-failed";
+                    run.detail = Some(format!(
+                        "{} failed: {}; both files are back, but {failure}",
                         failed.step, failed.detail
                     ));
                 }
@@ -818,6 +830,9 @@ fn sync_next(observed: &Observed, run: &SyncRun) -> Vec<String> {
         "unreachable" | "unparsable" => vec![
             "retry when the release page answers; --tag <TAG> makes no request at all".to_owned(),
         ],
+        "cleanup-failed" => vec![
+            "remove the named marker by hand before the next entry; an active marker beside its backups would overwrite later edits".to_owned(),
+        ],
         "recovery-failed" | "restore-failed" => vec![
             "a file is not back: free the path the detail names, then rerun; the backups wait under the state root".to_owned(),
         ],
@@ -872,7 +887,7 @@ fn exit_for(caller: Caller, run: &SyncRun) -> Result<(), RkError> {
                     )),
             ))
         }
-        "lock-unavailable" | "restore-failed" | "recovery-failed" => {
+        "lock-unavailable" | "restore-failed" | "recovery-failed" | "cleanup-failed" => {
             Err(RkError::Io(std::io::Error::other(detail)))
         }
         _ => Ok(()),

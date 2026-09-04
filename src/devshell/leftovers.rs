@@ -129,17 +129,15 @@ pub fn scan(target: &Utf8Path) -> Result<Vec<Leftover>, RkError> {
         }
     }
     if let Some(text) = read("flake.nix") {
-        for (index, line) in text.lines().enumerate() {
-            if names_package(line, "flock") || names_package(line, "bats") {
-                found.push(Leftover {
-                    id: "devshell-tooling",
-                    file: "flake.nix".to_owned(),
-                    line: Some(index + 1),
-                    text: Some(line.trim().to_owned()),
-                    action: Action::Manual,
-                    reason: "a Nix package list carries structure a line scan cannot judge",
-                });
-            }
+        for (number, line) in list_members_named(&text, &["flock", "bats"]) {
+            found.push(Leftover {
+                id: "devshell-tooling",
+                file: "flake.nix".to_owned(),
+                line: Some(number),
+                text: Some(line),
+                action: Action::Manual,
+                reason: "a Nix package list carries structure a line scan cannot judge",
+            });
         }
     }
     let mut host_files: Vec<String> = HOST_INSTALL_FILES.iter().map(|s| (*s).to_owned()).collect();
@@ -207,32 +205,37 @@ fn is_recipe_head(line: &str, name: &str) -> bool {
     rest.contains(':') && (head.is_empty() || head.starts_with(' ') || head.starts_with('\t'))
 }
 
-/// Whether a Nix line names `package` as a list member.
-///
-/// Outside a comment, a whitespace-separated token that is an attribute
-/// path ending in the package name, and in list context: after an
-/// opening bracket on the same line, or on a line with no `=` at all —
-/// a continuation line inside a multi-line list. An assignment such as
-/// `formatter = pkgs.bats;`, a comment, a string, or an attribute that
-/// merely contains the name is not a match.
-fn names_package(line: &str, package: &str) -> bool {
-    let code = line.split('#').next().unwrap_or_default();
+/// Every `(line number, trimmed line)` of a Nix text that names one of
+/// the packages as a list member: a whitespace-separated token — brackets
+/// stripped — that is an attribute path ending in the package name, at a
+/// bracket depth above zero. The depth runs across the whole text, so a
+/// multi-line assignment such as `formatter =` over `pkgs.bats;` is not a
+/// list member, and a continuation line inside `[ ... ]` is. Comments
+/// are skipped.
+fn list_members_named(text: &str, packages: &[&str]) -> Vec<(usize, String)> {
     let mut depth = 0usize;
-    let mut offset = 0usize;
-    let assigns = code.contains('=');
-    for token in code.split_whitespace() {
-        let at = code[offset..].find(token).map_or(offset, |i| offset + i);
-        offset = at + token.len();
-        let opened = token.matches('[').count();
-        let closed = token.matches(']').count();
-        let stripped = token.trim_matches(|c| matches!(c, '[' | ']' | '(' | ')' | ';'));
-        let in_list = depth + opened > closed || !assigns;
-        if in_list && is_package_path(stripped, package) {
-            return true;
+    let mut found = Vec::new();
+    for (index, line) in text.lines().enumerate() {
+        let code = line.split('#').next().unwrap_or_default();
+        let mut named = false;
+        for token in code.split_whitespace() {
+            let opened = token.matches('[').count();
+            let closed = token.matches(']').count();
+            let stripped = token.trim_matches(|c| matches!(c, '[' | ']' | '(' | ')' | ';'));
+            if depth + opened > closed
+                && packages
+                    .iter()
+                    .any(|package| is_package_path(stripped, package))
+            {
+                named = true;
+            }
+            depth = (depth + opened).saturating_sub(closed);
         }
-        depth = (depth + opened).saturating_sub(closed);
+        if named {
+            found.push((index + 1, line.trim().to_owned()));
+        }
     }
-    false
+    found
 }
 
 /// Whether a token is an attribute path whose last segment is `package`.
@@ -267,7 +270,7 @@ mod tests {
 
     use camino::Utf8PathBuf;
 
-    use super::{Action, is_recipe_head, names_package, scan, swap_envrc};
+    use super::{Action, is_recipe_head, list_members_named, scan, swap_envrc};
     use crate::devshell::pin::PIN_PREFIX;
 
     #[test]
@@ -325,35 +328,33 @@ mod tests {
         assert!(is_recipe_head("rk-bump tag='':", "rk-bump"));
         assert!(!is_recipe_head("rk-bump-all:", "rk-bump"));
         assert!(!is_recipe_head("    rk-bump", "rk-bump"));
-        assert!(names_package("    pkgs.flock", "flock"));
-        assert!(names_package("bats # the suites", "bats"));
-        assert!(names_package("[ flock bats ]", "flock"));
-        assert!(names_package(
-            "nixpkgs.legacyPackages.x86_64-linux.bats",
-            "bats"
-        ));
-        assert!(!names_package("combats", "bats"));
-        assert!(!names_package("flock-of-seagulls", "flock"));
-        assert!(
-            !names_package("# flock is gone", "flock"),
-            "a comment is not a package"
+        let members = |text: &str| list_members_named(text, &["flock", "bats"]);
+        assert_eq!(
+            members("packages = [\n  pkgs.flock\n  bats # the suites\n];\n"),
+            [
+                (2, "pkgs.flock".to_owned()),
+                (3, "bats # the suites".to_owned())
+            ]
         );
-        assert!(!names_package("checks.flockTest = x;", "flock"));
-        assert!(
-            !names_package("description = \"needs flock\";", "flock"),
-            "a string is not a package"
+        assert_eq!(members("packages = [ flock bats ];\n").len(), 1);
+        assert_eq!(
+            members("packages = [\n  nixpkgs.legacyPackages.x86_64-linux.bats\n];\n").len(),
+            1
         );
-        assert!(!names_package("pkgs.bats-core", "bats"));
-        assert!(
-            !names_package("formatter = pkgs.bats;", "bats"),
-            "an assignment is not a list member"
-        );
-        assert!(!names_package("someTool = pkgs.flock;", "flock"));
-        assert!(names_package("packages = [ pkgs.flock ];", "flock"));
-        assert!(!names_package("packages = with pkgs; [", "bats"));
-        assert!(
-            names_package("  bats", "bats"),
-            "a continuation line in a list"
-        );
+        for not_a_member in [
+            "combats\n",
+            "[ flock-of-seagulls ]\n",
+            "# flock is gone\n",
+            "[ checks.flockTest ]\n",
+            "description = \"needs flock\";\n",
+            "[ pkgs.bats-core ]\n",
+            "formatter = pkgs.bats;\n",
+            "someTool = pkgs.flock;\n",
+            "formatter =\n  pkgs.bats;\n",
+            "someTool =\n  pkgs.flock;\n",
+            "packages = with pkgs; [\n];\nformatter = pkgs.bats;\n",
+        ] {
+            assert!(members(not_a_member).is_empty(), "{not_a_member:?}");
+        }
     }
 }
