@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.18](https://github.com/gubasso/release-kit/compare/v0.2.17...v0.2.18) - 2026-09-04
+
+### Other
+
+- *(method)* rename the container layout to a workspace ([#67](https://github.com/gubasso/release-kit/pull/67))
+
 ## [0.2.17](https://github.com/gubasso/release-kit/compare/v0.2.16...v0.2.17) - 2026-09-04
 
 ### Added
