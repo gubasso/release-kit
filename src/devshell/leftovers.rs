@@ -207,22 +207,42 @@ fn is_recipe_head(line: &str, name: &str) -> bool {
     rest.contains(':') && (head.is_empty() || head.starts_with(' ') || head.starts_with('\t'))
 }
 
-/// Whether a Nix line names `package` as a list member: outside a
-/// comment, a whitespace-separated token — brackets stripped — that is
-/// an attribute path ending in the package name. A comment, a string,
-/// or an attribute that merely contains the name is not a match.
+/// Whether a Nix line names `package` as a list member.
+///
+/// Outside a comment, a whitespace-separated token that is an attribute
+/// path ending in the package name, and in list context: after an
+/// opening bracket on the same line, or on a line with no `=` at all —
+/// a continuation line inside a multi-line list. An assignment such as
+/// `formatter = pkgs.bats;`, a comment, a string, or an attribute that
+/// merely contains the name is not a match.
 fn names_package(line: &str, package: &str) -> bool {
     let code = line.split('#').next().unwrap_or_default();
-    code.split_whitespace()
-        .map(|token| token.trim_matches(|c| matches!(c, '[' | ']' | '(' | ')' | ';')))
-        .any(|token| {
-            token.strip_suffix(package).is_some_and(|head| {
-                (head.is_empty() || head.ends_with('.'))
-                    && head
-                        .chars()
-                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
-            })
-        })
+    let mut depth = 0usize;
+    let mut offset = 0usize;
+    let assigns = code.contains('=');
+    for token in code.split_whitespace() {
+        let at = code[offset..].find(token).map_or(offset, |i| offset + i);
+        offset = at + token.len();
+        let opened = token.matches('[').count();
+        let closed = token.matches(']').count();
+        let stripped = token.trim_matches(|c| matches!(c, '[' | ']' | '(' | ')' | ';'));
+        let in_list = depth + opened > closed || !assigns;
+        if in_list && is_package_path(stripped, package) {
+            return true;
+        }
+        depth = (depth + opened).saturating_sub(closed);
+    }
+    false
+}
+
+/// Whether a token is an attribute path whose last segment is `package`.
+fn is_package_path(token: &str, package: &str) -> bool {
+    token.strip_suffix(package).is_some_and(|head| {
+        (head.is_empty() || head.ends_with('.'))
+            && head
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+    })
 }
 
 /// The workflow files under `.github/workflows`, relative to the target.
@@ -324,5 +344,16 @@ mod tests {
             "a string is not a package"
         );
         assert!(!names_package("pkgs.bats-core", "bats"));
+        assert!(
+            !names_package("formatter = pkgs.bats;", "bats"),
+            "an assignment is not a list member"
+        );
+        assert!(!names_package("someTool = pkgs.flock;", "flock"));
+        assert!(names_package("packages = [ pkgs.flock ];", "flock"));
+        assert!(!names_package("packages = with pkgs; [", "bats"));
+        assert!(
+            names_package("  bats", "bats"),
+            "a continuation line in a list"
+        );
     }
 }

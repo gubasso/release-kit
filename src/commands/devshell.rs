@@ -448,7 +448,10 @@ fn gate_and_decide(
 ) -> Result<(), RkError> {
     let envrc = args.caller == Caller::Envrc;
     let today = guard::today();
-    if args.apply && envrc && observed.stamp.as_deref() == Some(today.as_str()) {
+    // A pending marker outranks the stamp: an interrupted run recovers on
+    // the next entry, not on the next day.
+    if args.apply && envrc && !observed.pending && observed.stamp.as_deref() == Some(today.as_str())
+    {
         run.outcome = "skipped-stamped";
         run.detail = Some(format!("today's attempt already happened ({today})"));
         return Ok(());
@@ -607,8 +610,12 @@ fn apply_bump(
     let failure = transact(&observed.target, &rewritten, &mut steps);
     match failure {
         None => {
-            transaction.commit();
             run.outcome = "bumped";
+            if let Err(source) = transaction.commit() {
+                run.detail = Some(format!(
+                    "the pin moved, but the transaction marker could not be cleared: {source}; remove it under the state root before the next run"
+                ));
+            }
         }
         Some(failed) => {
             run.outcome = match failed.step {

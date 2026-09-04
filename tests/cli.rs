@@ -12174,3 +12174,52 @@ fn recovery_waits_for_the_lock() {
         "the marker waits for the lock holder"
     );
 }
+
+/// An interrupted run recovers on the next `.envrc` entry even on a day
+/// the stamp already marks: the marker outranks the stamp.
+#[test]
+fn a_pending_marker_outranks_the_daily_stamp() {
+    let fixture = DevshellFixture::new();
+    fixture.write_flake("v0.2.15");
+    fixture.commit_all();
+    let flake = fixture.read("flake.nix");
+    let lock = fixture.read("flake.lock");
+    let backup = fixture.state_dir().join(fixture.key()).join("backup");
+    std::fs::create_dir_all(&backup).expect("the backup dir creates");
+    std::fs::write(backup.join("flake.nix"), &flake).expect("writes");
+    std::fs::write(backup.join("flake.lock"), &lock).expect("writes");
+    std::fs::write(
+        fixture.state_dir().join(fixture.key()).join("pending.json"),
+        r#"{"target":"x","pid":4294967295,"present":{"flake.nix":true,"flake.lock":true}}"#,
+    )
+    .expect("the marker writes");
+    std::fs::write(
+        fixture.state_dir().join(format!("{}.stamp", fixture.key())),
+        format!("{}\n", today_utc()),
+    )
+    .expect("the stamp plants");
+    std::fs::write(
+        fixture.target().join("flake.nix"),
+        flake.replace("v0.2.15", "v0.2.16"),
+    )
+    .expect("half-moved");
+    let (code, report) = fixture.sync_json(&["devshell", "sync", "--apply"]);
+    assert_eq!(code, Some(0));
+    assert_eq!(
+        report["recovered"],
+        serde_json::json!(["flake.nix", "flake.lock"]),
+        "{report}"
+    );
+    // The recovered run continues: the restored v0.2.15 pin is what the
+    // bump starts from, and the transaction moves it forward whole.
+    assert_eq!(report["outcome"], "bumped", "{report}");
+    assert_eq!(report["from"], "v0.2.15");
+    assert!(fixture.read("flake.lock").contains("rev-of-v0.2.16"));
+    assert!(
+        !fixture
+            .state_dir()
+            .join(fixture.key())
+            .join("pending.json")
+            .exists()
+    );
+}
