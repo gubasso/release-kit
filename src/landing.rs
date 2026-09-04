@@ -650,7 +650,18 @@ fn default_features(table: &toml::Table) -> std::collections::BTreeSet<String> {
         }
         if let Some(implies) = features.get(&name).and_then(toml::Value::as_array) {
             for implied in implies.iter().filter_map(toml::Value::as_str) {
-                if !implied.contains(':') && !implied.contains('/') {
+                if implied.starts_with("dep:") || implied.contains("?/") {
+                    // `dep:name` enables the dependency without a feature
+                    // of this crate; a weak `name?/feature` edge enables
+                    // nothing by itself.
+                    continue;
+                }
+                if let Some((package, _)) = implied.split_once('/') {
+                    // A strong `name/feature` edge also enables the
+                    // optional package and, with it, the implicit feature
+                    // of the same name.
+                    queue.push(package.to_owned());
+                } else {
                     queue.push(implied.to_owned());
                 }
             }
