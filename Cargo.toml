@@ -17,8 +17,11 @@ exclude = [
     "/tests",
     "/AGENTS.md",
     "/CLAUDE.md",
+    # The flake stays excluded on purpose: crates.io consumers build with
+    # cargo, and the flake serves the consumers who fetch the repository.
     "/flake.nix",
     "/flake.lock",
+    "/nix",
     "/justfile",
     "/deny.toml",
     "/dist-workspace.toml",

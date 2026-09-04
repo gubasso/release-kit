@@ -40,3 +40,21 @@ jobs:
       - run: nix develop --command just check
         env:
           SKIP: no-commit-to-branch,rk-worktree-location
+
+  # Every system the flake advertises is one this job natively builds and
+  # smokes; the flake's system list and this matrix grow together. A
+  # cross-evaluated check is not the same proof, so each runner checks
+  # its own system.
+  flake:
+    strategy:
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@v19
+      - uses: DeterminateSystems/magic-nix-cache-action@v13
+        with:
+          use-flakehub: false
+          use-gha-cache: true
+      - run: nix flake check
