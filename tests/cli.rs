@@ -136,6 +136,7 @@ fn method_lists_every_chapter() {
             .and(predicate::str::contains("setup"))
             .and(predicate::str::contains("operate"))
             .and(predicate::str::contains("recovery"))
+            .and(predicate::str::contains("migration"))
             .and(predicate::str::contains("diff-surface")),
     );
 }
@@ -1620,6 +1621,7 @@ fn usage_dumps_every_verb_in_one_call() {
         "rk status",
         "rk upgrade",
         "rk adopt",
+        "rk assess",
         "rk versions",
         "rk doctor",
         "rk usage",
@@ -2168,6 +2170,7 @@ fn the_runbooks_match_their_method_chapters() {
         ("method/07-branch-for-release.md", "runbooks/backport.md"),
         ("method/09-release-lines.md", "runbooks/release-lines.md"),
         ("method/08-worktrees.md", "runbooks/worktree.md"),
+        ("method/10-migration.md", "runbooks/migration.md"),
     ] {
         let rendered = std::fs::read_to_string(repo_path(runbook)).expect("reads");
         assert_eq!(
@@ -2247,6 +2250,7 @@ fn every_runbook_fence_declares_a_language() {
 fn guide_lists_and_serves_byte_identically_when_nothing_resolves() {
     rk().args(["guide", "--list"]).assert().success().stdout(
         predicate::str::contains("release")
+            .and(predicate::str::contains("migration"))
             .and(predicate::str::contains("setup"))
             .and(predicate::str::contains("backport")),
     );
@@ -12259,4 +12263,332 @@ fn a_pending_marker_outranks_the_daily_stamp() {
             .join("pending.json")
             .exists()
     );
+}
+
+/// The classification is a report, never a gate: every verdict exits 0,
+/// a plain directory is greenfield, and one release marker turns it
+/// brownfield with the marker named. Per
+/// `landing:a-landing-classifies-its-target-first`.
+#[test]
+fn assess_classifies_a_plain_directory_and_a_release_marker() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    rk().args(["assess", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("classification: greenfield")
+                .and(predicate::str::contains("git: not a repository"))
+                .and(predicate::str::contains("rk init")),
+        );
+    std::fs::write(target.path().join("CHANGELOG.md"), "# Changelog\n").expect("writes");
+    let out = rk()
+        .args(["assess", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["schema"], "rk.assess/1");
+    assert_eq!(report["classification"], "brownfield");
+    assert_eq!(report["landing"]["recorded"], false);
+    assert_eq!(
+        report["release_markers"],
+        serde_json::json!(["CHANGELOG.md"])
+    );
+    assert_eq!(report["collisions"], serde_json::json!([]));
+    assert_eq!(report["git"], false);
+    assert!(
+        report["next"]
+            .as_array()
+            .expect("next lines")
+            .iter()
+            .any(|line| line
+                .as_str()
+                .is_some_and(|s| s.contains("rk guide migration"))),
+        "brownfield routes to the migration runbook: {report}"
+    );
+}
+
+/// Release activity with no mechanism behind it is a question for the
+/// operator: a tag alone, or a second long-lived branch alone, reads
+/// `needs-decision`; a topic branch is not long-lived.
+#[test]
+fn assess_reads_tags_and_long_lived_branches_from_git() {
+    let repo = branch_fixture();
+    let verdict = |args: &[&str]| -> serde_json::Value {
+        let out = rk()
+            .args(["assess", "--json", "--target"])
+            .arg(repo.path())
+            .args(args)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        serde_json::from_slice(&out).expect("one JSON object")
+    };
+    let clean = verdict(&[]);
+    assert_eq!(clean["classification"], "greenfield", "{clean}");
+    assert_eq!(clean["git"], true);
+    assert_eq!(clean["tech"], serde_json::Value::Null);
+    assert_eq!(clean["forge"], "github");
+    assert_eq!(clean["repo"], "acme/widget");
+
+    // A topic branch is not long-lived, whatever its last segment is.
+    git_in(repo.path(), &["branch", "feat/topic"]);
+    git_in(repo.path(), &["branch", "feat/develop"]);
+    let topic = verdict(&[]);
+    assert_eq!(topic["classification"], "greenfield", "{topic}");
+
+    git_in(repo.path(), &["branch", "develop"]);
+    git_in(repo.path(), &["branch", "release/1.2"]);
+    let branched = verdict(&[]);
+    assert_eq!(branched["classification"], "needs-decision", "{branched}");
+    assert_eq!(
+        branched["long_lived_branches"],
+        serde_json::json!(["develop", "release/1.2"])
+    );
+    git_in(repo.path(), &["branch", "-D", "develop"]);
+    git_in(repo.path(), &["branch", "-D", "release/1.2"]);
+
+    git_in(repo.path(), &["tag", "v0.1.0"]);
+    let tagged = verdict(&[]);
+    assert_eq!(tagged["classification"], "needs-decision", "{tagged}");
+    assert_eq!(tagged["tags"], 1);
+    rk().args(["assess", "--target"])
+        .arg(repo.path())
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("tags: 1")
+                .and(predicate::str::contains("long-lived branches: none"))
+                .and(predicate::str::contains("the operator says")),
+        );
+}
+
+/// A landed target reads as brownfield — every payload destination is a
+/// collision, the block destinations included — and its next lines route
+/// by the status report rather than to a migration.
+#[test]
+fn assess_reports_a_landing_and_routes_by_status() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    std::fs::write(
+        target.path().join("Cargo.toml"),
+        "[package]\nname = \"widget\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("the version file writes");
+    land_rust(target.path()).success();
+    let out = rk()
+        .args(["assess", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["classification"], "brownfield");
+    assert_eq!(report["landing"]["recorded"], true);
+    assert_eq!(report["landing"]["rk_version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(report["tech"], "rust");
+    let collisions = report["collisions"].as_array().expect("collisions");
+    for expected in ["AGENTS.md", ".pre-commit-config.yaml", "release-plz.toml"] {
+        assert!(
+            collisions.iter().any(|c| c == expected),
+            "{expected} is a collision: {report}"
+        );
+    }
+    let next = report["next"].as_array().expect("next lines");
+    assert!(
+        next.iter()
+            .any(|line| line.as_str().is_some_and(|s| s.contains("rk status"))),
+        "a recorded target routes by status: {report}"
+    );
+    assert!(
+        !next.iter().any(|line| line
+            .as_str()
+            .is_some_and(|s| s.contains("rk guide migration"))),
+        "a recorded target is not a migration: {report}"
+    );
+    rk().args(["assess", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!(
+            "landing: recorded at release-kit {}",
+            env!("CARGO_PKG_VERSION")
+        )));
+}
+
+/// A target that is not a directory is the one refusal, at the missing
+/// code; a broken record refuses through the record's own taxonomy
+/// rather than classifying past it.
+#[test]
+fn assess_refuses_a_missing_target_and_a_broken_record() {
+    rk().args(["assess", "--target", "/nonexistent/rk-assess"])
+        .assert()
+        .code(66);
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+    let mut manifest = read_manifest(target.path());
+    manifest["schema_version"] = serde_json::json!(999);
+    write_manifest(target.path(), &manifest);
+    rk().args(["assess", "--target"])
+        .arg(target.path())
+        .assert()
+        .code(73);
+}
+
+/// Every documented configuration name of another release tool is a
+/// marker, and `package.json` is one only with the `release` key
+/// semantic-release reads, so an ordinary Node project stays unmarked.
+#[test]
+fn assess_recognizes_the_documented_marker_names() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    let verdict = || -> serde_json::Value {
+        let out = rk()
+            .args(["assess", "--json", "--target"])
+            .arg(target.path())
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        serde_json::from_slice(&out).expect("one JSON object")
+    };
+    std::fs::write(
+        target.path().join("package.json"),
+        "{\"name\": \"widget\"}\n",
+    )
+    .expect("writes");
+    let plain = verdict();
+    assert_eq!(plain["classification"], "greenfield", "{plain}");
+
+    std::fs::write(
+        target.path().join("package.json"),
+        "{\"name\": \"widget\", \"release\": {\"branches\": [\"master\"]}}\n",
+    )
+    .expect("writes");
+    let keyed = verdict();
+    assert_eq!(keyed["classification"], "brownfield", "{keyed}");
+    assert_eq!(
+        keyed["release_markers"],
+        serde_json::json!(["package.json"])
+    );
+
+    std::fs::create_dir_all(target.path().join(".config")).expect("creates");
+    std::fs::write(target.path().join(".config/goreleaser.yml"), "version: 2\n").expect("writes");
+    std::fs::write(
+        target.path().join("release.config.mjs"),
+        "export default {}\n",
+    )
+    .expect("writes");
+    let marked = verdict();
+    assert_eq!(
+        marked["release_markers"],
+        serde_json::json!([
+            ".config/goreleaser.yml",
+            "package.json",
+            "release.config.mjs"
+        ])
+    );
+}
+
+/// An unreadable history is not an absent one: a git that runs and
+/// refuses — anything but a plain "not a repository" — is the run's
+/// failure, never a greenfield verdict.
+#[test]
+fn assess_refuses_when_git_cannot_answer() {
+    let repo = branch_fixture();
+    let fake = repo.path().join("failing-git");
+    std::fs::write(
+        &fake,
+        "#!/bin/sh\ncase \"$*\" in *rev-parse*) exit 0;; esac\necho 'fatal: bad object' >&2\nexit 128\n",
+    )
+    .expect("the fake git writes");
+    let mut permissions = std::fs::metadata(&fake).expect("metadata").permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+    std::fs::set_permissions(&fake, permissions).expect("chmod");
+    rk().args(["assess", "--target"])
+        .arg(repo.path())
+        .env("RK_GIT_BIN", &fake)
+        .assert()
+        .code(70)
+        .stderr(predicate::str::contains("bad object"));
+}
+
+/// Repository discovery answers for the target alone: an inherited
+/// `GIT_DIR` naming a missing repository does not redirect the probe, and
+/// the diagnostic the probe reads arrives in the `C` locale whatever the
+/// caller's locale is.
+#[test]
+fn assess_discovers_the_repository_under_a_foreign_git_dir_and_locale() {
+    let repo = branch_fixture();
+    // A foreign but valid repository, with its own origin and its own
+    // history, standing in for the hook's repository a caller inherits.
+    let foreign = branch_fixture();
+    git_in(
+        foreign.path(),
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://gitlab.com/other/thing.git",
+        ],
+    );
+    git_in(foreign.path(), &["tag", "v9.9.9"]);
+    let assess = |git_dir: &Path, work_tree: &Path| -> serde_json::Value {
+        let out = rk()
+            .args(["assess", "--json", "--target"])
+            .arg(repo.path())
+            .env("GIT_DIR", git_dir.join(".git"))
+            .env("GIT_WORK_TREE", work_tree)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        serde_json::from_slice(&out).expect("one JSON object")
+    };
+    for (git_dir, work_tree) in [
+        (
+            Path::new("/nonexistent/rk-assess"),
+            Path::new("/nonexistent/rk-assess"),
+        ),
+        (foreign.path(), foreign.path()),
+    ] {
+        let report = assess(git_dir, work_tree);
+        assert_eq!(report["git"], true, "{report}");
+        assert_eq!(report["classification"], "greenfield", "{report}");
+        assert_eq!(report["forge"], "github", "{report}");
+        assert_eq!(report["repo"], "acme/widget", "{report}");
+        assert_eq!(report["tags"], 0, "{report}");
+    }
+
+    // A git that would translate its diagnostic under the caller's locale
+    // sees the pinned one instead: the fake refuses unless LC_ALL is C.
+    let fake = repo.path().join("localized-git");
+    std::fs::write(
+        &fake,
+        "#!/bin/sh\n[ \"$LC_ALL\" = C ] || { echo 'fatal: locale leaked' >&2; exit 128; }\necho 'fatal: not a git repository' >&2\nexit 128\n",
+    )
+    .expect("the fake git writes");
+    let mut permissions = std::fs::metadata(&fake).expect("metadata").permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+    std::fs::set_permissions(&fake, permissions).expect("chmod");
+    let plain = tempfile::tempdir().expect("a scratch dir exists");
+    rk().args(["assess", "--target"])
+        .arg(plain.path())
+        .env("RK_GIT_BIN", &fake)
+        .env("LC_ALL", "pt_BR.UTF-8")
+        .env("LANGUAGE", "pt_BR")
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("classification: greenfield")
+                .and(predicate::str::contains("git: not a repository")),
+        );
 }

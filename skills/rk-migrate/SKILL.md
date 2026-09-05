@@ -7,7 +7,7 @@ compatibility: Requires the rk binary on PATH; install with cargo install releas
 
 # rk-migrate
 
-Take a repository from wherever it is to the current release-kit convention. The work is a loop, not a script: observe, act on the smallest gap, re-observe, continue — and everything the operator must do by hand is gated, stated as an exact command, and verified after they run it.
+Take a repository from wherever it releases today to the current release-kit convention. The procedure this skill drives is `rk method migration`, with `rk guide migration` as its commands; read the chapter once per task and hold it. The work is a loop, not a script: observe, act on the smallest gap, re-observe, continue — and everything the operator must do by hand is gated, stated as an exact command, and verified after they run it.
 
 ## Before acting
 
@@ -16,67 +16,45 @@ Read two shared files before the first action of a task, in this order, and hold
 1. `~/.local/state/release-kit/skills/shared/pre-flight-gate.md` — run it whatever the request carries. It checks this host with `rk doctor` and stops the task on what no plan can work around. No flag skips it.
 2. `~/.local/state/release-kit/skills/shared/plan-gate.md` — it binds three phases: plan and present the plan for approval, validate that plan against every preview and read-only source phase 2 names, then execute it.
 
-The two gates are why this skill is safe to run: every verb below writes files, changes a forge, or publishes a version, the pre-flight says whether this host can run it at all, and the plan gate states which of those steps stay the operator's own.
+The two gates are why this skill is safe to run: every verb the runbook names writes files, changes a forge, or publishes a version, the pre-flight says whether this host can run it at all, and the plan gate states which of those steps stay the operator's own.
 
 When the request carries `--no-plan`, skip the plan gate's approval turn only. Still run the pre-flight, still state the ordered plan before acting, and still validate it as phase 2 directs.
 
-## The loop
+## Detect
 
-1. Observe: `rk doctor` for the host, `rk status --target .` for the landed payload (`--check` to judge), `rk setup check --target .` for the forge shape, `rk versions --check` for the pins.
-2. Classify every finding as one of: run it now, gate it for the operator, or already satisfied.
-3. Act on the automated findings, one at a time, smallest first.
-4. Re-run the observation that found the gap. A check that cannot be read is not a pass, and a failed check is never continued past — it is the next gap.
-5. Stop when `rk status --check`, `rk setup check`, and `rk versions --check` are green; the first release through `rk method operate` is the migration's proof.
+The pre-flight's last step already ran `rk assess --target . --json` and `rk status --target .`; this skill routes on what they returned, and the chapter's first section defines the verdicts.
 
-## What runs unattended
+- `brownfield` with no record is this skill's subject: the runbook, start to end.
+- `greenfield` belongs to the rk-setup skill, because there is nothing to migrate; hand off and stop.
+- `needs-decision` is the operator's call, asked with `AskUserQuestion` and the report's evidence — the tags, the branches — before any plan claims to know what the release activity is.
+- A recorded target routes by `rk status`, whatever the verdict says: an older record or a missing parameter is runbook step 2b, a mode or style change is step 2c, and drift is the finding the report names.
 
-| Finding                                                     | Act                                                                                                                                                                                                                                          |
-| ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A target with no landing record                             | Preview first: `rk adopt --target . --scopes <list> --workflow <mode> --style <style>` lists what differs from the selected candidate; align, then `--apply` (below)                                                                         |
-| A landed payload older than the binary                      | `rk upgrade --target . --apply`                                                                                                                                                                                                              |
-| A record without the scopes parameter                       | `rk upgrade --target . --scopes <list> --apply`, the list confirmed with the operator first                                                                                                                                                  |
-| A record without the style parameter                        | `rk upgrade --target . --style <style> --apply`, the style asked of the operator first (below)                                                                                                                                               |
-| A forge that forbids a request merging itself               | `rk setup step auto-merge --apply`                                                                                                                                                                                                           |
-| A missing hook block in `.pre-commit-config.yaml`           | The upgrade lands it; reconcile the config first, as below                                                                                                                                                                                   |
-| A missing or drifted forge protection                       | `rk setup step <name> --apply`                                                                                                                                                                                                               |
-| A squash title source that is not the request's title       | `rk setup step protect-trunk --apply` re-asserts it                                                                                                                                                                                          |
-| A squash message source that is not the request's body      | `rk setup step protect-trunk --apply` re-asserts it                                                                                                                                                                                          |
-| A hook block lacking the `rk-message` content guard         | `rk upgrade --target . --apply` re-renders the block; reconcile a hand-edited block first                                                                                                                                                    |
-| An unfilled `TODO(release-kit)` sentinel                    | Resolve it in the seeded file, from the project                                                                                                                                                                                              |
-| Stale installed skills                                      | `rk skill install --apply`                                                                                                                                                                                                                   |
-| A flake with no release-kit input                           | `rk devshell add --target .` prints the fragments; apply them in the listed order, then `rk devshell sync --caller operator --apply`                                                                                                         |
-| A predecessor bump mechanism, named by `rk devshell status` | `rk devshell clean --target . --apply`, then the `manual` entries by hand; the migration is not done while `leftovers` is non-empty, because a native mechanism wired over an unremoved predecessor is a failed migration, not a partial one |
+## The inventory
 
-Mechanical file edits can go to a subagent; every forge mutation stays in this loop, where its observation lives.
+The plan's body is the findings inventory the chapter shapes: one entry per gap runbook step 1 reports, with its disposition — run it now, gate it for the operator, already satisfied — its command by runbook step number, and the observation that verifies it. The inventory names `rk runs` for what the setup steps did and the landing record for what landed, and copies neither. A discovery returns to planning and is never handled inline.
 
-Before an upgrade lands the hook block into an existing `.pre-commit-config.yaml`, reconcile it as `rk guide setup` step 4 directs, and gate the choice between an existing hook and the landed one for the operator rather than stacking a second hook on one job.
-
-An adoption is a verification pass against one rendered candidate, and `--workflow` selects which candidate — `branches` by default, the compatibility-safe reading of a pre-record target; it never blesses the disk. Run the preview first: it lists every destination that differs from the selected candidate, and the pre-adoption alignment is to bring the two marked blocks to the candidate's bytes — `rk payload` and `rk snippet` print them — then re-run and apply. A refusal naming the blocks is that alignment still owed, not an error to force past.
-
-The skill reads the recorded mode and style from `rk status` and routes by both. A mode or style change is a named migration, never a side effect of a code-change request: `rk upgrade --workflow <mode>` or `rk upgrade --style <style>` previewed, applied on the operator's approval, committed through a pull request — then the transition for branches open across the change, each step stated and gated: main checkout to `master` and pulled, each open bare branch adopted with `rk worktree add <branch> --apply`. Under worktree mode, an off-path worktree or a bare-worked branch is a named step the same way — `rk worktree add` seats a bare branch, and `git worktree move`, named by the add refusal, brings an off-path seat home. The skill may also state the workspace layout from the worktree chapter as an option and render the promotion commands from the worktree runbook, and runs none of them: moving directories on the operator's disk is never a code change.
+Mechanical file edits — answering a sentinel, aligning a block to the candidate's bytes — can go to a subagent; every forge mutation stays in this loop, where its observation lives.
 
 ## What waits for the operator
 
 Gate each of these: print the exact command, say what it changes and why, wait, then re-observe before continuing.
 
-- `rk setup step single-trunk --apply` — destructive; it deletes retired long-lived branches, and its ancestry guard refusing is a stop, not an obstacle.
+- Removing a protection from a live branch, on any forge — runbook steps 3a and 5a.
+- `rk setup step single-trunk --apply` — runbook step 5b; destructive, and its ancestry guard refusing is a stop, not an obstacle.
 - `install-bot` and `bot-secrets` — the bot identity and its credentials; `rk forge <name>` carries the walkthrough.
 - Registry actions: the first hand publish, registering the trusted publisher, turning on enforcement. `rk guide setup` names each with its reason.
-- Removing an existing protection from a live branch, on any forge.
-- The release style, on a record that predates it. Ask it with `AskUserQuestion` the way rk-setup's step 6 states, because arming an existing project's release request changes what a green trunk does; then `rk upgrade --style <style>`, previewed, and the visible diff is the arming line in the release workflow.
-- The development environment, where the project obtains `rk` by a host install or a hand-rolled bump. Ask it with `AskUserQuestion` the way rk-setup's step 6 states, with the replacement as the default: the devshell pin supersedes what is there, `rk devshell clean` removes what it can judge, and `rk guide setup` carries the procedure in its order.
+- The release style, on a record that predates it — runbook step 2b. Ask it with `AskUserQuestion` the way rk-setup's step 6 states, because arming an existing project's release request changes what a green trunk does.
+- The development environment, where the project obtains `rk` by a host install or a hand-rolled bump — runbook step 6. Ask it with `AskUserQuestion` the way rk-setup's step 6 states, with the replacement as the default; the migration is not done while the cleanup's `leftovers` list is non-empty.
+- The predecessor's removal itself, and every other removal: what it removes is committed first, per the chapter's recoverability section.
+- A workspace promotion under worktree mode: the skill may state the layout from `rk method worktrees` and render the commands from `rk guide worktree` step 5, and runs none of them; moving directories on the operator's disk is never a code change.
 
-## From the retired two-branch flow
+## When it goes wrong
 
-A repository still running an integration branch plus a gated release branch migrates in this order, because each protection refuses the step after it:
-
-1. Land the current payload's files on the old default branch; prove them with the project's own checks.
-2. Gate: remove the old release-branch protection — its pull-request-only rule refuses the fast-forward that comes next.
-3. Fast-forward the trunk to the integrated tip; CI proves the landing there, not on the old branch.
-4. `rk setup step default-branch --apply` makes the trunk the default.
-5. `rk setup step protect-trunk --apply --required-check <name>`, then `protect-tags`; `protect-release-lines` only where older lines exist.
-6. Gate: remove the old integration branch's protection, then the one-way door — `rk setup step single-trunk --apply`.
-7. `rk setup check --target .` and `rk status --check --target .` green end the migration.
+- A check that cannot be read is not a pass, and a failed check is never continued past: it is the next entry, and the step that failed is the whole of the next action.
+- A refusal from `rk adopt` naming the two marked blocks is the alignment still owed — runbook step 2a — never an error to force past.
+- A refusal from `rk upgrade` naming a conflict is a release-kit-owned file the target edited: reconcile it as `rk guide setup` step 4d directs, then rerun; never widen the plan to keep the edit.
+- An interrupted migration resumes from the inventory: runbook step 7a reruns the observations and continues from the first entry they do not satisfy.
+- A gap the observations report that the inventory does not name returns to planning before anything runs.
 
 ## Defaults
 
@@ -84,3 +62,4 @@ A repository still running an integration branch plus a gated release branch mig
 - Prefer an rk verb over a raw forge call; where no verb covers the gap, use the forge CLI and say that the loop is outside the convention there.
 - Report every gated step's outcome from observation, never from the operator's word alone.
 - Leave the repository releasable at every stop: a migration interrupted between steps must break no existing flow.
+- Never widen an approved scope inline: a mode or style change, a second branch, a workspace move is its own entry, approved at its own size.

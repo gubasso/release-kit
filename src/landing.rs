@@ -106,6 +106,16 @@ pub fn kind_of(destination: &str) -> Option<Kind> {
         .map(|(_, kind)| *kind)
 }
 
+/// Every destination the payload can land — the whole files and the two
+/// block destinations — in declaration order. The classification reads
+/// it to ask whether a destination is already present at a target.
+pub fn destinations() -> impl Iterator<Item = &'static str> {
+    KINDS
+        .iter()
+        .map(|(name, _)| *name)
+        .chain([AGENTS_DESTINATION, HOOKS_DESTINATION])
+}
+
 /// The mechanical substitution sites in `rendered` files.
 ///
 /// Known values, substituted identically everywhere each appears. The

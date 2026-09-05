@@ -56,6 +56,7 @@ fn run(cli: &Cli) -> Result<(), RkError> {
         Commands::Status(args) => commands::status::run(args),
         Commands::Upgrade(args) => commands::upgrade::run(args),
         Commands::Adopt(args) => commands::adopt::run(args),
+        Commands::Assess(args) => commands::assess::run(args),
         Commands::Setup(args) => commands::setup::run(args),
         Commands::Branches(args) => commands::branches::run(args),
         Commands::Lines(args) => commands::lines::run(args),
@@ -116,6 +117,7 @@ const fn name(command: &Commands) -> &'static str {
         Commands::Status(_) => "status",
         Commands::Upgrade(_) => "upgrade",
         Commands::Adopt(_) => "adopt",
+        Commands::Assess(_) => "assess",
         Commands::Setup(_) => "setup",
         Commands::Branches(_) => "branches",
         Commands::Lines(_) => "lines",
@@ -147,6 +149,7 @@ const fn wants_json(command: &Commands) -> bool {
         Commands::Status(args) => args.json,
         Commands::Upgrade(args) => args.json,
         Commands::Adopt(args) => args.json,
+        Commands::Assess(args) => args.json,
         Commands::Versions(args) => args.json,
         Commands::Doctor(args) => args.json,
         Commands::Setup(args) => match &args.action {

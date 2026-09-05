@@ -2,7 +2,7 @@
 
 External sources behind `SPEC-landing.md`: how comparable tools record what they generated into a project, how they judge whether it is still theirs, and what each one does when it is not. Each entry states what the source says and which rule it bears on.
 
-Verified against the listed sources on 2026-08-28 and re-checked on 2026-08-29; the arming entries verified on 2026-09-03.
+Verified against the listed sources on 2026-08-28 and re-checked on 2026-08-29; the arming entries verified on 2026-09-03; the release-marker entries verified on 2026-09-05.
 
 ## cargo-dist, on generated files that refuse to drift
 
@@ -100,3 +100,12 @@ The Nix-owned destinations the payload names, verified against the Nix reference
 - <https://nix.dev/manual/nix/latest/command-ref/new-cli/nix3-flake-lock>
 
 Bearing: `landing:the-flake-pair-lands-all-or-nothing`, and `placement:a-third-party-destination-names-its-source` for `flake.nix` and `flake.lock`.
+
+## semantic-release and GoReleaser, on where their configuration lives
+
+semantic-release reads its configuration from `.releaserc` with no extension or with `.yaml`, `.yml`, `.json`, `.js`, `.cjs`, or `.mjs`, from `release.config.js`, `release.config.cjs`, or `release.config.mjs`, or from a `release` key in `package.json`. GoReleaser looks for `.config/goreleaser.yml`, `.config/goreleaser.yaml`, `.goreleaser.yml`, `.goreleaser.yaml`, `goreleaser.yml`, and `goreleaser.yaml`, in that order.
+
+- <https://semantic-release.gitbook.io/semantic-release/usage/configuration>
+- <https://goreleaser.com/customization/>
+
+Bearing: `landing:a-landing-classifies-its-target-first`. The marker catalog `rk assess` reads, `RELEASE_MARKERS` in `src/assess.rs`, carries every documented name, and `package.json` counts only with the `release` key, because an ordinary Node manifest is not a release mechanism.

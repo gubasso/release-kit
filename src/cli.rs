@@ -3,6 +3,7 @@
 //! its handler in `commands`.
 
 pub mod adopt;
+pub mod assess;
 pub mod branches;
 pub mod completions;
 pub mod devshell;
@@ -57,6 +58,8 @@ pub enum Commands {
     Upgrade(upgrade::UpgradeArgs),
     /// Record a target landed before the record existed.
     Adopt(adopt::AdoptArgs),
+    /// Classify a target before anything lands: greenfield, brownfield, or needs-decision.
+    Assess(assess::AssessArgs),
     /// Execute the repository-side setup against the detected forge.
     Setup(setup::SetupArgs),
     /// Report and prune local branches the forge already merged.

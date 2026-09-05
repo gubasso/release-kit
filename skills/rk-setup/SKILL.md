@@ -36,6 +36,7 @@ When the request carries `--no-plan`, skip the plan gate's approval turn only. S
 | Print the pinned-tool registry             | `rk versions`              |
 | List the executable setup steps            | `rk setup --list`          |
 | A landed target's own report               | `rk status --target .`     |
+| The verdict on a target with no record     | `rk assess --target .`     |
 | Judge a message against the content guards | `rk message --check`       |
 | The merged branches this clone still holds | `rk branches prune`        |
 | The worktree lifecycle, as commands        | `rk guide worktree`        |
@@ -56,7 +57,7 @@ Skills and the agent setup install at user scope only — `rk skill install --ap
 1. Detect the technology: `Cargo.toml` means rust, `pyproject.toml` means python, a `VERSION` file or a plain script tree means bash. When none of the bindings fit, stop and say so; the method still applies, the files do not. In the same pass run `rk devshell status --target .` and read whether the project carries a flake, an `.envrc`, the release-kit input, and any leftover of a predecessor bump mechanism — the `leftovers` list, reported whatever the state is.
 2. Read the spine and the binding before touching anything: `rk method model`, `rk method invariants`, and `rk binding <tech>`.
 3. Check freshness with `rk versions --check`, a verb that fetches: it compares each version pin against its source and resolves each action pin's discovery ref against the pinned execution commit. `update-available` and `ref-moved` are updates to review — read the release notes for what moved — never incidents; `no-version-source` marks a pin whose freshness signal is its ref alone. Prefer the latest version when landing; where the landed file then diverges from the snippet, say what moved and why.
-4. Check for an existing landing first: `rk status --target .`. A target already carrying `.release-kit/manifest.json` takes `rk upgrade`, not a second landing, and `rk init --apply` refuses over one.
+4. Check for an existing landing first: `rk status --target .`. A target already carrying `.release-kit/manifest.json` takes `rk upgrade`, not a second landing, and `rk init --apply` refuses over one. A target with no record routes by the pre-flight's verdict: `greenfield` lands here, `brownfield` belongs to the rk-migrate skill because a payload landed beside another release mechanism is a second release path, and `needs-decision` is the operator's answer first.
 5. Decide the scopes. `rk init --apply` refuses without `--scopes`, the comma-separated Conventional Commit scopes the project accepts, rendered into the title check, the commit hook, and the routing block. Derive the list from the project's own structure — its modules, packages, or ownership zones — and from `git log --format=%s`, present it, and let the operator adjust before landing.
 6. Decide the workflow mode, the release style, the Nix opt-in, and the development environment in the same planning turn, with `AskUserQuestion` beside the binding and forge choices; the answers flow into the planned `rk init` flags.
    - The workflow mode: `--workflow worktree` (the default, recommended — every code-changing branch in a linked worktree, the main checkout commits nothing) or `--workflow branches` (branches worked in the main checkout, worktrees optional beside them). `rk method worktrees` owns the trade.
@@ -77,4 +78,4 @@ The landed files hold the invariants of `rk method invariants`: exactly one work
 - Never run the setup steps out of order; each one names what the next depends on.
 - Never edit a generated artifact workflow by hand; change its configuration and regenerate, as the binding directs.
 - Never answer provenance with a signing scheme of your own; take what the channel offers by default, and where it offers nothing, say so rather than implying otherwise.
-- A project that already carries a partial setup gets the same sequence, skipping only what is verifiably done.
+- A greenfield project that already carries part of the setup gets the same sequence, skipping only what is verifiably done; a brownfield one is the rk-migrate skill's, through `rk guide migration`.
