@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.19](https://github.com/gubasso/release-kit/compare/v0.2.18...v0.2.19) - 2026-09-05
+
+### Added
+
+- *(cli)* add rk assess and the migration chapter ([#69](https://github.com/gubasso/release-kit/pull/69))
+
 ## [0.2.18](https://github.com/gubasso/release-kit/compare/v0.2.17...v0.2.18) - 2026-09-04
 
 ### Other
