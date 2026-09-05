@@ -12337,18 +12337,22 @@ fn assess_reads_tags_and_long_lived_branches_from_git() {
     assert_eq!(clean["forge"], "github");
     assert_eq!(clean["repo"], "acme/widget");
 
+    // A topic branch is not long-lived, whatever its last segment is.
     git_in(repo.path(), &["branch", "feat/topic"]);
+    git_in(repo.path(), &["branch", "feat/develop"]);
     let topic = verdict(&[]);
     assert_eq!(topic["classification"], "greenfield", "{topic}");
 
     git_in(repo.path(), &["branch", "develop"]);
+    git_in(repo.path(), &["branch", "release/1.2"]);
     let branched = verdict(&[]);
     assert_eq!(branched["classification"], "needs-decision", "{branched}");
     assert_eq!(
         branched["long_lived_branches"],
-        serde_json::json!(["develop"])
+        serde_json::json!(["develop", "release/1.2"])
     );
     git_in(repo.path(), &["branch", "-D", "develop"]);
+    git_in(repo.path(), &["branch", "-D", "release/1.2"]);
 
     git_in(repo.path(), &["tag", "v0.1.0"]);
     let tagged = verdict(&[]);
@@ -12436,4 +12440,155 @@ fn assess_refuses_a_missing_target_and_a_broken_record() {
         .arg(target.path())
         .assert()
         .code(73);
+}
+
+/// Every documented configuration name of another release tool is a
+/// marker, and `package.json` is one only with the `release` key
+/// semantic-release reads, so an ordinary Node project stays unmarked.
+#[test]
+fn assess_recognizes_the_documented_marker_names() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    let verdict = || -> serde_json::Value {
+        let out = rk()
+            .args(["assess", "--json", "--target"])
+            .arg(target.path())
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        serde_json::from_slice(&out).expect("one JSON object")
+    };
+    std::fs::write(
+        target.path().join("package.json"),
+        "{\"name\": \"widget\"}\n",
+    )
+    .expect("writes");
+    let plain = verdict();
+    assert_eq!(plain["classification"], "greenfield", "{plain}");
+
+    std::fs::write(
+        target.path().join("package.json"),
+        "{\"name\": \"widget\", \"release\": {\"branches\": [\"master\"]}}\n",
+    )
+    .expect("writes");
+    let keyed = verdict();
+    assert_eq!(keyed["classification"], "brownfield", "{keyed}");
+    assert_eq!(
+        keyed["release_markers"],
+        serde_json::json!(["package.json"])
+    );
+
+    std::fs::create_dir_all(target.path().join(".config")).expect("creates");
+    std::fs::write(target.path().join(".config/goreleaser.yml"), "version: 2\n").expect("writes");
+    std::fs::write(
+        target.path().join("release.config.mjs"),
+        "export default {}\n",
+    )
+    .expect("writes");
+    let marked = verdict();
+    assert_eq!(
+        marked["release_markers"],
+        serde_json::json!([
+            ".config/goreleaser.yml",
+            "package.json",
+            "release.config.mjs"
+        ])
+    );
+}
+
+/// An unreadable history is not an absent one: a git that runs and
+/// refuses — anything but a plain "not a repository" — is the run's
+/// failure, never a greenfield verdict.
+#[test]
+fn assess_refuses_when_git_cannot_answer() {
+    let repo = branch_fixture();
+    let fake = repo.path().join("failing-git");
+    std::fs::write(
+        &fake,
+        "#!/bin/sh\ncase \"$*\" in *rev-parse*) exit 0;; esac\necho 'fatal: bad object' >&2\nexit 128\n",
+    )
+    .expect("the fake git writes");
+    let mut permissions = std::fs::metadata(&fake).expect("metadata").permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+    std::fs::set_permissions(&fake, permissions).expect("chmod");
+    rk().args(["assess", "--target"])
+        .arg(repo.path())
+        .env("RK_GIT_BIN", &fake)
+        .assert()
+        .code(70)
+        .stderr(predicate::str::contains("bad object"));
+}
+
+/// Repository discovery answers for the target alone: an inherited
+/// `GIT_DIR` naming a missing repository does not redirect the probe, and
+/// the diagnostic the probe reads arrives in the `C` locale whatever the
+/// caller's locale is.
+#[test]
+fn assess_discovers_the_repository_under_a_foreign_git_dir_and_locale() {
+    let repo = branch_fixture();
+    // A foreign but valid repository, with its own origin and its own
+    // history, standing in for the hook's repository a caller inherits.
+    let foreign = branch_fixture();
+    git_in(
+        foreign.path(),
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://gitlab.com/other/thing.git",
+        ],
+    );
+    git_in(foreign.path(), &["tag", "v9.9.9"]);
+    let assess = |git_dir: &Path, work_tree: &Path| -> serde_json::Value {
+        let out = rk()
+            .args(["assess", "--json", "--target"])
+            .arg(repo.path())
+            .env("GIT_DIR", git_dir.join(".git"))
+            .env("GIT_WORK_TREE", work_tree)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        serde_json::from_slice(&out).expect("one JSON object")
+    };
+    for (git_dir, work_tree) in [
+        (
+            Path::new("/nonexistent/rk-assess"),
+            Path::new("/nonexistent/rk-assess"),
+        ),
+        (foreign.path(), foreign.path()),
+    ] {
+        let report = assess(git_dir, work_tree);
+        assert_eq!(report["git"], true, "{report}");
+        assert_eq!(report["classification"], "greenfield", "{report}");
+        assert_eq!(report["forge"], "github", "{report}");
+        assert_eq!(report["repo"], "acme/widget", "{report}");
+        assert_eq!(report["tags"], 0, "{report}");
+    }
+
+    // A git that would translate its diagnostic under the caller's locale
+    // sees the pinned one instead: the fake refuses unless LC_ALL is C.
+    let fake = repo.path().join("localized-git");
+    std::fs::write(
+        &fake,
+        "#!/bin/sh\n[ \"$LC_ALL\" = C ] || { echo 'fatal: locale leaked' >&2; exit 128; }\necho 'fatal: not a git repository' >&2\nexit 128\n",
+    )
+    .expect("the fake git writes");
+    let mut permissions = std::fs::metadata(&fake).expect("metadata").permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+    std::fs::set_permissions(&fake, permissions).expect("chmod");
+    let plain = tempfile::tempdir().expect("a scratch dir exists");
+    rk().args(["assess", "--target"])
+        .arg(plain.path())
+        .env("RK_GIT_BIN", &fake)
+        .env("LC_ALL", "pt_BR.UTF-8")
+        .env("LANGUAGE", "pt_BR")
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("classification: greenfield")
+                .and(predicate::str::contains("git: not a repository")),
+        );
 }

@@ -94,9 +94,21 @@ On github:
 ```bash
 gh api "repos/<repo>/rulesets" -q '.[] | "\(.id) \(.name)"'
 # check: names the ruleset guarding the retired release branch
+gh api "repos/<repo>/rulesets/<id>" -q '.conditions.ref_name'
+# check: the include list names the retired branch alone; a ruleset that also names a live branch is edited, never deleted
+gh api "repos/<repo>/rulesets/<id>" > ../ruleset-<id>.json
+# check: the whole ruleset is held outside the repository, so a deletion can be recreated from it
 gh api -X DELETE "repos/<repo>/rulesets/<id>"
 gh api "repos/<repo>/branches/<old-release-branch>/protection" >/dev/null 2>&1 && gh api -X DELETE "repos/<repo>/branches/<old-release-branch>/protection"
 # check: the ruleset list no longer names it, and the classic protection read 404s
+```
+
+- the ruleset also names a live branch: keep it, and update it in place instead of deleting it. The update body carries only the writable fields, with the retired branch taken out of the include list:
+
+```bash
+jq '{name, target, enforcement, bypass_actors, conditions, rules} | .conditions.ref_name.include -= ["refs/heads/<old-release-branch>"]' ../ruleset-<id>.json | gh api -X PUT "repos/<repo>/rulesets/<id>" --input -
+gh api "repos/<repo>/rulesets/<id>" -q '.conditions.ref_name.include'
+# check: names only live branches; the saved JSON still recreates the ruleset as it stood
 ```
 
 On gitlab:

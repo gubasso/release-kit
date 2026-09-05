@@ -16,23 +16,40 @@ use std::process::Command;
 use camino::Utf8Path;
 use serde::Serialize;
 
+use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
 use crate::landing::{self, manifest};
 use crate::setup::context::TRUNK_BRANCH;
 
-/// Files that mark a release mechanism, whichever tool owns it. The
-/// payload's own destinations are judged separately, as collisions; this
-/// list is what other tools leave behind.
-pub const RELEASE_MARKERS: [&str; 15] = [
+/// The prefix of the convention's own long-lived branch form.
+const RELEASE_LINE_PREFIX: &str = "release/";
+
+/// Files that mark a release mechanism, whichever tool owns it.
+///
+/// The payload's own destinations are judged separately, as collisions;
+/// this list is what other tools leave behind: every configuration name
+/// semantic-release and `GoReleaser` document, release-plz's dotted form,
+/// the workflow names a hand-rolled publish commonly takes, and a
+/// changelog. `package.json` joins the list only when it carries the
+/// top-level `release` key semantic-release reads, judged in [`gather`].
+pub const RELEASE_MARKERS: [&str; 23] = [
     ".release-plz.toml",
     ".releaserc",
+    ".releaserc.cjs",
     ".releaserc.js",
     ".releaserc.json",
+    ".releaserc.mjs",
     ".releaserc.yaml",
     ".releaserc.yml",
+    "release.config.cjs",
     "release.config.js",
+    "release.config.mjs",
+    ".config/goreleaser.yaml",
+    ".config/goreleaser.yml",
     ".goreleaser.yaml",
     ".goreleaser.yml",
+    "goreleaser.yaml",
+    "goreleaser.yml",
     ".github/workflows/publish.yml",
     ".github/workflows/publish.yaml",
     ".github/workflows/release.yaml",
@@ -41,9 +58,12 @@ pub const RELEASE_MARKERS: [&str; 15] = [
     "CHANGES.md",
 ];
 
-/// Branch names that conventionally outlive a topic: a second one beside
-/// the trunk is the retired two-branch flow, or a trunk under another
-/// name, and either is a migration step.
+/// Branch names that conventionally outlive a topic.
+///
+/// A second one beside the trunk is the retired two-branch flow, or a
+/// trunk under another name, and either is a migration step. A
+/// `release/<line>` branch — the convention's own long-lived form — is
+/// recognized by its prefix.
 pub const LONG_LIVED_BRANCHES: [&str; 11] = [
     "master",
     "main",
@@ -138,9 +158,11 @@ pub fn classify(evidence: &Evidence) -> Classification {
 /// # Errors
 ///
 /// Returns the record's own failure taxonomy for an unreadable or unknown
-/// landing record — a broken record must not silently classify — and
+/// landing record — a broken record must not silently classify —
 /// [`RkError::Io`] for a disk read that fails for a reason other than
-/// absence.
+/// absence, and [`RkError::Subprocess`] where git runs but cannot answer
+/// for a repository, because an observation that cannot be read is not a
+/// pass and must never read as an absent release history.
 pub fn gather(target: &Utf8Path) -> Result<Evidence, RkError> {
     let record = manifest::load(target)?;
     let landing = Landing {
@@ -153,6 +175,9 @@ pub fn gather(target: &Utf8Path) -> Result<Evidence, RkError> {
         .filter(|marker| target.join(marker).is_file())
         .map(|marker| (*marker).to_owned())
         .collect();
+    if package_json_names_a_release(target)? {
+        release_markers.push("package.json".to_owned());
+    }
     release_markers.sort();
     let mut collisions = Vec::new();
     for destination in landing::destinations() {
@@ -161,7 +186,7 @@ pub fn gather(target: &Utf8Path) -> Result<Evidence, RkError> {
         }
     }
     collisions.sort();
-    let (git, tags, long_lived_branches) = git_evidence(target);
+    let (git, tags, long_lived_branches) = git_evidence(target)?;
     Ok(Evidence {
         landing,
         tech: crate::detect::tech_of(target.as_std_path()),
@@ -175,63 +200,157 @@ pub fn gather(target: &Utf8Path) -> Result<Evidence, RkError> {
     })
 }
 
+/// Whether `package.json` carries the top-level `release` key
+/// semantic-release reads its configuration from. An ordinary Node
+/// project's manifest is not a release marker; only that key is.
+fn package_json_names_a_release(target: &Utf8Path) -> Result<bool, RkError> {
+    let path = target.join("package.json");
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(RkError::Io(e)),
+    };
+    // A manifest that does not parse is not evidence of a release
+    // mechanism; the tool that would read it fails on it too.
+    Ok(serde_json::from_slice::<serde_json::Value>(&bytes)
+        .ok()
+        .and_then(|value| value.get("release").map(|_| ()))
+        .is_some())
+}
+
 /// The git-borne evidence: whether the target is a repository, how many
 /// tags it holds, and which long-lived branches stand beside the trunk.
-/// A target git cannot read answers `false` and empty — an observation,
-/// never a failure, because a plain directory is a legitimate greenfield.
-fn git_evidence(target: &Utf8Path) -> (bool, usize, Vec<String>) {
-    let Some(tags) = git_lines(target, &["tag", "--list"]) else {
-        return (false, 0, Vec::new());
-    };
+///
+/// A directory git positively reports as no repository answers `false`
+/// and empty — an observation, never a failure, because a plain
+/// directory is a legitimate greenfield. Every other refusal — a
+/// corrupt repository, an ownership refusal, a git that does not run —
+/// is an error, because an unreadable history must not read as none.
+fn git_evidence(target: &Utf8Path) -> Result<(bool, usize, Vec<String>), RkError> {
+    match git_lines(target, &["rev-parse", "--git-dir"]) {
+        Ok(_) => {}
+        Err(GitFailure::NotARepository) => return Ok((false, 0, Vec::new())),
+        Err(GitFailure::Other(error)) => return Err(error),
+    }
+    let tags = git_lines(target, &["tag", "--list"]).map_err(GitFailure::into_error)?;
     let refs = git_lines(
         target,
         &[
             "for-each-ref",
-            "--format=%(refname:short)",
+            "--format=%(refname)",
             "refs/heads",
             "refs/remotes",
         ],
     )
-    .unwrap_or_default();
-    (true, tags.len(), long_lived_among(&refs))
+    .map_err(GitFailure::into_error)?;
+    Ok((true, tags.len(), long_lived_among(&refs)))
 }
 
-/// The long-lived branch names among `refs`, the trunk excluded and the
-/// remote prefix stripped, each name once, in the catalog's order.
+/// The long-lived branch names among `refs`, given as full ref names.
+///
+/// `refs/heads/<name>` keeps its whole name, `refs/remotes/<remote>/<name>`
+/// drops the remote alone, and a remote `HEAD` pointer is skipped. A
+/// name is long-lived when it is a catalog entry other than the trunk or
+/// carries the release-line prefix; each appears once, sorted.
 #[must_use]
 pub fn long_lived_among(refs: &[String]) -> Vec<String> {
-    let names: Vec<&str> = refs
-        .iter()
-        .map(|name| name.split_once('/').map_or(name.as_str(), |(_, rest)| rest))
-        .collect();
-    LONG_LIVED_BRANCHES
-        .iter()
-        .filter(|candidate| **candidate != TRUNK_BRANCH)
-        .filter(|candidate| names.contains(candidate))
-        .map(|candidate| (*candidate).to_owned())
-        .collect()
+    let mut names = std::collections::BTreeSet::new();
+    for reference in refs {
+        let name = if let Some(local) = reference.strip_prefix("refs/heads/") {
+            local
+        } else if let Some(remote) = reference.strip_prefix("refs/remotes/") {
+            match remote.split_once('/') {
+                Some((_, "HEAD")) | None => continue,
+                Some((_, name)) => name,
+            }
+        } else {
+            continue;
+        };
+        let catalogued = name != TRUNK_BRANCH && LONG_LIVED_BRANCHES.contains(&name);
+        if catalogued || name.starts_with(RELEASE_LINE_PREFIX) {
+            names.insert(name.to_owned());
+        }
+    }
+    names.into_iter().collect()
 }
 
-/// The non-empty stdout lines of one git call, or `None` where git did
-/// not run or refused — a directory that is not a repository.
-fn git_lines(target: &Utf8Path, args: &[&str]) -> Option<Vec<String>> {
-    let out = Command::new(crate::probes::git_bin())
+/// Why one git call gave no answer.
+enum GitFailure {
+    /// Git ran and said the target is not a repository.
+    NotARepository,
+    /// Git did not run, or ran and refused for another reason.
+    Other(RkError),
+}
+
+impl GitFailure {
+    /// After the target is known to be a repository, every failure is
+    /// the same kind: a history that cannot be read.
+    fn into_error(self) -> RkError {
+        match self {
+            Self::NotARepository => RkError::subprocess(
+                Diagnostic::new(
+                    Reason::SubprocessFailed,
+                    "git stopped answering for a repository it had just recognized",
+                )
+                .expected("a readable repository"),
+            ),
+            Self::Other(error) => error,
+        }
+    }
+}
+
+/// The non-empty stdout lines of one git call.
+///
+/// The call answers for the `-C` target alone: the variables a running
+/// hook exports are scrubbed, so an inherited `GIT_DIR` cannot redirect
+/// the probe at another repository, and the locale is pinned to `C`, so
+/// the one diagnostic this module reads — git's own "not a git
+/// repository" — arrives untranslated.
+fn git_lines(target: &Utf8Path, args: &[&str]) -> Result<Vec<String>, GitFailure> {
+    let mut command = Command::new(crate::probes::git_bin());
+    for var in crate::maintenance::GIT_HOOK_VARS {
+        command.env_remove(var);
+    }
+    let out = command
+        .env("LC_ALL", "C")
+        .env_remove("LANGUAGE")
         .arg("-C")
         .arg(target)
         .args(args)
         .output()
-        .ok()?;
+        .map_err(|error| {
+            GitFailure::Other(RkError::subprocess(
+                Diagnostic::new(
+                    Reason::SubprocessSpawn,
+                    format!("git could not be spawned: {error}"),
+                )
+                .expected("git on PATH, or RK_GIT_BIN naming it"),
+            ))
+        })?;
     if !out.status.success() {
-        return None;
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        if stderr.contains("not a git repository") {
+            return Err(GitFailure::NotARepository);
+        }
+        return Err(GitFailure::Other(RkError::subprocess(
+            Diagnostic::new(
+                Reason::SubprocessFailed,
+                format!(
+                    "git {} failed at {target}: {}",
+                    args.join(" "),
+                    stderr.trim()
+                ),
+            )
+            .expected("git answering for the target, or a target that is not a repository")
+            .action("an unreadable history is not an absent one; repair the repository or its ownership before classifying"),
+        )));
     }
-    Some(
-        String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .map(str::to_owned)
-            .collect(),
-    )
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_owned)
+        .collect())
 }
 
 #[cfg(test)]
@@ -291,24 +410,33 @@ mod tests {
         assert_eq!(classify(&branched), Classification::NeedsDecision);
     }
 
-    /// The trunk is never evidence against itself; a remote prefix is
-    /// stripped; a topic branch is not long-lived; a name appears once.
+    /// The trunk is never evidence against itself; only the remote
+    /// segment is stripped, so a topic branch whose last segment is a
+    /// catalog name stays a topic branch; a release line is recognized
+    /// by its prefix; a remote HEAD pointer is skipped; each name once.
     #[test]
-    fn long_lived_branches_are_read_from_the_refs() {
+    fn long_lived_branches_are_read_from_the_full_ref_names() {
         let refs: Vec<String> = [
-            "master",
-            "origin/master",
-            "origin/HEAD",
-            "develop",
-            "origin/develop",
-            "feat/x",
-            "origin/main",
+            "refs/heads/master",
+            "refs/remotes/origin/master",
+            "refs/remotes/origin/HEAD",
+            "refs/heads/develop",
+            "refs/remotes/origin/develop",
+            "refs/heads/feat/x",
+            "refs/heads/feat/develop",
+            "refs/remotes/origin/main",
+            "refs/heads/release/1.2",
+            "refs/remotes/upstream/release/1.2",
         ]
         .iter()
         .map(|name| (*name).to_owned())
         .collect();
-        assert_eq!(long_lived_among(&refs), vec!["main", "develop"]);
-        assert!(long_lived_among(&["master".to_owned()]).is_empty());
+        assert_eq!(
+            long_lived_among(&refs),
+            vec!["develop", "main", "release/1.2"]
+        );
+        assert!(long_lived_among(&["refs/heads/master".to_owned()]).is_empty());
+        assert!(long_lived_among(&["refs/heads/feat/develop".to_owned()]).is_empty());
     }
 
     #[test]

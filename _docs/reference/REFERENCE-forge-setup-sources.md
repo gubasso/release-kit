@@ -19,14 +19,14 @@ Bearing: `forge-setup:a-step-is-idempotent`. Separate create and update endpoint
 
 ## Removing a protection from a retired branch
 
-A ruleset is deleted with `DELETE /repos/{owner}/{repo}/rulesets/{ruleset_id}`, listed first by `GET /repos/{owner}/{repo}/rulesets`; a classic branch protection is read with `GET /repos/{owner}/{repo}/branches/{branch}/protection` and removed with `DELETE` on the same path, which returns 204 and removes every rule on that branch. On GitLab, `GET /projects/:id/protected_branches` lists the protected branches and `DELETE /projects/:id/protected_branches/:name` unprotects one, with `:id` the project's numeric id or its URL-encoded path. `glab api` replaces `:id` in the endpoint with the current directory's project, and `--method` or its `-X` shorthand overrides the request method.
+A ruleset is deleted with `DELETE /repos/{owner}/{repo}/rulesets/{ruleset_id}`, listed first by `GET /repos/{owner}/{repo}/rulesets`, whose entries carry the id and name and not the conditions; `GET /repos/{owner}/{repo}/rulesets/{ruleset_id}` returns the whole ruleset, its `conditions.ref_name.include` list included, and `PUT` on the same path updates it in place from a body carrying `name`, `target`, `enforcement`, `bypass_actors`, `conditions`, and `rules` alone — the read-only fields a `GET` returns, such as `id`, `source`, and the timestamps, are not part of the update representation; a classic branch protection is read with `GET /repos/{owner}/{repo}/branches/{branch}/protection` and removed with `DELETE` on the same path, which returns 204 and removes every rule on that branch. On GitLab, `GET /projects/:id/protected_branches` lists the protected branches and `DELETE /projects/:id/protected_branches/:name` unprotects one, with `:id` the project's numeric id or its URL-encoded path. `glab api` replaces `:id` in the endpoint with the current directory's project, and `--method` or its `-X` shorthand overrides the request method.
 
 - <https://docs.github.com/en/rest/repos/rules>
 - <https://docs.github.com/en/rest/branches/branch-protection>
 - <https://docs.gitlab.com/api/protected_branches/>
 - <https://docs.gitlab.com/cli/api/>
 
-Bearing: `runbooks/migration.md` steps 3a and 5a, the two gated removals a migration from the retired two-branch flow makes before the trunk can be fast-forwarded and before `single-trunk` can delete the integration branch. Both forms are read first and deleted second, because a repository may carry either a ruleset or a classic protection on the retired branch and the runbook must find whichever stands.
+Bearing: `runbooks/migration.md` steps 3a and 5a, the two gated removals a migration from the retired two-branch flow makes before the trunk can be fast-forwarded and before `single-trunk` can delete the integration branch. Both forms are read first and deleted second, because a repository may carry either a ruleset or a classic protection on the retired branch and the runbook must find whichever stands. The single ruleset is read before its deletion because one ruleset may guard several branches, and deleting it for the retired one would strip a live one.
 
 ## GITHUB_TOKEN and recursive workflow triggering
 

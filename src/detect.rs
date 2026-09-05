@@ -66,9 +66,17 @@ pub struct Detection {
 }
 
 /// Read the `origin` remote of `dir` and map it, without judging.
+///
+/// The read answers for `dir` alone: the variables a running hook
+/// exports are scrubbed, so an inherited `GIT_DIR` cannot answer with
+/// another repository's remote.
 #[must_use]
 pub fn detect(dir: &Path) -> Detection {
-    let out = Command::new(crate::probes::git_bin())
+    let mut command = Command::new(crate::probes::git_bin());
+    for var in crate::maintenance::GIT_HOOK_VARS {
+        command.env_remove(var);
+    }
+    let out = command
         .args(["-C"])
         .arg(dir)
         .args(["remote", "get-url", "origin"])
