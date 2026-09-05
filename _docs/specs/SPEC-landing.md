@@ -15,6 +15,7 @@
   - [`landing:a-dropped-file-stays` — A dropped file stays](#landinga-dropped-file-stays--a-dropped-file-stays)
   - [`landing:a-target-is-never-downgraded` — A target is never downgraded](#landinga-target-is-never-downgraded--a-target-is-never-downgraded)
   - [`landing:status-judges-only-under-check` — Status judges only under check](#landingstatus-judges-only-under-check--status-judges-only-under-check)
+  - [`landing:a-landing-classifies-its-target-first` — A landing classifies its target first](#landinga-landing-classifies-its-target-first--a-landing-classifies-its-target-first)
   - [`landing:an-adoption-writes-the-record-and-nothing-else` — An adoption writes the record and nothing else](#landingan-adoption-writes-the-record-and-nothing-else--an-adoption-writes-the-record-and-nothing-else)
   - [`landing:a-block-destination-owns-its-marked-lines-alone` — A block destination owns its marked lines alone](#landinga-block-destination-owns-its-marked-lines-alone--a-block-destination-owns-its-marked-lines-alone)
   - [`landing:the-shared-zone-composes-into-every-pair` — The shared zone composes into every pair](#landingthe-shared-zone-composes-into-every-pair--the-shared-zone-composes-into-every-pair)
@@ -165,6 +166,24 @@ Plain `rk status` MUST report and exit 0 for every reportable state — drift, s
 - THEN both print the same report, the plain run exits 0, and the check exits 1 naming the rendered drift in its violations
 
 Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `landing:a-landing-classifies-its-target-first` — A landing classifies its target first
+
+Where a setup or migration task finds no landing record at a target, the skills and the shared pre-flight gate MUST route by `rk assess`, which MUST report its evidence and exactly one verdict — `brownfield` where another tool's release marker or a payload destination is already present, `greenfield` where no release mechanism and no release history exists, and `needs-decision` where tags or a second long-lived branch exist with no mechanism behind them — writing nothing, touching no network, and exiting 0 on every verdict, because a target already releasing somehow that reads as a fresh start is how a repository ends up with two release paths.
+
+#### Scenario: A target releasing through another tool carries no record
+
+- GIVEN a repository holding a release tool's configuration and no `.release-kit/manifest.json`
+- WHEN `rk assess --target . --json` runs
+- THEN the report classifies `brownfield`, names the marker, and exits 0, so the routing skill loads the migration procedure instead of landing the payload beside the tool
+
+#### Scenario: A recorded target is assessed
+
+- GIVEN a repository carrying a landing record
+- WHEN `rk assess --target .` runs
+- THEN the report states the record and its version, and its next lines route to `rk status` rather than to a migration, whatever the verdict says
+
+Verify: `cargo nextest run -E 'test(/^assess_/)'`
 
 ### `landing:an-adoption-writes-the-record-and-nothing-else` — An adoption writes the record and nothing else
 

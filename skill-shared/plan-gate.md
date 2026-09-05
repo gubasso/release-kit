@@ -34,7 +34,7 @@ When the request carries `--no-plan`, replace this phase's approval turn: do not
 The plan is a claim about what will happen. Check it against something that knows, never against your own confidence.
 
 1. Preview every verb that has one. `rk init`, `rk setup`, `rk upgrade`, `rk adopt`, `rk skill install`, `rk branches prune`, `rk worktree add`, and `rk worktree prune` write nothing without `--apply`; run each and read what it reports.
-2. Validate every action that has no preview — a merge, a tag, a publish, a forge or registry mutation — against what states it instead: `rk guide <topic>` for the commands, the owning method chapter for their order, and a read-only observation of the current state. `rk status --check --target .` and `rk setup check --target .` observe and never write.
+2. Validate every action that has no preview — a merge, a tag, a publish, a forge or registry mutation — against what states it instead: `rk guide <topic>` for the commands, the owning method chapter for their order, and a read-only observation of the current state. `rk assess --target .`, `rk status --check --target .`, and `rk setup check --target .` observe and never write.
 3. Compare both against the plan: the destinations, their count, and the steps in their order.
 4. Where they disagree, stop. Say what differs, and return to phase 1. Never reconcile a surprise by widening the plan silently.
 

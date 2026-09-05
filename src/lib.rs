@@ -8,6 +8,7 @@
 //! `digest` the one hash type, and `error` the one exit-code matrix.
 
 pub mod applog;
+pub mod assess;
 pub mod atomic;
 pub mod branches;
 pub mod cli;

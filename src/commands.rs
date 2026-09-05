@@ -2,6 +2,7 @@
 //! dispatches, and `cli` only declares the argument surface.
 
 pub mod adopt;
+pub mod assess;
 pub mod branches;
 pub mod completions;
 pub mod devshell;

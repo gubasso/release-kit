@@ -60,6 +60,7 @@ This repository is the canonical knowledge product for the release-kit workflow.
 - The executable repository-side setup: `rk setup`, with `rk runs` over its journals.
 - The branches a squash merge retires in this clone: `rk branches prune`, preview by default; the post-merge reminder lands with `rk setup step branch-reminder`, bound by `_docs/specs/SPEC-maintenance.md`.
 - The worktree lifecycle and the workflow mode: `rk worktree`, with `rk guide worktree` as the procedure.
+- A target that already releases somehow, and its verdict before anything lands: `rk assess`, with `rk guide migration` as the procedure and `rk method migration` as its why.
 - The release-line lifecycle and the release style: `rk lines`, with `rk guide release-lines` as the procedure, bound by `_docs/specs/SPEC-maintenance.md` and `_docs/specs/SPEC-landing.md`.
 - What lands in a target: `snippets/`, served by `rk snippet --list`.
 - What a landed target reports about itself: `rk status`, with `--check` as the judging mode; `rk upgrade` takes it to a newer payload; `rk adopt` records a pre-record target.

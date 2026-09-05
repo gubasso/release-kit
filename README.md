@@ -21,7 +21,7 @@ The binary is `rk`.
 - Read the method: [method/README.md](./method/README.md), or `rk method --list` anywhere.
 - Read a technology binding: [bindings/](./bindings/README.md), or `rk binding rust`.
 - Land the workflow in a project: `rk init --tech rust --target .` previews; `--apply` writes the files and the landing record.
-- Ask a landed project about itself: `rk status`, with `--check` for a CI gate; take a newer payload with `rk upgrade`; record a pre-record project with `rk adopt`.
+- Ask a landed project about itself: `rk status`, with `--check` for a CI gate; take a newer payload with `rk upgrade`; record a pre-record project with `rk adopt`; classify a project before anything lands with `rk assess`.
 - See the pinned tools and their freshness: `rk versions`, and `rk versions --check` to compare each pin upstream.
 - Take `rk` from a project's own flake and keep it fresh: `rk devshell add` prints the fragments and seeds the pair; `rk devshell sync` moves the pin from `.envrc`; `rk devshell clean` removes what a hand-rolled bump left.
 - Prove what the binary carries: `rk payload`, with `--json` for the machine form.
