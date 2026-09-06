@@ -20,6 +20,25 @@ rk setup check --target .
 # check: protect-release-lines reports satisfied
 ```
 
+Then the project's own CI takes the lines in its trigger filters, by hand: release-kit writes no such file and no check reports the gap.
+
+On github:
+
+```bash
+grep -n -A8 '^on:' .github/workflows/ci.yml
+# check: push and pull_request each admit a release/* ref — through no branch filter, a branches list carrying release/** with no ! pattern excluding it, or a branches-ignore list that does not match one
+# a push declaring only tags or tags-ignore runs for no branch at all, whatever its other filters say
+# a branches list naming the trunk alone: add 'release/**' beside it; a pull_request filter selects by the base branch, so a request opened against a line starts no run without it
+```
+
+On gitlab:
+
+```bash
+grep -n -B4 -A8 'rules:\|workflow:\|only:\|except:' .gitlab-ci.yml
+# check: the branch path admits CI_COMMIT_BRANCH =~ /^release\//, and the merge-request path matches the line's own request — every merge_request_event, or one whose CI_MERGE_REQUEST_TARGET_BRANCH_NAME =~ /^release\//
+# a rule reaching only the source branch matches neither path: CI_COMMIT_BRANCH is unset in a merge-request pipeline, and the request's source branch is the bot's, not the line
+```
+
 ## 3. Open the line
 
 The base is chosen and stated, never defaulted; the verb refuses without it.
