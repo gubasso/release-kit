@@ -13368,3 +13368,344 @@ fn every_depend_action_emits_one_json_object() {
         assert!(schema.starts_with("rk.depend-"), "{schema}");
     }
 }
+
+/// The satisfied trunk shape: an owned ruleset requiring `test` and the
+/// title check, and both squash sources owned.
+fn seed_owned_trunk(fixture: &ForgeFixture) {
+    fixture.seed("default_branch", "master");
+    fixture.seed("rulesets.index", "master-protection\n");
+    fixture.seed(
+        "ruleset_master-protection",
+        r#"{
+  "name": "master-protection",
+  "target": "branch",
+  "enforcement": "active",
+  "bypass_actors": [],
+  "conditions": {
+    "ref_name": { "include": ["refs/heads/master"], "exclude": [] }
+  },
+  "rules": [
+    { "type": "deletion" },
+    { "type": "non_fast_forward" },
+    {
+      "type": "pull_request",
+      "parameters": { "required_approving_review_count": 0, "allowed_merge_methods": ["squash"] }
+    },
+    {
+      "type": "required_status_checks",
+      "parameters": { "required_status_checks": [{ "context": "test" }, { "context": "pr-title" }] }
+    }
+  ]
+}"#,
+    );
+    fixture.seed("squash_merge_commit_title", "PR_TITLE");
+    fixture.seed("squash_merge_commit_message", "PR_BODY");
+}
+
+/// A workflow file in the fixture's target.
+fn write_workflow(fixture: &ForgeFixture, name: &str, body: &str) {
+    let dir = fixture.target.path().join(".github/workflows");
+    std::fs::create_dir_all(&dir).expect("the workflows dir");
+    std::fs::write(dir.join(name), body).expect("the workflow writes");
+}
+
+/// The protect-trunk line of a check run with the named required check.
+fn protect_trunk_line(fixture: &ForgeFixture, required_check: Option<&str>) -> String {
+    let mut args = vec!["--repo", "acme/widget", "--forge", "github"];
+    if let Some(check) = required_check {
+        args.extend(["--required-check", check]);
+    }
+    let out = fixture
+        .rk(&["setup", "check"])
+        .args(&args)
+        .assert()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8_lossy(&out);
+    text.lines()
+        .find(|line| line.contains("protect-trunk"))
+        .unwrap_or_else(|| panic!("no protect-trunk line: {text}"))
+        .to_owned()
+}
+
+const GATED_WORKFLOW: &str = "\
+on:
+  push:
+  pull_request:
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+  build:
+    runs-on: ubuntu-latest
+  test:
+    if: always()
+    needs: [lint, build]
+    runs-on: ubuntu-latest
+";
+
+const UNGATED_WORKFLOW: &str = "\
+on: [push, pull_request]
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+  build:
+    runs-on: ubuntu-latest
+  docs:
+    runs-on: ubuntu-latest
+  test:
+    if: always()
+    needs: lint
+    runs-on: ubuntu-latest
+";
+
+/// A gate that needs every other request job earns no limitation.
+#[test]
+fn check_reports_no_limitation_when_the_gate_needs_every_job() {
+    let fixture = ForgeFixture::new();
+    seed_owned_trunk(&fixture);
+    write_workflow(&fixture, "ci.yml", GATED_WORKFLOW);
+    let line = protect_trunk_line(&fixture, Some("test"));
+    assert!(line.starts_with("ok protect-trunk"), "{line}");
+    assert!(!line.contains("limitation:"), "{line}");
+}
+
+/// The jobs outside the gate's needs are named: they report on a request
+/// and hold nothing.
+#[test]
+fn check_names_the_request_jobs_the_gate_does_not_need() {
+    let fixture = ForgeFixture::new();
+    seed_owned_trunk(&fixture);
+    write_workflow(&fixture, "ci.yml", UNGATED_WORKFLOW);
+    let line = protect_trunk_line(&fixture, Some("test"));
+    assert!(line.starts_with("ok protect-trunk"), "{line}");
+    assert!(
+        line.contains("limitation:") && line.contains("gates nothing from [build, docs]"),
+        "{line}"
+    );
+}
+
+/// A required check no request job reports is unsatisfiable, and the
+/// check says so rather than reporting a bare pass.
+#[test]
+fn check_reports_an_unsatisfiable_required_check() {
+    let fixture = ForgeFixture::new();
+    seed_owned_trunk(&fixture);
+    write_workflow(
+        &fixture,
+        "ci.yml",
+        "on: [pull_request]\njobs:\n  lint:\n    runs-on: x\n  unit:\n    runs-on: x\n",
+    );
+    let line = protect_trunk_line(&fixture, Some("test"));
+    assert!(
+        line.contains("cannot be satisfied") && line.contains("[lint, unit]"),
+        "{line}"
+    );
+}
+
+/// A gate without `if: always()` is skipped when a needed job fails, and
+/// the forge reads the skip as success.
+#[test]
+fn check_reports_a_gate_without_always() {
+    let fixture = ForgeFixture::new();
+    seed_owned_trunk(&fixture);
+    write_workflow(
+        &fixture,
+        "ci.yml",
+        &GATED_WORKFLOW.replace("    if: always()\n", ""),
+    );
+    let line = protect_trunk_line(&fixture, Some("test"));
+    assert!(line.contains("runs without if: always()"), "{line}");
+    assert!(!line.contains("gates nothing"), "{line}");
+}
+
+/// A block-list needs is read like a flow list; an expression is not
+/// followed, and the check says the reading is incomplete.
+#[test]
+fn check_reads_a_block_needs_list_and_names_an_opaque_one() {
+    let fixture = ForgeFixture::new();
+    seed_owned_trunk(&fixture);
+    write_workflow(
+        &fixture,
+        "ci.yml",
+        "on: [pull_request]\njobs:\n  lint:\n    runs-on: x\n  build:\n    runs-on: x\n  test:\n    if: always()\n    needs:\n      - lint\n      - build\n",
+    );
+    let line = protect_trunk_line(&fixture, Some("test"));
+    assert!(!line.contains("limitation:"), "{line}");
+    write_workflow(
+        &fixture,
+        "ci.yml",
+        "on: [pull_request]\njobs:\n  lint:\n    runs-on: x\n  test:\n    if: always()\n    needs: ${{ fromJSON(inputs.jobs) }}\n",
+    );
+    let line = protect_trunk_line(&fixture, Some("test"));
+    assert!(
+        line.contains("could not be read") && line.contains("ci.yml"),
+        "{line}"
+    );
+}
+
+/// A target with no request workflow reports that the check cannot be
+/// satisfied: no job anywhere reports it.
+#[test]
+fn check_reports_a_check_no_request_workflow_can_report() {
+    let fixture = ForgeFixture::new();
+    seed_owned_trunk(&fixture);
+    let line = protect_trunk_line(&fixture, Some("test"));
+    assert!(
+        line.starts_with("ok protect-trunk")
+            && line.contains("no workflow in .github/workflows runs on a pull request"),
+        "no workflows dir: {line}"
+    );
+    write_workflow(
+        &fixture,
+        "nightly.yml",
+        "on: push\njobs:\n  lint:\n    runs-on: x\n  test:\n    runs-on: x\n",
+    );
+    let line = protect_trunk_line(&fixture, Some("test"));
+    assert!(
+        line.contains("no workflow in .github/workflows runs on a pull request"),
+        "push-only workflow: {line}"
+    );
+}
+
+/// A gate whose name is an expression, or whose condition is more than a
+/// bare `always()`, or whose trigger filters by paths, is not proven.
+#[test]
+fn check_names_an_unproven_gate_name_condition_and_trigger() {
+    let fixture = ForgeFixture::new();
+    seed_owned_trunk(&fixture);
+    write_workflow(
+        &fixture,
+        "ci.yml",
+        "on: [pull_request]\njobs:\n  lint:\n    runs-on: x\n  test:\n    name: test-${{ matrix.os }}\n    if: always()\n    needs: [lint]\n",
+    );
+    let line = protect_trunk_line(&fixture, Some("test"));
+    assert!(
+        line.contains("names itself by an expression") && line.contains("not proven to exist"),
+        "{line}"
+    );
+    write_workflow(
+        &fixture,
+        "ci.yml",
+        "on:\n  pull_request:\n    paths: ['src/**']\njobs:\n  lint:\n    runs-on: x\n  test:\n    if: always() && needs.lint.result == 'success'\n    needs: [lint]\n",
+    );
+    let line = protect_trunk_line(&fixture, Some("test"));
+    assert!(
+        line.contains("runs under the condition always() && needs.lint.result == 'success'"),
+        "{line}"
+    );
+    assert!(line.contains("filters by paths"), "{line}");
+    assert!(!line.contains("gates nothing"), "{line}");
+    write_workflow(
+        &fixture,
+        "ci.yml",
+        "on:\n  pull_request:\n    branches: [main]\n    types: [opened]\njobs:\n  test:\n    if: always()\n",
+    );
+    let line = protect_trunk_line(&fixture, Some("test"));
+    assert!(
+        line.contains("reads branches: [main]") && line.contains("against master"),
+        "{line}"
+    );
+    assert!(line.contains("reads types: [opened]"), "{line}");
+    write_workflow(
+        &fixture,
+        "ci.yml",
+        "on:\n  pull_request:\n    branches-ignore: ['ma[as]ter']\njobs:\n  test:\n    if: always()\n",
+    );
+    let line = protect_trunk_line(&fixture, Some("test"));
+    assert!(
+        line.contains("reads branches-ignore: [ma[as]ter]"),
+        "{line}"
+    );
+    write_workflow(
+        &fixture,
+        "ci.yml",
+        "on: [pull_request]\njobs:\n  lint:\n    runs-on: x\n  test:\n    uses: org/repo/.github/workflows/x.yml@main\n    name: test\n    needs: [lint]\n",
+    );
+    let line = protect_trunk_line(&fixture, Some("test"));
+    assert!(
+        line.contains("runs a reusable workflow") && line.contains("not proven to exist"),
+        "{line}"
+    );
+}
+
+/// A workflow that runs on a request from a second file is judged with the
+/// first, and an unreadable file is named rather than skipped.
+#[test]
+fn check_judges_every_request_workflow_and_names_an_unreadable_one() {
+    let fixture = ForgeFixture::new();
+    seed_owned_trunk(&fixture);
+    write_workflow(&fixture, "ci.yml", GATED_WORKFLOW);
+    write_workflow(
+        &fixture,
+        "release.yml",
+        "on:\n  pull_request:\n  push:\n    tags: ['v*']\njobs:\n  plan:\n    runs-on: x\n",
+    );
+    let line = protect_trunk_line(&fixture, Some("test"));
+    assert!(line.contains("gates nothing from [plan]"), "{line}");
+    std::fs::create_dir_all(fixture.target.path().join(".github/workflows/broken.yml"))
+        .expect("a directory named as a file");
+    let line = protect_trunk_line(&fixture, Some("test"));
+    assert!(line.contains("[broken.yml] could not be read"), "{line}");
+}
+
+/// Without `--required-check` the workflows are not read: the gate is
+/// unknown to the check, so it judges nothing about it.
+#[test]
+fn check_reads_workflows_only_with_a_required_check() {
+    let fixture = ForgeFixture::new();
+    seed_owned_trunk(&fixture);
+    write_workflow(&fixture, "ci.yml", UNGATED_WORKFLOW);
+    let line = protect_trunk_line(&fixture, None);
+    assert!(line.starts_with("ok protect-trunk"), "{line}");
+    assert!(!line.contains("limitation:"), "{line}");
+}
+
+/// The aggregate protections step carries the trunk limitation through
+/// instead of shadowing it behind a bare pass.
+#[test]
+fn protections_check_carries_the_trunk_limitation() {
+    let fixture = ForgeFixture::new();
+    seed_owned_trunk(&fixture);
+    fixture.seed("rulesets.index", "master-protection\nrelease-tags\n");
+    fixture.seed(
+        "ruleset_release-tags",
+        r#"{
+  "name": "release-tags",
+  "target": "tag",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": { "include": ["refs/tags/v*"], "exclude": [] }
+  },
+  "rules": [
+    { "type": "deletion" },
+    { "type": "update" }
+  ]
+}"#,
+    );
+    write_workflow(&fixture, "ci.yml", UNGATED_WORKFLOW);
+    let out = fixture
+        .rk(&["setup", "check"])
+        .args([
+            "--repo",
+            "acme/widget",
+            "--forge",
+            "github",
+            "--required-check",
+            "test",
+        ])
+        .assert()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8_lossy(&out);
+    let line = text
+        .lines()
+        .find(|line| line.contains("protections-check"))
+        .unwrap_or_else(|| panic!("no protections-check line: {text}"));
+    assert!(
+        line.starts_with("ok protections-check")
+            && line.contains("gates nothing from [build, docs]"),
+        "{line}"
+    );
+}

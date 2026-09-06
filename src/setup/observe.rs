@@ -14,6 +14,7 @@ use crate::error::RkError;
 use crate::setup::app_jwt::{self, AppApi};
 use crate::setup::context::{Ctx, TRUNK_BRANCH};
 use crate::setup::process::{Exec, Outcome};
+use crate::setup::workflow_jobs;
 
 /// The executor observes run through: the command layer wraps echoing,
 /// journaling, and redaction around the process adapter.
@@ -455,9 +456,14 @@ fn github(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
             // nothing proven wrong stays unknown, never drift.
             let mut failures = Vec::new();
             let mut unknowns = Vec::new();
+            // Every satisfied step's limitation survives the aggregate.
+            let mut limitations: Vec<String> = Vec::new();
             for owned in ["protect-trunk", "protect-tags", "protect-release-lines"] {
                 match github(ctx, owned, run)? {
-                    StepState::Satisfied { .. } | StepState::Inapplicable { .. } => {}
+                    StepState::Satisfied {
+                        limitation: found, ..
+                    } => limitations.extend(found),
+                    StepState::Inapplicable { .. } => {}
                     StepState::Unsatisfied { detail } => {
                         failures.push(format!("{owned}: {detail}"));
                     }
@@ -489,7 +495,14 @@ fn github(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
             } else if !unknowns.is_empty() {
                 StepState::unknown(unknowns.join("; "))
             } else {
-                StepState::ok("exactly the owned protections, with those rules")
+                StepState::Satisfied {
+                    detail: "exactly the owned protections, with those rules".into(),
+                    limitation: if limitations.is_empty() {
+                        None
+                    } else {
+                        Some(limitations.join("; "))
+                    },
+                }
             })
         }
         _ => Ok(StepState::unknown(format!("no observation for {step}"))),
@@ -686,11 +699,24 @@ fn github_trunk_ruleset(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkErro
             }
         }
     }
-    Ok(if faults.is_empty() {
-        StepState::ok(format!("{name} holds the release-merge shape"))
-    } else {
-        StepState::not(faults.join("; "))
+    if !faults.is_empty() {
+        return Ok(StepState::not(faults.join("; ")));
+    }
+    let detail = format!("{name} holds the release-merge shape");
+    Ok(match gate_limitation(ctx) {
+        Some(limitation) => StepState::ok_with_limitation(detail, limitation),
+        None => StepState::ok(detail),
     })
+}
+
+/// What the trunk protection leaves ungated. The ruleset requires the
+/// named check and nothing else the project's workflow reports, so a job
+/// outside the check's `needs` holds no merge. That is a limitation on
+/// what the protection enforces, not drift, and it is read only where the
+/// check is named: without the flag the observation knows no gate.
+fn gate_limitation(ctx: &Ctx) -> Option<String> {
+    let check = ctx.required_check.as_deref()?;
+    workflow_jobs::limitation(&workflow_jobs::read_gate(&ctx.target, check), check)
 }
 
 /// What the repository's squash message settings hold.

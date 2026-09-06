@@ -68,7 +68,24 @@ rk setup check --target .                                # prove what was applie
 
 On github:
 
-`--required-check <name>` names the CI job the trunk's protection requires, and the protection refuses without it: a wrong or missing check name does not fail, it hangs the merge button with nothing saying why. `gh api repos/<repo>/commits/HEAD/check-runs` lists the names the project's own workflow reports.
+`--required-check <name>` names the one CI job the trunk's protection requires beside the landed title check, and the protection refuses without it: a wrong or missing check name does not fail, it hangs the merge button with nothing saying why. `gh api repos/<repo>/commits/HEAD/check-runs` lists the names the project's own workflow reports. No other job holds a merge: where the workflow declares more than one job, name a gate job that needs every other one, because under the trunk style the request merges itself the moment the named check is green and nobody reads the rest of the list. The gate runs `if: always()` and fails on any result other than `success`, because the forge reports a job skipped by a failed dependency as success:
+
+```yaml
+gate:
+  if: always()
+  needs: [lint, test, build]
+  runs-on: ubuntu-latest
+  steps:
+    - name: every job succeeded
+      env:
+        RESULTS: ${{ join(needs.*.result, ' ') }}
+      run: |
+        for r in $RESULTS; do
+          [ "$r" = success ] || { echo "a required job reported $r"; exit 1; }
+        done
+```
+
+`rk setup check --required-check <name>` names the jobs the gate leaves out, and a gate without `if: always()`, as a limitation on `protect-trunk`.
 
 On gitlab:
 
@@ -194,9 +211,11 @@ The trunk protection names check contexts, and a context no workflow reports is 
 On github:
 
 ```bash
-gh api "repos/<repo>/contents/.github/workflows/ci.yml" -q .content | base64 -d | grep -E '^\s+(test:|pull_request:)'
+gh api "repos/<repo>/contents/.github/workflows/ci.yml" -q .content | base64 -d | grep -E '^\s+(<name>:|pull_request:|needs:)'
 gh api "repos/<repo>/contents/.github/workflows/pr-title.yml" -q .name
-# check: the job id and its pull_request trigger appear, and the trunk carries pr-title.yml
+# check: the job id and its pull_request trigger appear, the job's needs line names every other job in the workflow, and the trunk carries pr-title.yml
+rk setup check --target . --required-check <name>
+# check: protect-trunk reports no limitation once 3b has applied; before it, the line names any job the gate leaves out
 # 404 on pr-title.yml: step 4 has not reached the trunk, and protecting now would block the very request that lands it
 ```
 
@@ -313,7 +332,7 @@ On github:
 ```bash
 gh pr create --repo <repo> --base master --head "$(git branch --show-current)" --title '<type>(<scope>): <subject>' --body '<what changed, and why>'
 gh pr checks --watch
-# check: the required check reports success; the other contexts may report skipped
+# check: the required check reports success; it and pr-title are the only contexts that hold the merge
 gh pr merge --squash --delete-branch
 # check: reports the pull request squashed and merged
 ```

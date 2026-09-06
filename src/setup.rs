@@ -17,3 +17,4 @@ pub mod observe;
 pub mod process;
 pub mod secrets;
 pub mod steps;
+pub mod workflow_jobs;
