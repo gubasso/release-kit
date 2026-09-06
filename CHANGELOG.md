@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.21](https://github.com/gubasso/release-kit/compare/v0.2.20...v0.2.21) - 2026-09-06
+
+### Fixed
+
+- *(setup)* report the request jobs a one-name required check leaves ungated ([#87](https://github.com/gubasso/release-kit/pull/87))
+
 ## [0.2.20](https://github.com/gubasso/release-kit/compare/v0.2.19...v0.2.20) - 2026-09-06
 
 ### Added
