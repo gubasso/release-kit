@@ -6,6 +6,7 @@ pub mod adopt;
 pub mod assess;
 pub mod branches;
 pub mod completions;
+pub mod depend;
 pub mod devshell;
 pub mod doctor;
 pub mod guide;
@@ -76,6 +77,8 @@ pub enum Commands {
     Skill(skill::SkillArgs),
     /// Wire release-kit as a consumer's devshell dependency and keep its pin fresh.
     Devshell(devshell::DevshellArgs),
+    /// Add another project as a dependency of a target, from how the source distributes itself.
+    Depend(depend::DependArgs),
     /// Run every environment probe and report by class.
     Doctor(doctor::DoctorArgs),
     /// Print the whole command surface in one call.

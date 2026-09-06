@@ -1,0 +1,1 @@
+"ubi:RK_DEP_OWNER_REPO" = { version = "RK_DEP_VERSION", exe = "RK_DEP_BIN" }

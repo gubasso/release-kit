@@ -3,7 +3,8 @@
 //! The library exists so the crate's own tests can link the modules; the
 //! `rk` binary in `main.rs` is the product. `embedded` holds the payload
 //! and `payload_roots` its one inventory, `cli` the argument surface,
-//! `commands` the handlers, `devshell` the consumer pin, `skills` the
+//! `commands` the handlers, `devshell` the consumer pin, `depend` the
+//! dependency matrix, `skills` the
 //! user-scope skill install,
 //! `digest` the one hash type, and `error` the one exit-code matrix.
 
@@ -13,6 +14,7 @@ pub mod atomic;
 pub mod branches;
 pub mod cli;
 pub mod commands;
+pub mod depend;
 pub mod detect;
 pub mod devshell;
 pub mod diagnostic;

@@ -1,0 +1,4 @@
+RK_DEP_INPUT = {
+  url = "RK_DEP_FLAKE_REF";
+  inputs.nixpkgs.follows = "nixpkgs";
+};

@@ -47,6 +47,7 @@ When the request carries `--no-plan`, skip the plan gate's approval turn only. S
 | The flake fragments and the seed pair      | `rk devshell add`          |
 | The predecessor bump mechanism's removal   | `rk devshell clean`        |
 | The pin moved to the latest release        | `rk devshell sync`         |
+| Another project as a dependency            | `rk depend assess`         |
 
 ## Installation scope
 

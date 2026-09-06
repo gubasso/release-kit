@@ -73,6 +73,7 @@ This repository is the canonical knowledge product for the release-kit workflow.
 - What a landed target reports about itself: `rk status`, with `--check` as the judging mode; `rk upgrade` takes it to a newer payload; `rk adopt` records a pre-record target.
 - Pinned tools and freshness: `versions.toml`, served by `rk versions`; `rk versions --check` and `rk devshell sync` are the two verbs that fetch.
 - A consumer's `rk` from its own flake, pinned and kept fresh: `rk devshell`, with `rk guide setup` carrying the procedure, bound by `_docs/specs/SPEC-packaging.md`.
+- Another project taken as a dev or prod dependency of a target: `rk depend`, with `rk guide dependencies` as the procedure and `rk method dependencies` as its why, bound by `_docs/specs/SPEC-dependencies.md`.
 - The payload's identity and digests: `rk payload`, with `--json` as the machine form.
 - Host readiness and the whole command surface: `rk doctor` and `rk usage`.
 - Docs format and budgets: `sdd spec docs-format`; this repository is an sdd instance.

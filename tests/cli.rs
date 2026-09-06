@@ -14,7 +14,7 @@ use release_kit::skills::Digest;
 use release_kit::skills::record::{RECORD_PATH, Record};
 
 /// Every skill the payload carries, and the roots an install writes them to.
-const SKILLS: [&str; 3] = ["rk-migrate", "rk-release", "rk-setup"];
+const SKILLS: [&str; 4] = ["rk-depend", "rk-migrate", "rk-release", "rk-setup"];
 const ROOTS: [&str; 2] = [".claude/skills", ".agents/skills"];
 
 /// What every skill shares, installed once outside the agent roots, in the
@@ -1618,6 +1618,8 @@ fn usage_dumps_every_verb_in_one_call() {
         "rk devshell add",
         "rk devshell clean",
         "rk devshell sync",
+        "rk depend assess",
+        "rk depend add",
         "rk status",
         "rk upgrade",
         "rk adopt",
@@ -2171,6 +2173,7 @@ fn the_runbooks_match_their_method_chapters() {
         ("method/09-release-lines.md", "runbooks/release-lines.md"),
         ("method/08-worktrees.md", "runbooks/worktree.md"),
         ("method/10-migration.md", "runbooks/migration.md"),
+        ("method/11-dependencies.md", "runbooks/dependencies.md"),
     ] {
         let rendered = std::fs::read_to_string(repo_path(runbook)).expect("reads");
         assert_eq!(
@@ -2251,6 +2254,7 @@ fn guide_lists_and_serves_byte_identically_when_nothing_resolves() {
     rk().args(["guide", "--list"]).assert().success().stdout(
         predicate::str::contains("release")
             .and(predicate::str::contains("migration"))
+            .and(predicate::str::contains("dependencies"))
             .and(predicate::str::contains("setup"))
             .and(predicate::str::contains("backport")),
     );
@@ -12784,4 +12788,583 @@ fn assess_discovers_the_repository_under_a_foreign_git_dir_and_locale() {
             predicate::str::contains("classification: greenfield")
                 .and(predicate::str::contains("git: not a repository")),
         );
+}
+
+/// One depend fixture: a scratch source under git with a remote and a
+/// tag, shaped as a rust crate that ships release archives and a flake,
+/// and a scratch target the tests seed per manager.
+struct DependFixture {
+    source: tempfile::TempDir,
+    target: tempfile::TempDir,
+}
+
+impl DependFixture {
+    fn new() -> Self {
+        let fixture = Self {
+            source: tempfile::tempdir().expect("a scratch source exists"),
+            target: tempfile::tempdir().expect("a scratch target exists"),
+        };
+        let source = fixture.source.path();
+        std::fs::write(
+            source.join("Cargo.toml"),
+            "[package]\nname = \"sample-tool\"\nversion = \"1.4.0\"\nrepository = \"https://github.com/acme/sample-tool\"\n\n[[bin]]\nname = \"sam\"\n",
+        )
+        .expect("writes");
+        std::fs::write(
+            source.join("dist-workspace.toml"),
+            "[dist]\nci = \"github\"\n",
+        )
+        .expect("writes");
+        std::fs::write(
+            source.join("flake.nix"),
+            "{ outputs = { self, nixpkgs }: { packages.default = null; }; }\n",
+        )
+        .expect("writes");
+        git_in(source, &["init", "-q", "-b", "master"]);
+        git_in(source, &["config", "user.email", "rk@example.invalid"]);
+        git_in(source, &["config", "user.name", "rk test"]);
+        git_in(
+            source,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/acme/sample-tool.git",
+            ],
+        );
+        git_in(source, &["add", "-A"]);
+        git_in(source, &["commit", "-qm", "chore: seed"]);
+        git_in(source, &["tag", "v1.4.0"]);
+        fixture
+    }
+
+    fn source(&self) -> &Path {
+        self.source.path()
+    }
+
+    fn target(&self) -> &Path {
+        self.target.path()
+    }
+
+    fn seed_target(&self, name: &str, text: &str) {
+        let path = self.target().join(name);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("mkdir");
+        }
+        std::fs::write(path, text).expect("writes");
+    }
+
+    fn rk(&self, args: &[&str]) -> Command {
+        let mut command = rk_scrubbed();
+        command.args(args);
+        command.arg("--source").arg(self.source());
+        command.arg("--target").arg(self.target());
+        command
+    }
+
+    fn json(&self, args: &[&str]) -> serde_json::Value {
+        let output = self.rk(args).arg("--json").output().expect("runs");
+        serde_json::from_slice(&output.stdout).expect("one JSON object on stdout")
+    }
+
+    fn json_with_code(&self, args: &[&str]) -> (i32, serde_json::Value) {
+        let output = self.rk(args).arg("--json").output().expect("runs");
+        let code = output.status.code().expect("an exit code");
+        let report = serde_json::from_slice(&output.stdout).expect("one JSON object on stdout");
+        (code, report)
+    }
+}
+
+/// SATISFIES dependencies:the-assessment-is-offline-and-exits-zero
+#[test]
+fn depend_assess_reads_a_cargo_dist_flake_source_and_a_flake_target() {
+    let fixture = DependFixture::new();
+    fixture.seed_target(
+        "flake.nix",
+        "{ inputs = { nixpkgs.url = \"github:NixOS/nixpkgs\"; }; outputs = { self, nixpkgs }: { devShells.x86_64-linux.default = null; }; }\n",
+    );
+    fixture.seed_target(
+        "Cargo.toml",
+        "[package]\nname = \"widget\"\nversion = \"0.1.0\"\n",
+    );
+    fixture.rk(&["depend", "assess"]).assert().success().stdout(
+        predicate::str::contains("rust sample-tool 1.4.0")
+            .and(predicate::str::contains(
+                "channels: crates, flake, github-release",
+            ))
+            .and(predicate::str::contains("dev flake via flake: fragment"))
+            .and(predicate::str::contains(
+                "prod via crates: native cargo add sample-tool@1.4.0",
+            ))
+            .and(predicate::str::contains("verdict ready")),
+    );
+    let report = fixture.json(&["depend", "assess"]);
+    assert_eq!(report["schema"], "rk.depend-assess/1");
+    assert_eq!(report["verdict"], "ready");
+    assert_eq!(report["source"]["name"], "sample-tool");
+    assert_eq!(report["source"]["bins"], serde_json::json!(["sam"]));
+    assert_eq!(report["source"]["owner_repo"], "acme/sample-tool");
+    assert_eq!(report["source"]["tag_style"], "prefixed");
+    assert_eq!(report["resolved"]["tag"], "v1.4.0");
+    assert_eq!(report["target"]["managers"][0]["manager"], "flake");
+    let first = &report["dev"][0];
+    assert_eq!(first["manager"], "flake");
+    assert_eq!(first["channel"], "flake");
+    assert_eq!(first["mode"], "fragment");
+    assert_eq!(first["fragments"][0]["id"], "flake-input");
+    assert!(
+        first["fragments"][0]["text"]
+            .as_str()
+            .expect("text")
+            .contains("github:acme/sample-tool/v1.4.0")
+    );
+    assert_eq!(first["fragments"][0]["anchor"]["needle"], "inputs = {");
+    assert_eq!(report["prod"]["command"], "cargo add sample-tool@1.4.0");
+    let flake = std::fs::read_to_string(fixture.target().join("flake.nix")).expect("reads");
+    assert!(flake.starts_with("{ inputs"), "assess writes nothing");
+}
+
+#[test]
+fn depend_assess_reports_manual_only_for_an_asdf_target() {
+    let fixture = DependFixture::new();
+    fixture.seed_target(".tool-versions", "nodejs 24.0.0\n");
+    let report = fixture.json(&["depend", "assess"]);
+    assert_eq!(report["verdict"], "manual-only");
+    let dev = report["dev"].as_array().expect("dev options");
+    assert_eq!(dev.len(), 3);
+    for option in dev {
+        assert_eq!(option["mode"], "manual");
+        assert_eq!(option["reason"], "asdf-plugin-unknown");
+        assert_eq!(option["fragments"][0]["text"], "sample-tool 1.4.0");
+    }
+    assert!(
+        report.get("prod").is_none(),
+        "no target technology, no prod option"
+    );
+}
+
+#[test]
+fn depend_assess_reports_source_unknown_for_an_empty_source() {
+    let fixture = DependFixture::new();
+    let empty = tempfile::tempdir().expect("an empty source");
+    let output = rk_scrubbed()
+        .args(["depend", "assess", "--json", "--source"])
+        .arg(empty.path())
+        .arg("--target")
+        .arg(fixture.target())
+        .output()
+        .expect("runs");
+    assert!(output.status.success(), "every verdict exits 0");
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("one JSON object on stdout");
+    assert_eq!(report["verdict"], "source-unknown");
+    assert_eq!(report["dev"], serde_json::json!([]));
+    assert!(report.get("resolved").is_none());
+}
+
+#[test]
+fn depend_assess_reports_version_unknown_for_a_source_with_no_version() {
+    let fixture = DependFixture::new();
+    std::fs::write(
+        fixture.source().join("Cargo.toml"),
+        "[package]\nname = \"sample-tool\"\n",
+    )
+    .expect("writes");
+    fixture.seed_target("mise.toml", "[tools]\n");
+    let report = fixture.json(&["depend", "assess"]);
+    assert_eq!(report["verdict"], "version-unknown");
+    assert_eq!(report["dev"], serde_json::json!([]));
+    let next = report["next"].as_array().expect("next");
+    assert!(
+        next.iter()
+            .any(|l| l.as_str().is_some_and(|l| l.contains("--pin"))),
+        "{next:?}"
+    );
+    let pinned = fixture.json(&["depend", "add", "--kind", "dev", "--pin", "2.0.0"]);
+    assert_eq!(
+        pinned["fragments"][0]["text"],
+        "\"cargo:sample-tool\" = \"2.0.0\""
+    );
+}
+
+#[test]
+fn depend_add_never_seeds_over_a_mise_conf_d_directory() {
+    let fixture = DependFixture::new();
+    fixture.seed_target(".mise/conf.d/a-env.toml", "[env]\nFOO = 'bar'\n");
+    fixture.seed_target(
+        ".mise/conf.d/tools.toml",
+        "[tools]\nnode = '24'\n\"cargo:sample-tool\" = \"1.3.0\"\n",
+    );
+    let assessed = fixture.json(&["depend", "assess"]);
+    assert_eq!(
+        assessed["target"]["already"][0]["file"],
+        ".mise/conf.d/tools.toml"
+    );
+    let report = fixture.json(&["depend", "add", "--kind", "dev"]);
+    assert_eq!(report["manager"], "mise");
+    assert_eq!(report["file"], ".mise/conf.d/tools.toml");
+    assert_eq!(report["fragments"][0]["present"], true);
+    assert_eq!(report["file_present"], "present");
+    fixture
+        .rk(&["depend", "add", "--kind", "dev", "--apply"])
+        .assert()
+        .code(73);
+    assert!(
+        !fixture.target().join("mise.toml").exists(),
+        "no second configuration surface"
+    );
+}
+
+#[test]
+fn depend_add_flake_derives_a_nix_identifier_for_a_scoped_name() {
+    let fixture = DependFixture::new();
+    std::fs::remove_file(fixture.source().join("Cargo.toml")).expect("removes");
+    std::fs::remove_file(fixture.source().join("dist-workspace.toml")).expect("removes");
+    std::fs::write(
+        fixture.source().join("package.json"),
+        r#"{"name":"@acme/tool","version":"3.0.0","bin":{"tool":"cli.js"}}"#,
+    )
+    .expect("writes");
+    let report = fixture.json(&[
+        "depend",
+        "add",
+        "--kind",
+        "dev",
+        "--manager",
+        "flake",
+        "--apply",
+    ]);
+    assert_eq!(report["name"], "@acme/tool");
+    assert_eq!(report["freshness"], "nix flake update acme-tool");
+    let flake = std::fs::read_to_string(fixture.target().join("flake.nix")).expect("reads");
+    assert!(flake.contains("acme-tool = {"), "{flake}");
+    assert!(flake.contains("{ self, nixpkgs, acme-tool }"), "{flake}");
+    assert!(!flake.contains('@'));
+}
+
+#[test]
+fn depend_assess_names_where_the_dependency_is_already_pinned() {
+    let fixture = DependFixture::new();
+    fixture.seed_target(
+        "mise.toml",
+        "[tools]\nnode = '24'\n\"cargo:sample-tool\" = \"1.3.0\"\n",
+    );
+    let report = fixture.json(&["depend", "assess"]);
+    assert_eq!(report["target"]["already"][0]["file"], "mise.toml");
+    assert_eq!(report["target"]["already"][0]["line"], 3);
+    assert_eq!(report["dev"][0]["fragments"][0]["present"], true);
+}
+
+/// SATISFIES dependencies:the-source-is-a-local-checkout
+#[test]
+fn depend_refuses_a_url_source() {
+    let fixture = DependFixture::new();
+    for verb in [
+        vec!["depend", "assess"],
+        vec!["depend", "add", "--kind", "dev"],
+    ] {
+        rk_scrubbed()
+            .args(&verb)
+            .args(["--source", "https://github.com/acme/sample-tool"])
+            .arg("--target")
+            .arg(fixture.target())
+            .assert()
+            .code(64)
+            .stderr(predicate::str::contains("clone the URL first"));
+    }
+}
+
+#[test]
+fn depend_refuses_a_missing_source() {
+    let fixture = DependFixture::new();
+    rk_scrubbed()
+        .args([
+            "depend",
+            "assess",
+            "--json",
+            "--source",
+            "/nonexistent/sample",
+        ])
+        .arg("--target")
+        .arg(fixture.target())
+        .assert()
+        .code(66)
+        .stderr(predicate::str::contains("target-not-found"));
+}
+
+#[test]
+fn depend_add_previews_the_flake_fragments_and_writes_nothing() {
+    let fixture = DependFixture::new();
+    fixture.seed_target(
+        "flake.nix",
+        "{ inputs = {}; outputs = { self }: { devShells = {}; }; }\n",
+    );
+    fixture
+        .rk(&["depend", "add", "--kind", "dev"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("DRY RUN")
+                .and(predicate::str::contains(
+                    "sample-tool 1.4.0 (tag v1.4.0, from the source-tree)",
+                ))
+                .and(predicate::str::contains(
+                    "--- flake-input into flake.nix (insert-into-attrset at inputs): missing",
+                ))
+                .and(predicate::str::contains(
+                    "--- outputs-argument into flake.nix",
+                ))
+                .and(predicate::str::contains(
+                    "--- devshell-package into flake.nix",
+                ))
+                .and(predicate::str::contains(
+                    "sample-tool.packages.${system}.default",
+                ))
+                .and(predicate::str::contains(
+                    "flake.nix present: the target owns it",
+                )),
+        );
+    let report = fixture.json(&["depend", "add", "--kind", "dev"]);
+    assert_eq!(report["schema"], "rk.depend-add/1");
+    assert_eq!(report["mode"], "preview");
+    assert_eq!(report["manager"], "flake");
+    assert_eq!(report["manager_origin"], "detected");
+    assert_eq!(report["landing"], "fragment");
+    assert_eq!(report["file_present"], "present");
+    assert_eq!(report["written"], serde_json::json!([]));
+    assert_eq!(report["freshness"], "nix flake update sample-tool");
+    assert_eq!(
+        std::fs::read_to_string(fixture.target().join("flake.nix")).expect("reads"),
+        "{ inputs = {}; outputs = { self }: { devShells = {}; }; }\n"
+    );
+}
+
+#[test]
+fn depend_add_apply_seeds_a_flake_where_there_is_none() {
+    let fixture = DependFixture::new();
+    let report = fixture.json(&[
+        "depend",
+        "add",
+        "--kind",
+        "dev",
+        "--manager",
+        "flake",
+        "--apply",
+    ]);
+    assert_eq!(report["mode"], "apply");
+    assert_eq!(report["manager_origin"], "argument");
+    assert_eq!(report["written"], serde_json::json!(["flake.nix"]));
+    let flake = std::fs::read_to_string(fixture.target().join("flake.nix")).expect("reads");
+    assert!(flake.contains("sample-tool = {"));
+    assert!(flake.contains("url = \"github:acme/sample-tool/v1.4.0\";"));
+    assert!(flake.contains("packages = [ sample-tool.packages.${system}.default ];"));
+    assert!(flake.ends_with("}\n"));
+    let next = report["next"].as_array().expect("next");
+    assert!(
+        next.iter()
+            .any(|line| line.as_str().is_some_and(|l| l.contains("direnv"))),
+        "no .envrc loads the flake yet: {next:?}"
+    );
+}
+
+#[test]
+fn depend_add_apply_seeds_mise_toml_where_there_is_none() {
+    let fixture = DependFixture::new();
+    let report = fixture.json(&[
+        "depend",
+        "add",
+        "--kind",
+        "dev",
+        "--manager",
+        "mise",
+        "--apply",
+    ]);
+    assert_eq!(report["channel"], "crates");
+    assert_eq!(report["written"], serde_json::json!(["mise.toml"]));
+    assert_eq!(
+        std::fs::read_to_string(fixture.target().join("mise.toml")).expect("reads"),
+        "[tools]\n\"cargo:sample-tool\" = \"1.4.0\"\n"
+    );
+}
+
+/// SATISFIES dependencies:add-edits-no-file-the-target-owns
+#[test]
+fn depend_add_apply_refuses_a_manager_file_the_target_owns() {
+    let fixture = DependFixture::new();
+    let owned = "{ inputs = { nixpkgs.url = \"github:NixOS/nixpkgs\"; }; outputs = { self, nixpkgs }: { }; }\n";
+    fixture.seed_target("flake.nix", owned);
+    fixture
+        .rk(&["depend", "add", "--kind", "dev", "--apply"])
+        .assert()
+        .code(73)
+        .stdout(predicate::str::contains("--- flake-input into flake.nix"))
+        .stderr(predicate::str::contains(
+            "never edits a file the target owns",
+        ));
+    let (code, report) = fixture.json_with_code(&["depend", "add", "--kind", "dev", "--apply"]);
+    assert_eq!(code, 73);
+    assert_eq!(report["written"], serde_json::json!([]));
+    assert!(
+        report["refusal"]
+            .as_str()
+            .expect("a refusal")
+            .contains("flake.nix")
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture.target().join("flake.nix")).expect("reads"),
+        owned,
+        "the owned file is byte-identical"
+    );
+}
+
+#[test]
+fn depend_add_mise_serves_the_ubi_line_when_asked_for_the_archive() {
+    let fixture = DependFixture::new();
+    fixture.seed_target(".mise.toml", "[tools]\nnode = '24'\n");
+    let report = fixture.json(&[
+        "depend",
+        "add",
+        "--kind",
+        "dev",
+        "--channel",
+        "github-release",
+    ]);
+    assert_eq!(report["manager"], "mise");
+    assert_eq!(report["file"], ".mise.toml");
+    assert_eq!(
+        report["fragments"][0]["text"],
+        "\"ubi:acme/sample-tool\" = { version = \"1.4.0\", exe = \"sam\" }"
+    );
+    assert_eq!(report["fragments"][0]["placement"], "insert-into-table");
+    assert_eq!(report["fragments"][0]["anchor"]["needle"], "[tools]");
+    assert_eq!(
+        report["freshness"],
+        "mise upgrade --bump ubi:acme/sample-tool"
+    );
+    fixture
+        .rk(&["depend", "add", "--kind", "dev", "--channel", "pypi"])
+        .assert()
+        .code(64)
+        .stderr(predicate::str::contains(
+            "viable channels are crates, github-release",
+        ));
+}
+
+#[test]
+fn depend_add_devbox_serves_the_flake_ref() {
+    let fixture = DependFixture::new();
+    fixture.seed_target("devbox.json", "{\n  \"packages\": [\"go@latest\"]\n}\n");
+    let report = fixture.json(&["depend", "add", "--kind", "dev"]);
+    assert_eq!(report["manager"], "devbox");
+    assert_eq!(report["channel"], "flake");
+    assert_eq!(
+        report["fragments"][0]["text"],
+        "\"github:acme/sample-tool/v1.4.0#default\""
+    );
+    assert_eq!(report["fragments"][0]["placement"], "append-to-array");
+    assert_eq!(report["freshness"], "devbox update");
+}
+
+#[test]
+fn depend_add_needs_the_manager_when_the_target_carries_two() {
+    let fixture = DependFixture::new();
+    fixture.seed_target("flake.nix", "{ }\n");
+    fixture.seed_target("mise.toml", "[tools]\n");
+    fixture
+        .rk(&["depend", "add", "--kind", "dev"])
+        .assert()
+        .code(64)
+        .stderr(predicate::str::contains("flake and mise; pass --manager"));
+    let bare = DependFixture::new();
+    bare.rk(&["depend", "add", "--kind", "dev"])
+        .assert()
+        .code(64)
+        .stderr(predicate::str::contains("pass --manager to seed one"));
+}
+
+/// SATISFIES dependencies:a-prod-dependency-lands-through-the-native-command
+#[test]
+fn depend_add_prod_prints_the_native_command_and_refuses_apply() {
+    let fixture = DependFixture::new();
+    fixture.seed_target(
+        "Cargo.toml",
+        "[package]\nname = \"widget\"\nversion = \"0.1.0\"\n",
+    );
+    fixture
+        .rk(&["depend", "add", "--kind", "prod"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("run: cargo add sample-tool@1.4.0"));
+    let report = fixture.json(&["depend", "add", "--kind", "prod"]);
+    assert_eq!(report["kind"], "prod");
+    assert_eq!(report["landing"], "native");
+    assert_eq!(report["command"], "cargo add sample-tool@1.4.0");
+    assert!(report.get("manager").is_none());
+    assert!(report.get("file").is_none());
+    fixture
+        .rk(&["depend", "add", "--kind", "prod", "--apply"])
+        .assert()
+        .code(64)
+        .stdout(predicate::str::contains("run: cargo add sample-tool@1.4.0"))
+        .stderr(predicate::str::contains("rk never edits Cargo.toml"));
+    let (code, applied) = fixture.json_with_code(&["depend", "add", "--kind", "prod", "--apply"]);
+    assert_eq!(code, 64);
+    assert_eq!(
+        applied["command"], "cargo add sample-tool@1.4.0",
+        "the report precedes the refusal"
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture.target().join("Cargo.toml")).expect("reads"),
+        "[package]\nname = \"widget\"\nversion = \"0.1.0\"\n"
+    );
+    let python = DependFixture::new();
+    python.seed_target("pyproject.toml", "[project]\nname = \"widget\"\n");
+    let mismatch = python.json(&["depend", "add", "--kind", "prod"]);
+    assert_eq!(mismatch["landing"], "manual");
+    assert_eq!(mismatch["reason"], "technology-mismatch");
+}
+
+#[test]
+fn depend_add_honors_the_version_override_and_the_bare_tag_style() {
+    let fixture = DependFixture::new();
+    fixture.seed_target("mise.toml", "[tools]\n");
+    let report = fixture.json(&["depend", "add", "--kind", "dev", "--pin", "v2.0.0"]);
+    assert_eq!(report["version"], "2.0.0");
+    assert_eq!(report["tag"], "v2.0.0");
+    assert_eq!(report["version_origin"], "argument");
+    assert_eq!(
+        report["fragments"][0]["text"],
+        "\"cargo:sample-tool\" = \"2.0.0\""
+    );
+    fixture
+        .rk(&["depend", "add", "--kind", "dev", "--manager", "devbox"])
+        .assert()
+        .code(64)
+        .stderr(predicate::str::contains("its managers are mise"));
+    git_in(fixture.source(), &["tag", "-d", "v1.4.0"]);
+    git_in(fixture.source(), &["tag", "1.4.0"]);
+    std::fs::remove_file(fixture.target().join("mise.toml")).expect("removes");
+    let bare = fixture.json(&["depend", "add", "--kind", "dev", "--manager", "devbox"]);
+    assert_eq!(bare["tag"], "1.4.0");
+    assert_eq!(
+        bare["fragments"][0]["text"],
+        "\"github:acme/sample-tool/1.4.0#default\""
+    );
+    fixture
+        .rk(&["depend", "add", "--kind", "dev", "--pin", "latest"])
+        .assert()
+        .code(64);
+}
+
+#[test]
+fn every_depend_action_emits_one_json_object() {
+    let fixture = DependFixture::new();
+    for args in [
+        vec!["depend", "assess"],
+        vec!["depend", "add", "--kind", "dev", "--manager", "flake"],
+    ] {
+        let report = fixture.json(&args);
+        let schema = report["schema"].as_str().expect("a schema");
+        assert!(schema.starts_with("rk.depend-"), "{schema}");
+    }
 }

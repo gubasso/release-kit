@@ -5,6 +5,7 @@ pub mod adopt;
 pub mod assess;
 pub mod branches;
 pub mod completions;
+pub mod depend;
 pub mod devshell;
 pub mod doctor;
 pub mod forge;
