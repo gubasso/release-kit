@@ -7,7 +7,6 @@ on:
     branches: [master, 'release/**']
 
 jobs:
-  # The job name is the status-check context branch protection requires.
   test:
     runs-on: ubuntu-latest
     steps:
@@ -58,3 +57,19 @@ jobs:
           use-flakehub: false
           use-gha-cache: true
       - run: nix flake check
+
+  # The one status-check context the trunk protection requires. It needs
+  # every other job and runs even when one fails: the forge reports a
+  # skipped job as success, so the gate must run to fail.
+  gate:
+    if: always()
+    needs: [test, flake]
+    runs-on: ubuntu-latest
+    steps:
+      - name: every job succeeded
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          for r in $RESULTS; do
+            [ "$r" = success ] || { echo "a required job reported $r"; exit 1; }
+          done

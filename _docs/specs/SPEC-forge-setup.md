@@ -10,6 +10,7 @@
   - [`forge-setup:key-material-never-reaches-the-environment` — Key material never reaches the environment](#forge-setupkey-material-never-reaches-the-environment--key-material-never-reaches-the-environment)
   - [`forge-setup:every-supported-forge-runs-every-step` — Every supported forge runs every step](#forge-setupevery-supported-forge-runs-every-step--every-supported-forge-runs-every-step)
   - [`forge-setup:a-check-reports-what-the-forge-enforces` — A check reports what the forge enforces](#forge-setupa-check-reports-what-the-forge-enforces--a-check-reports-what-the-forge-enforces)
+  - [`forge-setup:the-required-check-stands-for-every-request-job` — The required check stands for every request job](#forge-setupthe-required-check-stands-for-every-request-job--the-required-check-stands-for-every-request-job)
   - [`forge-setup:the-setup-permits-a-request-to-merge-itself` — The setup permits a request to merge itself](#forge-setupthe-setup-permits-a-request-to-merge-itself--the-setup-permits-a-request-to-merge-itself)
   - [`forge-setup:the-setup-asserts-the-squash-title-source` — The setup asserts the squash title source](#forge-setupthe-setup-asserts-the-squash-title-source--the-setup-asserts-the-squash-title-source)
   - [`forge-setup:the-setup-asserts-the-squash-body-source` — The setup asserts the squash body source](#forge-setupthe-setup-asserts-the-squash-body-source--the-setup-asserts-the-squash-body-source)
@@ -105,6 +106,24 @@ Where a forge cannot enforce what a step's proof claims, `rk setup check` MUST r
 - GIVEN a protected `v*` pattern on a forge whose Owners can still delete a protected tag
 - WHEN `rk setup check` runs
 - THEN the step reports satisfied with the limitation named, so nobody believes an immutability the forge does not provide
+
+Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `forge-setup:the-required-check-stands-for-every-request-job` — The required check stands for every request job
+
+Where `rk setup check` knows the required check, it MUST read the target's own workflows and report, as a limitation on `protect-trunk`, every job that reports on a pull request and that the required check neither is nor needs, and it MUST report a required check that no request job reports, because the trunk protection requires that one context beside the title check and no other job holds a merge — under the trunk style's standing arm nobody reads the check list before the forge merges, so an ungated red job ships. The observation MUST also name a gate that runs without `if: always()`, because the forge reports a job skipped by a failed dependency as success.
+
+#### Scenario: A five-job workflow names one job
+
+- GIVEN a workflow that runs on `pull_request` with the jobs `lint`, `build`, `test`, `docs`, and `nix`, and `test` needs `lint` alone
+- WHEN `rk setup check --required-check test` runs against a trunk whose ruleset the setup owns
+- THEN `protect-trunk` reports satisfied with a limitation naming `build`, `docs`, and `nix` as jobs that gate nothing
+
+#### Scenario: A gate that needs every job
+
+- GIVEN the same workflow where `test` runs `if: always()` and needs every other job
+- WHEN `rk setup check --required-check test` runs
+- THEN `protect-trunk` reports satisfied with no limitation
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 

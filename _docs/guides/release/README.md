@@ -21,8 +21,8 @@ A variable here is something a project is free to choose. Everything the convent
   - fixed by `TRUNK_BRANCH` in `src/setup/context.rs`, and by the `branches:` filter in the landed `release-plz.yml`
 - Release lines: `release/*`
   - fixed by that same `branches:` filter
-- Required checks: `test` and `pr-title`
-  - `test` is the job id this project's own CI workflow reports, which `--required-check test` assumes
+- Required checks: `gate` and `pr-title`
+  - `gate` is the job id this project's own CI workflow reports for the whole workflow: it needs `test` and `flake`, runs `if: always()`, and fails on any result other than success, which `--required-check gate` assumes
   - `pr-title` is the job id the landed title check reports, and `setup/github/protect-trunk` requires it beside the first
 - Title check: `.github/workflows/pr-title.yml`
   - fixed by the snippet that lands it, and it runs on `pull_request_target` so the forge executes the trunk's copy

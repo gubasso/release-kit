@@ -432,7 +432,7 @@ fn line_fragments(line: &str) -> Vec<&str> {
 /// The scalar before its comment. A hash opens a YAML comment only where
 /// a space precedes it, and a git ref may carry one, so the readable tag
 /// kept beside a commit is stripped while `<sha>#dev` stays whole.
-fn before_comment(value: &str) -> &str {
+pub(crate) fn before_comment(value: &str) -> &str {
     let mut previous = ' ';
     for (index, character) in value.char_indices() {
         if character == '#' && (previous == ' ' || previous == '\t') {

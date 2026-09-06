@@ -224,3 +224,11 @@ Verified 2026-09-01. A required status check on GitHub matches by context name �
 - <https://docs.gitlab.com/ee/api/projects.html>
 
 Bearing: the pair of required contexts `protect-trunk` writes, and why the GitLab half registers nothing.
+
+## A skipped job reports success
+
+Verified 2026-09-06. A GitHub Actions job that is skipped — by its own `if` conditional, or because a job it `needs` failed — reports success to the required status check that names it, and does not block the merge. Only a workflow that never runs at all, skipped by a path or branch filter or by a commit message, leaves its check pending and blocks. So a gate job that `needs` every other job holds the merge only when it runs `if: always()` and itself fails on any `needs.*.result` other than `success`; without that, a red needed job skips the gate and the skip reads as green.
+
+- <https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/defining-the-mergeability-of-pull-requests/troubleshooting-required-status-checks>
+
+Bearing: `forge-setup:the-required-check-stands-for-every-request-job`, the `always()` clause of the gate shape the setup runbook shows, and why the observation names a gate that lacks it.
