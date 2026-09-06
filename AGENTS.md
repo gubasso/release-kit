@@ -41,6 +41,13 @@ This repository is the canonical knowledge product for the release-kit workflow.
 - State what is true now. Decision records are the only history-bearing document class.
 - Keep exploratory material in `.draft/`; promotion is a rewrite into the owning zone.
 
+## Text that leaves this machine
+
+- An issue, a pull request, a review comment, a commit message, a release note, or any other text posted to a forge or a registry carries no operator particulars: no local filesystem path, no home directory, no scratch, run, session, cache or state directory, no hostname, and no account name that identifies the machine. The public guides already follow this rule, and it binds every forge-facing text the same way.
+- A local research record is not a citation. Cite the public source a reader can open, or restate the finding in the text itself, and keep the path to the local record out of it entirely.
+- Before posting or editing forge-facing text, scan the whole body for `/home/`, `/tmp/`, `/var/`, `.local/`, `.cache/`, and `~`, and stop on any match. The `no-personal-path` gate holds the files in this repository, and it never sees a body that goes straight to a forge, so this scan is the only check that text gets.
+- A leak that already posted is not repaired by an edit alone: the forge keeps the edit history. Report it to the operator, who decides on deleting the revision.
+
 ## Executable artifacts
 
 - Rust follows the exobrain CLI conventions: clap derive in `src/cli/`, one handler per subcommand in `src/commands/`, typed errors with a tested exit-code matrix in `src/error.rs`.
