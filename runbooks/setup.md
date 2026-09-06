@@ -200,6 +200,8 @@ gh api "repos/<repo>/contents/.github/workflows/pr-title.yml" -q .name
 # 404 on pr-title.yml: step 4 has not reached the trunk, and protecting now would block the very request that lands it
 ```
 
+A project that keeps older lines reads the same file for `release/**`: a pull-request filter selects by base branch, so the required check reports on a line's request only where the project's own workflow watches the lines too. [The release-lines runbook](./release-lines.md) step 2 owns that wiring, and it is owed before a line is ever cut.
+
 ### 3b. Protect the trunk
 
 Automated: `rk setup step protect-trunk --apply --required-check <name>` — on GitHub only after 3a passes, per the chapter's ordering; a rerun updates the protection in place.
