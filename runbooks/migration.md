@@ -77,7 +77,17 @@ rk status --check --target .
 # check: exits 0; every drift, missing file, sentinel, and invariant line is an entry until it does
 ```
 
-### 2e. Prove the landed files where the default branch is today
+### 2e. Regenerate what a landed file generates
+
+A seeded configuration a tool consumes is not in effect until that tool runs, and a brownfield target arrives with the tool's previous output already committed; [the setup runbook](./setup.md) step 4b regenerates it at the pin.
+
+```bash
+rk status --check --target .
+# check: no invariant line names .github/workflows/release.yml
+# a workflow-action-stale or workflow-attestation-missing line: the committed workflow predates the landed configuration, and the regenerate is what closes it
+```
+
+### 2f. Prove the landed files where the default branch is today
 
 The project's own checks run on the landed files before any branch moves; [the setup runbook](./setup.md) step 4c lands them where the trunk takes a direct write, and step 4f where it does not.
 

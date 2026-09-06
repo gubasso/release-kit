@@ -45,6 +45,7 @@ Gate each of these: print the exact command, say what it changes and why, wait, 
 - Registry actions: the first hand publish, registering the trusted publisher, turning on enforcement. `rk guide setup` names each with its reason.
 - The release style, on a record that predates it — runbook step 2b. Ask it with `AskUserQuestion` the way rk-setup's step 6 states, because arming an existing project's release request changes what a green trunk does.
 - The development environment, where the project obtains `rk` by a host install or a hand-rolled bump — runbook step 6. Ask it with `AskUserQuestion` the way rk-setup's step 6 states, with the replacement as the default; the migration is not done while the cleanup's `leftovers` list is non-empty.
+- Regenerating what a landed configuration generates — runbook step 2e; it needs the binding's generator installed at its pin, and `rk status --check` names the generated file while the committed one predates the landing.
 - The predecessor's removal itself, and every other removal: what it removes is committed first, per the chapter's recoverability section.
 - A workspace promotion under worktree mode: the skill may state the layout from `rk method worktrees` and render the commands from `rk guide worktree` step 5, and runs none of them; moving directories on the operator's disk is never a code change.
 

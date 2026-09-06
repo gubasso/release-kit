@@ -310,17 +310,51 @@ fn observe(args: &StatusArgs, manifest: &Manifest) -> Result<Observed, RkError> 
             observed.drift_rendered.push(file.destination.clone());
         }
     }
-    // The record-consistency step: recorded digests alone cannot see a
-    // manifest edited only at its parameters — every file still matches
-    // its own record — so the two mode-bearing block destinations are
-    // re-rendered from the record's own parameters and compared against
-    // the digest the record stores for each. Only where the recorded
-    // payload is this binary's: an older landing's blocks legitimately
-    // differ from this payload's candidate — that is the alignment line's
-    // story and the upgrade's job, not parameter drift. A destination
-    // already reported as rendered drift is the file's own story, not the
-    // record's, and is skipped too.
+    // The cross-file step: a landed file can generate the artifact the
+    // forge actually executes, and the payload ships no copy of it, so no
+    // recorded digest sees the two disagree. The pair's own rule reads
+    // both off the target's disk.
+    observed.invariants.extend(invariants::target_failures(
+        &manifest.tech,
+        &manifest.forge,
+        &args.target,
+    ));
     let same_payload = manifest.payload_sha256 == crate::commands::payload::report().payload_sha256;
+    if same_payload {
+        observe_parameter_drift(manifest, &mut observed);
+    }
+    if same_payload {
+        observe_record_set(args, manifest, &mut observed.record_drift)?;
+    }
+    // Stale means behind, not merely different: a landing from a newer rk
+    // can carry pins ahead of this binary's registry, and that is the
+    // alignment line's story, not a freshness complaint.
+    for (tool, landed) in &manifest.pins {
+        if let Some(available) = registry::version_of(tool) {
+            if manifest::version_is_newer(&available, landed) {
+                observed.stale.push(StalePin {
+                    tool: tool.clone(),
+                    landed: landed.clone(),
+                    available,
+                });
+            }
+        }
+    }
+    Ok(observed)
+}
+
+/// The record-consistency step over the two mode-bearing blocks.
+///
+/// Recorded digests alone cannot see a manifest edited only at its
+/// parameters — every file still matches its own record — so the two
+/// block destinations are re-rendered from the record's own parameters
+/// and compared against the digest the record stores for each. Called
+/// only under this binary's own payload: an older landing's blocks
+/// legitimately differ from this payload's candidate, which is the
+/// alignment line's story and the upgrade's job, not parameter drift. A
+/// destination already reported as rendered drift is the file's own
+/// story, not the record's, and is skipped too.
+fn observe_parameter_drift(manifest: &Manifest, observed: &mut Observed) {
     for (destination, template) in [
         (
             landing::AGENTS_DESTINATION,
@@ -331,9 +365,6 @@ fn observe(args: &StatusArgs, manifest: &Manifest) -> Result<Observed, RkError> 
             landing::hooks_block(manifest.parameters.workflow),
         ),
     ] {
-        if !same_payload {
-            break;
-        }
         let Some(record) = manifest.file(destination) else {
             continue;
         };
@@ -357,24 +388,6 @@ fn observe(args: &StatusArgs, manifest: &Manifest) -> Result<Observed, RkError> 
                 .push(format!("{destination} (parameters.workflow)"));
         }
     }
-    if same_payload {
-        observe_record_set(args, manifest, &mut observed.record_drift)?;
-    }
-    // Stale means behind, not merely different: a landing from a newer rk
-    // can carry pins ahead of this binary's registry, and that is the
-    // alignment line's story, not a freshness complaint.
-    for (tool, landed) in &manifest.pins {
-        if let Some(available) = registry::version_of(tool) {
-            if manifest::version_is_newer(&available, landed) {
-                observed.stale.push(StalePin {
-                    tool: tool.clone(),
-                    landed: landed.clone(),
-                    available,
-                });
-            }
-        }
-    }
-    Ok(observed)
 }
 
 /// The record-set consistency step: the recorded digests judge each
