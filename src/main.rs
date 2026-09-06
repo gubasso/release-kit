@@ -65,6 +65,7 @@ fn run(cli: &Cli) -> Result<(), RkError> {
         Commands::Runs(args) => commands::runs::run(args),
         Commands::Skill(args) => commands::skill::run(args),
         Commands::Devshell(args) => commands::devshell::run(args),
+        Commands::Depend(args) => commands::depend::run(args),
         Commands::Doctor(args) => commands::doctor::run(args),
         Commands::Usage => commands::usage::run(),
         Commands::License => commands::license::run(),
@@ -126,6 +127,7 @@ const fn name(command: &Commands) -> &'static str {
         Commands::Runs(_) => "runs",
         Commands::Skill(_) => "skill",
         Commands::Devshell(_) => "devshell",
+        Commands::Depend(_) => "depend",
         Commands::Doctor(_) => "doctor",
         Commands::Usage => "usage",
         Commands::License => "license",
@@ -137,6 +139,7 @@ const fn name(command: &Commands) -> &'static str {
 /// error renders on stderr.
 const fn wants_json(command: &Commands) -> bool {
     use release_kit::cli::branches::BranchesAction;
+    use release_kit::cli::depend::DependAction;
     use release_kit::cli::devshell::DevshellAction;
     use release_kit::cli::lines::LinesAction;
     use release_kit::cli::runs::RunsAction;
@@ -191,6 +194,10 @@ const fn wants_json(command: &Commands) -> bool {
             DevshellAction::Add(args) => args.json,
             DevshellAction::Clean(args) => args.json,
             DevshellAction::Sync(args) => args.json,
+        },
+        Commands::Depend(args) => match &args.action {
+            DependAction::Assess(args) => args.json,
+            DependAction::Add(args) => args.json,
         },
         _ => false,
     }

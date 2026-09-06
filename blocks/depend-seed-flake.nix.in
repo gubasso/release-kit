@@ -1,0 +1,39 @@
+# Seeded by rk depend add, and written only where the project had no
+# flake: an existing flake is never edited, and this project owns and
+# tunes this one from the first write.
+#
+# The RK_DEP_INPUT tag below is the version this project develops
+# against, and flake.lock is its content pin. `nix flake update
+# RK_DEP_INPUT` moves the two together; rk depend edits nothing here.
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    RK_DEP_INPUT = {
+      url = "RK_DEP_FLAKE_REF";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+  };
+
+  outputs =
+    { self, nixpkgs, RK_DEP_INPUT }:
+    let
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+      ];
+      eachSystem = f: nixpkgs.lib.genAttrs systems (system: f system);
+    in
+    {
+      devShells = eachSystem (
+        system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+        in
+        {
+          default = pkgs.mkShell {
+            packages = [ RK_DEP_INPUT.packages.${system}.default ];
+          };
+        }
+      );
+    };
+}
