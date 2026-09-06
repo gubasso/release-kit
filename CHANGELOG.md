@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.20](https://github.com/gubasso/release-kit/compare/v0.2.19...v0.2.20) - 2026-09-06
+
+### Added
+
+- *(cli)* add rk depend and the rk-depend skill ([#86](https://github.com/gubasso/release-kit/pull/86))
+- *(landing)* judge the generated artifact workflow against its configuration ([#83](https://github.com/gubasso/release-kit/pull/83))
+
+### Other
+
+- *(method)* name the project CI as the second half of the line wiring ([#84](https://github.com/gubasso/release-kit/pull/84))
+
 ## [0.2.19](https://github.com/gubasso/release-kit/compare/v0.2.18...v0.2.19) - 2026-09-05
 
 ### Added
