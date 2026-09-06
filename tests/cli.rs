@@ -6703,6 +6703,183 @@ fn status_judges_a_seeded_file_that_dropped_the_invariants() {
         .success();
 }
 
+/// Every `(action, commit)` the payload's own seed pins, so a test
+/// workflow carries the pins the judgment expects and a pin bump moves
+/// the fixture with the seed.
+fn seed_action_commits() -> Vec<(String, String)> {
+    let seed = std::fs::read_to_string(repo_path("snippets/rust/github/dist-workspace.toml"))
+        .expect("the seed reads");
+    seed.lines()
+        .skip_while(|line| !line.starts_with("[dist.github-action-commits]"))
+        .skip(1)
+        .take_while(|line| !line.starts_with('['))
+        .filter_map(|line| line.split_once('='))
+        .map(|(action, commit)| {
+            let commit = commit.split('#').next().unwrap_or(commit);
+            (
+                action.trim().trim_matches('"').to_owned(),
+                commit.trim().trim_matches('"').to_owned(),
+            )
+        })
+        .collect()
+}
+
+/// Write a generated artifact workflow into a landed target: one step per
+/// seeded pin, at the reference the caller names for each.
+fn write_artifact_workflow(target: &Path, reference: impl Fn(&str, &str) -> String) {
+    let steps = seed_action_commits()
+        .iter()
+        .fold(String::new(), |mut steps, (action, commit)| {
+            use std::fmt::Write as _;
+            let _ = writeln!(
+                steps,
+                "      - uses: {action}@{}",
+                reference(action, commit)
+            );
+            steps
+        });
+    let dir = target.join(".github/workflows");
+    std::fs::create_dir_all(&dir).expect("the workflow directory creates");
+    std::fs::write(
+        dir.join("release.yml"),
+        format!("name: Release\njobs:\n  host:\n    steps:\n{steps}"),
+    )
+    .expect("the workflow writes");
+}
+
+/// SATISFIES landing:a-seeded-file-still-carries-the-invariants
+/// The forge executes the generated workflow, not the configuration it
+/// was generated from: a target whose `dist-workspace.toml` carries every
+/// pin while `.github/workflows/release.yml` still names a movable tag
+/// and no attest step is reported by plain status and fails `--check`,
+/// and the generated file is never rewritten.
+#[test]
+fn status_catches_a_stale_generated_artifact_workflow() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+    let workflow = target.path().join(".github/workflows/release.yml");
+    let stale = "name: Release\njobs:\n  host:\n    steps:\n      - uses: actions/checkout@v4\n";
+    std::fs::create_dir_all(workflow.parent().expect("the workflow has a directory"))
+        .expect("the workflow directory creates");
+    std::fs::write(&workflow, stale).expect("the stale workflow writes");
+
+    let plain = rk()
+        .args(["status", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&plain).expect("one JSON object");
+    let failures = report["invariant_failures"]
+        .as_array()
+        .expect("the plain report carries the failures");
+    for code in ["workflow-action-stale", "workflow-attestation-missing"] {
+        assert!(
+            failures.iter().any(|failure| failure["code"] == code
+                && failure["destination"] == ".github/workflows/release.yml"),
+            "{code} is reported against the file to fix: {report}"
+        );
+    }
+
+    let checked = rk()
+        .args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8_lossy(&checked);
+    assert!(
+        text.contains("INVARIANT .github/workflows/release.yml (workflow-attestation-missing)"),
+        "{text}"
+    );
+    assert!(
+        text.contains("dist generate --mode ci"),
+        "the next lines carry the remediation: {text}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&workflow).expect("the workflow reads"),
+        stale,
+        "the judgment rewrites nothing"
+    );
+}
+
+/// SATISFIES landing:a-seeded-file-still-carries-the-invariants
+/// A workflow regenerated from the landed configuration fails nothing:
+/// every action runs at the commit the configuration pins, and the attest
+/// step the configuration asks for is there.
+#[test]
+fn status_passes_a_regenerated_artifact_workflow() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+    write_artifact_workflow(target.path(), |_, commit| commit.to_owned());
+    let filled = std::fs::read_to_string(target.path().join("release-plz.toml"))
+        .expect("the seeded file reads")
+        .lines()
+        .filter(|line| !line.contains("TODO(release-kit)"))
+        .fold(String::new(), |mut text, line| {
+            text.push_str(line);
+            text.push('\n');
+            text
+        });
+    std::fs::write(target.path().join("release-plz.toml"), filled).expect("the fill writes");
+    let plain = rk()
+        .args(["status", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&plain).expect("one JSON object");
+    assert_eq!(
+        report["invariant_failures"]
+            .as_array()
+            .expect("the array is present")
+            .len(),
+        0,
+        "{report}"
+    );
+    rk().args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+}
+
+/// SATISFIES landing:a-seeded-file-still-carries-the-invariants
+/// A landing writes no artifact workflow — the operator generates it
+/// afterwards — so an absent one is reported by nothing and a fresh
+/// target passes `--check` on its first day.
+#[test]
+fn status_is_silent_on_an_artifact_workflow_that_was_never_generated() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+    assert!(
+        !target.path().join(".github/workflows/release.yml").exists(),
+        "the landing writes no artifact workflow"
+    );
+    let plain = rk()
+        .args(["status", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&plain).expect("one JSON object");
+    assert_eq!(
+        report["invariant_failures"]
+            .as_array()
+            .expect("the array is present")
+            .len(),
+        0,
+        "{report}"
+    );
+}
+
 /// A recorded file that vanished is the missing violation, never a
 /// validation attempt over absent bytes: plain status reports MISSING and
 /// exits 0, the check exits 1 on the same report, and no invariant
@@ -6903,6 +7080,22 @@ fn every_payload_action_maps_to_one_registry_entry() {
             "{file}: {action}'s readable comment must be the registry's discovery ref"
         );
     }
+}
+
+/// SATISFIES landing:a-seeded-file-still-carries-the-invariants
+/// This repository is itself a landed rust/github target whose artifact
+/// workflow is generated and committed, so the cross-file judgment runs
+/// against real cargo-dist output on every test run, never against a
+/// fixture alone.
+#[test]
+fn this_projects_artifact_workflow_matches_its_configuration() {
+    let root =
+        Utf8PathBuf::from_path_buf(repo_path("")).expect("the repository root is a utf-8 path");
+    let found = release_kit::landing::invariants::target_failures("rust", "github", &root);
+    assert!(
+        found.is_empty(),
+        "this repository's own generated workflow disagrees with its configuration: {found:?}"
+    );
 }
 
 /// The cargo-dist action-commit table covers every action the pinned

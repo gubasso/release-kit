@@ -44,6 +44,8 @@ dist plan
 # check: prints the artifact list for every target in dist-workspace.toml
 ```
 
+`rk status --check` judges the committed workflow against `dist-workspace.toml` without `dist` installed: every reference the workflow runs is immutable, it is the configuration's own value wherever the configuration pins that action, a step the check cannot resolve is reported rather than passed, and an attest step is present while `github-attestations` is true. It reads from the workflow to the configuration, so a pin the workflow never runs is the target's own tuning; a table entry naming a movable tag pins nothing, so every reference is judged for itself whatever the configuration says about it. It reads the grammar cargo-dist writes — block and flow steps, quoted and unquoted keys — and a workflow hand-authored in some further YAML presentation is beyond a text reader, which is one more reason the `dist generate` proof above stays the whole-file check. It is the gate a target carries after the landing, and the `dist generate` proof above stays the stronger check, because only regenerating sees the rest of the workflow body. A workflow that was never generated is reported by nothing: `rk init` writes none, so generating it is a step the operator owes.
+
 ### The bootstrap token
 
 The first publish is manual, and the registry exposes token creation in the browser only: the New API Token form at `crates.io/settings/tokens`. Mint the narrowest token that can do the job.
