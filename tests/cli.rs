@@ -13544,21 +13544,109 @@ fn check_reads_a_block_needs_list_and_names_an_opaque_one() {
     );
 }
 
-/// A workflow that never runs on a request reports no context there, so
-/// its jobs are not ungated, and a target without workflows says nothing.
+/// A target with no request workflow reports that the check cannot be
+/// satisfied: no job anywhere reports it.
 #[test]
-fn check_ignores_workflows_that_do_not_run_on_requests() {
+fn check_reports_a_check_no_request_workflow_can_report() {
     let fixture = ForgeFixture::new();
     seed_owned_trunk(&fixture);
     let line = protect_trunk_line(&fixture, Some("test"));
-    assert!(!line.contains("limitation:"), "no workflows dir: {line}");
+    assert!(
+        line.starts_with("ok protect-trunk")
+            && line.contains("no workflow in .github/workflows runs on a pull request"),
+        "no workflows dir: {line}"
+    );
     write_workflow(
         &fixture,
         "nightly.yml",
         "on: push\njobs:\n  lint:\n    runs-on: x\n  test:\n    runs-on: x\n",
     );
     let line = protect_trunk_line(&fixture, Some("test"));
-    assert!(!line.contains("limitation:"), "push-only workflow: {line}");
+    assert!(
+        line.contains("no workflow in .github/workflows runs on a pull request"),
+        "push-only workflow: {line}"
+    );
+}
+
+/// A gate whose name is an expression, or whose condition is more than a
+/// bare `always()`, or whose trigger filters by paths, is not proven.
+#[test]
+fn check_names_an_unproven_gate_name_condition_and_trigger() {
+    let fixture = ForgeFixture::new();
+    seed_owned_trunk(&fixture);
+    write_workflow(
+        &fixture,
+        "ci.yml",
+        "on: [pull_request]\njobs:\n  lint:\n    runs-on: x\n  test:\n    name: test-${{ matrix.os }}\n    if: always()\n    needs: [lint]\n",
+    );
+    let line = protect_trunk_line(&fixture, Some("test"));
+    assert!(
+        line.contains("names itself by an expression") && line.contains("not proven to exist"),
+        "{line}"
+    );
+    write_workflow(
+        &fixture,
+        "ci.yml",
+        "on:\n  pull_request:\n    paths: ['src/**']\njobs:\n  lint:\n    runs-on: x\n  test:\n    if: always() && needs.lint.result == 'success'\n    needs: [lint]\n",
+    );
+    let line = protect_trunk_line(&fixture, Some("test"));
+    assert!(
+        line.contains("runs under the condition always() && needs.lint.result == 'success'"),
+        "{line}"
+    );
+    assert!(line.contains("filters by paths"), "{line}");
+    assert!(!line.contains("gates nothing"), "{line}");
+    write_workflow(
+        &fixture,
+        "ci.yml",
+        "on:\n  pull_request:\n    branches: [main]\n    types: [opened]\njobs:\n  test:\n    if: always()\n",
+    );
+    let line = protect_trunk_line(&fixture, Some("test"));
+    assert!(
+        line.contains("reads branches: [main]") && line.contains("against master"),
+        "{line}"
+    );
+    assert!(line.contains("reads types: [opened]"), "{line}");
+    write_workflow(
+        &fixture,
+        "ci.yml",
+        "on:\n  pull_request:\n    branches-ignore: ['ma[as]ter']\njobs:\n  test:\n    if: always()\n",
+    );
+    let line = protect_trunk_line(&fixture, Some("test"));
+    assert!(
+        line.contains("reads branches-ignore: [ma[as]ter]"),
+        "{line}"
+    );
+    write_workflow(
+        &fixture,
+        "ci.yml",
+        "on: [pull_request]\njobs:\n  lint:\n    runs-on: x\n  test:\n    uses: org/repo/.github/workflows/x.yml@main\n    name: test\n    needs: [lint]\n",
+    );
+    let line = protect_trunk_line(&fixture, Some("test"));
+    assert!(
+        line.contains("runs a reusable workflow") && line.contains("not proven to exist"),
+        "{line}"
+    );
+}
+
+/// A workflow that runs on a request from a second file is judged with the
+/// first, and an unreadable file is named rather than skipped.
+#[test]
+fn check_judges_every_request_workflow_and_names_an_unreadable_one() {
+    let fixture = ForgeFixture::new();
+    seed_owned_trunk(&fixture);
+    write_workflow(&fixture, "ci.yml", GATED_WORKFLOW);
+    write_workflow(
+        &fixture,
+        "release.yml",
+        "on:\n  pull_request:\n  push:\n    tags: ['v*']\njobs:\n  plan:\n    runs-on: x\n",
+    );
+    let line = protect_trunk_line(&fixture, Some("test"));
+    assert!(line.contains("gates nothing from [plan]"), "{line}");
+    std::fs::create_dir_all(fixture.target.path().join(".github/workflows/broken.yml"))
+        .expect("a directory named as a file");
+    let line = protect_trunk_line(&fixture, Some("test"));
+    assert!(line.contains("[broken.yml] could not be read"), "{line}");
 }
 
 /// Without `--required-check` the workflows are not read: the gate is

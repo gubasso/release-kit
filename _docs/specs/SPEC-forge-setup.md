@@ -111,7 +111,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `forge-setup:the-required-check-stands-for-every-request-job` — The required check stands for every request job
 
-Where `rk setup check` knows the required check, it MUST read the target's own workflows and report, as a limitation on `protect-trunk`, every job that reports on a pull request and that the required check neither is nor needs, and it MUST report a required check that no request job reports, because the trunk protection requires that one context beside the title check and no other job holds a merge — under the trunk style's standing arm nobody reads the check list before the forge merges, so an ungated red job ships. The observation MUST also name a gate that runs without `if: always()`, because the forge reports a job skipped by a failed dependency as success.
+Where `rk setup check` knows the required check, it MUST read the target's own workflows and report, as a limitation on `protect-trunk`, every job that reports on a pull request and that the required check neither is nor needs, and it MUST report a required check that no request job reports, because the trunk protection requires that one context beside the title check and no other job holds a merge — under the trunk style's standing arm nobody reads the check list before the forge merges, so an ungated red job ships. The observation MUST also name a gate whose condition is anything but a bare `if: always()`, because the forge reports a job skipped by a failed dependency as success and any other expression can skip it. Where the file does not state what it needs — a gate named by an expression or a reusable-workflow call, a workflow that cannot be read, a target with no request workflow at all — the observation MUST say so rather than report a clean gate.
 
 #### Scenario: A five-job workflow names one job
 
@@ -124,6 +124,12 @@ Where `rk setup check` knows the required check, it MUST read the target's own w
 - GIVEN the same workflow where `test` runs `if: always()` and needs every other job
 - WHEN `rk setup check --required-check test` runs
 - THEN `protect-trunk` reports satisfied with no limitation
+
+#### Scenario: A gate the file does not prove
+
+- GIVEN a gate named `test-${{ matrix.os }}`, or one running `if: always() && needs.lint.result == 'success'`, or a target whose workflows never run on a pull request
+- WHEN `rk setup check --required-check test` runs
+- THEN `protect-trunk` reports satisfied with a limitation naming what could not be proven, never a bare pass
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 
