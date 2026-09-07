@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.23](https://github.com/gubasso/release-kit/compare/v0.2.22...v0.2.23) - 2026-09-07
+
+### Fixed
+
+- *(landing)* render the routing block in plain sentences ([#92](https://github.com/gubasso/release-kit/pull/92))
+
 ## [0.2.22](https://github.com/gubasso/release-kit/compare/v0.2.21...v0.2.22) - 2026-09-07
 
 ### Added
