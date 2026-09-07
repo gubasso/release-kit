@@ -283,7 +283,7 @@ rk status --check --target .
 
 On rust:
 
-Add the release proofs to the project's own gated workflow first, then regenerate the artifact workflow at the pin and read what a release will build — that order, because the generated workflow stops reporting on a request the moment it is regenerated, and the gated job is what replaces it. [The binding](../bindings/rust.md) carries the commands, the job, and the no-diff proof. Where the target opts into Nix, its build proof is a job of the same workflow, and the binding carries that one too.
+On github, add the release proofs to the project's own gated workflow first, then regenerate the artifact workflow at the pin and read what a release will build — that order, because the generated workflow stops reporting on a request the moment it is regenerated, and the gated job is what replaces it. [The binding](../bindings/rust.md) carries the commands, the job, and the no-diff proof. Where the target opts into Nix, its build proof is a job of the same workflow, and the binding carries that one too, or reports the smaller product where the pair's pipeline takes no job of the target's own. On gitlab the pair builds no artifacts, so there is no plan to gate.
 
 ### 4c. Put the files on the trunk
 

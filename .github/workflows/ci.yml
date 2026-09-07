@@ -76,17 +76,22 @@ jobs:
           use-gha-cache: true
       - name: install dist at the configured pin
         run: |
-          set -eu
+          set -euo pipefail
           pin="$(grep -m1 '^cargo-dist-version' dist-workspace.toml | cut -d'"' -f2)"
+          [ -n "$pin" ] || { echo "dist-workspace.toml names no cargo-dist-version"; exit 1; }
           curl --proto '=https' --tlsv1.2 -LsSf \
             "https://github.com/axodotdev/cargo-dist/releases/download/v$pin/cargo-dist-installer.sh" | sh
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           echo "DIST_PIN=$pin" >> "$GITHUB_ENV"
       - name: dist runs at the configured pin
         run: nix develop --command dist --version | grep -Fq "$DIST_PIN"
+      # The tracked check comes first: git diff compares the index with the
+      # working tree and never shows an untracked path, so a request that
+      # deletes the workflow would regenerate it and diff clean.
       - name: the committed workflow is what the pin produces
         run: |
-          set -eu
+          set -euo pipefail
+          git ls-files --error-unmatch -- .github/workflows/release.yml > /dev/null
           nix develop --command dist generate
           git diff --exit-code -- .github/workflows/release.yml
       - name: the configuration produces a viable release

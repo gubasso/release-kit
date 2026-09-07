@@ -126,13 +126,13 @@ Verify: `cargo nextest run -E 'test(every_git_and_sh_launch_resolves_through_the
 
 ### `packaging:the-landable-capability-promises-a-buildable-flake` — The landable capability promises a buildable flake
 
-The landed Nix capability MUST promise exactly a package expression that evaluates for the supported crate shape, a flake that builds where the seed pair landed, and a CI check that proves that build — and MUST NOT promise presence in nixpkgs or any registry, because a registry submission carries a human maintainer commitment into someone else's repository. The support matrix degrades honestly: a pair that lands fewer files reports the smaller product, never an error.
+The landed Nix capability MUST promise exactly a package expression that evaluates for the supported crate shape, a flake that builds where the seed pair landed, and — where the pair's forge leaves the target a pipeline to add it to — a served job proving that build, and MUST NOT promise presence in nixpkgs or any registry, because a registry submission carries a human maintainer commitment into someone else's repository. The capability lands no CI file of its own: a job proving the build holds a merge only inside the pipeline the forge's gate reads, and that pipeline is the target's. The support matrix degrades honestly: a pair that serves no such job reports the smaller product, never an error.
 
 #### Scenario: An operator asks what the capability shipped
 
 - GIVEN a target that opted in with `rk init --nix`
 - WHEN the operator reads the landing report and the runbook
-- THEN the promise is the build and its proof, with registry distribution named as the target's own later step
+- THEN the promise is the build, and the job that proves it in the target's own pipeline where the pair's forge serves one, with registry distribution named as the target's own later step
 
 Verify: `cargo nextest run -E 'test(nix)'`
 

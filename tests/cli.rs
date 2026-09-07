@@ -10237,6 +10237,31 @@ fn an_adoption_records_the_nix_parameter() {
     );
 }
 
+/// The generated workflow must be tracked before it is regenerated and
+/// diffed. `git diff` compares the index with the working tree and shows
+/// no untracked path, so a request that deletes the workflow regenerates
+/// it and diffs clean — a green gate over a release contract that no
+/// longer exists, which `rk status` reports as nothing because an absent
+/// generated file is the generator's story. The assertion is on the order
+/// of the two commands, in the served job and in this repository's own.
+#[test]
+fn the_release_proof_asserts_the_workflow_is_tracked_before_it_diffs() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for path in ["bindings/rust.md", ".github/workflows/ci.yml"] {
+        let text = std::fs::read_to_string(root.join(path)).expect("the file reads");
+        let tracked = text
+            .find("git ls-files --error-unmatch -- .github/workflows/release.yml")
+            .unwrap_or_else(|| panic!("{path}: the proof never asserts the workflow is tracked"));
+        let diffed = text
+            .find("git diff --exit-code -- .github/workflows/release.yml")
+            .unwrap_or_else(|| panic!("{path}: the proof never diffs the workflow"));
+        assert!(
+            tracked < diffed,
+            "{path}: the tracked assertion must precede the diff, which sees no untracked path"
+        );
+    }
+}
+
 /// Every action the rust binding serves in a job body is pinned by a full
 /// commit that appears exactly once in `versions.toml`, with a discovery
 /// ref, a freshness URL, and a checked date beside it. The binding is

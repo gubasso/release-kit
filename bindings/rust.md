@@ -44,7 +44,7 @@ dist plan
 # check: prints the artifact list for every target in dist-workspace.toml
 ```
 
-The same two proofs, as the job the project's gate needs. Its id joins that gate's `needs` beside the project's other jobs, and the pin is read from the file so a `cargo-dist-version` bump moves the job with it. A target whose CI runs through a devshell wraps both `dist` commands the way its other jobs are wrapped. A target large enough to split its CI across called workflows keeps the job in whichever called file the gate reaches, which is the one escape from a single gated file.
+The same two proofs, as the job the project's gate needs. Its id joins that gate's `needs` beside the project's other jobs, and the pin is read from the file so a `cargo-dist-version` bump moves the job with it. The tracked check runs before the generate, because `git diff` compares the index with the working tree and shows no untracked path: without it, a request deleting the workflow regenerates it and diffs clean. The extraction reads the one presentation the seed writes, so a requoted or indented key yields no pin; the emptiness check and the version assertion make that failure loud rather than a silently wrong version. A target whose CI runs through a devshell wraps every `dist` command the way its other jobs are wrapped. A target large enough to split its CI across called workflows keeps the job in whichever called file the gate reaches, which is the one escape from a single gated file.
 
 ```yaml
 dist-plan:
@@ -53,14 +53,19 @@ dist-plan:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
     - name: install dist at the configured pin
       run: |
-        set -eu
+        set -euo pipefail
         pin="$(grep -m1 '^cargo-dist-version' dist-workspace.toml | cut -d'"' -f2)"
+        [ -n "$pin" ] || { echo "dist-workspace.toml names no cargo-dist-version"; exit 1; }
         curl --proto '=https' --tlsv1.2 -LsSf \
           "https://github.com/axodotdev/cargo-dist/releases/download/v$pin/cargo-dist-installer.sh" | sh
         echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+        echo "DIST_PIN=$pin" >> "$GITHUB_ENV"
+    - name: dist runs at the configured pin
+      run: dist --version | grep -Fq "$DIST_PIN"
     - name: the committed workflow is what the pin produces
       run: |
-        set -eu
+        set -euo pipefail
+        git ls-files --error-unmatch -- .github/workflows/release.yml > /dev/null
         dist generate
         git diff --exit-code -- .github/workflows/release.yml
     - name: the configuration produces a viable release
@@ -126,9 +131,9 @@ The package then has exactly one publishing path.
 
 ### The Nix capability
 
-An opt-in beside the release automation, off by default: `rk init --nix` lands `nix/package.nix` (seeded — a starting point the project tunes) and a seed `flake.nix` and `flake.lock` pair where the target has none (a target's own flake is never touched, and `rk init` reports what it withholds and why). The set is the same on both forges, because the proof is a job of the project's own gated workflow rather than a landed one. A shape the seed cannot serve lands nothing, with the missing piece named — the seed reads `Cargo.toml` through `importTOML`, builds from the committed `Cargo.lock`, and smokes the crate's binary, so it supports one crate with a `[package]` table, a lock, and an implicit `src/main.rs` binary or an explicit `[[bin]]` entry; a workspace root, a lib-only crate, or an uncommitted lock is withheld. The capability promises a buildable flake and its proof, never presence in nixpkgs; registry distribution is the target's own later step. After landing: run `nix build .#default` once, resolve the license `TODO(release-kit)` in the seed, and commit the pair with the record. A consumer then pins the project as a flake input at a release tag, `github:<owner>/<repo>/vX.Y.Z`, and bumps by editing the tag and running `nix flake update <input>` — for release-kit itself as the input, `rk devshell sync` is that bump, both files inside one fenced transaction; a later `nix flake update` in the target itself refreshes the seed lock. Deeper distribution tiers — a nixpkgs submission, a binary cache — carry maintainer commitments and stay deliberate, separate steps.
+An opt-in beside the release automation, off by default: `rk init --nix` lands `nix/package.nix` (seeded — a starting point the project tunes) and a seed `flake.nix` and `flake.lock` pair where the target has none (a target's own flake is never touched, and `rk init` reports what it withholds and why). The landed set is the same on both forges, because the proof is a job of the project's own gated pipeline rather than a landed one; the binding serves that job for github, and the gitlab pair reports the smaller product below. A shape the seed cannot serve lands nothing, with the missing piece named — the seed reads `Cargo.toml` through `importTOML`, builds from the committed `Cargo.lock`, and smokes the crate's binary, so it supports one crate with a `[package]` table, a lock, and an implicit `src/main.rs` binary or an explicit `[[bin]]` entry; a workspace root, a lib-only crate, or an uncommitted lock is withheld. The capability promises a buildable flake and its proof, never presence in nixpkgs; registry distribution is the target's own later step. After landing: run `nix build .#default` once, resolve the license `TODO(release-kit)` in the seed, and commit the pair with the record. A consumer then pins the project as a flake input at a release tag, `github:<owner>/<repo>/vX.Y.Z`, and bumps by editing the tag and running `nix flake update <input>` — for release-kit itself as the input, `rk devshell sync` is that bump, both files inside one fenced transaction; a later `nix flake update` in the target itself refreshes the seed lock. Deeper distribution tiers — a nixpkgs submission, a binary cache — carry maintainer commitments and stay deliberate, separate steps.
 
-The job that proves the same build in CI, on github. Its id joins the gate's `needs` like any other. `nix build .#default` runs first, because `nix flake check` builds only the `checks` output, so without it a repository whose flake release-kit did not author goes green having never compiled `nix/package.nix`.
+On github, the job that proves the same build in CI. Its id joins the gate's `needs` like any other. `nix build .#default` runs first, because `nix flake check` builds only the `checks` output, so without it a repository whose flake release-kit did not author goes green having never compiled `nix/package.nix`.
 
 ```yaml
 nix:
@@ -143,6 +148,8 @@ nix:
     - run: nix build .#default
     - run: nix flake check
 ```
+
+On gitlab the capability lands its files and serves no job, which is the smaller product it reports honestly. The landed `.gitlab-ci.yml` is release-kit's own file and declares the one `release` stage, so a job added to it is owned drift an upgrade refuses, and a job naming an undeclared stage is an invalid pipeline. Proving the build there is the target's own integration until that pipeline carries a point to extend.
 
 ## Operate specifics
 
