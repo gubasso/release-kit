@@ -121,13 +121,13 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `landing:a-seeded-file-still-carries-the-invariants` — A seeded file still carries the invariants
 
-`rk status` MUST judge a landed file's effective configuration against the invariants its `(technology, forge, destination)` key owns, and MUST judge, per `(technology, forge)`, a file that a landed file generates and the distribution ships no copy of — for `(rust, github)`, `.github/workflows/release.yml` against `dist-workspace.toml` — reporting each failure with a stable code, the destination to change, the reason, and the exact remediation, and `--check` MUST count each one a violation. The relationship to `landing:a-seeded-file-is-never-rewritten` is deliberate: nothing is rewritten — the file stays the target's to tune — and the narrow part the invariants own is judged. The judgment over a landed configuration MUST read the parsed configuration, never match text: a commented key, a disabled value, a defaulted phase, or an unpaired phase fails, and whitespace or key order changes nothing. The judgment over a generated file MUST read that file's own text in the grammar its generator writes, because the generator is not installed and the text is what the forge executes, and MUST report a value it cannot resolve rather than pass it, since a step nobody can read is not a step nobody runs; a presentation outside that grammar is beyond a text reader, so the generator's own check stays the whole-file proof and the rule claims no more than it holds; where the generated file or the configuration it comes from is absent, the run reports nothing, because the distribution writes neither and an absence is the generator's story rather than drift.
+`rk status` MUST judge a landed file's effective configuration against the invariants its `(technology, forge, destination)` key owns, and MUST judge, per `(technology, forge)`, a file that a landed file generates and the distribution ships no copy of — for `(rust, github)`, `.github/workflows/release.yml` against `dist-workspace.toml` — reporting each failure with a stable code, the destination to change, the reason, and the exact remediation, and `--check` MUST count each one a violation. The relationship to `landing:a-seeded-file-is-never-rewritten` is deliberate: nothing is rewritten — the file stays the target's to tune — and the narrow part the invariants own is judged. The judgment over a landed configuration MUST read the parsed configuration, never match text: a commented key, a disabled value, a defaulted phase, or an unpaired phase fails, and whitespace or key order changes nothing. The judgment over a generated file MUST read that file's own text in the grammar its generator writes, because the generator is not installed and the text is what the forge executes, and MUST report a value it cannot resolve rather than pass it, since a step nobody can read is not a step nobody runs; a presentation outside that grammar is beyond a text reader, so the generator's own check stays the whole-file proof and the rule claims no more than it holds; where the generated file or the configuration it comes from is absent, the run reports nothing, because the distribution writes neither and an absence is the generator's story rather than drift. Where the pair's generated file would report a status check on a pull request, both the configuration that asks for it and the generated file that carries the trigger MUST fail, because the forge resolves a job's `needs` inside one workflow file and the trunk protection requires one project-owned context beside the title check, so a job in the generated file is in no gate's `needs` and the forge merges over its failure.
 
-#### Scenario: A landed target turns attestations off
+#### Scenario: A landed target turns attestations off and reports a second check
 
-- GIVEN a landed rust/github target whose `dist-workspace.toml` sets `github-attestations = false`
+- GIVEN a landed rust/github target whose `dist-workspace.toml` sets `github-attestations = false` and leaves `pr-run-mode` at a value other than `skip`, beside a generated `.github/workflows/release.yml` that triggers on `pull_request`
 - WHEN `rk status` and `rk status --check` run
-- THEN both report the failure with its code and remediation, the plain run exits 0, the check exits 1, and the file is untouched
+- THEN both report each failure with its code and remediation — the disabled attestation, the run mode, and the workflow's request trigger — the plain run exits 0, the check exits 1, and neither file is touched
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 
@@ -313,12 +313,12 @@ Verify: `cargo nextest run -E 'test(a_pre_nix_record_upgrades_to_nothing_unreque
 
 ### `landing:the-flake-pair-lands-all-or-nothing` — The flake pair lands all-or-nothing
 
-A landing MUST land the seed `flake.nix` and its matching `flake.lock` as a pair only where the target carries neither, withholding the pair and the rendered workflow together with the reason named where either exists, because a seed lock beside a foreign flake describes the wrong input graph and a green check that never builds the landed expression proves nothing; the seeded package expression still lands, and a crate shape the seed does not support withholds the whole capability by name.
+A landing MUST land the seed `flake.nix` and its matching `flake.lock` as a pair only where the target carries neither, withholding the pair with the reason named where either exists, because a seed lock beside a foreign flake describes the wrong input graph; the seeded package expression still lands, and a crate shape the seed does not support withholds the whole capability by name. The capability MUST land no workflow, because a job proving the build holds a merge only inside the workflow the required check needs, and that workflow is the target's own.
 
 #### Scenario: A target with its own flake opts in
 
 - GIVEN a rust target carrying a `flake.nix` of its own
 - WHEN `rk init --nix --apply` runs
-- THEN `nix/package.nix` lands, the pair and the workflow are withheld with the reason reported, the withheld destinations stay out of the record, and a later `rk upgrade` reproduces the same decision
+- THEN `nix/package.nix` lands, the pair is withheld with the reason reported, no workflow is written, the withheld destinations stay out of the record, and a later `rk upgrade` reproduces the same decision
 
 Verify: `cargo nextest run -E 'test(a_target_with_its_own_flake_keeps_it_and_the_pair_is_withheld)'`

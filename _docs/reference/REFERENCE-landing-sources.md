@@ -2,7 +2,7 @@
 
 External sources behind `SPEC-landing.md`: how comparable tools record what they generated into a project, how they judge whether it is still theirs, and what each one does when it is not. Each entry states what the source says and which rule it bears on.
 
-Verified against the listed sources on 2026-08-28 and re-checked on 2026-08-29; the arming entries verified on 2026-09-03; the release-marker entries verified on 2026-09-05.
+Verified against the listed sources on 2026-08-28 and re-checked on 2026-08-29; the arming entries verified on 2026-09-03; the release-marker entries verified on 2026-09-05; the run-mode entry verified on 2026-09-07.
 
 ## cargo-dist, on generated files that refuse to drift
 
@@ -13,6 +13,19 @@ Verified against the listed sources on 2026-08-28 and re-checked on 2026-08-29; 
 - <https://github.com/axodotdev/cargo-dist/blob/main/CHANGELOG.md>
 
 Bearing: `landing:a-rendered-file-is-reproducible` and `landing:an-upgrade-refuses-on-owned-drift`. This is also the exemplar release-kit already teaches its own users about in `bindings/rust.md`, so adopting the same shape for its own landed files is consistent with what it asks of them. The general stance is the load-bearing part: a tool that generates a file should be able to say whether that file is still what it generated, which is what the recorded digests are for.
+
+## cargo-dist, on the run mode, and the projects that skip it
+
+`pr-run-mode` selects what the generated GitHub workflow does on a pull request: `plan`, the default, runs the plan job and the reference calls it recommended; `upload` also builds and uploads the artifacts; `skip` leaves the `pull_request` trigger out of the generated file entirely. GitHub Actions resolves a job's `needs` inside one workflow file, and a required status check names a job rather than a workflow, so a job in the generated file can be in no other file's gate. astral-sh/uv sets `pr-run-mode = "skip"` and carries a hand-written `dist plan` job in its own gated CI graph; astral-sh/ruff carries a `cargo-publish-dry-run` job in its CI workflow for the same reason. rust-lang/cargo and rust-lang/rust-analyzer both end their CI graph in an aggregate job named `conclusion`, which reads `toJson(needs)` with jq and fails on any result other than success.
+
+- <https://axodotdev.github.io/cargo-dist/book/reference/config.html>
+- <https://docs.github.com/en/actions/reference/workflows-and-actions/contexts>
+- <https://github.com/astral-sh/uv/blob/main/dist-workspace.toml>
+- <https://github.com/astral-sh/uv/blob/main/.github/workflows/check-release.yml>
+- <https://github.com/astral-sh/ruff/blob/main/.github/workflows/ci.yaml>
+- <https://github.com/rust-lang/cargo/blob/master/.github/workflows/main.yml>
+
+Bearing: `landing:a-seeded-file-still-carries-the-invariants`, for the `pr-run-mode-not-skip` and `workflow-runs-on-a-request` codes, and the jobs `bindings/rust.md` serves for the project's own gate.
 
 ## projen, on markers, anti-tamper, and the sweep
 

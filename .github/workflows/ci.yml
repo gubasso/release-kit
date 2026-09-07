@@ -58,18 +58,54 @@ jobs:
           use-gha-cache: true
       - run: nix flake check
 
+  # The release configuration proves itself here, not in release.yml.
+  # pr-run-mode is skip, so the generated workflow is tag-only and reports
+  # nothing on a request: needs resolves inside one file, so a job there
+  # could never be one this gate holds. dist is not in the devshell; it
+  # installs at the pin dist-workspace.toml carries, with the installer the
+  # generated workflow itself uses, and nix develop keeps the caller's PATH
+  # so the flake's cargo and that dist meet.
+  dist-plan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@v19
+      - uses: DeterminateSystems/magic-nix-cache-action@v13
+        with:
+          use-flakehub: false
+          use-gha-cache: true
+      - name: install dist at the configured pin
+        run: |
+          set -eu
+          pin="$(grep -m1 '^cargo-dist-version' dist-workspace.toml | cut -d'"' -f2)"
+          curl --proto '=https' --tlsv1.2 -LsSf \
+            "https://github.com/axodotdev/cargo-dist/releases/download/v$pin/cargo-dist-installer.sh" | sh
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          echo "DIST_PIN=$pin" >> "$GITHUB_ENV"
+      - name: dist runs at the configured pin
+        run: nix develop --command dist --version | grep -Fq "$DIST_PIN"
+      - name: the committed workflow is what the pin produces
+        run: |
+          set -eu
+          nix develop --command dist generate
+          git diff --exit-code -- .github/workflows/release.yml
+      - name: the configuration produces a viable release
+        run: nix develop --command dist plan
+
   # The one status-check context the trunk protection requires. It needs
   # every other job and runs even when one fails: the forge reports a
-  # skipped job as success, so the gate must run to fail.
+  # skipped job as success, so the gate must run to fail. It names the job
+  # that failed, because the gate's own log is where a red merge is read.
   gate:
     if: always()
-    needs: [test, flake]
+    needs: [test, flake, dist-plan]
     runs-on: ubuntu-latest
     steps:
       - name: every job succeeded
         env:
-          RESULTS: ${{ join(needs.*.result, ' ') }}
+          RESULTS: ${{ toJson(needs) }}
         run: |
-          for r in $RESULTS; do
-            [ "$r" = success ] || { echo "a required job reported $r"; exit 1; }
-          done
+          set -eu
+          bad="$(printf '%s' "$RESULTS" |
+            jq -r 'to_entries[] | select(.value.result != "success") | "\(.key) reported \(.value.result)"')"
+          [ -z "$bad" ] || { echo "$bad"; exit 1; }
