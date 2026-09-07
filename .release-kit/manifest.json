@@ -1,7 +1,7 @@
 {
   "schema_version": 4,
   "rk_version": "0.2.22",
-  "payload_sha256": "bb93ed811561f3243de772590426645bbefbdc368a5596f605e95a44d3069039",
+  "payload_sha256": "d91eba8f7d2ef5be2397bba5773fea92f50801da75494adf361dfb3c65990b63",
   "origin": "adopt",
   "tech": "rust",
   "forge": "github",
@@ -53,8 +53,8 @@
     {
       "destination": "AGENTS.md",
       "kind": "rendered",
-      "sha256": "7bbdb12b6339b764b6d6c6eaac2aeea753418a5adaa0cab9370743836c7b41d4",
-      "baseline_sha256": "077e5649e52c1d218d702d60703e4c10506f4e8923c488089d1e4f297d61e593"
+      "sha256": "8765d8d6d11ac135c4f6e51bf5c9e5ca243b534421a3509771297fbb2d4775fa",
+      "baseline_sha256": "1b9661acaf7a79fbc2b62b6292d5d2d5f1b22f86c4270254102080c6fd599fe6"
     },
     {
       "destination": "dist-workspace.toml",

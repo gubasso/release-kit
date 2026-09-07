@@ -1414,7 +1414,7 @@ mod tests {
         assert!(worktree_routing.contains("This project works in worktrees"));
         assert!(branches_routing.contains("Branches are worked in the main checkout"));
         for block in [&worktree_routing, &branches_routing] {
-            assert!(block.contains("create or remove a worktree"));
+            assert!(block.contains("Create or remove a worktree"));
             assert!(block.contains("`rk worktree add <branch>`"));
             assert!(!block.contains("RK_WORKFLOW_LINE"), "{block}");
         }

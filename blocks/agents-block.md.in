@@ -3,8 +3,8 @@
 ## Releases
 
 - This repository runs the release-kit convention. `rk method invariants` states what must stay true.
-- An agent here guides and never drives. It reads this convention and tells the operator which step comes next. It takes no git or forge action unless the operator's request named that action. The bounded actions are: create, switch, or delete a branch, create or remove a worktree, commit, push, tag, and open, update, or merge a pull request. A request to change code authorizes the file changes alone.
-- Work reaches the trunk only through a squash-merged pull request from a short-lived branch. The branch name is `<type>/<slug>`, whose type matches the squash title, or the forge-minted `<issue-id>-<slug>`. Nothing is committed on `master`.
+- An agent here guides and never drives. It reads this convention and tells the operator which step comes next. It takes no git or forge action unless the operator's request named that action. The bounded actions include the following. Create, switch, or delete a branch. Create or remove a worktree. Commit, push, or tag. Open, update, or merge a pull request. A request to change code authorizes the file changes alone.
+- Work reaches the trunk only through a squash-merged pull request from a short-lived branch. The branch name is `<type>/<slug>`, whose type matches the squash title's type, or the forge-minted `<issue-id>-<slug>`. Nothing is committed on `master`.
 RK_WORKFLOW_LINE
 - The request's title becomes the trunk's commit message, so it MUST be a scoped Conventional Commit. The body carries the context and lands with it. The body names no internal planning artifact and carries no agent attribution. The landed rk-message hook, the forge's body check, and the observed body source hold that rule.
 - Every commit follows the same scoped convention. The landed commit-msg hook enforces it, and the scopes this project accepts are `RK_SCOPES_CSV`.

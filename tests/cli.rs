@@ -1895,7 +1895,7 @@ fn the_routing_block_bounds_the_agents_initiative() {
             "guides and never drives",
             "unless the operator's request named that action",
             "authorizes the file changes alone",
-            "create or remove a worktree",
+            "Create or remove a worktree",
             "names no internal planning artifact and carries no agent attribution",
         ] {
             assert!(
@@ -1912,31 +1912,77 @@ fn the_routing_block_bounds_the_agents_initiative() {
     }
 }
 
-/// Collapse the spans a prose gate protects: a backticked span and a
-/// parenthesized span each read as one word.
-fn collapse_protected(line: &str) -> String {
+/// One prose finding: the check that fired and the line it fired on.
+type ProseFinding = (&'static str, String);
+
+/// Collapse one delimited span to a single word, the way the prose gate's
+/// protected spans read: a backticked span and a parenthesized span each
+/// count as one. An unmatched opener protects nothing, so the rest of the
+/// line stays as written and is still measured.
+fn collapse_delimited(text: &str, open: char, close: char) -> String {
     let mut out = String::new();
-    let mut rest = line;
-    while let Some(start) = rest.find(['`', '(']) {
-        let close = if rest.as_bytes()[start] == b'`' {
-            '`'
-        } else {
-            ')'
-        };
+    let mut rest = text;
+    while let Some(start) = rest.find(open) {
+        let after = &rest[start + open.len_utf8()..];
+        let Some(end) = after.find(close) else { break };
         out.push_str(&rest[..start]);
         out.push_str(" SPAN ");
-        let after = &rest[start + 1..];
-        let Some(end) = after.find(close) else {
-            rest = "";
-            break;
-        };
-        rest = &after[end + 1..];
+        rest = &after[end + close.len_utf8()..];
     }
     out.push_str(rest);
     out
 }
 
-/// Split a collapsed line into sentences the way a prose gate does: a full
+/// A URL counts as one word too.
+fn collapse_urls(text: &str) -> String {
+    text.split_whitespace()
+        .map(|word| {
+            if word.starts_with("http://") || word.starts_with("https://") {
+                "SPAN"
+            } else {
+                word
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Every protected span collapsed, in the gate's own order.
+fn collapse_prose(text: &str) -> String {
+    let code = collapse_delimited(text, '`', '`');
+    let urls = collapse_urls(&code);
+    collapse_delimited(&urls, '(', ')')
+}
+
+/// Count the dashes that splice two statements: an em dash, or a spaced
+/// single or double hyphen between two non-digits. A numeric range and a
+/// command flag are neither.
+fn logic_dashes(text: &str) -> usize {
+    let mut count = text.matches('—').count();
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] != '-' {
+            i += 1;
+            continue;
+        }
+        let doubled = chars.get(i + 1) == Some(&'-');
+        let (dash_end, gap) = if doubled { (i + 1, i + 2) } else { (i, i + 1) };
+        let before = if i >= 2 { Some(chars[i - 2]) } else { None };
+        let after = chars.get(gap + 1).copied();
+        let spaced = i >= 1 && chars[i - 1] == ' ' && chars.get(gap) == Some(&' ');
+        if spaced
+            && before.is_some_and(|c| !c.is_ascii_digit())
+            && after.is_some_and(|c| !c.is_ascii_digit())
+        {
+            count += 1;
+        }
+        i = dash_end + 1;
+    }
+    count
+}
+
+/// Split a collapsed line into sentences the way the gate does: a full
 /// stop, a question mark, an exclamation mark, or a colon ends one, and a
 /// fragment under two words is not a sentence.
 fn sentences_of(collapsed: &str) -> Vec<String> {
@@ -1957,10 +2003,145 @@ fn sentences_of(collapsed: &str) -> Vec<String> {
         .collect()
 }
 
+/// A word with its surrounding punctuation removed, lowercased.
+fn bare(word: &str) -> String {
+    word.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'')
+        .to_lowercase()
+}
+
+/// Every deterministic prose finding on one markdown text, by the rules a
+/// Simplified Technical English gate applies to a descriptive document:
+/// no contraction, no perfect tense, no `-ing` clause used as a verb, no
+/// modal outside can, will, and must, no semicolon, no dash splicing two
+/// statements, and no sentence over 25 words. A heading, a comment, and a
+/// blank line are not prose; a list marker is not a word.
+fn prose_findings(text: &str) -> Vec<ProseFinding> {
+    // The stems the gate names, each an `-ing` form used as a verb.
+    const ING_STEMS: [&str; 14] = [
+        "making",
+        "allowing",
+        "enabling",
+        "ensuring",
+        "highlighting",
+        "creating",
+        "providing",
+        "offering",
+        "helping",
+        "reducing",
+        "improving",
+        "leading",
+        "causing",
+        "resulting",
+    ];
+    const CONTRACTIONS: [&str; 5] = ["n't", "'ll", "'re", "'ve", "'d"];
+    const MODALS: [&str; 6] = ["should", "would", "may", "might", "could", "shall"];
+
+    let mut findings = Vec::new();
+    let mut push = |category, line: &str| findings.push((category, line.to_owned()));
+    for raw in text.lines() {
+        let line = raw.trim_start();
+        if line.is_empty() || line.starts_with('#') || line.starts_with('<') {
+            continue;
+        }
+        let item = line
+            .strip_prefix("- ")
+            .or_else(|| line.strip_prefix("* "))
+            .or_else(|| line.strip_prefix("+ "))
+            .unwrap_or(line);
+        let collapsed = collapse_prose(item);
+        let lower = collapsed.to_lowercase();
+
+        if collapsed.contains(';') {
+            push("semicolon", raw);
+        }
+        if logic_dashes(&collapsed) > 0 {
+            push("logic-dash", raw);
+        }
+        if CONTRACTIONS.iter().any(|form| lower.contains(form)) {
+            push("contraction", raw);
+        }
+        if ING_STEMS
+            .iter()
+            .any(|stem| lower.contains(&format!(", {stem}")))
+        {
+            push("ing-verb", raw);
+        }
+        let words: Vec<&str> = collapsed.split_whitespace().collect();
+        for (index, word) in words.iter().enumerate() {
+            let this = bare(word);
+            // An uppercase RFC 2119 keyword is protected, never a modal.
+            if MODALS.contains(&this.as_str())
+                && !word
+                    .chars()
+                    .filter(|c| c.is_alphabetic())
+                    .all(char::is_uppercase)
+            {
+                push("banned-modal", raw);
+            }
+            let Some(next) = words.get(index + 1).map(|w| bare(w)) else {
+                continue;
+            };
+            let perfect = matches!(this.as_str(), "has" | "have" | "had") && next == "been"
+                || matches!(this.as_str(), "has" | "have") && next.ends_with("ed");
+            if perfect {
+                push("perfect-tense", raw);
+            }
+        }
+        for sentence in sentences_of(&collapsed) {
+            if sentence.split_whitespace().count() > 25 {
+                push("sentence-over-limit", raw);
+            }
+        }
+    }
+    findings
+}
+
+/// The guard itself is judged first: each check fires on a line built to
+/// break it, so a green block is evidence and not an empty scan.
+#[test]
+fn the_prose_checks_catch_every_class_they_name() {
+    for (category, line) in [
+        ("semicolon", "- One clause; another clause."),
+        ("logic-dash", "- One clause — another clause."),
+        ("logic-dash", "- One clause -- another clause."),
+        ("contraction", "- The hook doesn't refuse the commit."),
+        ("perfect-tense", "- The release has landed on the trunk."),
+        (
+            "ing-verb",
+            "- The hook refuses, causing the commit to fail.",
+        ),
+        ("banned-modal", "- The operator should decide."),
+        (
+            "sentence-over-limit",
+            "- A sentence written to run past the limit the gate sets for a descriptive line, \
+             padded with more words until it is long enough to be reported by the check.",
+        ),
+    ] {
+        let fired: Vec<&str> = prose_findings(line)
+            .iter()
+            .map(|(category, _)| *category)
+            .collect();
+        assert!(
+            fired.contains(&category),
+            "the {category} check missed '{line}': {fired:?}"
+        );
+    }
+    // A numeric range and a command flag are not logic dashes, and an
+    // uppercase keyword is not a modal.
+    for line in [
+        "- The window is 5 - 10 minutes wide.",
+        "- Run the command with --list to see them.",
+        "- The title MUST be a scoped Conventional Commit.",
+    ] {
+        let fired = prose_findings(line);
+        assert!(fired.is_empty(), "a clean line was reported: {fired:?}");
+    }
+}
+
 /// The landed block answers to the target's own prose gate, per
 /// `landing:the-routing-block-bounds-the-agents-initiative`: the target
-/// owns none of these lines, so the three deterministic checks a
-/// Simplified Technical English gate runs are held here, at the renderer.
+/// owns none of these lines, so the checks a Simplified Technical English
+/// gate runs over its `AGENTS.md` are held here, at the renderer.
 #[test]
 fn the_routing_block_reads_as_plain_prose() {
     for workflow in [
@@ -1975,24 +2156,11 @@ fn the_routing_block_reads_as_plain_prose() {
             None,
         );
         let text = String::from_utf8(rendered).expect("the block is text");
-        for line in text.lines() {
-            let Some(item) = line.trim_start().strip_prefix("- ") else {
-                continue;
-            };
-            let collapsed = collapse_protected(item);
-            assert!(
-                !collapsed.contains(';'),
-                "a semicolon joins two statements: {line}"
-            );
-            assert!(
-                !collapsed.contains('—') && !collapsed.contains(" - "),
-                "a dash splices two statements: {line}"
-            );
-            for sentence in sentences_of(&collapsed) {
-                let words = sentence.split_whitespace().count();
-                assert!(words <= 25, "{words} words, limit 25: {sentence}");
-            }
-        }
+        let findings = prose_findings(&text);
+        assert!(
+            findings.is_empty(),
+            "the rendered block carries prose findings: {findings:?}"
+        );
     }
 }
 
