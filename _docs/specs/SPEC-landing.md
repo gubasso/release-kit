@@ -23,7 +23,7 @@
   - [`landing:the-landed-guards-hold-the-message-content` — The landed guards hold the message content](#landingthe-landed-guards-hold-the-message-content--the-landed-guards-hold-the-message-content)
   - [`landing:the-arming-identity-is-the-bot` — The arming identity is the bot](#landingthe-arming-identity-is-the-bot--the-arming-identity-is-the-bot)
   - [`landing:the-changelog-quality-gate-is-the-squash-message` — The changelog quality gate is the squash message](#landingthe-changelog-quality-gate-is-the-squash-message--the-changelog-quality-gate-is-the-squash-message)
-  - [`landing:the-routing-block-bounds-the-agents-initiative` — The routing block bounds the agent's initiative](#landingthe-routing-block-bounds-the-agents-initiative--the-routing-block-bounds-the-agents-initiative)
+  - [`landing:the-routing-block-bounds-the-agents-initiative` — The routing block bounds the agent's initiative and reads as plain prose](#landingthe-routing-block-bounds-the-agents-initiative--the-routing-block-bounds-the-agents-initiative-and-reads-as-plain-prose)
   - [`landing:the-nix-capability-is-a-recorded-opt-in` — The Nix capability is a recorded opt-in](#landingthe-nix-capability-is-a-recorded-opt-in--the-nix-capability-is-a-recorded-opt-in)
   - [`landing:the-flake-pair-lands-all-or-nothing` — The flake pair lands all-or-nothing](#landingthe-flake-pair-lands-all-or-nothing--the-flake-pair-lands-all-or-nothing)
 
@@ -287,15 +287,15 @@ Where the recorded style arms the release request, the changelog's quality MUST 
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 
-### `landing:the-routing-block-bounds-the-agents-initiative` — The routing block bounds the agent's initiative
+### `landing:the-routing-block-bounds-the-agents-initiative` — The routing block bounds the agent's initiative and reads as plain prose
 
-The routing block MUST state that an agent acting in the target guides and never drives: that a request to change code authorizes the file changes alone, and that creating, switching or deleting a branch, creating or removing a worktree, committing, pushing, tagging, and opening, updating or merging a pull request happen only where the operator's request named that action. It is the one landed line no mechanism enforces — a hook and a forge protection bound the end state and cannot tell an agent from a person — so the target carries it as a sentence rather than leaving an agent to discover it by refusal.
+The routing block MUST state that an agent acting in the target guides and never drives: that a request to change code authorizes the file changes alone, and that a git or forge action — creating, switching or deleting a branch, creating or removing a worktree, committing, pushing, tagging, and opening, updating or merging a pull request among them — happens only where the operator's request named that action. It is the one landed line no mechanism enforces — a hook and a forge protection bound the end state and cannot tell an agent from a person — so the target carries it as a sentence rather than leaving an agent to discover it by refusal. Every line of the block MUST also read as plain prose — a simple tense, no contraction, no modal outside can, will and must, no semicolon, no dash splicing two statements, and no sentence over 25 words — because the target owns none of these lines, so a prose gate the target runs over its own `AGENTS.md` finds a defect it cannot repair and the renderer is the only place that can answer it.
 
 #### Scenario: The block is read for what it authorizes
 
 - GIVEN the routing block release-kit renders into a target's `AGENTS.md`
 - WHEN the test suite reads it
-- THEN it carries the line bounding the agent's initiative, and no line ordering an agent to branch, commit, or merge on its own
+- THEN it carries the line bounding the agent's initiative, no line ordering an agent to branch, commit, or merge on its own, and no line a prose gate would report
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 
