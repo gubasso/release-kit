@@ -36,7 +36,7 @@ build:
     printf '[package]\nname = "widget"\nversion = "0.1.0"\n' > "$n/Cargo.toml"; \
     printf 'fn main() {}\n' > "$n/src/main.rs"; printf 'version = 4\n' > "$n/Cargo.lock"; \
     cargo run -q -- init --tech rust --forge github --repo acme/widget --scopes api,cli --nix --target "$n" --apply >/dev/null; \
-    test -f "$n/nix/package.nix"; test -f "$n/flake.nix"; test -f "$n/flake.lock"; test -f "$n/.github/workflows/nix.yml"; \
+    test -f "$n/nix/package.nix"; test -f "$n/flake.nix"; test -f "$n/flake.lock"; test ! -e "$n/.github/workflows/nix.yml"; \
     printf '# tuned by the target\n' >> "$n/nix/package.nix"; \
     cargo run -q -- upgrade --target "$n" --apply >/dev/null; \
     grep -q '# tuned by the target' "$n/nix/package.nix"

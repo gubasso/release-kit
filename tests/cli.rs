@@ -6291,6 +6291,37 @@ fn the_rust_github_seed_attests_the_release_payload_in_the_host_phase() {
         !dist.contains_key("github-attestations-filters"),
         "no narrowing filter: the default [\"*\"] covers every hosted file, and an enumerated list goes quiet when an archive format moves"
     );
+    assert_eq!(
+        dist.get("pr-run-mode").and_then(toml::Value::as_str),
+        Some("skip"),
+        "the generated workflow reports on no request: needs resolves inside one workflow file, so a job it declares is in no gate's needs and the required check does not hold it"
+    );
+}
+
+/// This repository's own gate is read by the same reader `rk setup check`
+/// runs against a target, so the convention it teaches is one it passes.
+/// The proof a merge rests on is a job the gate needs, never a job beside
+/// it: without this, a job added to `ci.yml` and left out of `needs`
+/// reports red and merges anyway.
+#[test]
+fn this_projects_ci_gate_needs_every_request_job() {
+    let root = camino::Utf8Path::from_path(Path::new(env!("CARGO_MANIFEST_DIR")))
+        .expect("a utf-8 manifest directory");
+    let report = release_kit::setup::workflow_jobs::read_gate(root, "gate");
+    assert_eq!(
+        report.reading,
+        release_kit::setup::workflow_jobs::GateReading::Gated,
+        "every job this repository reports on a request is one the gate needs"
+    );
+    assert_eq!(
+        report.gate_condition,
+        Some(release_kit::setup::workflow_jobs::Condition::Always),
+        "the gate runs even when a needed job fails: the forge reports a skipped job as success"
+    );
+    assert!(
+        release_kit::setup::workflow_jobs::limitation(&report, "gate").is_none(),
+        "the reader names no limitation against this repository's own workflows"
+    );
 }
 
 /// The bash/github release workflow mints the attestation before the release
@@ -6681,7 +6712,7 @@ fn status_judges_a_seeded_file_that_dropped_the_invariants() {
         .map(|(_, rest)| format!("[dist.github-action-commits]{rest}"))
         .expect("the seed carries the action-commit table");
     let tuned = format!(
-        "[workspace]\nmembers = [\"cargo:.\"]\n\n[dist]\ncargo-dist-version = \"0.32.0\"\nci = \"github\"\ntargets = [\"x86_64-unknown-linux-gnu\"]\ngithub-attestations = true\ngithub-attestations-phase = \"host\"\ngithub-release = \"host\"\n\n{table}"
+        "[workspace]\nmembers = [\"cargo:.\"]\n\n[dist]\ncargo-dist-version = \"0.32.0\"\nci = \"github\"\ntargets = [\"x86_64-unknown-linux-gnu\"]\npr-run-mode = \"skip\"\ngithub-attestations = true\ngithub-attestations-phase = \"host\"\ngithub-release = \"host\"\n\n{table}"
     );
     std::fs::write(&seeded, tuned).expect("the tune writes");
     rk().args(["status", "--check", "--target"])
@@ -6851,6 +6882,113 @@ fn status_passes_a_regenerated_artifact_workflow() {
         .arg(target.path())
         .assert()
         .success();
+}
+
+/// SATISFIES landing:a-seeded-file-still-carries-the-invariants
+/// The forge resolves a job's needs inside one workflow file, so a plan
+/// job in the generated workflow is in no gate's needs: it reports a
+/// status the required check does not hold, and under the standing arm a
+/// red one merges. A target that tunes the run mode back is told, and the
+/// remediation names both halves of the fix.
+#[test]
+fn status_faults_a_configuration_that_reports_on_a_request() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+    let seeded = target.path().join("dist-workspace.toml");
+    let tuned = std::fs::read_to_string(&seeded)
+        .expect("the seeded file reads")
+        .replace("pr-run-mode = \"skip\"", "pr-run-mode = \"plan\"");
+    std::fs::write(&seeded, &tuned).expect("the tune writes");
+
+    let plain = rk()
+        .args(["status", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&plain).expect("one JSON object");
+    let failure = report["invariant_failures"]
+        .as_array()
+        .expect("the plain report carries the failures")
+        .iter()
+        .find(|failure| failure["code"] == "pr-run-mode-not-skip")
+        .unwrap_or_else(|| panic!("the run mode is judged: {report}"));
+    assert_eq!(failure["destination"], "dist-workspace.toml", "{report}");
+    assert!(
+        failure["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("plan")),
+        "the reason names the value found: {report}"
+    );
+    let remediation = failure["remediation"].as_str().expect("a remediation");
+    assert!(
+        remediation.contains("pr-run-mode = \"skip\"")
+            && remediation.contains("the workflow the required check gates"),
+        "the remediation names both halves: {remediation}"
+    );
+
+    let checked = rk()
+        .args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8_lossy(&checked);
+    assert!(
+        text.contains("INVARIANT dist-workspace.toml (pr-run-mode-not-skip)"),
+        "{text}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&seeded).expect("the seeded file reads"),
+        tuned,
+        "the judgment rewrites nothing"
+    );
+}
+
+/// SATISFIES landing:a-seeded-file-still-carries-the-invariants
+/// The forge executes the workflow, not the configuration it was
+/// generated from. A target that set the run mode and never regenerated
+/// still reports the job, so the generated file is judged for itself —
+/// the case the configuration rule alone cannot see.
+#[test]
+fn status_faults_a_generated_workflow_left_on_the_request_trigger() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+    write_artifact_workflow(target.path(), |_, commit| commit.to_owned());
+    let workflow = target.path().join(".github/workflows/release.yml");
+    let generated = std::fs::read_to_string(&workflow).expect("the workflow reads");
+    std::fs::write(
+        &workflow,
+        format!("on:\n  pull_request:\n  push:\n    tags: ['**']\n{generated}"),
+    )
+    .expect("the trigger writes");
+
+    let plain = rk()
+        .args(["status", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&plain).expect("one JSON object");
+    assert!(
+        report["invariant_failures"]
+            .as_array()
+            .expect("the failures array")
+            .iter()
+            .any(|failure| failure["code"] == "workflow-runs-on-a-request"
+                && failure["destination"] == ".github/workflows/release.yml"),
+        "the generated file is judged for itself: {report}"
+    );
+    rk().args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .code(1);
 }
 
 /// SATISFIES landing:a-seeded-file-still-carries-the-invariants
@@ -10099,17 +10237,42 @@ fn an_adoption_records_the_nix_parameter() {
     );
 }
 
-/// Every action the rendered nix workflow launches is pinned by a full
-/// commit that appears exactly once in `versions.toml`, with a discovery
-/// ref, a freshness URL, and a checked date beside it. Without this test
-/// the pin doctrine holds only as long as whoever edits the workflow
-/// remembers it.
+/// The generated workflow must be tracked before it is regenerated and
+/// diffed. `git diff` compares the index with the working tree and shows
+/// no untracked path, so a request that deletes the workflow regenerates
+/// it and diffs clean — a green gate over a release contract that no
+/// longer exists, which `rk status` reports as nothing because an absent
+/// generated file is the generator's story. The assertion is on the order
+/// of the two commands, in the served job and in this repository's own.
 #[test]
-fn the_nix_workflow_pins_resolve_through_the_registry() {
+fn the_release_proof_asserts_the_workflow_is_tracked_before_it_diffs() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for path in ["bindings/rust.md", ".github/workflows/ci.yml"] {
+        let text = std::fs::read_to_string(root.join(path)).expect("the file reads");
+        let tracked = text
+            .find("git ls-files --error-unmatch -- .github/workflows/release.yml")
+            .unwrap_or_else(|| panic!("{path}: the proof never asserts the workflow is tracked"));
+        let diffed = text
+            .find("git diff --exit-code -- .github/workflows/release.yml")
+            .unwrap_or_else(|| panic!("{path}: the proof never diffs the workflow"));
+        assert!(
+            tracked < diffed,
+            "{path}: the tracked assertion must precede the diff, which sees no untracked path"
+        );
+    }
+}
+
+/// Every action the rust binding serves in a job body is pinned by a full
+/// commit that appears exactly once in `versions.toml`, with a discovery
+/// ref, a freshness URL, and a checked date beside it. The binding is
+/// where the payload now carries these jobs — an operator pastes them
+/// into a workflow release-kit does not own — so the pin doctrine reaches
+/// them here or nowhere.
+#[test]
+fn the_binding_job_pins_resolve_through_the_registry() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let workflow =
-        std::fs::read_to_string(root.join("snippets/rust/github/.github/workflows/nix.yml"))
-            .expect("the workflow snippet reads");
+        std::fs::read_to_string(root.join("bindings/rust.md")).expect("the binding reads");
     let registry = std::fs::read_to_string(root.join("versions.toml")).expect("the registry reads");
     let table: toml::Table = registry.parse().expect("the registry parses");
     let tools = table["tool"].as_array().expect("a tool list");
@@ -10148,13 +10311,13 @@ fn the_nix_workflow_pins_resolve_through_the_registry() {
             );
         }
     }
-    assert_eq!(pinned, 3, "the workflow launches three pinned actions");
+    assert_eq!(pinned, 4, "the binding serves four pinned action steps");
 }
 
 /// The landed capability builds, end to end: a scratch crate opts in and
 /// the seed flake compiles `nix/package.nix` through the same named build
-/// the rendered workflow runs. Ignored by default — it needs the nix CLI
-/// and network access — and run by the build recipe beside the
+/// the job the binding serves runs. Ignored by default — it needs the nix
+/// CLI and network access — and run by the build recipe beside the
 /// publish-closure proof.
 #[test]
 #[ignore = "needs the nix CLI and network access; just check runs it"]

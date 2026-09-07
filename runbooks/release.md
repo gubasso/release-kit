@@ -38,7 +38,7 @@ glab mr merge <release mr> --squash --remove-source-branch   # unarmed only
 # 6. verify
 ```
 
-Four traps, and the chapter's [own warnings](../method/03-operate.md) explain the first three. An armed request has no correction window, and a stop is a disarm run before the last check turns green, never a close raced after it. Step 3 is the last point a changelog correction reaches an unarmed release, and a correction does not survive a later refresh. Step 5 is why a check run straight after the merge reports the release as missing under a dedicated artifact builder: the release page arrives only when the slowest platform build finishes. And where the artifact workflow also runs on pull requests, its newest run is usually not this release's: select runs by commit, never by recency.
+Four traps, and the chapter's [own warnings](../method/03-operate.md) explain the first three. An armed request has no correction window, and a stop is a disarm run before the last check turns green, never a close raced after it. Step 3 is the last point a changelog correction reaches an unarmed release, and a correction does not survive a later refresh. Step 5 is why a check run straight after the merge reports the release as missing under a dedicated artifact builder: the release page arrives only when the slowest platform build finishes. And where a target left its artifact workflow reporting on pull requests, its newest run is usually not this release's: select runs by commit, never by recency — a target on the current payload has tag runs alone, and `rk status --check` faults the configuration that produces the others.
 
 ## 1. Land the work
 
@@ -226,7 +226,7 @@ On gitlab:
 glab ci status --wait
 ```
 
-The `--event push` filter keeps the second watch off the runs the artifact workflow also produces on pull requests. The `(rust, gitlab)` pair has no artifact builder, so there is no dedicated build to wait for and no installers to expect on the release page; [the Rust binding](../bindings/rust.md) states it.
+The `--event push` filter narrows the second watch to the tag push, which is the only event the artifact workflow runs on under the current payload, and it keeps the watch off the request runs a target that tuned the run mode still produces. The `(rust, gitlab)` pair has no artifact builder, so there is no dedicated build to wait for and no installers to expect on the release page; [the Rust binding](../bindings/rust.md) states it.
 
 ## 6. Verify
 

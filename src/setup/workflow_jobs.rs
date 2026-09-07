@@ -399,7 +399,11 @@ pub fn limitation(report: &GateReport, required_check: &str) -> Option<String> {
 /// The workflow's pull-request trigger, in the block, the flow, the
 /// scalar, or the block-list form of `on`, where it has one, with the
 /// filters a block-form event carries under it.
-fn request_trigger(workflow: &str) -> Option<Trigger> {
+///
+/// The landing invariant reads it too, to ask whether a generated
+/// workflow reports on a request at all: one reader owns the forms `on`
+/// takes, so a form one of them learns is a form both know.
+pub(crate) fn request_trigger(workflow: &str) -> Option<Trigger> {
     let mut in_on = false;
     let mut event_indent: Option<usize> = None;
     let mut in_request_event = false;

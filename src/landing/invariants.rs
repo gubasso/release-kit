@@ -131,15 +131,41 @@ fn dist_workspace(destination: &str, bytes: &[u8]) -> Vec<InvariantFailure> {
             "remove github-attestations-filters from [dist]; the default [\"*\"] attests every hosted file",
         ));
     }
-    // The build that signs is itself pinned by digest: the seed's
-    // [dist.github-action-commits] table pins the actions cargo-dist
-    // injects — the attest step among them — and a landed target must
-    // carry the same effective table, or its signer runs code a moved
-    // tag can swap.
-    let expected = seed_action_commits();
-    let found = value("github-action-commits").and_then(toml::Value::as_table);
-    for (action, commit) in &expected {
-        let remediation = "bring the [dist.github-action-commits] table to the payload seed's (rk snippet rust/github/dist-workspace.toml) and regenerate with dist generate --mode ci";
+    // cargo-dist's default puts a plan job on every pull request. The
+    // trunk protection requires one project-owned context beside the
+    // landed title check, and `needs` resolves inside one workflow file,
+    // so a job in the generated file is in no gate's needs: it reports a
+    // status nothing holds, and under the standing arm a red one merges.
+    let mode = value("pr-run-mode").and_then(toml::Value::as_str);
+    if mode != Some("skip") {
+        failures.push(InvariantFailure::new(
+            "pr-run-mode-not-skip",
+            destination,
+            mode.map_or_else(
+                || "pr-run-mode is unset, so it defaults to plan and the generated workflow reports a job on every pull request that no gate can need".to_owned(),
+                |other| format!(
+                    "pr-run-mode is \"{other}\", so the generated workflow reports a job on every pull request that no gate can need"
+                ),
+            ),
+            "set pr-run-mode = \"skip\" in [dist] and regenerate with dist generate, then run dist plan and the dist generate proof as a job of the workflow the required check gates",
+        ));
+    }
+    failures.extend(action_commit_failures(
+        destination,
+        value("github-action-commits").and_then(toml::Value::as_table),
+    ));
+    failures
+}
+
+/// The build that signs is itself pinned by digest: the seed's
+/// `[dist.github-action-commits]` table pins the actions cargo-dist
+/// injects — the attest step among them — and a landed target must carry
+/// the same effective table, or its signer runs code a moved tag can
+/// swap.
+fn action_commit_failures(destination: &str, found: Option<&toml::Table>) -> Vec<InvariantFailure> {
+    let remediation = "bring the [dist.github-action-commits] table to the payload seed's (rk snippet rust/github/dist-workspace.toml) and regenerate with dist generate --mode ci";
+    let mut failures = Vec::new();
+    for (action, commit) in &seed_action_commits() {
         // Three distinct states, each with its own true reason: an
         // absent entry falls back to the movable tag, a non-string value
         // is invalid configuration, and a mismatched string executes an
@@ -338,6 +364,16 @@ fn workflow_matches_configuration(config: &str, workflow: &str) -> Vec<Invariant
             "regenerate the workflow with dist generate --mode ci and commit it, so the configured attest step is what runs",
         ));
     }
+    // The forge executes the workflow, not the configuration: a target
+    // that set skip and never regenerated still reports the job.
+    if crate::setup::workflow_jobs::request_trigger(workflow).is_some() {
+        failures.push(InvariantFailure::new(
+            "workflow-runs-on-a-request",
+            GENERATED_WORKFLOW,
+            "the workflow triggers on a pull request, and no gate in another file can need a job declared here, so the one required check does not hold what this workflow reports",
+            "set pr-run-mode = \"skip\" in [dist] in dist-workspace.toml and regenerate with dist generate, so the artifact workflow is tag-only; the dist plan and dist generate proofs belong to the workflow the required check gates",
+        ));
+    }
     failures
 }
 
@@ -485,6 +521,7 @@ mod tests {
 
     const CLEAN: &str = r#"
 [dist]
+pr-run-mode = "skip"
 github-attestations = true
 github-attestations-phase = "host"
 github-release = "host"
@@ -596,6 +633,82 @@ github-release = "host"
                 "{text:?} must fail with {code}, got {found:?}"
             );
         }
+    }
+
+    /// Every run mode but `skip` puts a job on a pull request that no
+    /// gate can need, and an unset key is the default `plan`, so the
+    /// absent case carries its own reason rather than the value's.
+    #[test]
+    fn a_configuration_that_reports_on_a_request_fails() {
+        let absent = CLEAN.replace("pr-run-mode = \"skip\"\n", "");
+        let found = failures("rust", "github", "dist-workspace.toml", absent.as_bytes());
+        assert!(
+            found
+                .iter()
+                .any(|failure| failure.code == "pr-run-mode-not-skip"
+                    && failure.reason.contains("unset")
+                    && failure.reason.contains("plan")),
+            "an unset key defaults to plan and says so: {found:?}"
+        );
+        for other in ["plan", "upload"] {
+            let text = CLEAN.replace("\"skip\"", &format!("\"{other}\""));
+            let found = failures("rust", "github", "dist-workspace.toml", text.as_bytes());
+            assert!(
+                found
+                    .iter()
+                    .any(|failure| failure.code == "pr-run-mode-not-skip"
+                        && failure.reason.contains(other)),
+                "{other} fails and is named: {found:?}"
+            );
+        }
+        // A non-string value pins nothing either, and falls to the same
+        // code rather than passing on a shape the reader cannot use.
+        let non_string = CLEAN.replace("\"skip\"", "3");
+        assert!(
+            failures(
+                "rust",
+                "github",
+                "dist-workspace.toml",
+                non_string.as_bytes()
+            )
+            .iter()
+            .any(|failure| failure.code == "pr-run-mode-not-skip"),
+            "a non-string run mode is not skip"
+        );
+        assert!(
+            !failures("rust", "github", "dist-workspace.toml", CLEAN.as_bytes())
+                .iter()
+                .any(|failure| failure.code == "pr-run-mode-not-skip"),
+            "skip fails nothing"
+        );
+    }
+
+    /// The forge executes the workflow, not the configuration: a target
+    /// that set `skip` and never regenerated still reports the job, in
+    /// whichever form of `on` the generator left behind.
+    #[test]
+    fn a_generated_workflow_that_triggers_on_a_request_fails() {
+        let attest = "      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6\n";
+        for trigger in [
+            "on:\n  pull_request:\n",
+            "on: [push, pull_request]\n",
+            "on: pull_request_target\n",
+        ] {
+            let workflow = format!("{trigger}jobs:\n  plan:\n    steps:\n{attest}");
+            assert!(
+                workflow_matches_configuration(CLEAN, &workflow)
+                    .iter()
+                    .any(|failure| failure.code == "workflow-runs-on-a-request"
+                        && failure.destination == super::GENERATED_WORKFLOW),
+                "{trigger:?} reports a check no gate can need"
+            );
+        }
+        let tag_only =
+            format!("on:\n  push:\n    tags:\n      - '**'\njobs:\n  plan:\n    steps:\n{attest}");
+        assert!(
+            workflow_matches_configuration(CLEAN, &tag_only).is_empty(),
+            "a tag-only workflow reports nothing on a request"
+        );
     }
 
     /// A workflow generated from the clean configuration fails nothing.

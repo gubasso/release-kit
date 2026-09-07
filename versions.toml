@@ -187,7 +187,7 @@ action = "DeterminateSystems/nix-installer-action@v19"
 commit = "90bb610b90bf290cad97484ba341453bd1cbefea"
 ref_class = "moving-major-tag"
 used_by = ["rust"]
-purpose = "installs Nix in the landed nix workflow"
+purpose = "installs Nix in the nix build job the rust binding serves for the project's own gate"
 check = "https://api.github.com/repos/DeterminateSystems/nix-installer-action/releases/latest"
 checked = 2026-09-04
 
@@ -198,6 +198,6 @@ action = "DeterminateSystems/magic-nix-cache-action@v13"
 commit = "565684385bcd71bad329742eefe8d12f2e765b39"
 ref_class = "moving-major-tag"
 used_by = ["rust"]
-purpose = "caches store paths through the GitHub Actions cache in the landed nix workflow"
+purpose = "caches store paths through the GitHub Actions cache in the nix build job the rust binding serves"
 check = "https://api.github.com/repos/DeterminateSystems/magic-nix-cache-action/releases/latest"
 checked = 2026-09-04

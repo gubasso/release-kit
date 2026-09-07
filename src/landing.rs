@@ -53,12 +53,11 @@ impl Kind {
 /// OIDC permission, so release-kit owns them; the tool configurations are
 /// per-project judgment; the two state files are rewritten by the release
 /// automation itself.
-const KINDS: [(&str, Kind); 16] = [
+const KINDS: [(&str, Kind); 15] = [
     (".github/workflows/release-plz.yml", Kind::Rendered),
     (".github/workflows/release-please.yml", Kind::Rendered),
     (".github/workflows/release.yml", Kind::Rendered),
     (".github/workflows/pr-title.yml", Kind::Rendered),
-    (".github/workflows/nix.yml", Kind::Rendered),
     (".gitlab-ci.yml", Kind::Rendered),
     (".gitlab/ci/mr-title.yml", Kind::Rendered),
     ("release-plz.toml", Kind::Seeded),
@@ -78,20 +77,18 @@ const KINDS: [(&str, Kind); 16] = [
 /// The parameter is recorded, so `status`, `upgrade`, and `adopt` can
 /// reconstruct whether these files are supposed to exist: an absent file
 /// under `nix = false` is not wanted, never drifted.
-pub const NIX_DESTINATIONS: [&str; 4] = [
-    "nix/package.nix",
-    "flake.nix",
-    "flake.lock",
-    ".github/workflows/nix.yml",
-];
+///
+/// The capability lands no workflow: a job proving the build gates the
+/// merge only inside the workflow the required check needs, and that
+/// workflow is the target's own. The rust binding serves the job.
+pub const NIX_DESTINATIONS: [&str; 3] = ["nix/package.nix", "flake.nix", "flake.lock"];
 
 /// The subset a target with a flake of its own keeps out: the seed pair,
-/// and the workflow whose check would run against a flake release-kit did
-/// not author.
+/// whose files would sit beside a flake release-kit did not author.
 ///
 /// The seeded package expression is not in it — it lands either way, as
 /// the starting point the target integrates by hand.
-pub const NIX_WITHHOLDABLE: [&str; 3] = ["flake.nix", "flake.lock", ".github/workflows/nix.yml"];
+pub const NIX_WITHHOLDABLE: [&str; 2] = ["flake.nix", "flake.lock"];
 
 /// The declared kind of a destination, or `None` for a file the payload
 /// does not classify.
@@ -725,11 +722,9 @@ fn default_features(table: &toml::Table) -> std::collections::BTreeSet<String> {
 /// `None` where the pair lands whole.
 ///
 /// The pair is all-or-nothing: a target that already carries a
-/// `flake.nix` or `flake.lock` of its own keeps its pair — a seed lock
-/// beside a foreign flake describes the wrong input graph — and the
-/// rendered workflow is withheld with it, because a green check that
-/// never builds the landed expression proves nothing. A pair the record
-/// names is release-kit's own landing and is never withheld.
+/// `flake.nix` or `flake.lock` of its own keeps its pair, because a seed
+/// lock beside a foreign flake describes the wrong input graph. A pair
+/// the record names is release-kit's own landing and is never withheld.
 ///
 /// # Errors
 ///
@@ -753,7 +748,7 @@ pub fn nix_withheld(
         return Ok(None);
     }
     Ok(Some(format!(
-        "the target already carries {}; its flake pair stays its own, and the nix workflow is withheld with it",
+        "the target already carries {}; its flake pair stays its own",
         present.join(" and ")
     )))
 }
@@ -1180,9 +1175,17 @@ mod tests {
         for destination in ["nix/package.nix", "flake.nix", "flake.lock"] {
             assert!(on.contains(&destination.to_owned()), "{destination}");
         }
+        // The capability lands no workflow, so both forges land the same
+        // set: a job proving the build holds a merge only inside the
+        // workflow the required check needs, and that one is the
+        // target's own.
         let gitlab = paths(true, "gitlab");
         assert!(gitlab.contains(&"nix/package.nix".to_owned()));
-        assert!(!gitlab.contains(&".github/workflows/nix.yml".to_owned()));
+        assert!(
+            !on.iter()
+                .chain(gitlab.iter())
+                .any(|destination| destination.contains("nix.yml"))
+        );
         let bash = projection(
             "bash",
             "github",
@@ -1244,22 +1247,14 @@ mod tests {
         let mut all = entries();
         let withheld = withhold_nix(target, true, None, &mut all).expect("the judgment runs");
         let paths: Vec<&str> = withheld.iter().map(|w| w.path.as_str()).collect();
-        assert_eq!(
-            paths,
-            [
-                ".github/workflows/nix.yml",
-                "flake.lock",
-                "flake.nix",
-                "nix/package.nix"
-            ]
-        );
+        assert_eq!(paths, ["flake.lock", "flake.nix", "nix/package.nix"]);
         assert!(
             all.iter()
                 .all(|entry| !NIX_DESTINATIONS.contains(&entry.destination.as_str()))
         );
 
-        // A single crate with its own flake: the pair and the workflow are
-        // withheld, and the package expression still lands.
+        // A single crate with its own flake: the seed pair is withheld,
+        // and the package expression still lands.
         std::fs::write(
             target.join("Cargo.toml"),
             "[package]\nname = \"widget\"\nversion = \"0.1.0\"\n",
@@ -1272,10 +1267,7 @@ mod tests {
         let mut all = entries();
         let withheld = withhold_nix(target, true, None, &mut all).expect("the judgment runs");
         let paths: Vec<&str> = withheld.iter().map(|w| w.path.as_str()).collect();
-        assert_eq!(
-            paths,
-            [".github/workflows/nix.yml", "flake.lock", "flake.nix"]
-        );
+        assert_eq!(paths, ["flake.lock", "flake.nix"]);
         assert!(
             all.iter()
                 .any(|entry| entry.destination == "nix/package.nix")
