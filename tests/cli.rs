@@ -1895,7 +1895,7 @@ fn the_routing_block_bounds_the_agents_initiative() {
             "guides and never drives",
             "unless the operator's request named that action",
             "authorizes the file changes alone",
-            "creating or removing a worktree",
+            "create or remove a worktree",
             "names no internal planning artifact and carries no agent attribution",
         ] {
             assert!(
@@ -1908,6 +1908,90 @@ fn the_routing_block_bounds_the_agents_initiative() {
                 !block.contains(order),
                 "the block still orders the agent to act: '{order}'"
             );
+        }
+    }
+}
+
+/// Collapse the spans a prose gate protects: a backticked span and a
+/// parenthesized span each read as one word.
+fn collapse_protected(line: &str) -> String {
+    let mut out = String::new();
+    let mut rest = line;
+    while let Some(start) = rest.find(['`', '(']) {
+        let close = if rest.as_bytes()[start] == b'`' {
+            '`'
+        } else {
+            ')'
+        };
+        out.push_str(&rest[..start]);
+        out.push_str(" SPAN ");
+        let after = &rest[start + 1..];
+        let Some(end) = after.find(close) else {
+            rest = "";
+            break;
+        };
+        rest = &after[end + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Split a collapsed line into sentences the way a prose gate does: a full
+/// stop, a question mark, an exclamation mark, or a colon ends one, and a
+/// fragment under two words is not a sentence.
+fn sentences_of(collapsed: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current = String::new();
+    let mut chars = collapsed.chars().peekable();
+    while let Some(ch) = chars.next() {
+        current.push(ch);
+        if matches!(ch, '.' | '!' | '?' | ':') && chars.peek().is_none_or(char::is_ascii_whitespace)
+        {
+            out.push(std::mem::take(&mut current));
+        }
+    }
+    out.push(current);
+    out.into_iter()
+        .map(|s| s.trim().to_owned())
+        .filter(|s| s.split_whitespace().count() >= 2)
+        .collect()
+}
+
+/// The landed block answers to the target's own prose gate, per
+/// `landing:the-routing-block-bounds-the-agents-initiative`: the target
+/// owns none of these lines, so the three deterministic checks a
+/// Simplified Technical English gate runs are held here, at the renderer.
+#[test]
+fn the_routing_block_reads_as_plain_prose() {
+    for workflow in [
+        release_kit::landing::Workflow::Worktree,
+        release_kit::landing::Workflow::Branches,
+    ] {
+        let scopes = release_kit::landing::parse_scopes("api,cli").expect("the scopes parse");
+        let rendered = release_kit::landing::render(
+            release_kit::landing::routing_block(workflow).as_bytes(),
+            "acme/widget",
+            &scopes,
+            None,
+        );
+        let text = String::from_utf8(rendered).expect("the block is text");
+        for line in text.lines() {
+            let Some(item) = line.trim_start().strip_prefix("- ") else {
+                continue;
+            };
+            let collapsed = collapse_protected(item);
+            assert!(
+                !collapsed.contains(';'),
+                "a semicolon joins two statements: {line}"
+            );
+            assert!(
+                !collapsed.contains('—') && !collapsed.contains(" - "),
+                "a dash splices two statements: {line}"
+            );
+            for sentence in sentences_of(&collapsed) {
+                let words = sentence.split_whitespace().count();
+                assert!(words <= 25, "{words} words, limit 25: {sentence}");
+            }
         }
     }
 }
