@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.22](https://github.com/gubasso/release-kit/compare/v0.2.21...v0.2.22) - 2026-09-07
+
+### Added
+
+- *(landing)* run every merge proof inside the gated workflow ([#90](https://github.com/gubasso/release-kit/pull/90))
+
 ## [0.2.21](https://github.com/gubasso/release-kit/compare/v0.2.20...v0.2.21) - 2026-09-06
 
 ### Fixed
