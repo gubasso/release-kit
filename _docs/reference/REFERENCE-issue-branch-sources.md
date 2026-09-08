@@ -70,6 +70,16 @@ Verified 2026-09-08 against the `glab` source at `https://gitlab.com/gitlab-org/
 
 Verified 2026-09-08 against the `can_create_branch` project controller action in `https://gitlab.com/gitlab-org/gitlab`, which answers with `suggested_branch_name`. It is a Rails controller route rather than an `/api/v4` endpoint. `glab api` reaches `/api/v4` alone, and the route carries no compatibility contract. Bearing: rk does not call it, and `_docs/decisions/ADR-render-gitlabs-template-rather-than-call-an-internal-route.md` records the cost that choice accepts.
 
-## Live proof
+## Live proof, GitHub
 
-Not run. The proof transcript this record is meant to carry — a real GitHub issue minted and adopted, and a GitLab project's template rendered across an ASCII title, a punctuation run, an accented title, a title over 100 characters, and a confidential issue — has not been executed against a live instance. Every rendering claim above rests on the source and the documentation alone. The transliteration table is the one place a live run can still disagree, and `rk issue start` reports that case in its own detail line.
+Run 2026-09-08 against the live API, read-only: every state below came from a preview, which writes nothing at the forge and nothing in the clone.
+
+- An issue the forge already links a branch to answers `origin: already` and carries the forge's own name for that branch. rk composed no name, and the derived seat it reported was the standing worktree for it.
+- An issue the forge links no branch to answers `origin: pending` and prints no branch name, with the report saying the name arrives at the apply. This is the design working as intended rather than a gap: GitHub names the branch during the mint, so no honest preview can print one first.
+- An issue URL naming another project refuses as a usage error before any forge call.
+
+Bearing: the GraphQL read, the linked-branch parsing against a real connection, the adopt-rather-than-mint path, and the seat derivation are confirmed against the forge itself. The mint is not: proving it needs a write, and it stays covered by the stubbed tests alone.
+
+## Live proof, GitLab
+
+Not run. The rendering transcript this record is meant to carry — a project's template across an ASCII title, a punctuation run, an accented title, a title over 100 characters, and a confidential issue — has not been executed against a live instance. Every GitLab rendering claim above rests on the source and the documentation alone. The transliteration table is the one place a live run can still disagree, and `rk issue start` reports that case in its own detail line.

@@ -9,7 +9,7 @@ The convention already preferred the forge-minted `<issue-id>-<slug>`, and nothi
 - `Mint at the forge on GitHub, and reproduce GitLab's rendering` — chosen.
 - `Render the name in the client on both forges` — rejected: it is what `glab mr create --create-source-branch` does, and it applies no template, transliterates nothing, squeezes nothing, and truncates nothing. Two clients then produce two branches for one issue.
 - `glab mr create --related-issue --create-source-branch` — rejected: it also opens a merge request before the first commit exists.
-- `Let the operator pass a name` — rejected: an escape is the hole this work exists to close.
+- `Let the operator pass a name` — rejected: an escape is the hole this closes.
 
 ## Decision Outcome
 
@@ -22,8 +22,8 @@ Enforced by `issue-branch:the-forge-names-the-branch` and `issue-branch:a-custom
 - Good: one issue has one branch, whoever starts the work, and a rerun adopts instead of duplicating.
 - Good: the branch, its request, and the issue's closing hang together with no keyword in the body.
 - Bad: the two forges reach one outcome by different mechanisms, so the GitLab arm carries a reproduction upstream can move under it.
-- Bad: that reproduction's transliteration rests on a table, and an unusual script can render differently. The verb reports the case rather than hiding it.
+- Bad: that reproduction's transliteration rests on a table, so an unusual script can render differently. The verb reports the case.
 
 ## Status
 
-Implemented — `src/issue.rs` and `src/commands/issue.rs`. The live proof against a real instance has not run, which `_docs/reference/REFERENCE-issue-branch-sources.md` records plainly.
+Implemented — `src/issue.rs` and `src/commands/issue.rs`. The GitHub read path is proven live; the mint and the GitLab rendering are not, and `_docs/reference/REFERENCE-issue-branch-sources.md` records which is which.
