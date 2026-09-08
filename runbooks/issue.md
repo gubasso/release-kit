@@ -40,7 +40,7 @@ The branch is seated at `../<project>@<issue-id>-<slug>`, through the same deriv
 
 On branches:
 
-The branch is checked out in the main checkout. A dirty working tree makes git refuse the checkout, and git's own reason is what the report carries.
+The branch is checked out in the main checkout, whichever of the repository's worktrees you named. It asks for a clean checkout: uncommitted work there refuses the run before anything is created at the forge.
 
 ## 4. Prepare the seat
 

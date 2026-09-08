@@ -1238,7 +1238,14 @@ fn header(count: usize) -> String {
 /// Run one git command against the target, spawn failure typed. The
 /// hook variables are scrubbed: a run from inside a git hook must act
 /// on the named target, never on the hook's own repository.
-fn git(target: &Utf8Path, args: &[&str]) -> Result<std::process::Output, RkError> {
+///
+/// `rk issue start` spawns git too, and shares this so the scrubbing is
+/// one owner rather than a rule each caller has to remember.
+///
+/// # Errors
+///
+/// git failing to spawn.
+pub(crate) fn git(target: &Utf8Path, args: &[&str]) -> Result<std::process::Output, RkError> {
     let mut command = std::process::Command::new(crate::probes::git_bin());
     for var in maintenance::GIT_HOOK_VARS {
         command.env_remove(var);

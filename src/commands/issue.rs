@@ -444,20 +444,7 @@ fn branch_seatable(main: &Utf8Path, branch: &str) -> Result<(), RkError> {
         // over anything: the switch is a no-op and carries no risk.
         return Ok(());
     }
-    let held = std::process::Command::new(probes::git_bin())
-        .args(["-C"])
-        .arg(main)
-        .args(["status", "--porcelain"])
-        .output()
-        .map_err(|source| {
-            RkError::subprocess(
-                Diagnostic::new(
-                    Reason::SubprocessSpawn,
-                    format!("git did not run: {source}"),
-                )
-                .target_state("unchanged"),
-            )
-        })?;
+    let held = crate::commands::worktree::git(main, &["status", "--porcelain"])?;
     // A probe that cannot answer counts as dirty: this runs before a
     // remote write, so the closed direction is the safe one.
     if !held.status.success() || !held.stdout.is_empty() {
@@ -513,22 +500,10 @@ fn seat_branch(
     if !apply {
         return report(out, ground, resolved, None, Some(branch.to_owned()), false);
     }
-    let git = |args: &[&str]| -> Result<std::process::Output, RkError> {
-        std::process::Command::new(probes::git_bin())
-            .args(["-C"])
-            .arg(main)
-            .args(args)
-            .output()
-            .map_err(|source| {
-                RkError::subprocess(
-                    Diagnostic::new(
-                        Reason::SubprocessSpawn,
-                        format!("git did not run: {source}"),
-                    )
-                    .target_state("unchanged"),
-                )
-            })
-    };
+    // Through the shared runner, which scrubs the hook variables: a run
+    // from inside a git hook must act on the named checkout and never on
+    // the hook's own repository.
+    let git = |args: &[&str]| crate::commands::worktree::git(main, args);
     let fetched = git(&["fetch", "origin"])?;
     if !fetched.status.success() {
         return Err(stale_refs(branch, resolved, &last_line(&fetched.stderr)));

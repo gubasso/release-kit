@@ -16740,3 +16740,40 @@ fn a_branch_already_in_the_main_checkout_ignores_a_dirty_tree() {
     .assert()
     .success();
 }
+
+/// Every git command runs against the named checkout, never against the
+/// repository an inherited hook environment points at.
+#[test]
+fn branches_mode_ignores_an_inherited_hook_environment() {
+    let (_parent, repo) = seatable_fixture();
+    with_remote_branch(&repo, "57-fix-the-csv-upload");
+    // A second repository, which the hook variables name.
+    let (_other_parent, other) = seatable_fixture();
+    let before = branch_names(&other);
+    let (mock, gh) = mock_forge("gh", GH_ISSUE_MOCK);
+    std::fs::write(
+        mock.path().join("before.json"),
+        linked(&["57-fix-the-csv-upload"]),
+    )
+    .expect("the answer writes");
+    rk().args(["issue", "start", "57", "--workflow", "branches"])
+        .args(["--forge", "github", "--repo", "acme/widget"])
+        .args(["--apply", "--target"])
+        .arg(&repo)
+        .env("RK_GH_BIN", &gh)
+        .env("RK_MOCK_DIR", mock.path())
+        .env("GIT_DIR", other.join(".git"))
+        .env("GIT_WORK_TREE", &other)
+        .assert()
+        .success();
+    assert_eq!(
+        tip_of(&repo, "HEAD"),
+        tip_of(&repo, "57-fix-the-csv-upload"),
+        "the named checkout moved"
+    );
+    assert_eq!(
+        before,
+        branch_names(&other),
+        "the repository the hook variables name is untouched"
+    );
+}
