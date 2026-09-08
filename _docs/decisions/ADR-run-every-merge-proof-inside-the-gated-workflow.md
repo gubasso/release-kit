@@ -16,7 +16,7 @@ The forge resolves a job's `needs` inside one workflow file, and a required stat
 
 Chosen option: the seed sets `pr-run-mode = "skip"`, so the generated workflow is tag-only; the Nix capability lands its expression and its flake pair and no workflow; and the Rust binding serves both proof jobs for the gate. astral-sh/uv sets the same run mode and carries its own plan job the same way. `rk status --check` judges both ends of the generator, and `rk setup check` still names any job a gate leaves out.
 
-Enforced by `landing:a-seeded-file-still-carries-the-invariants`, `landing:the-flake-pair-lands-all-or-nothing`, and `forge-setup:the-required-check-stands-for-every-request-job`.
+Enforced by `landing:a-seeded-file-still-carries-the-invariants`, `landing:the-flake-pair-lands-all-or-nothing`, and `forge-setup:the-required-check-is-shaped-to-report`.
 
 ## Consequences
 

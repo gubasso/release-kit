@@ -1,19 +1,26 @@
-//! What a target's own workflows say about the job `--required-check` names.
+//! Whether the job `--required-check` names is shaped to report a blocking
+//! answer.
 //!
 //! The trunk protection requires exactly two status-check contexts: the
-//! named check and the title check. Every other job the project's workflow
-//! reports on a pull request gates nothing, and under the trunk style's
-//! standing arm nobody reads the check list before the merge. This reader
-//! finds those jobs so `rk setup check` can name them as a limitation on
-//! `protect-trunk`. It reads the workflow text line by line, in the same
-//! spirit as the landing invariants: where a value sits somewhere this
-//! reader does not follow, it says so rather than guessing.
+//! named check and the title check. Which other jobs a project means to
+//! block a merge is intent, and no file states it, so this reader makes no
+//! claim about them: `gate.needs` is the voting list by convention, and
+//! `forges/github.md` owns that convention. What this reader judges is the
+//! gate itself, in five ways it can fail to report: no job reports the
+//! context, more than one does, the condition is not proven to survive a
+//! failed dependency, the `needs` value is not a literal list, and the
+//! trigger filters the request away. It reads the workflow text line by
+//! line, in the same spirit as the landing invariants: where a value sits
+//! somewhere this reader does not follow, it says so rather than guessing.
+//!
+//! It does not prove that the gate holds a merge. A gate under a proven
+//! condition with a literal `needs` still passes if its steps never inspect
+//! the results, and that is script semantics this reader does not run.
 
 use camino::Utf8Path;
 
 use crate::landing::invariants::before_comment;
 use crate::setup::context::TRUNK_BRANCH;
-use crate::setup::observe::TITLE_CHECK;
 
 /// What the workflows say about the required check.
 #[derive(Debug, PartialEq, Eq)]
@@ -40,11 +47,6 @@ pub enum GateReading {
         /// The workflow file that carries it.
         workflow: String,
     },
-    /// Contexts that report on a pull request and gate nothing.
-    Ungated {
-        /// Their names, in file order.
-        jobs: Vec<String>,
-    },
 }
 
 /// The gate job's `if` condition, as far as the reader proves it.
@@ -52,8 +54,15 @@ pub enum GateReading {
 pub enum Condition {
     /// No `if` key: the job is skipped when a needed job fails.
     Absent,
-    /// A bare `always()`: the job runs whatever the needed jobs report.
-    Always,
+    /// `always()`, or `!cancelled()` written so that YAML reads it as text:
+    /// the job runs when a needed job fails, which is the property the gate
+    /// rests on. `rust-lang/cargo` uses the second deliberately, so that a
+    /// manual cancel does not turn the gate red.
+    Proven,
+    /// A scalar opening with `!`, which YAML reads as a tag rather than as
+    /// text, carried verbatim. The forge never sees the expression, so the
+    /// workflow does not parse and the check never reports.
+    UnquotedTag(String),
     /// Any other expression, carried verbatim: not proven to run on a
     /// failed dependency.
     Other(String),
@@ -68,6 +77,10 @@ pub struct GateReport {
     pub gate_condition: Option<Condition>,
     /// What the gate's workflow filters its pull-request trigger by.
     pub gate_trigger: Trigger,
+    /// How many jobs report the required context on a pull request. Where
+    /// a name is required, every reporter of it must pass, so a second one
+    /// takes the merge decision out of the gate's hands.
+    pub reporting: usize,
     /// Workflow files that could not be read, so their jobs are unjudged.
     pub unreadable: Vec<String>,
 }
@@ -106,14 +119,6 @@ impl Job {
             Name::Fixed(name) => Some(name),
             Name::Unproven => None,
         }
-    }
-
-    /// How the job is listed: its context, or its id marked as unresolved.
-    fn listing(&self) -> String {
-        self.context().map_or_else(
-            || format!("{} (a context this reader cannot resolve)", self.id),
-            str::to_owned,
-        )
     }
 }
 
@@ -224,6 +229,7 @@ pub fn read_gate(target: &Utf8Path, required_check: &str) -> GateReport {
         reading: GateReading::NoRequestWorkflows,
         gate_condition: None,
         gate_trigger: Trigger::default(),
+        reporting: 0,
         unreadable,
     };
     if workflows.iter().all(|workflow| workflow.jobs.is_empty()) {
@@ -276,7 +282,19 @@ fn read_workflows(dir: &Utf8Path) -> (Vec<Workflow>, Vec<String>) {
 }
 
 /// The gate judgment over workflows that declare at least one job.
+///
+/// The judgment is about the gate alone. Which other jobs a project means
+/// to block a merge is intent, and no file states it, so a job outside the
+/// gate's `needs` is neither counted nor named here.
 fn judge(report: &mut GateReport, workflows: &[Workflow], required_check: &str) {
+    // Every job reporting the required context, across every request
+    // workflow: one is the gate, and a second makes the required check
+    // ambiguous.
+    report.reporting = workflows
+        .iter()
+        .flat_map(|workflow| &workflow.jobs)
+        .filter(|job| job.context() == Some(required_check))
+        .count();
     let Some((workflow, gate)) = workflows.iter().find_map(|workflow| {
         workflow
             .jobs
@@ -290,9 +308,12 @@ fn judge(report: &mut GateReport, workflows: &[Workflow], required_check: &str) 
             .find(|job| job.id == required_check && job.context().is_none());
         report.reading = unproven.map_or_else(
             || GateReading::NoSuchJob {
+                // The contexts that do report, which is the remediation an
+                // operator acts on: one of these is the name to require.
                 contexts: workflows
                     .iter()
-                    .flat_map(|workflow| workflow.jobs.iter().map(Job::listing))
+                    .flat_map(|workflow| workflow.jobs.iter().filter_map(Job::context))
+                    .map(str::to_owned)
                     .collect(),
             },
             |job| GateReading::UnprovenGateName {
@@ -303,73 +324,57 @@ fn judge(report: &mut GateReport, workflows: &[Workflow], required_check: &str) 
     };
     report.gate_condition = Some(gate.condition.clone());
     report.gate_trigger = workflow.trigger.clone();
-    // A `needs` entry is a job id, and ids are per workflow file, so the
-    // gated jobs resolve inside the gate's own file.
-    let gated: Vec<&Job> = match &gate.needs {
-        Needs::Opaque => {
-            report.reading = GateReading::OpaqueNeeds {
-                workflow: workflow.name.clone(),
-            };
-            return;
-        }
-        Needs::None => Vec::new(),
-        Needs::Listed(ids) => ids
-            .iter()
-            .filter_map(|id| workflow.jobs.iter().find(|job| &job.id == id))
-            .collect(),
-    };
-    let mut ungated: Vec<String> = Vec::new();
-    for job in workflows.iter().flat_map(|workflow| &workflow.jobs) {
-        if std::ptr::eq(job, gate)
-            || job.context() == Some(TITLE_CHECK)
-            || gated.iter().any(|needed| std::ptr::eq(*needed, job))
-        {
-            continue;
-        }
-        let listing = job.listing();
-        if !ungated.contains(&listing) {
-            ungated.push(listing);
-        }
-    }
-    report.reading = if ungated.is_empty() {
-        GateReading::Gated
-    } else {
-        GateReading::Ungated { jobs: ungated }
+    // A `needs` value the reader does not follow is refused rather than
+    // interpreted: an anchor, an alias, or an expression names a voting
+    // list nobody can read from the file.
+    report.reading = match &gate.needs {
+        Needs::Opaque => GateReading::OpaqueNeeds {
+            workflow: workflow.name.clone(),
+        },
+        Needs::None | Needs::Listed(_) => GateReading::Gated,
     };
 }
 
-/// The one-line limitation a report earns, or nothing where the check
-/// stands for every request-reporting job.
+/// The ways the gate is shaped so that it cannot report a blocking answer,
+/// or nothing where its shape is sound.
+///
+/// Every part is a fault on `protect-trunk`, not a limitation: a required
+/// check that cannot report is a broken trunk protection.
 #[must_use]
-pub fn limitation(report: &GateReport, required_check: &str) -> Option<String> {
+pub fn faults(report: &GateReport, required_check: &str) -> Option<String> {
     let mut parts: Vec<String> = Vec::new();
     match &report.reading {
         GateReading::Gated => {}
         GateReading::NoRequestWorkflows => parts.push(format!(
-            "no workflow in .github/workflows runs on a pull request, so the required check {required_check} cannot be satisfied"
+            "no workflow in .github/workflows runs on a pull request, so the required check {required_check} never reports and every merge hangs; name a job that runs on a pull request, or remove the required context"
         )),
         GateReading::NoSuchJob { contexts } => parts.push(format!(
-            "no job in .github/workflows reports the context {required_check} on a pull request, so the required check cannot be satisfied; the request-reporting contexts are [{}]",
+            "no job in .github/workflows reports the context {required_check} on a pull request, so the required check never reports and every merge hangs; the contexts that do report are [{}]",
             contexts.join(", ")
         )),
         GateReading::UnprovenGateName { job } => parts.push(format!(
-            "the job {job} names itself by an expression or runs a reusable workflow, so the context it reports is not in the file and the required check {required_check} is not proven to exist"
+            "the job {job} names itself by an expression or runs a reusable workflow, so the context it reports is not in the file and {required_check} is not proven to exist; give the job a literal name equal to the required context"
         )),
         GateReading::OpaqueNeeds { workflow } => parts.push(format!(
-            "the needs value of {required_check} in {workflow} is one this reader does not follow; whether every request-reporting job is gated could not be read"
-        )),
-        GateReading::Ungated { jobs } => parts.push(format!(
-            "the required check {required_check} gates nothing from [{}]: those jobs report on a pull request but the gate does not need them, so a failure there does not hold the merge",
-            jobs.join(", ")
+            "the needs value of {required_check} in {workflow} is an anchor, an alias, or an expression, which this reader refuses rather than interprets; write it as a literal list of job ids"
         )),
     }
+    if report.reporting > 1 {
+        parts.push(format!(
+            "the context {required_check} is reported by {} jobs on a pull request, so the required check no longer stands for the gate alone: every reporter of a required name must pass, and a job outside the gate can hold or release the merge; rename all but one",
+            report.reporting
+        ));
+    }
     match &report.gate_condition {
-        None | Some(Condition::Always) => {}
+        None | Some(Condition::Proven) => {}
         Some(Condition::Absent) => parts.push(format!(
-            "the job {required_check} runs without if: always(), so a needed job that fails skips it and the skip reports success"
+            "the job {required_check} runs under no if condition, so a needed job that fails skips it and the forge reads a skip as success; use if: always(), or if: ${{{{ !cancelled() }}}}"
+        )),
+        Some(Condition::UnquotedTag(raw)) => parts.push(format!(
+            "the condition of {required_check} reads {raw}, and an unquoted scalar opening with ! is a YAML tag rather than text, so the workflow does not parse and the check never reports; write it as ${{{{ !cancelled() }}}} or quote it"
         )),
         Some(Condition::Other(expression)) => parts.push(format!(
-            "the job {required_check} runs under the condition {expression}, which this reader cannot prove holds when a needed job fails; a bare always() is the proven form"
+            "the job {required_check} runs under the condition {expression}, which this reader cannot prove holds when a needed job fails; always() or ${{{{ !cancelled() }}}} is the proven form"
         )),
     }
     if report.gate_trigger.paths_filtered {
@@ -384,12 +389,12 @@ pub fn limitation(report: &GateReport, required_check: &str) -> Option<String> {
     }
     if let Some(filter) = &report.gate_trigger.types_filtered {
         parts.push(format!(
-            "the pull_request trigger of the workflow carrying {required_check} reads {filter}, so an opened, reopened, or synchronized request outside those types never reports the check"
+            "the pull_request trigger of the workflow carrying {required_check} reads {filter}, which leaves out one of opened, reopened, and synchronize, so a request in that state never reports the check"
         ));
     }
     if !report.unreadable.is_empty() {
         parts.push(format!(
-            "[{}] could not be read, so the jobs there are not judged",
+            "[{}] could not be read, so no job there is judged and the context is not proven unique",
             report.unreadable.join(", ")
         ));
     }
@@ -589,18 +594,33 @@ fn jobs(workflow: &str) -> Vec<Job> {
     found
 }
 
-/// A job's `if` value: a bare `always()`, with or without the expression
-/// braces, is the one form proven to run on a failed dependency. Anything
-/// else is carried verbatim, because `always() && x` skips when `x` is
-/// false and a skipped job reports success.
+/// A job's `if` value: `always()` and `!cancelled()` are the two
+/// expressions proven to run on a failed dependency. Anything else is
+/// carried verbatim, because `always() && x` skips when `x` is false and a
+/// skipped job reports success.
+///
+/// `!cancelled()` is here because `rust-lang/cargo` uses it deliberately,
+/// so that a manual cancel does not turn the gate red. It runs on a failed
+/// dependency exactly as `always()` does, which is the property the gate
+/// rests on.
+///
+/// The `!` needs the expression braces or quotes to survive YAML: an
+/// unquoted scalar opening with `!` is a tag, not text, so `if:
+/// !cancelled()` does not parse and the forge never runs the workflow. The
+/// raw scalar is therefore read before it is unquoted, and the bare form is
+/// its own fault rather than a pass.
 fn condition(value: &str) -> Condition {
-    let value = unquote(before_comment(value).trim());
+    let raw = before_comment(value).trim();
+    let value = unquote(raw);
     let inner = value
         .strip_prefix("${{")
         .and_then(|rest| rest.strip_suffix("}}"))
         .map_or(value, str::trim);
-    if inner == "always()" {
-        Condition::Always
+    if raw.starts_with('!') {
+        return Condition::UnquotedTag(raw.to_owned());
+    }
+    if inner == "always()" || inner == "!cancelled()" {
+        Condition::Proven
     } else if inner.is_empty() {
         Condition::Other("(a value carried on another line)".to_owned())
     } else {
@@ -883,7 +903,7 @@ jobs:
         );
         assert_eq!(found[3].name, Name::Unproven);
         assert_eq!(found[3].context(), None);
-        assert_eq!(found[3].condition, Condition::Always);
+        assert_eq!(found[3].condition, Condition::Proven);
         assert_eq!(
             found[3].needs,
             Needs::Listed(vec!["lint".to_owned(), "docs".to_owned()])
@@ -933,17 +953,30 @@ jobs:
     }
 
     #[test]
-    fn a_condition_is_proven_only_as_a_bare_always() {
-        assert_eq!(condition("always()"), Condition::Always);
-        assert_eq!(condition("${{ always() }}"), Condition::Always);
-        assert_eq!(condition("'${{always()}}'"), Condition::Always);
+    fn a_condition_is_proven_only_as_always_or_a_readable_not_cancelled() {
+        assert_eq!(condition("always()"), Condition::Proven);
+        assert_eq!(condition("${{ always() }}"), Condition::Proven);
+        assert_eq!(condition("'${{always()}}'"), Condition::Proven);
+        // The `!` survives YAML only inside the braces or inside quotes.
+        assert_eq!(condition("${{ !cancelled() }}"), Condition::Proven);
+        assert_eq!(condition("'!cancelled()'"), Condition::Proven);
+        assert_eq!(condition("\"!cancelled()\""), Condition::Proven);
+        // Unquoted, it is a YAML tag: the workflow does not parse at all.
+        assert_eq!(
+            condition("!cancelled()"),
+            Condition::UnquotedTag("!cancelled()".to_owned())
+        );
         assert_eq!(
             condition("${{ always() && false }}"),
             Condition::Other("always() && false".to_owned())
         );
         assert_eq!(
+            condition("'!cancelled() && x'"),
+            Condition::Other("!cancelled() && x".to_owned())
+        );
+        assert_eq!(
             condition("!always()"),
-            Condition::Other("!always()".to_owned())
+            Condition::UnquotedTag("!always()".to_owned())
         );
         assert_eq!(
             condition(""),
@@ -952,27 +985,25 @@ jobs:
     }
 
     #[test]
-    fn read_gate_partitions_the_contexts() {
+    fn read_gate_judges_the_gates_shape() {
         let gated = report(
             "on: [pull_request]\njobs:\n  lint:\n  test:\n    if: always()\n    needs: [lint]\n",
             "test",
         );
         assert_eq!(gated.reading, GateReading::Gated);
-        assert_eq!(gated.gate_condition, Some(Condition::Always));
+        assert_eq!(gated.gate_condition, Some(Condition::Proven));
         assert_eq!(gated.gate_trigger, Trigger::default());
+        assert_eq!(gated.reporting, 1);
         assert!(gated.unreadable.is_empty());
 
-        let ungated = report(
-            "on: [pull_request]\njobs:\n  lint:\n  build:\n  docs:\n  pr-title:\n  test:\n    needs: lint\n",
+        // A gate that needs one job of five is sound: which of the others
+        // votes is the project's convention, and no file states it.
+        let subset = report(
+            "on: [pull_request]\njobs:\n  lint:\n  build:\n  docs:\n  pr-title:\n  test:\n    if: always()\n    needs: lint\n",
             "test",
         );
-        assert_eq!(
-            ungated.reading,
-            GateReading::Ungated {
-                jobs: vec!["build".to_owned(), "docs".to_owned()]
-            }
-        );
-        assert_eq!(ungated.gate_condition, Some(Condition::Absent));
+        assert_eq!(subset.reading, GateReading::Gated);
+        assert_eq!(faults(&subset, "test"), None);
 
         let missing = report("on: [pull_request]\njobs:\n  lint:\n  unit:\n", "test");
         assert_eq!(
@@ -1035,6 +1066,19 @@ jobs:
         let push_only = report("on: push\njobs:\n  lint:\n  test:\n", "test");
         assert_eq!(push_only.reading, GateReading::NoRequestWorkflows);
 
+        // Two jobs reporting one context leave the protection unable to say
+        // which one it is holding for.
+        let duplicated = report(
+            "on: [pull_request]\njobs:\n  test:\n    if: always()\n  other:\n    name: test\n",
+            "test",
+        );
+        assert_eq!(duplicated.reporting, 2);
+        let text = faults(&duplicated, "test").expect("a fault");
+        assert!(
+            text.contains("no longer stands for the gate alone"),
+            "{text}"
+        );
+
         let dir = tempfile::tempdir().expect("a tempdir");
         let empty = read_gate(Utf8Path::from_path(dir.path()).expect("utf-8"), "test");
         assert_eq!(empty.reading, GateReading::NoRequestWorkflows);
@@ -1054,19 +1098,23 @@ jobs:
         let report = read_gate(Utf8Path::from_path(dir.path()).expect("utf-8"), "test");
         assert_eq!(report.reading, GateReading::Gated);
         assert_eq!(report.unreadable, vec!["broken.yml".to_owned()]);
-        let text = limitation(&report, "test").expect("a limitation");
+        let text = faults(&report, "test").expect("a fault");
         assert!(text.contains("[broken.yml] could not be read"), "{text}");
+        // The unreadable file leaves uniqueness unproven; the text must not
+        // convert that into a claim of uniqueness.
+        assert!(!text.contains("stands for the gate alone"), "{text}");
     }
 
     #[test]
-    fn limitation_texts_are_one_line_each() {
+    fn fault_texts_are_one_line_each() {
         let base = || GateReport {
             reading: GateReading::Gated,
-            gate_condition: Some(Condition::Always),
+            gate_condition: Some(Condition::Proven),
             gate_trigger: Trigger::default(),
+            reporting: 1,
             unreadable: Vec::new(),
         };
-        assert_eq!(limitation(&base(), "test"), None);
+        assert_eq!(faults(&base(), "test"), None);
         let cases = [
             GateReport {
                 reading: GateReading::NoRequestWorkflows,
@@ -1095,10 +1143,15 @@ jobs:
                 ..base()
             },
             GateReport {
-                reading: GateReading::Ungated {
-                    jobs: vec!["a".to_owned(), "b".to_owned()],
-                },
                 gate_condition: Some(Condition::Other("always() && x".to_owned())),
+                ..base()
+            },
+            GateReport {
+                gate_condition: Some(Condition::UnquotedTag("!cancelled()".to_owned())),
+                ..base()
+            },
+            GateReport {
+                reporting: 2,
                 ..base()
             },
             GateReport {
@@ -1115,7 +1168,7 @@ jobs:
             },
         ];
         for case in &cases {
-            let text = limitation(case, "test").expect("a limitation");
+            let text = faults(case, "test").expect("a fault");
             assert!(!text.contains('\n'), "{text}");
             assert!(
                 text.starts_with(|c: char| c.is_lowercase() || c == '['),

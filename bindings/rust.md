@@ -21,6 +21,8 @@ The registry-and-auth answer is narrower on GitLab too: crates.io trusted publis
 
 The tag push retriggers `release.yml` only because the publish jobs authenticate with a GitHub App token; a tag pushed with `GITHUB_TOKEN` starts no workflow.
 
+On GitLab, `.gitlab-ci.yml` is the one landed pipeline, and a project declares its own jobs in `.gitlab/ci/project.yml`, which the rendered parent triggers as a child pipeline; [the forge document](../forges/gitlab.md) carries the rules that file follows.
+
 ## Setup specifics
 
 - Step 0 is `cargo publish --dry-run` plus reading `cargo package --list`. crates.io hard-rejects a publish with no `description` and rejects a `categories` value that is not a canonical slug; both surface here without credentials.
@@ -131,7 +133,7 @@ The package then has exactly one publishing path.
 
 ### The Nix capability
 
-An opt-in beside the release automation, off by default: `rk init --nix` lands `nix/package.nix` (seeded — a starting point the project tunes) and a seed `flake.nix` and `flake.lock` pair where the target has none (a target's own flake is never touched, and `rk init` reports what it withholds and why). The landed set is the same on both forges, because the proof is a job of the project's own gated pipeline rather than a landed one; the binding serves that job for github, and the gitlab pair reports the smaller product below. A shape the seed cannot serve lands nothing, with the missing piece named — the seed reads `Cargo.toml` through `importTOML`, builds from the committed `Cargo.lock`, and smokes the crate's binary, so it supports one crate with a `[package]` table, a lock, and an implicit `src/main.rs` binary or an explicit `[[bin]]` entry; a workspace root, a lib-only crate, or an uncommitted lock is withheld. The capability promises a buildable flake and its proof, never presence in nixpkgs; registry distribution is the target's own later step. After landing: run `nix build .#default` once, resolve the license `TODO(release-kit)` in the seed, and commit the pair with the record. A consumer then pins the project as a flake input at a release tag, `github:<owner>/<repo>/vX.Y.Z`, and bumps by editing the tag and running `nix flake update <input>` — for release-kit itself as the input, `rk devshell sync` is that bump, both files inside one fenced transaction; a later `nix flake update` in the target itself refreshes the seed lock. Deeper distribution tiers — a nixpkgs submission, a binary cache — carry maintainer commitments and stay deliberate, separate steps.
+An opt-in beside the release automation, off by default: `rk init --nix` lands `nix/package.nix` (seeded — a starting point the project tunes) and a seed `flake.nix` and `flake.lock` pair where the target has none (a target's own flake is never touched, and `rk init` reports what it withholds and why). The landed set is the same on both forges, because the proof is a job of the project's own gated pipeline rather than a landed one; the binding serves that job for each forge below. A shape the seed cannot serve lands nothing, with the missing piece named — the seed reads `Cargo.toml` through `importTOML`, builds from the committed `Cargo.lock`, and smokes the crate's binary, so it supports one crate with a `[package]` table, a lock, and an implicit `src/main.rs` binary or an explicit `[[bin]]` entry; a workspace root, a lib-only crate, or an uncommitted lock is withheld. The capability promises a buildable flake and its proof, never presence in nixpkgs; registry distribution is the target's own later step. After landing: run `nix build .#default` once, resolve the license `TODO(release-kit)` in the seed, and commit the pair with the record. A consumer then pins the project as a flake input at a release tag, `github:<owner>/<repo>/vX.Y.Z`, and bumps by editing the tag and running `nix flake update <input>` — for release-kit itself as the input, `rk devshell sync` is that bump, both files inside one fenced transaction; a later `nix flake update` in the target itself refreshes the seed lock. Deeper distribution tiers — a nixpkgs submission, a binary cache — carry maintainer commitments and stay deliberate, separate steps.
 
 On github, the job that proves the same build in CI. Its id joins the gate's `needs` like any other. `nix build .#default` runs first, because `nix flake check` builds only the `checks` output, so without it a repository whose flake release-kit did not author goes green having never compiled `nix/package.nix`.
 
@@ -149,7 +151,17 @@ nix:
     - run: nix flake check
 ```
 
-On gitlab the capability lands its files and serves no job, which is the smaller product it reports honestly. The landed `.gitlab-ci.yml` is release-kit's own file and declares the one `release` stage, so a job added to it is owned drift an upgrade refuses, and a job naming an undeclared stage is an invalid pipeline. Proving the build there is the target's own integration until that pipeline carries a point to extend.
+On gitlab, the same proof as a job of `.gitlab/ci/project.yml`, the file the project owns and the landed pipeline triggers as a child pipeline; [the forge document](../forges/gitlab.md) carries the rules that file follows.
+
+```yaml
+nix:
+  image: nixos/nix:2.35.2
+  script:
+    - nix --extra-experimental-features 'nix-command flakes' build .#default
+    - nix --extra-experimental-features 'nix-command flakes' flake check
+```
+
+Three things the shape rests on. The official `nixos/nix` image enables neither `nix-command` nor `flakes`, and both commands need them, so without the flags the job fails on every target. The job carries no `stage:` and no `merge_request_event` rule: it runs inside the child pipeline, where `CI_PIPELINE_SOURCE` reads `parent_pipeline`, so that rule could never match, and the bridge already restricts the child to merge requests — use `CI_MERGE_REQUEST_ID` where a rule is wanted. And `nix build` runs before `nix flake check` for the same reason it does on github.
 
 ## Operate specifics
 

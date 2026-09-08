@@ -10,7 +10,9 @@
   - [`forge-setup:key-material-never-reaches-the-environment` — Key material never reaches the environment](#forge-setupkey-material-never-reaches-the-environment--key-material-never-reaches-the-environment)
   - [`forge-setup:every-supported-forge-runs-every-step` — Every supported forge runs every step](#forge-setupevery-supported-forge-runs-every-step--every-supported-forge-runs-every-step)
   - [`forge-setup:a-check-reports-what-the-forge-enforces` — A check reports what the forge enforces](#forge-setupa-check-reports-what-the-forge-enforces--a-check-reports-what-the-forge-enforces)
-  - [`forge-setup:the-required-check-stands-for-every-request-job` — The required check stands for every request job](#forge-setupthe-required-check-stands-for-every-request-job--the-required-check-stands-for-every-request-job)
+  - [`forge-setup:an-unowned-protection-names-its-consequence` — An unowned protection names its consequence](#forge-setupan-unowned-protection-names-its-consequence--an-unowned-protection-names-its-consequence)
+  - [`forge-setup:the-setup-refuses-a-forge-below-the-floor` — The setup refuses a forge below the floor](#forge-setupthe-setup-refuses-a-forge-below-the-floor--the-setup-refuses-a-forge-below-the-floor)
+  - [`forge-setup:the-required-check-is-shaped-to-report` — The required check is shaped to report](#forge-setupthe-required-check-is-shaped-to-report--the-required-check-is-shaped-to-report)
   - [`forge-setup:the-setup-permits-a-request-to-merge-itself` — The setup permits a request to merge itself](#forge-setupthe-setup-permits-a-request-to-merge-itself--the-setup-permits-a-request-to-merge-itself)
   - [`forge-setup:the-setup-asserts-the-squash-title-source` — The setup asserts the squash title source](#forge-setupthe-setup-asserts-the-squash-title-source--the-setup-asserts-the-squash-title-source)
   - [`forge-setup:the-setup-asserts-the-squash-body-source` — The setup asserts the squash body source](#forge-setupthe-setup-asserts-the-squash-body-source--the-setup-asserts-the-squash-body-source)
@@ -109,27 +111,63 @@ Where a forge cannot enforce what a step's proof claims, `rk setup check` MUST r
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 
-### `forge-setup:the-required-check-stands-for-every-request-job` — The required check stands for every request job
+### `forge-setup:an-unowned-protection-names-its-consequence` — An unowned protection names its consequence
 
-Where `rk setup check` knows the required check, it MUST read the target's own workflows and report, as a limitation on `protect-trunk`, every job that reports on a pull request and that the required check neither is nor needs, and it MUST report a required check that no request job reports, because the trunk protection requires that one context beside the title check and no other job holds a merge — under the trunk style's standing arm nobody reads the check list before the forge merges, so an ungated red job ships. The observation MUST also name a gate whose condition is anything but a bare `if: always()`, because the forge reports a job skipped by a failed dependency as success and any other expression can skip it. Where the file does not state what it needs — a gate named by an expression or a reusable-workflow call, a workflow that cannot be read, a target with no request workflow at all — the observation MUST say so rather than report a clean gate.
+Where a trunk protection carries a rule the setup does not own, `rk setup check` MUST fault rather than pass, because a rule the setup cannot reproduce can block the very merge the method depends on. Where the convention refuses that rule kind deliberately, the fault text MUST state what is enabled, what it costs, and the command that removes it, rather than the rule kind's bare name; today the merge queue is the one such kind, and a generic rule keeps the generic text. A refused rule kind MUST NOT join the set of rules the setup requires, because the same set drives the missing-rule fault and would then demand the refused rule on every target. This is the fail-loud half of `forge-setup:a-check-reports-what-the-forge-enforces`.
+
+#### Scenario: A merge queue stands on the trunk
+
+- GIVEN a trunk ruleset the setup owns, carrying a `merge_queue` rule beside the owned ones
+- WHEN `rk setup check` runs
+- THEN `protect-trunk` faults, and the text names the queue, the missing `merge_group` trigger, and `rk setup step protect-trunk --apply` as the remedy
+
+#### Scenario: A target with no queue
+
+- GIVEN a trunk ruleset carrying exactly the owned rules
+- WHEN `rk setup check` runs
+- THEN no rule is reported missing, because the refused kind is not a required one
+
+Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `forge-setup:the-setup-refuses-a-forge-below-the-floor` — The setup refuses a forge below the floor
+
+Where the convention's landed pipeline rests on a forge feature introduced in a known version, `rk setup` MUST observe the forge's own version as a step of its own, and MUST NOT install the trunk protection while that version is below the floor, because the merge check it would install then waits on a status the landed pipeline cannot produce. A version the observation cannot read MUST block the protection exactly as a version below the floor does: a floor nobody could read proves neither way, and this step fails closed. A version whose suffix names a pre-release rather than an edition MUST NOT satisfy the floor, because nothing proves the feature shipped in the pre-release that carries the floor's number. The refusal MUST name the reading, the feature the floor exists for, and the fix. A forge that declares no version floor MUST be answered without a call. This is the fail-closed half of `forge-setup:a-check-reports-what-the-forge-enforces`: that rule reports a forge enforcing less than a step claims, and this one refuses a forge that cannot enforce it at all.
+
+#### Scenario: An instance below the floor
+
+- GIVEN a GitLab instance reporting `18.0.4-ce`, against a floor of 18.2
+- WHEN `rk setup step protect-trunk --apply` runs
+- THEN it refuses naming `forge-version` as the unmet prerequisite, no protection is installed, and the fault text carries the reading, `strategy: mirror`, and the upgrade
+
+#### Scenario: A version nobody can read
+
+- GIVEN an instance whose `GET /version` fails, answers 404, or answers a body naming no version
+- WHEN `rk setup step protect-trunk --apply` runs
+- THEN the floor step reads unknown, the protection refuses on the same prerequisite, and nothing is installed
+
+Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `forge-setup:the-required-check-is-shaped-to-report` — The required check is shaped to report
+
+Where `rk setup check` knows the required check, it MUST read the target's own workflows and fault `protect-trunk` on each of five shapes that stop the gate reporting a blocking answer: no job reports the required context on a pull request; more than one job reports it, so the required check no longer stands for the gate alone, because every reporter of a required name must pass and a job outside the gate can then hold or release the merge; the gate's condition is neither `always()` nor `!cancelled()`, because the forge reports a job skipped by a failed dependency as success and any other expression can skip it, and a `!cancelled()` written as an unquoted scalar is a YAML tag rather than text, so the workflow does not parse at all; the gate's `needs` is an anchor, an alias, or an expression rather than a literal list, which is refused rather than interpreted; and the gate's workflow filters its `pull_request` trigger by `paths`, misses the trunk branch, or omits one of `opened`, `reopened`, and `synchronize` from an explicit `types` list. These are faults rather than limitations, because a required check that cannot report is a broken trunk protection. The observation MUST judge the gate alone and MUST make no claim about the jobs the gate does not name: whether a job is meant to block a merge is intent, and no file states it. It MUST NOT claim that the gate holds a merge, because a gate under a proven condition with a literal `needs` still passes if its steps never inspect the results, which is script semantics this reader does not run; and where a workflow cannot be read, it MUST say so and leave the context's uniqueness unproven rather than claim it. The presence of a `types` key is not itself a fault: an explicit list carrying all three lifecycle types is accepted.
 
 #### Scenario: A five-job workflow names one job
 
-- GIVEN a workflow that runs on `pull_request` with the jobs `lint`, `build`, `test`, `docs`, and `nix`, and `test` needs `lint` alone
+- GIVEN a workflow that runs on `pull_request` with the jobs `lint`, `build`, `test`, `docs`, and `nix`, where `test` runs `if: always()` and needs `lint` alone
 - WHEN `rk setup check --required-check test` runs against a trunk whose ruleset the setup owns
-- THEN `protect-trunk` reports satisfied with a limitation naming `build`, `docs`, and `nix` as jobs that gate nothing
+- THEN `protect-trunk` reports satisfied with nothing said about `build`, `docs`, or `nix`
 
-#### Scenario: A gate that needs every job
+#### Scenario: A gate that can skip
 
-- GIVEN the same workflow where `test` runs `if: always()` and needs every other job
+- GIVEN the same workflow where `test` runs `if: always() && needs.lint.result == 'success'`
 - WHEN `rk setup check --required-check test` runs
-- THEN `protect-trunk` reports satisfied with no limitation
+- THEN `protect-trunk` faults, naming the condition and the skip that reads as success
 
 #### Scenario: A gate the file does not prove
 
-- GIVEN a gate named `test-${{ matrix.os }}`, or one running `if: always() && needs.lint.result == 'success'`, or a target whose workflows never run on a pull request
+- GIVEN a gate named `test-${{ matrix.os }}`, or one that is a reusable-workflow call, or a second job whose name equals the required context, or a target whose workflows never run on a pull request
 - WHEN `rk setup check --required-check test` runs
-- THEN `protect-trunk` reports satisfied with a limitation naming what could not be proven, never a bare pass
+- THEN `protect-trunk` faults, naming what could not be proven or what the gate no longer stands alone for, never a bare pass
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 

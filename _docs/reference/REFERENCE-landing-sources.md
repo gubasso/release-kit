@@ -1,8 +1,8 @@
 # Landing Sources
 
-External sources behind `SPEC-landing.md`: how comparable tools record what they generated into a project, how they judge whether it is still theirs, and what each one does when it is not. Each entry states what the source says and which rule it bears on.
+External sources behind `SPEC-landing.md`: how comparable tools record what they generated into a project, how they judge whether it is still theirs, what each one does when it is not, and what a forge's own configuration language allows a landed file to leave to the target. Each entry states what the source says and which rule it bears on.
 
-Verified against the listed sources on 2026-08-28 and re-checked on 2026-08-29; the arming entries verified on 2026-09-03; the release-marker entries verified on 2026-09-05; the run-mode entry verified on 2026-09-07.
+Verified against the listed sources on 2026-08-28 and re-checked on 2026-08-29; the arming entries verified on 2026-09-03; the release-marker entries verified on 2026-09-05; the run-mode entry verified on 2026-09-07; the GitLab composition entries verified on 2026-09-08.
 
 ## cargo-dist, on generated files that refuse to drift
 
@@ -115,6 +115,35 @@ The Nix-owned destinations the payload names, verified against the Nix reference
 - <https://nix.dev/manual/nix/latest/command-ref/new-cli/nix3-flake-lock>
 
 Bearing: `landing:the-flake-pair-lands-all-or-nothing`, and `placement:a-third-party-destination-names-its-source` for `flake.nix` and `flake.lock`.
+
+## GitLab, on why an include cannot isolate a target's jobs
+
+Included configuration is merged by a deep merge, at any depth: "Included files are read in the order defined in the configuration file, and the included configuration is merged together in the same order", and "after all configuration added with `include` is merged together, the main configuration is merged with the included configuration". The main file wins a key both files declare, so the included file contributes every key the main file omits, whatever the include order. A file the target owned as an include would therefore add `allow_failure`, `needs`, `retry`, `tags`, or `artifacts` to a job release-kit owns, and would add `default`, `variables`, and `workflow` subkeys globally. No include order prevents it.
+
+- <https://docs.gitlab.com/ci/yaml/includes/>
+
+Bearing: `landing:the-flake-pair-lands-all-or-nothing`, and the `project-jobs` bridge in both rendered GitLab parents. This is the fact that rules out the simpler shape and leaves a child pipeline as the only isolating one.
+
+## GitLab, on the child pipeline that carries the target's jobs
+
+A downstream pipeline is a separate configuration, so a child's globals, `default` block, and job names never merge into the parent. `trigger:strategy` forces the trigger job to wait for the downstream pipeline before it is marked success, against a default that marks the trigger job success as soon as the downstream pipeline is created. Of its two values, `mirror` "mirrors the status of the downstream pipeline exactly" and the reference introduced it in GitLab 18.2; `depend` is documented as "not recommended, use `mirror` instead", and its status can read running while the downstream waits on a manual job. Two documented shapes of a child job cannot gate: an optional manual job "does not affect the status of the downstream pipeline or the upstream trigger job", and a failed job under `allow_failure: true` leaves the downstream pipeline successful. A rule combining `if:` and `exists:` matches only when both match — "the rule evaluates to true only when all included keywords evaluate to true" — and `exists:` paths are relative to the project directory. Inside the child, `CI_PIPELINE_SOURCE` reads `parent_pipeline`.
+
+- <https://docs.gitlab.com/ci/yaml/#triggerstrategy>
+- <https://docs.gitlab.com/ci/yaml/#rulesexists>
+- <https://docs.gitlab.com/ci/pipelines/downstream_pipelines/>
+- <https://docs.gitlab.com/ci/jobs/job_rules/#complex-rules>
+- <https://docs.gitlab.com/ci/variables/predefined_variables/>
+
+Bearing: the `project-jobs` bridge, the GitLab 18.2 version floor `rk setup step forge-version` enforces, and the gating caveats `forges/gitlab.md` states. The 18.2 date is what makes the floor a requirement rather than a preference.
+
+## GitLab, on the pipeline a merge request did not get
+
+"If a pipeline contains only jobs in the `.pre` or `.post` stages, it does not run." On a merge-request event the landed release jobs' rules never match, so a title gate at `stage: .pre` was the only job that survived, and the forge created no pipeline at all. The project setting `only_allow_merge_if_pipeline_succeeds` then blocked every merge for want of the pipeline it waits on. `.pre` and `.post` need no entry in `stages:`; every other stage does, and arrays are not deep-merged, so a target cannot contribute a stage from a file of its own.
+
+- <https://docs.gitlab.com/ci/yaml/#stage-pre>
+- <https://docs.gitlab.com/ci/yaml/#stages>
+
+Bearing: the `test` stage both rendered GitLab parents declare last, and the `stage: test` the landed `mr-title` job carries. This is the defect the bridge would have inherited, since the bridge sits in an ordinary stage too.
 
 ## semantic-release and GoReleaser, on where their configuration lives
 

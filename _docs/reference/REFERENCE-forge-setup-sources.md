@@ -2,7 +2,7 @@
 
 External sources behind `SPEC-forge-setup.md`: what each forge's API actually offers, which setup actions are scriptable at all, and how an embedded script is executed safely. Each entry states what the source says and which rule or file it bears on.
 
-Verified against the listed sources on 2026-08-28, re-checked on 2026-08-29, the GitHub App entries re-checked on 2026-08-31 and again on 2026-09-01 when the token-class findings below were also confirmed against a live account, and the merged-branch deletion and default-workflow-permissions entries verified on 2026-09-01, the auto-merge entries on 2026-09-03, and the protection-removal entries on 2026-09-05. A source marked corroborating was reported by a parallel review and not independently fetched. Forge APIs move; re-check an entry before trusting it to design something new.
+Verified against the listed sources on 2026-08-28, re-checked on 2026-08-29, the GitHub App entries re-checked on 2026-08-31 and again on 2026-09-01 when the token-class findings below were also confirmed against a live account, and the merged-branch deletion and default-workflow-permissions entries verified on 2026-09-01, the auto-merge entries on 2026-09-03, the protection-removal entries on 2026-09-05, and the version-endpoint, merge-queue, gate-shape, and pipeline-inspection entries on 2026-09-08. A source marked corroborating was reported by a parallel review and not independently fetched. Forge APIs move; re-check an entry before trusting it to design something new.
 
 ## GitHub rulesets
 
@@ -225,10 +225,57 @@ Verified 2026-09-01. A required status check on GitHub matches by context name �
 
 Bearing: the pair of required contexts `protect-trunk` writes, and why the GitLab half registers nothing.
 
+## Reading a GitLab merge request's pipeline, its bridge, and its child
+
+Verified 2026-09-08. `glab ci get --merge-request <iid>` shows the head pipeline of one merge request, which the reference distinguishes from `--branch` because a merge request's head pipeline can diverge from the latest pipeline on its source branch; `--output json` with `--jq` yields its id. `glab api --paginate` "requests all pages of results sequentially until no more pages of results remain", which matters because a GitLab REST list answers `per_page` rows a page, "default: `20`, max: `100`". The jobs API separates the two job kinds: `GET /projects/:id/pipelines/:pipeline_id/jobs` lists ordinary jobs and carries no trigger job, while `GET /projects/:id/pipelines/:pipeline_id/bridges` lists the trigger jobs, each with a `downstream_pipeline` object naming the child's id. GitLab 19.2 introduced `trigger_jobs` as that endpoint's name and deprecated `bridges`, which stays as an alias; at this convention's 18.2 floor `bridges` is the only spelling.
+
+- <https://docs.gitlab.com/cli/ci/get/>
+- <https://docs.gitlab.com/cli/api/>
+- <https://docs.gitlab.com/api/jobs/>
+- <https://docs.gitlab.com/api/rest/>
+
+Bearing: step 3a of `runbooks/setup.md`, the four commands that prove a target's child pipeline ran. The split between `jobs` and `bridges` is what makes the diagnostic readable: a parent carrying `mr-title` and no bridge is an absent or unmatched `.gitlab/ci/project.yml`, which is a different failure from a pipeline that never compiled.
+
+## A merge queue needs a check that triggers on `merge_group`
+
+Verified 2026-09-08. A repository with a merge queue must add the `merge_group` event as a trigger to the workflows that perform its required checks: "You must use the `merge_group` event to trigger your GitHub Actions workflow when a pull request is added to a merge queue", and otherwise "status checks will not be triggered when you add a pull request to a merge queue". The queue waits for the required checks to report, and the repository setting that names how long the queue waits for CI is what ends the wait: the request is dropped from the queue rather than merged.
+
+- <https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-a-merge-queue>
+
+Bearing: `forge-setup:an-unowned-protection-names-its-consequence`, and the merge-queue bullet in `forges/github.md`. The payload lands no workflow carrying that trigger, which is why the queue is refused rather than supported.
+
+## The GitLab version endpoint
+
+Verified 2026-09-08. `GET /version` answers an authenticated request with a JSON object whose `version` field carries the instance's own version, the documented example being `"18.1.1-ee"`, beside a `revision` field and, on an Enterprise instance, a `kas` object and an `enterprise` flag. The version string carries the edition as a suffix, so the number is what precedes the first `-`. The endpoint needs authentication, which is why an unauthenticated CLI reads as unknown rather than as a version below the floor.
+
+- <https://docs.gitlab.com/api/version/>
+
+Bearing: `forge-setup:the-setup-refuses-a-forge-below-the-floor`, and the one read-only call `forge-version` makes. This is the only endpoint the step touches, and the shape of its answer is what the parser reads.
+
 ## A skipped job reports success
 
-Verified 2026-09-06. A GitHub Actions job that is skipped — by its own `if` conditional, or because a job it `needs` failed — reports success to the required status check that names it, and does not block the merge. Only a workflow that never runs at all, skipped by a path or branch filter or by a commit message, leaves its check pending and blocks. So a gate job that `needs` every other job holds the merge only when it runs `if: always()` and itself fails on any `needs.*.result` other than `success`; without that, a red needed job skips the gate and the skip reads as green.
+Verified 2026-09-06, re-checked 2026-09-08. A GitHub Actions job that is skipped — by its own `if` conditional, or because a job it `needs` failed — reports success to the required status check that names it, and does not block the merge: "successful check statuses are `success`, `skipped`, and `neutral`". Only a workflow that never runs at all, skipped by a path or branch filter or by a commit message, leaves its check pending and blocks, and the same page advises avoiding a required workflow that can be skipped. So a gate job holds the merge only when it runs on a failed dependency and itself fails on any `needs.*.result` other than `success`; without that, a red needed job skips the gate and the skip reads as green. The same page states that "if a check and a commit status have the same name, both must pass when that name is required", so a required name is matched by name alone and every reporter of it takes part in the decision.
 
 - <https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/defining-the-mergeability-of-pull-requests/troubleshooting-required-status-checks>
 
-Bearing: `forge-setup:the-required-check-stands-for-every-request-job`, the `always()` clause of the gate shape the setup runbook shows, and why the observation names a gate that lacks it.
+Bearing: `forge-setup:the-required-check-is-shaped-to-report`, all five of its faults. The skip fact is why a gate needs a proven condition; the name-matching fact is why a second job reporting the required context is a fault, because the required check then no longer stands for the gate alone.
+
+## A gate condition that survives a failed dependency
+
+Verified 2026-09-08. `always()` "causes the step to always execute, and returns true, even when canceled", and `!cancelled()` returns true unless the workflow was cancelled — so both run when a needed job fails, which is the property a gate rests on. The reference warns against `always()` where a critical failure should stop the run, and recommends `!cancelled()` there. `rust-lang/cargo` uses `!cancelled()` on its aggregate `conclusion` job, with the comment that it ensures the job is not skipped when its dependencies fail, "because a skipped job is considered a success by GitHub", while still not running when the workflow is cancelled by hand.
+
+- <https://docs.github.com/en/actions/reference/workflows-and-actions/expressions#always>
+- <https://github.com/rust-lang/cargo/blob/master/.github/workflows/main.yml>
+
+Bearing: the condition fault of `forge-setup:the-required-check-is-shaped-to-report`, and the two forms the reader accepts. Neither form is preferred here; both are proven, and an expression built on either is not.
+
+## A required check is chosen one name at a time
+
+Verified 2026-09-08. "Require status checks before merging" is configured by adding each required check individually, by name, and the page documents no option that requires every check a pull request reports. That, with the name matching above, is the whole interface a protection offers.
+
+A reusable-workflow call is a further gap in what a file states: the caller job's own `name` does not determine the contexts the called jobs report, and no reference page consulted here states what those contexts are. So the reader refuses a gate that is a `uses:` call rather than guessing a name for it.
+
+- <https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches>
+- <https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows>
+
+Bearing: `forge-setup:the-required-check-is-shaped-to-report`, and why coverage is a convention in `forges/github.md` rather than a proof in the code. The aggregate gate exists because one name is all a protection takes.

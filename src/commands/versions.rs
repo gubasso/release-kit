@@ -168,7 +168,44 @@ fn resolve_ref(action: &str, pinned_commit: &str) -> (&'static str, Option<Strin
     }
 }
 
+/// The page bound for a paged answer: at 100 entries a page, ten pages is
+/// a thousand tags, past any project this registry pins. A source deeper
+/// than that reads as unreachable rather than as a version this check
+/// silently guessed.
+const MAX_PAGES: u32 = 10;
+
+/// One GET, or `None` where the fetch failed.
+fn fetch(url: &str) -> Option<Vec<u8>> {
+    let curl = std::env::var_os("RK_CURL_BIN").unwrap_or_else(|| "curl".into());
+    let fetched = std::process::Command::new(curl)
+        .args(["-fsSL", "--max-time", "10", url])
+        .output();
+    match fetched {
+        Ok(output) if output.status.success() => Some(output.stdout),
+        _ => None,
+    }
+}
+
+/// The same URL at a later page, in the query form every paged source here
+/// takes.
+fn paged(url: &str, page: u32) -> String {
+    let joiner = if url.contains('?') { '&' } else { '?' };
+    format!("{url}{joiner}page={page}")
+}
+
 /// Fetch one check URL and classify the answer.
+///
+/// An object answer — a crates.io crate, a forge's latest release — is one
+/// GET. An array answer is a page of a list, and the endpoint documents no
+/// ordering, so reading one page would compute the greatest of an arbitrary
+/// subset and could report a stale pin as current. Every page is therefore
+/// read, to the bound above, and the greatest version across all of them
+/// wins.
+///
+/// Reaching the bound with a page still full is not an answer: the list
+/// continues past what was read, so the greatest version is unknown. That
+/// reads as `source-unreachable`, the same as a failed fetch, rather than
+/// as the greatest of the pages that happened to fit.
 fn check_one(tool: &str, pinned: &str, url: &str) -> PinResult {
     let result = |result, available| PinResult {
         tool: tool.to_owned(),
@@ -180,15 +217,34 @@ fn check_one(tool: &str, pinned: &str, url: &str) -> PinResult {
         ref_result: None,
         ref_commit: None,
     };
-    let curl = std::env::var_os("RK_CURL_BIN").unwrap_or_else(|| "curl".into());
-    let fetched = std::process::Command::new(curl)
-        .args(["-fsSL", "--max-time", "10", url])
-        .output();
-    let body = match fetched {
-        Ok(output) if output.status.success() => output.stdout,
-        _ => return result("source-unreachable", None),
+    let Some(body) = fetch(url) else {
+        return result("source-unreachable", None);
     };
-    let Some(available) = latest_version(&body) else {
+    let mut best = latest_version(&body);
+    if is_page(&body) && !is_empty_page(&body) {
+        let mut ended = false;
+        for page in 2..=MAX_PAGES {
+            let Some(body) = fetch(&paged(url, page)) else {
+                return result("source-unreachable", None);
+            };
+            // Every page of a list is a list. A later page that answers
+            // some other shape is a source this reader does not
+            // understand, and feeding it to the object parser would mint
+            // a version out of an answer that names no tag.
+            if !is_page(&body) {
+                return result("source-unparsable", None);
+            }
+            if is_empty_page(&body) {
+                ended = true;
+                break;
+            }
+            best = greater(best, latest_version(&body));
+        }
+        if !ended {
+            return result("source-unreachable", None);
+        }
+    }
+    let Some(available) = best else {
         return result("source-unparsable", None);
     };
     if is_current(pinned, &available) {
@@ -198,19 +254,73 @@ fn check_one(tool: &str, pinned: &str, url: &str) -> PinResult {
     }
 }
 
-/// The latest version a source's JSON names: `max_stable_version` from a
-/// crates.io answer, `tag_name` from a forge's releases answer.
+/// Whether the answer is one page of a list rather than a single object.
+fn is_page(body: &[u8]) -> bool {
+    serde_json::from_slice::<serde_json::Value>(body).is_ok_and(|value| value.is_array())
+}
+
+/// Whether the answer is a page past the end of the list.
+fn is_empty_page(body: &[u8]) -> bool {
+    serde_json::from_slice::<serde_json::Value>(body)
+        .is_ok_and(|value| value.as_array().is_some_and(Vec::is_empty))
+}
+
+/// The greater of two versions, comparing numerically component by
+/// component, with an absent version losing to any present one.
+fn greater(left: Option<String>, right: Option<String>) -> Option<String> {
+    match (left, right) {
+        (Some(left), Some(right)) => {
+            if numeric_parts(&right) > numeric_parts(&left) {
+                Some(right)
+            } else {
+                Some(left)
+            }
+        }
+        (some, None) | (None, some) => some,
+    }
+}
+
+/// The latest version a source's JSON names, across the three answer
+/// shapes: `max_stable_version` from a crates.io answer, `tag_name` from a
+/// forge's releases answer, and the greatest `name` from a forge's tags
+/// answer, which is an array.
+///
+/// The tags shape exists for a project that publishes tags and cuts no
+/// releases, so no releases answer names its latest version. The greatest
+/// is taken rather than the first, because the endpoint promises no
+/// ordering.
 fn latest_version(body: &[u8]) -> Option<String> {
     let value: serde_json::Value = serde_json::from_slice(body).ok()?;
+    if let Some(tags) = value.as_array() {
+        return tags
+            .iter()
+            .filter_map(|tag| tag.get("name").and_then(serde_json::Value::as_str))
+            .filter_map(number_from)
+            .max_by(|left, right| numeric_parts(left).cmp(&numeric_parts(right)));
+    }
     let raw = value
         .get("crate")
         .and_then(|krate| krate.get("max_stable_version"))
         .or_else(|| value.get("tag_name"))
         .and_then(serde_json::Value::as_str)?;
-    // A tag may prefix the number — `v2.13.1`, or a name before it — so
-    // the version starts at the first digit.
+    number_from(raw)
+}
+
+/// A ref name from its first digit on: a tag may prefix the number —
+/// `v2.13.1`, or a name before it.
+fn number_from(raw: &str) -> Option<String> {
     let start = raw.find(|c: char| c.is_ascii_digit())?;
     Some(raw[start..].to_owned())
+}
+
+/// A version's numeric components, so that 2.10 orders above 2.9 rather
+/// than below it; the first component that is not a number ends the list,
+/// which keeps a suffixed variant below its plain sibling.
+fn numeric_parts(version: &str) -> Vec<u64> {
+    version
+        .split('.')
+        .map_while(|part| part.parse::<u64>().ok())
+        .collect()
 }
 
 /// Whether the pin already matches the source: exactly, or — for a pin
@@ -244,6 +354,27 @@ mod tests {
         );
         assert_eq!(latest_version(b"not json"), None);
         assert_eq!(latest_version(br#"{"unrelated":true}"#), None);
+    }
+
+    /// The tags shape, for a project that publishes tags and cuts no
+    /// releases. The greatest wins, not the first, because the endpoint
+    /// promises no ordering; and 2.10 is above 2.9, not below it.
+    #[test]
+    fn a_tags_answer_reads_the_greatest_name() {
+        assert_eq!(
+            latest_version(br#"[{"name":"2.35.0"},{"name":"2.35.2"},{"name":"2.34.8"}]"#),
+            Some("2.35.2".to_owned())
+        );
+        assert_eq!(
+            latest_version(br#"[{"name":"2.9.0"},{"name":"2.10.0"}]"#),
+            Some("2.10.0".to_owned())
+        );
+        assert_eq!(
+            latest_version(br#"[{"name":"v1.2.3"}]"#),
+            Some("1.2.3".to_owned())
+        );
+        assert_eq!(latest_version(b"[]"), None);
+        assert_eq!(latest_version(br#"[{"sha":"abc"}]"#), None);
     }
 
     #[test]
