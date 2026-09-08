@@ -110,6 +110,31 @@ repos:
         language: system
         files: '^(src/|tests/|build\.rs$|Cargo\.(toml|lock)$|method/|bindings/|snippets/|blocks/|skills/|versions\.toml$|LICENSE)'
         pass_filenames: false
+      # The payload is audited against nothing: --no-config keeps zizmor.yml
+      # out of reach, because an ignore there is keyed by base filename alone
+      # and would silence the shipped release.yml along with the generated
+      # one. Every accepted finding in a snippet is an inline comment in that
+      # snippet, which renders into each target and drifts no rendered file.
+      - id: zizmor-payload
+        name: zizmor over the payload
+        entry: zizmor --no-progress --offline --no-config --min-confidence medium
+        language: system
+        files: '^snippets/.*/\.github/workflows/.*\.ya?ml$'
+      - id: zizmor-own
+        name: zizmor over this project's workflows
+        entry: zizmor --no-progress --offline --config zizmor.yml --min-confidence medium
+        language: system
+        files: '^\.github/workflows/.*\.ya?ml$'
+      # release.yml is excluded because it is cargo-dist's output and the
+      # dist-plan job proves it byte-equal to the generator, so its five
+      # shellcheck relays are not this project's to fix. See
+      # _docs/reference/known-issues/KI-dist-generates-an-unhardened-workflow.md
+      - id: actionlint
+        name: actionlint
+        entry: actionlint
+        language: system
+        files: '^(\.github|snippets/.*/\.github)/workflows/.*\.ya?ml$'
+        exclude: '^\.github/workflows/release\.yml$'
   - repo: https://github.com/frnmst/md-toc
     rev: 9.0.0
     hooks:
