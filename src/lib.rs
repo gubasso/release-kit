@@ -22,6 +22,7 @@ pub mod digest;
 pub mod embedded;
 pub mod error;
 pub mod events;
+pub mod issue;
 pub mod landing;
 pub mod maintenance;
 pub mod output;
