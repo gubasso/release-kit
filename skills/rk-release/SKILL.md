@@ -31,6 +31,16 @@ One pull request. The bot maintains the release request against the trunk — th
 3. Follow the guide's six steps in order and by number, running each check it prints; this skill adds no step of its own. The merge in its step 4 is the release itself, so it stays the operator's unless their request named it — and under `trunk` there is no merge to run: the operator's equivalent decision is whether to hold, which the guide's step 3b carries as one disarm command. Route the changelog correction and any checkout by the project's workflow mode, read from `rk status`: under `worktree` the request's branch takes `rk worktree add "<bot branch>" --apply`, under `branches` the forge CLI's checkout — `rk guide release` renders the right form.
 4. An older line takes `rk guide backport` for the fix crossing over and `rk guide release-lines` for the line's own life, the same way.
 
+## Start work an issue names
+
+A request naming an issue — an issue URL, or "fix", "address", "implement", or "work on" plus an issue — starts from `rk issue start <issue>`, and the plan's first step is that command. The forge names the branch and rk seats it the way the project's recorded workflow mode says. Three rules bind this.
+
+- Never write a predicted branch name into the plan. The name is whatever the forge mints, and stating a guess is the mistake this verb exists to prevent. Write "the branch the forge mints for issue <n>".
+- The preview is what the plan presents for approval, and the apply is what execution runs. That is the plan gate's own two-phase shape, so no new gate appears here.
+- Minting a branch at the forge is a forge action, so it happens only where the operator's request named starting work on that issue.
+
+`rk guide issue` renders the whole procedure, and `rk method model` owns why the name comes from the forge.
+
 ## When it goes wrong
 
 Route by symptom through `rk method recovery`:

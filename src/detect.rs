@@ -48,6 +48,44 @@ impl Forge {
         }
     }
 
+    /// The environment variable that substitutes this forge's CLI.
+    #[must_use]
+    pub const fn cli_override(self) -> &'static str {
+        match self {
+            Self::Github => "RK_GH_BIN",
+            Self::Gitlab => "RK_GLAB_BIN",
+        }
+    }
+
+    /// The lowest forge-CLI version this binary calls.
+    ///
+    /// `gh issue develop` was introduced in gh 2.19.0, so below that the
+    /// command does not exist and the floor is a fact rather than a
+    /// preference. The default naming this binary depends on is a property
+    /// of the GraphQL API — `CreateLinkedBranchInput.name` is optional and
+    /// documented to default to the issue number and title — so no higher
+    /// floor buys correctness.
+    ///
+    /// The `glab` floor is the version whose source this behavior was
+    /// written against. Only `glab api` is called, which is much older, so
+    /// the floor is stricter than the calls need.
+    #[must_use]
+    pub const fn cli_floor(self) -> (u32, u32, u32) {
+        match self {
+            Self::Github => (2, 19, 0),
+            Self::Gitlab => (1, 114, 0),
+        }
+    }
+
+    /// The command that raises a CLI below [`Self::cli_floor`].
+    #[must_use]
+    pub const fn cli_upgrade(self) -> &'static str {
+        match self {
+            Self::Github => "upgrade gh, or point RK_GH_BIN at a newer binary",
+            Self::Gitlab => "upgrade glab, or point RK_GLAB_BIN at a newer binary",
+        }
+    }
+
     /// Every supported forge, in a stable order.
     pub const ALL: [Self; 2] = [Self::Github, Self::Gitlab];
 }

@@ -10,7 +10,7 @@ Parallel work forces the worktree form regardless of mode. Two writers — human
 
 ## The naming rule
 
-A worktree's path derives from the project and the branch: the branch name flattens by replacing every `/` with `-`, and the worktree is the sibling `../<project>@<flattened branch>`. Flattening is not injective — `feat/a-b` and `feat-a/b` derive the same directory — so `rk worktree add` refuses a collision by name and never suffixes silently. A worktree made by hand at some other path works and is reported off-path by `rk worktree list`, never refused; `rk worktree add` for its branch refuses to make a second seat and names `git worktree move` to the derived path as the move.
+A worktree's path derives from the project and the branch: the branch name flattens by replacing every `/` with `-`, and the worktree is the sibling `../<project>@<flattened branch>`. Flattening is not injective — `feat/a-b` and `feat-a/b` derive the same directory — so `rk worktree add` refuses a collision by name and never suffixes silently. A worktree made by hand at some other path works and is reported off-path by `rk worktree list`, never refused; `rk worktree add` for its branch refuses to make a second seat and names `git worktree move` to the derived path as the move. A branch started from an issue reaches its seat through this same derivation and these same refusals, so nothing in the rule changes when the forge chose the name.
 
 ## The layouts the sibling rule admits
 

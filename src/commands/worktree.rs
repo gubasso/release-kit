@@ -112,6 +112,37 @@ fn layout_of(worktrees: &[Worktree]) -> Result<Layout, RkError> {
     })
 }
 
+/// The repository's main checkout, whichever of its worktrees named it.
+///
+/// `rk issue start` needs this under the branches mode: the mode works
+/// branches in the main checkout, and a `--target` naming a linked
+/// worktree would otherwise switch that worktree instead.
+///
+/// # Errors
+///
+/// The same gate [`plan_seat`] runs: a target that is not a directory,
+/// not a repository, or whose inventory the parser cannot trust.
+pub(crate) fn main_checkout(target: &Utf8Path) -> Result<Utf8PathBuf, RkError> {
+    let worktrees = inventory(target)?;
+    Ok(layout_of(&worktrees)?.main)
+}
+
+/// Where a branch is checked out, if anywhere in this repository.
+///
+/// `rk issue start` needs this under the branches mode: `git switch`
+/// refuses a branch another worktree holds, and that refusal is knowable
+/// before the forge is written to.
+///
+/// # Errors
+///
+/// The same gate [`plan_seat`] runs over the inventory.
+pub(crate) fn seat_of(target: &Utf8Path, branch: &str) -> Result<Option<Utf8PathBuf>, RkError> {
+    Ok(inventory(target)?
+        .into_iter()
+        .find(|worktree| worktree.branch.as_deref() == Some(branch))
+        .map(|worktree| worktree.path))
+}
+
 /// The seats in use: the caller's own worktree, resolved from the process
 /// working directory, and the target's current worktree — both,
 /// independently, so invoking from worktree A with `--target` naming the
@@ -329,28 +360,54 @@ struct AddReport {
 }
 
 /// One resolved source for the branch.
-struct Source {
+pub(crate) struct Source {
     /// `adopted`, `remote`, `base`, or `trunk`.
-    kind: &'static str,
+    pub(crate) kind: &'static str,
     /// What creates: `branch`, `worktree`, or `nothing`.
-    created: &'static str,
+    pub(crate) created: &'static str,
     /// The commit-ish shown as the base, where a branch is created.
-    base: Option<String>,
+    pub(crate) base: Option<String>,
     /// The upstream of a created tracking branch.
-    upstream: Option<String>,
+    pub(crate) upstream: Option<String>,
     /// The exact git invocation, argv after `git`.
-    command: Vec<String>,
+    pub(crate) command: Vec<String>,
 }
 
-/// Create or adopt one branch's worktree at its derived sibling path.
-#[allow(clippy::too_many_lines)]
-fn add(
+/// One branch's planned seat at its derived sibling path.
+pub(crate) enum Seat {
+    /// The canonical worktree already stands; nothing is created.
+    Satisfied {
+        /// Where it stands.
+        path: Utf8PathBuf,
+    },
+    /// The seat is not there yet, and the source says how it is made.
+    Fresh {
+        /// The derived path the worktree lands at.
+        path: Utf8PathBuf,
+        /// How the branch is resolved.
+        source: Source,
+        /// What the apply's refresh reported, where it failed.
+        detail: Option<String>,
+    },
+}
+
+/// Plan one branch's seat: every refusal first, then the source it comes
+/// from. Nothing is created here.
+///
+/// `rk worktree add` and `rk issue start` both seat a worktree, so both
+/// come through this one function and one derivation.
+///
+/// # Errors
+///
+/// A name the grammar or git refuses, the trunk, an option-shaped base, a
+/// branch already seated elsewhere, a stale record at the derived path,
+/// and a derived path already occupied.
+pub(crate) fn plan_seat(
     target: &Utf8Path,
     branch: &str,
     base: Option<&str>,
     apply: bool,
-    out: Output,
-) -> Result<(), RkError> {
+) -> Result<Seat, RkError> {
     let worktrees = inventory(target)?;
     let layout = layout_of(&worktrees)?;
 
@@ -394,54 +451,7 @@ fn add(
         .iter()
         .find(|worktree| worktree.branch.as_deref() == Some(branch));
     if let Some(seat) = registered {
-        if seat.path == path {
-            // Satisfied only while the seat actually stands: a record
-            // whose directory was deleted by hand is a stale record, not
-            // a standing worktree, and reporting it satisfied would print
-            // a path that does not exist.
-            // The recovery differs by lock: prune keeps a locked record
-            // unconditionally, so naming it for one would loop the
-            // operator back here forever.
-            if seat.prunable.is_some() || !path.is_dir() {
-                let recovery = if seat.locked.is_some() {
-                    format!(
-                        "the record is locked, which prune keeps unconditionally: git worktree repair recovers a moved directory, or git worktree unlock {path} — for a lock you own — then rk worktree prune --apply clears it"
-                    )
-                } else {
-                    "rk worktree prune --apply clears the stale record, then re-run; git worktree repair recovers a moved directory instead".to_owned()
-                };
-                return Err(RkError::refusal(
-                    Diagnostic::new(
-                        Reason::StateDrift,
-                        format!("{path} is registered to {branch} and its directory is missing"),
-                    )
-                    .expected("the canonical worktree standing, or its stale record cleared")
-                    .action(recovery)
-                    .target_state("unchanged"),
-                ));
-            }
-            return report_satisfied(out, branch, &path, apply);
-        }
-        // The recovery differs by seat: the main checkout is never moved,
-        // so the branch leaves it; a linked worktree moves to the derived
-        // path, keeping its standing state.
-        let recovery = if seat.path == layout.main {
-            format!("git switch {TRUNK_BRANCH} there, then re-run")
-        } else {
-            format!("git worktree move {} {path}", seat.path)
-        };
-        return Err(RkError::refusal(
-            Diagnostic::new(
-                Reason::StateDrift,
-                format!(
-                    "branch {branch} is checked out at {}, and one branch has one seat",
-                    seat.path
-                ),
-            )
-            .expected("the branch free, or already at its derived path")
-            .action(recovery)
-            .target_state("unchanged"),
-        ));
+        return judge_registered(seat, branch, &path, &layout.main);
     }
     if path.exists() {
         let occupant = worktrees
@@ -479,6 +489,111 @@ fn add(
         }
     }
     let source = resolve_source(target, branch, base, &path)?;
+    Ok(Seat::Fresh {
+        path,
+        source,
+        detail,
+    })
+}
+
+/// Judge a branch this repository already registers a seat for: the
+/// canonical seat standing is satisfied, and everything else refuses with
+/// the recovery its own case takes.
+fn judge_registered(
+    seat: &Worktree,
+    branch: &str,
+    path: &Utf8Path,
+    main: &Utf8Path,
+) -> Result<Seat, RkError> {
+    if seat.path == path {
+        // Satisfied only while the seat actually stands: a record whose
+        // directory was deleted by hand is a stale record, not a standing
+        // worktree, and reporting it satisfied would print a path that
+        // does not exist.
+        // The recovery differs by lock: prune keeps a locked record
+        // unconditionally, so naming it for one would loop the operator
+        // back here forever.
+        if seat.prunable.is_some() || !path.is_dir() {
+            let recovery = if seat.locked.is_some() {
+                format!(
+                    "the record is locked, which prune keeps unconditionally: git worktree repair recovers a moved directory, or git worktree unlock {path} — for a lock you own — then rk worktree prune --apply clears it"
+                )
+            } else {
+                "rk worktree prune --apply clears the stale record, then re-run; git worktree repair recovers a moved directory instead".to_owned()
+            };
+            return Err(RkError::refusal(
+                Diagnostic::new(
+                    Reason::StateDrift,
+                    format!("{path} is registered to {branch} and its directory is missing"),
+                )
+                .expected("the canonical worktree standing, or its stale record cleared")
+                .action(recovery)
+                .target_state("unchanged"),
+            ));
+        }
+        return Ok(Seat::Satisfied {
+            path: path.to_owned(),
+        });
+    }
+    // The recovery differs by seat: the main checkout is never moved, so
+    // the branch leaves it; a linked worktree moves to the derived path,
+    // keeping its standing state.
+    let recovery = if seat.path == main {
+        format!("git switch {TRUNK_BRANCH} there, then re-run")
+    } else {
+        format!("git worktree move {} {path}", seat.path)
+    };
+    Err(RkError::refusal(
+        Diagnostic::new(
+            Reason::StateDrift,
+            format!(
+                "branch {branch} is checked out at {}, and one branch has one seat",
+                seat.path
+            ),
+        )
+        .expected("the branch free, or already at its derived path")
+        .action(recovery)
+        .target_state("unchanged"),
+    ))
+}
+
+/// Run a planned source, creating the worktree.
+///
+/// # Errors
+///
+/// The git invocation refusing, with its own last line.
+pub(crate) fn create_seat(target: &Utf8Path, source: &Source) -> Result<(), RkError> {
+    let argv: Vec<&str> = source.command.iter().map(String::as_str).collect();
+    let created = git(target, &argv)?;
+    if created.status.success() {
+        return Ok(());
+    }
+    Err(RkError::subprocess(
+        Diagnostic::new(
+            Reason::SubprocessFailed,
+            format!("git worktree add refused: {}", last_line(&created.stderr)),
+        )
+        .expected("the worktree created at the derived path")
+        .target_state("unchanged"),
+    ))
+}
+
+/// Create or adopt one branch's worktree at its derived sibling path.
+fn add(
+    target: &Utf8Path,
+    branch: &str,
+    base: Option<&str>,
+    apply: bool,
+    out: Output,
+) -> Result<(), RkError> {
+    let (path, source, detail) = match plan_seat(target, branch, base, apply)? {
+        Seat::Satisfied { path } => return report_satisfied(out, branch, &path, apply),
+        Seat::Fresh {
+            path,
+            source,
+            detail,
+        } => (path, source, detail),
+    };
 
     if !apply {
         out.result_line(format!(
@@ -522,18 +637,7 @@ fn add(
         });
     }
 
-    let argv: Vec<&str> = source.command.iter().map(String::as_str).collect();
-    let created = git(target, &argv)?;
-    if !created.status.success() {
-        return Err(RkError::subprocess(
-            Diagnostic::new(
-                Reason::SubprocessFailed,
-                format!("git worktree add refused: {}", last_line(&created.stderr)),
-            )
-            .expected("the worktree created at the derived path")
-            .target_state("unchanged"),
-        ));
-    }
+    create_seat(target, &source)?;
     out.result_line(&path);
     let next = vec![
         format!("cd {path}"),
@@ -1134,7 +1238,14 @@ fn header(count: usize) -> String {
 /// Run one git command against the target, spawn failure typed. The
 /// hook variables are scrubbed: a run from inside a git hook must act
 /// on the named target, never on the hook's own repository.
-fn git(target: &Utf8Path, args: &[&str]) -> Result<std::process::Output, RkError> {
+///
+/// `rk issue start` spawns git too, and shares this so the scrubbing is
+/// one owner rather than a rule each caller has to remember.
+///
+/// # Errors
+///
+/// git failing to spawn.
+pub(crate) fn git(target: &Utf8Path, args: &[&str]) -> Result<std::process::Output, RkError> {
     let mut command = std::process::Command::new(crate::probes::git_bin());
     for var in maintenance::GIT_HOOK_VARS {
         command.env_remove(var);

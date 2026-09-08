@@ -9,6 +9,7 @@ The human-facing step by step: the chapter and its runbook state each procedure 
 | [backport](./backport.md)           | `rk method branch-for-release` | `rk guide backport`      |
 | [release-lines](./release-lines.md) | `rk method release-lines`      | `rk guide release-lines` |
 | [worktree](./worktree.md)           | `rk method worktrees`          | `rk guide worktree`      |
+| [issue](./issue.md)                 | `rk method model`              | `rk guide issue`         |
 | [migration](./migration.md)         | `rk method migration`          | `rk guide migration`     |
 | [dependencies](./dependencies.md)   | `rk method dependencies`       | `rk guide dependencies`  |
 

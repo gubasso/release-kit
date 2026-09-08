@@ -19,6 +19,7 @@ This repository is the canonical knowledge product for the release-kit workflow.
 - `snippets/` is scoped by `(technology, forge)` pair, and `rk init` selects the pair; a pair may honestly land fewer files than another.
 - `snippets/_shared/<forge>` holds a forge's technology-independent files, composed into every pair at landing; it is not a technology, and a destination it shares with a pair is a payload defect.
 - `blocks/` holds the whole texts the binary writes outside `snippets/` — the spliced blocks and the host-side hook body — authored as files so no human-faced artifact lives as a source literal.
+- `src/issue.rs` owns starting work from an issue: the pure half renders and judges, the spawning half calls the forge CLI, and the seating comes from `src/commands/worktree.rs` so one derivation serves both verbs. `SPEC-issue-branch.md` binds it.
 - Every landable file has a declared kind in `src/landing.rs` — `rendered`, `seeded`, or `state` — and a landing writes `.release-kit/manifest.json` into the target, last. `SPEC-landing.md` binds the record and every verb that reads it.
 - `src/` is the distribution: the `rk` binary embeds every root in `src/payload_roots.rs` and the licenses at compile time, so canon and binary cannot drift.
 - `skills/` installs at user scope only — the only mode, not a default beside a system scope, because one scope is one owner per skill name and the vendors share no system layout — and `rk init` lands none: an agent resolves a skill by name across scopes, so a second copy is a second entry under one name. `SPEC-distribution.md` binds what the installer may write there.
@@ -67,6 +68,7 @@ This repository is the canonical knowledge product for the release-kit workflow.
 - The executable repository-side setup: `rk setup`, with `rk runs` over its journals.
 - The branches a squash merge retires in this clone: `rk branches prune`, preview by default; the post-merge reminder lands with `rk setup step branch-reminder`, bound by `_docs/specs/SPEC-maintenance.md`.
 - The worktree lifecycle and the workflow mode: `rk worktree`, with `rk guide worktree` as the procedure.
+- Work an issue already names: `rk issue start <issue>`, with `rk guide issue` as the procedure, bound by `_docs/specs/SPEC-issue-branch.md`. It mints the branch at the forge, seats it the way the recorded mode says, and never invents a name.
 - A target that already releases somehow, and its verdict before anything lands: `rk assess`, with `rk guide migration` as the procedure and `rk method migration` as its why.
 - The release-line lifecycle and the release style: `rk lines`, with `rk guide release-lines` as the procedure, bound by `_docs/specs/SPEC-maintenance.md` and `_docs/specs/SPEC-landing.md`.
 - What lands in a target: `snippets/`, served by `rk snippet --list`.
@@ -84,8 +86,9 @@ This repository is the canonical knowledge product for the release-kit workflow.
 ## Releases
 
 - This repository runs the release-kit convention. `rk method invariants` states what must stay true.
-- An agent here guides and never drives. It reads this convention and tells the operator which step comes next. It takes no git or forge action unless the operator's request named that action. The bounded actions include the following. Create, switch, or delete a branch. Create or remove a worktree. Commit, push, or tag. Open, update, or merge a pull request. A request to change code authorizes the file changes alone.
+- An agent here guides and never drives. It reads this convention and tells the operator which step comes next. It takes no git or forge action unless the operator's request named that action. The bounded actions include the following. Create, switch, or delete a branch. Mint a branch at the forge from an issue. Create or remove a worktree. Commit, push, or tag. Open, update, or merge a pull request. A request to change code authorizes the file changes alone.
 - Work reaches the trunk only through a squash-merged pull request from a short-lived branch. The branch name is `<type>/<slug>`, whose type matches the squash title's type, or the forge-minted `<issue-id>-<slug>`. Nothing is committed on `master`.
+- A request that names an issue starts from the forge's own branch: `rk issue start <issue>` mints it at the forge, seats it, and links it to the issue. Never invent a name for work an issue already names.
 - This project works in worktrees: every code-changing branch lives in its linked worktree (`rk worktree add <branch>` creates or adopts it beside the checkout), the main checkout commits nothing, and `rk worktree prune` retires a merged worktree. One branch, one writer.
 - The request's title becomes the trunk's commit message, so it MUST be a scoped Conventional Commit. The body carries the context and lands with it. The body names no internal planning artifact and carries no agent attribution. The landed rk-message hook, the forge's body check, and the observed body source hold that rule.
 - Every commit follows the same scoped convention. The landed commit-msg hook requires a scope on every one, and the title check holds it to lowercase letters, digits, and `_ . / -`.
