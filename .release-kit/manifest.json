@@ -1,6 +1,6 @@
 {
   "schema_version": 5,
-  "rk_version": "0.3.2",
+  "rk_version": "0.3.3",
   "payload_sha256": "51b905d58e296f5df7bd3594e76f8a55e58b2765a5cecae25950ea907aecfc65",
   "origin": "adopt",
   "tech": "rust",
