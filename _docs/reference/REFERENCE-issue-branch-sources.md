@@ -54,6 +54,10 @@ Verified 2026-09-08 against `https://docs.gitlab.com/api/branches/`. `GET /proje
 
 Verified 2026-09-08 against `gh issue develop --help` on gh 2.99.0 and `https://cli.github.com/manual/gh_issue_develop`. `--base` is "Name of the remote branch you want to make your new branch from". GitLab's Branches API `ref` accepts a branch name or a commit SHA. Bearing: the two forges do not accept the same set of values, so `rk issue start --base` documents the remote branch as the form both take and names the SHA as GitLab's alone.
 
+## GitLab CLI, on the host it calls
+
+Verified 2026-09-08 against `glab api --help` on glab 1.114.0 and `https://docs.gitlab.com/cli/api/`. Where the working directory is a Git directory, `glab api` uses the GitLab authenticated host there; otherwise it uses gitlab.com. `--hostname` overrides both. Bearing: this verb passes `--hostname` on every GitLab call where the clone's remote or the issue reference names a host, so the project it acts on is the one that was named rather than one the working directory implied. A clone with no remote, reached through a self-managed issue URL, would otherwise have been acted on at gitlab.com.
+
 ## GitLab, on creating a branch
 
 Verified 2026-09-08 against `https://docs.gitlab.com/ee/api/branches.html`. `POST /projects/:id/repository/branches` takes `branch`, the name of the branch, and `ref`, the branch name or commit SHA to create the branch from, and answers `201 Created`. It resolves no template. Bearing: the create call is why the reads exist. The absence a mint acts on comes from the prefix search above, not from a `404` on the exact name.

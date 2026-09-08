@@ -15419,6 +15419,11 @@ exit 1
 /// A `glab` that answers the four reads from files and records the POST.
 const GLAB_ISSUE_MOCK: &str = r#"#!/bin/sh
 printf '%s\n' "$*" >> "$RK_MOCK_DIR/log"
+# The host pair is recorded above and then dropped, so one pattern set
+# matches whether or not the caller named a host.
+if [ "$2" = "--hostname" ]; then
+  verb="$1"; shift 3; set -- "$verb" "$@"
+fi
 case "$*" in
   "--version") echo "glab 1.114.0"; exit 0;;
   "api projects/acme%2Fwidget") cat "$RK_MOCK_DIR/project.json"; exit 0;;
@@ -16383,7 +16388,7 @@ fn the_linked_branch_read_asks_for_every_page() {
         .success();
     let log = mock_log(mock.path());
     assert!(
-        log.contains("api --paginate projects/acme%2Fwidget/repository/branches?search="),
+        log.contains("--paginate projects/acme%2Fwidget/repository/branches?search="),
         "{log}"
     );
 }
@@ -16776,4 +16781,57 @@ fn branches_mode_ignores_an_inherited_hook_environment() {
         branch_names(&other),
         "the repository the hook variables name is untouched"
     );
+}
+
+/// `glab api` picks its host from the working directory and otherwise
+/// falls back to gitlab.com, so every call names the host the clone or
+/// the reference gave. A self-managed project reached through an issue
+/// URL must not be acted on somewhere else.
+#[test]
+fn every_gitlab_call_names_the_host_the_reference_gave() {
+    let repo = tempfile::tempdir().expect("a scratch repo exists");
+    git_in(repo.path(), &["init", "-q", "-b", "master"]);
+    git_in(repo.path(), &["config", "user.email", "rk@example.invalid"]);
+    git_in(repo.path(), &["config", "user.name", "rk test"]);
+    std::fs::write(repo.path().join("seed"), "x\n").expect("the seed writes");
+    git_in(repo.path(), &["add", "seed"]);
+    git_in(repo.path(), &["commit", "-qm", "chore: seed"]);
+    let (mock, glab) = mock_forge("glab", GLAB_ISSUE_MOCK);
+    gitlab_answers(mock.path(), None, false);
+    rk_scrubbed()
+        .args([
+            "issue",
+            "start",
+            "https://gitlab.example.com/acme/widget/-/issues/57",
+        ])
+        .args(["--forge", "gitlab", "--repo", "acme/widget", "--target"])
+        .arg(repo.path())
+        .env("RK_GLAB_BIN", &glab)
+        .env("RK_MOCK_DIR", mock.path())
+        .assert()
+        .success();
+    let log = mock_log(mock.path());
+    for line in log.lines().filter(|line| line.starts_with("api")) {
+        assert!(
+            line.contains("--hostname gitlab.example.com"),
+            "every call names the host: {line}"
+        );
+    }
+    assert!(log.lines().any(|line| line.starts_with("api")), "{log}");
+}
+
+/// The host the clone's own remote names wins, and it reaches the CLI
+/// explicitly rather than through the working directory.
+#[test]
+fn a_gitlab_clone_names_its_own_host_on_every_call() {
+    let (_parent, repo) = gitlab_fixture();
+    let (mock, glab) = mock_forge("glab", GLAB_ISSUE_MOCK);
+    gitlab_answers(mock.path(), None, false);
+    gitlab_start(&repo, &glab, mock.path(), &[])
+        .assert()
+        .success();
+    let log = mock_log(mock.path());
+    for line in log.lines().filter(|line| line.starts_with("api")) {
+        assert!(line.contains("--hostname gitlab.com"), "{line}");
+    }
 }

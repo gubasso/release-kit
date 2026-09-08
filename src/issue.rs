@@ -472,6 +472,12 @@ pub struct Ask<'a> {
     pub reference: &'a Reference,
     /// The remote branch a new branch starts from.
     pub base: Option<&'a str>,
+    /// The forge host, from the clone's remote or from the reference.
+    ///
+    /// `glab api` otherwise picks its host from the working directory
+    /// and falls back to gitlab.com, so a clone with no remote could
+    /// write to a host neither the operator nor the reference named.
+    pub host: Option<&'a str>,
     /// Whether to write, at the forge and afterwards.
     pub apply: bool,
     /// Every local refusal the seat carries, run where the forge lets rk
@@ -596,9 +602,14 @@ fn plan_gitlab(
     target: &Path,
     encoded: &str,
     reference: &Reference,
+    host: &[&str],
 ) -> Result<Planned, RkError> {
     let project = answered(
-        &forge_call(cli, target, &["api", &format!("projects/{encoded}")])?,
+        &forge_call(
+            cli,
+            target,
+            &borrowed(&api(host, &format!("projects/{encoded}"))),
+        )?,
         "the project read",
     )?;
     // A template the answer does not carry is not the same as one the
@@ -630,10 +641,10 @@ fn plan_gitlab(
         &forge_call(
             cli,
             target,
-            &[
-                "api",
+            &borrowed(&api(
+                host,
                 &format!("projects/{encoded}/issues/{}", reference.number),
-            ],
+            )),
         )?,
         "the issue read",
     )?;
@@ -648,7 +659,10 @@ fn plan_gitlab(
     // which keeps the ordinary case at three calls.
     let creator = match template.as_deref() {
         Some(text) if text.contains("%{branch_creator}") => {
-            let user = answered(&forge_call(cli, target, &["api", "user"])?, "the user read")?;
+            let user = answered(
+                &forge_call(cli, target, &borrowed(&api(host, "user")))?,
+                "the user read",
+            )?;
             user["username"].as_str().map(ToOwned::to_owned)
         }
         _ => None,
@@ -744,12 +758,13 @@ fn gitlab_detail(confidential: bool, template: Option<&str>, approximated: bool)
 fn resolve_gitlab(cli: &Path, target: &Path, ask: &Ask<'_>) -> Result<Resolved, RkError> {
     let (reference, base, apply) = (ask.reference, ask.base, ask.apply);
     let encoded = ask.repo.replace('/', "%2F");
-    let planned = plan_gitlab(cli, target, &encoded, reference)?;
+    let host = host_args(ask.host);
+    let planned = plan_gitlab(cli, target, &encoded, reference, &host)?;
     // One read answers the whole question. Every admissible name carries
     // the issue's link prefix, so the prefix search is a superset of the
     // exact name: it finds the branch this rendering would produce, and
     // it finds one an earlier title or template produced instead.
-    let linked = linked_branches(cli, target, &encoded, planned.iid)?;
+    let linked = linked_branches(cli, target, &encoded, planned.iid, &host)?;
     if let Some((primary, others)) = pick(linked, &planned.name) {
         let detail = if primary == planned.name {
             planned.detail
@@ -780,21 +795,15 @@ fn resolve_gitlab(cli: &Path, target: &Path, ask: &Ask<'_>) -> Result<Resolved, 
         // POST /projects/:id/repository/branches takes the name and the
         // ref, and resolves no template — which is why the reads exist.
         let start = base.unwrap_or(&planned.default_branch);
-        forge_call(
-            cli,
-            target,
-            &[
-                "api",
-                "--method",
-                "POST",
-                &format!(
-                    "projects/{encoded}/repository/branches?branch={}&ref={}",
-                    encode(&planned.name),
-                    encode(start)
-                ),
-            ],
-        )
-        .and_then(|out| succeeded(&out, "the branch creation"))?;
+        let mut args = api(&host, "--method");
+        args.push("POST".to_owned());
+        args.push(format!(
+            "projects/{encoded}/repository/branches?branch={}&ref={}",
+            encode(&planned.name),
+            encode(start)
+        ));
+        forge_call(cli, target, &borrowed(&args))
+            .and_then(|out| succeeded(&out, "the branch creation"))?;
         "forge"
     } else {
         "pending"
@@ -861,22 +870,17 @@ fn linked_branches(
     target: &Path,
     encoded: &str,
     iid: u64,
+    host: &[&str],
 ) -> Result<Vec<String>, RkError> {
-    let found = forge_call(
-        cli,
-        target,
-        &[
-            "api",
-            // A list endpoint answers one page of twenty by default, and
-            // this read is the authority on what the issue owns: a
-            // second page left unread would read as absence.
-            "--paginate",
-            &format!(
-                "projects/{encoded}/repository/branches?search={}",
-                encode(&format!("^{iid}-"))
-            ),
-        ],
-    )?;
+    // A list endpoint answers one page of twenty by default, and this
+    // read is the authority on what the issue owns: a second page left
+    // unread would read as absence.
+    let mut args = api(host, "--paginate");
+    args.push(format!(
+        "projects/{encoded}/repository/branches?search={}",
+        encode(&format!("^{iid}-"))
+    ));
+    let found = forge_call(cli, target, &borrowed(&args))?;
     let body = answered(&found, "the linked branch read")?;
     let Some(held) = body.as_array() else {
         return Err(forge_failure(
@@ -900,6 +904,25 @@ fn linked_branches(
         }
     }
     Ok(names)
+}
+
+/// The `--hostname` pair a GitLab call carries, where a host is known.
+fn host_args(host: Option<&str>) -> Vec<&str> {
+    host.map_or_else(Vec::new, |host| vec!["--hostname", host])
+}
+
+/// One `glab api` argument list: the verb, the host where one is known,
+/// and the rest.
+fn api(host: &[&str], rest: &str) -> Vec<String> {
+    let mut args = vec!["api".to_owned()];
+    args.extend(host.iter().map(|held| (*held).to_owned()));
+    args.push(rest.to_owned());
+    args
+}
+
+/// An owned argument list as the borrowed one [`forge_call`] takes.
+fn borrowed(args: &[String]) -> Vec<&str> {
+    args.iter().map(String::as_str).collect()
 }
 
 /// One forge CLI call, in the shape [`crate::branches::merged_request_for`]

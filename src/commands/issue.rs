@@ -112,6 +112,8 @@ struct Ground {
     forge: Forge,
     /// The project path.
     repo: String,
+    /// The forge host, from the clone's remote or from the reference.
+    host: Option<String>,
     /// The mode the seat follows.
     workflow: Workflow,
     /// Where the mode came from, for the report.
@@ -287,6 +289,7 @@ fn ground(
     Ok(Ground {
         forge,
         repo,
+        host: detected.host.or_else(|| reference.host.clone()),
         workflow,
         workflow_source,
     })
@@ -328,6 +331,7 @@ fn start(
             forge: ground.forge,
             repo: &ground.repo,
             reference: &reference,
+            host: ground.host.as_deref(),
             base: overrides.base,
             apply,
             seatable: &seatable,
