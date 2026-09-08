@@ -116,16 +116,13 @@ pub fn destinations() -> impl Iterator<Item = &'static str> {
 /// The mechanical substitution sites in `rendered` files.
 ///
 /// Known values, substituted identically everywhere each appears. The
-/// owner is derived from the landing's `repo` parameter and the two scope
-/// forms from its `scopes` list, so the landed bytes stay a deterministic
+/// owner is derived from the landing's `repo` parameter and the scope
+/// shape from [`SCOPE_SHAPE`], so the landed bytes stay a deterministic
 /// function of payload plus parameters.
 pub const OWNER_TOKEN: &[u8] = b"OWNER";
 
-/// The scope list, comma-joined: hook arguments and prose.
-pub const SCOPES_CSV_TOKEN: &[u8] = b"RK_SCOPES_CSV";
-
-/// The scope list, pipe-joined: the title checks' regular expression.
-pub const SCOPES_PIPE_TOKEN: &[u8] = b"RK_SCOPES_PIPE";
+/// The one scope shape: the title checks' regular expression.
+pub const SCOPE_SHAPE_TOKEN: &[u8] = b"RK_SCOPE_SHAPE";
 
 /// The recorded release style: `trunk` arms the bot's request in the
 /// landed release workflow, `lines` leaves every request unarmed.
@@ -134,28 +131,19 @@ pub const STYLE_TOKEN: &[u8] = b"RK_STYLE";
 /// Substitute the landing parameters into a `rendered` file's bytes.
 ///
 /// The repository's owner — the project path's first segment — replaces
-/// every `OWNER` occurrence, the scope list replaces the two scope
-/// tokens, and the recorded style replaces the style token. An empty
-/// scope list — or an unresolved style — leaves its tokens standing,
-/// which only a preview renders under; an apply refuses before reaching
-/// here.
+/// every `OWNER` occurrence, the one scope shape replaces the scope
+/// token, and the recorded style replaces the style token. The scope
+/// shape rests on no parameter, so it substitutes always. An unresolved
+/// style leaves its token standing, which only a preview renders under:
+/// an apply refuses before reaching here.
 #[must_use]
-pub fn render(baseline: &[u8], repo: &str, scopes: &[String], style: Option<Style>) -> Vec<u8> {
+pub fn render(baseline: &[u8], repo: &str, style: Option<Style>) -> Vec<u8> {
     let owner = repo.split('/').next().unwrap_or(repo);
     let mut out = substitute(baseline, OWNER_TOKEN, owner.as_bytes());
     if let Some(style) = style {
         out = substitute(&out, STYLE_TOKEN, style.as_str().as_bytes());
     }
-    if !scopes.is_empty() {
-        out = substitute(&out, SCOPES_CSV_TOKEN, scopes.join(",").as_bytes());
-        // The pipe form drops into an extended regular expression, where a
-        // dot matches any character; among the characters `parse_scopes`
-        // admits, the dot is the only special one, so `api.v1` escapes to
-        // match itself alone.
-        let pipe: Vec<String> = scopes.iter().map(|s| s.replace('.', "\\.")).collect();
-        out = substitute(&out, SCOPES_PIPE_TOKEN, pipe.join("|").as_bytes());
-    }
-    out
+    substitute(&out, SCOPE_SHAPE_TOKEN, SCOPE_SHAPE.as_bytes())
 }
 
 /// Every `token` occurrence replaced with `value`.
@@ -169,41 +157,6 @@ fn substitute(baseline: &[u8], token: &[u8], value: &[u8]) -> Vec<u8> {
     }
     out.extend_from_slice(rest);
     out
-}
-
-/// The `--scopes` argument parsed into the recorded list.
-///
-/// Comma-separated, each scope non-empty and made of letters, digits, and
-/// `_ . / -` — a set safe for the title checks' regular expression once
-/// the renderer escapes the dot, the one special character among them.
-///
-/// # Errors
-///
-/// Returns [`RkError::Usage`] naming the offending scope, or the empty
-/// list.
-pub fn parse_scopes(raw: &str) -> Result<Vec<String>, RkError> {
-    let scopes: Vec<String> = raw
-        .split(',')
-        .map(str::trim)
-        .filter(|scope| !scope.is_empty())
-        .map(str::to_owned)
-        .collect();
-    if scopes.is_empty() {
-        return Err(RkError::Usage(
-            "--scopes names no scope; pass a comma-separated list, e.g. --scopes api,cli".into(),
-        ));
-    }
-    for scope in &scopes {
-        let clean = scope
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '/' | '-'));
-        if !clean {
-            return Err(RkError::Usage(format!(
-                "the scope '{scope}' carries a character outside letters, digits, and _ . / -"
-            )));
-        }
-    }
-    Ok(scopes)
 }
 
 /// First occurrence of `needle` in `haystack`.
@@ -267,6 +220,17 @@ fn authored(text: &str) -> &str {
 /// token — `concat!` cannot interpolate a const, so [`hooks_block`]
 /// substitutes it for the template's `RK_BRANCH_GRAMMAR` token.
 pub const BRANCH_GRAMMAR: &str = r"^((build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)/[A-Za-z0-9._/-]+|([0-9]+|[A-Z][A-Z0-9]+-[0-9]+)-[A-Za-z0-9._-]+|release[-/].+)$";
+
+/// The one commit scope shape.
+///
+/// A bracket expression, lowercase, admitting the digits and `_ . / -`
+/// beside the letters, so `area/subarea` reads as one scope. It holds the
+/// shape of a scope and never its vocabulary: the word itself is the
+/// author's, guided by the routing block and by the repository's own
+/// history. One owner by token — the title checks take it as
+/// `RK_SCOPE_SHAPE` through [`render`], and `rk message --check` reads it
+/// directly, so the desk and the forge judge one language.
+pub const SCOPE_SHAPE: &str = "[a-z0-9._/-]+";
 
 /// The routing block for one workflow mode: the whole of target-side
 /// governance, authored as `blocks/agents-block.md.in` and never grown
@@ -511,7 +475,7 @@ pub fn pair_files(tech: &str, forge: &str) -> Result<Vec<(String, &'static [u8])
 
 /// The whole payload projection for one pair.
 ///
-/// Under the `repo`, `scopes`, `workflow`,
+/// Under the `repo`, `workflow`,
 /// `style`, and `nix` parameters: every snippet with its kind and
 /// rendered bytes, plus the routing block and the hook block — each a
 /// pure function of the recorded mode — sorted by destination. The Nix
@@ -527,7 +491,6 @@ pub fn projection(
     tech: &str,
     forge: &str,
     repo: &str,
-    scopes: &[String],
     workflow: Workflow,
     style: Option<Style>,
     nix: bool,
@@ -541,7 +504,7 @@ pub fn projection(
             anyhow::anyhow!("the payload does not classify {destination}; the kind table is stale")
         })?;
         let rendered = match kind {
-            Kind::Rendered => render(baseline, repo, scopes, style),
+            Kind::Rendered => render(baseline, repo, style),
             Kind::Seeded | Kind::State => baseline.to_vec(),
         };
         entries.push(Entry {
@@ -561,7 +524,7 @@ pub fn projection(
             kind: Kind::Rendered,
             placement: Placement::Block,
             baseline: template.as_bytes().to_vec(),
-            rendered: render(template.as_bytes(), repo, scopes, style),
+            rendered: render(template.as_bytes(), repo, style),
         });
     }
     entries.sort_by(|a, b| a.destination.cmp(&b.destination));
@@ -998,15 +961,11 @@ mod tests {
 
     use super::{
         AGENTS_DESTINATION, BLOCK_BEGIN, BLOCK_END, BRANCH_GRAMMAR, HOOK_TYPES_LINE, HOOKS_BEGIN,
-        HOOKS_DESTINATION, HOOKS_END, Kind, Style, Workflow, extract_block, hooks_block, kind_of,
-        pair_files, parse_scopes, projection, render, routing_block, splice_agents_block,
+        HOOKS_DESTINATION, HOOKS_END, Kind, SCOPE_SHAPE, Style, Workflow, extract_block,
+        hooks_block, kind_of, pair_files, projection, render, routing_block, splice_agents_block,
         splice_hooks_block,
     };
     use crate::embedded;
-
-    fn scopes(list: &[&str]) -> Vec<String> {
-        list.iter().map(|s| (*s).to_owned()).collect()
-    }
 
     /// Every snippet destination has a declared kind: a new landable file
     /// without a classification fails here, not at a landing. The shared
@@ -1032,38 +991,31 @@ mod tests {
 
     /// Substitution is total and derives from the repo parameter's first
     /// segment, so a nested GitLab project path still yields its root
-    /// namespace; the scope list renders in both joined forms.
+    /// namespace. The scope shape rests on no parameter, so it renders
+    /// under every landing.
     #[test]
     fn rendering_substitutes_every_owner_occurrence() {
         let baseline = b"if: repository_owner == 'OWNER'\n# OWNER again: OWNER\n";
-        let rendered = render(baseline, "acme/sub/widget", &[], None);
+        let rendered = render(baseline, "acme/sub/widget", None);
         let text = String::from_utf8(rendered).expect("rendered bytes stay text");
         assert_eq!(text, "if: repository_owner == 'acme'\n# acme again: acme\n");
 
-        let baseline = b"scopes 'RK_SCOPES_CSV' match (RK_SCOPES_PIPE)\n";
-        let rendered = render(baseline, "acme/widget", &scopes(&["api", "cli"]), None);
+        let baseline = b"match (RK_SCOPE_SHAPE)\n";
+        let rendered = render(baseline, "acme/widget", None);
         let text = String::from_utf8(rendered).expect("rendered bytes stay text");
-        assert_eq!(text, "scopes 'api,cli' match (api|cli)\n");
-
-        // A dot is the one admitted character that is special in the
-        // regular expression: it escapes, so `api.v1` matches only itself.
-        let rendered = render(baseline, "acme/widget", &scopes(&["api.v1"]), None);
-        let text = String::from_utf8(rendered).expect("rendered bytes stay text");
-        assert_eq!(text, "scopes 'api.v1' match (api\\.v1)\n");
+        assert_eq!(text, format!("match ({SCOPE_SHAPE})\n"));
     }
 
-    /// The scope argument parses to the recorded list, refusing the empty
-    /// list and any scope that would not drop into the title regex.
+    /// The one scope shape is a bracket expression an extended regular
+    /// expression takes verbatim: lowercase, and with the `-` last, where
+    /// it stands for itself rather than opening a range.
     #[test]
-    fn scope_parsing_refuses_the_unusable() {
-        assert_eq!(
-            parse_scopes("api, cli,guides/release").expect("a clean list parses"),
-            scopes(&["api", "cli", "guides/release"])
+    fn the_scope_shape_drops_into_the_title_check() {
+        assert_eq!(SCOPE_SHAPE, "[a-z0-9._/-]+");
+        assert!(
+            !SCOPE_SHAPE.contains('\''),
+            "the title checks single-quote it"
         );
-        assert!(parse_scopes("").is_err());
-        assert!(parse_scopes(" , ").is_err());
-        assert!(parse_scopes("api|cli").is_err());
-        assert!(parse_scopes("a b").is_err());
     }
 
     /// The shared zone composes into every pair, lands first, and is
@@ -1102,7 +1054,6 @@ mod tests {
             "rust",
             "github",
             "acme/widget",
-            &scopes(&["api", "cli"]),
             Workflow::Branches,
             Some(Style::Trunk),
             false,
@@ -1122,9 +1073,9 @@ mod tests {
             .find(|entry| entry.destination.ends_with("pr-title.yml"))
             .expect("the title check projects");
         let text = String::from_utf8_lossy(&title.rendered);
-        assert!(text.contains("api|cli"), "{text}");
+        assert!(text.contains(SCOPE_SHAPE), "{text}");
         assert!(
-            !text.contains("RK_SCOPES"),
+            !text.contains("RK_SCOPE_SHAPE"),
             "a scope token survived: {text}"
         );
         let seeded = entries
@@ -1140,8 +1091,10 @@ mod tests {
                 .find(|entry| entry.destination == block)
                 .expect("both blocks are part of the projection");
             let text = String::from_utf8_lossy(&entry.rendered);
-            assert!(!text.contains("RK_SCOPES"), "{block} kept a token: {text}");
-            assert!(text.contains("api,cli"), "{block} lost the scopes: {text}");
+            assert!(
+                !text.contains("RK_SCOPE_SHAPE"),
+                "{block} kept a token: {text}"
+            );
         }
     }
 
@@ -1157,7 +1110,6 @@ mod tests {
                 "rust",
                 forge,
                 "acme/widget",
-                &scopes(&["api"]),
                 Workflow::Worktree,
                 Some(Style::Trunk),
                 nix,
@@ -1190,7 +1142,6 @@ mod tests {
             "bash",
             "github",
             "acme/widget",
-            &scopes(&["api"]),
             Workflow::Worktree,
             Some(Style::Trunk),
             true,
@@ -1235,7 +1186,6 @@ mod tests {
                 "rust",
                 "github",
                 "acme/widget",
-                &scopes(&["api"]),
                 Workflow::Worktree,
                 Some(Style::Trunk),
                 true,

@@ -83,6 +83,8 @@ Verified 2026-09-01. A hook declares its `stages`, and a stage's hooks run only 
 
 `compilerla/conventional-pre-commit` checks a commit message against Conventional Commits at the `commit-msg` stage, with `--strict`, `--force-scope`, and a comma-delimited `--scopes` list; `crate-ci/committed` offers `allowed_scopes` but no option to require a scope, which is what decided between them.
 
+Verified 2026-09-08, by reading `conventional_pre_commit/format.py` in the hook repository the landed block pins. The `r_scope` property builds its pattern two ways. Named scopes produce an alternation of exactly those words. No named scopes, with `--force-scope`, produce `(\([\w :,\-/.#]+\))`: a scope stays mandatory, and any token of word characters, spaces, and the delimiters `: , - / . #` passes. The tool takes no scope pattern of its own, so the landed hook holds that a scope is present, and the shape is held beside it — by the title check on the forge, and by `rk message --check` at the desk.
+
 - <https://pre-commit.com/#pre-commit-configyaml---top-level>
 - <https://pre-commit.com/#pre-push>
 - <https://pre-commit.com/#temporarily-disabling-hooks>

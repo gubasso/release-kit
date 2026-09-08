@@ -61,7 +61,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `landing:a-rendered-file-is-reproducible` — A rendered file is reproducible
 
-A `rendered` file's landed bytes MUST be a deterministic function of the payload and the recorded parameters only, and every substituted value MUST be recorded in the manifest's `parameters`, so a later command can re-render the candidate and compare it against the disk.
+A `rendered` file's landed bytes MUST be a deterministic function of the payload and the recorded parameters only, and every substituted value MUST be recorded in the manifest's `parameters`, so a later command can re-render the candidate and compare it against the disk. A value the payload substitutes from one constant — the commit scope's shape — is not a parameter, so it MUST NOT be recorded, and a parameter an earlier schema recorded and this binary substitutes nowhere MUST read without it and rewrite without it.
 
 #### Scenario: The owner substitutes from the repo parameter
 
@@ -235,13 +235,13 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `landing:the-landed-guards-hold-the-message-content` — The landed guards hold the message content
 
-The landed commit-msg hook MUST refuse a message referencing a git-ignored path or carrying agent attribution, exempting only the release bot's request, recognized by exactly the title shape the landed title check admits for the bot. Where the forge carries the request's description onto the trunk, the landed required check MUST refuse a body matching the same patterns — the bot's request exempt whole, since the check has no ignore rules to consult — and the two pattern copies MUST be held equal by test.
+The landed commit-msg hook MUST refuse a message referencing a git-ignored path, carrying agent attribution, or naming a scope outside the one shape the landed title check admits, exempting only the release bot's request, recognized by exactly the title shape the landed title check admits for the bot. The scope's shape is a gate and its vocabulary is not: no landing records a scope list, the landed hooks require that a scope is present, and the routing block carries the guidance an author reads to choose the word. Where the forge carries the request's description onto the trunk, the landed required check MUST refuse a body matching the same patterns — the bot's request exempt whole, since the check has no ignore rules to consult — and the two pattern copies MUST be held equal by test.
 
 #### Scenario: A message references an internal planning artifact
 
-- GIVEN a commit whose body names a path the repository git-ignores
-- WHEN the landed rk-message hook judges the message
-- THEN the commit is refused naming the line and the ignored path, before the reference can become the trunk's permanent record
+- GIVEN a commit whose body names a path the repository git-ignores, and a second whose subject scope reads `Specs Ugly` where `record/ids` would have passed
+- WHEN the landed rk-message hook judges each message
+- THEN each is refused, the first naming the line and the ignored path before it becomes the trunk's permanent record, the second naming the scope and the shape it must take
 
 #### Scenario: The release bot's request passes with its generated body
 

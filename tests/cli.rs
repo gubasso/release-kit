@@ -95,7 +95,7 @@ fn utf8(path: &Path) -> Utf8PathBuf {
 /// and return the assertion to judge.
 fn land_rust(target: &Path) -> assert_cmd::assert::Assert {
     rk().args(["init", "--tech", "rust", "--forge", "github"])
-        .args(["--repo", "acme/widget", "--scopes", "api,cli", "--target"])
+        .args(["--repo", "acme/widget", "--target"])
         .arg(target)
         .arg("--apply")
         .assert()
@@ -265,8 +265,6 @@ fn a_closed_pipe_does_not_interrupt_an_apply() {
         "github",
         "--repo",
         "acme/widget",
-        "--scopes",
-        "api,cli",
         "--target",
         &target_path,
         "--apply",
@@ -561,7 +559,7 @@ fn init_preview_human_lines_are_snapshot_held() {
          AGENTS.md\n\
          dist-workspace.toml\n\
          release-plz.toml\n\
-         Next:\n  rk init --tech rust --forge github --repo <owner/name> --scopes <scope,scope> --workflow worktree --style trunk --target {path} --apply\n"
+         Next:\n  rk init --tech rust --forge github --repo <owner/name> --workflow worktree --style trunk --target {path} --apply\n"
     );
     rk().args([
         "init", "--tech", "rust", "--forge", "github", "--target", &path,
@@ -577,7 +575,7 @@ fn init_json_emits_one_object_and_nothing_else() {
     for (mode, extra) in [("preview", None), ("apply", Some("--apply"))] {
         let mut cmd = rk();
         cmd.args(["init", "--tech", "rust", "--forge", "github"])
-            .args(["--repo", "acme/widget", "--scopes", "api,cli", "--target"])
+            .args(["--repo", "acme/widget", "--target"])
             .arg(target.path());
         if let Some(flag) = extra {
             cmd.arg(flag);
@@ -613,7 +611,7 @@ fn init_json_failure_is_a_diagnostic_on_stderr() {
     std::fs::write(&workflow, "something local\n").expect("the conflict file writes");
     let output = rk()
         .args(["init", "--tech", "rust", "--forge", "github"])
-        .args(["--repo", "acme/widget", "--scopes", "api,cli", "--target"])
+        .args(["--repo", "acme/widget", "--target"])
         .arg(target.path())
         .args(["--apply", "--json"])
         .assert()
@@ -2148,11 +2146,9 @@ fn the_routing_block_reads_as_plain_prose() {
         release_kit::landing::Workflow::Worktree,
         release_kit::landing::Workflow::Branches,
     ] {
-        let scopes = release_kit::landing::parse_scopes("api,cli").expect("the scopes parse");
         let rendered = release_kit::landing::render(
             release_kit::landing::routing_block(workflow).as_bytes(),
             "acme/widget",
-            &scopes,
             None,
         );
         let text = String::from_utf8(rendered).expect("the block is text");
@@ -4794,15 +4790,15 @@ fn a_landing_writes_the_record_with_its_identity() {
         .success()
         .stdout(predicate::str::contains("wrote .release-kit/manifest.json"));
     let manifest = read_manifest(target.path());
-    assert_eq!(manifest["schema_version"], 4);
+    assert_eq!(manifest["schema_version"], 5);
     assert_eq!(manifest["rk_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(manifest["origin"], "init");
     assert_eq!(manifest["tech"], "rust");
     assert_eq!(manifest["forge"], "github");
     assert_eq!(manifest["parameters"]["repo"], "acme/widget");
-    assert_eq!(
-        manifest["parameters"]["scopes"],
-        serde_json::json!(["api", "cli"])
+    assert!(
+        manifest["parameters"]["scopes"].is_null(),
+        "the record carries no scope vocabulary"
     );
     assert_eq!(
         manifest["parameters"]["style"], "trunk",
@@ -4875,7 +4871,7 @@ fn the_routing_block_splices_and_is_recorded() {
     assert!(agents.contains("rk method invariants"));
     assert!(agents.contains("guides and never drives"));
     assert!(
-        agents.contains("the scopes this project accepts are `api,cli`"),
+        agents.contains("the title check holds it to lowercase letters, digits, and `_ . / -`"),
         "{agents}"
     );
     assert!(agents.trim_end().ends_with("<!-- END release-kit -->"));
@@ -4908,7 +4904,11 @@ fn the_hook_block_splices_and_lands_whole_and_refuses_reposless() {
         config.contains("- id: own-hook"),
         "the target's hooks survive"
     );
-    assert!(config.contains("--scopes, 'api,cli'"), "{config}");
+    assert!(
+        config.contains("args: [--strict, --force-scope]"),
+        "{config}"
+    );
+    assert!(!config.contains("--scopes"), "{config}");
     for hook in [
         "conventional-pre-commit",
         "rk-message",
@@ -5009,7 +5009,7 @@ fn a_duplicated_hook_block_is_drift_everywhere() {
     std::fs::remove_file(target.path().join(".github/workflows/release-plz.yml"))
         .expect("the workflow removes");
     rk().args([
-        "adopt", "--tech", "rust", "--forge", "github", "--scopes", "api,cli", "--style", "trunk",
+        "adopt", "--tech", "rust", "--forge", "github", "--style", "trunk",
     ])
     .args(["--repo", "acme/widget", "--target"])
     .arg(target.path())
@@ -5070,24 +5070,6 @@ fn a_reposless_hook_file_conflicts_a_legacy_upgrade_before_any_write() {
                 .iter()
                 .all(|file| file["destination"] != ".pre-commit-config.yaml")),
         "a refused upgrade must not rewrite the record"
-    );
-}
-
-/// An apply without `--scopes` refuses naming the flag: the scope
-/// vocabulary is a decision, not a default.
-#[test]
-fn init_apply_without_scopes_refuses_naming_the_flag() {
-    let target = tempfile::tempdir().expect("a scratch dir exists");
-    rk().args(["init", "--tech", "rust", "--forge", "github"])
-        .args(["--repo", "acme/widget", "--target"])
-        .arg(target.path())
-        .arg("--apply")
-        .assert()
-        .code(64)
-        .stderr(predicate::str::contains("--scopes"));
-    assert!(
-        !target.path().join(".release-kit").exists(),
-        "a refused landing writes nothing"
     );
 }
 
@@ -5514,8 +5496,7 @@ fn a_matching_target_adopts_writing_only_the_manifest() {
     let adopt = |apply: bool| {
         let mut cmd = rk();
         cmd.args([
-            "adopt", "--tech", "rust", "--forge", "github", "--scopes", "api,cli", "--style",
-            "trunk",
+            "adopt", "--tech", "rust", "--forge", "github", "--style", "trunk",
         ])
         .args([
             "--workflow",
@@ -5540,9 +5521,9 @@ fn a_matching_target_adopts_writing_only_the_manifest() {
     let manifest = read_manifest(target.path());
     assert_eq!(manifest["origin"], "adopt");
     assert_eq!(manifest["parameters"]["repo"], "acme/widget");
-    assert_eq!(
-        manifest["parameters"]["scopes"],
-        serde_json::json!(["api", "cli"])
+    assert!(
+        manifest["parameters"]["scopes"].is_null(),
+        "the record carries no scope vocabulary"
     );
     assert_eq!(
         tree_digests(target.path())
@@ -5582,7 +5563,7 @@ fn an_edited_rendered_file_refuses_adoption_listing_every_mismatch() {
     std::fs::write(&agents, block).expect("the block edit writes");
 
     rk().args([
-        "adopt", "--tech", "rust", "--forge", "github", "--scopes", "api,cli", "--style", "trunk",
+        "adopt", "--tech", "rust", "--forge", "github", "--style", "trunk",
     ])
     .args(["--repo", "acme/widget", "--target"])
     .arg(target.path())
@@ -5611,7 +5592,7 @@ fn a_differing_seeded_file_adopts_with_both_digests() {
     .expect("the tune writes");
 
     rk().args([
-        "adopt", "--tech", "rust", "--forge", "github", "--scopes", "api,cli", "--style", "trunk",
+        "adopt", "--tech", "rust", "--forge", "github", "--style", "trunk",
     ])
     .args([
         "--workflow",
@@ -5649,7 +5630,7 @@ fn a_missing_expected_file_refuses_adoption() {
     std::fs::remove_file(target.path().join("dist-workspace.toml")).expect("the file removes");
 
     rk().args([
-        "adopt", "--tech", "rust", "--forge", "github", "--scopes", "api,cli", "--style", "trunk",
+        "adopt", "--tech", "rust", "--forge", "github", "--style", "trunk",
     ])
     .args(["--repo", "acme/widget", "--target"])
     .arg(target.path())
@@ -5675,7 +5656,7 @@ fn an_agents_file_without_the_block_refuses_naming_the_block() {
     .expect("the rewrite writes");
 
     rk().args([
-        "adopt", "--tech", "rust", "--forge", "github", "--scopes", "api,cli", "--style", "trunk",
+        "adopt", "--tech", "rust", "--forge", "github", "--style", "trunk",
     ])
     .args(["--repo", "acme/widget", "--target"])
     .arg(target.path())
@@ -5694,7 +5675,7 @@ fn an_existing_record_refuses_adoption_naming_upgrade() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
     land_rust(target.path()).success();
     rk().args([
-        "adopt", "--tech", "rust", "--forge", "github", "--scopes", "api,cli", "--style", "trunk",
+        "adopt", "--tech", "rust", "--forge", "github", "--style", "trunk",
     ])
     .args(["--repo", "acme/widget", "--target"])
     .arg(target.path())
@@ -7620,7 +7601,7 @@ fn this_repos_own_record_carries_every_rust_pin() {
 /// Land the rust payload under one explicit workflow mode.
 fn land_rust_with_workflow(target: &Path, workflow: &str) -> assert_cmd::assert::Assert {
     rk().args(["init", "--tech", "rust", "--forge", "github"])
-        .args(["--repo", "acme/widget", "--scopes", "api,cli", "--workflow"])
+        .args(["--repo", "acme/widget", "--workflow"])
         .arg(workflow)
         .args(["--target"])
         .arg(target)
@@ -7696,7 +7677,7 @@ fn adopt_records_the_branches_workflow_by_default() {
     land_rust_with_workflow(target.path(), "branches").success();
     std::fs::remove_dir_all(target.path().join(".release-kit")).expect("the record removes");
     rk().args([
-        "adopt", "--tech", "rust", "--forge", "github", "--scopes", "api,cli", "--style", "trunk",
+        "adopt", "--tech", "rust", "--forge", "github", "--style", "trunk",
     ])
     .args(["--repo", "acme/widget", "--target"])
     .arg(target.path())
@@ -7721,8 +7702,7 @@ fn adopt_refuses_a_target_whose_blocks_do_not_match_the_selected_candidate() {
         let before = tree_digests(target.path());
         let output = rk()
             .args([
-                "adopt", "--tech", "rust", "--forge", "github", "--scopes", "api,cli", "--style",
-                "trunk",
+                "adopt", "--tech", "rust", "--forge", "github", "--style", "trunk",
             ])
             .args(["--workflow", selected, "--repo", "acme/widget", "--target"])
             .arg(target.path())
@@ -7824,7 +7804,7 @@ fn an_upgrade_migrates_a_schema_1_record_to_the_current_schema() {
         .assert()
         .success();
     let migrated = read_manifest(target.path());
-    assert_eq!(migrated["schema_version"], 4);
+    assert_eq!(migrated["schema_version"], 5);
     assert_eq!(migrated["parameters"]["workflow"], "branches");
     assert_eq!(migrated["parameters"]["style"], "trunk");
     let hooks = std::fs::read_to_string(target.path().join(".pre-commit-config.yaml"))
@@ -7833,6 +7813,86 @@ fn an_upgrade_migrates_a_schema_1_record_to_the_current_schema() {
         !hooks.contains("rk-worktree-location"),
         "a pre-mode record reads as branches, so no guard is imposed: {hooks}"
     );
+}
+
+/// SATISFIES landing:a-rendered-file-is-reproducible
+/// A schema-4 target carries a scope vocabulary this binary renders
+/// nowhere. The upgrade drops the parameter, and the re-rendered gates
+/// carry the shape in its place: the title check by its regular
+/// expression, the commit hook by requiring a scope and naming no list.
+#[test]
+fn an_upgrade_drops_the_recorded_scope_vocabulary() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+    let mut manifest = read_manifest(target.path());
+    manifest["schema_version"] = serde_json::json!(4);
+    manifest
+        .get_mut("parameters")
+        .and_then(serde_json::Value::as_object_mut)
+        .expect("a parameters object")
+        .insert(
+            "scopes".to_owned(),
+            serde_json::json!(["api", "cli", "guides/release"]),
+        );
+    write_manifest(target.path(), &manifest);
+
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+
+    let migrated = read_manifest(target.path());
+    assert_eq!(migrated["schema_version"], 5);
+    assert!(
+        migrated["parameters"]["scopes"].is_null(),
+        "the vocabulary leaves the record: {migrated}"
+    );
+    let title = std::fs::read_to_string(target.path().join(".github/workflows/pr-title.yml"))
+        .expect("the title check reads");
+    assert!(title.contains("[a-z0-9._/-]+"), "{title}");
+    assert!(!title.contains("api|cli"), "{title}");
+    let hooks = std::fs::read_to_string(target.path().join(".pre-commit-config.yaml"))
+        .expect("the hook file reads");
+    assert!(hooks.contains("args: [--strict, --force-scope]"), "{hooks}");
+    assert!(!hooks.contains("--scopes"), "{hooks}");
+}
+
+/// SATISFIES landing:the-landed-guards-hold-the-message-content
+/// The desk judges the shape the forge judges: a scope outside the shape
+/// fails `rk message --check` before the commit lands, and a scope inside
+/// it passes whether or not any other commit has ever used the word.
+#[test]
+fn message_check_holds_the_scope_to_the_shape() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    let message = target.path().join("COMMIT_EDITMSG");
+
+    std::fs::write(&message, "docs(Specs Ugly): split the ranking rules\n")
+        .expect("the message writes");
+    rk().args(["message", "--check", "--target"])
+        .arg(target.path())
+        .arg(&message)
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("scope-shape:1"));
+
+    // A scope no recorded list would have carried, and no landing had to
+    // be re-rendered for it.
+    std::fs::write(&message, "docs(record/ids): correct the counter reset\n")
+        .expect("the message writes");
+    rk().args(["message", "--check", "--target"])
+        .arg(target.path())
+        .arg(&message)
+        .assert()
+        .success();
+
+    // The bot's own request carries no scope and is judged by its title
+    // shape alone, exactly as the landed title check judges it.
+    std::fs::write(&message, "chore: release v1.2.3\n").expect("the message writes");
+    rk().args(["message", "--check", "--target"])
+        .arg(target.path())
+        .arg(&message)
+        .assert()
+        .success();
 }
 
 /// SATISFIES landing:an-upgrade-refuses-on-owned-drift
@@ -9823,15 +9883,7 @@ fn init_renders_the_recorded_style_into_the_release_workflow() {
 
     let lines = tempfile::tempdir().expect("a scratch dir exists");
     rk().args(["init", "--tech", "rust", "--forge", "github"])
-        .args([
-            "--repo",
-            "acme/widget",
-            "--scopes",
-            "api,cli",
-            "--style",
-            "lines",
-            "--target",
-        ])
+        .args(["--repo", "acme/widget", "--style", "lines", "--target"])
         .arg(lines.path())
         .arg("--apply")
         .assert()
@@ -10113,7 +10165,7 @@ fn adopt_preview_replays_a_complete_apply_command() {
     land_rust(target.path()).success();
     std::fs::remove_dir_all(target.path().join(".release-kit")).expect("the record removes");
     rk().args([
-        "adopt", "--tech", "rust", "--forge", "github", "--scopes", "api,cli", "--style", "trunk",
+        "adopt", "--tech", "rust", "--forge", "github", "--style", "trunk",
     ])
     .args([
         "--workflow",
@@ -10128,7 +10180,6 @@ fn adopt_preview_replays_a_complete_apply_command() {
     .stdout(
         predicate::str::contains("--tech rust")
             .and(predicate::str::contains("--repo acme/widget"))
-            .and(predicate::str::contains("--scopes api,cli"))
             .and(predicate::str::contains("--workflow worktree"))
             .and(predicate::str::contains("--style trunk")),
     );
@@ -10189,7 +10240,7 @@ fn seed_crate(target: &Path) {
 /// Land the rust payload with the Nix capability opted in.
 fn land_rust_nix(target: &Path) -> assert_cmd::assert::Assert {
     rk().args(["init", "--tech", "rust", "--forge", "github"])
-        .args(["--repo", "acme/widget", "--scopes", "api,cli", "--nix"])
+        .args(["--repo", "acme/widget", "--nix"])
         .arg("--target")
         .arg(target)
         .arg("--apply")
@@ -10274,7 +10325,7 @@ fn a_target_with_its_own_flake_keeps_it_and_the_pair_is_withheld() {
     let own_flake = "{ description = \"the target's own\"; }\n";
     std::fs::write(target.path().join("flake.nix"), own_flake).expect("the flake writes");
     rk().args(["init", "--tech", "rust", "--forge", "github"])
-        .args(["--repo", "acme/widget", "--scopes", "api,cli", "--nix"])
+        .args(["--repo", "acme/widget", "--nix"])
         .arg("--target")
         .arg(target.path())
         .assert()
@@ -10464,7 +10515,7 @@ fn an_adoption_records_the_nix_parameter() {
     std::fs::remove_file(target.path().join(".release-kit/manifest.json"))
         .expect("the record removes");
     rk().args(["adopt", "--tech", "rust", "--forge", "github"])
-        .args(["--repo", "acme/widget", "--scopes", "api,cli"])
+        .args(["--repo", "acme/widget"])
         .args(["--workflow", "worktree", "--style", "trunk", "--nix"])
         .arg("--apply")
         .arg("--target")

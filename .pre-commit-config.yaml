@@ -11,7 +11,7 @@ repos:
     hooks:
       - id: conventional-pre-commit
         stages: [commit-msg]
-        args: [--strict, --force-scope, --scopes, 'bindings,ci,cli,deps,distribution,docs,forges,guides,guides/release,instance,landing,method,output,runbooks,setup,skills,snippets']
+        args: [--strict, --force-scope]
   - repo: local
     hooks:
       - id: rk-message

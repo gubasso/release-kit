@@ -88,7 +88,8 @@ This repository is the canonical knowledge product for the release-kit workflow.
 - Work reaches the trunk only through a squash-merged pull request from a short-lived branch. The branch name is `<type>/<slug>`, whose type matches the squash title's type, or the forge-minted `<issue-id>-<slug>`. Nothing is committed on `master`.
 - This project works in worktrees: every code-changing branch lives in its linked worktree (`rk worktree add <branch>` creates or adopts it beside the checkout), the main checkout commits nothing, and `rk worktree prune` retires a merged worktree. One branch, one writer.
 - The request's title becomes the trunk's commit message, so it MUST be a scoped Conventional Commit. The body carries the context and lands with it. The body names no internal planning artifact and carries no agent attribution. The landed rk-message hook, the forge's body check, and the observed body source hold that rule.
-- Every commit follows the same scoped convention. The landed commit-msg hook enforces it, and the scopes this project accepts are `bindings,ci,cli,deps,distribution,docs,forges,guides,guides/release,instance,landing,method,output,runbooks,setup,skills,snippets`.
+- Every commit follows the same scoped convention. The landed commit-msg hook requires a scope on every one, and the title check holds it to lowercase letters, digits, and `_ . / -`.
+- The scope names the area you changed, and reads as `area/subarea` where that is clearer. Prefer a scope this repository already uses, which `git log --format=%s | sed -n 's/^[a-z]*(\([^)]*\)).*/\1/p' | sort -u` lists. Coin a new scope only where no existing one names the area.
 - Never author a tag, and never hand-edit a generated artifact workflow.
 - Run `rk status` before changing anything under `.github/workflows/` or `.gitlab-ci.yml`, or any file `.release-kit/manifest.json` names.
 - The full method is `rk method --list`. The recovery paths are `rk method recovery`.

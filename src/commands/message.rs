@@ -1,7 +1,7 @@
 //! `rk message`: the content guards over a commit message, a title, or a
 //! request body.
 //!
-//! Two classes of finding, declared in `blocks/message-guards`:
+//! Two classes of finding are declared in `blocks/message-guards`:
 //! attribution an agent left in the text, and a reference to a path the
 //! target repository ignores — an internal artifact that would leak into
 //! the permanent record. The release bot's request is exempt from the
@@ -11,6 +11,12 @@
 //! them by hand — the binary carries no regex engine — and a unit test
 //! pins the file to the set the matchers cover, so a pattern edit and its
 //! matcher move together.
+//!
+//! A third class is a shape rather than a forbidden pattern, so it lives
+//! here and not in the guard file: a subject whose scope falls outside
+//! [`landing::SCOPE_SHAPE`]. The landed `conventional-pre-commit` hook
+//! requires a scope but takes no pattern for it, so without this class a
+//! scope the forge's title check rejects passes at the desk.
 
 use std::io::Read as _;
 use std::io::Write as _;
@@ -21,6 +27,7 @@ use serde::Serialize;
 use crate::cli::message::{MessageArgs, MessageKind};
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
+use crate::landing;
 use crate::output::Output;
 
 /// The guard patterns, verbatim: `blocks/message-guards`.
@@ -29,7 +36,7 @@ static GUARDS: &str = include_str!("../../blocks/message-guards");
 /// One finding.
 #[derive(Debug, Serialize)]
 struct Finding {
-    /// `attribution` or `internal-path`.
+    /// `attribution`, `internal-path`, or `scope-shape`.
     class: &'static str,
     /// The 1-based line the finding sits on.
     line: usize,
@@ -75,6 +82,21 @@ pub fn run(args: &MessageArgs) -> Result<(), RkError> {
                 line: index + 1,
                 detail,
             }));
+        }
+    }
+    // The subject is line 1 of a commit message and of a title; a body's
+    // title is context passed beside it, and its findings would carry no
+    // line the reader can open.
+    if matches!(args.kind, MessageKind::Commit | MessageKind::Title) && !exempt {
+        if let Some(scope) = misshapen_scope(title) {
+            findings.push(Finding {
+                class: "scope-shape",
+                line: 1,
+                detail: format!(
+                    "the scope '{scope}' is outside {}: lowercase letters, digits, and _ . / -",
+                    landing::SCOPE_SHAPE
+                ),
+            });
         }
     }
     let mut seen: std::collections::BTreeSet<(usize, String)> = std::collections::BTreeSet::new();
@@ -147,7 +169,7 @@ pub fn run(args: &MessageArgs) -> Result<(), RkError> {
                     if count == 1 { "" } else { "s" }
                 ),
             )
-            .expected("no agent attribution and no reference to a git-ignored path")
+            .expected("no agent attribution, no reference to a git-ignored path, and a scope the title check admits")
             .action("reword the text; the findings above name each line"),
         ));
     }
@@ -193,6 +215,30 @@ fn bot_title(title: &str) -> bool {
             .strip_prefix(stem)
             .is_some_and(|tail| !tail.is_empty())
     })
+}
+
+/// The subject's scope where it falls outside [`landing::SCOPE_SHAPE`],
+/// or `None`.
+///
+/// The scope is what sits between the parentheses of a `type(scope):`
+/// subject, with the breaking `!` outside them. A subject carrying no
+/// scope at all returns `None`: requiring one is the landed
+/// `conventional-pre-commit` hook's job, and this class judges the shape
+/// of a scope that is there.
+fn misshapen_scope(title: &str) -> Option<String> {
+    let (kind, rest) = title.split_once('(')?;
+    if kind.is_empty() || !kind.chars().all(|c| c.is_ascii_alphabetic()) {
+        return None;
+    }
+    let (scope, rest) = rest.split_once(')')?;
+    if !(rest.starts_with(':') || rest.starts_with("!:")) {
+        return None;
+    }
+    let shaped = !scope.is_empty()
+        && scope.chars().all(|c| {
+            c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '.' | '/' | '-')
+        });
+    (!shaped).then(|| scope.to_owned())
 }
 
 /// Every attribution match on one line, as the matched fragment.

@@ -379,7 +379,6 @@ fn observe_parameter_drift(manifest: &Manifest, observed: &mut Observed) {
         let candidate = landing::render(
             template.as_bytes(),
             &manifest.parameters.repo,
-            &manifest.parameters.scopes,
             manifest.parameters.style,
         );
         if Digest::of(&candidate) != record.sha256 {
@@ -408,7 +407,6 @@ fn observe_record_set(
         &manifest.tech,
         &manifest.forge,
         &manifest.parameters.repo,
-        &manifest.parameters.scopes,
         manifest.parameters.workflow,
         manifest.parameters.style,
         manifest.parameters.nix,

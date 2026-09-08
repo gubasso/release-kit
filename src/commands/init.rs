@@ -108,46 +108,26 @@ pub fn run(args: &InitArgs) -> Result<(), RkError> {
     let style = Style::parse(&args.style)?;
     if args.apply {
         let repo = resolved.repo.ok_or_else(landing::repo_unresolved)?;
-        let scopes = landing::parse_scopes(args.scopes.as_deref().ok_or_else(|| {
-            RkError::Usage(
-                "an apply renders the scope-bearing files; pass --scopes <list>, the Conventional Commit scopes this project accepts".into(),
-            )
-        })?)?;
-        let mut entries = landing::projection(
-            &args.tech,
-            &forge,
-            &repo,
-            &scopes,
-            workflow,
-            Some(style),
-            args.nix,
-        )?;
+        let mut entries =
+            landing::projection(&args.tech, &forge, &repo, workflow, Some(style), args.nix)?;
         let withheld = landing::withhold_nix(&args.target, args.nix, None, &mut entries)?;
         apply(
-            out, args, &forge, &repo, &scopes, workflow, style, &entries, withheld,
+            out, args, &forge, &repo, workflow, style, &entries, withheld,
         )
     } else {
         // A preview lists destinations and compares nothing, so an
         // unresolved repository only means the owner substitution is
-        // shown unrendered; the placeholder substitutes to itself, and an
-        // absent scope list leaves the scope tokens standing.
+        // shown unrendered: the placeholder substitutes to itself.
         if resolved.repo.is_none() {
             out.frame(
                 "note: no repository detected; an apply derives the owner from --repo <path>",
             );
         }
         let repo = resolved.repo;
-        let scopes = args
-            .scopes
-            .as_deref()
-            .map(landing::parse_scopes)
-            .transpose()?
-            .unwrap_or_default();
         let mut entries = landing::projection(
             &args.tech,
             &forge,
             repo.as_deref().unwrap_or("OWNER"),
-            &scopes,
             workflow,
             Some(style),
             args.nix,
@@ -172,10 +152,9 @@ fn preview(
     withheld: Vec<landing::Withheld>,
 ) -> Result<(), RkError> {
     let repo_argument = repo.as_deref().unwrap_or("<owner/name>");
-    let scopes_argument = args.scopes.as_deref().unwrap_or("<scope,scope>");
     let nix_flag = if args.nix { " --nix" } else { "" };
     let next = vec![format!(
-        "rk init --tech {} --forge {forge} --repo {repo_argument} --scopes {scopes_argument} --workflow {} --style {}{nix_flag} --target {} --apply",
+        "rk init --tech {} --forge {forge} --repo {repo_argument} --workflow {} --style {}{nix_flag} --target {} --apply",
         args.tech,
         workflow.as_str(),
         style.as_str(),
@@ -225,7 +204,6 @@ fn apply(
     args: &InitArgs,
     forge: &str,
     repo: &str,
-    scopes: &[String],
     workflow: Workflow,
     style: Style,
     entries: &[Entry],
@@ -294,7 +272,6 @@ fn apply(
             landed_at: manifest::now(),
             parameters: Parameters {
                 repo: repo.to_owned(),
-                scopes: scopes.to_vec(),
                 workflow,
                 style: Some(style),
                 nix: args.nix,
