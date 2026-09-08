@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4](https://github.com/gubasso/release-kit/compare/v0.3.3...v0.3.4) - 2026-09-08
+
+### Other
+
+- *(bindings/rust)* name the trade the generated release.yml forces ([#109](https://github.com/gubasso/release-kit/pull/109))
+- *(landing)* take the record to the version that shipped ([#108](https://github.com/gubasso/release-kit/pull/108))
+
 ## [0.3.3](https://github.com/gubasso/release-kit/compare/v0.3.2...v0.3.3) - 2026-09-08
 
 ### Fixed
