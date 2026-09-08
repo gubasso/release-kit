@@ -29,6 +29,7 @@ The binary is `rk`.
 - Check the host and load the whole surface: `rk doctor` and `rk usage`.
 - Install the agent skills at user scope: `rk skill install` previews; `--apply` writes `~/.claude/skills/` and `~/.agents/skills/`, plus what they share at `~/.local/state/release-kit/skills/shared/`.
 - Follow the recipe: `rk guide setup` once per repository, `rk guide release` for every release, `rk guide backport` for a fix crossing to an older line, `rk guide release-lines` for the line's own life.
+- Start work an issue names: `rk issue start <issue>` previews; `--apply` mints the branch at the forge and seats it, with `rk guide issue` as the procedure.
 - Execute the repository-side setup: `rk setup --target .` previews; `--apply` runs; `rk setup check` proves it.
 - Read a forge's specifics: `rk forge github` or `rk forge gitlab`.
 - Audit what a setup run did: `rk runs list` and `rk runs show <id>`.

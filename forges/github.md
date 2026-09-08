@@ -139,7 +139,7 @@ One caveat remains, on the write alone: adding a repository an existing installa
 | List open release requests           | `gh pr list --base <branch> --state open`                                         |
 | Merge the release request            | `gh pr merge --squash --delete-branch`                                            |
 | Wait on checks                       | `gh pr checks --watch`                                                            |
-| Create the branch for an issue       | `gh issue develop <issue> --checkout`                                             |
+| Create the branch for an issue       | `gh issue develop <issue>`; `--checkout` seats it in the main checkout            |
 | List the branches an issue links     | `gh issue develop --list <issue>`                                                 |
 | Wait on a build                      | `gh run watch --exit-status`                                                      |
 | Find the merged request for a commit | `gh api /repos/{owner}/{repo}/commits/{sha}/pulls`                                |
