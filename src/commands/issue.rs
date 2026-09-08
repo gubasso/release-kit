@@ -112,8 +112,15 @@ struct Ground {
     forge: Forge,
     /// The project path.
     repo: String,
-    /// The forge host, from the clone's remote or from the reference.
-    host: Option<String>,
+    /// The API host to name explicitly, where one has to be named.
+    ///
+    /// The reference's host alone, because an issue URL is a web address
+    /// and its host is the instance. A remote's host is a transport
+    /// host, which a self-managed instance may serve under a separate
+    /// name — `git@ssh.example.com` for `example.com` — so naming it
+    /// would send the API calls somewhere the forge CLI already resolves
+    /// correctly from the working directory.
+    api_host: Option<String>,
     /// The mode the seat follows.
     workflow: Workflow,
     /// Where the mode came from, for the report.
@@ -289,7 +296,7 @@ fn ground(
     Ok(Ground {
         forge,
         repo,
-        host: detected.host.or_else(|| reference.host.clone()),
+        api_host: reference.host.clone(),
         workflow,
         workflow_source,
     })
@@ -331,7 +338,7 @@ fn start(
             forge: ground.forge,
             repo: &ground.repo,
             reference: &reference,
-            host: ground.host.as_deref(),
+            host: ground.api_host.as_deref(),
             base: overrides.base,
             apply,
             seatable: &seatable,

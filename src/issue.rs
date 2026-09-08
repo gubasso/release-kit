@@ -472,11 +472,14 @@ pub struct Ask<'a> {
     pub reference: &'a Reference,
     /// The remote branch a new branch starts from.
     pub base: Option<&'a str>,
-    /// The forge host, from the clone's remote or from the reference.
+    /// The API host to name explicitly, where one has to be named.
     ///
-    /// `glab api` otherwise picks its host from the working directory
-    /// and falls back to gitlab.com, so a clone with no remote could
-    /// write to a host neither the operator nor the reference named.
+    /// `glab api` resolves its host from the working directory and falls
+    /// back to gitlab.com, which is right for a clone whose remote it
+    /// can read and wrong for one with no remote: there, a self-managed
+    /// issue URL would be acted on at gitlab.com. So this carries the
+    /// reference's host and not the remote's — a remote names a
+    /// transport host, which an instance may serve under another name.
     pub host: Option<&'a str>,
     /// Whether to write, at the forge and afterwards.
     pub apply: bool,

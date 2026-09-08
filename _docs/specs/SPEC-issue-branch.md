@@ -74,7 +74,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `issue-branch:a-name-that-does-not-link-is-refused` — A name that does not link is refused
 
-Where a forge links a branch to an issue by name, the verb MUST refuse a rendered name the forge would not link, rather than create it and report a link that does not exist. The verb MUST act on the host the clone's remote names or, where that names none, the host the reference names. Where its calls can be directed at that host, they MUST name it rather than let the tool infer one; where they cannot, the verb MUST refuse rather than act on a default.
+Where a forge links a branch to an issue by name, the verb MUST refuse a rendered name the forge would not link, rather than create it and report a link that does not exist. The verb MUST act on the instance the clone's remote or the reference names. Where the clone names no remote and the reference names a host, its calls MUST carry that host, because a forge CLI left to its own default would act on a different instance. Where the remote names it, the calls MUST leave the forge CLI's own resolution alone, because a remote is a transport address an instance may serve under another name. A forge whose calls can carry no host MUST be refused rather than acted on at a default.
 
 #### Scenario: A template renders an admissible name with the wrong prefix
 

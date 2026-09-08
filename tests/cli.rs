@@ -16820,18 +16820,26 @@ fn every_gitlab_call_names_the_host_the_reference_gave() {
     assert!(log.lines().any(|line| line.starts_with("api")), "{log}");
 }
 
-/// The host the clone's own remote names wins, and it reaches the CLI
-/// explicitly rather than through the working directory.
+/// A clone whose remote the CLI can read names no host: the remote is a
+/// transport address, and an instance may serve it under a name other
+/// than its own — `git@ssh.example.com` for `example.com`. Naming it
+/// would send the API calls past the mapping the CLI already holds.
 #[test]
-fn a_gitlab_clone_names_its_own_host_on_every_call() {
-    let (_parent, repo) = gitlab_fixture();
-    let (mock, glab) = mock_forge("glab", GLAB_ISSUE_MOCK);
-    gitlab_answers(mock.path(), None, false);
-    gitlab_start(&repo, &glab, mock.path(), &[])
-        .assert()
-        .success();
-    let log = mock_log(mock.path());
-    for line in log.lines().filter(|line| line.starts_with("api")) {
-        assert!(line.contains("--hostname gitlab.com"), "{line}");
+fn a_gitlab_clone_leaves_its_own_host_to_the_cli() {
+    for origin in [
+        "https://gitlab.com/acme/widget.git",
+        "git@ssh.gitlab.example.com:acme/widget.git",
+    ] {
+        let (_parent, repo) = fixture_with_origin(origin);
+        let (mock, glab) = mock_forge("glab", GLAB_ISSUE_MOCK);
+        gitlab_answers(mock.path(), None, false);
+        gitlab_start(&repo, &glab, mock.path(), &["--forge", "gitlab"])
+            .assert()
+            .success();
+        let log = mock_log(mock.path());
+        assert!(
+            !log.contains("--hostname"),
+            "{origin}: the CLI resolves its own host here: {log}"
+        );
     }
 }

@@ -56,7 +56,7 @@ Verified 2026-09-08 against `gh issue develop --help` on gh 2.99.0 and `https://
 
 ## GitLab CLI, on the host it calls
 
-Verified 2026-09-08 against `glab api --help` on glab 1.114.0 and `https://docs.gitlab.com/cli/api/`. Where the working directory is a Git directory, `glab api` uses the GitLab authenticated host there; otherwise it uses gitlab.com. `--hostname` overrides both. Bearing: this verb passes `--hostname` on every GitLab call where the clone's remote or the issue reference names a host, so the project it acts on is the one that was named rather than one the working directory implied. A clone with no remote, reached through a self-managed issue URL, would otherwise have been acted on at gitlab.com.
+Verified 2026-09-08 against `glab api --help` on glab 1.114.0 and `https://docs.gitlab.com/cli/api/`. Where the working directory is a Git directory, `glab api` uses the GitLab authenticated host there; otherwise it uses gitlab.com. `--hostname` overrides both. `--hostname` names the GitLab instance, and `--ssh-hostname` is a separate setting for an instance whose SSH endpoint differs from it. Bearing: this verb passes `--hostname` for a host an issue URL named, because a URL's host is the instance and a clone with no remote would otherwise be acted on at gitlab.com. It passes nothing for a host read from a git remote, because a remote names a transport endpoint an instance may serve under another name, and the CLI's own resolution from the working directory already maps it.
 
 ## GitLab, on creating a branch
 
