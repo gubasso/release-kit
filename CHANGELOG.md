@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3](https://github.com/gubasso/release-kit/compare/v0.3.2...v0.3.3) - 2026-09-08
+
+### Fixed
+
+- *(snippets)* mint each app token with the permissions its job needs ([#102](https://github.com/gubasso/release-kit/pull/102))
+
+### Other
+
+- *(ci)* audit the workflows this project ships and the ones it runs ([#106](https://github.com/gubasso/release-kit/pull/106))
+
 ## [0.3.2](https://github.com/gubasso/release-kit/compare/v0.3.1...v0.3.2) - 2026-09-08
 
 ### Added
