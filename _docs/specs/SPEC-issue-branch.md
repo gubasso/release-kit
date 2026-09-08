@@ -110,13 +110,19 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `issue-branch:a-reference-must-agree-with-the-clone` — A reference must agree with the clone
 
-If an issue reference names a project or a host that disagrees with the target's own remote, then the run MUST refuse before any forge call.
+If an issue reference names a project or a host that disagrees with the target's own remote, then the run MUST refuse before any forge call. The comparison is textual and MUST stay so, because this check runs before the forge-CLI gate precisely so that a wrong clone costs one local read. Where that refuses a reference an instance would have accepted, the message MUST name the issue number as the remedy.
 
 #### Scenario: An issue URL from another project
 
 - GIVEN a clone whose origin is one project, and an issue URL naming another
 - WHEN `rk issue start <url>` runs
 - THEN the run refuses as a usage error naming both projects, because the branch would otherwise be minted on one project and seated in another
+
+#### Scenario: An instance served under a separate SSH endpoint
+
+- GIVEN a clone whose origin is `git@ssh.example.com:acme/widget.git` on an instance whose web host is `example.com`
+- WHEN `rk issue start https://example.com/acme/widget/-/issues/57` runs
+- THEN the run refuses and names the issue number as the way through, because resolving the two names to one instance would mean asking the forge before this check has decided whether to ask it at all
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 

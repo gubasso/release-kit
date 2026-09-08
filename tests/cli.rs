@@ -16843,3 +16843,39 @@ fn a_gitlab_clone_leaves_its_own_host_to_the_cli() {
         );
     }
 }
+
+/// The two hosts are compared as they are written, so an instance served
+/// under a separate SSH endpoint refuses its own web URL. The refusal is
+/// safe and the remedy is the issue number, which the message names.
+#[test]
+fn an_ssh_alias_clone_refuses_its_web_url_and_names_the_remedy() {
+    let (_parent, repo) = fixture_with_origin("git@ssh.gitlab.example.com:acme/widget.git");
+    let out = rk_scrubbed()
+        .args([
+            "issue",
+            "start",
+            "https://gitlab.example.com/acme/widget/-/issues/57",
+        ])
+        .args(["--forge", "gitlab", "--target"])
+        .arg(&repo)
+        .env("RK_GLAB_BIN", "/no/such/glab")
+        .assert()
+        .code(64)
+        .get_output()
+        .stderr
+        .clone();
+    let text = String::from_utf8_lossy(&out).into_owned();
+    assert!(text.contains("pass the issue number instead"), "{text}");
+
+    // And the issue number is accepted, so the remedy the message names
+    // actually works.
+    let (mock, glab) = mock_forge("glab", GLAB_ISSUE_MOCK);
+    gitlab_answers(mock.path(), None, false);
+    rk_scrubbed()
+        .args(["issue", "start", "57", "--forge", "gitlab", "--target"])
+        .arg(&repo)
+        .env("RK_GLAB_BIN", &glab)
+        .env("RK_MOCK_DIR", mock.path())
+        .assert()
+        .success();
+}

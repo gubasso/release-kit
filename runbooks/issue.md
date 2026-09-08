@@ -9,7 +9,7 @@ rk issue start <issue>
 # check: the report names the issue, the branch, and the seat, and says nothing was touched
 ```
 
-`<issue>` is a number, `#<number>`, or the issue's URL. A URL naming another project refuses before any call, because the branch would be minted on one project and seated in another. `--forge` and `--repo` fill in what detection could not read; either one contradicting the clone's own remote refuses for the same reason.
+`<issue>` is a number, `#<number>`, or the issue's URL. A URL naming another project refuses before any call, because the branch would be minted on one project and seated in another. The hosts are compared as they are written, so an instance served under a separate SSH endpoint — `git@ssh.example.com` for `example.com` — refuses its own web URL: pass the issue number there, which names the same issue and asks no question about hosts. `--forge` and `--repo` fill in what detection could not read; either one contradicting the clone's own remote refuses for the same reason.
 
 ## 2. Read the report
 
