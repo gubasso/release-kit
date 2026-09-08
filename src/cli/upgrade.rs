@@ -12,13 +12,6 @@ pub struct UpgradeArgs {
     #[arg(long, default_value = ".")]
     pub target: Utf8PathBuf,
 
-    /// The Conventional Commit scopes this project accepts,
-    /// comma-separated. A record that already carries them needs no flag;
-    /// a record from before the parameter existed refuses until one names
-    /// them, and the answer is recorded.
-    #[arg(long)]
-    pub scopes: Option<String>,
-
     /// Change the recorded working-copy mode: worktree or branches. The
     /// one overridden parameter — everything else comes from the record —
     /// and the apply's diff is the visible mode change. Omitted, the

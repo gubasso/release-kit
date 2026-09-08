@@ -105,7 +105,6 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
     let resolved = landing::resolve(&args.target, args.forge.as_deref(), args.repo.as_deref())?;
     let repo = resolved.repo.ok_or_else(landing::repo_unresolved)?;
     let tech = resolved_tech(args)?;
-    let scopes = required_scopes(args.scopes.as_deref())?;
     let workflow = Workflow::parse(&args.workflow)?;
     // The style is required rather than defaulted: it changes the release
     // workflow's bytes, and an adoption verifies bytes against exactly one
@@ -119,7 +118,6 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
         &tech,
         &resolved.forge,
         &repo,
-        &scopes,
         workflow,
         Some(style),
         args.nix,
@@ -153,7 +151,6 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
                 landed_at: manifest::now(),
                 parameters: Parameters {
                     repo: repo.clone(),
-                    scopes,
                     workflow,
                     style: Some(style),
                     nix: args.nix,
@@ -175,9 +172,8 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
         ]
     } else {
         vec![format!(
-            "rk adopt --tech {tech} --forge {} --repo {repo} --scopes {} --workflow {} --style {}{} --target {} --apply writes the record and nothing else",
+            "rk adopt --tech {tech} --forge {} --repo {repo} --workflow {} --style {}{} --target {} --apply writes the record and nothing else",
             resolved.forge,
-            args.scopes.as_deref().unwrap_or("<scope,scope>"),
             workflow.as_str(),
             style.as_str(),
             if args.nix { " --nix" } else { "" },
@@ -303,16 +299,6 @@ fn resolved_tech(args: &AdoptArgs) -> Result<String, RkError> {
         },
         |tech| Ok(tech.to_owned()),
     )
-}
-
-/// The `--scopes` argument an adoption cannot proceed without: there is
-/// no record to read the parameter from yet.
-fn required_scopes(raw: Option<&str>) -> Result<Vec<String>, RkError> {
-    landing::parse_scopes(raw.ok_or_else(|| {
-        RkError::Usage(
-            "an adoption renders the candidate under the scopes parameter; pass --scopes <list>, the Conventional Commit scopes this project accepts".into(),
-        )
-    })?)
 }
 
 #[cfg(test)]

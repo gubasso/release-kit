@@ -26,5 +26,5 @@ The bot-App walkthrough it routes to is `rk forge github`; the registry forms ar
 ## What this repository settles
 
 - The required check is `gate`: the job id its own `ci.yml` reports, needing `test`, `flake`, and `dist-plan`, and the one value the payload does not write on a GitHub target. Name a CI job otherwise and the required check, the ruleset, and the runbook's step 3 prerequisite all move with it.
-- The commit scopes `rk init --scopes` rendered into the title check and the hook block are the ones `AGENTS.md` lists.
+- The commit scope is held by shape rather than by a list: the landed title check admits lowercase letters, digits, and `_ . / -`, and the landed `AGENTS.md` block tells the author to prefer a scope this repository's history already carries.
 - The bot App exists, is installed on this repository, and its credentials are stored; rerunning the setup here verifies rather than creates, which is every step's rerun shape anyway.

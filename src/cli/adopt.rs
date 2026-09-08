@@ -30,13 +30,6 @@ pub struct AdoptArgs {
     #[arg(long)]
     pub repo: Option<String>,
 
-    /// The Conventional Commit scopes this project accepts,
-    /// comma-separated, the parameter the candidate is rendered under and
-    /// the record carries. There is no record to read it from yet, so the
-    /// adoption refuses without it.
-    #[arg(long)]
-    pub scopes: Option<String>,
-
     /// The working-copy mode the candidate is rendered under: worktree or
     /// branches. It chooses which candidate adoption verifies against and
     /// never blesses the disk; the default is branches, the

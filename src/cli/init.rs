@@ -25,13 +25,6 @@ pub struct InitArgs {
     #[arg(long)]
     pub repo: Option<String>,
 
-    /// The Conventional Commit scopes this project accepts,
-    /// comma-separated, rendered into the title checks and the commit
-    /// hook and recorded as a landing parameter. An apply without it
-    /// refuses: the scope vocabulary is a decision, not a default.
-    #[arg(long)]
-    pub scopes: Option<String>,
-
     /// The working-copy mode this project chooses: worktree (every
     /// code-changing branch in a linked worktree, the main checkout
     /// commits nothing) or branches (branches worked in the main

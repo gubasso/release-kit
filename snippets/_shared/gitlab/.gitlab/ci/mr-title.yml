@@ -20,7 +20,7 @@ mr-title:
   script:
     - |
       printf '%s' "$CI_MERGE_REQUEST_TITLE" | grep -Eq \
-        '^((build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)\((RK_SCOPES_PIPE)\)!?: .+|chore(\((release|master|main)\))?: (release|v).+)$' \
+        '^((build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)\((RK_SCOPE_SHAPE)\)!?: .+|chore(\((release|master|main)\))?: (release|v).+)$' \
         && exit 0
-      echo "the title '$CI_MERGE_REQUEST_TITLE' must read type(scope) then a colon and a description, with the scope one of RK_SCOPES_CSV"
+      echo "the title '$CI_MERGE_REQUEST_TITLE' must read type(scope) then a colon and a description, with the scope lowercase letters, digits, and _ . / -"
       exit 1

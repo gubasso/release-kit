@@ -30,9 +30,11 @@ pub const MANIFEST_PATH: &str = ".release-kit/manifest.json";
 /// whose absent `style` parameter reads as none and holds an upgrade
 /// until `--style` names one — and schema 3 — the pre-nix record, whose
 /// absent `nix` parameter reads as opt-out, so an existing target's
-/// upgrade never sprouts files nobody requested — and refuses anything
-/// else by name.
-pub const SCHEMA_VERSION: u64 = 4;
+/// upgrade never sprouts files nobody requested — and schema 4 — the
+/// scope-vocabulary record, whose `scopes` parameter this binary renders
+/// nowhere, so a read drops it and the next rewrite lands without it —
+/// and refuses anything else by name.
+pub const SCHEMA_VERSION: u64 = 5;
 
 /// The oldest schema this binary still reads.
 const OLDEST_READABLE_SCHEMA: u64 = 1;
@@ -157,12 +159,6 @@ pub struct Parameters {
     /// The project path on the forge, recorded whole because a GitLab
     /// project may nest below its group.
     pub repo: String,
-    /// The Conventional Commit scopes the project accepts, rendered into
-    /// the title checks, the commit hook, and the routing block. Defaults
-    /// empty for a record from before the parameter existed; an upgrade of
-    /// such a record asks for `--scopes` once and records the answer.
-    #[serde(default)]
-    pub scopes: Vec<String>,
     /// The working-copy mode the project chose: every code-changing branch
     /// in a linked worktree (`worktree`), or branches worked in the main
     /// checkout with worktrees optional beside them (`branches`). A record
@@ -402,13 +398,13 @@ mod tests {
     use crate::digest::Digest;
     use crate::landing::Kind;
 
-    /// The complete record shape at schema 4, held by snapshot: a field
+    /// The complete record shape at schema 5, held by snapshot: a field
     /// rename or removal fails here and becomes a schema-version bump
     /// instead of a silent break at every reader.
     #[test]
     fn the_manifest_schema_snapshot_holds() {
         let manifest = Manifest {
-            schema_version: 4,
+            schema_version: 5,
             rk_version: "0.1.0".into(),
             payload_sha256: Digest::of(b""),
             origin: "init".into(),
@@ -417,7 +413,6 @@ mod tests {
             landed_at: "2026-08-29T00:00:00Z".into(),
             parameters: Parameters {
                 repo: "acme/widget".into(),
-                scopes: vec!["api".into(), "cli".into()],
                 workflow: Workflow::Worktree,
                 style: Some(Style::Trunk),
                 nix: true,
@@ -442,13 +437,14 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&manifest).expect("a manifest serializes"),
             format!(
-                r#"{{"schema_version":4,"rk_version":"0.1.0","payload_sha256":"{empty}","origin":"init","tech":"rust","forge":"github","landed_at":"2026-08-29T00:00:00Z","parameters":{{"repo":"acme/widget","scopes":["api","cli"],"workflow":"worktree","style":"trunk","nix":true}},"files":[{{"destination":"release-plz.toml","kind":"seeded","sha256":"{empty}","baseline_sha256":"{empty}"}},{{"destination":"VERSION","kind":"state","sha256":"{empty}"}}],"pins":{{"release-plz":"0.3.160"}}}}"#
+                r#"{{"schema_version":5,"rk_version":"0.1.0","payload_sha256":"{empty}","origin":"init","tech":"rust","forge":"github","landed_at":"2026-08-29T00:00:00Z","parameters":{{"repo":"acme/widget","workflow":"worktree","style":"trunk","nix":true}},"files":[{{"destination":"release-plz.toml","kind":"seeded","sha256":"{empty}","baseline_sha256":"{empty}"}},{{"destination":"VERSION","kind":"state","sha256":"{empty}"}}],"pins":{{"release-plz":"0.3.160"}}}}"#
             ),
             "a state file must omit baseline_sha256 rather than serializing null"
         );
     }
 
-    /// A record written before the mode existed reads as `branches`; a
+    /// A record written before the mode existed reads as `branches`, and
+    /// its scope vocabulary drops, because this binary renders none. A
     /// record past this binary's schema refuses by name, because the field
     /// it cannot see decides whether a guard is landed.
     #[test]
@@ -475,10 +471,10 @@ mod tests {
             "a pre-nix record reads as opt-out, so an upgrade adds nothing unrequested"
         );
 
-        std::fs::write(target.join(super::MANIFEST_PATH), record(5)).expect("the record writes");
-        let refused = super::load(target).expect_err("a schema-5 record refuses");
+        std::fs::write(target.join(super::MANIFEST_PATH), record(6)).expect("the record writes");
+        let refused = super::load(target).expect_err("a schema-6 record refuses");
         let message = refused.to_string();
-        assert!(message.contains('5'), "{message}");
+        assert!(message.contains('6'), "{message}");
     }
 
     #[test]

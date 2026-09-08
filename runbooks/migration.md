@@ -30,11 +30,11 @@ Every line of those reports that is not green is one entry in the inventory. Not
 Adoption verifies the disk against one rendered candidate and never blesses the disk. `--workflow` and `--style` choose the candidate; `--style` is required because it changes the release workflow's bytes.
 
 ```bash
-rk adopt --target . --scopes <scope,scope> --workflow <mode> --style <style>
+rk adopt --target . --workflow <mode> --style <style>
 # check: every rendered destination reports matches; a differs line names a destination to bring to the candidate's bytes
 rk snippet <tech>/<forge>/<path>
 # check: the candidate's bytes for one destination; rk payload lists them all with their digests
-rk adopt --target . --scopes <scope,scope> --workflow <mode> --style <style> --apply
+rk adopt --target . --workflow <mode> --style <style> --apply
 # check: wrote .release-kit/manifest.json, and nothing else changed
 ```
 
@@ -50,7 +50,6 @@ rk upgrade --target . --apply
 # check: rewrote .release-kit/manifest.json; every sentinel left to fill is listed
 ```
 
-- a record without the scopes parameter: `--scopes <scope,scope>`, the list confirmed with the operator first.
 - a record without the style parameter: `--style <style>`, asked of the operator first, because arming an existing project's release request changes what a green trunk does.
 - a hook block lacking the `rk-message` content guard: the upgrade re-renders the block; a hand-edited block is reconciled first, per 2d.
 

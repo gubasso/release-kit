@@ -84,10 +84,9 @@ struct Decision<'a> {
 pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
     let out = Output::new(args.json);
     let mut recorded = load_upgradable(&args.target)?;
-    resolve_scopes(&mut recorded, args.scopes.as_deref())?;
     // The mode change is an upgrade with exactly one overridden
-    // parameter; everything else — tech, forge, repo, scopes, lineage —
-    // comes from the record, untouched.
+    // parameter; everything else — tech, forge, repo, lineage — comes
+    // from the record, untouched.
     if let Some(raw) = args.workflow.as_deref() {
         recorded.parameters.workflow = Workflow::parse(raw)?;
     }
@@ -224,7 +223,6 @@ fn project(
         &recorded.tech,
         &recorded.forge,
         &recorded.parameters.repo,
-        &recorded.parameters.scopes,
         recorded.parameters.workflow,
         Some(style),
         recorded.parameters.nix,
@@ -309,7 +307,6 @@ fn rewrite_record(
             landed_at: recorded.landed_at.clone(),
             parameters: manifest::Parameters {
                 repo: recorded.parameters.repo.clone(),
-                scopes: recorded.parameters.scopes.clone(),
                 workflow: recorded.parameters.workflow,
                 style: recorded.parameters.style,
                 nix: recorded.parameters.nix,
@@ -595,20 +592,6 @@ fn clone_record(record: &FileRecord) -> FileRecord {
         sha256: record.sha256.clone(),
         baseline_sha256: record.baseline_sha256.clone(),
     }
-}
-
-/// The scope parameter comes from the record; a record from before the
-/// parameter existed takes `--scopes` once, and the rewrite records it.
-fn resolve_scopes(recorded: &mut Manifest, raw: Option<&str>) -> Result<(), RkError> {
-    if let Some(raw) = raw {
-        recorded.parameters.scopes = landing::parse_scopes(raw)?;
-    }
-    if recorded.parameters.scopes.is_empty() {
-        return Err(RkError::Usage(
-            "the record carries no scopes parameter; pass --scopes <list>, the Conventional Commit scopes this project accepts, and the upgrade records it".into(),
-        ));
-    }
-    Ok(())
 }
 
 #[cfg(test)]
