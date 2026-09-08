@@ -9,7 +9,7 @@ rk issue start <issue>
 # check: the report names the issue, the branch, and the seat, and says nothing was touched
 ```
 
-`<issue>` is a number, `#<number>`, or the issue's URL. A URL naming another project refuses before any call, because the branch would be minted on one project and seated in another.
+`<issue>` is a number, `#<number>`, or the issue's URL. A URL naming another project refuses before any call, because the branch would be minted on one project and seated in another. `--forge` and `--repo` fill in what detection could not read; either one contradicting the clone's own remote refuses for the same reason.
 
 ## 2. Read the report
 
@@ -62,6 +62,8 @@ Commit, push, pull request, squash merge — the trunk's one path, unchanged by 
 Each of these stops the run and leaves the clone unchanged. The destination is what the report names.
 
 - The forge CLI is absent or below the floor. The message names the version found, the floor, and the upgrade. `rk doctor` reports the same thing as `gh-version` and `glab-version`.
-- On GitLab, the project's branch name template renders a name the landed grammar refuses. The message names the rendered name and the setting that produced it. Change the template at Settings, Repository, Branch defaults, Branch name template, or pass a name to `rk worktree add` instead.
+- On GitLab, the project's branch name template renders a name this verb cannot use. The message names the rendered name and the setting that produced it. Two things can be wrong with it: the landed grammar refuses it, or GitLab would not link it to the issue, which needs the issue number followed by a hyphen at the start. Change the template at Settings, Repository, Branch defaults, Branch name template, or pass a name to `rk worktree add` instead.
+- The forge carries the branch and this clone cannot reach its tip. Run `git fetch origin`, then rerun. The apply refuses rather than seat a same-named branch cut from the trunk, which would share none of the forge's history.
+- The forge answers a failure. The reason comes from the forge's own answer: authenticate the CLI, get access to the project, wait for a rate limit, or correct the issue number. A rerun is the fix only where the reason says the failure was transient.
 - The issue carries more than one linked branch. The report names the others and says the first was taken.
 - The branch is already seated somewhere other than its derived path. The report names the seat and the move that frees it, exactly as `rk worktree add` does.

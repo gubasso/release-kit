@@ -38,8 +38,9 @@ pub enum IssueAction {
         #[arg(long)]
         workflow: Option<String>,
 
-        /// The commit-ish the branch starts from; the forge's default
-        /// branch where absent.
+        /// The remote branch the new branch starts from; the forge's
+        /// default branch where absent. GitHub takes a remote branch
+        /// name alone; GitLab also takes a commit SHA.
         #[arg(long)]
         base: Option<String>,
 

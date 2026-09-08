@@ -118,6 +118,22 @@ struct Ground {
     workflow_source: &'static str,
 }
 
+/// Refuse a coordinate that disagrees with one the clone already knows.
+///
+/// A coordinate the clone does not know is absent rather than
+/// contradicted, which is what leaves an override its real job.
+fn contradicts(what: &str, chosen: Option<&str>, known: Option<&str>) -> Result<(), RkError> {
+    let (Some(chosen), Some(known)) = (chosen, known) else {
+        return Ok(());
+    };
+    if chosen == known {
+        return Ok(());
+    }
+    Err(RkError::Usage(format!(
+        "the {what} to act on is {chosen} and this clone's is {known}; the branch would be minted on one project and seated in another"
+    )))
+}
+
 /// Read the target, the reference, and the recorded mode. Nothing here
 /// touches the network, so every refusal below costs one local read.
 fn ground(
@@ -175,11 +191,20 @@ fn ground(
             RkError::missing(diagnostic)
         });
     };
+    // An override supplies a coordinate detection could not, and never
+    // replaces one it could: minting on the project the operator named
+    // and seating the branch in the clone they are standing in is the
+    // same cross-project mistake the reference check refuses.
+    contradicts(
+        "forge",
+        named.map(Forge::as_str),
+        detected.forge.map(Forge::as_str),
+    )?;
     let Some(repo) = overrides
         .repo
         .map(str::to_owned)
         .or_else(|| reference.repo.clone())
-        .or(detected.repo)
+        .or_else(|| detected.repo.clone())
     else {
         return Err(RkError::missing(
             Diagnostic::new(
@@ -190,9 +215,33 @@ fn ground(
             .action("pass --repo <owner/name>"),
         ));
     };
+    contradicts("repository", Some(repo.as_str()), detected.repo.as_deref())?;
+    contradicts("repository", Some(repo.as_str()), reference.repo.as_deref())?;
     let recorded = manifest::load(target)?.map(|held| held.parameters.workflow);
     let (workflow, workflow_source) = match (overrides.workflow, recorded) {
-        (Some(raw), _) => (Workflow::parse(raw)?, "the --workflow flag"),
+        // The mode is a landing parameter, changed through the landing
+        // verbs alone, so a runtime flag states it rather than sets it.
+        // Where it disagrees with the record, one clone would work in a
+        // mode the committed project policy does not carry.
+        (Some(raw), Some(held)) => {
+            let named = Workflow::parse(raw)?;
+            if named != held {
+                return Err(RkError::refusal(
+                    Diagnostic::new(
+                        Reason::StateDrift,
+                        format!(
+                            "--workflow {raw} disagrees with the landing record, which states {}",
+                            held.as_str()
+                        ),
+                    )
+                    .expected("a flag that states the recorded mode, or no flag at all")
+                    .action("rk upgrade --workflow <mode> --apply changes the recorded mode")
+                    .target_state("unchanged"),
+                ));
+            }
+            (held, "the landing record, restated by --workflow")
+        }
+        (Some(raw), None) => (Workflow::parse(raw)?, "the --workflow flag"),
         (None, Some(held)) => (held, "the landing record"),
         // A target with no record is treated as the convention's own
         // mode rather than as branches: the record's serde default exists
@@ -251,19 +300,56 @@ fn seat_worktree(
         return report(out, ground, resolved, None, None, apply);
     };
     let seat = crate::commands::worktree::plan_seat(target, branch, base, apply)?;
+    let mut note = None;
     let path = match seat {
         crate::commands::worktree::Seat::Satisfied { path } => path,
         crate::commands::worktree::Seat::Fresh { path, source, .. } => {
+            // The forge holds this branch, so the seat comes from its
+            // real tip — an adopted local branch, or the remote-tracking
+            // ref. Anything else would build a same-named branch sharing
+            // none of the forge's history. A preview says so, because it
+            // does not fetch and the refs it reads may simply be stale;
+            // an apply fetched first, so there it is a refusal.
+            if !matches!(source.kind, "adopted" | "remote") {
+                if apply {
+                    return Err(unreachable_tip(branch, resolved));
+                }
+                note = Some(format!(
+                    "origin/{branch} is not in this clone yet; the apply fetches first, and refuses rather than seat a branch from the trunk"
+                ));
+            }
             if apply {
                 crate::commands::worktree::create_seat(target, &source)?;
             }
             path
         }
     };
-    report(out, ground, resolved, Some(path), None, apply)
+    report_with(out, ground, resolved, Some(path), None, apply, note)
+}
+
+/// The branch the forge holds is not reachable locally, so no seat is
+/// made from something else that happens to share its name.
+fn unreachable_tip(branch: &str, resolved: &Resolved) -> RkError {
+    RkError::refusal(
+        Diagnostic::new(
+            Reason::StateDrift,
+            format!("the forge carries {branch} and this clone cannot reach its tip"),
+        )
+        .expected(format!(
+            "origin/{branch} present, or {branch} already local"
+        ))
+        .action("git fetch origin, then rerun")
+        .target_state(format!(
+            "unchanged; issue #{} keeps its branch at the forge",
+            resolved.number
+        )),
+    )
 }
 
 /// Branches mode: the branch checked out in the main checkout.
+///
+/// The main checkout is where this mode works branches, so the switch
+/// runs there whichever of the repository's worktrees `--target` named.
 ///
 /// Both forges create the branch on the remote, so an apply always sees
 /// the same case — a remote tip with no local branch — unless a previous
@@ -281,10 +367,11 @@ fn seat_branch(
     if !apply {
         return report(out, ground, resolved, None, Some(branch.to_owned()), false);
     }
+    let main = crate::commands::worktree::main_checkout(target)?;
     let git = |args: &[&str]| -> Result<std::process::Output, RkError> {
         std::process::Command::new(probes::git_bin())
             .args(["-C"])
-            .arg(target)
+            .arg(&main)
             .args(args)
             .output()
             .map_err(|source| {
@@ -343,6 +430,19 @@ fn report(
     checkout: Option<String>,
     apply: bool,
 ) -> Result<(), RkError> {
+    report_with(out, ground, resolved, path, checkout, apply, None)
+}
+
+/// [`report`], carrying a note the seating step raised.
+fn report_with(
+    out: Output,
+    ground: &Ground,
+    resolved: &Resolved,
+    path: Option<Utf8PathBuf>,
+    checkout: Option<String>,
+    apply: bool,
+    note: Option<String>,
+) -> Result<(), RkError> {
     let mode = if apply { "apply" } else { "preview" };
     out.result_line(format!("issue:  #{} {}", resolved.number, resolved.title));
     out.result_line(format!(
@@ -371,7 +471,12 @@ fn report(
             resolved.others.join(", ")
         ));
     }
-    if let Some(detail) = &resolved.detail {
+    let detail = match (resolved.detail.clone(), note) {
+        (Some(had), Some(note)) => Some(format!("{had}; {note}")),
+        (Some(one), None) | (None, Some(one)) => Some(one),
+        (None, None) => None,
+    };
+    if let Some(detail) = &detail {
         out.warn(detail);
     }
     let next = next_lines(ground, resolved, path.as_ref(), apply);
@@ -389,7 +494,7 @@ fn report(
         path: path.map(|path| path.to_string()),
         checkout,
         others: resolved.others.clone(),
-        detail: resolved.detail.clone(),
+        detail,
         next,
     })
 }

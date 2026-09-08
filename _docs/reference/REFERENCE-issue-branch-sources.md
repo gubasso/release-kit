@@ -34,6 +34,18 @@ Verified 2026-09-08 against `Gitlab::StringPlaceholderReplacer` in `lib/gitlab/s
 
 Verified 2026-09-08 against `https://api.rubyonrails.org/classes/String.html#method-i-parameterize` and `ActiveSupport::Inflector.parameterize`. The method transliterates to an ASCII approximation, replaces every run of characters outside `[A-Za-z0-9_-]` with the separator, squeezes repeated separators into one, drops a leading and a trailing separator, and downcases unless the case is preserved. The documented example renders `"^très|Jolie-- "` as `tres-jolie`. `ActiveSupport::Inflector.transliterate` replaces a character it has no approximation for with `?`, which the run replacement then turns into the separator. Bearing: `parameterize` in `src/issue.rs` follows this order, and a character outside its table takes the same `?` path, so the two agree wherever the tables agree. The `approximated` flag reports the one place they can differ.
 
+## GitLab, on which branch names link to an issue
+
+Verified 2026-09-08 against `Issue#related_branches` in `app/models/issue.rb` of `https://gitlab.com/gitlab-org/gitlab` and `https://docs.gitlab.com/user/project/repository/branches/`. GitLab associates a branch with an issue when the branch name begins with the issue's own iid followed by a hyphen. No other part of the name takes part in the match. Bearing: a project template such as `feat/%{id}-%{title}` renders a name the landed grammar admits and GitLab links to nothing, so `rk issue start` refuses it rather than create a branch and report a link that does not exist. The same prefix is what makes a second run find a branch minted under an older title.
+
+## GitLab, on searching branches by prefix
+
+Verified 2026-09-08 against `https://docs.gitlab.com/api/branches/`. `GET /projects/:id/repository/branches` takes `search`, and a term beginning with `^` matches from the start of the branch name. Bearing: one read finds whatever branch the issue already owns under its iid prefix, which is how the verb stays idempotent after a title or template edit moves the name it would otherwise recompute.
+
+## GitHub CLI, on the base flag
+
+Verified 2026-09-08 against `gh issue develop --help` on gh 2.99.0 and `https://cli.github.com/manual/gh_issue_develop`. `--base` is "Name of the remote branch you want to make your new branch from". GitLab's Branches API `ref` accepts a branch name or a commit SHA. Bearing: the two forges do not accept the same set of values, so `rk issue start --base` documents the remote branch as the form both take and names the SHA as GitLab's alone.
+
 ## GitLab, on creating a branch
 
 Verified 2026-09-08 against `https://docs.gitlab.com/ee/api/branches.html`. `POST /projects/:id/repository/branches` takes `branch`, the name of the branch, and `ref`, the branch name or commit SHA to create the branch from, and answers `201 Created`. It resolves no template. `GET /projects/:id/repository/branches/:branch` answers `404` for a branch that does not exist. Bearing: the create call is why the reads exist, and the read's `404` is the proof of absence a mint acts on.

@@ -602,7 +602,15 @@ fn plan_gitlab(
         creator.as_deref(),
     );
     if !admissible(&rendered.name) {
-        return Err(refuse_template(&rendered.name));
+        return Err(refuse_template(&rendered.name, GRAMMAR_REFUSED));
+    }
+    // GitLab links a branch to an issue by name, and it matches on the
+    // iid followed by a hyphen. A template can render a name the landed
+    // grammar admits and GitLab links to nothing — `feat/%{id}-%{title}`
+    // is the ordinary case — and the verb would then report a link that
+    // does not exist.
+    if !links_to(&rendered.name, iid) {
+        return Err(refuse_template(&rendered.name, &link_refused(iid)));
     }
     Ok(Planned {
         iid,
@@ -613,16 +621,36 @@ fn plan_gitlab(
     })
 }
 
-/// A rendered name the landed grammar refuses, named with its cause.
-fn refuse_template(name: &str) -> RkError {
+/// What a rendered name has to satisfy for the landed grammar.
+const GRAMMAR_REFUSED: &str = "a template whose names match <type>/<slug> or <issue-id>-<slug>";
+
+/// Whether GitLab links a branch of this name to the issue.
+///
+/// GitLab matches the issue's own iid followed by a hyphen at the start
+/// of the name, so a prefix of any other shape links to nothing.
+#[must_use]
+pub fn links_to(branch: &str, iid: u64) -> bool {
+    branch
+        .strip_prefix(&iid.to_string())
+        .and_then(|rest| rest.strip_prefix('-'))
+        .is_some_and(|slug| !slug.is_empty())
+}
+
+/// What a rendered name has to satisfy for GitLab to link it.
+fn link_refused(iid: u64) -> String {
+    format!(
+        "a template whose names start with {iid}-, which is how GitLab links a branch to its issue"
+    )
+}
+
+/// A rendered name this verb cannot use, named with its cause.
+fn refuse_template(name: &str, expected: &str) -> RkError {
     RkError::refusal(
         Diagnostic::new(
             Reason::PrerequisiteUnmet,
-            format!(
-                "the project's issue_branch_template renders '{name}', which the landed grammar refuses"
-            ),
+            format!("the project's issue_branch_template renders '{name}', which this verb cannot use"),
         )
-        .expected("a template whose names match <type>/<slug> or <issue-id>-<slug>")
+        .expected(expected)
         .action(
             "change Settings > Repository > Branch defaults > Branch name template, or pass a branch to rk worktree add instead",
         )
@@ -675,14 +703,47 @@ fn resolve_gitlab(
             ),
         ],
     )?;
-    let origin = if standing.status.success() {
-        "already"
-    } else if !not_found(&standing.stderr) {
-        return Err(forge_failure(format!(
-            "the branch read did not answer: {}",
-            last_line(&standing.stderr)
-        )));
-    } else if apply {
+    if standing.status.success() {
+        return Ok(Resolved {
+            number: planned.iid,
+            title: planned.title,
+            branch: Some(planned.name),
+            origin: "already",
+            others: Vec::new(),
+            detail: planned.detail,
+        });
+    }
+    if !not_found(&standing.stderr) {
+        let stderr = String::from_utf8_lossy(&standing.stderr);
+        return Err(forge_failure_from(
+            format!(
+                "the branch read did not answer: {}",
+                last_line(&standing.stderr)
+            ),
+            &stderr,
+        ));
+    }
+    // The exact name is a recomputation, and a title or template edit
+    // moves it. GitLab links by the iid prefix, so a branch already
+    // linked to this issue is found by that prefix and adopted — without
+    // it a second run would mint a second branch for one issue.
+    if let Some(held) = linked_by_prefix(cli, target, &encoded, planned.iid)? {
+        let took = format!("the forge already links '{held}' to this issue, so it was taken");
+        let detail = Some(
+            planned
+                .detail
+                .map_or_else(|| took.clone(), |had| format!("{had}; {took}")),
+        );
+        return Ok(Resolved {
+            number: planned.iid,
+            title: planned.title,
+            branch: Some(held),
+            origin: "already",
+            others: Vec::new(),
+            detail,
+        });
+    }
+    let origin = if apply {
         // POST /projects/:id/repository/branches takes the name and the
         // ref, and resolves no template — which is why the reads exist.
         let start = base.unwrap_or(&planned.default_branch);
@@ -715,6 +776,47 @@ fn resolve_gitlab(
         others: Vec::new(),
         detail: planned.detail,
     })
+}
+
+/// A branch the project already carries under this issue's link prefix.
+///
+/// The Branches API's `search` takes `^term` for a starts-with match, so
+/// one read answers whether the issue already owns a branch under a name
+/// an earlier title or template produced.
+fn linked_by_prefix(
+    cli: &Path,
+    target: &Path,
+    encoded: &str,
+    iid: u64,
+) -> Result<Option<String>, RkError> {
+    let found = forge_call(
+        cli,
+        target,
+        &[
+            "api",
+            &format!(
+                "projects/{encoded}/repository/branches?search={}",
+                encode(&format!("^{iid}-"))
+            ),
+        ],
+    )?;
+    // A search that does not answer is not proof of absence, and it is
+    // not worth failing a mint over: the exact-name read already ran.
+    if !found.status.success() {
+        return Ok(None);
+    }
+    let body: Value = match serde_json::from_slice(&found.stdout) {
+        Ok(body) => body,
+        Err(_) => return Ok(None),
+    };
+    Ok(body
+        .as_array()
+        .and_then(|held| {
+            held.iter()
+                .filter_map(|branch| branch["name"].as_str())
+                .find(|name| links_to(name, iid))
+        })
+        .map(ToOwned::to_owned))
 }
 
 /// One forge CLI call, in the shape [`crate::branches::merged_request_for`]
@@ -752,18 +854,89 @@ fn succeeded(out: &Output, what: &str) -> Result<(), RkError> {
     if out.status.success() {
         return Ok(());
     }
-    Err(forge_failure(format!(
-        "{what} failed: {}",
-        last_line(&out.stderr)
-    )))
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    Err(forge_failure_from(
+        format!("{what} failed: {}", last_line(&out.stderr)),
+        &stderr,
+    ))
 }
 
 /// A forge call that failed, leaving nothing behind.
+///
+/// The reason is read from the forge CLI's own answer rather than
+/// asserted. Only a failure the forge itself reports as transient is
+/// [`Reason::ForgeTemporary`], because that reason tells the operator a
+/// rerun can cure it — and a rerun cures neither a logged-out CLI nor a
+/// permission the account does not have.
 fn forge_failure(message: String) -> RkError {
-    RkError::subprocess(
-        Diagnostic::new(Reason::ForgeTemporary, message)
-            .action("read the forge's own answer, then rerun")
-            .target_state("unchanged"),
+    forge_failure_from(message, "")
+}
+
+/// [`forge_failure`], classified from the forge CLI's stderr.
+fn forge_failure_from(message: String, stderr: &str) -> RkError {
+    let (reason, action) = classify_forge_answer(stderr);
+    let diagnostic = Diagnostic::new(reason, message)
+        .action(action)
+        .target_state("unchanged");
+    match reason {
+        Reason::ForgeAuthentication
+        | Reason::ForgePermission
+        | Reason::ForgeRateLimit
+        | Reason::RemoteConflict => RkError::refusal(diagnostic),
+        Reason::TargetNotFound => RkError::missing(diagnostic),
+        _ => RkError::subprocess(diagnostic),
+    }
+}
+
+/// The reason a forge CLI's own answer carries, and what fixes it.
+///
+/// `gh` renders an HTTP status as `HTTP <code>` and `glab` as
+/// `<code> <phrase>`, so both spellings are matched. A status nothing
+/// recognizes stays [`Reason::SubprocessFailed`] rather than claiming a
+/// retry will help.
+fn classify_forge_answer(stderr: &str) -> (Reason, &'static str) {
+    let text = stderr.to_ascii_lowercase();
+    let status =
+        |code: &str| text.contains(&format!("http {code}")) || text.contains(&format!("{code} "));
+    if text.contains("rate limit") || status("429") {
+        return (
+            Reason::ForgeRateLimit,
+            "wait for the forge's limit to reset, then rerun",
+        );
+    }
+    if status("401") || text.contains("not logged in") || text.contains("authentication") {
+        return (
+            Reason::ForgeAuthentication,
+            "authenticate the forge CLI, then rerun",
+        );
+    }
+    if status("403") {
+        return (
+            Reason::ForgePermission,
+            "grant this account access to the project, then rerun",
+        );
+    }
+    if status("404") {
+        return (
+            Reason::TargetNotFound,
+            "check the issue number and the project, then rerun",
+        );
+    }
+    if status("409") {
+        return (
+            Reason::RemoteConflict,
+            "read what the forge already carries, then rerun",
+        );
+    }
+    if status("500") || status("502") || status("503") || status("504") {
+        return (
+            Reason::ForgeTemporary,
+            "rerun; the forge failed transiently",
+        );
+    }
+    (
+        Reason::SubprocessFailed,
+        "read the forge's own answer, then decide",
     )
 }
 

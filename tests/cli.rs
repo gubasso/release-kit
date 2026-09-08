@@ -15403,6 +15403,8 @@ case "$*" in
   "api projects/acme%2Fwidget/issues/57") cat "$RK_MOCK_DIR/issue.json"; exit 0;;
   "api user") echo '{"username":"Ada Lovelace"}'; exit 0;;
   "api --method POST"*) touch "$RK_MOCK_DIR/posted"; echo '{}'; exit 0;;
+  "api projects/acme%2Fwidget/repository/branches?search="*)
+    cat "$RK_MOCK_DIR/search.json" 2>/dev/null || echo '[]'; exit 0;;
   "api projects/acme%2Fwidget/repository/branches/"*)
     if [ -f "$RK_MOCK_DIR/exists" ]; then echo '{"name":"held"}'; exit 0; fi
     echo "404 Not Found" >&2; exit 1;;
@@ -15667,12 +15669,35 @@ fn an_issue_url_naming_another_project_refuses() {
     assert!(text.contains("acme/widget"), "{text}");
 }
 
+/// A scratch repository whose origin is a GitLab project, so no override
+/// has to contradict what detection reads.
+fn gitlab_fixture() -> (tempfile::TempDir, PathBuf) {
+    let parent = tempfile::tempdir().expect("a scratch parent exists");
+    let repo = parent.path().join("widget");
+    std::fs::create_dir(&repo).expect("the repo dir creates");
+    git_in(&repo, &["init", "-q", "-b", "master"]);
+    git_in(&repo, &["config", "user.email", "rk@example.invalid"]);
+    git_in(&repo, &["config", "user.name", "rk test"]);
+    git_in(
+        &repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://gitlab.com/acme/widget.git",
+        ],
+    );
+    std::fs::write(repo.join("seed"), "x\n").expect("the seed writes");
+    git_in(&repo, &["add", "seed"]);
+    git_in(&repo, &["commit", "-qm", "chore: seed"]);
+    (parent, repo)
+}
+
 /// One `rk issue start` invocation against the GitLab mock.
 fn gitlab_start(repo: &Path, glab: &Path, mock_dir: &Path, extra: &[&str]) -> Command {
     let mut command = rk_scrubbed();
     command
-        .args(["issue", "start", "57", "--forge", "gitlab"])
-        .args(["--repo", "acme/widget", "--target"])
+        .args(["issue", "start", "57", "--target"])
         .arg(repo)
         .args(extra)
         .env("RK_GLAB_BIN", glab)
@@ -15697,7 +15722,7 @@ fn gitlab_answers(dir: &Path, template: Option<&str>, confidential: bool) {
 
 #[test]
 fn a_gitlab_absent_template_joins_id_and_title() {
-    let (_parent, repo) = worktree_fixture();
+    let (_parent, repo) = gitlab_fixture();
     let (mock, glab) = mock_forge("glab", GLAB_ISSUE_MOCK);
     gitlab_answers(mock.path(), None, false);
     let out = gitlab_start(&repo, &glab, mock.path(), &["--json"])
@@ -15717,7 +15742,7 @@ fn a_gitlab_absent_template_joins_id_and_title() {
 
 #[test]
 fn a_gitlab_project_template_is_read_not_assumed() {
-    let (_parent, repo) = worktree_fixture();
+    let (_parent, repo) = gitlab_fixture();
     let (mock, glab) = mock_forge("glab", GLAB_ISSUE_MOCK);
     gitlab_answers(mock.path(), Some("%{id}-%{branch_creator}-%{title}"), false);
     with_remote_branch(&repo, "57-Ada-Lovelace-fix-the-csv-upload");
@@ -15744,7 +15769,7 @@ fn a_gitlab_project_template_is_read_not_assumed() {
 
 #[test]
 fn a_gitlab_confidential_issue_mints_the_confidential_name() {
-    let (_parent, repo) = worktree_fixture();
+    let (_parent, repo) = gitlab_fixture();
     let (mock, glab) = mock_forge("glab", GLAB_ISSUE_MOCK);
     gitlab_answers(mock.path(), Some("%{id}-%{title}"), true);
     let out = gitlab_start(&repo, &glab, mock.path(), &["--json"])
@@ -15766,7 +15791,7 @@ fn a_gitlab_confidential_issue_mints_the_confidential_name() {
 
 #[test]
 fn a_gitlab_template_the_grammar_refuses_stops_before_the_post() {
-    let (_parent, repo) = worktree_fixture();
+    let (_parent, repo) = gitlab_fixture();
     let (mock, glab) = mock_forge("glab", GLAB_ISSUE_MOCK);
     gitlab_answers(mock.path(), Some("feature/%{id}-%{title}"), false);
     let out = gitlab_start(&repo, &glab, mock.path(), &["--apply"])
@@ -15786,7 +15811,7 @@ fn a_gitlab_template_the_grammar_refuses_stops_before_the_post() {
 
 #[test]
 fn an_existing_gitlab_branch_mints_nothing() {
-    let (_parent, repo) = worktree_fixture();
+    let (_parent, repo) = gitlab_fixture();
     let (mock, glab) = mock_forge("glab", GLAB_ISSUE_MOCK);
     gitlab_answers(mock.path(), None, false);
     std::fs::write(mock.path().join("exists"), "").expect("the marker writes");
@@ -15828,6 +15853,7 @@ fn the_issue_start_schema_snapshot_holds() {
         linked(&["57-fix-the-csv-upload"]),
     )
     .expect("the answer writes");
+    with_remote_branch(&repo, "57-fix-the-csv-upload");
     let out = issue_start(&repo, &gh, mock.path(), &["--json"])
         .assert()
         .success()
@@ -15927,5 +15953,270 @@ fn both_skills_route_an_issue_shaped_request_to_the_verb() {
             text.contains("Never write a predicted branch name into the plan"),
             "{skill} forbids a guessed name"
         );
+    }
+}
+
+/// The forge holds the branch, so the seat comes from its real tip. A
+/// clone that cannot reach that tip is refused rather than given a
+/// same-named branch cut from the trunk.
+#[test]
+fn an_unreachable_forge_tip_refuses_rather_than_seat_from_the_trunk() {
+    let (parent, repo) = worktree_fixture();
+    let (mock, gh) = mock_forge("gh", GH_ISSUE_MOCK);
+    std::fs::write(
+        mock.path().join("before.json"),
+        linked(&["57-fix-the-csv-upload"]),
+    )
+    .expect("the answer writes");
+    // No remote-tracking ref: the mint happened at the forge and this
+    // clone never saw it, which a failed fetch also produces.
+    let out = issue_start(&repo, &gh, mock.path(), &["--apply"])
+        .assert()
+        .code(73)
+        .get_output()
+        .stderr
+        .clone();
+    let text = String::from_utf8_lossy(&out).into_owned();
+    assert!(text.contains("cannot reach its tip"), "{text}");
+    assert!(
+        !parent.path().join("widget@57-fix-the-csv-upload").exists(),
+        "no seat is made from the trunk"
+    );
+    assert!(
+        !branch_names(&repo).contains("57-fix-the-csv-upload"),
+        "no same-named local branch is created"
+    );
+}
+
+/// The same state under a preview is a note, not a refusal: a preview
+/// does not fetch, so the refs it reads can simply be stale.
+#[test]
+fn a_preview_names_an_unreachable_tip_without_refusing() {
+    let (_parent, repo) = worktree_fixture();
+    let (mock, gh) = mock_forge("gh", GH_ISSUE_MOCK);
+    std::fs::write(
+        mock.path().join("before.json"),
+        linked(&["57-fix-the-csv-upload"]),
+    )
+    .expect("the answer writes");
+    let out = issue_start(&repo, &gh, mock.path(), &["--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert!(
+        report["detail"]
+            .as_str()
+            .expect("a detail line")
+            .contains("is not in this clone yet"),
+        "{report}"
+    );
+}
+
+/// An override supplies a coordinate detection could not; it never
+/// replaces one it could. The mint and the seat stay one project.
+#[test]
+fn an_override_that_contradicts_the_clone_refuses() {
+    let (_parent, repo) = worktree_fixture();
+    for extra in [vec!["--repo", "other/thing"], vec!["--forge", "gitlab"]] {
+        let out = rk_scrubbed()
+            .args(["issue", "start", "57", "--target"])
+            .arg(&repo)
+            .args(&extra)
+            .env("RK_GH_BIN", "/no/such/gh")
+            .env("RK_GLAB_BIN", "/no/such/glab")
+            .assert()
+            .code(64)
+            .get_output()
+            .stderr
+            .clone();
+        let text = String::from_utf8_lossy(&out).into_owned();
+        assert!(
+            text.contains("minted on one project and seated in another"),
+            "{extra:?}: {text}"
+        );
+    }
+}
+
+/// An override that only restates what detection already read is fine,
+/// which is what keeps the flags usable.
+#[test]
+fn an_override_that_restates_the_clone_is_accepted() {
+    let (_parent, repo) = worktree_fixture();
+    let (mock, gh) = mock_forge("gh", GH_ISSUE_MOCK);
+    std::fs::write(
+        mock.path().join("before.json"),
+        linked(&["57-fix-the-csv-upload"]),
+    )
+    .expect("the answer writes");
+    issue_start(
+        &repo,
+        &gh,
+        mock.path(),
+        &["--forge", "github", "--repo", "acme/widget"],
+    )
+    .assert()
+    .success();
+}
+
+/// The workflow mode is a landing parameter, changed through the landing
+/// verbs alone, so a runtime flag states it and never overrides it.
+#[test]
+fn a_workflow_flag_disagreeing_with_the_record_refuses() {
+    let (_parent, repo) = worktree_fixture();
+    land_rust(&repo).success();
+    let (mock, gh) = mock_forge("gh", GH_ISSUE_MOCK);
+    std::fs::write(
+        mock.path().join("before.json"),
+        linked(&["57-fix-the-csv-upload"]),
+    )
+    .expect("the answer writes");
+    let out = issue_start(&repo, &gh, mock.path(), &["--workflow", "branches"])
+        .assert()
+        .code(73)
+        .get_output()
+        .stderr
+        .clone();
+    let text = String::from_utf8_lossy(&out).into_owned();
+    assert!(text.contains("disagrees with the landing record"), "{text}");
+    assert!(text.contains("rk upgrade"), "{text}");
+}
+
+/// Branches mode works branches in the main checkout, so the switch runs
+/// there whichever of the repository's worktrees named the target.
+#[test]
+fn branches_mode_switches_the_main_checkout_not_the_named_worktree() {
+    let (_parent, repo) = worktree_fixture();
+    git_in(&repo, &["branch", "feat/other"]);
+    let linked_seat = seat(&repo, "feat/other");
+    with_remote_branch(&repo, "57-fix-the-csv-upload");
+    let (mock, gh) = mock_forge("gh", GH_ISSUE_MOCK);
+    std::fs::write(
+        mock.path().join("before.json"),
+        linked(&["57-fix-the-csv-upload"]),
+    )
+    .expect("the answer writes");
+    rk_scrubbed()
+        .args(["issue", "start", "57", "--workflow", "branches"])
+        .args(["--apply", "--target"])
+        .arg(&linked_seat)
+        .env("RK_GH_BIN", &gh)
+        .env("RK_MOCK_DIR", mock.path())
+        .assert()
+        .success();
+    assert_eq!(
+        tip_of(&repo, "HEAD"),
+        tip_of(&repo, "57-fix-the-csv-upload"),
+        "the main checkout moved"
+    );
+    assert_eq!(
+        head_branch(&linked_seat),
+        "feat/other",
+        "the named worktree kept its own branch"
+    );
+}
+
+/// The branch a linked worktree has checked out.
+fn head_branch(dir: &Path) -> String {
+    let mut command = std::process::Command::new("git");
+    for var in GIT_HOOK_VARS {
+        command.env_remove(var);
+    }
+    let out = command
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(dir)
+        .output()
+        .expect("git runs");
+    String::from_utf8_lossy(&out.stdout).trim().to_owned()
+}
+
+/// GitLab links a branch to an issue by the iid prefix, so a template
+/// rendering an admissible name that carries no such prefix links to
+/// nothing, and the verb refuses rather than report a link it did not
+/// make.
+#[test]
+fn a_gitlab_template_that_breaks_the_issue_link_refuses() {
+    let (_parent, repo) = gitlab_fixture();
+    let (mock, glab) = mock_forge("glab", GLAB_ISSUE_MOCK);
+    gitlab_answers(mock.path(), Some("feat/%{id}-%{title}"), false);
+    let out = gitlab_start(&repo, &glab, mock.path(), &["--apply"])
+        .assert()
+        .code(73)
+        .get_output()
+        .stderr
+        .clone();
+    let text = String::from_utf8_lossy(&out).into_owned();
+    assert!(text.contains("feat/57-fix-the-csv-upload"), "{text}");
+    assert!(
+        text.contains("how GitLab links a branch to its issue"),
+        "{text}"
+    );
+    assert!(
+        !mock.path().join("posted").exists(),
+        "nothing is created when the link would not exist"
+    );
+}
+
+/// A title or template edit moves the recomputed name. The forge links
+/// by the iid prefix, so the branch it already carries is found by that
+/// prefix and adopted, rather than a second branch minted for one issue.
+#[test]
+fn a_gitlab_branch_under_an_older_name_is_adopted_not_duplicated() {
+    let (_parent, repo) = gitlab_fixture();
+    let (mock, glab) = mock_forge("glab", GLAB_ISSUE_MOCK);
+    gitlab_answers(mock.path(), None, false);
+    std::fs::write(
+        mock.path().join("search.json"),
+        r#"[{"name":"57-the-older-title"}]"#,
+    )
+    .expect("the answer writes");
+    with_remote_branch(&repo, "57-the-older-title");
+    let out = gitlab_start(&repo, &glab, mock.path(), &["--apply", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["branch"], "57-the-older-title");
+    assert_eq!(report["origin"], "already");
+    assert!(
+        !mock.path().join("posted").exists(),
+        "one issue keeps one branch"
+    );
+}
+
+/// A forge failure carries the reason the forge's own answer states, so
+/// a machine consumer branches correctly and an operator is not told to
+/// rerun something a rerun cannot cure.
+#[test]
+fn a_forge_failure_carries_the_reason_the_answer_states() {
+    for (stderr, reason, code) in [
+        ("HTTP 401: Bad credentials", "forge-authentication", 73),
+        ("HTTP 403: Resource not accessible", "forge-permission", 73),
+        ("API rate limit exceeded", "forge-rate-limit", 73),
+        ("HTTP 404: Not Found", "target-not-found", 66),
+        ("HTTP 502: Bad Gateway", "forge-temporary", 70),
+        ("something nobody classified", "subprocess-failed", 70),
+    ] {
+        let (_parent, repo) = worktree_fixture();
+        let (mock, gh) = mock_forge(
+            "gh",
+            &format!(
+                "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'gh version 2.99.0'; exit 0; fi\necho '{stderr}' >&2\nexit 1\n"
+            ),
+        );
+        let out = issue_start(&repo, &gh, mock.path(), &["--apply", "--json"])
+            .assert()
+            .code(code)
+            .get_output()
+            .stderr
+            .clone();
+        let diagnostic: serde_json::Value =
+            serde_json::from_slice(&out).expect("one JSON diagnostic");
+        assert_eq!(diagnostic["reason"], reason, "for {stderr}");
+        assert_eq!(diagnostic["target_state"], "unchanged", "for {stderr}");
     }
 }

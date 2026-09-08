@@ -8,6 +8,7 @@
   - [`issue-branch:a-customized-template-is-read-not-assumed` — A customized template is read, not assumed](#issue-brancha-customized-template-is-read-not-assumed--a-customized-template-is-read-not-assumed)
   - [`issue-branch:a-confidential-issue-keeps-its-title-out-of-the-branch` — A confidential issue keeps its title out of the branch](#issue-brancha-confidential-issue-keeps-its-title-out-of-the-branch--a-confidential-issue-keeps-its-title-out-of-the-branch)
   - [`issue-branch:a-name-the-grammar-refuses-stops-before-any-write` — A name the grammar refuses stops before any write](#issue-brancha-name-the-grammar-refuses-stops-before-any-write--a-name-the-grammar-refuses-stops-before-any-write)
+  - [`issue-branch:a-name-that-does-not-link-is-refused` — A name that does not link is refused](#issue-brancha-name-that-does-not-link-is-refused--a-name-that-does-not-link-is-refused)
   - [`issue-branch:a-mint-is-idempotent` — A mint is idempotent](#issue-brancha-mint-is-idempotent--a-mint-is-idempotent)
   - [`issue-branch:the-preview-writes-nothing` — The preview writes nothing](#issue-branchthe-preview-writes-nothing--the-preview-writes-nothing)
   - [`issue-branch:a-reference-must-agree-with-the-clone` — A reference must agree with the clone](#issue-brancha-reference-must-agree-with-the-clone--a-reference-must-agree-with-the-clone)
@@ -70,15 +71,27 @@ If a rendered name falls outside the landed branch grammar, then the run MUST st
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 
+### `issue-branch:a-name-that-does-not-link-is-refused` — A name that does not link is refused
+
+Where a forge links a branch to an issue by name, the verb MUST refuse a rendered name the forge would not link, rather than create it and report a link that does not exist.
+
+#### Scenario: A template renders an admissible name with the wrong prefix
+
+- GIVEN a GitLab project whose template is `feat/%{id}-%{title}`, which the landed grammar admits as a type-prefixed branch
+- WHEN `rk issue start <issue> --apply` runs
+- THEN the run refuses, because GitLab links a branch to an issue by the issue's own iid followed by a hyphen, and this name carries no such prefix
+
+Verify: `cargo nextest run -E 'binary(cli)'`
+
 ### `issue-branch:a-mint-is-idempotent` — A mint is idempotent
 
 While the forge already carries a branch for an issue, the verb MUST adopt it and MUST NOT create a second one.
 
 #### Scenario: The verb runs twice on the same issue
 
-- GIVEN an issue whose branch and worktree a previous apply already produced
+- GIVEN an issue whose branch a previous apply already produced, under a name an edited title or template no longer renders
 - WHEN `rk issue start <issue> --apply` runs again
-- THEN nothing is minted, the standing seat is reported, and the run succeeds, because an agent that lost track of its own state must be able to rerun safely
+- THEN the branch the forge already links to that issue is found and adopted, nothing is minted, and the run succeeds, because one issue keeps one branch and an agent that lost track of its own state must be able to rerun safely
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 
@@ -108,24 +121,24 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `issue-branch:the-seat-follows-the-recorded-mode` — The seat follows the recorded mode
 
-The verb MUST seat the branch the way the target's recorded workflow mode states, and MUST report which source decided the mode.
+The verb MUST seat the branch the way the target's recorded workflow mode states, MUST report which source decided the mode, and MUST refuse a runtime flag that disagrees with a recorded mode, because `maintenance:the-workflow-mode-is-a-landing-parameter` puts that decision in the landing verbs. Under the worktree mode the seat MUST come from the branch the forge holds — an existing local branch or the remote-tracking ref — and never from the trunk. Under the branches mode the checkout MUST happen in the main checkout, whichever of the repository's worktrees named the target.
 
 #### Scenario: A target recorded in branches mode
 
-- GIVEN a landed target whose record states the branches mode
+- GIVEN a landed target whose record states the branches mode, and a `--target` naming one of its linked worktrees
 - WHEN `rk issue start <issue> --apply` runs
-- THEN the branch is checked out in the main checkout rather than seated in a worktree, and the report names the landing record as the source
+- THEN the main checkout takes the branch, the named worktree keeps its own, and the report names the landing record as the source
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `issue-branch:a-forge-failure-leaves-the-clone-unchanged` — A forge failure leaves the clone unchanged
 
-If any forge call fails, then the run MUST return before the first local mutation and MUST state that the target is unchanged.
+If any forge call fails, then the run MUST return before the first local mutation, MUST state that the target is unchanged, and MUST carry the reason the forge's own answer states rather than one asserted for every failure.
 
 #### Scenario: The forge answers an error
 
-- GIVEN a forge CLI that fails on the issue read
+- GIVEN a forge CLI that fails on the issue read with an authentication status
 - WHEN `rk issue start <issue> --apply` runs
-- THEN the run fails, no branch and no worktree are created, and the diagnostic states the target as unchanged
+- THEN the run fails as `forge-authentication` rather than `forge-temporary`, no branch and no worktree are created, and the diagnostic states the target as unchanged, because a rerun cures a transient failure and not a logged-out CLI
 
 Verify: `cargo nextest run -E 'binary(cli)'`

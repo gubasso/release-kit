@@ -112,6 +112,21 @@ fn layout_of(worktrees: &[Worktree]) -> Result<Layout, RkError> {
     })
 }
 
+/// The repository's main checkout, whichever of its worktrees named it.
+///
+/// `rk issue start` needs this under the branches mode: the mode works
+/// branches in the main checkout, and a `--target` naming a linked
+/// worktree would otherwise switch that worktree instead.
+///
+/// # Errors
+///
+/// The same gate [`plan_seat`] runs: a target that is not a directory,
+/// not a repository, or whose inventory the parser cannot trust.
+pub(crate) fn main_checkout(target: &Utf8Path) -> Result<Utf8PathBuf, RkError> {
+    let worktrees = inventory(target)?;
+    Ok(layout_of(&worktrees)?.main)
+}
+
 /// The seats in use: the caller's own worktree, resolved from the process
 /// working directory, and the target's current worktree — both,
 /// independently, so invoking from worktree A with `--target` naming the
