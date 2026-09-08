@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2](https://github.com/gubasso/release-kit/compare/v0.3.1...v0.3.2) - 2026-09-08
+
+### Added
+
+- *(issue)* start work from a forge issue with the forge naming the branch ([#100](https://github.com/gubasso/release-kit/pull/100))
+
 ## [0.3.1](https://github.com/gubasso/release-kit/compare/v0.3.0...v0.3.1) - 2026-09-08
 
 ### Added
