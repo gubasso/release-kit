@@ -10957,6 +10957,134 @@ fn every_arming_step_authenticates_as_the_bot() {
     }
 }
 
+/// Every App token the payload mints is scoped to the job that uses it.
+/// `actions/create-github-app-token` hands back a token carrying every
+/// permission the installation holds unless a `permission-*` input narrows it,
+/// so a mint without one ships the widest token release-kit's own setup guide
+/// asks a project to grant. The half that opens the release request also takes
+/// `permission-pull-requests`; the half that tags and publishes must not.
+#[test]
+fn every_app_token_mint_scopes_its_permissions() {
+    // The exact permission set each mint may carry, keyed by the workflow and
+    // the job it sits in. Exact, not a floor: a mint that grows a permission
+    // fails here until someone states which call needs it.
+    // In the walk's own order, which is the payload's path order.
+    let expected: Vec<(&str, &str, Vec<&str>)> = vec![
+        (
+            "bash/github/.github/workflows/release.yml",
+            "release-request",
+            vec!["contents: write", "pull-requests: write"],
+        ),
+        (
+            "bash/github/.github/workflows/release.yml",
+            "tag-and-attach",
+            vec!["contents: write"],
+        ),
+        (
+            "python/github/.github/workflows/release-please.yml",
+            "release-please-pr",
+            vec!["contents: write", "pull-requests: write"],
+        ),
+        (
+            "python/github/.github/workflows/release-please.yml",
+            "tag-and-publish",
+            vec!["contents: write"],
+        ),
+        (
+            "rust/github/.github/workflows/release-plz.yml",
+            "release-plz-release",
+            vec!["contents: write"],
+        ),
+        (
+            "rust/github/.github/workflows/release-plz.yml",
+            "release-plz-pr",
+            vec!["contents: write", "pull-requests: write"],
+        ),
+    ];
+    // Discovered, never listed: a new payload workflow that mints a token
+    // reaches this test on the day it lands.
+    let observed = app_token_mints();
+    let observed: Vec<(&str, &str, Vec<&str>)> = observed
+        .iter()
+        .map(|(file, job, permissions)| {
+            (
+                file.as_str(),
+                job.as_str(),
+                permissions.iter().map(String::as_str).collect(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        observed, expected,
+        "every app token mint names the exact permissions its job's calls need; \
+         a mint the payload gained, lost, or rescoped is read against each job's \
+         own API use before this list moves"
+    );
+}
+
+/// Every `actions/create-github-app-token` step in the payload, as the
+/// snippets-relative file, the job it sits in, and the sorted `permission-*`
+/// inputs it names. A mint naming none yields an empty set, which is the
+/// blanket-installation token the action hands back by default.
+fn app_token_mints() -> Vec<(String, String, Vec<String>)> {
+    let root = repo_path("snippets");
+    let mut files = Vec::new();
+    let mut stack = vec![root.clone()];
+    while let Some(path) = stack.pop() {
+        if path.is_dir() {
+            for entry in std::fs::read_dir(&path).expect("the dir reads") {
+                stack.push(entry.expect("an entry").path());
+            }
+            continue;
+        }
+        files.push(path);
+    }
+    files.sort();
+    let mut mints = Vec::new();
+    for path in files {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let file = path
+            .strip_prefix(&root)
+            .expect("a path under snippets")
+            .display()
+            .to_string();
+        let lines: Vec<&str> = text.lines().collect();
+        let mut job = String::new();
+        for (index, line) in lines.iter().enumerate() {
+            if let Some(name) = line.strip_prefix("  ").and_then(|rest| {
+                let name = rest.strip_suffix(':')?;
+                (!name.starts_with(' ') && !name.starts_with('#')).then_some(name)
+            }) {
+                job = name.to_string();
+            }
+            if !line.contains("create-github-app-token@") {
+                continue;
+            }
+            let indent = line.len() - line.trim_start().len();
+            let mut permissions = Vec::new();
+            for next in &lines[index + 1..] {
+                let trimmed = next.trim_start();
+                let next_indent = next.len() - trimmed.len();
+                if !trimmed.is_empty() && (next_indent < indent || trimmed.starts_with("- ")) {
+                    break;
+                }
+                if let Some(input) = trimmed.strip_prefix("permission-") {
+                    permissions.push(input.trim().to_owned());
+                }
+            }
+            permissions.sort();
+            mints.push((file.clone(), job.clone(), permissions));
+        }
+    }
+    assert!(
+        !mints.is_empty(),
+        "the payload mints app tokens; a walk finding none is a broken walk"
+    );
+    mints
+}
+
 /// SATISFIES landing:the-release-style-is-a-landing-parameter: the recorded
 /// style renders into the landed release workflow as the one substituted
 /// value, so a style change is a one-word reviewed diff and the lines style

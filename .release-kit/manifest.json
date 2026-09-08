@@ -1,7 +1,7 @@
 {
   "schema_version": 5,
-  "rk_version": "0.3.1",
-  "payload_sha256": "e5eb83fdcbdec7ac0cedd7df3dfba604e770f50342dd626ae57b65faf50334b8",
+  "rk_version": "0.3.2",
+  "payload_sha256": "51b905d58e296f5df7bd3594e76f8a55e58b2765a5cecae25950ea907aecfc65",
   "origin": "adopt",
   "tech": "rust",
   "forge": "github",
@@ -16,14 +16,14 @@
     {
       "destination": ".github/workflows/pr-title.yml",
       "kind": "rendered",
-      "sha256": "9a10a4d7f9ada97c0e7b871a9d7c351574ff3cb13081504cd7f453cf7a012ee4",
-      "baseline_sha256": "95565551a263edecb52c98cf91f40e0f6c9412560243481f816ba525049854c1"
+      "sha256": "972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c",
+      "baseline_sha256": "0205b9f369179ae855a5feb84d034860632c3187818dd4ae8a23b1fe0aa79bda"
     },
     {
       "destination": ".github/workflows/release-plz.yml",
       "kind": "rendered",
-      "sha256": "c6caff0323bb4489ea637178c99ac836c3c55c40ac4b4437e1345da12be272b7",
-      "baseline_sha256": "f67151adc5f1c8a215e2320edef81151435c71a837e175e7f4aeed5cf8d77ff1"
+      "sha256": "dae0bfc1282b30535df0a13562b0b3ea5b4ff59af63009301f5ee86a9406c968",
+      "baseline_sha256": "4fb58d8ee980491f9ce7a650829864261cd51a27d6eea0801290a96e3e148fa5"
     },
     {
       "destination": ".pre-commit-config.yaml",

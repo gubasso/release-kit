@@ -62,7 +62,9 @@ What it does not need, against the guesses that cost a rerun:
 
 - Issues: release-plz opens pull requests, never issues.
 - Actions, Workflows: `Workflows: write` is needed only to write files under `.github/workflows/`, and the release request never touches them.
-- Administration: release-plz asks for it only where a tag protection blocks tag creation. The convention's tag ruleset restricts `deletion` and `update` on `v*` and leaves creation open, so `Contents: write` carries the tag push.
+- Administration: release-plz asks for it only where a tag protection blocks tag creation. The convention's tag ruleset restricts `deletion` and `update` on `v*` and leaves creation open, so `Contents: write` carries the tag push. A target that adds a `creation` rule grants Administration here and widens the mint below to match.
+
+The grant above is the ceiling. Each landed workflow mints a token narrower than it, per job, through the `permission-*` inputs of `actions/create-github-app-token`: without one the token inherits every permission the installation holds. The half that opens and arms the release request takes `permission-contents: write` and `permission-pull-requests: write`; the half that tags and publishes opens no request and takes `permission-contents: write` alone. release-plz scopes its own release workflow the same way.
 
 ### Collect the credentials
 
