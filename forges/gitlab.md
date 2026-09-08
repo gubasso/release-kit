@@ -8,7 +8,7 @@ How this forge answers the method's fifth axis. The CLI is `glab`, and `rk setup
 - The gate is the release request's own merge, enforced by the project setting `only_allow_merge_if_pipeline_succeeds`. That is real enforcement — a Maintainer cannot merge past a failing pipeline — with a different shape: it is project-wide rather than branch-targeted, it requires the whole pipeline rather than a named job, and it blocks a merge when there is no pipeline at all. There is no check name to register and nothing for one to point at.
 - Linear trunk history is the project setting `merge_method=ff` plus squash on every merge request: the forge that can fast-forward, does, so the trunk takes no merge commits. The squash message is the merge request's title because `squash_commit_template` is `%{title}` — this forge's documented default, which `protect-trunk` asserts rather than assumes — and the landed `mr-title` job holds that title to the scoped convention, blocking through the pipeline requirement since this forge names no check; the Limitations below state what that job stops and what it cannot.
 - Protections are protected branches and protected tags. A protected branch updates in place through `PATCH /projects/:id/protected_branches/:name`; protected tags expose no update endpoint, so a change is delete-then-create and a rerun is briefly not atomic.
-- The issue link is a name match: a branch named `<issue>-<slug>` — the shape the forge mints from an issue — cross-links, and the merge request opened from it carries `Closes #<issue>` by default. `glab mr create --related-issue <issue> --create-source-branch` creates the branch and that merge request in one move.
+- The issue link is a name match: a branch named `<issue>-<slug>` — the shape the forge mints from an issue — cross-links, and the merge request opened from it carries `Closes #<issue>` by default. The name comes from the project setting `issue_branch_template`, whose variables are `%{id}`, `%{title}`, and `%{branch_creator}`, and GitLab applies that template in the web UI alone: no API endpoint renders it, and the Branches API creates a branch from a name and a ref it is given. So `rk issue start` reads the project's template, renders it the way GitLab renders it, and then creates the branch. A confidential issue is the one case the template does not reach: GitLab names its branch `<iid>-confidential-issue`, so no branch name carries a confidential title.
 - The bot identity is a project access token: creating the token also creates its bot user, in one API call. A push authenticated with the default CI job token starts no pipeline, which is why the token exists at all.
 
 ## Bootstrap
@@ -32,31 +32,34 @@ The rendered pipeline triggers a child pipeline from `.gitlab/ci/project.yml`. T
 
 ## Mapping
 
-| Purpose                              | Command                                                                |
-| ------------------------------------ | ---------------------------------------------------------------------- |
-| Raw API                              | `glab api`                                                             |
-| Set the default branch               | `glab api -X PUT projects/:id` with `default_branch`                   |
-| Delete a branch when its merge lands | `glab api -X PUT projects/:id` with `remove_source_branch_after_merge` |
-| Store a secret                       | `glab variable set NAME --masked` with the value on stdin              |
-| List open release requests           | `glab mr list --target-branch <branch>`                                |
-| Merge the release request            | `glab mr merge --squash --remove-source-branch`                        |
-| Wait on checks                       | `glab ci status --wait`                                                |
-| Wait on a build                      | `glab ci status --wait`                                                |
-| Find the merged request for a commit | `glab api projects/:id/repository/commits/<sha>/merge_requests`        |
-| Create the branch for an issue       | `glab mr create --related-issue <issue> --create-source-branch`        |
-| Protect a branch                     | `POST /projects/:id/protected_branches`, `PATCH` to update             |
-| Require the trunk's checks           | `PUT /projects/:id` with `only_allow_merge_if_pipeline_succeeds`       |
-| Set the merge method                 | `PUT /projects/:id` with `merge_method=ff`                             |
-| Make the title the squash message    | `PUT /projects/:id` with `squash_commit_template=%{title}`             |
-| Protect tags                         | `POST /projects/:id/protected_tags`; no `PATCH`, so delete-then-create |
-| Grant the bot access to a project    | `POST /projects/:id/access_tokens`                                     |
-| Find the bot identity                | `GET /projects/:id/access_tokens`                                      |
+| Purpose                               | Command                                                                |
+| ------------------------------------- | ---------------------------------------------------------------------- |
+| Raw API                               | `glab api`                                                             |
+| Set the default branch                | `glab api -X PUT projects/:id` with `default_branch`                   |
+| Delete a branch when its merge lands  | `glab api -X PUT projects/:id` with `remove_source_branch_after_merge` |
+| Store a secret                        | `glab variable set NAME --masked` with the value on stdin              |
+| List open release requests            | `glab mr list --target-branch <branch>`                                |
+| Merge the release request             | `glab mr merge --squash --remove-source-branch`                        |
+| Wait on checks                        | `glab ci status --wait`                                                |
+| Wait on a build                       | `glab ci status --wait`                                                |
+| Find the merged request for a commit  | `glab api projects/:id/repository/commits/<sha>/merge_requests`        |
+| Read the branch name template         | `glab api projects/:id`, field `issue_branch_template`                 |
+| Create the branch for an issue        | `glab api -X POST projects/:id/repository/branches` with the name      |
+| Create it and a merge request at once | `glab mr create --related-issue <issue> --create-source-branch`        |
+| Protect a branch                      | `POST /projects/:id/protected_branches`, `PATCH` to update             |
+| Require the trunk's checks            | `PUT /projects/:id` with `only_allow_merge_if_pipeline_succeeds`       |
+| Set the merge method                  | `PUT /projects/:id` with `merge_method=ff`                             |
+| Make the title the squash message     | `PUT /projects/:id` with `squash_commit_template=%{title}`             |
+| Protect tags                          | `POST /projects/:id/protected_tags`; no `PATCH`, so delete-then-create |
+| Grant the bot access to a project     | `POST /projects/:id/access_tokens`                                     |
+| Find the bot identity                 | `GET /projects/:id/access_tokens`                                      |
 
 ## Limitations
 
 - Tag immutability is weaker than the method asks. Protected tags stop git clients and non-privileged users, but a project Owner or Maintainer can still delete a protected tag through the UI or the API: protection against accident, not against authority. `rk setup check` reports that weaker guarantee by name rather than a pass, and the invariant survives as an invariant of the method, held by convention where the forge stops.
 - The gate names no check. Per-check enforcement exists only as external status checks in the Ultimate tier, so `--required-check` is a usage error on this forge rather than a value silently discarded.
 - The title gate stops accident, not authority. A merge request pipeline runs the source branch's CI configuration, so an author can edit the `mr-title` job out of their own request's pipeline — running it from configuration the request cannot touch takes a pipeline execution policy, an Ultimate-tier feature. And editing a request's title starts no new pipeline, so a title changed after its pipeline passed is merged unrechecked. The sibling forge closes both holes — `pull_request_target` runs the trunk's copy, and the check re-runs on an `edited` event; here the convention holds by the same authority-versus-accident line the protected-tag limitation already states.
+- No API renders an issue's branch name. The template is a project setting the web UI applies, so a client that wants the same name must reproduce GitLab's own rendering. `glab mr create --related-issue --create-source-branch` composes the name in the client instead: it applies no template, transliterates nothing, squeezes no separator runs, and truncates nothing, so it can produce a different name for the same issue. It also opens a merge request before the first commit exists. `rk issue start` therefore renders the name itself, and reports the one case its transliteration table can differ on.
 - Registry trusted publishing that supports this forge covers GitLab.com only, in public beta; a self-hosted instance cannot satisfy the OIDC invariant and falls back to a long-lived token, which is what the invariant exists to remove. `rk setup` reports this at the first step rather than letting it surface when the trusted publisher will not register.
 - Keyless provenance signing covers GitLab.com only, for the same OIDC reason: Sigstore's public instance trusts `gitlab.com` as an issuer and no self-managed `CI_SERVER_URL`, and the `id_tokens` configuration must live in the project being built and signed — no AutoDevOps, no CI files included from other repositories, no child pipelines. A landed pipeline states the limitation at run time and releases without provenance on a self-managed instance rather than failing; [the bash binding](../bindings/bash.md) carries what the signed statement is and how a consumer verifies it.
 - The `(rust, gitlab)` pair has no artifact builder, so its release page carries no installers; [the Rust binding](../bindings/rust.md) carries that fact, because it is a property of the pair.

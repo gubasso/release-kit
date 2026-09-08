@@ -8,9 +8,14 @@
 //! reproduction lives. Spawning stays in the handler, exactly as
 //! [`crate::branches`] declares for the branch half.
 
+use std::path::Path;
+use std::process::Output;
+
 use serde_json::Value;
 
-use crate::detect::Detection;
+use crate::detect::{Detection, Forge};
+use crate::diagnostic::{Diagnostic, Reason};
+use crate::error::RkError;
 
 /// GitLab's documented default when a project sets no template.
 ///
@@ -380,6 +385,420 @@ pub fn linked_branch(body: &Value) -> Minted {
 #[must_use]
 pub fn admissible(branch: &str) -> bool {
     crate::worktree::matches_grammar(branch)
+}
+
+/// What one issue resolves to, before anything is seated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Resolved {
+    /// The issue, as the forge numbers it.
+    pub number: u64,
+    /// The issue's title, for the report.
+    pub title: String,
+    /// The branch the seat takes.
+    ///
+    /// Absent for one case alone: a GitHub preview of an issue with no
+    /// linked branch. The server names that branch at the moment it mints
+    /// it, so no honest preview can print a name.
+    pub branch: Option<String>,
+    /// Where the name came from: `already` for one the forge carried,
+    /// `forge` for a fresh mint, `pending` for a name the forge has not
+    /// been asked to make yet.
+    pub origin: &'static str,
+    /// Other branches the forge links to the same issue, GitHub only.
+    pub others: Vec<String>,
+    /// A note the report prints: a template that was read, a title the
+    /// transliteration table did not cover, a confidential issue.
+    pub detail: Option<String>,
+}
+
+/// Resolve one issue to its branch, minting at the forge under `apply`.
+///
+/// Every failure returns before any local mutation, so a forge that
+/// refuses, rate-limits, or answers nothing leaves the clone as it was.
+///
+/// # Errors
+///
+/// A forge call that does not run or does not answer, and — on GitLab —
+/// a project template rendering a name the landed grammar refuses.
+pub fn resolve(
+    cli: &Path,
+    target: &Path,
+    forge: Forge,
+    repo: &str,
+    reference: &Reference,
+    base: Option<&str>,
+    apply: bool,
+) -> Result<Resolved, RkError> {
+    match forge {
+        Forge::Github => resolve_github(cli, target, repo, reference, base, apply),
+        Forge::Gitlab => resolve_gitlab(cli, target, repo, reference, base, apply),
+    }
+}
+
+/// The GitHub path: one GraphQL read, a mint where nothing is linked, and
+/// the same read again for the name the server chose.
+fn resolve_github(
+    cli: &Path,
+    target: &Path,
+    repo: &str,
+    reference: &Reference,
+    base: Option<&str>,
+    apply: bool,
+) -> Result<Resolved, RkError> {
+    let Some((owner, name)) = repo.split_once('/') else {
+        return Err(RkError::Usage(format!(
+            "'{repo}' is not a GitHub project path; pass --repo <owner/name>"
+        )));
+    };
+    let number = reference.number.to_string();
+    let read = || -> Result<Value, RkError> {
+        let out = forge_call(
+            cli,
+            target,
+            &[
+                "api",
+                "graphql",
+                "-f",
+                &format!("query={LINKED_BRANCHES_QUERY}"),
+                "-F",
+                &format!("owner={owner}"),
+                "-F",
+                &format!("name={name}"),
+                // `number` is `Int!`, and only `-F` renders an integer as
+                // a JSON number; `-f` would send the string "57".
+                "-F",
+                &format!("number={number}"),
+            ],
+        )?;
+        answered(&out, "the issue read")
+    };
+    let body = read()?;
+    let title = body
+        .pointer("/data/repository/issue/title")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    match linked_branch(&body) {
+        Minted::Already { branch, others } => Ok(Resolved {
+            number: reference.number,
+            title,
+            branch: Some(branch),
+            origin: "already",
+            others,
+            detail: None,
+        }),
+        Minted::Unknown { detail } => Err(forge_failure(format!(
+            "the issue read did not answer with linked branches: {detail}"
+        ))),
+        Minted::Absent if !apply => Ok(Resolved {
+            number: reference.number,
+            title,
+            branch: None,
+            origin: "pending",
+            others: Vec::new(),
+            detail: Some(
+                "GitHub names the branch when it mints it, so the exact name appears on the apply"
+                    .to_owned(),
+            ),
+        }),
+        Minted::Absent => {
+            // No `--name`: an omitted name is a request for the forge's
+            // own, which the mutation documents as the issue number and
+            // title. No `--checkout` either: the seat belongs to the verb
+            // and to the recorded mode.
+            let mut args = vec!["issue", "develop", number.as_str(), "--repo", repo];
+            if let Some(base) = base {
+                args.push("--base");
+                args.push(base);
+            }
+            succeeded(&forge_call(cli, target, &args)?, "the mint")?;
+            // The read is the authority, not the line the mint printed,
+            // and it is the same path the idempotent second run takes.
+            let after = read()?;
+            match linked_branch(&after) {
+                Minted::Already { branch, others } => Ok(Resolved {
+                    number: reference.number,
+                    title,
+                    branch: Some(branch),
+                    origin: "forge",
+                    others,
+                    detail: None,
+                }),
+                _ => Err(forge_failure(
+                    "the mint reported success and the issue still carries no linked branch"
+                        .to_owned(),
+                )),
+            }
+        }
+    }
+}
+
+/// The read GitHub answers both before and after a mint.
+const LINKED_BRANCHES_QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { issue(number: $number) { title linkedBranches(first: 10) { nodes { ref { name } } } } } }";
+
+/// What the GitLab reads settled, before the branch itself is looked at.
+struct Planned {
+    /// The issue's own iid, as GitLab counts it.
+    iid: u64,
+    /// The issue's title, for the report.
+    title: String,
+    /// The name GitLab's own rules produce.
+    name: String,
+    /// The project's default branch, the ref a mint starts from.
+    default_branch: String,
+    /// What the report says about how the name came out.
+    detail: Option<String>,
+}
+
+/// The GitLab reads: the project, the issue, and — only where the template
+/// names the creator — the user. The name is rendered and judged here, so
+/// a template nobody can land through fails before any write.
+fn plan_gitlab(
+    cli: &Path,
+    target: &Path,
+    encoded: &str,
+    reference: &Reference,
+) -> Result<Planned, RkError> {
+    let project = answered(
+        &forge_call(cli, target, &["api", &format!("projects/{encoded}")])?,
+        "the project read",
+    )?;
+    let template = project["issue_branch_template"]
+        .as_str()
+        .filter(|text| !text.trim().is_empty())
+        .map(ToOwned::to_owned);
+    let default_branch = project["default_branch"]
+        .as_str()
+        .unwrap_or("main")
+        .to_owned();
+    let issue = answered(
+        &forge_call(
+            cli,
+            target,
+            &[
+                "api",
+                &format!("projects/{encoded}/issues/{}", reference.number),
+            ],
+        )?,
+        "the issue read",
+    )?;
+    let iid = issue["iid"].as_u64().unwrap_or(reference.number);
+    let title = issue["title"].as_str().unwrap_or_default().to_owned();
+    let confidential = issue["confidential"].as_bool().unwrap_or(false);
+    // The user read happens only where the template names the creator,
+    // which keeps the ordinary case at three calls.
+    let creator = match template.as_deref() {
+        Some(text) if text.contains("%{branch_creator}") => {
+            let user = answered(&forge_call(cli, target, &["api", "user"])?, "the user read")?;
+            user["username"].as_str().map(ToOwned::to_owned)
+        }
+        _ => None,
+    };
+    let rendered = gitlab_branch_name(
+        iid,
+        &title,
+        confidential,
+        template.as_deref(),
+        creator.as_deref(),
+    );
+    if !admissible(&rendered.name) {
+        return Err(refuse_template(&rendered.name));
+    }
+    Ok(Planned {
+        iid,
+        title,
+        detail: gitlab_detail(confidential, template.as_deref(), rendered.approximated),
+        name: rendered.name,
+        default_branch,
+    })
+}
+
+/// A rendered name the landed grammar refuses, named with its cause.
+fn refuse_template(name: &str) -> RkError {
+    RkError::refusal(
+        Diagnostic::new(
+            Reason::PrerequisiteUnmet,
+            format!(
+                "the project's issue_branch_template renders '{name}', which the landed grammar refuses"
+            ),
+        )
+        .expected("a template whose names match <type>/<slug> or <issue-id>-<slug>")
+        .action(
+            "change Settings > Repository > Branch defaults > Branch name template, or pass a branch to rk worktree add instead",
+        )
+        .target_state("unchanged"),
+    )
+}
+
+/// What the report says about how a GitLab name came out. Each note is a
+/// state the operator must see rather than one rk decides quietly.
+fn gitlab_detail(confidential: bool, template: Option<&str>, approximated: bool) -> Option<String> {
+    let mut notes = Vec::new();
+    if confidential {
+        notes.push(
+            "the issue is confidential, so GitLab keeps its title out of the branch and applies no template"
+                .to_owned(),
+        );
+    }
+    if let Some(text) = template {
+        notes.push(format!("the project's branch name template is '{text}'"));
+    }
+    if approximated {
+        notes.push(
+            "the title carries characters outside the transliteration table, so this name can differ from the one GitLab's own button produces"
+                .to_owned(),
+        );
+    }
+    (!notes.is_empty()).then(|| notes.join("; "))
+}
+
+/// The GitLab path: plan the name from the project's own rules, then read
+/// the branch and create it where it is absent.
+fn resolve_gitlab(
+    cli: &Path,
+    target: &Path,
+    repo: &str,
+    reference: &Reference,
+    base: Option<&str>,
+    apply: bool,
+) -> Result<Resolved, RkError> {
+    let encoded = repo.replace('/', "%2F");
+    let planned = plan_gitlab(cli, target, &encoded, reference)?;
+    let standing = forge_call(
+        cli,
+        target,
+        &[
+            "api",
+            &format!(
+                "projects/{encoded}/repository/branches/{}",
+                encode(&planned.name)
+            ),
+        ],
+    )?;
+    let origin = if standing.status.success() {
+        "already"
+    } else if !not_found(&standing.stderr) {
+        return Err(forge_failure(format!(
+            "the branch read did not answer: {}",
+            last_line(&standing.stderr)
+        )));
+    } else if apply {
+        // POST /projects/:id/repository/branches takes the name and the
+        // ref, and resolves no template — which is why the reads exist.
+        let start = base.unwrap_or(&planned.default_branch);
+        forge_call(
+            cli,
+            target,
+            &[
+                "api",
+                "--method",
+                "POST",
+                &format!(
+                    "projects/{encoded}/repository/branches?branch={}&ref={}",
+                    encode(&planned.name),
+                    encode(start)
+                ),
+            ],
+        )
+        .and_then(|out| succeeded(&out, "the branch creation"))?;
+        "forge"
+    } else {
+        "pending"
+    };
+    Ok(Resolved {
+        number: planned.iid,
+        title: planned.title,
+        // GitLab links an issue and a branch by name, so the name rk
+        // rendered is the name that now exists, and no read-back follows.
+        branch: Some(planned.name),
+        origin,
+        others: Vec::new(),
+        detail: planned.detail,
+    })
+}
+
+/// One forge CLI call, in the shape [`crate::branches::merged_request_for`]
+/// already uses: the target's directory, and both pagers silenced.
+///
+/// A non-zero exit is returned rather than raised, because a caller reads
+/// a not-found as an answer.
+fn forge_call(cli: &Path, target: &Path, args: &[&str]) -> Result<Output, RkError> {
+    std::process::Command::new(cli)
+        .args(args)
+        .current_dir(target)
+        .env("GH_PAGER", "")
+        .env("GLAB_PAGER", "")
+        .output()
+        .map_err(|source| {
+            RkError::subprocess(
+                Diagnostic::new(
+                    Reason::SubprocessSpawn,
+                    format!("the forge CLI did not run: {source}"),
+                )
+                .target_state("unchanged"),
+            )
+        })
+}
+
+/// A successful call's body, parsed.
+fn answered(out: &Output, what: &str) -> Result<Value, RkError> {
+    succeeded(out, what)?;
+    serde_json::from_slice(&out.stdout)
+        .map_err(|_| forge_failure(format!("{what} did not answer with JSON")))
+}
+
+/// A call that had to succeed, whose body nothing reads.
+fn succeeded(out: &Output, what: &str) -> Result<(), RkError> {
+    if out.status.success() {
+        return Ok(());
+    }
+    Err(forge_failure(format!(
+        "{what} failed: {}",
+        last_line(&out.stderr)
+    )))
+}
+
+/// A forge call that failed, leaving nothing behind.
+fn forge_failure(message: String) -> RkError {
+    RkError::subprocess(
+        Diagnostic::new(Reason::ForgeTemporary, message)
+            .action("read the forge's own answer, then rerun")
+            .target_state("unchanged"),
+    )
+}
+
+/// A definite not-found, which is proof of absence.
+///
+/// `gh` renders `HTTP 404` and `glab` renders `404 Not Found`; a bare
+/// `404` substring would read an outage message as an answer.
+fn not_found(stderr: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(stderr);
+    text.contains("HTTP 404") || text.contains("404 Not Found")
+}
+
+/// The last non-empty stderr line, for a one-line detail.
+fn last_line(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes)
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("no output")
+        .to_owned()
+}
+
+/// Percent-encode everything outside the unreserved set, so a branch name
+/// carrying `/` reaches the API as one path segment.
+fn encode(text: &str) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(text.len());
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            out.push(byte as char);
+        } else {
+            let _ = write!(out, "%{byte:02X}");
+        }
+    }
+    out
 }
 
 #[cfg(test)]
