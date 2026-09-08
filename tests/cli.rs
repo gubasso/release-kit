@@ -1132,7 +1132,11 @@ fn doctor_reports_every_probe_and_exits_0() {
     let home = Home::new();
     let gh = home.path().join("fake-gh");
     let glab = home.path().join("fake-glab");
-    std::fs::write(&gh, "#!/bin/sh\nexit 0\n").expect("the mock writes");
+    std::fs::write(
+        &gh,
+        "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'gh version 2.99.0 (2025-01-01)'; fi\nexit 0\n",
+    )
+    .expect("the mock writes");
     std::fs::write(&glab, "#!/bin/sh\nexit 1\n").expect("the mock writes");
     #[cfg(unix)]
     for mock in [&gh, &glab] {
@@ -1171,6 +1175,8 @@ fn doctor_reports_every_probe_and_exits_0() {
             "git-remote",
             "gh-auth",
             "glab-auth",
+            "gh-version",
+            "glab-version",
             "openssl",
             "curl",
             "nix",
@@ -1189,6 +1195,17 @@ fn doctor_reports_every_probe_and_exits_0() {
     assert_eq!(by_id("gh-auth")["status"], "ok");
     assert_eq!(by_id("glab-auth")["status"], "failed");
     assert_eq!(by_id("glab-auth")["remediation"], "run glab auth login");
+    assert_eq!(by_id("gh-version")["status"], "ok");
+    assert!(
+        by_id("gh-version")["message"]
+            .as_str()
+            .expect("a message")
+            .contains("2.99.0"),
+        "the found version is named: {:?}",
+        by_id("gh-version")
+    );
+    assert_eq!(by_id("glab-version")["status"], "failed");
+    assert_eq!(by_id("glab-version")["remediation"], "install glab");
     assert_eq!(by_id("git")["class"], "hard");
     assert_eq!(by_id("sh")["class"], "hard");
 }

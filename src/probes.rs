@@ -12,6 +12,9 @@ use std::process::Command;
 use camino::{Utf8Path, Utf8PathBuf};
 use serde::Serialize;
 
+use crate::detect::Forge;
+use crate::diagnostic::{Diagnostic, Reason};
+use crate::error::RkError;
 use crate::skills::record::{RECORD_PATH, Record};
 use crate::skills::{AGENTS_ROOT, CLAUDE_ROOT, Digest, SHARED_ROOT};
 
@@ -186,6 +189,8 @@ pub fn run_all() -> Vec<ProbeResult> {
             "glab auth login",
             &[&["auth", "status"]],
         ),
+        forge_cli_floor(Forge::Github),
+        forge_cli_floor(Forge::Gitlab),
         tool(
             "openssl",
             "RK_OPENSSL_BIN",
@@ -658,9 +663,178 @@ fn forge_cli(
     }
 }
 
+/// One owner for a forge CLI's binary name, honoring the override that
+/// keeps the tests hermetic.
+#[must_use]
+pub fn forge_bin(forge: Forge) -> String {
+    std::env::var(forge.cli_override()).unwrap_or_else(|_| forge.cli().to_owned())
+}
+
+/// The version probe's stable name.
+const fn version_probe_id(forge: Forge) -> &'static str {
+    match forge {
+        Forge::Github => "gh-version",
+        Forge::Gitlab => "glab-version",
+    }
+}
+
+/// The first `<major>.<minor>.<patch>` run in a version line.
+///
+/// `gh version 2.19.0 (2022-10-25)` and `glab 1.114.0 (4d7c6cd)` both
+/// resolve. Nothing else in the crate parses a version string.
+#[must_use]
+pub fn parse_cli_version(text: &str) -> Option<(u32, u32, u32)> {
+    let bytes = text.as_bytes();
+    let mut start = 0;
+    while start < bytes.len() {
+        if !bytes[start].is_ascii_digit() {
+            start += 1;
+            continue;
+        }
+        let mut end = start;
+        while end < bytes.len() && (bytes[end].is_ascii_digit() || bytes[end] == b'.') {
+            end += 1;
+        }
+        let run = &text[start..end];
+        let mut parts = run.split('.');
+        let parsed = (|| {
+            let major = parts.next()?.parse().ok()?;
+            let minor = parts.next()?.parse().ok()?;
+            let patch = parts.next()?.parse().ok()?;
+            Some((major, minor, patch))
+        })();
+        if let Some(version) = parsed {
+            return Some(version);
+        }
+        start = end.max(start + 1);
+    }
+    None
+}
+
+/// Run `<bin> --version` and parse it. A spawn failure, a non-zero exit,
+/// or output carrying no version run all answer `None`, because none of
+/// them proves a version this binary can trust.
+#[must_use]
+pub fn forge_cli_version(bin: &str) -> Option<(u32, u32, u32)> {
+    let out = Command::new(bin).arg("--version").output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_cli_version(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// A forge CLI is present and at or above the floor this binary calls.
+///
+/// Soft: a host that never starts work from an issue does not need it.
+fn forge_cli_floor(forge: Forge) -> ProbeResult {
+    let id = version_probe_id(forge);
+    let bin = forge_bin(forge);
+    let name = forge.cli();
+    let floor = forge.cli_floor();
+    match forge_cli_version(&bin) {
+        Some(found) if found >= floor => ProbeResult::ok(
+            id,
+            ProbeClass::Soft,
+            format!("{name} {} is at or above {}", show(found), show(floor)),
+        ),
+        Some(found) => ProbeResult::failed(
+            id,
+            ProbeClass::Soft,
+            format!(
+                "{name} {} is below the {} rk calls",
+                show(found),
+                show(floor)
+            ),
+            forge.cli_upgrade(),
+        ),
+        None => ProbeResult::failed(
+            id,
+            ProbeClass::Soft,
+            format!("{name} does not answer --version with a version"),
+            format!("install {name}"),
+        ),
+    }
+}
+
+/// `<major>.<minor>.<patch>` for a message.
+fn show((major, minor, patch): (u32, u32, u32)) -> String {
+    format!("{major}.{minor}.{patch}")
+}
+
+/// The gate a verb runs before its first forge call: the CLI is present
+/// and at or above [`Forge::cli_floor`]. Returns the binary to spawn and
+/// the version found.
+///
+/// It runs before anything is written, locally or remotely, so a stale CLI
+/// costs one local process and leaves the clone untouched.
+///
+/// # Errors
+///
+/// [`Reason::PrerequisiteUnmet`] where the CLI is absent, does not answer,
+/// or is below the floor.
+pub fn require_forge_cli(forge: Forge) -> Result<(String, (u32, u32, u32)), RkError> {
+    let bin = forge_bin(forge);
+    let name = forge.cli();
+    let floor = forge.cli_floor();
+    let Some(found) = forge_cli_version(&bin) else {
+        return Err(RkError::refusal(
+            Diagnostic::new(
+                Reason::PrerequisiteUnmet,
+                format!("{name} does not answer --version with a version"),
+            )
+            .expected(format!("{name} at or above {} on PATH", show(floor)))
+            .action(format!("install {name}, then rerun"))
+            .target_state("unchanged"),
+        ));
+    };
+    if found < floor {
+        return Err(RkError::refusal(
+            Diagnostic::new(
+                Reason::PrerequisiteUnmet,
+                format!(
+                    "{name} {} is below the {} rk calls",
+                    show(found),
+                    show(floor)
+                ),
+            )
+            .expected(format!("{name} at or above {}", show(floor)))
+            .action(forge.cli_upgrade())
+            .target_state("unchanged"),
+        ));
+    }
+    Ok((bin, found))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::remote_host;
+    use super::{parse_cli_version, remote_host};
+
+    /// Both forge CLIs print their version in a different shape, and a
+    /// line carrying no version resolves to nothing rather than to a
+    /// guess.
+    #[test]
+    fn a_version_line_parses_from_both_forge_clis() {
+        assert_eq!(
+            parse_cli_version("gh version 2.19.0 (2022-10-25)"),
+            Some((2, 19, 0))
+        );
+        assert_eq!(
+            parse_cli_version("glab 1.114.0 (4d7c6cd)\n"),
+            Some((1, 114, 0))
+        );
+        assert_eq!(parse_cli_version("gh version 2.99.0"), Some((2, 99, 0)));
+        assert_eq!(parse_cli_version("no version here"), None);
+        assert_eq!(parse_cli_version("gh version 2.19"), None);
+    }
+
+    /// The floor comparison orders by component, so no string comparison
+    /// survives it.
+    #[test]
+    fn a_floor_comparison_orders_by_component() {
+        assert!((2, 100, 0) > (2, 99, 0));
+        assert!((2, 9, 0) < (2, 19, 0));
+        assert!((2, 19, 0) >= (2, 19, 0));
+    }
 
     #[test]
     fn a_remote_host_parses_from_both_url_forms() {
