@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1](https://github.com/gubasso/release-kit/compare/v0.3.0...v0.3.1) - 2026-09-08
+
+### Added
+
+- *(landing)* give a gitlab target a child pipeline of its own ([#97](https://github.com/gubasso/release-kit/pull/97))
+
 ## [0.3.0](https://github.com/gubasso/release-kit/compare/v0.2.23...v0.3.0) - 2026-09-08
 
 ### Added
