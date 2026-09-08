@@ -35,13 +35,14 @@ pub struct StepSpec {
     pub prereqs: &'static [&'static str],
 }
 
-/// The thirteen steps, in the chapter's order.
+/// The fourteen steps, in the chapter's order.
 ///
-/// `package-check` and `branch-reminder` belong to no forge tree — one
-/// reads its command from the technology binding, the other writes an
-/// embedded hook body into the target's own git directory — which makes
-/// them the two steps outside the parity rule.
-pub const STEPS: [StepSpec; 13] = [
+/// `package-check`, `branch-reminder`, and `forge-version` belong to no
+/// forge tree — the first reads its command from the technology binding,
+/// the second writes an embedded hook body into the target's own git
+/// directory, and the third is one read-only API call the observer already
+/// makes — which makes them the three steps outside the parity rule.
+pub const STEPS: [StepSpec; 14] = [
     StepSpec {
         name: "package-check",
         chapter: "§0",
@@ -115,13 +116,22 @@ pub const STEPS: [StepSpec; 13] = [
         prereqs: &[],
     },
     StepSpec {
+        name: "forge-version",
+        chapter: "§3",
+        mutates: Mutates::Nothing,
+        proves: "the forge meets the convention's minimum version",
+        destructive: false,
+        optional: false,
+        prereqs: &[],
+    },
+    StepSpec {
         name: "protect-trunk",
         chapter: "§3",
         mutates: Mutates::Forge,
         proves: "the trunk takes no direct push, merges only by squash with the request's title and body as the message, and requires the named check",
         destructive: false,
         optional: false,
-        prereqs: &["default-branch"],
+        prereqs: &["default-branch", "forge-version"],
     },
     StepSpec {
         name: "protect-tags",

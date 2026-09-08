@@ -201,3 +201,17 @@ used_by = ["rust"]
 purpose = "caches store paths through the GitHub Actions cache in the nix build job the rust binding serves"
 check = "https://api.github.com/repos/DeterminateSystems/magic-nix-cache-action/releases/latest"
 checked = 2026-09-04
+
+# NixOS/nix publishes tags and cuts no GitHub releases, so the check reads
+# the tags endpoint rather than the releases one; the image tag tracks the
+# Nix version, so the greatest tag there is the newest image. That endpoint
+# answers a page of a list and documents no ordering, so the check reads
+# every page and takes the greatest across all of them; per_page=100 is its
+# maximum and keeps the page count down.
+[[tool]]
+name = "nix-image"
+version = "2.35.2"
+used_by = ["rust"]
+purpose = "runs the nix build proof in the child pipeline the gitlab pair triggers"
+check = "https://api.github.com/repos/NixOS/nix/tags?per_page=100"
+checked = 2026-09-08

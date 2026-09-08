@@ -1,7 +1,7 @@
 {
   "schema_version": 5,
-  "rk_version": "0.2.23",
-  "payload_sha256": "9f84d604207ffc6895899a1ebe170d41b566f8a9f8c02dc98a86efc69cdd38bc",
+  "rk_version": "0.3.0",
+  "payload_sha256": "29c5b50d75e5c7369a0f83ca4318f41c227a051a7db0c89f45a1a94acadbaac6",
   "origin": "adopt",
   "tech": "rust",
   "forge": "github",
@@ -60,6 +60,7 @@
     "dist-download-artifact": "8",
     "dist-upload-artifact": "7",
     "magic-nix-cache-action": "13",
+    "nix-image": "2.35.2",
     "nix-installer-action": "19",
     "pre-commit-hooks": "6.0.0",
     "release-plz": "0.3.160",

@@ -121,6 +121,9 @@ pub fn observe(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkE
     if step == "branch-reminder" {
         return Ok(branch_reminder_state(ctx));
     }
+    if step == "forge-version" {
+        return forge_version(ctx, run);
+    }
     match ctx.forge {
         Forge::Github => github(ctx, step, run),
         Forge::Gitlab => gitlab(ctx, step, run),
@@ -182,6 +185,96 @@ fn branch_reminder_state(ctx: &Ctx) -> StepState {
         HookState::Drifted => StepState::not("the reminder hook drifted from this binary's body"),
         HookState::Unreadable(detail) => StepState::unknown(detail),
     }
+}
+
+/// The GitLab version this convention needs, as major and minor.
+///
+/// `trigger: strategy: mirror` arrived in GitLab 18.2, and the merge-request
+/// pipeline's `project-jobs` bridge rests on it: below the floor the child
+/// pipeline's status never reaches the parent, so a failing project job
+/// merges.
+pub const GITLAB_VERSION_FLOOR: (u64, u64) = (18, 2);
+
+/// The two suffixes that name an edition rather than a pre-release. Every
+/// other suffix is a pre-release, and the step fails closed on one.
+const GITLAB_EDITIONS: [&str; 2] = ["ee", "ce"];
+
+/// The refusal an instance below the floor reads: the reading, the reason,
+/// and the fix.
+fn version_refusal(found: &str, prerelease: Option<&str>) -> String {
+    let (major, minor) = GITLAB_VERSION_FLOOR;
+    let mut said = vec![format!(
+        "this GitLab instance reports {found}; the convention needs {major}.{minor} or newer"
+    )];
+    if let Some(suffix) = prerelease {
+        said.push(format!(
+            "the -{suffix} suffix is a pre-release, and nothing proves the feature shipped in it, so this step fails closed"
+        ));
+    }
+    said.push(format!(
+        "the merge-request pipeline triggers a child pipeline with `strategy: mirror`, which GitLab added in {major}.{minor}"
+    ));
+    said.push(
+        "below it the child's status never reaches the parent pipeline, so a failing project job merges".to_owned(),
+    );
+    said.push(format!(
+        "upgrade the instance to {major}.{minor} or newer, or host the project on gitlab.com"
+    ));
+    said.join("; ")
+}
+
+/// §3: the forge's own version against the convention's floor.
+///
+/// GitHub is a rolling service and is answered without a call. GitLab is one
+/// read-only `GET /version`, and every failure to read is `Unknown`, which
+/// blocks the `protect-trunk` prerequisite exactly as `Unsatisfied` does.
+fn forge_version(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkError> {
+    if ctx.forge == Forge::Github {
+        return Ok(StepState::ok(
+            "github.com is a rolling service and declares no version floor",
+        ));
+    }
+    let body = match api_get(ctx, run, "version")? {
+        Api::Ok(body) => body,
+        Api::Missing => {
+            return Ok(StepState::unknown(
+                "this instance answers no GET /version; the floor cannot be read. Check that glab is authenticated against it: glab auth login",
+            ));
+        }
+        Api::Failed(err) => {
+            return Ok(StepState::unknown(format!(
+                "the version could not be read: {err}. Check that glab is authenticated against this instance: glab auth login"
+            )));
+        }
+    };
+    let Some(found) = body["version"].as_str() else {
+        return Ok(StepState::unknown(
+            "the forge answer carries no version field; the floor cannot be read. Check that glab is authenticated against this instance: glab auth login",
+        ));
+    };
+    let (number, suffix) = found
+        .split_once('-')
+        .map_or((found, None), |(n, s)| (n, Some(s)));
+    let mut parts = number.split('.');
+    let parsed = parts
+        .next()
+        .and_then(|major| major.parse::<u64>().ok())
+        .zip(parts.next().and_then(|minor| minor.parse::<u64>().ok()));
+    let Some(pair) = parsed else {
+        return Ok(StepState::unknown(format!(
+            "the forge reports the version as '{found}', which names no major and minor pair; the floor cannot be read"
+        )));
+    };
+    if let Some(suffix) = suffix.filter(|s| !GITLAB_EDITIONS.contains(s)) {
+        return Ok(StepState::not(version_refusal(found, Some(suffix))));
+    }
+    if pair < GITLAB_VERSION_FLOOR {
+        return Ok(StepState::not(version_refusal(found, None)));
+    }
+    let (major, minor) = GITLAB_VERSION_FLOOR;
+    Ok(StepState::ok(format!(
+        "this instance reports {found}, at or above the {major}.{minor} floor"
+    )))
 }
 
 /// The destructive step's own guard: whether deleting a candidate branch
@@ -592,6 +685,38 @@ fn github_ruleset(
 }
 
 /// The trunk ruleset, checked for the shape a release merge needs.
+/// The rule kinds the setup writes and can reproduce. It also drives the
+/// missing-rule fault, so a kind this convention refuses must stay out of
+/// it: adding one here would demand that rule on every target.
+const OWNED_TRUNK_RULES: [&str; 4] = [
+    "deletion",
+    "non_fast_forward",
+    "pull_request",
+    "required_status_checks",
+];
+
+/// A fault line for every rule on the trunk that the setup does not own.
+///
+/// The merge queue gets its own text, because this convention refuses one
+/// deliberately and the operator needs the consequence and the remedy. Every
+/// other unowned kind reads generically: an unowned rule is one the setup
+/// cannot reproduce or explain, and it can block the very merge the method
+/// depends on.
+fn unowned_rule_faults(rules: &[Value]) -> Vec<String> {
+    rules
+        .iter()
+        .filter_map(|rule| rule["type"].as_str())
+        .filter(|kind| !OWNED_TRUNK_RULES.contains(kind))
+        .map(|kind| {
+            if kind == "merge_queue" {
+                MERGE_QUEUE_FAULT.to_owned()
+            } else {
+                format!("an unowned rule is present: {kind}")
+            }
+        })
+        .collect()
+}
+
 fn github_trunk_ruleset(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkError> {
     let name = format!("{TRUNK_BRANCH}-protection");
     let detail = match github_ruleset_body(ctx, run, &name)? {
@@ -627,27 +752,12 @@ fn github_trunk_ruleset(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkErro
     if !detail["bypass_actors"].as_array().is_none_or(Vec::is_empty) {
         faults.push("a bypass actor is named".to_owned());
     }
-    let owned = [
-        "deletion",
-        "non_fast_forward",
-        "pull_request",
-        "required_status_checks",
-    ];
-    for required in owned {
+    for required in OWNED_TRUNK_RULES {
         if !has(required) {
             faults.push(format!("the {required} rule is missing"));
         }
     }
-    for rule in &rules {
-        if let Some(kind) = rule["type"].as_str() {
-            if !owned.contains(&kind) {
-                // Named for the sharpest case: an unowned rule is one the
-                // setup cannot reproduce or explain, and it can block the
-                // very merge the method depends on.
-                faults.push(format!("an unowned rule is present: {kind}"));
-            }
-        }
-    }
+    faults.extend(unowned_rule_faults(&rules));
     if let Some(request) = rules.iter().find(|rule| rule["type"] == "pull_request") {
         if request["parameters"]["allowed_merge_methods"] != serde_json::json!(["squash"]) {
             faults.push("the merge method is not exactly a squash merge".to_owned());
@@ -699,24 +809,29 @@ fn github_trunk_ruleset(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkErro
             }
         }
     }
+    if let Some(shape) = gate_faults(ctx) {
+        faults.push(shape);
+    }
     if !faults.is_empty() {
         return Ok(StepState::not(faults.join("; ")));
     }
-    let detail = format!("{name} holds the release-merge shape");
-    Ok(match gate_limitation(ctx) {
-        Some(limitation) => StepState::ok_with_limitation(detail, limitation),
-        None => StepState::ok(detail),
-    })
+    Ok(StepState::ok(format!(
+        "{name} holds the release-merge shape"
+    )))
 }
 
-/// What the trunk protection leaves ungated. The ruleset requires the
-/// named check and nothing else the project's workflow reports, so a job
-/// outside the check's `needs` holds no merge. That is a limitation on
-/// what the protection enforces, not drift, and it is read only where the
-/// check is named: without the flag the observation knows no gate.
-fn gate_limitation(ctx: &Ctx) -> Option<String> {
+/// The ways the named gate is shaped so that it cannot report a blocking
+/// answer. A required check that never reports is a broken trunk
+/// protection, not a weaker guarantee, so each of these is a fault rather
+/// than a limitation. Read only where the check is named: without the flag
+/// the observation knows no gate.
+///
+/// It judges the gate alone. Which other jobs a project means to block a
+/// merge is intent, no file states it, and `forges/github.md` carries that
+/// as a convention instead.
+fn gate_faults(ctx: &Ctx) -> Option<String> {
     let check = ctx.required_check.as_deref()?;
-    workflow_jobs::limitation(&workflow_jobs::read_gate(&ctx.target, check), check)
+    workflow_jobs::faults(&workflow_jobs::read_gate(&ctx.target, check), check)
 }
 
 /// What the repository's squash message settings hold.
@@ -817,6 +932,12 @@ const GITLAB_AUTO_MERGE_LIMITATION: &str = "the forge offers no project-level au
 /// The GitLab limitation `protect-tags` and `protections-check` report.
 const GITLAB_TAG_LIMITATION: &str =
     "an Owner or Maintainer can still delete a protected tag through the UI or API";
+
+/// The fault a merge queue on the trunk reads as: what is enabled, what it
+/// costs, and how to undo it. This convention refuses a queue rather than
+/// owning one, so the operator needs the consequence rather than a rule
+/// type's bare name.
+const MERGE_QUEUE_FAULT: &str = "a merge queue is enabled on the trunk; this convention lands no workflow that triggers on merge_group, so the queue waits on a required check that never reports and drops the request when its CI timeout expires. rk setup step protect-trunk --apply rewrites the ruleset without it";
 
 /// The GitLab limitation `protect-trunk` and `protections-check` report:
 /// the title gate rides the request's own pipeline on this forge.

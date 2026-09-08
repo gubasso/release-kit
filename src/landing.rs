@@ -78,9 +78,12 @@ const KINDS: [(&str, Kind); 15] = [
 /// reconstruct whether these files are supposed to exist: an absent file
 /// under `nix = false` is not wanted, never drifted.
 ///
-/// The capability lands no workflow: a job proving the build gates the
-/// merge only inside the workflow the required check needs, and that
-/// workflow is the target's own. The rust binding serves the job.
+/// The capability lands no workflow, on either forge, and each forge's
+/// reason is its own. On GitHub a job gates the merge only inside the
+/// workflow the required check needs, and that workflow is the target's
+/// own. On GitLab the merge check is the whole pipeline, and a target's
+/// jobs live in the child pipeline the rendered parent triggers, which the
+/// target owns. The bindings serve the job for both.
 pub const NIX_DESTINATIONS: [&str; 3] = ["nix/package.nix", "flake.nix", "flake.lock"];
 
 /// The subset a target with a flake of its own keeps out: the seed pair,

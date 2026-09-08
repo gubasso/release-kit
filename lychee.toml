@@ -2,6 +2,12 @@ scheme = ["http", "https"]
 cache = true
 max_retries = 3
 
+# A rate limit is the host declining to answer this checker right now, and
+# it says nothing about whether the link works. Treating it as a failure
+# makes the gate report the network the check ran from rather than the
+# documents it read.
+accept = ["100..=103", "200..=299", "429"]
+
 exclude = [
   "https://example.invalid/.*",
   # Owner-only settings pages: 404 to anyone not signed in as the owner.

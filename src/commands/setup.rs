@@ -194,6 +194,11 @@ fn script(name: &str, forge: Option<&str>) -> Result<(), RkError> {
             "branch-reminder writes an embedded hook body and has no script; rk setup step branch-reminder previews the write".into(),
         ));
     }
+    if name == "forge-version" {
+        return Err(RkError::Usage(
+            "forge-version reads the forge's own version and has no script; rk setup step forge-version previews the read".into(),
+        ));
+    }
     let forge = match forge {
         Some(value) => Forge::parse(value).ok_or_else(|| {
             RkError::Usage(format!(
@@ -462,6 +467,18 @@ fn render_invocation(ctx: &Ctx, step: &StepSpec) -> String {
             Some("bash") => "nothing to run: no registry for this technology".to_owned(),
             _ => "needs: a version file naming the technology".to_owned(),
         },
+        "forge-version" => {
+            let (major, minor) = observe::GITLAB_VERSION_FLOOR;
+            match ctx.forge {
+                Forge::Github => {
+                    "nothing to read: github.com is a rolling service and declares no version floor"
+                        .to_owned()
+                }
+                Forge::Gitlab => format!(
+                    "would read: GET /version, and compare it against the {major}.{minor} floor; nothing is written"
+                ),
+            }
+        }
         name => {
             let check = ctx
                 .required_check
@@ -679,6 +696,30 @@ fn apply_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
                 )),
             }
         }
+        // The step mutates nothing, so apply and check read the same answer
+        // and apply writes nothing at all. An unreadable version is a
+        // refusal, never a pass: the floor exists to stop a protection the
+        // forge cannot honor, and a floor nobody could read proves neither
+        // way.
+        "forge-version" => match observe_with(engine, "forge-version")? {
+            StepState::Satisfied { detail, .. } => Ok(Done::Satisfied(detail)),
+            StepState::Unsatisfied { detail } | StepState::Inapplicable { detail } => {
+                Err(RkError::refusal(
+                    Diagnostic::new(Reason::PrerequisiteUnmet, detail)
+                        .expected(step.proves.to_owned())
+                        .action("upgrade the instance, or host the project on gitlab.com")
+                        .target_state("unchanged")
+                        .step(step.name),
+                ))
+            }
+            StepState::Unknown { detail } => Err(RkError::refusal(
+                Diagnostic::new(Reason::ForgeTemporary, detail)
+                    .expected("a readable forge version")
+                    .action("glab auth login, then rerun")
+                    .target_state("unchanged")
+                    .step(step.name),
+            )),
+        },
         "branch-reminder" => {
             use crate::setup::branch_reminder::{HookState, hook_body, hook_path, observe_hook};
             match observe_hook(&engine.ctx.target) {

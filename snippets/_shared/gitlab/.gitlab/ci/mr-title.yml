@@ -11,7 +11,7 @@
 # pipeline; the forge document's Limitations state both.
 
 mr-title:
-  stage: .pre
+  stage: test
   image: alpine:3
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'

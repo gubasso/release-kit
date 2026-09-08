@@ -2225,8 +2225,8 @@ fn the_two_setup_trees_hold_identical_step_sets() {
 }
 
 /// Every step in `rk setup --list` resolves to an embedded script in every
-/// tree, except `package-check` and `branch-reminder`, the two steps
-/// outside the parity rule.
+/// tree, except `package-check`, `branch-reminder`, and `forge-version`,
+/// the three steps outside the parity rule.
 #[test]
 fn every_listed_step_resolves_to_a_script_in_every_tree() {
     let out = rk().args(["setup", "--list"]).assert().success();
@@ -2240,8 +2240,10 @@ fn every_listed_step_resolves_to_a_script_in_every_tree() {
             Some(rest.split_whitespace().next()?.to_owned())
         })
         .collect();
-    assert_eq!(listed.len(), 13, "thirteen steps list: {text}");
-    listed.retain(|name| !["package-check", "branch-reminder"].contains(&name.as_str()));
+    assert_eq!(listed.len(), 14, "fourteen steps list: {text}");
+    listed.retain(|name| {
+        !["package-check", "branch-reminder", "forge-version"].contains(&name.as_str())
+    });
     listed.sort();
     let filed: Vec<String> = script_files("github").into_iter().map(|(n, _)| n).collect();
     assert_eq!(listed, filed, "the list and the tree disagree");
@@ -3009,6 +3011,14 @@ api)
       echo "glab: 404 Not Found (HTTP 404)" >&2; exit 1
     fi;;
   "GET "*"/access_tokens") echo '[]';;
+  "GET version")
+    v="$(cat "$STATE/gitlab_version" 2>/dev/null || echo '18.2.1-ee')"
+    case "$v" in
+      __missing__) echo "glab: 404 Not Found (HTTP 404)" >&2; exit 1;;
+      __failed__) echo "glab: dial tcp: connection refused" >&2; exit 1;;
+      __fieldless__) echo '{"revision":"abc1234"}';;
+      *) echo "{\"version\":\"$v\",\"revision\":\"abc1234\"}";;
+    esac;;
   "GET "*"/protected_tags/v%2A")
     if [[ -f "$STATE/tag_protected" ]]; then echo '{"name":"v*"}'; else echo "glab: 404 Not Found (HTTP 404)" >&2; exit 1; fi;;
   "POST "*"/protected_tags")
@@ -3154,6 +3164,20 @@ impl ForgeFixture {
 
     fn seed(&self, name: &str, value: &str) {
         std::fs::write(self.mock.path().join(name), value).expect("the state seeds");
+    }
+
+    /// A sound gate in the target's own workflows, reporting both check
+    /// names these tests require. A required context no job reports is a
+    /// fault on `protect-trunk`, so a target that names one owes the
+    /// workflow that reports it.
+    fn seed_gate(&self) {
+        let dir = self.target.path().join(".github/workflows");
+        std::fs::create_dir_all(&dir).expect("the workflows dir");
+        std::fs::write(
+            dir.join("ci.yml"),
+            "on: [pull_request]\njobs:\n  lint:\n    runs-on: ubuntu-latest\n  test-check:\n    if: always()\n    needs: [lint]\n    runs-on: ubuntu-latest\n  build:\n    name: build (matrix, 1)\n    if: always()\n    needs: [lint]\n    runs-on: ubuntu-latest\n",
+        )
+        .expect("the gate workflow writes");
     }
 
     /// A key file outside the target, in the mode rk demands. `mode` is the
@@ -3304,6 +3328,7 @@ fn setup_json_is_ndjson_opening_with_the_schema() {
 #[allow(clippy::too_many_lines)]
 fn a_full_github_apply_lands_reasserts_and_checks_clean() {
     let fixture = ForgeFixture::new();
+    fixture.seed_gate();
     let key = fixture.key_file();
     let apply = |fixture: &ForgeFixture| {
         let mut command = fixture.rk(&["setup"]);
@@ -3810,6 +3835,7 @@ fn the_required_check_flag_is_demanded_and_refused_per_forge() {
 #[test]
 fn the_check_name_reaches_the_protection_body_verbatim() {
     let fixture = ForgeFixture::new();
+    fixture.seed_gate();
     fixture.seed("default_branch", "master");
     fixture
         .rk(&["setup", "step", "protect-trunk"])
@@ -3894,6 +3920,278 @@ fn a_gitlab_protect_trunk_apply_asserts_the_squash_template() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// The GitLab version floor
+
+/// Observe `forge-version` against one seeded instance version and hand
+/// back what `rk setup check` printed for that step alone.
+fn forge_version_line(fixture: &ForgeFixture, version: &str) -> String {
+    fixture.seed("gitlab_version", version);
+    let out = fixture
+        .rk(&["setup", "check"])
+        .args(["--repo", "acme/widget", "--forge", "gitlab"])
+        .assert()
+        .get_output()
+        .stdout
+        .clone();
+    String::from_utf8_lossy(&out)
+        .lines()
+        .find(|line| line.contains("forge-version"))
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// A supported version satisfies the step. The comparison is numeric, so
+/// 18.10 is above the 18.2 floor rather than below it, and an edition
+/// suffix carries no feature and is ignored.
+#[test]
+fn the_floor_accepts_a_supported_version() {
+    let fixture = ForgeFixture::new();
+    for version in ["18.2.0", "18.2.1-ee", "19.0.0", "18.10.0", "18.2.0-ce"] {
+        let line = forge_version_line(&fixture, version);
+        assert!(
+            line.starts_with("ok forge-version"),
+            "{version} must satisfy the floor: {line}"
+        );
+    }
+}
+
+/// An instance below the floor is not satisfied. The whole convention rests
+/// on `strategy: mirror`, which such an instance cannot compile.
+#[test]
+fn the_floor_refuses_an_old_version() {
+    let fixture = ForgeFixture::new();
+    for version in ["18.1.9", "18.0.4-ce", "17.11.0"] {
+        let line = forge_version_line(&fixture, version);
+        assert!(
+            line.starts_with("unsatisfied forge-version"),
+            "{version} must not satisfy the floor: {line}"
+        );
+    }
+}
+
+/// The refusal is actionable on its own: the reading, the reason, and the
+/// fix, without reading the source.
+#[test]
+fn the_refusal_names_the_reason_and_the_fix() {
+    let fixture = ForgeFixture::new();
+    let line = forge_version_line(&fixture, "18.0.0");
+    for part in [
+        "18.0.0",
+        "18.2 or newer",
+        "strategy: mirror",
+        "upgrade the instance",
+        "gitlab.com",
+    ] {
+        assert!(
+            line.contains(part),
+            "the refusal must name `{part}`: {line}"
+        );
+    }
+}
+
+/// Every failure to read is unknown, never satisfied. A floor nobody could
+/// read proves neither way, and it blocks the protection just the same.
+#[test]
+fn an_unreadable_version_is_unknown() {
+    let fixture = ForgeFixture::new();
+    for version in ["__missing__", "__failed__", "__fieldless__", "nightly"] {
+        let line = forge_version_line(&fixture, version);
+        assert!(
+            line.starts_with("unknown forge-version"),
+            "{version} must read as unknown: {line}"
+        );
+    }
+}
+
+/// GitHub is answered without a call: github.com is a rolling service, and
+/// GitHub Enterprise Server is not a supported target, so the step makes no
+/// claim about it.
+#[test]
+fn github_needs_no_version_call() {
+    let fixture = ForgeFixture::new();
+    let out = fixture
+        .rk(&["setup", "step", "forge-version"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .arg("--apply")
+        .assert()
+        .success()
+        .get_output()
+        .stderr
+        .clone();
+    assert!(
+        String::from_utf8_lossy(&out).contains("rolling service"),
+        "github is satisfied without a version call"
+    );
+    assert!(
+        !fixture.log().contains("api version"),
+        "no version call was made: {}",
+        fixture.log()
+    );
+}
+
+/// The requirement itself: the trunk protection refuses while the floor is
+/// unmet, and refuses the same while it is unreadable. This asserts the
+/// behaviour of the existing prerequisite gate; it changes nothing there.
+#[test]
+fn protect_trunk_refuses_below_the_floor() {
+    for version in ["18.0.0", "__failed__"] {
+        let fixture = ForgeFixture::new();
+        fixture.seed("default_branch", "master");
+        fixture.seed("gitlab_version", version);
+        fixture
+            .rk(&["setup", "step", "protect-trunk"])
+            .args(["--repo", "acme/widget", "--forge", "gitlab", "--apply"])
+            .assert()
+            .code(73)
+            .stderr(predicate::str::contains("requires forge-version first"));
+        assert!(
+            !fixture.state("protected_master").exists(),
+            "{version}: no protection may be installed below the floor"
+        );
+    }
+}
+
+/// A pre-release carrying the floor's own number is refused. Nothing proves
+/// that `strategy: mirror` shipped in the pre-release that carries the
+/// number, so the step fails closed and names the suffix as the reason.
+#[test]
+fn a_pre_release_at_the_floor_is_refused() {
+    let fixture = ForgeFixture::new();
+    for version in ["18.2.0-pre", "18.2.0-rc1"] {
+        let line = forge_version_line(&fixture, version);
+        assert!(
+            line.starts_with("unsatisfied forge-version"),
+            "{version} must not satisfy the floor: {line}"
+        );
+        assert!(
+            line.contains("pre-release"),
+            "{version}: the refusal must name the pre-release suffix: {line}"
+        );
+    }
+    for version in ["18.2.0-ee", "18.2.0-ce"] {
+        let line = forge_version_line(&fixture, version);
+        assert!(
+            line.starts_with("ok forge-version"),
+            "{version} is an edition, not a pre-release: {line}"
+        );
+    }
+}
+
+/// The step resolves to no script, and the two forge trees stay identical.
+/// A step outside the parity rule must not grow a file in one tree alone.
+#[test]
+fn forge_version_resolves_to_no_script() {
+    rk().args(["setup", "script", "forge-version"])
+        .assert()
+        .code(64)
+        .stderr(predicate::str::contains("has no script"));
+    let github: Vec<String> = script_files("github").into_iter().map(|(n, _)| n).collect();
+    let gitlab: Vec<String> = script_files("gitlab").into_iter().map(|(n, _)| n).collect();
+    assert_eq!(github, gitlab, "the forge trees disagree on step names");
+    assert!(
+        !github.contains(&"forge-version".to_owned()),
+        "forge-version runs no script and belongs in no tree"
+    );
+}
+
+/// Preview describes the read it would make and never claims a script it
+/// does not have. A preview line that lies is worse than none.
+#[test]
+fn forge_version_preview_names_no_script() {
+    let fixture = ForgeFixture::new();
+    let out = fixture
+        .rk(&["setup", "step", "forge-version"])
+        .args(["--repo", "acme/widget", "--forge", "gitlab"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8_lossy(&out);
+    assert!(
+        text.contains("GET /version"),
+        "the preview names the read it makes: {text}"
+    );
+    assert!(
+        !text.contains("would run: sh") && !text.contains("embedded"),
+        "the preview must claim no embedded script: {text}"
+    );
+    assert_eq!(fixture.log(), "", "preview invoked the forge CLI");
+}
+
+/// Apply reads the same answer check reads and writes nothing: the step
+/// mutates nothing, so its apply must record no mutating call.
+#[test]
+fn forge_version_applies_without_writing() {
+    let fixture = ForgeFixture::new();
+    fixture.seed("gitlab_version", "18.2.1-ee");
+    fixture
+        .rk(&["setup", "step", "forge-version"])
+        .args(["--repo", "acme/widget", "--forge", "gitlab", "--apply"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("18.2.1-ee"));
+    for call in fixture.log().lines() {
+        assert!(
+            call.starts_with("api version"),
+            "the step made a call beyond the version read: {call}"
+        );
+    }
+}
+
+/// The ordered run reaches the floor before it reaches the protection, and
+/// the protection declares the floor as its prerequisite. Together with
+/// `protect_trunk_refuses_below_the_floor`, that is what makes an ordered
+/// apply stop before a merge check the child pipeline cannot feed.
+#[test]
+fn the_ordered_run_places_forge_version_before_protect_trunk() {
+    let listed: Vec<String> = release_kit::setup::steps::STEPS
+        .iter()
+        .map(|step| step.name.to_owned())
+        .collect();
+    let floor = listed
+        .iter()
+        .position(|name| name == "forge-version")
+        .expect("the table carries the floor step");
+    let protect = listed
+        .iter()
+        .position(|name| name == "protect-trunk")
+        .expect("the table carries the protection step");
+    assert!(
+        floor < protect,
+        "the floor must be observed before the protection: {listed:?}"
+    );
+    assert!(
+        release_kit::setup::steps::spec("protect-trunk")
+            .expect("the protection step")
+            .prereqs
+            .contains(&"forge-version"),
+        "the protection must declare the floor as a prerequisite"
+    );
+
+    let fixture = ForgeFixture::new();
+    let out = fixture
+        .rk(&["setup"])
+        .args(["--repo", "acme/widget", "--forge", "gitlab"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8_lossy(&out);
+    let floor = text
+        .find("forge-version")
+        .expect("the preview lists the floor step");
+    let protect = text
+        .find("protect-trunk")
+        .expect("the preview lists the protection step");
+    assert!(
+        floor < protect,
+        "the preview must list the floor first: {text}"
+    );
+}
+
 /// Ordering is enforced by observation: a protection step refuses while the
 /// trunk has not been proven the default.
 #[test]
@@ -3909,6 +4207,109 @@ fn a_protection_step_refuses_before_the_trunk_is_the_default() {
     assert!(
         !fixture.log().contains("-X POST"),
         "the refusal must write nothing"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The merge queue this convention refuses
+
+/// A trunk ruleset the setup owns, plus whatever extra rules a case adds.
+fn owned_trunk_ruleset(extra: &str) -> String {
+    format!(
+        r#"{{
+  "name": "master-protection",
+  "target": "branch",
+  "enforcement": "active",
+  "bypass_actors": [],
+  "conditions": {{
+    "ref_name": {{ "include": ["refs/heads/master"], "exclude": [] }}
+  }},
+  "rules": [
+    {{ "type": "deletion" }},
+    {{ "type": "non_fast_forward" }},
+    {{
+      "type": "pull_request",
+      "parameters": {{ "required_approving_review_count": 0, "allowed_merge_methods": ["squash"] }}
+    }},
+    {{
+      "type": "required_status_checks",
+      "parameters": {{ "required_status_checks": [{{ "context": "test-check" }}, {{ "context": "pr-title" }}] }}
+    }}{extra}
+  ]
+}}"#
+    )
+}
+
+/// Seed a trunk ruleset and read what `rk setup check` says about it.
+fn check_owned_trunk(fixture: &ForgeFixture, extra: &str) -> String {
+    fixture.seed("default_branch", "master");
+    fixture.seed("rulesets.index", "master-protection\n");
+    fixture.seed("ruleset_master-protection", &owned_trunk_ruleset(extra));
+    let out = fixture
+        .rk(&["setup", "check"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .args(["--required-check", "test-check"])
+        .assert()
+        .get_output()
+        .stdout
+        .clone();
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// SATISFIES forge-setup:an-unowned-protection-names-its-consequence
+/// A queue already faulted; only the message was missing. The operator
+/// needs the consequence and the remedy, not the rule kind's bare name.
+#[test]
+fn the_merge_queue_fault_names_its_consequence() {
+    let fixture = ForgeFixture::new();
+    let text = check_owned_trunk(&fixture, ",\n    { \"type\": \"merge_queue\" }");
+    assert!(
+        text.contains("unsatisfied protect-trunk"),
+        "a queue must fault: {text}"
+    );
+    for part in [
+        "merge queue is enabled",
+        "merge_group",
+        "rk setup step protect-trunk --apply",
+    ] {
+        assert!(text.contains(part), "the fault must name `{part}`: {text}");
+    }
+    assert!(
+        !text.contains("an unowned rule is present: merge_queue"),
+        "the queue has its own text, not the generic one: {text}"
+    );
+}
+
+/// SATISFIES forge-setup:an-unowned-protection-names-its-consequence
+/// Every other unowned kind keeps the generic text: the custom arm is one
+/// message, not a new classification.
+#[test]
+fn an_unowned_rule_still_faults_generically() {
+    let fixture = ForgeFixture::new();
+    let text = check_owned_trunk(
+        &fixture,
+        ",\n    { \"type\": \"commit_author_email_pattern\" }",
+    );
+    assert!(
+        text.contains("an unowned rule is present: commit_author_email_pattern"),
+        "an unowned kind with no arm keeps the generic text: {text}"
+    );
+}
+
+/// SATISFIES forge-setup:an-unowned-protection-names-its-consequence
+/// The refused kind stays out of the required set. That set also drives the
+/// missing-rule fault, so adding it there would demand a queue everywhere.
+#[test]
+fn the_setup_never_demands_a_merge_queue() {
+    let fixture = ForgeFixture::new();
+    let text = check_owned_trunk(&fixture, "");
+    assert!(
+        !text.contains("merge_queue"),
+        "a ruleset without a queue must report nothing about one: {text}"
+    );
+    assert!(
+        text.contains("ok protect-trunk") || text.contains("satisfied protect-trunk"),
+        "the owned shape with no queue is satisfied: {text}"
     );
 }
 
@@ -5732,6 +6133,10 @@ case "$url" in
   *cargo-dist*) printf '%s' '{"tag_name":"v999.0.0"}';;
   *git-cliff*) printf '%s' 'not json at all';;
   *actions/checkout*) exit 22;;
+  */NixOS/nix/tags*) case "$url" in
+    *"&page="*) printf '%s' '[]';;
+    *) printf '%s' '[{"name":"2.35.2"}]';;
+  esac;;
   *) printf '%s' '{"tag_name":"v1.14.2"}';;
 esac
 "#,
@@ -5823,6 +6228,145 @@ esac
     assert!(
         pin_named("git-cliff")["ref_result"].is_null(),
         "a non-action pin resolves no ref"
+    );
+}
+
+/// A paged source is read to its end. The tags endpoint answers a page of a
+/// list and documents no ordering, so a check that stopped at page one
+/// would compute the greatest of an arbitrary subset and could report a
+/// stale pin as current. Here the greatest entry sits on page two.
+#[test]
+fn a_paged_check_source_is_read_past_its_first_page() {
+    let mock = tempfile::tempdir().expect("a scratch dir exists");
+    let curl = mock.path().join("curl");
+    std::fs::write(
+        &curl,
+        r#"#!/usr/bin/env bash
+url="${@: -1}"
+case "$url" in
+  */NixOS/nix/tags*) case "$url" in
+    *"&page=2"*) printf '%s' '[{"name":"3.0.0"},{"name":"2.34.8"}]';;
+    *"&page="*) printf '%s' '[]';;
+    *) printf '%s' '[{"name":"2.35.0"},{"name":"2.35.2"}]';;
+  esac;;
+  *) printf '%s' '{"tag_name":"v0.0.0"}';;
+esac
+"#,
+    )
+    .expect("the mock writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&curl, std::fs::Permissions::from_mode(0o755))
+            .expect("the mock is executable");
+    }
+    let out = rk()
+        .args(["versions", "--check", "--json"])
+        .env("RK_CURL_BIN", &curl)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    let paged = report["pins"]
+        .as_array()
+        .and_then(|pins| pins.iter().find(|pin| pin["tool"] == "nix-image").cloned())
+        .expect("the nix-image pin reports");
+    assert_eq!(paged["result"], "update-available", "{paged}");
+    assert_eq!(paged["available"], "3.0.0", "{paged}");
+}
+
+/// A list that never ends within the page bound is not an answer. The
+/// greatest version lies past what was read, so reporting the greatest of
+/// the pages that fit would be the same silent false-current the paging
+/// exists to remove. It reads as unreachable instead.
+#[test]
+fn a_paged_source_past_the_bound_reads_as_unreachable() {
+    let mock = tempfile::tempdir().expect("a scratch dir exists");
+    let curl = mock.path().join("curl");
+    std::fs::write(
+        &curl,
+        r#"#!/usr/bin/env bash
+url="${@: -1}"
+case "$url" in
+  */NixOS/nix/tags*) printf '%s' '[{"name":"2.35.2"}]';;
+  *) printf '%s' '{"tag_name":"v0.0.0"}';;
+esac
+"#,
+    )
+    .expect("the mock writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&curl, std::fs::Permissions::from_mode(0o755))
+            .expect("the mock is executable");
+    }
+    let out = rk()
+        .args(["versions", "--check", "--json"])
+        .env("RK_CURL_BIN", &curl)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    let unbounded = report["pins"]
+        .as_array()
+        .and_then(|pins| pins.iter().find(|pin| pin["tool"] == "nix-image").cloned())
+        .expect("the nix-image pin reports");
+    assert_eq!(unbounded["result"], "source-unreachable", "{unbounded}");
+    assert!(
+        unbounded["available"].is_null(),
+        "a list that never ended names no version: {unbounded}"
+    );
+}
+
+/// Every page of a list is a list. A later page answering some other shape
+/// is a source this reader does not understand, and the object parser would
+/// otherwise mint a version out of an answer that names no tag at all.
+#[test]
+fn a_paged_source_that_changes_shape_reads_as_unparsable() {
+    let mock = tempfile::tempdir().expect("a scratch dir exists");
+    let curl = mock.path().join("curl");
+    std::fs::write(
+        &curl,
+        r#"#!/usr/bin/env bash
+url="${@: -1}"
+case "$url" in
+  */NixOS/nix/tags*) case "$url" in
+    *"&page=2"*) printf '%s' '{"tag_name":"v99.0.0"}';;
+    *"&page="*) printf '%s' '[]';;
+    *) printf '%s' '[{"name":"2.35.2"}]';;
+  esac;;
+  *) printf '%s' '{"tag_name":"v0.0.0"}';;
+esac
+"#,
+    )
+    .expect("the mock writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&curl, std::fs::Permissions::from_mode(0o755))
+            .expect("the mock is executable");
+    }
+    let out = rk()
+        .args(["versions", "--check", "--json"])
+        .env("RK_CURL_BIN", &curl)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    let shifted = report["pins"]
+        .as_array()
+        .and_then(|pins| pins.iter().find(|pin| pin["tool"] == "nix-image").cloned())
+        .expect("the nix-image pin reports");
+    assert_eq!(shifted["result"], "source-unparsable", "{shifted}");
+    assert!(
+        shifted["available"].is_null(),
+        "an object on a later page names no tag: {shifted}"
     );
 }
 
@@ -6533,27 +7077,31 @@ fn the_rust_github_seed_attests_the_release_payload_in_the_host_phase() {
 
 /// This repository's own gate is read by the same reader `rk setup check`
 /// runs against a target, so the convention it teaches is one it passes.
-/// The proof a merge rests on is a job the gate needs, never a job beside
-/// it: without this, a job added to `ci.yml` and left out of `needs`
-/// reports red and merges anyway.
+/// The proof a merge rests on is a job the gate needs, which is this
+/// repository's own convention; what the reader judges is that the gate is
+/// shaped to report a blocking answer at all.
 #[test]
-fn this_projects_ci_gate_needs_every_request_job() {
+fn this_projects_ci_gate_is_shaped_to_report() {
     let root = camino::Utf8Path::from_path(Path::new(env!("CARGO_MANIFEST_DIR")))
         .expect("a utf-8 manifest directory");
     let report = release_kit::setup::workflow_jobs::read_gate(root, "gate");
     assert_eq!(
         report.reading,
         release_kit::setup::workflow_jobs::GateReading::Gated,
-        "every job this repository reports on a request is one the gate needs"
+        "the gate reports the required context and names a literal needs list"
     );
     assert_eq!(
         report.gate_condition,
-        Some(release_kit::setup::workflow_jobs::Condition::Always),
+        Some(release_kit::setup::workflow_jobs::Condition::Proven),
         "the gate runs even when a needed job fails: the forge reports a skipped job as success"
     );
+    assert_eq!(
+        report.reporting, 1,
+        "exactly one job reports the required context, so the protection is unambiguous"
+    );
     assert!(
-        release_kit::setup::workflow_jobs::limitation(&report, "gate").is_none(),
-        "the reader names no limitation against this repository's own workflows"
+        release_kit::setup::workflow_jobs::faults(&report, "gate").is_none(),
+        "the reader faults nothing against this repository's own workflows"
     );
 }
 
@@ -6580,14 +7128,12 @@ fn the_bash_github_workflow_attests_before_it_creates_the_release() {
     );
 }
 
-/// The bash/gitlab pipeline, split into its top-level sections: everything
-/// from a column-zero `name:` line to the next column-zero line, comments
-/// dropped so a job's prose neighbour cannot satisfy an assertion about its
+/// A GitLab pipeline, split into its top-level sections: everything from a
+/// column-zero `name:` line to the next column-zero line, comments dropped
+/// so a job's prose neighbour cannot satisfy an assertion about its
 /// commands. The provenance tests reason about which job carries what, so
 /// they need the boundaries, not just the whole file.
-fn bash_gitlab_sections() -> Vec<(String, String)> {
-    let text = std::fs::read_to_string(repo_path("snippets/bash/gitlab/.gitlab-ci.yml"))
-        .expect("the pipeline reads");
+fn gitlab_sections_of(text: &str) -> Vec<(String, String)> {
     let mut sections: Vec<(String, String)> = Vec::new();
     for line in text.lines() {
         if line.trim_start().starts_with('#') {
@@ -6606,6 +7152,12 @@ fn bash_gitlab_sections() -> Vec<(String, String)> {
     }
     assert!(!sections.is_empty(), "the pipeline parsed to no sections");
     sections
+}
+
+fn bash_gitlab_sections() -> Vec<(String, String)> {
+    let text = std::fs::read_to_string(repo_path("snippets/bash/gitlab/.gitlab-ci.yml"))
+        .expect("the pipeline reads");
+    gitlab_sections_of(&text)
 }
 
 fn bash_gitlab_job(name: &str) -> String {
@@ -6799,6 +7351,460 @@ fn the_bash_gitlab_cosign_pin_agrees_with_the_registry() {
     assert!(
         provenance.contains("sha256sum -c"),
         "the fetched binary is checked against the authored digest before it runs"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The GitLab merge-request pipeline, and the target-owned child pipeline
+
+/// The rendered GitLab parents: the snippet each pair lands as
+/// `.gitlab-ci.yml`.
+const GITLAB_PARENTS: [&str; 2] = [
+    "snippets/rust/gitlab/.gitlab-ci.yml",
+    "snippets/bash/gitlab/.gitlab-ci.yml",
+];
+
+/// The top-level keys of a GitLab file that are configuration and not jobs.
+const GITLAB_NON_JOB_KEYS: [&str; 6] = [
+    "include",
+    "stages",
+    "workflow",
+    "default",
+    "variables",
+    "image",
+];
+
+/// Land one GitLab pair into a scratch target, so an assertion reads the
+/// composed tree a project gets rather than the snippet tree alone.
+fn land_gitlab(tech: &str) -> tempfile::TempDir {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    std::fs::create_dir_all(target.path().join(".git")).expect("a git directory exists");
+    rk().args(["init", "--tech", tech, "--forge", "gitlab"])
+        .args(["--repo", "acme/widget", "--target"])
+        .arg(target.path())
+        .arg("--apply")
+        .assert()
+        .success();
+    target
+}
+
+/// Every GitLab configuration file in a landed target: the parent and the
+/// files it includes from `.gitlab/ci/`.
+fn landed_gitlab_files(root: &Path) -> Vec<PathBuf> {
+    let mut files = vec![root.join(".gitlab-ci.yml")];
+    let dir = root.join(".gitlab/ci");
+    if dir.is_dir() {
+        let mut included: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .expect("the include directory reads")
+            .map(|entry| entry.expect("an entry").path())
+            .collect();
+        included.sort();
+        files.extend(included);
+    }
+    files
+}
+
+/// The `stages:` list a GitLab file declares, in declaration order.
+fn gitlab_stages(text: &str) -> Vec<String> {
+    let mut stages: Vec<String> = Vec::new();
+    let mut inside = false;
+    for line in text.lines() {
+        if line.trim_start().starts_with('#') {
+            continue;
+        }
+        if line.starts_with("stages:") {
+            inside = true;
+            continue;
+        }
+        if !inside {
+            continue;
+        }
+        if let Some(stage) = line.trim().strip_prefix("- ") {
+            stages.push(stage.trim().to_owned());
+        } else if !line.trim().is_empty() {
+            break;
+        }
+    }
+    stages
+}
+
+/// Every `stage:` value a GitLab file assigns, jobs and templates alike.
+fn gitlab_job_stages(text: &str) -> Vec<String> {
+    text.lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .filter_map(|line| line.trim().strip_prefix("stage: "))
+        .map(|stage| stage.trim().to_owned())
+        .collect()
+}
+
+/// SATISFIES forge-setup:a-check-reports-what-the-forge-enforces
+/// GitLab creates no pipeline whose only jobs sit in `.pre` or `.post`. On a
+/// merge-request event the release jobs' rules never match, so a title gate
+/// in `.pre` was the only job, no pipeline was created, and the project's
+/// "pipelines must succeed" setting then blocked every merge for want of the
+/// pipeline it waits on. This is the regression that holds that defect shut.
+#[test]
+fn mr_title_runs_in_an_ordinary_stage() {
+    let text =
+        std::fs::read_to_string(repo_path("snippets/_shared/gitlab/.gitlab/ci/mr-title.yml"))
+            .expect("the title gate reads");
+    assert_eq!(
+        gitlab_job_stages(&text),
+        vec!["test".to_owned()],
+        "the title gate must sit in an ordinary stage: a pipeline of only .pre or .post jobs is never created"
+    );
+}
+
+/// Every GitLab pair gives a merge request a pipeline: at least one job
+/// survives the merge-request rules outside `.pre` and `.post`. The forge
+/// gate is "pipelines must succeed", which a missing pipeline never
+/// satisfies, so this is the property the merge depends on.
+#[test]
+fn every_gitlab_pair_produces_a_merge_request_job() {
+    for tech in ["rust", "bash"] {
+        let target = land_gitlab(tech);
+        let mut running: Vec<String> = Vec::new();
+        for path in landed_gitlab_files(target.path()) {
+            let text = std::fs::read_to_string(&path).expect("a landed pipeline reads");
+            for (name, body) in gitlab_sections_of(&text) {
+                if name.starts_with('.') || GITLAB_NON_JOB_KEYS.contains(&name.as_str()) {
+                    continue;
+                }
+                if !body.contains("merge_request_event") {
+                    continue;
+                }
+                if gitlab_job_stages(&body)
+                    .iter()
+                    .any(|stage| stage == ".pre" || stage == ".post")
+                {
+                    continue;
+                }
+                running.push(name);
+            }
+        }
+        assert!(
+            !running.is_empty(),
+            "{tech}/gitlab runs no ordinary job on a merge request, so the forge creates no pipeline and the merge check never passes"
+        );
+    }
+}
+
+/// The `test` stage is declared last. Stages run in order, so a `test` stage
+/// ahead of `release` would let a target's own job delay or block a trunk
+/// release. The position does not affect the merge gate, which reads the
+/// whole pipeline.
+#[test]
+fn the_test_stage_is_declared_last() {
+    for path in GITLAB_PARENTS {
+        let text = std::fs::read_to_string(repo_path(path)).expect("the parent reads");
+        let stages = gitlab_stages(&text);
+        assert_eq!(
+            stages.last().map(String::as_str),
+            Some("test"),
+            "{path}: `test` must be the last declared stage, after every release stage: {stages:?}"
+        );
+    }
+}
+
+/// Every stage a landed GitLab job names is declared in that target's
+/// parent, `.pre` and `.post` aside. GitLab does not deep-merge arrays, so a
+/// target cannot contribute a stage from a file of its own, and an
+/// undeclared stage fails the whole pipeline at compile time.
+#[test]
+fn every_gitlab_stage_is_declared() {
+    for tech in ["rust", "bash"] {
+        let target = land_gitlab(tech);
+        let parent = std::fs::read_to_string(target.path().join(".gitlab-ci.yml"))
+            .expect("the landed parent reads");
+        let declared = gitlab_stages(&parent);
+        for path in landed_gitlab_files(target.path()) {
+            let text = std::fs::read_to_string(&path).expect("a landed pipeline reads");
+            for stage in gitlab_job_stages(&text) {
+                assert!(
+                    stage == ".pre" || stage == ".post" || declared.contains(&stage),
+                    "{tech}/gitlab: {} names the undeclared stage `{stage}`; declared: {declared:?}",
+                    path.display()
+                );
+            }
+        }
+    }
+}
+
+/// The file a GitLab target creates to declare jobs of its own. The payload
+/// lands no such file; the bridge names the path a target uses.
+const GITLAB_PROJECT_FILE: &str = ".gitlab/ci/project.yml";
+
+/// The `project-jobs` bridge in one rendered parent.
+fn gitlab_bridge(path: &str) -> String {
+    let text = std::fs::read_to_string(repo_path(path)).expect("the parent reads");
+    gitlab_sections_of(&text)
+        .into_iter()
+        .find(|(name, _)| name == "project-jobs")
+        .map_or_else(
+            || panic!("{path} declares no project-jobs bridge"),
+            |(_, body)| body,
+        )
+}
+
+/// The paths a GitLab file includes statically, from its top-level
+/// `include:` list alone. A path reached through `trigger:` is a downstream
+/// pipeline and is deliberately not in this list.
+fn gitlab_static_includes(text: &str) -> Vec<String> {
+    let mut included: Vec<String> = Vec::new();
+    let mut inside = false;
+    for line in text.lines() {
+        if line.trim_start().starts_with('#') {
+            continue;
+        }
+        if line.starts_with("include:") {
+            inside = true;
+            continue;
+        }
+        if !inside {
+            continue;
+        }
+        if let Some(entry) = line.trim().strip_prefix("- local: ") {
+            included.push(entry.trim().to_owned());
+        } else if !line.trim().is_empty() && !line.starts_with("  ") {
+            break;
+        }
+    }
+    included
+}
+
+/// Each rendered parent declares the bridge exactly once. Two bridges would
+/// trigger the target's file twice per merge request.
+#[test]
+fn the_gitlab_bridge_exists_once_per_parent() {
+    for path in GITLAB_PARENTS {
+        let text = std::fs::read_to_string(repo_path(path)).expect("the parent reads");
+        let count = gitlab_sections_of(&text)
+            .into_iter()
+            .filter(|(name, _)| name == "project-jobs")
+            .count();
+        assert_eq!(count, 1, "{path}: the bridge must appear exactly once");
+    }
+}
+
+/// The bridge runs on a merge request and on nothing else. A trunk push
+/// releases; a target's own jobs have no business in that pipeline.
+#[test]
+fn the_bridge_is_merge_request_only() {
+    for path in GITLAB_PARENTS {
+        let bridge = gitlab_bridge(path);
+        assert!(
+            bridge.contains(r#"if: '$CI_PIPELINE_SOURCE == "merge_request_event"'"#),
+            "{path}: the bridge must be scoped to a merge-request event: {bridge}"
+        );
+    }
+}
+
+/// The bridge is guarded by the exact file it triggers, and by no wildcard.
+/// Without the guard a target that declared nothing still gets a bridge job
+/// and an empty downstream pipeline on every merge request.
+#[test]
+fn the_bridge_is_guarded_by_an_exact_file() {
+    for path in GITLAB_PARENTS {
+        let bridge = gitlab_bridge(path);
+        let guard = bridge
+            .find("exists:")
+            .unwrap_or_else(|| panic!("{path}: the bridge carries no exists: guard"));
+        let guarded = bridge[guard..]
+            .lines()
+            .nth(1)
+            .unwrap_or_default()
+            .trim()
+            .to_owned();
+        assert_eq!(
+            guarded,
+            format!("- {GITLAB_PROJECT_FILE}"),
+            "{path}: the guard must name the exact file, with no glob"
+        );
+        assert!(
+            !guarded.contains('*'),
+            "{path}: a wildcard guard would trigger on a file the bridge does not include"
+        );
+    }
+}
+
+/// The trigger mirrors the child's status, so a failing project job reaches
+/// the parent pipeline and the merge check holds it. The default marks the
+/// trigger job successful the moment the child pipeline is created, which
+/// would gate on nothing at all.
+#[test]
+fn the_bridge_mirrors_the_child_status() {
+    for path in GITLAB_PARENTS {
+        let bridge = gitlab_bridge(path);
+        assert!(
+            bridge.contains("strategy: mirror"),
+            "{path}: the trigger must mirror the child's status: {bridge}"
+        );
+        assert!(
+            !bridge.contains("strategy: depend"),
+            "{path}: depend is not recommended, and its status reads running on a manual child job"
+        );
+    }
+}
+
+/// The target's file is reached through the bridge and through nothing
+/// else. A static include would deep-merge it into the jobs release-kit
+/// owns, which is the whole reason the bridge exists. The bridge itself
+/// necessarily names the path inside `trigger:`, so the assertion is about
+/// static includes, not about every occurrence of the string.
+#[test]
+fn the_target_file_is_reached_only_through_the_bridge() {
+    for tech in ["rust", "bash"] {
+        let target = land_gitlab(tech);
+        for path in landed_gitlab_files(target.path()) {
+            let text = std::fs::read_to_string(&path).expect("a landed pipeline reads");
+            assert!(
+                !gitlab_static_includes(&text).contains(&GITLAB_PROJECT_FILE.to_owned()),
+                "{tech}/gitlab: {} includes the target's file statically, so it would deep-merge",
+                path.display()
+            );
+        }
+        assert!(
+            !target.path().join(GITLAB_PROJECT_FILE).exists(),
+            "{tech}/gitlab: the payload must land no {GITLAB_PROJECT_FILE}; the target creates it"
+        );
+    }
+    for path in GITLAB_PARENTS {
+        let bridge = gitlab_bridge(path);
+        let trigger = bridge
+            .find("trigger:")
+            .unwrap_or_else(|| panic!("{path}: the bridge carries no trigger:"));
+        let count = bridge[trigger..]
+            .lines()
+            .filter(|line| line.trim() == format!("- local: {GITLAB_PROJECT_FILE}"))
+            .count();
+        assert_eq!(
+            count, 1,
+            "{path}: the trigger must include the target's file exactly once"
+        );
+    }
+}
+
+/// The bridge sits in an ordinary stage, declared last, so a target's jobs
+/// can never delay or block a trunk release.
+#[test]
+fn the_bridge_sits_in_the_test_stage() {
+    for path in GITLAB_PARENTS {
+        let bridge = gitlab_bridge(path);
+        assert_eq!(
+            gitlab_job_stages(&bridge),
+            vec!["test".to_owned()],
+            "{path}: the bridge must sit in the test stage"
+        );
+    }
+}
+
+/// The forge document names no `gh` token. It gained the extension point's
+/// rules, and a document that teaches the wrong CLI is worse than a silent
+/// one.
+#[test]
+fn the_gitlab_forge_document_carries_no_gh_token() {
+    let text = std::fs::read_to_string(repo_path("forges/gitlab.md")).expect("the document reads");
+    let names_gh = text
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|token| token == "gh");
+    assert!(!names_gh, "the gitlab document names gh");
+    assert!(
+        text.contains(GITLAB_PROJECT_FILE),
+        "the gitlab document must own the extension point's rules"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The GitLab Nix build proof, served for the child pipeline
+
+/// The `nix` job the rust binding serves for a GitLab target's own child
+/// pipeline: the fenced block that follows the gitlab paragraph.
+fn served_gitlab_nix_job() -> String {
+    let text = std::fs::read_to_string(repo_path("bindings/rust.md")).expect("the binding reads");
+    let at = text
+        .find("On gitlab, the same proof")
+        .expect("the binding serves a gitlab nix job");
+    let block = text[at..]
+        .split("```")
+        .nth(1)
+        .expect("the paragraph is followed by a fenced block");
+    block
+        .strip_prefix("yaml\n")
+        .expect("the block declares its language")
+        .to_owned()
+}
+
+/// The image tag in the binding is the registry's. A pin that floats with a
+/// document is not pinned.
+#[test]
+fn the_gitlab_nix_job_pin_matches_the_registry() {
+    let registry = std::fs::read_to_string(repo_path("versions.toml")).expect("the registry reads");
+    let value: toml::Table = registry.parse().expect("the registry parses");
+    let pinned = value
+        .get("tool")
+        .and_then(toml::Value::as_array)
+        .expect("tool entries")
+        .iter()
+        .find(|tool| tool.get("name").and_then(toml::Value::as_str) == Some("nix-image"))
+        .expect("a nix-image entry")
+        .get("version")
+        .and_then(toml::Value::as_str)
+        .expect("a nix-image version")
+        .to_owned();
+    assert!(
+        served_gitlab_nix_job().contains(&format!("image: nixos/nix:{pinned}")),
+        "the served job's image must be the registry's pin ({pinned})"
+    );
+}
+
+/// The official image enables neither experimental feature, and both
+/// commands need them, so a job without the flags fails on every target.
+#[test]
+fn the_gitlab_nix_job_enables_the_features() {
+    let job = served_gitlab_nix_job();
+    let commands: Vec<&str> = job
+        .lines()
+        .filter(|line| line.trim_start().starts_with("- nix "))
+        .collect();
+    assert_eq!(commands.len(), 2, "the job runs two nix commands: {job}");
+    for command in commands {
+        assert!(
+            command.contains("--extra-experimental-features")
+                && command.contains("nix-command")
+                && command.contains("flakes"),
+            "every nix command must enable both features: {command}"
+        );
+    }
+}
+
+/// SATISFIES packaging:the-landable-capability-promises-a-buildable-flake
+/// `nix flake check` builds only the `checks` output, so a job that ran it
+/// alone would go green having never compiled the seeded package
+/// expression. The order is the proof.
+#[test]
+fn the_nix_build_precedes_the_flake_check() {
+    let job = served_gitlab_nix_job();
+    let build = job.find("build .#default").expect("the job builds");
+    let check = job.find("flake check").expect("the job checks the flake");
+    assert!(
+        build < check,
+        "nix build must precede nix flake check: {job}"
+    );
+}
+
+/// The served job carries no merge-request rule and no stage. Inside a
+/// child pipeline `CI_PIPELINE_SOURCE` reads `parent_pipeline`, so such a
+/// rule could never match, and the bridge already scopes the child.
+#[test]
+fn the_child_job_carries_no_merge_request_rule() {
+    let job = served_gitlab_nix_job();
+    assert!(
+        !job.contains("merge_request_event"),
+        "a rule that can never match would silence the job: {job}"
+    );
+    assert!(
+        !job.contains("stage:"),
+        "the child declares its own stages; the served job names none: {job}"
     );
 }
 
@@ -13975,54 +14981,53 @@ jobs:
     runs-on: ubuntu-latest
 ";
 
-/// A gate that needs every other request job earns no limitation.
+/// A gate under `!cancelled()` is proven where YAML reads it as text.
+/// `rust-lang/cargo` uses it deliberately, so a manual cancel does not turn
+/// the gate red; it runs on a failed dependency exactly as `always()` does.
 #[test]
-fn check_reports_no_limitation_when_the_gate_needs_every_job() {
+fn a_gate_under_not_cancelled_is_proven() {
     let fixture = ForgeFixture::new();
     seed_owned_trunk(&fixture);
-    write_workflow(&fixture, "ci.yml", GATED_WORKFLOW);
-    let line = protect_trunk_line(&fixture, Some("test"));
-    assert!(line.starts_with("ok protect-trunk"), "{line}");
-    assert!(!line.contains("limitation:"), "{line}");
+    for form in ["${{ !cancelled() }}", "'!cancelled()'", "\"!cancelled()\""] {
+        write_workflow(
+            &fixture,
+            "ci.yml",
+            &GATED_WORKFLOW.replace("if: always()", &format!("if: {form}")),
+        );
+        let line = protect_trunk_line(&fixture, Some("test"));
+        assert!(line.starts_with("ok protect-trunk"), "{form}: {line}");
+        assert!(!line.contains("limitation:"), "{form}: {line}");
+    }
 }
 
-/// The jobs outside the gate's needs are named: they report on a request
-/// and hold nothing.
+/// SATISFIES forge-setup:the-required-check-is-shaped-to-report
+/// An unquoted `if: !cancelled()` is a YAML tag, not text: the forge never
+/// parses the workflow, so the required context never reports and the merge
+/// hangs. A reader that passed it would bless a repository that cannot
+/// merge at all.
 #[test]
-fn check_names_the_request_jobs_the_gate_does_not_need() {
-    let fixture = ForgeFixture::new();
-    seed_owned_trunk(&fixture);
-    write_workflow(&fixture, "ci.yml", UNGATED_WORKFLOW);
-    let line = protect_trunk_line(&fixture, Some("test"));
-    assert!(line.starts_with("ok protect-trunk"), "{line}");
-    assert!(
-        line.contains("limitation:") && line.contains("gates nothing from [build, docs]"),
-        "{line}"
-    );
-}
-
-/// A required check no request job reports is unsatisfiable, and the
-/// check says so rather than reporting a bare pass.
-#[test]
-fn check_reports_an_unsatisfiable_required_check() {
+fn an_unquoted_bang_condition_faults() {
     let fixture = ForgeFixture::new();
     seed_owned_trunk(&fixture);
     write_workflow(
         &fixture,
         "ci.yml",
-        "on: [pull_request]\njobs:\n  lint:\n    runs-on: x\n  unit:\n    runs-on: x\n",
+        &GATED_WORKFLOW.replace("if: always()", "if: !cancelled()"),
     );
     let line = protect_trunk_line(&fixture, Some("test"));
+    assert!(line.starts_with("unsatisfied protect-trunk"), "{line}");
     assert!(
-        line.contains("cannot be satisfied") && line.contains("[lint, unit]"),
+        line.contains("YAML tag rather than text") && line.contains("does not parse"),
         "{line}"
     );
 }
 
-/// A gate without `if: always()` is skipped when a needed job fails, and
-/// the forge reads the skip as success.
+/// SATISFIES forge-setup:the-required-check-is-shaped-to-report
+/// A gate under no condition, and one under `always() && x`, both fault:
+/// the forge reads a job skipped by a failed dependency as success, so a
+/// gate that can skip gates nothing.
 #[test]
-fn check_reports_a_gate_without_always() {
+fn a_gate_without_a_proven_condition_faults() {
     let fixture = ForgeFixture::new();
     seed_owned_trunk(&fixture);
     write_workflow(
@@ -14031,65 +15036,106 @@ fn check_reports_a_gate_without_always() {
         &GATED_WORKFLOW.replace("    if: always()\n", ""),
     );
     let line = protect_trunk_line(&fixture, Some("test"));
-    assert!(line.contains("runs without if: always()"), "{line}");
-    assert!(!line.contains("gates nothing"), "{line}");
+    assert!(line.starts_with("unsatisfied protect-trunk"), "{line}");
+    assert!(
+        line.contains("runs under no if condition") && line.contains("reads a skip as success"),
+        "{line}"
+    );
+    write_workflow(
+        &fixture,
+        "ci.yml",
+        &GATED_WORKFLOW.replace(
+            "if: always()",
+            "if: always() && needs.lint.result == 'success'",
+        ),
+    );
+    let line = protect_trunk_line(&fixture, Some("test"));
+    assert!(line.starts_with("unsatisfied protect-trunk"), "{line}");
+    assert!(
+        line.contains("runs under the condition always() && needs.lint.result == 'success'"),
+        "{line}"
+    );
 }
 
-/// A block-list needs is read like a flow list; an expression is not
-/// followed, and the check says the reading is incomplete.
+/// SATISFIES forge-setup:the-required-check-is-shaped-to-report
+/// A `needs` value the reader does not follow is refused, not interpreted:
+/// an anchor names a voting list nobody can read from the file.
 #[test]
-fn check_reads_a_block_needs_list_and_names_an_opaque_one() {
+fn a_gate_with_opaque_needs_faults() {
     let fixture = ForgeFixture::new();
     seed_owned_trunk(&fixture);
+    write_workflow(
+        &fixture,
+        "ci.yml",
+        "on: [pull_request]\njobs:\n  lint:\n    runs-on: x\n  test:\n    if: always()\n    needs: *all\n",
+    );
+    let line = protect_trunk_line(&fixture, Some("test"));
+    assert!(line.starts_with("unsatisfied protect-trunk"), "{line}");
+    assert!(
+        line.contains("an anchor, an alias, or an expression")
+            && line.contains("refuses rather than interprets"),
+        "{line}"
+    );
+    // A block list is read like a flow list and is sound.
     write_workflow(
         &fixture,
         "ci.yml",
         "on: [pull_request]\njobs:\n  lint:\n    runs-on: x\n  build:\n    runs-on: x\n  test:\n    if: always()\n    needs:\n      - lint\n      - build\n",
     );
     let line = protect_trunk_line(&fixture, Some("test"));
-    assert!(!line.contains("limitation:"), "{line}");
+    assert!(line.starts_with("ok protect-trunk"), "{line}");
+}
+
+/// SATISFIES forge-setup:the-required-check-is-shaped-to-report
+/// A required context no job reports never reports at all, and the fault
+/// lists the contexts that do: that list is the remediation an operator
+/// acts on.
+#[test]
+fn a_missing_gate_names_the_contexts_that_do_report() {
+    let fixture = ForgeFixture::new();
+    seed_owned_trunk(&fixture);
     write_workflow(
         &fixture,
         "ci.yml",
-        "on: [pull_request]\njobs:\n  lint:\n    runs-on: x\n  test:\n    if: always()\n    needs: ${{ fromJSON(inputs.jobs) }}\n",
+        "on: [pull_request]\njobs:\n  lint:\n    runs-on: x\n  unit:\n    runs-on: x\n",
     );
     let line = protect_trunk_line(&fixture, Some("test"));
+    assert!(line.starts_with("unsatisfied protect-trunk"), "{line}");
     assert!(
-        line.contains("could not be read") && line.contains("ci.yml"),
+        line.contains("never reports and every merge hangs") && line.contains("[lint, unit]"),
+        "{line}"
+    );
+
+    // No request workflow at all is the same failure, named for its cause.
+    let bare = ForgeFixture::new();
+    seed_owned_trunk(&bare);
+    let line = protect_trunk_line(&bare, Some("test"));
+    assert!(line.starts_with("unsatisfied protect-trunk"), "{line}");
+    assert!(
+        line.contains("no workflow in .github/workflows runs on a pull request"),
         "{line}"
     );
 }
 
-/// A target with no request workflow reports that the check cannot be
-/// satisfied: no job anywhere reports it.
+/// SATISFIES forge-setup:the-required-check-is-shaped-to-report
+/// A gate that is a reusable-workflow call reports `<caller> / <callee>`,
+/// never the caller's own name, so it cannot prove it reports the required
+/// context. A name built from an expression fails the same way.
 #[test]
-fn check_reports_a_check_no_request_workflow_can_report() {
+fn a_reusable_gate_still_faults() {
     let fixture = ForgeFixture::new();
     seed_owned_trunk(&fixture);
-    let line = protect_trunk_line(&fixture, Some("test"));
-    assert!(
-        line.starts_with("ok protect-trunk")
-            && line.contains("no workflow in .github/workflows runs on a pull request"),
-        "no workflows dir: {line}"
-    );
     write_workflow(
         &fixture,
-        "nightly.yml",
-        "on: push\njobs:\n  lint:\n    runs-on: x\n  test:\n    runs-on: x\n",
+        "ci.yml",
+        "on: [pull_request]\njobs:\n  lint:\n    runs-on: x\n  test:\n    uses: org/repo/.github/workflows/x.yml@main\n    name: test\n    needs: [lint]\n",
     );
     let line = protect_trunk_line(&fixture, Some("test"));
+    assert!(line.starts_with("unsatisfied protect-trunk"), "{line}");
     assert!(
-        line.contains("no workflow in .github/workflows runs on a pull request"),
-        "push-only workflow: {line}"
+        line.contains("runs a reusable workflow") && line.contains("not proven to exist"),
+        "{line}"
     );
-}
-
-/// A gate whose name is an expression, or whose condition is more than a
-/// bare `always()`, or whose trigger filters by paths, is not proven.
-#[test]
-fn check_names_an_unproven_gate_name_condition_and_trigger() {
-    let fixture = ForgeFixture::new();
-    seed_owned_trunk(&fixture);
     write_workflow(
         &fixture,
         "ci.yml",
@@ -14100,55 +15146,29 @@ fn check_names_an_unproven_gate_name_condition_and_trigger() {
         line.contains("names itself by an expression") && line.contains("not proven to exist"),
         "{line}"
     );
-    write_workflow(
-        &fixture,
-        "ci.yml",
-        "on:\n  pull_request:\n    paths: ['src/**']\njobs:\n  lint:\n    runs-on: x\n  test:\n    if: always() && needs.lint.result == 'success'\n    needs: [lint]\n",
-    );
-    let line = protect_trunk_line(&fixture, Some("test"));
-    assert!(
-        line.contains("runs under the condition always() && needs.lint.result == 'success'"),
-        "{line}"
-    );
-    assert!(line.contains("filters by paths"), "{line}");
-    assert!(!line.contains("gates nothing"), "{line}");
-    write_workflow(
-        &fixture,
-        "ci.yml",
-        "on:\n  pull_request:\n    branches: [main]\n    types: [opened]\njobs:\n  test:\n    if: always()\n",
-    );
-    let line = protect_trunk_line(&fixture, Some("test"));
-    assert!(
-        line.contains("reads branches: [main]") && line.contains("against master"),
-        "{line}"
-    );
-    assert!(line.contains("reads types: [opened]"), "{line}");
-    write_workflow(
-        &fixture,
-        "ci.yml",
-        "on:\n  pull_request:\n    branches-ignore: ['ma[as]ter']\njobs:\n  test:\n    if: always()\n",
-    );
-    let line = protect_trunk_line(&fixture, Some("test"));
-    assert!(
-        line.contains("reads branches-ignore: [ma[as]ter]"),
-        "{line}"
-    );
-    write_workflow(
-        &fixture,
-        "ci.yml",
-        "on: [pull_request]\njobs:\n  lint:\n    runs-on: x\n  test:\n    uses: org/repo/.github/workflows/x.yml@main\n    name: test\n    needs: [lint]\n",
-    );
-    let line = protect_trunk_line(&fixture, Some("test"));
-    assert!(
-        line.contains("runs a reusable workflow") && line.contains("not proven to exist"),
-        "{line}"
-    );
 }
 
-/// A workflow that runs on a request from a second file is judged with the
-/// first, and an unreadable file is named rather than skipped.
+/// SATISFIES forge-setup:the-required-check-is-shaped-to-report
+/// The reversal itself: a gate needing one job of five is satisfied, with
+/// nothing said about the other four. Which jobs vote is the project's
+/// convention, and no file states it.
 #[test]
-fn check_judges_every_request_workflow_and_names_an_unreadable_one() {
+fn an_ungated_job_is_no_longer_reported() {
+    let fixture = ForgeFixture::new();
+    seed_owned_trunk(&fixture);
+    write_workflow(&fixture, "ci.yml", UNGATED_WORKFLOW);
+    let line = protect_trunk_line(&fixture, Some("test"));
+    assert!(line.starts_with("ok protect-trunk"), "{line}");
+    assert!(!line.contains("limitation:"), "{line}");
+    assert!(!line.contains("gates nothing"), "{line}");
+}
+
+/// SATISFIES forge-setup:the-required-check-is-shaped-to-report
+/// A job in a second request workflow is one the gate cannot need, and it
+/// is no longer reported for that. Whether it is meant to block is intent
+/// no file states.
+#[test]
+fn a_second_request_workflow_is_no_longer_reported() {
     let fixture = ForgeFixture::new();
     seed_owned_trunk(&fixture);
     write_workflow(&fixture, "ci.yml", GATED_WORKFLOW);
@@ -14158,15 +15178,108 @@ fn check_judges_every_request_workflow_and_names_an_unreadable_one() {
         "on:\n  pull_request:\n  push:\n    tags: ['v*']\njobs:\n  plan:\n    runs-on: x\n",
     );
     let line = protect_trunk_line(&fixture, Some("test"));
-    assert!(line.contains("gates nothing from [plan]"), "{line}");
+    assert!(line.starts_with("ok protect-trunk"), "{line}");
+    assert!(!line.contains("plan"), "{line}");
+}
+
+/// SATISFIES forge-setup:the-required-check-is-shaped-to-report
+/// The fault is a missing lifecycle type, not the presence of the `types`
+/// key: a full explicit list is accepted, and the narrower wording is what
+/// the rule and the fault text carry.
+#[test]
+fn a_full_types_list_is_still_accepted() {
+    let fixture = ForgeFixture::new();
+    seed_owned_trunk(&fixture);
+    write_workflow(
+        &fixture,
+        "ci.yml",
+        "on:\n  pull_request:\n    types: [opened, synchronize, reopened]\njobs:\n  test:\n    if: always()\n",
+    );
+    let line = protect_trunk_line(&fixture, Some("test"));
+    assert!(line.starts_with("ok protect-trunk"), "{line}");
+    assert!(!line.contains("types:"), "{line}");
+    write_workflow(
+        &fixture,
+        "ci.yml",
+        "on:\n  pull_request:\n    types: [opened]\njobs:\n  test:\n    if: always()\n",
+    );
+    let line = protect_trunk_line(&fixture, Some("test"));
+    assert!(line.starts_with("unsatisfied protect-trunk"), "{line}");
+    assert!(
+        line.contains("reads types: [opened]")
+            && line.contains("leaves out one of opened, reopened, and synchronize"),
+        "{line}"
+    );
+}
+
+/// SATISFIES forge-setup:the-required-check-is-shaped-to-report
+/// Two jobs reporting one context make the required check ambiguous: the
+/// protection cannot say which job it is holding for.
+#[test]
+fn a_duplicated_required_context_faults() {
+    let fixture = ForgeFixture::new();
+    seed_owned_trunk(&fixture);
+    write_workflow(&fixture, "ci.yml", GATED_WORKFLOW);
+    write_workflow(
+        &fixture,
+        "extra.yml",
+        "on: [pull_request]\njobs:\n  other:\n    name: test\n    runs-on: x\n",
+    );
+    let line = protect_trunk_line(&fixture, Some("test"));
+    assert!(line.starts_with("unsatisfied protect-trunk"), "{line}");
+    assert!(
+        line.contains("reported by 2 jobs") && line.contains("no longer stands for the gate alone"),
+        "{line}"
+    );
+}
+
+/// SATISFIES forge-setup:the-required-check-is-shaped-to-report
+/// Uniqueness rests on the files the reader could read. An unreadable one
+/// leaves it unproven, and the text says so rather than converting an
+/// unproven uniqueness into a claim of uniqueness.
+#[test]
+fn an_unreadable_workflow_does_not_prove_uniqueness() {
+    let fixture = ForgeFixture::new();
+    seed_owned_trunk(&fixture);
+    write_workflow(&fixture, "ci.yml", GATED_WORKFLOW);
     std::fs::create_dir_all(fixture.target.path().join(".github/workflows/broken.yml"))
         .expect("a directory named as a file");
     let line = protect_trunk_line(&fixture, Some("test"));
-    assert!(line.contains("[broken.yml] could not be read"), "{line}");
+    assert!(
+        line.contains("[broken.yml] could not be read") && line.contains("not proven unique"),
+        "{line}"
+    );
+    assert!(!line.contains("stands for the gate alone"), "{line}");
 }
 
-/// Without `--required-check` the workflows are not read: the gate is
-/// unknown to the check, so it judges nothing about it.
+/// A trigger the gate's workflow filters away is a gate that never
+/// reports on the request that needs it.
+#[test]
+fn a_filtered_trigger_faults() {
+    let fixture = ForgeFixture::new();
+    seed_owned_trunk(&fixture);
+    write_workflow(
+        &fixture,
+        "ci.yml",
+        "on:\n  pull_request:\n    paths: ['src/**']\njobs:\n  test:\n    if: always()\n",
+    );
+    let line = protect_trunk_line(&fixture, Some("test"));
+    assert!(line.starts_with("unsatisfied protect-trunk"), "{line}");
+    assert!(line.contains("filters by paths"), "{line}");
+    write_workflow(
+        &fixture,
+        "ci.yml",
+        "on:\n  pull_request:\n    branches: [main]\njobs:\n  test:\n    if: always()\n",
+    );
+    let line = protect_trunk_line(&fixture, Some("test"));
+    assert!(
+        line.contains("reads branches: [main]") && line.contains("against master"),
+        "{line}"
+    );
+}
+
+/// Without `--required-check` the workflows are not read: the check knows
+/// no gate, so it judges nothing about one.
 #[test]
 fn check_reads_workflows_only_with_a_required_check() {
     let fixture = ForgeFixture::new();
@@ -14177,10 +15290,10 @@ fn check_reads_workflows_only_with_a_required_check() {
     assert!(!line.contains("limitation:"), "{line}");
 }
 
-/// The aggregate protections step carries the trunk limitation through
-/// instead of shadowing it behind a bare pass.
+/// The aggregate protections step carries the trunk fault through instead
+/// of shadowing it behind a bare pass.
 #[test]
-fn protections_check_carries_the_trunk_limitation() {
+fn protections_check_carries_the_trunk_fault() {
     let fixture = ForgeFixture::new();
     seed_owned_trunk(&fixture);
     fixture.seed("rulesets.index", "master-protection\nrelease-tags\n");
@@ -14199,7 +15312,11 @@ fn protections_check_carries_the_trunk_limitation() {
   ]
 }"#,
     );
-    write_workflow(&fixture, "ci.yml", UNGATED_WORKFLOW);
+    write_workflow(
+        &fixture,
+        "ci.yml",
+        &GATED_WORKFLOW.replace("    if: always()\n", ""),
+    );
     let out = fixture
         .rk(&["setup", "check"])
         .args([
@@ -14211,6 +15328,7 @@ fn protections_check_carries_the_trunk_limitation() {
             "test",
         ])
         .assert()
+        .code(1)
         .get_output()
         .stdout
         .clone();
@@ -14220,8 +15338,8 @@ fn protections_check_carries_the_trunk_limitation() {
         .find(|line| line.contains("protections-check"))
         .unwrap_or_else(|| panic!("no protections-check line: {text}"));
     assert!(
-        line.starts_with("ok protections-check")
-            && line.contains("gates nothing from [build, docs]"),
+        line.starts_with("unsatisfied protections-check")
+            && line.contains("runs under no if condition"),
         "{line}"
     );
 }

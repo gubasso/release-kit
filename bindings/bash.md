@@ -18,6 +18,7 @@ A one-line `VERSION` file is the committed source of truth, and `git-cliff --bum
 ## Setup specifics
 
 - No registry means no step 0 metadata gate, no bootstrap token, no trusted publisher, and no enforcement switch; setup is the branch shape, the protections, and the landed files.
+- On GitLab, a project declares its own jobs in `.gitlab/ci/project.yml`, which the rendered parent triggers as a child pipeline; [the forge document](../forges/gitlab.md) carries the rules that file follows.
 - The landed `VERSION` is `0.0.0`, the unreleased baseline; with no tag in the repository, the first release request bumps straight to the `initial_tag` that `cliff.toml` configures, so the baseline and the computed first version can never collide.
 - The Makefile honours `PREFIX`, `DESTDIR`, `bindir`, `libdir`, and `datadir`. Every downstream packaging tool assumes that contract, so it is the installability gate this binding runs where others dry-run against a registry.
 - `make dist` produces the tarball and its `.sha256` from `git archive`, so the artifact is a pure function of the tag.

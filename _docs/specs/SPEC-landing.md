@@ -313,7 +313,7 @@ Verify: `cargo nextest run -E 'test(a_pre_nix_record_upgrades_to_nothing_unreque
 
 ### `landing:the-flake-pair-lands-all-or-nothing` — The flake pair lands all-or-nothing
 
-A landing MUST land the seed `flake.nix` and its matching `flake.lock` as a pair only where the target carries neither, withholding the pair with the reason named where either exists, because a seed lock beside a foreign flake describes the wrong input graph; the seeded package expression still lands, and a crate shape the seed does not support withholds the whole capability by name. The capability MUST land no workflow, because a job proving the build holds a merge only inside the workflow the required check needs, and that workflow is the target's own.
+A landing MUST land the seed `flake.nix` and its matching `flake.lock` as a pair only where the target carries neither, withholding the pair with the reason named where either exists, because a seed lock beside a foreign flake describes the wrong input graph; the seeded package expression still lands, and a crate shape the seed does not support withholds the whole capability by name. The capability MUST land no CI file, because a job proving the build holds a merge only where the forge's own gate reaches it — inside the workflow the required check needs on GitHub, and inside the child pipeline the rendered parent triggers on GitLab, since that forge deep-merges an include and only a separate configuration isolates — and both of those files are the target's own.
 
 #### Scenario: A target with its own flake opts in
 
