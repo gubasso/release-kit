@@ -96,12 +96,18 @@ Verify: `rg -n "^[[:space:]]*(#|//).*\bADR-[a-z0-9]" . --type-not md && exit 1 |
 
 ### `spec-to-code:a-suppression-names-its-case` — A suppression names its known-issue case
 
-Where a test is suppressed or left failing, the author MUST name the `KI-<slug>` case at the suppression.
+Where a test is suppressed, left failing, or a finding masked because something outside this repository is broken, the author MUST name the `KI-<slug>` case at the suppression. Where the suppression is instead a permanent exception — it masks no external defect, so no record could carry a retirement condition anyone can meet — the author MUST state the reason at the suppression and MUST NOT name a case.
 
 #### Scenario: A suppression names a case that no record defines
 
 - GIVEN an expected failure whose reason is `KI-vendor-drops-the-body`
 - WHEN no record under known-issues carries that name
 - THEN the suppression fails, because a mask nobody can look up never gets removed
+
+#### Scenario: A permanent exception is given a case anyway
+
+- GIVEN a suppression over a construct this project chose deliberately and keeps
+- WHEN the author writes a record for it to satisfy the first sentence
+- THEN that record carries a retirement condition nobody can ever meet, which is the unremovable mask the first sentence exists to prevent
 
 Verify: `pre-commit run suppression-names-its-case --all-files`

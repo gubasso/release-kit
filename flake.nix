@@ -69,6 +69,12 @@
               pkgs.markdownlint-cli2
               pkgs.lychee
               pkgs.ripsecrets
+              # The payload is GitHub Actions workflows, so the workflows are
+              # what this project lints. zizmor audits them for security and
+              # actionlint for correctness, both over snippets/ and over this
+              # repository's own .github/workflows/.
+              pkgs.zizmor
+              pkgs.actionlint
               pkgs.shellcheck
               pkgs.shfmt
               pkgs.jq

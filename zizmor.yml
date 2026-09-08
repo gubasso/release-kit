@@ -1,0 +1,27 @@
+# What this repository's own workflows are audited against. The payload is
+# audited separately, with --no-config, so nothing here can reach it: zizmor
+# keys an ignore by base filename alone, and snippets/bash/github ships a
+# release.yml of its own. A payload suppression is an inline comment in the
+# snippet, where it renders into every target.
+rules:
+  # ci.yml runs actions by moving tag on purpose. The references this project
+  # holds immutable are the ones it ships, and the payload audit judges those
+  # for themselves, with no policy relaxing them.
+  unpinned-uses:
+    config:
+      policies:
+        "*": ref-pin
+  excessive-permissions:
+    ignore:
+      # release.yml is cargo-dist's output, and the dist-plan job proves it
+      # byte-equal to what `dist generate` writes, so it takes no inline
+      # comment: the next regeneration would drop it and fail that proof.
+      # contents: write sits at workflow level. See
+      # _docs/reference/known-issues/KI-dist-generates-an-unhardened-workflow.md
+      - release.yml
+  template-injection:
+    ignore:
+      # The same file, for the same reason. Its run bodies interpolate the
+      # plan job's own output. See
+      # _docs/reference/known-issues/KI-dist-generates-an-unhardened-workflow.md
+      - release.yml
