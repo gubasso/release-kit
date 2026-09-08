@@ -792,6 +792,10 @@ fn linked_branches(
         target,
         &[
             "api",
+            // A list endpoint answers one page of twenty by default, and
+            // this read is the authority on what the issue owns: a
+            // second page left unread would read as absence.
+            "--paginate",
             &format!(
                 "projects/{encoded}/repository/branches?search={}",
                 encode(&format!("^{iid}-"))
@@ -804,12 +808,23 @@ fn linked_branches(
             "the linked branch read did not answer with a branch list".to_owned(),
         ));
     };
-    Ok(held
-        .iter()
-        .filter_map(|branch| branch["name"].as_str())
-        .filter(|name| links_to(name, iid))
-        .map(ToOwned::to_owned)
-        .collect())
+    let mut names = Vec::with_capacity(held.len());
+    for branch in held {
+        // A member the API documents as carrying a name and that does
+        // not is unknown, not absent. Skipping it would turn a partial
+        // answer into proof that the issue owns nothing.
+        let Some(name) = branch["name"].as_str() else {
+            return Err(forge_failure(
+                "a branch in the linked branch read carries no name".to_owned(),
+            ));
+        };
+        // The forge's own search decides what it matched; the link rule
+        // decides what belongs to this issue.
+        if links_to(name, iid) {
+            names.push(name.to_owned());
+        }
+    }
+    Ok(names)
 }
 
 /// One forge CLI call, in the shape [`crate::branches::merged_request_for`]

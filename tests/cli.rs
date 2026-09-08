@@ -15403,7 +15403,7 @@ case "$*" in
   "api projects/acme%2Fwidget/issues/57") cat "$RK_MOCK_DIR/issue.json"; exit 0;;
   "api user") echo '{"username":"Ada Lovelace"}'; exit 0;;
   "api --method POST"*) touch "$RK_MOCK_DIR/posted"; echo '{}'; exit 0;;
-  "api projects/acme%2Fwidget/repository/branches?search="*)
+  "api --paginate projects/acme%2Fwidget/repository/branches?search="*)
     if [ -f "$RK_MOCK_DIR/search-fails" ]; then echo "HTTP 503: Service Unavailable" >&2; exit 1; fi
     if [ -f "$RK_MOCK_DIR/search-garbles" ]; then echo "not json at all"; exit 0; fi
     cat "$RK_MOCK_DIR/search.json" 2>/dev/null || echo '[]'; exit 0;;
@@ -16302,4 +16302,42 @@ fn a_search_result_without_the_link_prefix_is_not_taken() {
     assert_eq!(report["origin"], "pending");
     assert_eq!(report["branch"], "57-fix-the-csv-upload");
     assert!(report["others"].is_null(), "{report}");
+}
+
+/// A well-formed array whose members are not is still an unknown state.
+/// Skipping a member the API documents as carrying a name would turn a
+/// partial answer into proof that the issue owns nothing.
+#[test]
+fn a_malformed_branch_entry_mints_nothing() {
+    for body in [r"[{}]", r#"[{"name":57}]"#] {
+        let (_parent, repo) = gitlab_fixture();
+        let (mock, glab) = mock_forge("glab", GLAB_ISSUE_MOCK);
+        gitlab_answers(mock.path(), None, false);
+        std::fs::write(mock.path().join("search.json"), body).expect("the answer writes");
+        gitlab_start(&repo, &glab, mock.path(), &["--apply"])
+            .assert()
+            .code(70);
+        assert!(
+            !mock.path().join("posted").exists(),
+            "{body}: a partial answer is not proof of absence"
+        );
+    }
+}
+
+/// The read that decides what an issue owns asks for every page. A list
+/// endpoint answers twenty by default, and a second page left unread
+/// would read as absence.
+#[test]
+fn the_linked_branch_read_asks_for_every_page() {
+    let (_parent, repo) = gitlab_fixture();
+    let (mock, glab) = mock_forge("glab", GLAB_ISSUE_MOCK);
+    gitlab_answers(mock.path(), None, false);
+    gitlab_start(&repo, &glab, mock.path(), &["--json"])
+        .assert()
+        .success();
+    let log = mock_log(mock.path());
+    assert!(
+        log.contains("api --paginate projects/acme%2Fwidget/repository/branches?search="),
+        "{log}"
+    );
 }

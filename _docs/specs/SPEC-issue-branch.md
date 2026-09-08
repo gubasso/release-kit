@@ -86,7 +86,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `issue-branch:a-mint-is-idempotent` — A mint is idempotent
 
-While the forge already carries a branch for an issue, the verb MUST adopt it and MUST NOT create a second one. Only a read that answered MUST count as proof of absence: a read that failed, or that did not answer in the shape the API documents, MUST stop the run, because acting on an unknown state as if it were absence is what creates the second branch.
+While the forge already carries a branch for an issue, the verb MUST adopt it and MUST NOT create a second one. Only a read that answered in full MUST count as proof of absence: a read that failed, that did not answer in the shape the API documents, or that left a page of a paginated answer unread MUST stop the run, because acting on an unknown state as if it were absence is what creates the second branch.
 
 #### Scenario: The verb runs twice on the same issue
 

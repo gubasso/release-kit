@@ -40,7 +40,7 @@ Verified 2026-09-08 against `Issue#related_branches` in `app/models/issue.rb` of
 
 ## GitLab, on searching branches by prefix
 
-Verified 2026-09-08 against `https://docs.gitlab.com/api/branches/`. `GET /projects/:id/repository/branches` takes `search`, and a term beginning with `^` matches from the start of the branch name. The answer is an array. Bearing: every name this verb can use carries the issue's link prefix, so this one read is a superset of a read of the exact rendered name and replaces it. It finds the branch the current rendering would produce, it finds one an earlier title or template produced instead, and it finds every other branch the issue owns. An empty array is the only proof of absence.
+Verified 2026-09-08 against `https://docs.gitlab.com/api/branches/`. `GET /projects/:id/repository/branches` takes `search`, and a term beginning with `^` matches from the start of the branch name. The answer is an array, and a list endpoint answers one page of twenty by default. `glab api --paginate`, verified 2026-09-08 against `glab api --help` on glab 1.114.0, requests every page and emits the arrays as one JSON array under its default `json` output. Bearing: every name this verb can use carries the issue's link prefix, so this one read is a superset of a read of the exact rendered name and replaces it. It finds the branch the current rendering would produce, it finds one an earlier title or template produced instead, and it finds every other branch the issue owns. An empty array is the only proof of absence, and the read asks for every page: a second page left unread would read the same way.
 
 ## GitHub CLI, on the base flag
 
