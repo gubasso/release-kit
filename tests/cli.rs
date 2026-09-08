@@ -15443,7 +15443,7 @@ fn linked(names: &[&str]) -> String {
     serde_json::json!({
         "data": { "repository": { "issue": {
             "title": "Fix the CSV upload",
-            "linkedBranches": { "nodes": nodes }
+            "linkedBranches": { "pageInfo": { "hasNextPage": false }, "nodes": nodes }
         } } }
     })
     .to_string()
@@ -16555,6 +16555,124 @@ fn a_gitlab_issue_answer_missing_a_field_mints_nothing() {
         assert!(
             !mock.path().join("posted").exists(),
             "a partial issue answer creates nothing: {issue}"
+        );
+    }
+}
+
+/// The host the run acts on is whichever source names one. A clone with
+/// no readable origin and an issue URL for another host must not be
+/// acted on at the CLI's default host.
+#[test]
+fn an_issue_url_on_another_host_refuses_with_no_origin_to_read() {
+    let repo = tempfile::tempdir().expect("a scratch repo exists");
+    git_in(repo.path(), &["init", "-q", "-b", "master"]);
+    git_in(repo.path(), &["config", "user.email", "rk@example.invalid"]);
+    git_in(repo.path(), &["config", "user.name", "rk test"]);
+    std::fs::write(repo.path().join("seed"), "x\n").expect("the seed writes");
+    git_in(repo.path(), &["add", "seed"]);
+    git_in(repo.path(), &["commit", "-qm", "chore: seed"]);
+    let (mock, gh) = mock_forge("gh", GH_ISSUE_MOCK);
+    std::fs::write(mock.path().join("before.json"), linked(&[])).expect("the answer writes");
+    let out = rk_scrubbed()
+        .args([
+            "issue",
+            "start",
+            "https://github.example.com/acme/widget/issues/57",
+        ])
+        .args(["--forge", "github", "--apply", "--target"])
+        .arg(repo.path())
+        .env("RK_GH_BIN", &gh)
+        .env("RK_MOCK_DIR", mock.path())
+        .assert()
+        .code(73)
+        .get_output()
+        .stderr
+        .clone();
+    let text = String::from_utf8_lossy(&out).into_owned();
+    assert!(text.contains("github.example.com"), "{text}");
+    assert!(
+        mock_log(mock.path()).trim().is_empty(),
+        "nothing reached the forge: {}",
+        mock_log(mock.path())
+    );
+}
+
+/// Branches mode has a seat refusal too, and it is knowable before the
+/// forge is written to: git refuses a branch another worktree holds.
+#[test]
+fn a_branches_mode_collision_stops_before_the_gitlab_branch_is_created() {
+    let (_parent, repo) = seatable_fixture();
+    git_in(&repo, &["branch", "57-fix-the-csv-upload"]);
+    seat(&repo, "57-fix-the-csv-upload");
+    let (mock, glab) = mock_forge("glab", GLAB_ISSUE_MOCK);
+    gitlab_answers(mock.path(), None, false);
+    let out = gitlab_start_seatable(
+        &repo,
+        &glab,
+        mock.path(),
+        &["--workflow", "branches", "--apply"],
+    )
+    .assert()
+    .code(73)
+    .get_output()
+    .stderr
+    .clone();
+    let text = String::from_utf8_lossy(&out).into_owned();
+    assert!(text.contains("one branch has one seat"), "{text}");
+    assert!(
+        !mock.path().join("posted").exists(),
+        "the seat is refused before the forge is written to"
+    );
+}
+
+/// A connection that does not say whether it carries every branch says
+/// nothing, and absence is what authorizes a mint.
+#[test]
+fn a_github_answer_without_page_information_mints_nothing() {
+    for page in [
+        serde_json::json!({}),
+        serde_json::json!({ "hasNextPage": serde_json::Value::Null }),
+        serde_json::json!({ "hasNextPage": "no" }),
+    ] {
+        let (_parent, repo) = seatable_fixture();
+        let (mock, gh) = mock_forge("gh", GH_ISSUE_MOCK);
+        let body = serde_json::json!({"data":{"repository":{"issue":{"title":"t",
+            "linkedBranches":{"pageInfo": page, "nodes":[]}}}}});
+        std::fs::write(mock.path().join("before.json"), body.to_string())
+            .expect("the answer writes");
+        issue_start_seatable(&repo, &gh, mock.path(), &["--apply"])
+            .assert()
+            .failure();
+        assert!(
+            !mock_log(mock.path()).contains("issue develop"),
+            "a silent connection is not proof the issue links nothing: {body}"
+        );
+    }
+}
+
+/// The project read is as strict as the issue read. A template the
+/// answer does not carry is a partial read, not an unset template, and
+/// an invented default branch could create the branch from the wrong
+/// commit.
+#[test]
+fn a_partial_gitlab_project_answer_mints_nothing() {
+    for project in [
+        serde_json::json!({ "default_branch": "main" }),
+        serde_json::json!({ "default_branch": "main", "issue_branch_template": 7 }),
+        serde_json::json!({ "issue_branch_template": serde_json::Value::Null }),
+        serde_json::json!({ "default_branch": "", "issue_branch_template": serde_json::Value::Null }),
+    ] {
+        let (_parent, repo) = seatable_fixture();
+        let (mock, glab) = mock_forge("glab", GLAB_ISSUE_MOCK);
+        gitlab_answers(mock.path(), None, false);
+        std::fs::write(mock.path().join("project.json"), project.to_string())
+            .expect("the answer writes");
+        gitlab_start_seatable(&repo, &glab, mock.path(), &["--apply"])
+            .assert()
+            .failure();
+        assert!(
+            !mock.path().join("posted").exists(),
+            "a partial project answer creates nothing: {project}"
         );
     }
 }

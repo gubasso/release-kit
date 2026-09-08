@@ -74,7 +74,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `issue-branch:a-name-that-does-not-link-is-refused` — A name that does not link is refused
 
-Where a forge links a branch to an issue by name, the verb MUST refuse a rendered name the forge would not link, rather than create it and report a link that does not exist.
+Where a forge links a branch to an issue by name, the verb MUST refuse a rendered name the forge would not link, rather than create it and report a link that does not exist. The verb MUST also refuse a forge whose host its own calls do not reach, taking the host from the clone's remote or, where that names none, from the reference.
 
 #### Scenario: A template renders an admissible name with the wrong prefix
 
@@ -86,7 +86,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `issue-branch:a-mint-is-idempotent` — A mint is idempotent
 
-While the forge already carries a branch for an issue, the verb MUST adopt it and MUST NOT create a second one. Only a read that answered in full MUST count as proof of absence: a read that failed, that did not answer in the shape the API documents, or that left a page of a paginated answer unread MUST stop the run, because acting on an unknown state as if it were absence is what creates the second branch. This binds both forges: a GitHub node carrying no ref name and a connection reporting a further page are each unknown, exactly as a GitLab answer outside its documented shape is.
+While the forge already carries a branch for an issue, the verb MUST adopt it and MUST NOT create a second one. Only a read that answered in full MUST count as proof of absence: a read that failed, that did not answer in the shape the API documents, or that left a page of a paginated answer unread MUST stop the run, because acting on an unknown state as if it were absence is what creates the second branch. This binds both forges and every read: a GitHub node carrying no ref name, a connection that does not state whether a further page exists, and a GitLab project answer missing a field the rendering rests on are each unknown, exactly as a malformed branch list is.
 
 #### Scenario: The verb runs twice on the same issue
 
@@ -146,7 +146,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `issue-branch:a-forge-failure-leaves-the-clone-unchanged` — A forge failure leaves the clone unchanged
 
-If any forge call fails, then the run MUST return before the first local mutation, MUST state that the target is unchanged, and MUST carry the reason the forge's own answer states rather than one asserted for every failure. Every local prerequisite the run has MUST be checked before the first forge call, and where the forge lets rk know the branch name before it writes, every refusal the seat carries MUST run before that write.
+If any forge call fails, then the run MUST return before the first local mutation, MUST state that the target is unchanged, and MUST carry the reason the forge's own answer states rather than one asserted for every failure. Every local prerequisite the run has MUST be checked before the first forge call, and where the forge lets rk know the branch name before it writes, every refusal the seat carries MUST run before that write, under both workflow modes.
 
 #### Scenario: The forge answers an error
 

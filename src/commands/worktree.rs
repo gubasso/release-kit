@@ -127,6 +127,22 @@ pub(crate) fn main_checkout(target: &Utf8Path) -> Result<Utf8PathBuf, RkError> {
     Ok(layout_of(&worktrees)?.main)
 }
 
+/// Where a branch is checked out, if anywhere in this repository.
+///
+/// `rk issue start` needs this under the branches mode: `git switch`
+/// refuses a branch another worktree holds, and that refusal is knowable
+/// before the forge is written to.
+///
+/// # Errors
+///
+/// The same gate [`plan_seat`] runs over the inventory.
+pub(crate) fn seat_of(target: &Utf8Path, branch: &str) -> Result<Option<Utf8PathBuf>, RkError> {
+    Ok(inventory(target)?
+        .into_iter()
+        .find(|worktree| worktree.branch.as_deref() == Some(branch))
+        .map(|worktree| worktree.path))
+}
+
 /// The seats in use: the caller's own worktree, resolved from the process
 /// working directory, and the target's current worktree — both,
 /// independently, so invoking from worktree A with `--target` naming the

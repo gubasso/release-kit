@@ -19,7 +19,7 @@ use crate::issue::{self, Resolved};
 use crate::landing::manifest::{self, Workflow};
 use crate::output::Output;
 use crate::probes;
-use crate::setup::context::resolve_cli;
+use crate::setup::context::{TRUNK_BRANCH, resolve_cli};
 
 /// One `rk issue start` report.
 #[derive(Debug, Serialize)]
@@ -134,6 +134,42 @@ fn contradicts(what: &str, chosen: Option<&str>, known: Option<&str>) -> Result<
     )))
 }
 
+/// The mode the seat follows, and what decided it.
+///
+/// The mode is a landing parameter, changed through the landing verbs
+/// alone, so a runtime flag states it rather than sets it. Where it
+/// disagrees with the record, one clone would work in a mode the
+/// committed project policy does not carry.
+fn mode_of(target: &Utf8Path, named: Option<&str>) -> Result<(Workflow, &'static str), RkError> {
+    let recorded = manifest::load(target)?.map(|held| held.parameters.workflow);
+    match (named, recorded) {
+        (Some(raw), Some(held)) => {
+            if Workflow::parse(raw)? != held {
+                return Err(RkError::refusal(
+                    Diagnostic::new(
+                        Reason::StateDrift,
+                        format!(
+                            "--workflow {raw} disagrees with the landing record, which states {}",
+                            held.as_str()
+                        ),
+                    )
+                    .expected("a flag that states the recorded mode, or no flag at all")
+                    .action("rk upgrade --workflow <mode> --apply changes the recorded mode")
+                    .target_state("unchanged"),
+                ));
+            }
+            Ok((held, "the landing record, restated by --workflow"))
+        }
+        (Some(raw), None) => Ok((Workflow::parse(raw)?, "the --workflow flag")),
+        (None, Some(held)) => Ok((held, "the landing record")),
+        // A target with no record is treated as the convention's own
+        // mode rather than as branches: the record's serde default exists
+        // for records written before the parameter, not for targets that
+        // never landed.
+        (None, None) => Ok((Workflow::Worktree, "the default, with no landing record")),
+    }
+}
+
 /// Refuse a forge on a host this verb's calls would not reach.
 ///
 /// Every GitHub call here goes to the CLI's default host. An enterprise
@@ -214,7 +250,13 @@ fn ground(
             RkError::missing(diagnostic)
         });
     };
-    reachable(forge, detected.host.as_deref())?;
+    // The reference names a host too, and it is authoritative where the
+    // clone has none: an issue URL for another host must not be acted on
+    // at the CLI's default one.
+    reachable(
+        forge,
+        detected.host.as_deref().or(reference.host.as_deref()),
+    )?;
     // An override supplies a coordinate detection could not, and never
     // replaces one it could: minting on the project the operator named
     // and seating the branch in the clone they are standing in is the
@@ -241,38 +283,7 @@ fn ground(
     };
     contradicts("repository", Some(repo.as_str()), detected.repo.as_deref())?;
     contradicts("repository", Some(repo.as_str()), reference.repo.as_deref())?;
-    let recorded = manifest::load(target)?.map(|held| held.parameters.workflow);
-    let (workflow, workflow_source) = match (overrides.workflow, recorded) {
-        // The mode is a landing parameter, changed through the landing
-        // verbs alone, so a runtime flag states it rather than sets it.
-        // Where it disagrees with the record, one clone would work in a
-        // mode the committed project policy does not carry.
-        (Some(raw), Some(held)) => {
-            let named = Workflow::parse(raw)?;
-            if named != held {
-                return Err(RkError::refusal(
-                    Diagnostic::new(
-                        Reason::StateDrift,
-                        format!(
-                            "--workflow {raw} disagrees with the landing record, which states {}",
-                            held.as_str()
-                        ),
-                    )
-                    .expected("a flag that states the recorded mode, or no flag at all")
-                    .action("rk upgrade --workflow <mode> --apply changes the recorded mode")
-                    .target_state("unchanged"),
-                ));
-            }
-            (held, "the landing record, restated by --workflow")
-        }
-        (Some(raw), None) => (Workflow::parse(raw)?, "the --workflow flag"),
-        (None, Some(held)) => (held, "the landing record"),
-        // A target with no record is treated as the convention's own
-        // mode rather than as branches: the record's serde default exists
-        // for records written before the parameter, not for targets that
-        // never landed.
-        (None, None) => (Workflow::Worktree, "the default, with no landing record"),
-    };
+    let (workflow, workflow_source) = mode_of(target, overrides.workflow)?;
     Ok(Ground {
         forge,
         repo,
@@ -307,7 +318,7 @@ fn start(
                 crate::commands::worktree::plan_seat(target, branch, overrides.base, false)
                     .map(|_| ())
             }
-            Workflow::Branches => Ok(()),
+            Workflow::Branches => branch_seatable(&main, branch),
         }
     };
     let resolved = issue::resolve(
@@ -399,6 +410,32 @@ fn unreachable_tip(branch: &str, resolved: &Resolved) -> RkError {
             resolved.number
         )),
     )
+}
+
+/// What the branches-mode checkout needs, checked before the forge is
+/// written to.
+///
+/// `git switch` refuses a branch another worktree has checked out, and it
+/// refuses to move a working tree carrying conflicting changes. Both are
+/// knowable here, and a branch created at the forge and then refused
+/// locally is a remote change no report accounts for.
+fn branch_seatable(main: &Utf8Path, branch: &str) -> Result<(), RkError> {
+    if let Some(seat) = crate::commands::worktree::seat_of(main, branch)? {
+        if seat != main {
+            return Err(RkError::refusal(
+                Diagnostic::new(
+                    Reason::StateDrift,
+                    format!(
+                        "branch {branch} is checked out at {seat}, and one branch has one seat"
+                    ),
+                )
+                .expected("the branch free, or already in the main checkout")
+                .action(format!("git -C {seat} switch {TRUNK_BRANCH}, then rerun"))
+                .target_state("unchanged"),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// The refresh failed, so no local ref is proof of what the forge holds.

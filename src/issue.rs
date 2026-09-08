@@ -368,16 +368,26 @@ pub fn linked_branch(body: &Value) -> Minted {
             detail: "the answer carries no linkedBranches list".to_owned(),
         };
     };
-    if body
+    // Complete only where the answer says so. A `hasNextPage` that is
+    // missing, null, or not a boolean says nothing, and absence is what
+    // authorizes a mint.
+    match body
         .pointer("/data/repository/issue/linkedBranches/pageInfo/hasNextPage")
         .and_then(Value::as_bool)
-        == Some(true)
     {
-        return Minted::Unknown {
-            detail: format!(
-                "the issue links more than the {LINKED_BRANCH_PAGE} branches one read carries"
-            ),
-        };
+        Some(false) => {}
+        Some(true) => {
+            return Minted::Unknown {
+                detail: format!(
+                    "the issue links more than the {LINKED_BRANCH_PAGE} branches one read carries"
+                ),
+            };
+        }
+        None => {
+            return Minted::Unknown {
+                detail: "the answer does not say whether it carries every linked branch".to_owned(),
+            };
+        }
     }
     let mut names = Vec::with_capacity(nodes.len());
     for node in nodes {
@@ -591,14 +601,31 @@ fn plan_gitlab(
         &forge_call(cli, target, &["api", &format!("projects/{encoded}")])?,
         "the project read",
     )?;
-    let template = project["issue_branch_template"]
-        .as_str()
-        .filter(|text| !text.trim().is_empty())
-        .map(ToOwned::to_owned);
-    let default_branch = project["default_branch"]
-        .as_str()
-        .unwrap_or("main")
-        .to_owned();
+    // A template the answer does not carry is not the same as one the
+    // project does not set: the first is a partial read, and rendering
+    // the default name from it would quietly ignore a template that
+    // exists. GitLab answers an unset template as null.
+    let template = match project.get("issue_branch_template") {
+        Some(Value::Null) => None,
+        Some(Value::String(text)) if text.trim().is_empty() => None,
+        Some(Value::String(text)) => Some(text.clone()),
+        _ => {
+            return Err(forge_failure(
+                "the project read answered without a usable 'issue_branch_template'".to_owned(),
+            ));
+        }
+    };
+    // The default branch is the ref a mint starts from where `--base`
+    // names none. Inventing one could create the branch from the wrong
+    // commit, which is a wrong remote write rather than a failed read.
+    let default_branch = required(&project, "default_branch", |held| {
+        held.as_str()
+            .filter(|name| !name.trim().is_empty())
+            .map(ToOwned::to_owned)
+    })
+    .map_err(|_| {
+        forge_failure("the project read answered without a usable 'default_branch'".to_owned())
+    })?;
     let issue = answered(
         &forge_call(
             cli,
@@ -1193,7 +1220,10 @@ mod tests {
                 .map(|name| serde_json::json!({ "ref": { "name": name } }))
                 .collect();
             serde_json::json!({
-                "data": { "repository": { "issue": { "linkedBranches": { "nodes": nodes } } } }
+                "data": { "repository": { "issue": { "linkedBranches": {
+                    "pageInfo": { "hasNextPage": false },
+                    "nodes": nodes
+                } } } }
             })
         };
         assert_eq!(linked_branch(&answer(&[])), Minted::Absent);
@@ -1204,8 +1234,10 @@ mod tests {
                 others: vec![]
             }
         );
+        // Sorted, so the choice is a rule rather than the order the
+        // forge answered in.
         assert_eq!(
-            linked_branch(&answer(&["57-fix", "57-fix-again"])),
+            linked_branch(&answer(&["57-fix-again", "57-fix"])),
             Minted::Already {
                 branch: "57-fix".into(),
                 others: vec!["57-fix-again".into()]
