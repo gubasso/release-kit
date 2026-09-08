@@ -34,8 +34,8 @@
     {
       "destination": "AGENTS.md",
       "kind": "rendered",
-      "sha256": "06981a4a2f55f76f32dfb6d59e2643ed65bb01df173452ef8c00d4f0811ce91c",
-      "baseline_sha256": "06981a4a2f55f76f32dfb6d59e2643ed65bb01df173452ef8c00d4f0811ce91c"
+      "sha256": "2c8d67375a633a9a6028766cc51630c4c03fed7ab89290e833590c4ee8ff50e1",
+      "baseline_sha256": "2c8d67375a633a9a6028766cc51630c4c03fed7ab89290e833590c4ee8ff50e1"
     },
     {
       "destination": "dist-workspace.toml",

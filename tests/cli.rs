@@ -15893,3 +15893,39 @@ fn guide_serves_the_issue_runbook_with_the_forge_resolved() {
         .success()
         .stdout(predicate::str::contains("issue"));
 }
+
+#[test]
+fn the_landed_agents_block_routes_an_issue_to_the_verb() {
+    let target = tempfile::tempdir().expect("a target exists");
+    land_rust(target.path()).success();
+    let block = std::fs::read_to_string(target.path().join("AGENTS.md"))
+        .expect("the landing writes an AGENTS.md");
+    assert!(
+        block.contains("rk issue start <issue>"),
+        "the landed block names the verb: {block}"
+    );
+    assert!(
+        block.contains("Never invent a name for work an issue already names"),
+        "the landed block carries the rule: {block}"
+    );
+    assert!(
+        block.contains("Mint a branch at the forge from an issue"),
+        "minting is a bounded action a request must name: {block}"
+    );
+}
+
+#[test]
+fn both_skills_route_an_issue_shaped_request_to_the_verb() {
+    for skill in ["rk-setup", "rk-release"] {
+        let text = std::fs::read_to_string(repo_path(&format!("skills/{skill}/SKILL.md")))
+            .expect("the skill reads");
+        assert!(
+            text.contains("rk issue start <issue>"),
+            "{skill} routes to the verb"
+        );
+        assert!(
+            text.contains("Never write a predicted branch name into the plan"),
+            "{skill} forbids a guessed name"
+        );
+    }
+}
