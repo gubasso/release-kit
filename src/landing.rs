@@ -232,6 +232,20 @@ pub const BRANCH_GRAMMAR: &str = r"^((build|chore|ci|docs|feat|fix|perf|refactor
 /// directly, so the desk and the forge judge one language.
 pub const SCOPE_SHAPE: &str = "[a-z0-9._/-]+";
 
+/// Whether one scope matches [`SCOPE_SHAPE`].
+///
+/// The predicate and the pattern are one owner, so the desk's judgment
+/// cannot drift from the forge's: `rk message --check` calls this, the
+/// title checks render the pattern, and a test holds the two equal over
+/// every ASCII character.
+#[must_use]
+pub fn scope_is_shaped(scope: &str) -> bool {
+    !scope.is_empty()
+        && scope.chars().all(|c| {
+            c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '.' | '/' | '-')
+        })
+}
+
 /// The routing block for one workflow mode: the whole of target-side
 /// governance, authored as `blocks/agents-block.md.in` and never grown
 /// into a method chapter.
@@ -1016,6 +1030,45 @@ mod tests {
             !SCOPE_SHAPE.contains('\''),
             "the title checks single-quote it"
         );
+    }
+
+    /// The predicate `rk message --check` calls and the pattern the title
+    /// checks render admit exactly the same characters. The pattern is
+    /// expanded here from its own text, so editing one owner without the
+    /// other fails: the desk and the forge judge one language.
+    #[test]
+    fn the_scope_predicate_and_the_rendered_pattern_agree() {
+        let body = SCOPE_SHAPE
+            .strip_prefix('[')
+            .and_then(|rest| rest.strip_suffix("]+"))
+            .expect("the shape is one bracket expression, repeated");
+        let chars: Vec<char> = body.chars().collect();
+        let mut admitted = std::collections::BTreeSet::new();
+        let mut at = 0;
+        while at < chars.len() {
+            // A `-` with a neighbour on each side opens a range; last, it
+            // stands for itself, which is why the shape ends with it.
+            if at + 2 < chars.len() && chars[at + 1] == '-' {
+                for c in chars[at]..=chars[at + 2] {
+                    admitted.insert(c);
+                }
+                at += 3;
+            } else {
+                admitted.insert(chars[at]);
+                at += 1;
+            }
+        }
+        for byte in 0..=127u8 {
+            let c = char::from(byte);
+            assert_eq!(
+                super::scope_is_shaped(&c.to_string()),
+                admitted.contains(&c),
+                "the predicate and {SCOPE_SHAPE} disagree on {c:?}"
+            );
+        }
+        assert!(super::scope_is_shaped("guides/release"));
+        assert!(!super::scope_is_shaped(""), "a scope is never empty");
+        assert!(!super::scope_is_shaped("Specs Ugly"));
     }
 
     /// The shared zone composes into every pair, lands first, and is

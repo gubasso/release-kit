@@ -7824,6 +7824,9 @@ fn an_upgrade_migrates_a_schema_1_record_to_the_current_schema() {
 fn an_upgrade_drops_the_recorded_scope_vocabulary() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
     land_rust(target.path()).success();
+    // Stand in for the schema-4 renderer: the three scope-bearing files
+    // carry the list-rendered bytes, and the record agrees with them, so
+    // the upgrade sees a clean target rather than drift.
     let mut manifest = read_manifest(target.path());
     manifest["schema_version"] = serde_json::json!(4);
     manifest
@@ -7834,12 +7837,53 @@ fn an_upgrade_drops_the_recorded_scope_vocabulary() {
             "scopes".to_owned(),
             serde_json::json!(["api", "cli", "guides/release"]),
         );
+    for (destination, from, to) in [
+        (
+            ".github/workflows/pr-title.yml",
+            "[a-z0-9._/-]+",
+            "api|cli|guides/release",
+        ),
+        (
+            ".pre-commit-config.yaml",
+            "args: [--strict, --force-scope]",
+            "args: [--strict, --force-scope, --scopes, 'api,cli,guides/release']",
+        ),
+        (
+            "AGENTS.md",
+            "- Every commit follows the same scoped convention. The landed commit-msg hook requires a scope on every one, and the title check holds it to lowercase letters, digits, and `_ . / -`.",
+            "- Every commit follows the same scoped convention. The landed commit-msg hook enforces it, and the scopes this project accepts are `api,cli,guides/release`.",
+        ),
+    ] {
+        let path = target.path().join(destination);
+        let current = std::fs::read_to_string(&path).expect("the landed file reads");
+        assert!(current.contains(from), "{destination} lost {from}");
+        let older = current.replace(from, to);
+        std::fs::write(&path, &older).expect("the older bytes write");
+        // A block destination records the digest of its marked block, not
+        // of the whole file the target also owns.
+        let recorded = match release_kit::landing::block_markers(destination) {
+            Some((begin, end)) => release_kit::landing::extract_block(&older, begin, end)
+                .expect("the landed block is present"),
+            None => &older,
+        };
+        let digest = serde_json::Value::from(Digest::of(recorded.as_bytes()).to_string());
+        for file in manifest["files"].as_array_mut().expect("files") {
+            if file["destination"] == destination {
+                file["sha256"] = digest.clone();
+            }
+        }
+    }
     write_manifest(target.path(), &manifest);
 
     rk().args(["upgrade", "--apply", "--target"])
         .arg(target.path())
         .assert()
-        .success();
+        .success()
+        .stdout(
+            predicate::str::contains("updated .github/workflows/pr-title.yml")
+                .and(predicate::str::contains("updated .pre-commit-config.yaml"))
+                .and(predicate::str::contains("updated AGENTS.md")),
+        );
 
     let migrated = read_manifest(target.path());
     assert_eq!(migrated["schema_version"], 5);
@@ -7855,6 +7899,12 @@ fn an_upgrade_drops_the_recorded_scope_vocabulary() {
         .expect("the hook file reads");
     assert!(hooks.contains("args: [--strict, --force-scope]"), "{hooks}");
     assert!(!hooks.contains("--scopes"), "{hooks}");
+    let agents = std::fs::read_to_string(target.path().join("AGENTS.md")).expect("AGENTS.md reads");
+    assert!(
+        agents.contains("the title check holds it to lowercase letters, digits, and `_ . / -`"),
+        "{agents}"
+    );
+    assert!(!agents.contains("api,cli,guides/release"), "{agents}");
 }
 
 /// SATISFIES landing:the-landed-guards-hold-the-message-content
@@ -9480,7 +9530,7 @@ fn the_message_json_is_one_object_with_the_schema() {
         .clone();
     let report: serde_json::Value =
         serde_json::from_slice(&out).expect("one JSON object on stdout");
-    assert_eq!(report["schema"], "rk.message/1");
+    assert_eq!(report["schema"], "rk.message/2");
     assert_eq!(report["kind"], "commit");
     assert_eq!(report["exempt"], false);
     assert_eq!(report["findings"][0]["class"], "internal-path");

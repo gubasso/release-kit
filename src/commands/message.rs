@@ -153,7 +153,7 @@ pub fn run(args: &MessageArgs) -> Result<(), RkError> {
     }
     let count = findings.len();
     out.emit(&Report {
-        schema: "rk.message/1",
+        schema: "rk.message/2",
         kind: args.kind.as_str(),
         exempt,
         findings,
@@ -234,11 +234,7 @@ fn misshapen_scope(title: &str) -> Option<String> {
     if !(rest.starts_with(':') || rest.starts_with("!:")) {
         return None;
     }
-    let shaped = !scope.is_empty()
-        && scope.chars().all(|c| {
-            c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '.' | '/' | '-')
-        });
-    (!shaped).then(|| scope.to_owned())
+    (!landing::scope_is_shaped(scope)).then(|| scope.to_owned())
 }
 
 /// Every attribution match on one line, as the matched fragment.
@@ -443,22 +439,31 @@ mod tests {
         Finding, Report, attribution_hits, bot_title, fixed_draft_hits, guard_patterns, path_token,
     };
 
-    /// The complete `rk.message/1` shape, held by snapshot.
+    /// The complete `rk.message/2` shape, held by snapshot: the class
+    /// vocabulary is part of the contract, so the third class moved the
+    /// version rather than arriving unannounced.
     #[test]
     fn the_message_schema_snapshot_holds() {
         let report = Report {
-            schema: "rk.message/1",
+            schema: "rk.message/2",
             kind: "commit",
             exempt: false,
-            findings: vec![Finding {
-                class: "internal-path",
-                line: 3,
-                detail: ".draft/plan.md is git-ignored in .".into(),
-            }],
+            findings: vec![
+                Finding {
+                    class: "scope-shape",
+                    line: 1,
+                    detail: "the scope 'Specs Ugly' is outside [a-z0-9._/-]+: lowercase letters, digits, and _ . / -".into(),
+                },
+                Finding {
+                    class: "internal-path",
+                    line: 3,
+                    detail: ".draft/plan.md is git-ignored in .".into(),
+                },
+            ],
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.message/1","kind":"commit","exempt":false,"findings":[{"class":"internal-path","line":3,"detail":".draft/plan.md is git-ignored in ."}]}"#
+            r#"{"schema":"rk.message/2","kind":"commit","exempt":false,"findings":[{"class":"scope-shape","line":1,"detail":"the scope 'Specs Ugly' is outside [a-z0-9._/-]+: lowercase letters, digits, and _ . / -"},{"class":"internal-path","line":3,"detail":".draft/plan.md is git-ignored in ."}]}"#
         );
     }
 
