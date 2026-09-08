@@ -692,54 +692,29 @@ fn resolve_gitlab(
 ) -> Result<Resolved, RkError> {
     let encoded = repo.replace('/', "%2F");
     let planned = plan_gitlab(cli, target, &encoded, reference)?;
-    let standing = forge_call(
-        cli,
-        target,
-        &[
-            "api",
-            &format!(
-                "projects/{encoded}/repository/branches/{}",
-                encode(&planned.name)
-            ),
-        ],
-    )?;
-    if standing.status.success() {
+    // One read answers the whole question. Every admissible name carries
+    // the issue's link prefix, so the prefix search is a superset of the
+    // exact name: it finds the branch this rendering would produce, and
+    // it finds one an earlier title or template produced instead.
+    let linked = linked_branches(cli, target, &encoded, planned.iid)?;
+    if let Some((primary, others)) = pick(linked, &planned.name) {
+        let detail = if primary == planned.name {
+            planned.detail
+        } else {
+            let took =
+                format!("the forge already links '{primary}' to this issue, so it was taken");
+            Some(
+                planned
+                    .detail
+                    .map_or_else(|| took.clone(), |had| format!("{had}; {took}")),
+            )
+        };
         return Ok(Resolved {
             number: planned.iid,
             title: planned.title,
-            branch: Some(planned.name),
+            branch: Some(primary),
             origin: "already",
-            others: Vec::new(),
-            detail: planned.detail,
-        });
-    }
-    if !not_found(&standing.stderr) {
-        let stderr = String::from_utf8_lossy(&standing.stderr);
-        return Err(forge_failure_from(
-            format!(
-                "the branch read did not answer: {}",
-                last_line(&standing.stderr)
-            ),
-            &stderr,
-        ));
-    }
-    // The exact name is a recomputation, and a title or template edit
-    // moves it. GitLab links by the iid prefix, so a branch already
-    // linked to this issue is found by that prefix and adopted — without
-    // it a second run would mint a second branch for one issue.
-    if let Some(held) = linked_by_prefix(cli, target, &encoded, planned.iid)? {
-        let took = format!("the forge already links '{held}' to this issue, so it was taken");
-        let detail = Some(
-            planned
-                .detail
-                .map_or_else(|| took.clone(), |had| format!("{had}; {took}")),
-        );
-        return Ok(Resolved {
-            number: planned.iid,
-            title: planned.title,
-            branch: Some(held),
-            origin: "already",
-            others: Vec::new(),
+            others,
             detail,
         });
     }
@@ -778,17 +753,40 @@ fn resolve_gitlab(
     })
 }
 
-/// A branch the project already carries under this issue's link prefix.
+/// The branch to take, and every other one linked to the same issue.
+///
+/// The rendering this run produced wins where the forge carries it, so a
+/// steady project keeps taking the same branch. Otherwise the first name
+/// in sort order wins, which is a rule rather than whatever order the
+/// API answered in, and the rest are reported.
+fn pick(mut linked: Vec<String>, rendered: &str) -> Option<(String, Vec<String>)> {
+    if linked.is_empty() {
+        return None;
+    }
+    linked.sort_unstable();
+    let at = linked.iter().position(|name| name == rendered).unwrap_or(0);
+    let primary = linked.remove(at);
+    Some((primary, linked))
+}
+
+/// Every branch the project carries under this issue's link prefix.
 ///
 /// The Branches API's `search` takes `^term` for a starts-with match, so
-/// one read answers whether the issue already owns a branch under a name
-/// an earlier title or template produced.
-fn linked_by_prefix(
+/// one read answers what the issue already owns. An empty list is the
+/// only proof of absence: a call that fails, or output that does not
+/// parse, is unknown — and acting on unknown as if it were absence is
+/// what creates a second branch for one issue.
+///
+/// # Errors
+///
+/// The call failing, classified from the forge's own answer, and a body
+/// that is not the array the API documents.
+fn linked_branches(
     cli: &Path,
     target: &Path,
     encoded: &str,
     iid: u64,
-) -> Result<Option<String>, RkError> {
+) -> Result<Vec<String>, RkError> {
     let found = forge_call(
         cli,
         target,
@@ -800,23 +798,18 @@ fn linked_by_prefix(
             ),
         ],
     )?;
-    // A search that does not answer is not proof of absence, and it is
-    // not worth failing a mint over: the exact-name read already ran.
-    if !found.status.success() {
-        return Ok(None);
-    }
-    let body: Value = match serde_json::from_slice(&found.stdout) {
-        Ok(body) => body,
-        Err(_) => return Ok(None),
+    let body = answered(&found, "the linked branch read")?;
+    let Some(held) = body.as_array() else {
+        return Err(forge_failure(
+            "the linked branch read did not answer with a branch list".to_owned(),
+        ));
     };
-    Ok(body
-        .as_array()
-        .and_then(|held| {
-            held.iter()
-                .filter_map(|branch| branch["name"].as_str())
-                .find(|name| links_to(name, iid))
-        })
-        .map(ToOwned::to_owned))
+    Ok(held
+        .iter()
+        .filter_map(|branch| branch["name"].as_str())
+        .filter(|name| links_to(name, iid))
+        .map(ToOwned::to_owned)
+        .collect())
 }
 
 /// One forge CLI call, in the shape [`crate::branches::merged_request_for`]
@@ -938,15 +931,6 @@ fn classify_forge_answer(stderr: &str) -> (Reason, &'static str) {
         Reason::SubprocessFailed,
         "read the forge's own answer, then decide",
     )
-}
-
-/// A definite not-found, which is proof of absence.
-///
-/// `gh` renders `HTTP 404` and `glab` renders `404 Not Found`; a bare
-/// `404` substring would read an outage message as an answer.
-fn not_found(stderr: &[u8]) -> bool {
-    let text = String::from_utf8_lossy(stderr);
-    text.contains("HTTP 404") || text.contains("404 Not Found")
 }
 
 /// The last non-empty stderr line, for a one-line detail.

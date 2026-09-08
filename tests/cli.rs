@@ -15404,10 +15404,9 @@ case "$*" in
   "api user") echo '{"username":"Ada Lovelace"}'; exit 0;;
   "api --method POST"*) touch "$RK_MOCK_DIR/posted"; echo '{}'; exit 0;;
   "api projects/acme%2Fwidget/repository/branches?search="*)
+    if [ -f "$RK_MOCK_DIR/search-fails" ]; then echo "HTTP 503: Service Unavailable" >&2; exit 1; fi
+    if [ -f "$RK_MOCK_DIR/search-garbles" ]; then echo "not json at all"; exit 0; fi
     cat "$RK_MOCK_DIR/search.json" 2>/dev/null || echo '[]'; exit 0;;
-  "api projects/acme%2Fwidget/repository/branches/"*)
-    if [ -f "$RK_MOCK_DIR/exists" ]; then echo '{"name":"held"}'; exit 0; fi
-    echo "404 Not Found" >&2; exit 1;;
 esac
 echo "the mock was not asked anything it answers" >&2
 exit 1
@@ -15814,7 +15813,11 @@ fn an_existing_gitlab_branch_mints_nothing() {
     let (_parent, repo) = gitlab_fixture();
     let (mock, glab) = mock_forge("glab", GLAB_ISSUE_MOCK);
     gitlab_answers(mock.path(), None, false);
-    std::fs::write(mock.path().join("exists"), "").expect("the marker writes");
+    std::fs::write(
+        mock.path().join("search.json"),
+        r#"[{"name":"57-fix-the-csv-upload"}]"#,
+    )
+    .expect("the answer writes");
     with_remote_branch(&repo, "57-fix-the-csv-upload");
     let out = gitlab_start(&repo, &glab, mock.path(), &["--apply", "--json"])
         .assert()
@@ -16219,4 +16222,84 @@ fn a_forge_failure_carries_the_reason_the_answer_states() {
         assert_eq!(diagnostic["reason"], reason, "for {stderr}");
         assert_eq!(diagnostic["target_state"], "unchanged", "for {stderr}");
     }
+}
+
+/// An unknown state is not absence. A linked-branch read that fails, or
+/// that answers something other than a branch list, stops the run rather
+/// than minting a second branch for one issue.
+#[test]
+fn a_linked_branch_read_that_does_not_answer_mints_nothing() {
+    for (marker, code) in [("search-fails", 70), ("search-garbles", 70)] {
+        let (_parent, repo) = gitlab_fixture();
+        let (mock, glab) = mock_forge("glab", GLAB_ISSUE_MOCK);
+        gitlab_answers(mock.path(), None, false);
+        std::fs::write(mock.path().join(marker), "").expect("the marker writes");
+        gitlab_start(&repo, &glab, mock.path(), &["--apply"])
+            .assert()
+            .code(code);
+        assert!(
+            !mock.path().join("posted").exists(),
+            "{marker}: an unanswered read is not proof of absence"
+        );
+    }
+}
+
+/// The issue owning more than one branch is a state rk did not create.
+/// The report names every one, and the choice is a rule rather than the
+/// order the API answered in.
+#[test]
+fn a_gitlab_issue_with_two_linked_branches_names_both() {
+    let (_parent, repo) = gitlab_fixture();
+    let (mock, glab) = mock_forge("glab", GLAB_ISSUE_MOCK);
+    gitlab_answers(mock.path(), None, false);
+    // The rendered name is second in the answer, and first is a name an
+    // earlier title produced: the rendering wins, and the other shows.
+    std::fs::write(
+        mock.path().join("search.json"),
+        r#"[{"name":"57-an-older-title"},{"name":"57-fix-the-csv-upload"}]"#,
+    )
+    .expect("the answer writes");
+    with_remote_branch(&repo, "57-fix-the-csv-upload");
+    let out = gitlab_start(&repo, &glab, mock.path(), &["--apply", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["branch"], "57-fix-the-csv-upload");
+    assert_eq!(report["origin"], "already");
+    assert_eq!(
+        report["others"],
+        serde_json::json!(["57-an-older-title"]),
+        "the other linked branch is named, not dropped"
+    );
+    assert!(
+        !mock.path().join("posted").exists(),
+        "one issue keeps one branch"
+    );
+}
+
+/// A branch the search returns that carries no link prefix is not the
+/// issue's, whatever the search matched.
+#[test]
+fn a_search_result_without_the_link_prefix_is_not_taken() {
+    let (_parent, repo) = gitlab_fixture();
+    let (mock, glab) = mock_forge("glab", GLAB_ISSUE_MOCK);
+    gitlab_answers(mock.path(), None, false);
+    std::fs::write(
+        mock.path().join("search.json"),
+        r#"[{"name":"571-another-issue"},{"name":"57"}]"#,
+    )
+    .expect("the answer writes");
+    let out = gitlab_start(&repo, &glab, mock.path(), &["--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["origin"], "pending");
+    assert_eq!(report["branch"], "57-fix-the-csv-upload");
+    assert!(report["others"].is_null(), "{report}");
 }

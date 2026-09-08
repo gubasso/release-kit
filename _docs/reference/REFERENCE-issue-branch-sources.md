@@ -40,7 +40,7 @@ Verified 2026-09-08 against `Issue#related_branches` in `app/models/issue.rb` of
 
 ## GitLab, on searching branches by prefix
 
-Verified 2026-09-08 against `https://docs.gitlab.com/api/branches/`. `GET /projects/:id/repository/branches` takes `search`, and a term beginning with `^` matches from the start of the branch name. Bearing: one read finds whatever branch the issue already owns under its iid prefix, which is how the verb stays idempotent after a title or template edit moves the name it would otherwise recompute.
+Verified 2026-09-08 against `https://docs.gitlab.com/api/branches/`. `GET /projects/:id/repository/branches` takes `search`, and a term beginning with `^` matches from the start of the branch name. The answer is an array. Bearing: every name this verb can use carries the issue's link prefix, so this one read is a superset of a read of the exact rendered name and replaces it. It finds the branch the current rendering would produce, it finds one an earlier title or template produced instead, and it finds every other branch the issue owns. An empty array is the only proof of absence.
 
 ## GitHub CLI, on the base flag
 
@@ -48,7 +48,7 @@ Verified 2026-09-08 against `gh issue develop --help` on gh 2.99.0 and `https://
 
 ## GitLab, on creating a branch
 
-Verified 2026-09-08 against `https://docs.gitlab.com/ee/api/branches.html`. `POST /projects/:id/repository/branches` takes `branch`, the name of the branch, and `ref`, the branch name or commit SHA to create the branch from, and answers `201 Created`. It resolves no template. `GET /projects/:id/repository/branches/:branch` answers `404` for a branch that does not exist. Bearing: the create call is why the reads exist, and the read's `404` is the proof of absence a mint acts on.
+Verified 2026-09-08 against `https://docs.gitlab.com/ee/api/branches.html`. `POST /projects/:id/repository/branches` takes `branch`, the name of the branch, and `ref`, the branch name or commit SHA to create the branch from, and answers `201 Created`. It resolves no template. Bearing: the create call is why the reads exist. The absence a mint acts on comes from the prefix search above, not from a `404` on the exact name.
 
 ## GitLab CLI, on `glab mr create --related-issue`
 

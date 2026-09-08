@@ -13,6 +13,7 @@
   - [`issue-branch:the-preview-writes-nothing` — The preview writes nothing](#issue-branchthe-preview-writes-nothing--the-preview-writes-nothing)
   - [`issue-branch:a-reference-must-agree-with-the-clone` — A reference must agree with the clone](#issue-brancha-reference-must-agree-with-the-clone--a-reference-must-agree-with-the-clone)
   - [`issue-branch:the-seat-follows-the-recorded-mode` — The seat follows the recorded mode](#issue-branchthe-seat-follows-the-recorded-mode--the-seat-follows-the-recorded-mode)
+  - [`issue-branch:every-linked-branch-is-reported` — Every linked branch is reported](#issue-branchevery-linked-branch-is-reported--every-linked-branch-is-reported)
   - [`issue-branch:a-forge-failure-leaves-the-clone-unchanged` — A forge failure leaves the clone unchanged](#issue-brancha-forge-failure-leaves-the-clone-unchanged--a-forge-failure-leaves-the-clone-unchanged)
 
 <!--TOC-->
@@ -85,7 +86,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `issue-branch:a-mint-is-idempotent` — A mint is idempotent
 
-While the forge already carries a branch for an issue, the verb MUST adopt it and MUST NOT create a second one.
+While the forge already carries a branch for an issue, the verb MUST adopt it and MUST NOT create a second one. Only a read that answered MUST count as proof of absence: a read that failed, or that did not answer in the shape the API documents, MUST stop the run, because acting on an unknown state as if it were absence is what creates the second branch.
 
 #### Scenario: The verb runs twice on the same issue
 
@@ -128,6 +129,18 @@ The verb MUST seat the branch the way the target's recorded workflow mode states
 - GIVEN a landed target whose record states the branches mode, and a `--target` naming one of its linked worktrees
 - WHEN `rk issue start <issue> --apply` runs
 - THEN the main checkout takes the branch, the named worktree keeps its own, and the report names the landing record as the source
+
+Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `issue-branch:every-linked-branch-is-reported` — Every linked branch is reported
+
+Where an issue carries more than one branch, the verb MUST name every one it did not take, and MUST choose the one it takes by a stated rule rather than by the order the forge answered in.
+
+#### Scenario: An issue carries a branch under an older title
+
+- GIVEN an issue the forge links to both the name this run renders and a name an earlier title produced
+- WHEN `rk issue start <issue>` runs
+- THEN the rendered name is taken, because a steady project keeps taking the same branch, and the other is reported as a state rk did not create
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 
