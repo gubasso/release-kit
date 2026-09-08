@@ -16676,3 +16676,67 @@ fn a_partial_gitlab_project_answer_mints_nothing() {
         );
     }
 }
+
+/// Branches mode checks the working tree out into the main checkout, so
+/// a checkout carrying uncommitted work is a refusal, and it is knowable
+/// before the forge is written to.
+#[test]
+fn a_dirty_main_checkout_stops_before_the_gitlab_branch_is_created() {
+    let (_parent, repo) = seatable_fixture();
+    std::fs::write(repo.join("seed"), "changed\n").expect("the change writes");
+    let (mock, glab) = mock_forge("glab", GLAB_ISSUE_MOCK);
+    gitlab_answers(mock.path(), None, false);
+    let out = gitlab_start_seatable(
+        &repo,
+        &glab,
+        mock.path(),
+        &["--workflow", "branches", "--apply"],
+    )
+    .assert()
+    .code(73)
+    .get_output()
+    .stderr
+    .clone();
+    let text = String::from_utf8_lossy(&out).into_owned();
+    assert!(text.contains("carries uncommitted work"), "{text}");
+    assert!(
+        !mock.path().join("posted").exists(),
+        "the checkout is refused before the forge is written to"
+    );
+}
+
+/// A branch already seated in the main checkout is a no-op switch, so a
+/// dirty tree is no obstacle to adopting it.
+#[test]
+fn a_branch_already_in_the_main_checkout_ignores_a_dirty_tree() {
+    let (_parent, repo) = seatable_fixture();
+    with_remote_branch(&repo, "57-fix-the-csv-upload");
+    git_in(&repo, &["fetch", "-q", "origin"]);
+    git_in(
+        &repo,
+        &[
+            "switch",
+            "-q",
+            "--track",
+            "-c",
+            "57-fix-the-csv-upload",
+            "origin/57-fix-the-csv-upload",
+        ],
+    );
+    std::fs::write(repo.join("seed"), "changed\n").expect("the change writes");
+    let (mock, glab) = mock_forge("glab", GLAB_ISSUE_MOCK);
+    gitlab_answers(mock.path(), None, false);
+    std::fs::write(
+        mock.path().join("search.json"),
+        r#"[{"name":"57-fix-the-csv-upload"}]"#,
+    )
+    .expect("the answer writes");
+    gitlab_start_seatable(
+        &repo,
+        &glab,
+        mock.path(),
+        &["--workflow", "branches", "--apply"],
+    )
+    .assert()
+    .success();
+}

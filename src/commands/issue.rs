@@ -416,9 +416,15 @@ fn unreachable_tip(branch: &str, resolved: &Resolved) -> RkError {
 /// written to.
 ///
 /// `git switch` refuses a branch another worktree has checked out, and it
-/// refuses to move a working tree carrying conflicting changes. Both are
+/// refuses to move a working tree whose changes it would lose. Both are
 /// knowable here, and a branch created at the forge and then refused
 /// locally is a remote change no report accounts for.
+///
+/// The second check is deliberately stricter than git, which permits a
+/// switch whose changes do not conflict. Whether they conflict is not
+/// knowable without doing the switch, and this mode seats a branch the
+/// operator is about to start work on: a clean checkout is what that
+/// asks for, and the remedy is one command.
 fn branch_seatable(main: &Utf8Path, branch: &str) -> Result<(), RkError> {
     if let Some(seat) = crate::commands::worktree::seat_of(main, branch)? {
         if seat != main {
@@ -434,6 +440,36 @@ fn branch_seatable(main: &Utf8Path, branch: &str) -> Result<(), RkError> {
                 .target_state("unchanged"),
             ));
         }
+        // The branch is already seated here, so nothing is checked out
+        // over anything: the switch is a no-op and carries no risk.
+        return Ok(());
+    }
+    let held = std::process::Command::new(probes::git_bin())
+        .args(["-C"])
+        .arg(main)
+        .args(["status", "--porcelain"])
+        .output()
+        .map_err(|source| {
+            RkError::subprocess(
+                Diagnostic::new(
+                    Reason::SubprocessSpawn,
+                    format!("git did not run: {source}"),
+                )
+                .target_state("unchanged"),
+            )
+        })?;
+    // A probe that cannot answer counts as dirty: this runs before a
+    // remote write, so the closed direction is the safe one.
+    if !held.status.success() || !held.stdout.is_empty() {
+        return Err(RkError::refusal(
+            Diagnostic::new(
+                Reason::StateDrift,
+                format!("{main} carries uncommitted work, and this mode checks {branch} out there"),
+            )
+            .expected("a clean main checkout to seat the branch in")
+            .action("commit or stash the work, then rerun")
+            .target_state("unchanged"),
+        ));
     }
     Ok(())
 }

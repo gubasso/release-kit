@@ -122,7 +122,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `issue-branch:the-seat-follows-the-recorded-mode` — The seat follows the recorded mode
 
-The verb MUST seat the branch the way the target's recorded workflow mode states, MUST report which source decided the mode, and MUST refuse a runtime flag that disagrees with a recorded mode, because `maintenance:the-workflow-mode-is-a-landing-parameter` puts that decision in the landing verbs. Under the worktree mode the seat MUST come from the branch the forge holds — an existing local branch or the remote-tracking ref — and never from the trunk, and an apply whose refresh did not answer MUST refuse rather than trust a remote-tracking ref an older fetch left behind. Under the branches mode the checkout MUST happen in the main checkout, whichever of the repository's worktrees named the target.
+The verb MUST seat the branch the way the target's recorded workflow mode states, MUST report which source decided the mode, and MUST refuse a runtime flag that disagrees with a recorded mode, because `maintenance:the-workflow-mode-is-a-landing-parameter` puts that decision in the landing verbs. Under the worktree mode the seat MUST come from the branch the forge holds — an existing local branch or the remote-tracking ref — and never from the trunk, and an apply whose refresh did not answer MUST refuse rather than trust a remote-tracking ref an older fetch left behind. Under the branches mode the checkout MUST happen in the main checkout, whichever of the repository's worktrees named the target, and that checkout MUST be free — the branch seated nowhere else, and no uncommitted work to lose — before anything is written at the forge.
 
 #### Scenario: A target recorded in branches mode
 
