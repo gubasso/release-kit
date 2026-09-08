@@ -349,9 +349,15 @@ pub enum Minted {
 
 /// Read a GitHub `linkedBranches` answer.
 ///
-/// More than one node keeps the first and reports the rest: an issue with
-/// two linked branches is a state rk did not create, and picking from it
-/// silently would look like a choice rk made.
+/// More than one node keeps one and reports the rest: an issue with two
+/// linked branches is a state rk did not create, and picking from it
+/// silently would look like a choice rk made. The one kept is the first
+/// in sort order, which is a rule rather than whatever order the API
+/// answered in.
+///
+/// Every node must carry a ref name, and the connection must be whole: a
+/// node that does not, or a page the query did not reach, is unknown
+/// rather than absent, because absence is what authorizes a mint.
 #[must_use]
 pub fn linked_branch(body: &Value) -> Minted {
     let nodes = body
@@ -362,21 +368,40 @@ pub fn linked_branch(body: &Value) -> Minted {
             detail: "the answer carries no linkedBranches list".to_owned(),
         };
     };
-    let mut names = nodes
-        .iter()
-        .filter_map(|node| node.pointer("/ref/name").and_then(Value::as_str))
-        .map(ToOwned::to_owned);
-    match names.next() {
-        None if nodes.is_empty() => Minted::Absent,
-        None => Minted::Unknown {
-            detail: "a linked branch carries no ref name".to_owned(),
-        },
-        Some(branch) => Minted::Already {
-            branch,
-            others: names.collect(),
-        },
+    if body
+        .pointer("/data/repository/issue/linkedBranches/pageInfo/hasNextPage")
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        return Minted::Unknown {
+            detail: format!(
+                "the issue links more than the {LINKED_BRANCH_PAGE} branches one read carries"
+            ),
+        };
+    }
+    let mut names = Vec::with_capacity(nodes.len());
+    for node in nodes {
+        let Some(name) = node.pointer("/ref/name").and_then(Value::as_str) else {
+            return Minted::Unknown {
+                detail: "a linked branch carries no ref name".to_owned(),
+            };
+        };
+        names.push(name.to_owned());
+    }
+    names.sort_unstable();
+    if names.is_empty() {
+        return Minted::Absent;
+    }
+    let branch = names.remove(0);
+    Minted::Already {
+        branch,
+        others: names,
     }
 }
+
+/// How many linked branches one read carries. An issue with more is a
+/// state this verb reports rather than guesses at.
+const LINKED_BRANCH_PAGE: u32 = 100;
 
 /// Whether the landed grammar admits a branch name.
 ///
@@ -420,31 +445,34 @@ pub struct Resolved {
 ///
 /// A forge call that does not run or does not answer, and — on GitLab —
 /// a project template rendering a name the landed grammar refuses.
-pub fn resolve(
-    cli: &Path,
-    target: &Path,
-    forge: Forge,
-    repo: &str,
-    reference: &Reference,
-    base: Option<&str>,
-    apply: bool,
-) -> Result<Resolved, RkError> {
-    match forge {
-        Forge::Github => resolve_github(cli, target, repo, reference, base, apply),
-        Forge::Gitlab => resolve_gitlab(cli, target, repo, reference, base, apply),
+pub fn resolve(cli: &Path, target: &Path, ask: &Ask<'_>) -> Result<Resolved, RkError> {
+    match ask.forge {
+        Forge::Github => resolve_github(cli, target, ask),
+        Forge::Gitlab => resolve_gitlab(cli, target, ask),
     }
+}
+
+/// What one call asks the forge for.
+pub struct Ask<'a> {
+    /// The forge to act on.
+    pub forge: Forge,
+    /// The project path.
+    pub repo: &'a str,
+    /// The issue, as the operator named it.
+    pub reference: &'a Reference,
+    /// The remote branch a new branch starts from.
+    pub base: Option<&'a str>,
+    /// Whether to write, at the forge and afterwards.
+    pub apply: bool,
+    /// Every local refusal the seat carries, run where the forge lets rk
+    /// know the name before it writes.
+    pub seatable: &'a dyn Fn(&str) -> Result<(), RkError>,
 }
 
 /// The GitHub path: one GraphQL read, a mint where nothing is linked, and
 /// the same read again for the name the server chose.
-fn resolve_github(
-    cli: &Path,
-    target: &Path,
-    repo: &str,
-    reference: &Reference,
-    base: Option<&str>,
-    apply: bool,
-) -> Result<Resolved, RkError> {
+fn resolve_github(cli: &Path, target: &Path, ask: &Ask<'_>) -> Result<Resolved, RkError> {
+    let (repo, reference, base, apply) = (ask.repo, ask.reference, ask.base, ask.apply);
     let Some((owner, name)) = repo.split_once('/') else {
         return Err(RkError::Usage(format!(
             "'{repo}' is not a GitHub project path; pass --repo <owner/name>"
@@ -534,7 +562,7 @@ fn resolve_github(
 }
 
 /// The read GitHub answers both before and after a mint.
-const LINKED_BRANCHES_QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { issue(number: $number) { title linkedBranches(first: 10) { nodes { ref { name } } } } } }";
+const LINKED_BRANCHES_QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { issue(number: $number) { title linkedBranches(first: 100) { pageInfo { hasNextPage } nodes { ref { name } } } } } }";
 
 /// What the GitLab reads settled, before the branch itself is looked at.
 struct Planned {
@@ -582,9 +610,13 @@ fn plan_gitlab(
         )?,
         "the issue read",
     )?;
-    let iid = issue["iid"].as_u64().unwrap_or(reference.number);
-    let title = issue["title"].as_str().unwrap_or_default().to_owned();
-    let confidential = issue["confidential"].as_bool().unwrap_or(false);
+    // Every one of these is decoded strictly. `confidential` is the
+    // reason: a missing or mistyped field defaulted to public would put
+    // the issue's own title into a branch name anyone can read, and a
+    // partial answer is exactly when that happens.
+    let iid = required(&issue, "iid", Value::as_u64)?;
+    let title = required(&issue, "title", |held| held.as_str().map(ToOwned::to_owned))?;
+    let confidential = required(&issue, "confidential", Value::as_bool)?;
     // The user read happens only where the template names the creator,
     // which keeps the ordinary case at three calls.
     let creator = match template.as_deref() {
@@ -682,15 +714,9 @@ fn gitlab_detail(confidential: bool, template: Option<&str>, approximated: bool)
 
 /// The GitLab path: plan the name from the project's own rules, then read
 /// the branch and create it where it is absent.
-fn resolve_gitlab(
-    cli: &Path,
-    target: &Path,
-    repo: &str,
-    reference: &Reference,
-    base: Option<&str>,
-    apply: bool,
-) -> Result<Resolved, RkError> {
-    let encoded = repo.replace('/', "%2F");
+fn resolve_gitlab(cli: &Path, target: &Path, ask: &Ask<'_>) -> Result<Resolved, RkError> {
+    let (reference, base, apply) = (ask.reference, ask.base, ask.apply);
+    let encoded = ask.repo.replace('/', "%2F");
     let planned = plan_gitlab(cli, target, &encoded, reference)?;
     // One read answers the whole question. Every admissible name carries
     // the issue's link prefix, so the prefix search is a superset of the
@@ -719,6 +745,11 @@ fn resolve_gitlab(
         });
     }
     let origin = if apply {
+        // The name is known before the write here, unlike GitHub's, so
+        // every local refusal the seat carries runs first. A branch
+        // created at the forge and then refused locally would leave a
+        // remote change no report accounts for.
+        (ask.seatable)(&planned.name)?;
         // POST /projects/:id/repository/branches takes the name and the
         // ref, and resolves no template — which is why the reads exist.
         let start = base.unwrap_or(&planned.default_branch);
@@ -767,6 +798,23 @@ fn pick(mut linked: Vec<String>, rendered: &str) -> Option<(String, Vec<String>)
     let at = linked.iter().position(|name| name == rendered).unwrap_or(0);
     let primary = linked.remove(at);
     Some((primary, linked))
+}
+
+/// One field the API documents, or a failure naming it.
+///
+/// A field this verb reads is never defaulted: the shape of the answer
+/// decides what the branch is called and whether the title may appear in
+/// it, so a partial answer stops the run rather than being filled in.
+fn required<T>(
+    body: &Value,
+    field: &str,
+    read: impl Fn(&Value) -> Option<T>,
+) -> Result<T, RkError> {
+    read(&body[field]).ok_or_else(|| {
+        forge_failure(format!(
+            "the issue read answered without a usable '{field}'"
+        ))
+    })
 }
 
 /// Every branch the project carries under this issue's link prefix.

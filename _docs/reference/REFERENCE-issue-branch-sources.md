@@ -10,6 +10,14 @@ Verified 2026-09-08 against `https://docs.github.com/en/graphql/reference/input-
 
 Verified 2026-09-08 against `https://docs.github.com/en/graphql/reference/objects#issue` and `#linkedbranch`. `Issue.linkedBranches` is `LinkedBranchConnection!`, "Branches linked to this issue", and `LinkedBranch.ref` is "The branch's ref". Bearing: the read is the authority for the minted name, and the same read makes a second run idempotent instead of minting twice.
 
+## GitHub, on the linked-branch connection
+
+Verified 2026-09-08 against `https://docs.github.com/en/graphql/reference/objects#issue` and `https://docs.github.com/en/graphql/guides/using-pagination-in-the-graphql-api`. `Issue.linkedBranches` is a connection: it takes `first` and answers `pageInfo { hasNextPage }` beside its nodes, and reading past the first page needs cursor traversal. Bearing: the read asks for 100 and for `hasNextPage`. An issue linking more than that is reported as a state this verb will not guess at, rather than silently truncated, because a truncated answer is what would make a mint look authorized.
+
+## GitHub CLI, on the host it calls
+
+Verified 2026-09-08 against `https://cli.github.com/manual/gh_api`. `gh api --hostname` defaults to `github.com`, and `gh issue develop --repo` accepts `[HOST/]OWNER/REPO`. Bearing: this verb passes neither, so every GitHub call it makes goes to `github.com`. A clone whose origin is another host is refused by name before any call, rather than acted on at the wrong host.
+
 ## GitHub CLI, on `gh issue develop`
 
 Verified 2026-09-08 against `https://cli.github.com/manual/gh_issue_develop` and the cli/cli release history. The command was introduced in gh 2.19.0 through cli/cli pull request 6254, which describes it as remotely generating a branch linked to the issue. A later release added `--worktree`. Bearing: 2.19.0 is the GitHub floor in `Forge::cli_floor`, because below it the command does not exist. The `--worktree` flag is not used, because rk owns the path derivation and GitLab has no equivalent.

@@ -50,7 +50,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `issue-branch:a-confidential-issue-keeps-its-title-out-of-the-branch` — A confidential issue keeps its title out of the branch
 
-Where an issue is confidential, the rendered name MUST be the forge's title-free form and the project's template MUST NOT apply.
+Where an issue is confidential, the rendered name MUST be the forge's title-free form and the project's template MUST NOT apply. The field that states it MUST be read strictly: an answer that omits it or gives it another type MUST stop the run, because a flag defaulted to public puts the issue's own title into a branch name anyone can read.
 
 #### Scenario: A confidential GitLab issue under a template
 
@@ -86,7 +86,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `issue-branch:a-mint-is-idempotent` — A mint is idempotent
 
-While the forge already carries a branch for an issue, the verb MUST adopt it and MUST NOT create a second one. Only a read that answered in full MUST count as proof of absence: a read that failed, that did not answer in the shape the API documents, or that left a page of a paginated answer unread MUST stop the run, because acting on an unknown state as if it were absence is what creates the second branch.
+While the forge already carries a branch for an issue, the verb MUST adopt it and MUST NOT create a second one. Only a read that answered in full MUST count as proof of absence: a read that failed, that did not answer in the shape the API documents, or that left a page of a paginated answer unread MUST stop the run, because acting on an unknown state as if it were absence is what creates the second branch. This binds both forges: a GitHub node carrying no ref name and a connection reporting a further page are each unknown, exactly as a GitLab answer outside its documented shape is.
 
 #### Scenario: The verb runs twice on the same issue
 
@@ -122,7 +122,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `issue-branch:the-seat-follows-the-recorded-mode` — The seat follows the recorded mode
 
-The verb MUST seat the branch the way the target's recorded workflow mode states, MUST report which source decided the mode, and MUST refuse a runtime flag that disagrees with a recorded mode, because `maintenance:the-workflow-mode-is-a-landing-parameter` puts that decision in the landing verbs. Under the worktree mode the seat MUST come from the branch the forge holds — an existing local branch or the remote-tracking ref — and never from the trunk. Under the branches mode the checkout MUST happen in the main checkout, whichever of the repository's worktrees named the target.
+The verb MUST seat the branch the way the target's recorded workflow mode states, MUST report which source decided the mode, and MUST refuse a runtime flag that disagrees with a recorded mode, because `maintenance:the-workflow-mode-is-a-landing-parameter` puts that decision in the landing verbs. Under the worktree mode the seat MUST come from the branch the forge holds — an existing local branch or the remote-tracking ref — and never from the trunk, and an apply whose refresh did not answer MUST refuse rather than trust a remote-tracking ref an older fetch left behind. Under the branches mode the checkout MUST happen in the main checkout, whichever of the repository's worktrees named the target.
 
 #### Scenario: A target recorded in branches mode
 
@@ -134,7 +134,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `issue-branch:every-linked-branch-is-reported` — Every linked branch is reported
 
-Where an issue carries more than one branch, the verb MUST name every one it did not take, and MUST choose the one it takes by a stated rule rather than by the order the forge answered in.
+Where an issue carries more than one branch, the verb MUST name every one it did not take, and MUST choose the one it takes by a stated rule rather than by the order the forge answered in. This binds both forges.
 
 #### Scenario: An issue carries a branch under an older title
 
@@ -146,7 +146,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `issue-branch:a-forge-failure-leaves-the-clone-unchanged` — A forge failure leaves the clone unchanged
 
-If any forge call fails, then the run MUST return before the first local mutation, MUST state that the target is unchanged, and MUST carry the reason the forge's own answer states rather than one asserted for every failure.
+If any forge call fails, then the run MUST return before the first local mutation, MUST state that the target is unchanged, and MUST carry the reason the forge's own answer states rather than one asserted for every failure. Every local prerequisite the run has MUST be checked before the first forge call, and where the forge lets rk know the branch name before it writes, every refusal the seat carries MUST run before that write.
 
 #### Scenario: The forge answers an error
 

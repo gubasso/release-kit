@@ -9105,7 +9105,17 @@ fn status_reports_the_mode_and_check_flags_a_hand_edited_guard() {
 /// A scratch parent holding the repo at `./widget`, so the derived
 /// sibling worktrees stay inside the tempdir and die with it.
 fn worktree_fixture() -> (tempfile::TempDir, PathBuf) {
+    fixture_with_origin("https://github.com/acme/widget.git")
+}
+
+/// A scratch repository whose `origin` is a bare repository beside it, so
+/// the fetch an apply runs actually answers. Detection reads no host from
+/// a filesystem remote, so the caller passes `--forge` and `--repo`,
+/// which is the coordinate-supplying case those flags exist for.
+fn seatable_fixture() -> (tempfile::TempDir, PathBuf) {
     let parent = tempfile::tempdir().expect("a scratch parent exists");
+    let origin = parent.path().join("origin.git");
+    git_in(parent.path(), &["init", "-q", "--bare", "origin.git"]);
     let repo = parent.path().join("widget");
     std::fs::create_dir(&repo).expect("the repo dir creates");
     git_in(&repo, &["init", "-q", "-b", "master"]);
@@ -9113,13 +9123,25 @@ fn worktree_fixture() -> (tempfile::TempDir, PathBuf) {
     git_in(&repo, &["config", "user.name", "rk test"]);
     git_in(
         &repo,
-        &[
-            "remote",
-            "add",
-            "origin",
-            "https://github.com/acme/widget.git",
-        ],
+        &["remote", "add", "origin", origin.to_str().expect("utf-8")],
     );
+    std::fs::write(repo.join("seed"), "x\n").expect("the seed writes");
+    git_in(&repo, &["add", "seed"]);
+    git_in(&repo, &["commit", "-qm", "chore: seed"]);
+    git_in(&repo, &["push", "-q", "origin", "master"]);
+    (parent, repo)
+}
+
+/// A scratch repository with the named remote URL, for the tests whose
+/// subject is what detection reads.
+fn fixture_with_origin(url: &str) -> (tempfile::TempDir, PathBuf) {
+    let parent = tempfile::tempdir().expect("a scratch parent exists");
+    let repo = parent.path().join("widget");
+    std::fs::create_dir(&repo).expect("the repo dir creates");
+    git_in(&repo, &["init", "-q", "-b", "master"]);
+    git_in(&repo, &["config", "user.email", "rk@example.invalid"]);
+    git_in(&repo, &["config", "user.name", "rk test"]);
+    git_in(&repo, &["remote", "add", "origin", url]);
     std::fs::write(repo.join("seed"), "x\n").expect("the seed writes");
     git_in(&repo, &["add", "seed"]);
     git_in(&repo, &["commit", "-qm", "chore: seed"]);
@@ -15431,10 +15453,36 @@ fn linked(names: &[&str]) -> String {
 /// which is what both forges leave behind after a mint.
 fn with_remote_branch(repo: &Path, branch: &str) {
     let tip = tip_of(repo, "master");
-    git_in(
-        repo,
-        &["update-ref", &format!("refs/remotes/origin/{branch}"), &tip],
-    );
+    let url = {
+        let mut command = std::process::Command::new("git");
+        for var in GIT_HOOK_VARS {
+            command.env_remove(var);
+        }
+        let out = command
+            .args(["remote", "get-url", "origin"])
+            .current_dir(repo)
+            .output()
+            .expect("git runs");
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    };
+    if Path::new(&url).is_dir() {
+        // A real origin: push it, so the run's own fetch brings it in
+        // exactly as it would from a forge.
+        git_in(
+            repo,
+            &[
+                "push",
+                "-q",
+                "origin",
+                &format!("{tip}:refs/heads/{branch}"),
+            ],
+        );
+    } else {
+        git_in(
+            repo,
+            &["update-ref", &format!("refs/remotes/origin/{branch}"), &tip],
+        );
+    }
 }
 
 /// One `rk issue start` invocation against the GitHub mock.
@@ -15446,6 +15494,14 @@ fn issue_start(repo: &Path, gh: &Path, mock_dir: &Path, extra: &[&str]) -> Comma
         .args(extra)
         .env("RK_GH_BIN", gh)
         .env("RK_MOCK_DIR", mock_dir);
+    command
+}
+
+/// [`issue_start`] against a fixture whose origin is a real repository,
+/// which reads no host, so the coordinates come from the flags.
+fn issue_start_seatable(repo: &Path, gh: &Path, mock_dir: &Path, extra: &[&str]) -> Command {
+    let mut command = issue_start(repo, gh, mock_dir, extra);
+    command.args(["--forge", "github", "--repo", "acme/widget"]);
     command
 }
 
@@ -15516,7 +15572,7 @@ fn issue_start_previews_without_touching_the_forge_or_the_clone() {
 
 #[test]
 fn a_github_mint_passes_no_name_flag_and_a_number_variable() {
-    let (_parent, repo) = worktree_fixture();
+    let (_parent, repo) = seatable_fixture();
     let (mock, gh) = mock_forge("gh", GH_ISSUE_MOCK);
     std::fs::write(mock.path().join("before.json"), linked(&[])).expect("the answer writes");
     std::fs::write(
@@ -15525,7 +15581,7 @@ fn a_github_mint_passes_no_name_flag_and_a_number_variable() {
     )
     .expect("the answer writes");
     with_remote_branch(&repo, "57-fix-the-csv-upload");
-    issue_start(&repo, &gh, mock.path(), &["--apply"])
+    issue_start_seatable(&repo, &gh, mock.path(), &["--apply"])
         .assert()
         .success();
     let log = mock_log(mock.path());
@@ -15542,7 +15598,7 @@ fn a_github_mint_passes_no_name_flag_and_a_number_variable() {
 
 #[test]
 fn issue_start_seats_a_worktree_at_the_derived_path() {
-    let (parent, repo) = worktree_fixture();
+    let (parent, repo) = seatable_fixture();
     let (mock, gh) = mock_forge("gh", GH_ISSUE_MOCK);
     std::fs::write(
         mock.path().join("before.json"),
@@ -15550,7 +15606,7 @@ fn issue_start_seats_a_worktree_at_the_derived_path() {
     )
     .expect("the answer writes");
     with_remote_branch(&repo, "57-fix-the-csv-upload");
-    let out = issue_start(&repo, &gh, mock.path(), &["--apply", "--json"])
+    let out = issue_start_seatable(&repo, &gh, mock.path(), &["--apply", "--json"])
         .assert()
         .success()
         .get_output()
@@ -15565,7 +15621,7 @@ fn issue_start_seats_a_worktree_at_the_derived_path() {
 
 #[test]
 fn a_second_issue_start_mints_nothing_and_reports_the_seat() {
-    let (parent, repo) = worktree_fixture();
+    let (parent, repo) = seatable_fixture();
     let (mock, gh) = mock_forge("gh", GH_ISSUE_MOCK);
     std::fs::write(
         mock.path().join("before.json"),
@@ -15573,10 +15629,10 @@ fn a_second_issue_start_mints_nothing_and_reports_the_seat() {
     )
     .expect("the answer writes");
     with_remote_branch(&repo, "57-fix-the-csv-upload");
-    issue_start(&repo, &gh, mock.path(), &["--apply"])
+    issue_start_seatable(&repo, &gh, mock.path(), &["--apply"])
         .assert()
         .success();
-    let out = issue_start(&repo, &gh, mock.path(), &["--apply", "--json"])
+    let out = issue_start_seatable(&repo, &gh, mock.path(), &["--apply", "--json"])
         .assert()
         .success()
         .get_output()
@@ -15600,7 +15656,7 @@ fn a_second_issue_start_mints_nothing_and_reports_the_seat() {
 
 #[test]
 fn issue_start_checks_out_in_place_under_branches_mode() {
-    let (_parent, repo) = worktree_fixture();
+    let (_parent, repo) = seatable_fixture();
     let (mock, gh) = mock_forge("gh", GH_ISSUE_MOCK);
     std::fs::write(
         mock.path().join("before.json"),
@@ -15608,7 +15664,7 @@ fn issue_start_checks_out_in_place_under_branches_mode() {
     )
     .expect("the answer writes");
     with_remote_branch(&repo, "57-fix-the-csv-upload");
-    let out = issue_start(
+    let out = issue_start_seatable(
         &repo,
         &gh,
         mock.path(),
@@ -15671,25 +15727,7 @@ fn an_issue_url_naming_another_project_refuses() {
 /// A scratch repository whose origin is a GitLab project, so no override
 /// has to contradict what detection reads.
 fn gitlab_fixture() -> (tempfile::TempDir, PathBuf) {
-    let parent = tempfile::tempdir().expect("a scratch parent exists");
-    let repo = parent.path().join("widget");
-    std::fs::create_dir(&repo).expect("the repo dir creates");
-    git_in(&repo, &["init", "-q", "-b", "master"]);
-    git_in(&repo, &["config", "user.email", "rk@example.invalid"]);
-    git_in(&repo, &["config", "user.name", "rk test"]);
-    git_in(
-        &repo,
-        &[
-            "remote",
-            "add",
-            "origin",
-            "https://gitlab.com/acme/widget.git",
-        ],
-    );
-    std::fs::write(repo.join("seed"), "x\n").expect("the seed writes");
-    git_in(&repo, &["add", "seed"]);
-    git_in(&repo, &["commit", "-qm", "chore: seed"]);
-    (parent, repo)
+    fixture_with_origin("https://gitlab.com/acme/widget.git")
 }
 
 /// One `rk issue start` invocation against the GitLab mock.
@@ -15701,6 +15739,13 @@ fn gitlab_start(repo: &Path, glab: &Path, mock_dir: &Path, extra: &[&str]) -> Co
         .args(extra)
         .env("RK_GLAB_BIN", glab)
         .env("RK_MOCK_DIR", mock_dir);
+    command
+}
+
+/// [`gitlab_start`] against a fixture whose origin is a real repository.
+fn gitlab_start_seatable(repo: &Path, glab: &Path, mock_dir: &Path, extra: &[&str]) -> Command {
+    let mut command = gitlab_start(repo, glab, mock_dir, extra);
+    command.args(["--forge", "gitlab", "--repo", "acme/widget"]);
     command
 }
 
@@ -15741,11 +15786,11 @@ fn a_gitlab_absent_template_joins_id_and_title() {
 
 #[test]
 fn a_gitlab_project_template_is_read_not_assumed() {
-    let (_parent, repo) = gitlab_fixture();
+    let (_parent, repo) = seatable_fixture();
     let (mock, glab) = mock_forge("glab", GLAB_ISSUE_MOCK);
     gitlab_answers(mock.path(), Some("%{id}-%{branch_creator}-%{title}"), false);
     with_remote_branch(&repo, "57-Ada-Lovelace-fix-the-csv-upload");
-    let out = gitlab_start(&repo, &glab, mock.path(), &["--apply", "--json"])
+    let out = gitlab_start_seatable(&repo, &glab, mock.path(), &["--apply", "--json"])
         .assert()
         .success()
         .get_output()
@@ -15810,7 +15855,7 @@ fn a_gitlab_template_the_grammar_refuses_stops_before_the_post() {
 
 #[test]
 fn an_existing_gitlab_branch_mints_nothing() {
-    let (_parent, repo) = gitlab_fixture();
+    let (_parent, repo) = seatable_fixture();
     let (mock, glab) = mock_forge("glab", GLAB_ISSUE_MOCK);
     gitlab_answers(mock.path(), None, false);
     std::fs::write(
@@ -15819,7 +15864,7 @@ fn an_existing_gitlab_branch_mints_nothing() {
     )
     .expect("the answer writes");
     with_remote_branch(&repo, "57-fix-the-csv-upload");
-    let out = gitlab_start(&repo, &glab, mock.path(), &["--apply", "--json"])
+    let out = gitlab_start_seatable(&repo, &glab, mock.path(), &["--apply", "--json"])
         .assert()
         .success()
         .get_output()
@@ -15964,7 +16009,7 @@ fn both_skills_route_an_issue_shaped_request_to_the_verb() {
 /// same-named branch cut from the trunk.
 #[test]
 fn an_unreachable_forge_tip_refuses_rather_than_seat_from_the_trunk() {
-    let (parent, repo) = worktree_fixture();
+    let (parent, repo) = seatable_fixture();
     let (mock, gh) = mock_forge("gh", GH_ISSUE_MOCK);
     std::fs::write(
         mock.path().join("before.json"),
@@ -15973,7 +16018,7 @@ fn an_unreachable_forge_tip_refuses_rather_than_seat_from_the_trunk() {
     .expect("the answer writes");
     // No remote-tracking ref: the mint happened at the forge and this
     // clone never saw it, which a failed fetch also produces.
-    let out = issue_start(&repo, &gh, mock.path(), &["--apply"])
+    let out = issue_start_seatable(&repo, &gh, mock.path(), &["--apply"])
         .assert()
         .code(73)
         .get_output()
@@ -16091,7 +16136,7 @@ fn a_workflow_flag_disagreeing_with_the_record_refuses() {
 /// there whichever of the repository's worktrees named the target.
 #[test]
 fn branches_mode_switches_the_main_checkout_not_the_named_worktree() {
-    let (_parent, repo) = worktree_fixture();
+    let (_parent, repo) = seatable_fixture();
     git_in(&repo, &["branch", "feat/other"]);
     let linked_seat = seat(&repo, "feat/other");
     with_remote_branch(&repo, "57-fix-the-csv-upload");
@@ -16103,6 +16148,7 @@ fn branches_mode_switches_the_main_checkout_not_the_named_worktree() {
     .expect("the answer writes");
     rk_scrubbed()
         .args(["issue", "start", "57", "--workflow", "branches"])
+        .args(["--forge", "github", "--repo", "acme/widget"])
         .args(["--apply", "--target"])
         .arg(&linked_seat)
         .env("RK_GH_BIN", &gh)
@@ -16167,7 +16213,7 @@ fn a_gitlab_template_that_breaks_the_issue_link_refuses() {
 /// prefix and adopted, rather than a second branch minted for one issue.
 #[test]
 fn a_gitlab_branch_under_an_older_name_is_adopted_not_duplicated() {
-    let (_parent, repo) = gitlab_fixture();
+    let (_parent, repo) = seatable_fixture();
     let (mock, glab) = mock_forge("glab", GLAB_ISSUE_MOCK);
     gitlab_answers(mock.path(), None, false);
     std::fs::write(
@@ -16176,7 +16222,7 @@ fn a_gitlab_branch_under_an_older_name_is_adopted_not_duplicated() {
     )
     .expect("the answer writes");
     with_remote_branch(&repo, "57-the-older-title");
-    let out = gitlab_start(&repo, &glab, mock.path(), &["--apply", "--json"])
+    let out = gitlab_start_seatable(&repo, &glab, mock.path(), &["--apply", "--json"])
         .assert()
         .success()
         .get_output()
@@ -16249,7 +16295,7 @@ fn a_linked_branch_read_that_does_not_answer_mints_nothing() {
 /// order the API answered in.
 #[test]
 fn a_gitlab_issue_with_two_linked_branches_names_both() {
-    let (_parent, repo) = gitlab_fixture();
+    let (_parent, repo) = seatable_fixture();
     let (mock, glab) = mock_forge("glab", GLAB_ISSUE_MOCK);
     gitlab_answers(mock.path(), None, false);
     // The rendered name is second in the answer, and first is a name an
@@ -16260,7 +16306,7 @@ fn a_gitlab_issue_with_two_linked_branches_names_both() {
     )
     .expect("the answer writes");
     with_remote_branch(&repo, "57-fix-the-csv-upload");
-    let out = gitlab_start(&repo, &glab, mock.path(), &["--apply", "--json"])
+    let out = gitlab_start_seatable(&repo, &glab, mock.path(), &["--apply", "--json"])
         .assert()
         .success()
         .get_output()
@@ -16340,4 +16386,175 @@ fn the_linked_branch_read_asks_for_every_page() {
         log.contains("api --paginate projects/acme%2Fwidget/repository/branches?search="),
         "{log}"
     );
+}
+
+/// The target is a repository before anything reaches the network. A
+/// mint that succeeded and then failed on a local prerequisite would
+/// leave a remote branch no report accounts for.
+#[test]
+fn a_target_that_is_not_a_repository_refuses_before_the_forge() {
+    let plain = tempfile::tempdir().expect("a scratch dir exists");
+    let (mock, gh) = mock_forge("gh", GH_ISSUE_MOCK);
+    std::fs::write(mock.path().join("before.json"), linked(&[])).expect("the answer writes");
+    rk_scrubbed()
+        .args(["issue", "start", "57"])
+        .args(["--forge", "github", "--repo", "acme/widget"])
+        .args(["--apply", "--target"])
+        .arg(plain.path())
+        .env("RK_GH_BIN", &gh)
+        .env("RK_MOCK_DIR", mock.path())
+        .assert()
+        .failure();
+    assert!(
+        mock_log(mock.path())
+            .lines()
+            .all(|line| line == "--version"),
+        "nothing but the version gate reached the forge: {}",
+        mock_log(mock.path())
+    );
+}
+
+/// On GitLab the name is known before the write, so every local refusal
+/// the seat carries runs first: no branch is created at the forge that
+/// this clone then turns out to have no room for.
+#[test]
+fn a_gitlab_seat_refusal_stops_before_the_branch_is_created() {
+    let (parent, repo) = seatable_fixture();
+    // The derived path is occupied by something this repository does not
+    // register, which `rk worktree add` refuses.
+    std::fs::create_dir(parent.path().join("widget@57-fix-the-csv-upload"))
+        .expect("the occupant creates");
+    let (mock, glab) = mock_forge("glab", GLAB_ISSUE_MOCK);
+    gitlab_answers(mock.path(), None, false);
+    gitlab_start_seatable(&repo, &glab, mock.path(), &["--apply"])
+        .assert()
+        .code(73);
+    assert!(
+        !mock.path().join("posted").exists(),
+        "the seat is refused before the forge is written to"
+    );
+}
+
+/// A refresh that did not answer means no local ref is proof of what the
+/// forge holds, so a stale remote-tracking tip is not seated from.
+#[test]
+fn a_failed_refresh_refuses_rather_than_seat_a_stale_tip() {
+    let (_parent, repo) = seatable_fixture();
+    with_remote_branch(&repo, "57-fix-the-csv-upload");
+    // The origin goes away after the tracking ref exists, so the ref is
+    // there and the fetch cannot confirm it.
+    git_in(&repo, &["fetch", "-q", "origin"]);
+    git_in(
+        &repo,
+        &["remote", "set-url", "origin", "/no/such/origin.git"],
+    );
+    let (mock, gh) = mock_forge("gh", GH_ISSUE_MOCK);
+    std::fs::write(
+        mock.path().join("before.json"),
+        linked(&["57-fix-the-csv-upload"]),
+    )
+    .expect("the answer writes");
+    let out = issue_start_seatable(&repo, &gh, mock.path(), &["--apply"])
+        .assert()
+        .code(73)
+        .get_output()
+        .stderr
+        .clone();
+    let text = String::from_utf8_lossy(&out).into_owned();
+    assert!(text.contains("could not refresh from the forge"), "{text}");
+}
+
+/// The GitHub read is strict and whole: a node without a ref name, and a
+/// connection with a page left unread, are both unknown rather than an
+/// answer a mint can act on.
+#[test]
+fn a_partial_github_linked_branch_answer_mints_nothing() {
+    let bodies = [
+        serde_json::json!({"data":{"repository":{"issue":{"title":"t",
+            "linkedBranches":{"pageInfo":{"hasNextPage":false},"nodes":[{"ref":{}}]}}}}}),
+        serde_json::json!({"data":{"repository":{"issue":{"title":"t",
+            "linkedBranches":{"pageInfo":{"hasNextPage":true},"nodes":[]}}}}}),
+    ];
+    for body in bodies {
+        let (_parent, repo) = seatable_fixture();
+        let (mock, gh) = mock_forge("gh", GH_ISSUE_MOCK);
+        std::fs::write(mock.path().join("before.json"), body.to_string())
+            .expect("the answer writes");
+        issue_start_seatable(&repo, &gh, mock.path(), &["--apply"])
+            .assert()
+            .failure();
+        assert!(
+            !mock_log(mock.path()).contains("issue develop"),
+            "a partial answer is not proof the issue links nothing: {body}"
+        );
+    }
+}
+
+/// The choice among several linked branches is a rule, not the order the
+/// forge answered in.
+#[test]
+fn the_github_choice_does_not_follow_the_answer_order() {
+    for order in [vec!["57-zulu", "57-alpha"], vec!["57-alpha", "57-zulu"]] {
+        let (_parent, repo) = seatable_fixture();
+        let (mock, gh) = mock_forge("gh", GH_ISSUE_MOCK);
+        std::fs::write(mock.path().join("before.json"), linked(&order)).expect("the answer writes");
+        let out = issue_start_seatable(&repo, &gh, mock.path(), &["--json"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+        assert_eq!(report["branch"], "57-alpha", "for {order:?}");
+        assert_eq!(
+            report["others"],
+            serde_json::json!(["57-zulu"]),
+            "for {order:?}"
+        );
+    }
+}
+
+/// Every GitHub call goes to the CLI's default host, so a clone on any
+/// other host is refused by name rather than acted on at github.com.
+#[test]
+fn a_github_forge_on_another_host_refuses() {
+    let (_parent, repo) = fixture_with_origin("https://github.example.com/acme/widget.git");
+    let out = rk_scrubbed()
+        .args(["issue", "start", "57", "--forge", "github", "--target"])
+        .arg(&repo)
+        .env("RK_GH_BIN", "/no/such/gh")
+        .assert()
+        .code(73)
+        .get_output()
+        .stderr
+        .clone();
+    let text = String::from_utf8_lossy(&out).into_owned();
+    assert!(text.contains("github.example.com"), "{text}");
+    assert!(text.contains("reaches github.com alone"), "{text}");
+}
+
+/// A GitLab issue answer missing a field this verb reads stops the run.
+/// The confidentiality flag is why: defaulting it to public would put
+/// the issue's own title into a branch name anyone can read.
+#[test]
+fn a_gitlab_issue_answer_missing_a_field_mints_nothing() {
+    for issue in [
+        serde_json::json!({"iid": 57, "title": "Secret"}),
+        serde_json::json!({"iid": 57, "title": "Secret", "confidential": "yes"}),
+        serde_json::json!({"iid": 57, "confidential": true}),
+        serde_json::json!({"title": "Secret", "confidential": false}),
+    ] {
+        let (_parent, repo) = seatable_fixture();
+        let (mock, glab) = mock_forge("glab", GLAB_ISSUE_MOCK);
+        gitlab_answers(mock.path(), None, false);
+        std::fs::write(mock.path().join("issue.json"), issue.to_string())
+            .expect("the answer writes");
+        gitlab_start_seatable(&repo, &glab, mock.path(), &["--apply"])
+            .assert()
+            .failure();
+        assert!(
+            !mock.path().join("posted").exists(),
+            "a partial issue answer creates nothing: {issue}"
+        );
+    }
 }

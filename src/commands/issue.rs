@@ -134,6 +134,29 @@ fn contradicts(what: &str, chosen: Option<&str>, known: Option<&str>) -> Result<
     )))
 }
 
+/// Refuse a forge on a host this verb's calls would not reach.
+///
+/// Every GitHub call here goes to the CLI's default host. An enterprise
+/// remote reaches this verb only through `--forge`, and acting on the
+/// wrong host is worse than saying plainly that this verb carries one.
+fn reachable(forge: Forge, host: Option<&str>) -> Result<(), RkError> {
+    let Some(host) = host else { return Ok(()) };
+    if forge != Forge::Github || host.eq_ignore_ascii_case("github.com") {
+        return Ok(());
+    }
+    Err(RkError::refusal(
+        Diagnostic::new(
+            Reason::ForgeUnsupported,
+            format!("this clone's origin is {host}, and rk issue start reaches github.com alone"),
+        )
+        .expected("a github.com remote, or a GitLab project")
+        .action(
+            "start the branch with gh issue develop --repo <host>/<owner>/<name>, then rk worktree add it",
+        )
+        .target_state("unchanged"),
+    ))
+}
+
 /// Read the target, the reference, and the recorded mode. Nothing here
 /// touches the network, so every refusal below costs one local read.
 fn ground(
@@ -191,6 +214,7 @@ fn ground(
             RkError::missing(diagnostic)
         });
     };
+    reachable(forge, detected.host.as_deref())?;
     // An override supplies a coordinate detection could not, and never
     // replaces one it could: minting on the project the operator named
     // and seating the branch in the clone they are standing in is the
@@ -267,22 +291,40 @@ fn start(
 ) -> Result<(), RkError> {
     let reference = issue::parse_reference(reference).map_err(RkError::Usage)?;
     let ground = ground(target, &reference, overrides)?;
+    // The target is a repository before anything reaches the network.
+    // Without this, a mint could succeed and the run then fail on a
+    // local prerequisite, leaving a remote branch no report accounts for.
+    let main = crate::commands::worktree::main_checkout(target)?;
     // The gate before the first forge call, so a stale CLI costs one
     // local process rather than a half-finished remote change.
     probes::require_forge_cli(ground.forge)?;
     let cli = resolve_cli(ground.forge)?;
+    // Where the forge lets rk know the name before it writes, every
+    // local refusal the seat carries runs first.
+    let seatable = |branch: &str| -> Result<(), RkError> {
+        match ground.workflow {
+            Workflow::Worktree => {
+                crate::commands::worktree::plan_seat(target, branch, overrides.base, false)
+                    .map(|_| ())
+            }
+            Workflow::Branches => Ok(()),
+        }
+    };
     let resolved = issue::resolve(
         &cli,
         target.as_std_path(),
-        ground.forge,
-        &ground.repo,
-        &reference,
-        overrides.base,
-        apply,
+        &issue::Ask {
+            forge: ground.forge,
+            repo: &ground.repo,
+            reference: &reference,
+            base: overrides.base,
+            apply,
+            seatable: &seatable,
+        },
     )?;
     match ground.workflow {
         Workflow::Worktree => seat_worktree(target, &ground, &resolved, overrides.base, apply, out),
-        Workflow::Branches => seat_branch(target, &ground, &resolved, apply, out),
+        Workflow::Branches => seat_branch(&main, &ground, &resolved, apply, out),
     }
 }
 
@@ -303,7 +345,20 @@ fn seat_worktree(
     let mut note = None;
     let path = match seat {
         crate::commands::worktree::Seat::Satisfied { path } => path,
-        crate::commands::worktree::Seat::Fresh { path, source, .. } => {
+        crate::commands::worktree::Seat::Fresh {
+            path,
+            source,
+            detail,
+        } => {
+            // An apply refreshes first, and `detail` is set only where
+            // that refresh failed. A remote-tracking ref left over from
+            // an older fetch is not the tip the forge holds now, so it
+            // is not something to seat from and call success.
+            if apply {
+                if let Some(why) = detail {
+                    return Err(stale_refs(branch, resolved, &why));
+                }
+            }
             // The forge holds this branch, so the seat comes from its
             // real tip — an adopted local branch, or the remote-tracking
             // ref. Anything else would build a same-named branch sharing
@@ -346,6 +401,24 @@ fn unreachable_tip(branch: &str, resolved: &Resolved) -> RkError {
     )
 }
 
+/// The refresh failed, so no local ref is proof of what the forge holds.
+fn stale_refs(branch: &str, resolved: &Resolved, why: &str) -> RkError {
+    RkError::refusal(
+        Diagnostic::new(
+            Reason::StateDrift,
+            format!(
+                "this clone could not refresh from the forge, so its {branch} may be stale: {why}"
+            ),
+        )
+        .expected("a fetch that answered, so the seat starts from the tip the forge holds")
+        .action("git fetch origin, then rerun")
+        .target_state(format!(
+            "unchanged; issue #{} keeps its branch at the forge",
+            resolved.number
+        )),
+    )
+}
+
 /// Branches mode: the branch checked out in the main checkout.
 ///
 /// The main checkout is where this mode works branches, so the switch
@@ -355,7 +428,7 @@ fn unreachable_tip(branch: &str, resolved: &Resolved) -> RkError {
 /// the same case — a remote tip with no local branch — unless a previous
 /// run already made one.
 fn seat_branch(
-    target: &Utf8Path,
+    main: &Utf8Path,
     ground: &Ground,
     resolved: &Resolved,
     apply: bool,
@@ -367,11 +440,10 @@ fn seat_branch(
     if !apply {
         return report(out, ground, resolved, None, Some(branch.to_owned()), false);
     }
-    let main = crate::commands::worktree::main_checkout(target)?;
     let git = |args: &[&str]| -> Result<std::process::Output, RkError> {
         std::process::Command::new(probes::git_bin())
             .args(["-C"])
-            .arg(&main)
+            .arg(main)
             .args(args)
             .output()
             .map_err(|source| {
@@ -384,7 +456,10 @@ fn seat_branch(
                 )
             })
     };
-    let _ = git(&["fetch", "origin"])?;
+    let fetched = git(&["fetch", "origin"])?;
+    if !fetched.status.success() {
+        return Err(stale_refs(branch, resolved, &last_line(&fetched.stderr)));
+    }
     let local = git(&[
         "rev-parse",
         "--verify",
