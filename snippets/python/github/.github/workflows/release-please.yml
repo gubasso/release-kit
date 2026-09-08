@@ -28,11 +28,17 @@ jobs:
       group: release-please-${{ github.ref }}
       cancel-in-progress: false
     steps:
+      # The mint is scoped, not blanket: without a permission-* input the token
+      # carries every permission the installation holds. This half writes the
+      # bump branch and opens, refreshes, and arms the request, so it takes
+      # contents and pull-requests, which is the pair release-please documents.
       - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         id: app-token
         with:
           app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
           private-key: ${{ secrets.RELEASE_BOT_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5
         id: release-please
         with:
@@ -112,12 +118,17 @@ jobs:
           fi
           echo "pending=true" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+      # This half creates one tag ref and opens no pull request, so contents
+      # alone carries it. A target whose tag ruleset blocks creation needs
+      # administration here too; the convention's ruleset restricts deletion
+      # and update only.
       - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         if: steps.bump.outputs.pending == 'true'
         id: app-token
         with:
           app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
           private-key: ${{ secrets.RELEASE_BOT_APP_PRIVATE_KEY }}
+          permission-contents: write
       - name: tag the release commit
         if: steps.bump.outputs.pending == 'true'
         env:

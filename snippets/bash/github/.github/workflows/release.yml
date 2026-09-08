@@ -30,14 +30,22 @@ jobs:
       group: release-request-${{ github.ref }}
       cancel-in-progress: false
     steps:
+      # The mint is scoped, not blanket: without a permission-* input the token
+      # carries every permission the installation holds. This half pushes the
+      # bump branch and opens, refreshes, and arms the request, so it takes
+      # contents and pull-requests.
       - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         id: app-token
         with:
           app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
           private-key: ${{ secrets.RELEASE_BOT_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
+          # zizmor: ignore[artipacked] the persisted credential is what pushes
+          # the request branch below; persist-credentials: false breaks it.
           token: ${{ steps.app-token.outputs.token }}
       - name: install git-cliff
         run: pipx install git-cliff==2.13.1
@@ -106,11 +114,16 @@ jobs:
       attestations: write
       artifact-metadata: write
     steps:
+      # This half tags the bump commit and creates the release, and opens no
+      # pull request, so contents alone carries it. A target whose tag ruleset
+      # blocks creation needs administration here too; the convention's ruleset
+      # restricts deletion and update only.
       - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         id: app-token
         with:
           app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
           private-key: ${{ secrets.RELEASE_BOT_APP_PRIVATE_KEY }}
+          permission-contents: write
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
