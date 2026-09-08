@@ -17,6 +17,8 @@ In this mode the main checkout commits nothing, so this step is the only path to
 
 ### 1a. Adopt the forge-minted branch
 
+Work an issue names starts from `rk issue start <issue>`, which mints the branch at the forge and seats it here. [The issue runbook](./issue.md) owns that procedure. Where the branch already exists and only the seat is missing:
+
 ```bash
 rk worktree add <issue-id>-<slug> --apply
 # check: the source line reports remote; the local tracking branch is created from origin/<branch>, never recreated from the trunk

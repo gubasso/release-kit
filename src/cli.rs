@@ -11,6 +11,7 @@ pub mod devshell;
 pub mod doctor;
 pub mod guide;
 pub mod init;
+pub mod issue;
 pub mod lines;
 pub mod message;
 pub mod payload;
@@ -71,6 +72,8 @@ pub enum Commands {
     Message(message::MessageArgs),
     /// Inspect, create, and prune the linked worktrees beside a checkout.
     Worktree(worktree::WorktreeArgs),
+    /// Start work from a forge issue, with the forge naming the branch.
+    Issue(issue::IssueArgs),
     /// Inspect and prune the run journals.
     Runs(runs::RunsArgs),
     /// Manage the agent skills at user scope.

@@ -62,6 +62,7 @@ fn run(cli: &Cli) -> Result<(), RkError> {
         Commands::Lines(args) => commands::lines::run(args),
         Commands::Message(args) => commands::message::run(args),
         Commands::Worktree(args) => commands::worktree::run(args),
+        Commands::Issue(args) => commands::issue::run(args),
         Commands::Runs(args) => commands::runs::run(args),
         Commands::Skill(args) => commands::skill::run(args),
         Commands::Devshell(args) => commands::devshell::run(args),
@@ -124,6 +125,7 @@ const fn name(command: &Commands) -> &'static str {
         Commands::Lines(_) => "lines",
         Commands::Message(_) => "message",
         Commands::Worktree(_) => "worktree",
+        Commands::Issue(_) => "issue",
         Commands::Runs(_) => "runs",
         Commands::Skill(_) => "skill",
         Commands::Devshell(_) => "devshell",
@@ -141,6 +143,7 @@ const fn wants_json(command: &Commands) -> bool {
     use release_kit::cli::branches::BranchesAction;
     use release_kit::cli::depend::DependAction;
     use release_kit::cli::devshell::DevshellAction;
+    use release_kit::cli::issue::IssueAction;
     use release_kit::cli::lines::LinesAction;
     use release_kit::cli::runs::RunsAction;
     use release_kit::cli::setup::SetupAction;
@@ -178,6 +181,9 @@ const fn wants_json(command: &Commands) -> bool {
             WorktreeAction::List { json, .. }
             | WorktreeAction::Add { json, .. }
             | WorktreeAction::Prune { json, .. } => *json,
+        },
+        Commands::Issue(args) => match &args.action {
+            IssueAction::Start { json, .. } => *json,
         },
         Commands::Runs(args) => match &args.action {
             RunsAction::List { json } | RunsAction::Show { json, .. } => *json,
