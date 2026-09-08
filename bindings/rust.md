@@ -17,7 +17,7 @@ The registry-and-auth answer is narrower on GitLab too: crates.io trusted publis
 
 `release-plz.yml` is the publish workflow: it is the filename registered at crates.io, and the only workflow declaring `id-token: write`. It carries two jobs — the release-request maintainer, which keeps the bump-and-changelog pull request open against the trunk, and the tag-and-publish half, which fires on the push that lands the bump.
 
-`release.yml` is the artifact workflow and cargo-dist generates it. Never edit it by hand: a hand edit is silently reverted at the next `dist generate`. Change `dist-workspace.toml` and regenerate instead, and bump the `cargo-dist-version` pin there deliberately — regenerate and read the diff. It is never registered at crates.io.
+`release.yml` is the artifact workflow and cargo-dist generates it. Never edit it by hand: a hand edit is silently reverted at the next `dist generate`. Change `dist-workspace.toml` and regenerate instead, and bump the `cargo-dist-version` pin there deliberately — regenerate and read the diff. It is never registered at crates.io. The one project that edits it is the one whose own audit gates reject the generated shell, and that project pays for the edit with `allow-dirty` and a hand-porting duty: see [when the generated workflow fails the project's own gates](#when-the-generated-workflow-fails-the-projects-own-gates).
 
 The tag push retriggers `release.yml` only because the publish jobs authenticate with a GitHub App token; a tag pushed with `GITHUB_TOKEN` starts no workflow.
 
@@ -75,6 +75,17 @@ dist-plan:
 ```
 
 `rk status --check` judges the committed workflow against `dist-workspace.toml` without `dist` installed: every reference the workflow runs is immutable, it is the configuration's own value wherever the configuration pins that action, a step the check cannot resolve is reported rather than passed, and an attest step is present while `github-attestations` is true. It reads from the workflow to the configuration, so a pin the workflow never runs is the target's own tuning; a table entry naming a movable tag pins nothing, so every reference is judged for itself whatever the configuration says about it. It reads the grammar cargo-dist writes — block and flow steps, quoted and unquoted keys — and a workflow hand-authored in some further YAML presentation is beyond a text reader, which is one more reason the `dist generate` proof above stays the whole-file check. It is the gate a target carries after the landing, and the `dist generate` proof above stays the stronger check, because only regenerating sees the rest of the workflow body. It also faults a configuration whose `pr-run-mode` is not `skip`, and a generated workflow that still carries a pull-request trigger, because the two are the same defect at the two ends of the generator. A workflow that was never generated is reported by nothing: `rk init` writes none, so generating it is a step the operator owes.
+
+### When the generated workflow fails the project's own gates
+
+cargo-dist's output does not pass a strict workflow audit. It interpolates `${{ }}` expressions into `run:` bodies, and it leaves several shell expansions unquoted. A project that runs zizmor or actionlint over `.github/workflows/` therefore sees findings it did not author. Both defects are open upstream, so no `cargo-dist-version` bump removes them.
+
+The proof above and a hand-hardened workflow cannot both hold, because only cargo-dist's unmodified output satisfies the proof. The project chooses one, and the choice is the project's, not this convention's.
+
+- Keep the proof: the project commits the generated file as it is, and records each accepted finding in its own audit configuration, with the upstream issue that retires it. The workflow stays provably equal to what the pin produces.
+- Keep the hardening: the project sets `allow-dirty = ["ci"]` in `dist-workspace.toml`, edits the workflow, and runs `dist plan` alone in CI. The `dist generate` proof comes out of the gate, and `rk status --check` becomes the only judge the workflow still has.
+
+The second path carries an obligation that the first one automates. At every `cargo-dist-version` bump the operator regenerates into a scratch copy, reads the whole diff, and ports every change except the hardening. The project records that duty where its operator meets it. A project that takes this path silently keeps the hardening for one release and loses it at the next bump.
 
 ### The bootstrap token
 
