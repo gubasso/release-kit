@@ -10,14 +10,16 @@
 //! destination-keyed, and a second pair sharing a destination would
 //! otherwise silently inherit the wrong rule.
 //!
-//! A second, pair-keyed table judges what a landed file generates and the
-//! payload ships no copy of: no digest records such a file, so nothing
-//! else sees it drift away from the configuration it was generated from.
-//! That judgment reads the generated text, because the generator is not
-//! available to re-run and the text is what the forge executes. It reads
-//! the grammar the generator writes and reports what it cannot resolve;
-//! a workflow hand-authored in some further YAML presentation is beyond a
-//! text reader, and the generator's own check stays the whole-file proof.
+//! A second, pair-keyed table judges target-wide relationships that need
+//! files read from the target's disk: generated files the payload ships no
+//! copy of, and target-owned files landed configuration requires. No digest
+//! records a generated file, so nothing else sees it drift away from the
+//! configuration it was generated from. That judgment reads the generated
+//! text, because the generator is not available to re-run and the text is
+//! what the forge executes. It reads the grammar the generator writes and
+//! reports what it cannot resolve; a workflow hand-authored in some further
+//! YAML presentation is beyond a text reader, and the generator's own check
+//! stays the whole-file proof.
 
 use camino::Utf8Path;
 use serde::Serialize;
@@ -238,18 +240,75 @@ fn seed_action_commits() -> Vec<(String, String)> {
 /// executes it.
 const GENERATED_WORKFLOW: &str = ".github/workflows/release.yml";
 
-/// Judge what a landed file generates, keyed by `(technology, forge)`.
+/// Judge target-wide relationships, keyed by `(technology, forge)`.
 ///
-/// A destination-keyed rule cannot reach such a file: the payload ships
-/// no copy and nothing records it, so no digest sees it drift away from
-/// the configuration it was generated from. Both files are read off the
-/// target's own disk.
+/// A destination-keyed rule cannot reach a second file: the byte reader
+/// receives only one landed destination. The pair-keyed rules read files
+/// from the target's own disk, including generated files the payload ships
+/// no copy of and target-owned files landed configuration requires.
 #[must_use]
 pub fn target_failures(tech: &str, forge: &str, target: &Utf8Path) -> Vec<InvariantFailure> {
     match (tech, forge) {
-        ("rust", "github") => generated_release_workflow(target),
+        ("rust", "github") => {
+            let mut failures = generated_release_workflow(target);
+            failures.extend(dist_profile(target));
+            failures
+        }
         _ => Vec::new(),
     }
+}
+
+/// The root manifest configuration GitHub CI builds with. Incomplete
+/// inputs are silent: the landing record reports a missing landed
+/// configuration, while target-owned manifests are outside that record.
+fn dist_profile(target: &Utf8Path) -> Vec<InvariantFailure> {
+    let Ok(config) = std::fs::read_to_string(target.join("dist-workspace.toml")) else {
+        return Vec::new();
+    };
+    let Ok(config) = config.parse::<toml::Table>() else {
+        return Vec::new();
+    };
+    let Some(ci) = config
+        .get("dist")
+        .and_then(toml::Value::as_table)
+        .and_then(|dist| dist.get("ci"))
+    else {
+        return Vec::new();
+    };
+    let github = ci.as_str() == Some("github")
+        || ci
+            .as_array()
+            .is_some_and(|values| values.iter().any(|value| value.as_str() == Some("github")));
+    if !github {
+        return Vec::new();
+    }
+
+    let Ok(manifest) = std::fs::read_to_string(target.join("Cargo.toml")) else {
+        return Vec::new();
+    };
+    let Ok(manifest) = manifest.parse::<toml::Table>() else {
+        return Vec::new();
+    };
+    if manifest
+        .get("profile")
+        .and_then(toml::Value::as_table)
+        .and_then(|profile| profile.get("dist"))
+        .is_some_and(toml::Value::is_table)
+    {
+        return Vec::new();
+    }
+
+    vec![InvariantFailure::new(
+        "dist-profile-missing",
+        "Cargo.toml",
+        "dist-workspace.toml enables GitHub CI, whose generated workflow builds with `--profile dist`, but the root Cargo.toml defines no [profile.dist] table",
+        concat!(
+            "add this exact block to Cargo.toml:\n",
+            "\n",
+            "[profile.dist]\n",
+            "inherits = \"release\""
+        ),
+    )]
 }
 
 /// The pair's one generated file. Either file absent reports nothing:
