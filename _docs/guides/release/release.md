@@ -78,3 +78,38 @@ $ ( for f in "$tmp"/*; do
 ```
 
 The `--event push` filter on the second watch narrows it to the tag push, which is the only event `release.yml` runs on: `pr-run-mode` is `skip`, and the release proofs are the `dist-plan` job under the gate.
+
+## A request that falls behind the trunk
+
+The trunk ruleset requires a request to carry the trunk's tip, so a request whose head predates the tip is refused until its author updates it. This transcript is one observed pass, and the two refusal wordings are the forge's own.
+
+The state is readable before any merge is attempted, and the surprising part is the second line: freshness is judged apart from conflict, so a stale request reports as mergeable while the merge stays refused.
+
+```bash
+$ gh pr view 137 --repo "$OWNER/$REPO" --json mergeStateStatus,mergeable
+mergeStateStatus  BEHIND
+mergeable         MERGEABLE
+```
+
+Every required check was green at this point. The merge is still refused, and the two surfaces say different things:
+
+```bash
+$ gh pr merge 137 --repo "$OWNER/$REPO" --squash
+X Pull request 137 is not mergeable: the head branch is not up to date with the base branch.
+
+$ gh api -X PUT "repos/$OWNER/$REPO/pulls/137/merge" -f merge_method=squash
+HTTP 405: Repository rule violations found
+
+2 of 2 required status checks are expected.
+```
+
+The endpoint counts the checks as expected even though both had passed, because a check that passed on the stale head does not count toward a merge the forge has not tested. An operator who reads that message alone hunts for a broken check that does not exist; the branch state is what explains it.
+
+One command clears it, and the cost is one run of every workflow that triggers on a request:
+
+```bash
+$ gh pr update-branch 137 --repo "$OWNER/$REPO"
+✓ PR branch updated
+```
+
+Both runs started seven seconds after the update. The title check took 7 seconds and the gate took 7 minutes 4 seconds, so the gate is the whole wait. The state moved `BEHIND` to `BLOCKED` while they ran, and to `CLEAN` when they finished. [The drawn model](../../../method/06-release-from-trunk.md#why-an-armed-release-waits) owns why the trunk moving alone dispatches nothing.
