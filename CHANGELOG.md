@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.10](https://github.com/gubasso/release-kit/compare/v0.3.9...v0.3.10) - 2026-09-09
+
+### Other
+
+- *(method)* correct the freshness cost and the refusal an operator reads ([#138](https://github.com/gubasso/release-kit/pull/138))
+
 ## [0.3.9](https://github.com/gubasso/release-kit/compare/v0.3.8...v0.3.9) - 2026-09-09
 
 ### Added
