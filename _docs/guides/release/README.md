@@ -31,6 +31,7 @@ A variable here is something a project is free to choose. Everything the convent
   - fixed by `setup/github/protect-trunk`, which sets both on the repository
 - Trunk ruleset: `master-protection`
   - fixed by `setup/github/protect-trunk`
+  - it sets `strict_required_status_checks_policy`, so a request merges only while it carries the trunk's tip; a request the forge reports as `BEHIND` takes `gh pr update-branch` and one more `gate` run before it merges
 - Tag and line rulesets: `release-tags`, `release-lines`
   - fixed by `setup/github/protect-tags` and `setup/github/protect-release-lines`
 - Bot secrets: `RELEASE_BOT_APP_ID`, `RELEASE_BOT_APP_PRIVATE_KEY`
@@ -84,8 +85,8 @@ sequenceDiagram
   - prevents an unintended version
 - Release PR: the changelog is corrected on its branch before merge
   - prevents an incomplete immutable entry
-- Merge: `gate` passes, and squash is the only merge method
-  - prevents an unverified release and nonlinear history
+- Merge: `gate` passes, squash is the only merge method, and the request carries the trunk's tip
+  - prevents an unverified release, nonlinear history, and a release request shipping a version computed against a trunk that moved
 - Publisher: crates.io trusts `release-plz.yml`, never `release.yml`
   - prevents the installer workflow becoming the publisher
 - Tag: automation writes the annotated immutable tag
