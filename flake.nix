@@ -7,6 +7,19 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # This repository's docs gate, taken as a dev dependency the way rk depend
+    # serves the fragment. The tag in this URL is the version and flake.lock is
+    # the content pin; nothing else in this repository names an sdd version.
+    # The predecessor was a revision installed by a CI step, because the last
+    # release then carried neither a Nix package nor the gates this instance
+    # runs. A released tag carries both now, so the pin is a tag and the CI
+    # step is gone. Freshness is the manager's own verb: nix flake update
+    # spec-driven-docs, with the URL's tag moved to match, followed by sdd
+    # upgrade where the release moves the canon.
+    spec-driven-docs = {
+      url = "github:gubasso/spec-driven-docs/v0.4.5";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
@@ -14,6 +27,7 @@
       self,
       nixpkgs,
       rust-overlay,
+      spec-driven-docs,
     }:
     let
       # The support claim, not a convenience: every system named here is one
@@ -53,9 +67,18 @@
           # without it; the Rust toolchain comes from rust-toolchain.toml through
           # the overlay so CI and local development share one compiler. The
           # installed package owns its own runtime closure in nix/package.nix.
+          #
+          # rk is absent on purpose, and it is the one tool this shell may not
+          # carry. A binary embeds the payload it was compiled from, so an rk
+          # built when the lock last moved judges the current snippets against a
+          # stale copy of them and reports drift that is not there. This
+          # repository's rk is the one it just built: the justfile puts
+          # target/debug on PATH for the sweep, and .envrc does the same for an
+          # interactive shell.
           default = pkgs.mkShell {
             packages = [
               toolchain
+              spec-driven-docs.packages.${pkgs.stdenv.hostPlatform.system}.default
               pkgs.cargo-nextest
               pkgs.cargo-deny
               pkgs.just

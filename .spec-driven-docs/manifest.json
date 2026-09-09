@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "canon_version": "0.3.2",
+  "canon_version": "0.4.5",
   "canon_source": "https://github.com/gubasso/spec-driven-docs",
   "profile": "knowledge-base",
   "docs_root": "_docs",
@@ -62,14 +62,20 @@
     {
       "source": "_docs/specs/SPEC-known-issues.md",
       "destination": "_docs/specs/SPEC-known-issues.md",
-      "sha256": "a07c1e4e5ec0caa1b5f6998938b9a13dfbcd719652e8f3bc51d1bb7eee4be935",
-      "baseline_sha256": "a07c1e4e5ec0caa1b5f6998938b9a13dfbcd719652e8f3bc51d1bb7eee4be935"
+      "sha256": "f062754460dec37d841d08d37e1a6e2bcd9e93e9d17a158eeb35d3368f7f7ab3",
+      "baseline_sha256": "f062754460dec37d841d08d37e1a6e2bcd9e93e9d17a158eeb35d3368f7f7ab3"
     },
     {
       "source": "_docs/specs/SPEC-spec-to-code.md",
       "destination": "_docs/specs/SPEC-spec-to-code.md",
       "sha256": "62f72c226ee3f360fbd0263821e7d93e08c4abff35e7a9c89e4b66fcbae442ea",
       "baseline_sha256": "9062d227a2ddba668fce74ffc51e4018afe9b403bec0555ef953b589f1ad3189"
+    },
+    {
+      "source": "_docs/specs/SPEC-guides.md",
+      "destination": "_docs/specs/SPEC-guides.md",
+      "sha256": "5737c83008683de6dabb1e4f9b5df09aeee6966e8c475036337ee6c525507fb3",
+      "baseline_sha256": "5737c83008683de6dabb1e4f9b5df09aeee6966e8c475036337ee6c525507fb3"
     },
     {
       "source": "templates/TEMPLATE-spec.md",
@@ -88,12 +94,24 @@
       "destination": "_docs/reference/TEMPLATE-agents-digest.md",
       "sha256": "64212ee68f8603449d649c3224765c3e6845143785a7b6f714482f8924853ff2",
       "baseline_sha256": "64212ee68f8603449d649c3224765c3e6845143785a7b6f714482f8924853ff2"
+    },
+    {
+      "source": "templates/TEMPLATE-guide.md",
+      "destination": "_docs/guides/TEMPLATE-guide.md",
+      "sha256": "5cd5a28187840f74a681d8aa381f37310eaaff383bc3df39b343f0c88d7c7783",
+      "baseline_sha256": "5cd5a28187840f74a681d8aa381f37310eaaff383bc3df39b343f0c88d7c7783"
+    },
+    {
+      "source": "templates/TEMPLATE-known-issue.md",
+      "destination": "_docs/reference/TEMPLATE-known-issue.md",
+      "sha256": "a88508f87a54a1a3b7cfc63ce1411cbaa1c6def6c9fd41cbf0eed05b7a5e03ff",
+      "baseline_sha256": "a88508f87a54a1a3b7cfc63ce1411cbaa1c6def6c9fd41cbf0eed05b7a5e03ff"
     }
   ],
   "integration_blocks": [
     {
       "path": ".pre-commit-config.yaml",
-      "marker_hash": "0ff177ab9d514e7671b408a0218460907bae256d3685d059f294e63b7654e17f"
+      "marker_hash": "15d2f181fd12614d2fc702183b32c1c49eaacb09a8d8427f04852e6aacc9586c"
     }
   ]
 }
