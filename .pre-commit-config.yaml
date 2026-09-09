@@ -270,6 +270,12 @@ repos:
         entry: sdd gate ki-filename-shape
         language: system
         files: '^_docs/reference/known-issues/.*\.md$'
+      - id: ki-filing
+        name: 'known issue filing state'
+        entry: sdd gate ki-filing
+        language: system
+        always_run: true
+        pass_filenames: false
       - id: ki-mechanism-walkthrough
         name: 'known issue mechanism walkthrough'
         entry: sdd gate ki-mechanism-walkthrough
@@ -285,6 +291,12 @@ repos:
       - id: ki-retire-when
         name: 'known issue retirement condition'
         entry: sdd gate ki-retire-when
+        language: system
+        always_run: true
+        pass_filenames: false
+      - id: ki-state
+        name: 'known issue state'
+        entry: sdd gate ki-state
         language: system
         always_run: true
         pass_filenames: false

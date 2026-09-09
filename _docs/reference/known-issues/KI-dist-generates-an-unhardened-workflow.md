@@ -2,7 +2,7 @@
 upstream: https://github.com/axodotdev/cargo-dist/issues
 affects: .github/workflows/release.yml
 state: masked
-filing: filed
+filing: deferred
 workaround: zizmor.yml ignores the two audits for release.yml, and the actionlint hook excludes the file
 retire_when: each mask retires with its own upstream fix, once the cargo-dist pin here reaches the release carrying it. The template-injection ignore retires with cargo-dist#2320. The excessive-permissions ignore retires when the workflow-level contents write drops to the jobs that need it. The actionlint exclusion retires with cargo-dist#62, the shell-quoting fix, which is separate from #2320.
 ---
@@ -38,6 +38,8 @@ Removing the `release.yml` entries from `zizmor.yml` returns five findings. Remo
 The two ignores are keyed by base filename, which is the only key zizmor accepts, so they would also reach `snippets/bash/github/.github/workflows/release.yml`. The `zizmor-payload` hook runs `--no-config` for that reason, and the payload is audited with no ignore list at all.
 
 ## Upstream
+
+The filing is held on purpose. Every part of this case already sits on cargo-dist's tracker under the three issues below, filed by other people, so a fourth report adds noise and no evidence. That is why `upstream:` names the tracker rather than one issue.
 
 Every retirement condition was checked on 2026-09-09 and none is met. Both issues are open and neither moved since it was filed. The generated workflow still sets `contents: write` at workflow level. `rk versions --check` reports the pinned cargo-dist 0.32.0 current against the latest release, published 2026-05-22, so no pin bump reaches a fix either. Re-check these three before trusting the masks below to be necessary.
 
