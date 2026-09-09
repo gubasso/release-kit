@@ -50,15 +50,16 @@ clock     event                       trunk state         release request state
                                                           # loose gate merges here
 ```
 
-The repair continues the model: a successful job alone does not prove the request refreshed. The bot must rebuild the request on the new trunk tip and recompute its version and changelog. The bot-only GitHub branch takes the force-push path; a non-bot commit makes the bot close and reopen instead. The workflow re-arms on every refresh using the returned request number, so either path restores the arm. The repair carries an order rather than a clock, because its steps wait on the bot's own run and on the project's own gate, and both take whatever those take in the project reading this.
+The repair continues the model: a successful job alone does not prove the request refreshed. The bot must rebuild the request on the new trunk tip and recompute its version and changelog. The bot-only GitHub branch takes the force-push path; a non-bot commit makes the bot close and reopen instead. The workflow re-arms on every refresh using the returned request number, so either path restores the arm. The clock below is an offset from the trunk move, measured on one observed repair; the first step is the bot's own run and the second is the project's gate, so a project reads its own gate duration into the third column.
 
 ```text
-order  event                                   trunk state    release request state
-1      bot refresh rebuilds on #27             #27            v0.2.0; covers #25 AND #27
-       workflow re-arms                        #27            armed on refreshed request
-       # recompute, not a plain branch update
-2      refreshed checks pass                   #27            tested with #27; current
-3      forge merges automatically              #27──R         merged; v0.2.0 tags R
+offset  event                                   trunk state    release request state
++0s     breaking #27 merges                     #27            behind; the merge is refused
++40s    bot refresh rebuilds on #27             #27            v0.2.0; covers #25 AND #27
+        workflow re-arms                        #27            armed on refreshed request
+        # recompute, not a plain branch update
++7m16s  refreshed checks pass                   #27            tested with #27; current
++7m27s  forge merges automatically              #27──R         merged; v0.2.0 tags R
 
 resulting trunk                            changelog at R
 117e126 ── de4efdd ── R (v0.2.0)           #25: feature
@@ -84,7 +85,7 @@ local check → push → request checks run → trunk moves
 | ---------------------------------------------- | ------------------ | --------------------------------------------------------------------------------------------------------- |
 | Request-check runs, one intervening trunk move | One initial set    | That set again after the update, one run per triggering workflow; another move can require another update |
 | Commands per ordinary merge after pushing      | Merge, or arm once | Same, plus one branch update per stale attempt                                                            |
-| Human acts per armed release                   | None               | None; bot refresh and workflow re-arm                                                                     |
+| Human acts per armed release                   | None               | None; the bot rebuilt and the workflow re-armed within 40 seconds of the trunk move                       |
 | Wrong version from this stale-merge race       | Can ship           | Refused until the bot recomputes on the trunk's tip                                                       |
 
 ## Reproduce on the trunk
