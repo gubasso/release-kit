@@ -24,6 +24,67 @@ master:  A──B──C──D──E──F──G──H
 
 Then a customer reports that v1.0.0 crashes on an empty CSV upload. The two styles diverge entirely on how that report is answered.
 
+## Why an armed release waits
+
+The gate is judged at each merge attempt. A refusal runs no workflow: freshness is a merge precondition, not a workflow trigger.
+
+```text
+merge attempt
+  ├─ pull request, squash only, no bypass
+  ├─ required project gate and pr-title check pass
+  └─ head carries the trunk's current tip     # freshness clause added by strictness
+       no  → refuse; the armed request waits; no workflow dispatched
+       yes → merge when the other conditions hold
+```
+
+The race uses issue 107's recorded clock and request states, with the strict gate applied to the final attempt. The loose gate permits that attempt and ships v0.1.10 with the breaking change inside its range but absent from its changelog; under `0.y`, the minor position is the break signal.
+
+```text
+clock     event                       trunk state         release request state
+19:05:45  #26 opens                   #25 at 117e126      v0.1.10; covers #25
+19:05:47  bot arms #26                #25                 auto-merge enabled
+19:12:47  breaking #27 merges         #27 at de4efdd      head 96639f6; still v0.1.10
+19:12:50  release-plz run for #27     #27                 release-pr job succeeds;
+          succeeds                                        head still 96639f6
+19:19:49  #26 merge attempt           #27                 behind; strict gate REFUSES
+                                                          # loose gate merges here
+```
+
+The repair continues the model: a successful job alone does not prove the request refreshed. The bot must rebuild the request on the new trunk tip and recompute its version and changelog. The bot-only GitHub branch takes the force-push path; a non-bot commit makes the bot close and reopen instead. The workflow re-arms on every refresh using the returned request number, so either path restores the arm. The repair carries an order rather than a clock, because its steps wait on the bot's own run and on the project's own gate, and both take whatever those take in the project reading this.
+
+```text
+order  event                                   trunk state    release request state
+1      bot refresh rebuilds on #27             #27            v0.2.0; covers #25 AND #27
+       workflow re-arms                        #27            armed on refreshed request
+       # recompute, not a plain branch update
+2      refreshed checks pass                   #27            tested with #27; current
+3      forge merges automatically              #27──R         merged; v0.2.0 tags R
+
+resulting trunk                            changelog at R
+117e126 ── de4efdd ── R (v0.2.0)           #25: feature
+   #25        #27                          #27: breaking change
+              breaking                     minor bump signals the break
+# The trunk range, version, and entry now agree; no human release action.
+```
+
+An ordinary request needs its author's deliberate update when it falls behind. Native auto-merge does not update the branch.
+
+```text
+local check → push → one request-check run → trunk moves
+                                                |
+                                          nothing runs here
+                                          # strictness dispatches nothing
+                                                |
+                 merge ← one request-check run ← gh pr update-branch
+```
+
+| Cost or outcome                                | Loose policy       | Strict policy                                                            |
+| ---------------------------------------------- | ------------------ | ------------------------------------------------------------------------ |
+| Request-check runs, one intervening trunk move | One initial run    | Initial run plus one update run; another move can require another update |
+| Commands per ordinary merge after pushing      | Merge, or arm once | Same, plus one branch update per stale attempt                           |
+| Human acts per armed release                   | None               | None; bot refresh and workflow re-arm                                    |
+| Wrong version from this stale-merge race       | Can ship           | Refused until the bot recomputes on the trunk's tip                      |
+
 ## Reproduce on the trunk
 
 ```bash

@@ -767,6 +767,9 @@ fn github_trunk_ruleset(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkErro
         .iter()
         .find(|rule| rule["type"] == "required_status_checks")
     {
+        if checks["parameters"]["strict_required_status_checks_policy"] != true {
+            faults.push(STALE_MERGE_FAULT.to_owned());
+        }
         let contexts: Vec<&str> = checks["parameters"]["required_status_checks"]
             .as_array()
             .map(|list| {
@@ -938,6 +941,9 @@ const GITLAB_TAG_LIMITATION: &str =
 /// owning one, so the operator needs the consequence rather than a rule
 /// type's bare name.
 const MERGE_QUEUE_FAULT: &str = "a merge queue is enabled on the trunk; this convention lands no workflow that triggers on merge_group, so the queue waits on a required check that never reports and drops the request when its CI timeout expires. rk setup step protect-trunk --apply rewrites the ruleset without it";
+
+/// The freshness defect is independent of an absent required check.
+const STALE_MERGE_FAULT: &str = "the trunk permits a merge from a branch that does not carry the trunk's tip; an armed release request can therefore ship a version computed against a trunk that moved. rk setup step protect-trunk --apply rewrites the ruleset with the freshness requirement";
 
 /// The GitLab limitation `protect-trunk` and `protections-check` report:
 /// the title gate rides the request's own pipeline on this forge.

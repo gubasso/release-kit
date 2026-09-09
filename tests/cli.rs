@@ -4260,7 +4260,10 @@ fn a_protection_step_refuses_before_the_trunk_is_the_default() {
 // The merge queue this convention refuses
 
 /// A trunk ruleset the setup owns, plus whatever extra rules a case adds.
-fn owned_trunk_ruleset(extra: &str) -> String {
+fn owned_trunk_ruleset(extra: &str, strict: Option<bool>) -> String {
+    let policy = strict.map_or_else(String::new, |value| {
+        format!("\"strict_required_status_checks_policy\": {value}, ")
+    });
     format!(
         r#"{{
   "name": "master-protection",
@@ -4279,7 +4282,7 @@ fn owned_trunk_ruleset(extra: &str) -> String {
     }},
     {{
       "type": "required_status_checks",
-      "parameters": {{ "required_status_checks": [{{ "context": "test-check" }}, {{ "context": "pr-title" }}] }}
+      "parameters": {{ {policy}"required_status_checks": [{{ "context": "test-check" }}, {{ "context": "pr-title" }}] }}
     }}{extra}
   ]
 }}"#
@@ -4287,10 +4290,16 @@ fn owned_trunk_ruleset(extra: &str) -> String {
 }
 
 /// Seed a trunk ruleset and read what `rk setup check` says about it.
-fn check_owned_trunk(fixture: &ForgeFixture, extra: &str) -> String {
+fn check_owned_trunk(fixture: &ForgeFixture, extra: &str, strict: Option<bool>) -> String {
+    fixture.seed_gate();
+    fixture.seed("squash_merge_commit_title", "PR_TITLE");
+    fixture.seed("squash_merge_commit_message", "PR_BODY");
     fixture.seed("default_branch", "master");
     fixture.seed("rulesets.index", "master-protection\n");
-    fixture.seed("ruleset_master-protection", &owned_trunk_ruleset(extra));
+    fixture.seed(
+        "ruleset_master-protection",
+        &owned_trunk_ruleset(extra, strict),
+    );
     let out = fixture
         .rk(&["setup", "check"])
         .args(["--repo", "acme/widget", "--forge", "github"])
@@ -4308,7 +4317,7 @@ fn check_owned_trunk(fixture: &ForgeFixture, extra: &str) -> String {
 #[test]
 fn the_merge_queue_fault_names_its_consequence() {
     let fixture = ForgeFixture::new();
-    let text = check_owned_trunk(&fixture, ",\n    { \"type\": \"merge_queue\" }");
+    let text = check_owned_trunk(&fixture, ",\n    { \"type\": \"merge_queue\" }", Some(true));
     assert!(
         text.contains("unsatisfied protect-trunk"),
         "a queue must fault: {text}"
@@ -4335,6 +4344,7 @@ fn an_unowned_rule_still_faults_generically() {
     let text = check_owned_trunk(
         &fixture,
         ",\n    { \"type\": \"commit_author_email_pattern\" }",
+        Some(true),
     );
     assert!(
         text.contains("an unowned rule is present: commit_author_email_pattern"),
@@ -4348,7 +4358,7 @@ fn an_unowned_rule_still_faults_generically() {
 #[test]
 fn the_setup_never_demands_a_merge_queue() {
     let fixture = ForgeFixture::new();
-    let text = check_owned_trunk(&fixture, "");
+    let text = check_owned_trunk(&fixture, "", Some(true));
     assert!(
         !text.contains("merge_queue"),
         "a ruleset without a queue must report nothing about one: {text}"
@@ -4357,6 +4367,111 @@ fn the_setup_never_demands_a_merge_queue() {
         text.contains("ok protect-trunk") || text.contains("satisfied protect-trunk"),
         "the owned shape with no queue is satisfied: {text}"
     );
+}
+
+/// SATISFIES forge-setup:a-merge-carries-the-trunk-it-was-tested-against
+#[test]
+fn a_loose_status_check_policy_faults() {
+    let fixture = ForgeFixture::new();
+    let text = check_owned_trunk(&fixture, "", Some(false));
+    for part in [
+        "unsatisfied protect-trunk",
+        "does not carry the trunk's tip",
+        "an armed release request",
+        "version computed against a trunk that moved",
+        "rk setup step protect-trunk --apply",
+    ] {
+        assert!(text.contains(part), "the fault must name `{part}`: {text}");
+    }
+
+    // Empty checks and a loose policy are independent defects.
+    let mut body: serde_json::Value =
+        serde_json::from_str(&owned_trunk_ruleset("", Some(false))).expect("the ruleset parses");
+    body["rules"][3]["parameters"]["required_status_checks"] = serde_json::json!([]);
+    fixture.seed("ruleset_master-protection", &body.to_string());
+    let line = protect_trunk_line(&fixture, Some("test-check"));
+    assert!(line.contains("no status check is required"), "{line}");
+    assert!(
+        line.contains("version computed against a trunk that moved"),
+        "{line}"
+    );
+}
+
+/// SATISFIES forge-setup:a-merge-carries-the-trunk-it-was-tested-against
+#[test]
+fn the_strict_status_check_policy_holds_the_shape() {
+    let fixture = ForgeFixture::new();
+    let text = check_owned_trunk(&fixture, "", Some(true));
+    let line = text
+        .lines()
+        .find(|line| line.contains("protect-trunk"))
+        .expect("the step reports");
+    assert!(line.starts_with("ok protect-trunk"), "{line}");
+    assert!(
+        line.contains("master-protection holds the release-merge shape"),
+        "{line}"
+    );
+    assert!(
+        !text.contains("version computed against a trunk that moved"),
+        "{text}"
+    );
+}
+
+/// SATISFIES forge-setup:a-merge-carries-the-trunk-it-was-tested-against
+#[test]
+fn a_missing_status_check_policy_reads_as_loose() {
+    let fixture = ForgeFixture::new();
+    let loose = check_owned_trunk(&fixture, "", Some(false));
+    let missing = check_owned_trunk(&fixture, "", None);
+    let step = |text: &str| {
+        text.lines()
+            .find(|line| line.contains("protect-trunk"))
+            .expect("the step reports")
+            .to_owned()
+    };
+    assert_eq!(step(&missing), step(&loose));
+    assert!(step(&missing).starts_with("unsatisfied protect-trunk"));
+    assert!(
+        missing.contains("version computed against a trunk that moved"),
+        "{missing}"
+    );
+}
+
+/// SATISFIES forge-setup:a-merge-carries-the-trunk-it-was-tested-against
+#[test]
+fn the_applied_trunk_ruleset_requires_a_fresh_branch() {
+    let fixture = ForgeFixture::new();
+    check_owned_trunk(&fixture, "", Some(false));
+    fixture
+        .rk(&["setup", "step", "protect-trunk"])
+        .args([
+            "--repo",
+            "acme/widget",
+            "--forge",
+            "github",
+            "--required-check",
+            "test-check",
+            "--apply",
+        ])
+        .assert()
+        .success();
+    let body: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture.state("ruleset_master-protection"))
+            .expect("the sent body reads"),
+    )
+    .expect("the sent body parses");
+    let checks = body["rules"]
+        .as_array()
+        .expect("rules are an array")
+        .iter()
+        .find(|rule| rule["type"] == "required_status_checks")
+        .expect("the rule is sent");
+    assert_eq!(
+        checks["parameters"]["strict_required_status_checks_policy"],
+        true
+    );
+    let line = protect_trunk_line(&fixture, Some("test-check"));
+    assert!(line.starts_with("ok protect-trunk"), "{line}");
 }
 
 /// A right-named ruleset proves nothing on its own: one covering another
@@ -11053,7 +11168,7 @@ fn check_reports_a_drifted_squash_message_source() {
     },
     {
       "type": "required_status_checks",
-      "parameters": { "required_status_checks": [{ "context": "test" }, { "context": "pr-title" }] }
+      "parameters": { "strict_required_status_checks_policy": true, "required_status_checks": [{ "context": "test" }, { "context": "pr-title" }] }
     }
   ]
 }"#,
@@ -15431,7 +15546,7 @@ fn seed_owned_trunk(fixture: &ForgeFixture) {
     },
     {
       "type": "required_status_checks",
-      "parameters": { "required_status_checks": [{ "context": "test" }, { "context": "pr-title" }] }
+      "parameters": { "strict_required_status_checks_policy": true, "required_status_checks": [{ "context": "test" }, { "context": "pr-title" }] }
     }
   ]
 }"#,
