@@ -2,7 +2,7 @@
 
 External sources behind the workflow audit this repository runs over its own `.github/workflows/` and over the payload in `snippets/`: where each tool reads its configuration, what a suppression means to it, and how comparable projects record the findings they accept. Each entry states what the source says and what this repository does with it.
 
-Verified against the listed sources on 2026-09-08.
+Verified against the listed sources on 2026-09-08; the cargo-dist entries re-checked on 2026-09-09.
 
 ## zizmor, on where it reads its configuration
 
@@ -62,10 +62,10 @@ Bearing: every mint in the payload names its scope, in all three technology bind
 
 ## cargo-dist, on the workflow it generates
 
-The generated `release.yml` sets `contents: write` at workflow level and interpolates expressions into `run:` bodies. Both are open upstream. dist 0.32.0 is the latest release and the one this repository pins, so no upgrade removes them today.
+The generated `release.yml` sets `contents: write` at workflow level and interpolates expressions into `run:` bodies. Both are open upstream. Re-checked on 2026-09-09: dist 0.32.0 is still the latest release, published 2026-05-22, and still the one this repository pins, so no upgrade removes them today.
 
-- <https://github.com/axodotdev/cargo-dist/issues/2320> — open, 2026-03-04, on the interpolations, with a candidate fix linked.
-- <https://github.com/axodotdev/cargo-dist/issues/62> — open, 2023-01-31, on the shell quoting.
+- <https://github.com/axodotdev/cargo-dist/issues/2320> — open, 2026-03-04, on the interpolations, with a candidate fix linked. Unchanged at the 2026-09-09 re-check.
+- <https://github.com/axodotdev/cargo-dist/issues/62> — open, 2023-01-31, on the shell quoting. Unchanged at the 2026-09-09 re-check.
 - <https://github.com/axodotdev/cargo-dist/issues/2133> — closed completed 2025-10-22; moved `attestations` and `id-token` to the jobs and left `contents: write` at workflow level.
 
 Bearing: `_docs/reference/known-issues/KI-dist-generates-an-unhardened-workflow.md` records the acceptance and its retirement condition.

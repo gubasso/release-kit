@@ -39,6 +39,8 @@ The two ignores are keyed by base filename, which is the only key zizmor accepts
 
 ## Upstream
 
+Every retirement condition was checked on 2026-09-09 and none is met. Both issues are open and neither moved since it was filed. The generated workflow still sets `contents: write` at workflow level. `rk versions --check` reports the pinned cargo-dist 0.32.0 current against the latest release, published 2026-05-22, so no pin bump reaches a fix either. Re-check these three before trusting the masks below to be necessary.
+
 - <https://github.com/axodotdev/cargo-dist/issues/2320> — open, filed 2026-03-04. Reports that workflow scanning tools force `allow-dirty = ["ci"]`, and that the workflow then drifts. Links a candidate fix that routes the interpolations through intermediate environment variables.
 - <https://github.com/axodotdev/cargo-dist/issues/62> — open, filed 2023-01-31. The shell-quoting half.
 - <https://github.com/axodotdev/cargo-dist/issues/2133> — closed completed 2025-10-22. Moved `attestations` and `id-token` from the workflow level to the jobs that mint them, and left `contents: write` where it is.
