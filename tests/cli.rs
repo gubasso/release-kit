@@ -8425,6 +8425,177 @@ fn status_is_silent_on_an_artifact_workflow_that_was_never_generated() {
     );
 }
 
+/// SATISFIES landing:a-seeded-file-still-carries-the-invariants
+/// GitHub CI always builds through cargo's fixed `dist` profile, so both
+/// supported CI shapes fault before publication when the target-owned root
+/// manifest omits the table. Plain status reports the exact repair, checked
+/// status rejects it, and neither judgment changes the manifest.
+#[test]
+fn status_faults_a_github_dist_target_without_the_dist_profile() {
+    const REASON: &str = "dist-workspace.toml enables GitHub CI, whose generated workflow builds with `--profile dist`, but the root Cargo.toml defines no [profile.dist] table";
+    const REMEDIATION: &str =
+        "add this exact block to Cargo.toml:\n\n[profile.dist]\ninherits = \"release\"";
+
+    for (label, ci) in [
+        ("string", None),
+        ("array", Some("ci = [\"github\", \"gitlab\"]")),
+    ] {
+        let target = tempfile::tempdir().expect("a scratch dir exists");
+        seed_crate(target.path());
+        let manifest =
+            std::fs::read(target.path().join("Cargo.toml")).expect("the crate manifest reads");
+        land_rust(target.path()).success();
+        if let Some(ci) = ci {
+            let config = target.path().join("dist-workspace.toml");
+            let text = std::fs::read_to_string(&config)
+                .expect("the seeded configuration reads")
+                .replace("ci = \"github\"", ci);
+            std::fs::write(config, text).expect("the array-valued CI writes");
+        }
+
+        let plain = rk()
+            .args(["status", "--json", "--target"])
+            .arg(target.path())
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let report: serde_json::Value = serde_json::from_slice(&plain).expect("one JSON object");
+        let failures = report["invariant_failures"]
+            .as_array()
+            .expect("the failures array");
+        assert_eq!(failures.len(), 1, "{label}: {report}");
+        assert_eq!(failures[0]["code"], "dist-profile-missing", "{label}");
+        assert_eq!(failures[0]["destination"], "Cargo.toml", "{label}");
+        assert_eq!(failures[0]["reason"], REASON, "{label}");
+        assert_eq!(failures[0]["remediation"], REMEDIATION, "{label}");
+
+        let checked = rk()
+            .args(["status", "--check", "--target"])
+            .arg(target.path())
+            .assert()
+            .code(1)
+            .get_output()
+            .stdout
+            .clone();
+        let text = String::from_utf8_lossy(&checked);
+        assert!(
+            text.contains("INVARIANT Cargo.toml (dist-profile-missing)"),
+            "{label}: {text}"
+        );
+        assert!(text.contains(REMEDIATION), "{label}: {text}");
+        assert_eq!(
+            std::fs::read(target.path().join("Cargo.toml")).expect("the crate manifest reads"),
+            manifest,
+            "{label}: the judgment rewrites nothing"
+        );
+    }
+}
+
+/// SATISFIES landing:a-seeded-file-still-carries-the-invariants
+/// A structurally valid root profile satisfies the target-wide judgment;
+/// after the unrelated seeded sentinel is resolved, a freshly landed target
+/// needs no generated artifact workflow to pass checked status.
+#[test]
+fn status_accepts_a_github_dist_target_with_the_dist_profile() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    seed_crate(target.path());
+    std::fs::write(
+        target.path().join("Cargo.toml"),
+        "[package]\nname = \"widget\"\nversion = \"0.1.0\"\n\n[profile.dist]\ninherits = \"release\"\n",
+    )
+    .expect("the crate manifest writes");
+    land_rust(target.path()).success();
+    let filled = std::fs::read_to_string(target.path().join("release-plz.toml"))
+        .expect("the seeded file reads")
+        .lines()
+        .filter(|line| !line.contains("TODO(release-kit)"))
+        .fold(String::new(), |mut text, line| {
+            text.push_str(line);
+            text.push('\n');
+            text
+        });
+    std::fs::write(target.path().join("release-plz.toml"), filled).expect("the fill writes");
+
+    let plain = rk()
+        .args(["status", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&plain).expect("one JSON object");
+    assert!(
+        report["invariant_failures"]
+            .as_array()
+            .is_some_and(|failures| failures
+                .iter()
+                .all(|failure| failure["code"] != "dist-profile-missing")),
+        "{report}"
+    );
+    rk().args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+}
+
+/// SATISFIES landing:a-seeded-file-still-carries-the-invariants
+/// The profile judgment requires parsed GitHub CI and a readable, parsed
+/// root manifest. Every incomplete input is silent, while the same fixture
+/// faults once both inputs are complete and the profile is absent.
+#[test]
+fn status_profile_judgment_is_silent_without_complete_inputs() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    let target_path = utf8(target.path());
+    let config = target.path().join("dist-workspace.toml");
+    let manifest = target.path().join("Cargo.toml");
+    let assert_silent = |case: &str| {
+        let failures =
+            release_kit::landing::invariants::target_failures("rust", "github", &target_path);
+        assert!(
+            failures
+                .iter()
+                .all(|failure| failure.code != "dist-profile-missing"),
+            "{case}: {failures:?}"
+        );
+    };
+
+    assert_silent("no dist-workspace.toml");
+    std::fs::write(&config, "[dist").expect("the malformed configuration writes");
+    assert_silent("malformed dist-workspace.toml");
+    std::fs::write(&config, "[dist]\nci = \"gitlab\"\n")
+        .expect("the non-GitHub configuration writes");
+    assert_silent("non-GitHub string CI");
+    std::fs::write(&config, "[dist]\nci = [\"gitlab\", \"other\"]\n")
+        .expect("the non-GitHub CI array writes");
+    assert_silent("non-GitHub array CI");
+    std::fs::write(&config, "[dist]\nci = \"github\"\n").expect("the GitHub configuration writes");
+    assert_silent("no Cargo.toml");
+    std::fs::write(&manifest, [0xff]).expect("the non-UTF-8 manifest writes");
+    assert_silent("non-UTF-8 Cargo.toml");
+    std::fs::write(&manifest, "[package").expect("the malformed manifest writes");
+    assert_silent("malformed Cargo.toml");
+
+    std::fs::write(
+        &manifest,
+        "[package]\nname = \"widget\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("the parsing root manifest writes");
+    let failures =
+        release_kit::landing::invariants::target_failures("rust", "github", &target_path);
+    assert_eq!(
+        failures
+            .iter()
+            .filter(|failure| failure.code == "dist-profile-missing")
+            .count(),
+        1,
+        "the complete control faults: {failures:?}"
+    );
+}
+
+/// SATISFIES landing:a-seeded-file-still-carries-the-invariants
 /// A recorded file that vanished is the missing violation, never a
 /// validation attempt over absent bytes: plain status reports MISSING and
 /// exits 0, the check exits 1 on the same report, and no invariant
@@ -8432,6 +8603,7 @@ fn status_is_silent_on_an_artifact_workflow_that_was_never_generated() {
 #[test]
 fn status_reports_a_missing_invariant_bearing_file_as_missing() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
+    seed_crate(target.path());
     land_rust(target.path()).success();
     std::fs::remove_file(target.path().join("dist-workspace.toml")).expect("the file removes");
     let plain = rk()
@@ -8452,9 +8624,10 @@ fn status_reports_a_missing_invariant_bearing_file_as_missing() {
     assert!(
         report["invariant_failures"]
             .as_array()
-            .is_some_and(|failures| failures
-                .iter()
-                .all(|failure| failure["destination"] != "dist-workspace.toml")),
+            .is_some_and(|failures| failures.iter().all(|failure| {
+                failure["destination"] != "dist-workspace.toml"
+                    && failure["code"] != "dist-profile-missing"
+            })),
         "no invariant failure is fabricated for absent bytes: {report}"
     );
     let checked = rk()
