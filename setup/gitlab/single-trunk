@@ -44,6 +44,15 @@ done
 
 echo 'check: prints nothing for the retired branches'
 for candidate in main develop; do
-  glab api "projects/$project/repository/branches/$candidate" 2>/dev/null | compact | grep -o "\"name\":\"$candidate\"" || true
+  if [ "$candidate" = "$RK_TRUNK_BRANCH" ]; then
+    continue
+  fi
+  # Both streams are suppressed and the exit status decides, so the forge's
+  # 404 body never reaches this script's output.
+  if glab api "projects/$project/repository/branches/$candidate" >/dev/null 2>&1; then
+    echo "FAIL $candidate survived the retirement" >&2
+    echo 'remediation: delete it at the forge, then rerun' >&2
+    exit 1
+  fi
 done
 echo 'ok single-trunk'
