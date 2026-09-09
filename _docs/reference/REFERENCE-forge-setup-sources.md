@@ -2,7 +2,7 @@
 
 External sources behind `SPEC-forge-setup.md`: what each forge's API actually offers, which setup actions are scriptable at all, and how an embedded script is executed safely. Each entry states what the source says and which rule or file it bears on.
 
-Verified against the listed sources on 2026-08-28, re-checked on 2026-08-29, the GitHub App entries re-checked on 2026-08-31 and again on 2026-09-01 when the token-class findings below were also confirmed against a live account, and the merged-branch deletion and default-workflow-permissions entries verified on 2026-09-01, the auto-merge entries on 2026-09-03, the protection-removal entries on 2026-09-05, and the version-endpoint, merge-queue, gate-shape, and pipeline-inspection entries on 2026-09-08, and the strict-policy, freshness-cost, fast-forward-freshness, native-auto-merge, release-request-refresh, and upstream-race entries on 2026-09-09. A source marked corroborating was reported by a parallel review and not independently fetched. Forge APIs move; re-check an entry before trusting it to design something new.
+Verified against the listed sources on 2026-08-28, re-checked on 2026-08-29, the GitHub App entries re-checked on 2026-08-31 and again on 2026-09-01 when the token-class findings below were also confirmed against a live account, and the merged-branch deletion and default-workflow-permissions entries verified on 2026-09-01, the auto-merge entries on 2026-09-03, the protection-removal entries on 2026-09-05, and the version-endpoint, merge-queue, gate-shape, and pipeline-inspection entries on 2026-09-08, and the strict-policy, freshness-cost, fast-forward-freshness, native-auto-merge, release-request-refresh, and upstream-race entries on 2026-09-09, whose merge-state enum was read from the live schema the same day. A source marked corroborating was reported by a parallel review and not independently fetched. Forge APIs move; re-check an entry before trusting it to design something new.
 
 ## GitHub rulesets
 
@@ -298,7 +298,11 @@ The CLI updates an ordinary request with `gh pr update-branch`, merging its base
 
 - <https://cli.github.com/manual/gh_pr_update-branch>
 
-Bearing: `method/03-operate.md` and `method/06-release-from-trunk.md`. This is a merge precondition, not a workflow trigger; the extra request run follows a branch update, not each trunk commit. Further trunk movement can require further updates.
+The forge names the state itself. The `MergeStateStatus` enum carries `BEHIND`, described as "The head ref is out of date", and a request in that state reports `mergeable` as true while the merge stays refused, because freshness is judged apart from conflict. Read it with `gh pr view <number> --json mergeStateStatus`, or from the schema with `gh api graphql -f query='{__type(name:"MergeStateStatus"){enumValues{name description}}}'`.
+
+- <https://docs.github.com/en/graphql/reference/enums#mergestatestatus>
+
+Bearing: `method/03-operate.md` and `method/06-release-from-trunk.md`. This is a merge precondition, not a workflow trigger; the extra request run follows a branch update, not each trunk commit. Further trunk movement can require further updates. The operate chapter quotes the `BEHIND` description, so the reader's own command reports the same words the chapter does.
 
 ## GitLab fast-forward freshness
 
