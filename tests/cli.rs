@@ -5533,7 +5533,7 @@ fn status_json_is_one_object_over_a_fresh_landing() {
         .stdout
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["schema"], "rk.status/6");
+    assert_eq!(report["schema"], "rk.status/7");
     assert_eq!(report["landed"], true);
     assert_eq!(report["tech"], "rust");
     assert_eq!(report["style"], "trunk");
@@ -5644,6 +5644,153 @@ fn status_reports_a_stale_pin_offline() {
         .assert()
         .success()
         .stdout(predicate::str::contains("STALE").not());
+}
+
+/// A version gap alone is not an upgrade: the record names the binary that
+/// wrote it, two releases apart can carry identical bytes for this pair,
+/// and a release that changes no landed file must prompt nothing.
+#[test]
+fn status_does_not_prompt_on_a_version_gap_alone() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+    let mut manifest = read_manifest(target.path());
+    manifest["rk_version"] = serde_json::Value::from("0.0.1");
+    // A payload digest from another build, so the payload comparison
+    // cannot be what carries this case either.
+    manifest["payload_sha256"] =
+        serde_json::Value::from(Digest::of(b"another payload").to_string());
+    write_manifest(target.path(), &manifest);
+
+    let out = rk()
+        .args(["status", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(
+        report["alignment"], "binary-newer",
+        "the version gap is still reported as the fact it is: {report}"
+    );
+    assert_eq!(
+        report["pending"], 0,
+        "no landed file would change, so there is nothing to take: {report}"
+    );
+    rk().args(["status", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("PENDING")
+                .not()
+                .and(predicate::str::contains("rk upgrade").not()),
+        );
+}
+
+/// The prompt states what an upgrade would change: a record whose bytes
+/// this payload no longer renders is pending and routes to `rk upgrade`,
+/// and a destination this payload no longer projects is pending too.
+#[test]
+fn status_prompts_on_what_an_upgrade_would_change() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+
+    // Stand in for an older payload's rendering: the file and its record
+    // agree with each other, so nothing drifted, and both differ from this
+    // binary's candidate.
+    let workflow = target.path().join(".github/workflows/release-plz.yml");
+    let old = b"# an older release's workflow\n";
+    std::fs::write(&workflow, old).expect("the old bytes write");
+    let mut manifest = read_manifest(target.path());
+    let digest = serde_json::Value::from(Digest::of(old).to_string());
+    for file in manifest["files"].as_array_mut().expect("files") {
+        if file["destination"] == ".github/workflows/release-plz.yml" {
+            file["sha256"] = digest.clone();
+            file["baseline_sha256"] = digest.clone();
+        }
+    }
+    // A destination this payload does not ship: an upgrade drops it from
+    // the record, which is a change the prompt must count.
+    manifest["files"]
+        .as_array_mut()
+        .expect("files")
+        .push(serde_json::json!({
+            "destination": "legacy.yml",
+            "kind": "rendered",
+            "sha256": Digest::of(b"an older payload shipped this\n").to_string(),
+            "baseline_sha256": Digest::of(b"an older payload shipped this\n").to_string(),
+        }));
+    write_manifest(target.path(), &manifest);
+
+    let out = rk()
+        .args(["status", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(
+        report["pending"], 2,
+        "the rewritten workflow and the dropped destination: {report}"
+    );
+    assert_eq!(
+        report["drift"]["rendered"], 0,
+        "nobody edited a file, so this is the payload's story: {report}"
+    );
+    rk().args(["status", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("PENDING .github/workflows/release-plz.yml")
+                .and(predicate::str::contains("PENDING legacy.yml"))
+                .and(predicate::str::contains("rk upgrade")),
+        );
+}
+
+/// An available upgrade is not a defect: `--check` judges the closed
+/// violation set and a pending payload is not in it.
+#[test]
+fn status_check_does_not_fail_on_a_pending_upgrade() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+    let workflow = target.path().join(".github/workflows/release-plz.yml");
+    let old = b"# an older release's workflow\n";
+    std::fs::write(&workflow, old).expect("the old bytes write");
+    let mut manifest = read_manifest(target.path());
+    let digest = serde_json::Value::from(Digest::of(old).to_string());
+    for file in manifest["files"].as_array_mut().expect("files") {
+        if file["destination"] == ".github/workflows/release-plz.yml" {
+            file["sha256"] = digest.clone();
+            file["baseline_sha256"] = digest.clone();
+        }
+    }
+    write_manifest(target.path(), &manifest);
+    // The landed seeded file still carries its sentinel, which is the one
+    // violation here, so fill it before judging.
+    let seeded = target.path().join("release-plz.toml");
+    let filled = std::fs::read_to_string(&seeded)
+        .expect("the seeded file reads")
+        .lines()
+        .filter(|line| !line.contains("TODO(release-kit)"))
+        .fold(String::new(), |mut text, line| {
+            text.push_str(line);
+            text.push('\n');
+            text
+        });
+    std::fs::write(&seeded, filled).expect("the fill writes");
+
+    rk().args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "PENDING .github/workflows/release-plz.yml",
+        ));
 }
 
 /// A rendered-to-seeded reclassification is safe and silent: an untouched
