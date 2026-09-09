@@ -7,6 +7,8 @@ changelog_update = true
 # one merge button.
 release_always = false
 publish = true
+# This tag shape assumes one released package.
+git_tag_name = "v{{ version }}"
 # This pair has no artifact builder, so release-plz owns the release page:
 # it creates the GitLab release when it tags. The page carries no installers,
 # which the Rust binding states plainly.
