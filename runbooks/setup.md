@@ -298,7 +298,8 @@ The forge carries no project-level switch; availability follows from the pipelin
 
 ```bash
 rk setup check --target .
-# check: every step reports satisfied — auto-merge with a limitation on the forge that has no switch — and protect-release-lines reports skipped while no line exists
+# check: every step reports satisfied — protect-trunk reads back strict_required_status_checks_policy=true with required checks on GitHub, or merge_method=ff on GitLab; auto-merge names its limitation where no switch exists, and protect-release-lines is skipped while no line exists
+# protect-trunk unsatisfied: return to 3c; a loose or absent strict policy faults even when checks are required
 # install-bot unknown: rerun with 2b's exports in the environment; rk forge <forge> owns why only the bot reads its own installation
 ```
 

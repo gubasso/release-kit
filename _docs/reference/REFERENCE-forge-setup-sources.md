@@ -2,7 +2,7 @@
 
 External sources behind `SPEC-forge-setup.md`: what each forge's API actually offers, which setup actions are scriptable at all, and how an embedded script is executed safely. Each entry states what the source says and which rule or file it bears on.
 
-Verified against the listed sources on 2026-08-28, re-checked on 2026-08-29, the GitHub App entries re-checked on 2026-08-31 and again on 2026-09-01 when the token-class findings below were also confirmed against a live account, and the merged-branch deletion and default-workflow-permissions entries verified on 2026-09-01, the auto-merge entries on 2026-09-03, the protection-removal entries on 2026-09-05, and the version-endpoint, merge-queue, gate-shape, and pipeline-inspection entries on 2026-09-08. A source marked corroborating was reported by a parallel review and not independently fetched. Forge APIs move; re-check an entry before trusting it to design something new.
+Verified against the listed sources on 2026-08-28, re-checked on 2026-08-29, the GitHub App entries re-checked on 2026-08-31 and again on 2026-09-01 when the token-class findings below were also confirmed against a live account, and the merged-branch deletion and default-workflow-permissions entries verified on 2026-09-01, the auto-merge entries on 2026-09-03, the protection-removal entries on 2026-09-05, and the version-endpoint, merge-queue, gate-shape, and pipeline-inspection entries on 2026-09-08, and the strict-policy, freshness-cost, fast-forward-freshness, native-auto-merge, release-request-refresh, and upstream-race entries on 2026-09-09. A source marked corroborating was reported by a parallel review and not independently fetched. Forge APIs move; re-check an entry before trusting it to design something new.
 
 ## GitHub rulesets
 
@@ -279,3 +279,59 @@ A reusable-workflow call is a further gap in what a file states: the caller job'
 - <https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows>
 
 Bearing: `forge-setup:the-required-check-is-shaped-to-report`, and why coverage is a convention in `forges/github.md` rather than a proof in the code. The aggregate gate exists because one name is all a protection takes.
+
+## GitHub strict status-check policy
+
+The rulesets API describes `strict_required_status_checks_policy`: "Whether pull requests targeting a matching branch must be tested with the latest code. This setting will not take effect unless at least one status check is enabled."
+
+- <https://docs.github.com/en/rest/repos/rules>
+
+Bearing: `forge-setup:a-merge-carries-the-trunk-it-was-tested-against`. The landed ruleset requires two checks, the project gate and `pr-title`, so the strict setting takes effect; `setup/github/protect-trunk` enables it and the observation faults false or absent values independently of an empty check list.
+
+## GitHub freshness cost
+
+The strict protected-branch option states: "The branch must be up to date with the base branch before merging." Its cost is: "More builds may be required, as you'll need to bring the head branch up to date after other collaborators update the target branch."
+
+- <https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches>
+
+The CLI updates an ordinary request with `gh pr update-branch`, merging its base into the head by default.
+
+- <https://cli.github.com/manual/gh_pr_update-branch>
+
+Bearing: `method/03-operate.md` and `method/06-release-from-trunk.md`. This is a merge precondition, not a workflow trigger; the extra request run follows a branch update, not each trunk commit. Further trunk movement can require further updates.
+
+## GitLab fast-forward freshness
+
+The merge-method documentation states: "A fast-forward merge is only possible when the target branch (such as `main`) has not diverged from the source branch's base commit." And: "If the target branch has new commits that aren't in the source branch, you must first rebase the source branch."
+
+- <https://docs.gitlab.com/user/project/merge_requests/methods/>
+
+Bearing: `forge-setup:a-merge-carries-the-trunk-it-was-tested-against` and `forge-setup:every-supported-forge-runs-every-step`. `setup/gitlab/protect-trunk` sets `merge_method=ff`, and the observation faults a different merge method, carrying freshness without a second switch. The same documentation describes an optional automatic rebase before merge that does not rerun CI; that option is outside this setup's asserted shape and needs separate validation before claiming freshness of the tested result.
+
+## Native auto-merge does not refresh a branch
+
+GitHub describes auto-merge as merging after all required reviews and status checks pass. It is disabled when someone without write permission pushes new changes to the head branch or switches its base. The documented merge operation provides no branch-update action; relying on it to refresh a stale release request is unsupported.
+
+- <https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/incorporating-changes-from-a-pull-request/automatically-merging-a-pull-request>
+
+Bearing: `method/03-operate.md`. The release request waits for its bot refresh; an ordinary request needs a deliberate branch update when behind.
+
+## Release request refresh paths
+
+release-plz describes overwriting and force-pushing with the reason "changes done by bots are not valuable, so we can overwrite them", unavailable on Gitea and GitLab. A non-bot commit after the first selects closing the old request and opening a new one, "to preserve the git history of maintainers' changes". The trunk style's bot-only GitHub release request takes the force-push path; the workflow re-arms on every refresh using the returned request number, including a replacement request.
+
+The implementation selects an in-place update when the contributor list is empty, and closes the request when it is not, confirming the condition despite the usage page's ambiguous bullet ordering.
+
+- <https://release-plz.dev/docs/usage/release-pr>
+- <https://github.com/release-plz/release-plz/blob/main/crates/release_plz_core/src/command/release_pr/mod.rs>
+
+Bearing: `landing:the-arming-identity-is-the-bot` and `forge-setup:a-merge-carries-the-trunk-it-was-tested-against`. Refresh recomputes release contents; a plain branch update cannot substitute for it. The landed arm makes both refresh paths compatible with a hands-off release.
+
+## Upstream record of the release race
+
+release-plz issue 1030, "Handle race condition on PR merged", is closed, resolved by pull request 1761. It describes a release request merging after another request already landed on the trunk, publishing a change absent from the changelog. It records the same failure class as release-kit issue 107, not an open defect or proof of an identical refresh mechanism.
+
+- <https://github.com/release-plz/release-plz/issues/1030>
+- <https://github.com/release-plz/release-plz/pull/1761>
+
+Bearing: `forge-setup:a-merge-carries-the-trunk-it-was-tested-against` and the freshness decision record. A stale computed release can publish a range its version and changelog do not describe.

@@ -161,11 +161,11 @@ A new number means the bot reopened the request and took the fix: redo the corre
 
 ## 4. Let it merge, or merge it
 
-This is the release. The named check gates the merge either way, and squash is the only allowed method, so `master` stays linear.
+This is the release. A request behind the trunk waits for the bot to recompute it and for the refreshed checks to pass; [the drawn model](../method/06-release-from-trunk.md#why-an-armed-release-waits) shows what releases that wait. The named check and freshness gate the merge either way, and squash is the only allowed method, so `master` stays linear.
 
 On trunk:
 
-The request stands armed: the forge merges it the moment the last required check passes, and 4a is a watch, not an action. A request disarmed in 3b takes the unarmed form until the bot re-arms it.
+The request stands armed: the forge merges it once the last required check passes and the request carries the trunk's tip, and 4a is a watch, not an action. A request disarmed in 3b takes the unarmed form until the bot re-arms it.
 
 On lines:
 
@@ -177,7 +177,7 @@ On github:
 
 ```bash
 gh pr checks <release pr> --repo <repo> --watch
-# check: on an armed request the forge merges when the last check passes; there is nothing to run
+# check: on an armed request the forge merges when the last check passes and the branch is current; there is nothing to run
 # not armed, or disarmed: merge it yourself once the checks pass
 gh pr merge <release pr> --repo <repo> --squash --delete-branch
 ```

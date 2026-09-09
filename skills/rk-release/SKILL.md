@@ -41,6 +41,8 @@ A request naming an issue — an issue URL, or "fix", "address", "implement", or
 
 `rk guide issue` renders the whole procedure, and `rk method model` owns why the name comes from the forge.
 
+A release request behind the trunk waits for the bot's recomputation and refreshed checks. Follow `rk method operate` and its drawn model before treating that wait as a stalled release; an ordinary request takes the branch update the chapter names.
+
 ## When it goes wrong
 
 Route by symptom through `rk method recovery`:

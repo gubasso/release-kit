@@ -16,6 +16,7 @@
   - [`forge-setup:the-setup-permits-a-request-to-merge-itself` — The setup permits a request to merge itself](#forge-setupthe-setup-permits-a-request-to-merge-itself--the-setup-permits-a-request-to-merge-itself)
   - [`forge-setup:the-setup-asserts-the-squash-title-source` — The setup asserts the squash title source](#forge-setupthe-setup-asserts-the-squash-title-source--the-setup-asserts-the-squash-title-source)
   - [`forge-setup:the-setup-asserts-the-squash-body-source` — The setup asserts the squash body source](#forge-setupthe-setup-asserts-the-squash-body-source--the-setup-asserts-the-squash-body-source)
+  - [`forge-setup:a-merge-carries-the-trunk-it-was-tested-against` — A merge carries the trunk it was tested against](#forge-setupa-merge-carries-the-trunk-it-was-tested-against--a-merge-carries-the-trunk-it-was-tested-against)
 
 <!--TOC-->
 
@@ -210,5 +211,31 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 - GIVEN a GitLab project whose squash template is `%{title}`
 - WHEN the setup asserts and observes the squash settings
 - THEN the title template alone is asserted, because the template puts no request description on the trunk
+
+Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `forge-setup:a-merge-carries-the-trunk-it-was-tested-against` — A merge carries the trunk it was tested against
+
+On every supported forge, the trunk protection MUST refuse a merge from a branch that does not carry the trunk's tip, and `rk setup check` MUST fault where the protection does not enforce that requirement, accepting a forge's existing enforcing setting rather than requiring a second switch.
+
+The release request is the one branch whose contents are computed: a merge that does not re-read the trunk publishes a version its contents did not earn. GitHub requires the strict status-check policy with required checks; GitLab's `ff` merge method carries the requirement. [The decision](../decisions/ADR-require-a-fresh-branch-before-a-merge.md) records the trade.
+
+#### Scenario: The GitHub policy is loose
+
+- GIVEN a trunk ruleset whose `required_status_checks` rule sets the strict policy false
+- WHEN `rk setup check` runs
+- THEN `protect-trunk` faults and names the stale-merge consequence and `rk setup step protect-trunk --apply`
+
+#### Scenario: The GitHub policy is strict
+
+- GIVEN an otherwise owned trunk ruleset whose `required_status_checks` rule sets the strict policy true
+- WHEN `rk setup check` runs
+- THEN `protect-trunk` reports the release-merge shape
+
+#### Scenario: GitLab enforces freshness through its merge method
+
+- GIVEN an otherwise owned GitLab trunk whose merge method is `ff`
+- WHEN `rk setup check` runs
+- THEN `protect-trunk` reports satisfied without a second setting, because the merge method carries the requirement
 
 Verify: `cargo nextest run -E 'binary(cli)'`
