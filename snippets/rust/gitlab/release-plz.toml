@@ -16,3 +16,16 @@ git_release_enable = true
 # TODO(release-kit): keep false for a binary-only crate or a lib target only
 # this crate's own tests link; set true when external consumers hold the API.
 semver_check = false
+
+[changelog]
+# The default header hard-wraps its last sentence across two lines. A
+# reflowing markdown formatter joins them, the next release writes the wrapped
+# form back, and the trunk is dirty after every release. The bot pushes
+# without hooks, so no check on a request ever sees it. This is the default
+# text with that sentence on one line, which both forms agree on.
+header = """# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+"""
