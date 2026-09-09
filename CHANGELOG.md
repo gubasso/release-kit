@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.8](https://github.com/gubasso/release-kit/compare/v0.3.7...v0.3.8) - 2026-09-09
+
+### Fixed
+
+- *(snippets)* pin a one-line changelog header in the rust seeds ([#129](https://github.com/gubasso/release-kit/pull/129))
+- *(setup)* let the exit status decide the single-trunk check ([#128](https://github.com/gubasso/release-kit/pull/128))
+
+### Other
+
+- *(runbooks)* state the sanctioned trunk push at migration step 3b ([#127](https://github.com/gubasso/release-kit/pull/127))
+
 ## [0.3.7](https://github.com/gubasso/release-kit/compare/v0.3.6...v0.3.7) - 2026-09-09
 
 ### Fixed
