@@ -131,11 +131,14 @@ glab api -X DELETE "projects/:id/protected_branches/<old-release-branch>"
 
 ### 3b. Fast-forward the trunk to the integrated tip
 
+Step 2 spliced the hooks into the target's configuration, so a target that already installed the pre-push hook type refuses this push. It is the one write the trunk takes before step 4 protects it, and `SKIP` names the single rule that write sets aside. Where the hook type is not installed, the same command runs unchanged, so the step reads one way on every target.
+
 ```bash
 git fetch origin
 git switch master && git merge --ff-only origin/<old-default-branch>
-git push origin master
+SKIP=rk-no-push-to-trunk git push origin master
 # check: the push lands, and CI proves the landing on the trunk rather than on the old branch
+# rejected: --no-verify, which disables every pre-push hook the target owns
 ```
 
 - the merge refuses: the trunk holds a commit the old default does not, so the two diverged; that is a finding for the inventory, not a `--no-ff` to add.
