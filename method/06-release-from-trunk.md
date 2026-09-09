@@ -70,20 +70,22 @@ resulting trunk                            changelog at R
 An ordinary request needs its author's deliberate update when it falls behind. Native auto-merge does not update the branch.
 
 ```text
-local check → push → one request-check run → trunk moves
-                                                |
-                                          nothing runs here
-                                          # strictness dispatches nothing
-                                                |
-                 merge ← one request-check run ← gh pr update-branch
+local check → push → request checks run → trunk moves
+                                              |
+                                        nothing runs here
+                                        # strictness dispatches nothing
+                                              |
+               merge ← the same checks again ← gh pr update-branch
+                       # one run per workflow that triggers on a request,
+                       # and the slowest of them is the whole wait
 ```
 
-| Cost or outcome                                | Loose policy       | Strict policy                                                            |
-| ---------------------------------------------- | ------------------ | ------------------------------------------------------------------------ |
-| Request-check runs, one intervening trunk move | One initial run    | Initial run plus one update run; another move can require another update |
-| Commands per ordinary merge after pushing      | Merge, or arm once | Same, plus one branch update per stale attempt                           |
-| Human acts per armed release                   | None               | None; bot refresh and workflow re-arm                                    |
-| Wrong version from this stale-merge race       | Can ship           | Refused until the bot recomputes on the trunk's tip                      |
+| Cost or outcome                                | Loose policy       | Strict policy                                                                                             |
+| ---------------------------------------------- | ------------------ | --------------------------------------------------------------------------------------------------------- |
+| Request-check runs, one intervening trunk move | One initial set    | That set again after the update, one run per triggering workflow; another move can require another update |
+| Commands per ordinary merge after pushing      | Merge, or arm once | Same, plus one branch update per stale attempt                                                            |
+| Human acts per armed release                   | None               | None; bot refresh and workflow re-arm                                                                     |
+| Wrong version from this stale-merge race       | Can ship           | Refused until the bot recomputes on the trunk's tip                                                       |
 
 ## Reproduce on the trunk
 
