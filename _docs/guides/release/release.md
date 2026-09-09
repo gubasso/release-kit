@@ -113,3 +113,25 @@ $ gh pr update-branch 137 --repo "$OWNER/$REPO"
 ```
 
 Both runs started seven seconds after the update. The title check took 7 seconds and the gate took 7 minutes 4 seconds, so the gate is the whole wait. The state moved `BEHIND` to `BLOCKED` while they ran, and to `CLEAN` when they finished. [The drawn model](../../../method/06-release-from-trunk.md#why-an-armed-release-waits) owns why the trunk moving alone dispatches nothing.
+
+## A release request the trunk moved under
+
+The release request is the one branch whose contents are computed rather than written, so a stale one cannot be repaired by updating its branch: the version and the changelog have to be recomputed. The bot does that by itself. This transcript is one observed repair, with the clock as an offset from the trunk move.
+
+```text
++0s     a second request merges; the trunk moves under the open release request
++40s    the bot rebuilds the release request on the new tip, at the recomputed
+        version, and the workflow re-arms it
++7m16s  the refreshed checks pass
++7m27s  the forge merges the release request; no human acted after +0s
+```
+
+Two things in that trace are worth reading twice. The rebuild moves both ends of the request, so its head and its base both change, which is how a recompute differs from a branch update. And the arm returns on the refresh rather than surviving it: the arm was removed by hand before the trunk moved, and the workflow put it back, because it arms on every run and reads the request number fresh.
+
+```bash
+$ gh pr view <release pr> --repo "$OWNER/$REPO" --json headRefOid,baseRefOid,autoMergeRequest
+# before the trunk moves: head ff2ce53, base 0779f33, armed false
+# 40 seconds after:       head f7b1b3b, base 2f84998, armed true
+```
+
+So a release held by a disarm is not held against the bot's own refresh. Where a release must not ship, the hold is read at each refresh, which is what the runbook's step 3a means by saying the next refresh may re-arm.
