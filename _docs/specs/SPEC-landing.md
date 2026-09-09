@@ -157,13 +157,13 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `landing:status-judges-only-under-check` — Status judges only under check
 
-Plain `rk status` MUST report and exit 0 for every reportable state — drift, staleness, unresolved sentinels, invariant failures, and no landing at all — and `rk status --check` MUST compute the identical report and exit 1 exactly on a violation: drift to a `rendered` file, a record whose own parameters do not reproduce its recorded bytes or its recorded destination set, an invalid or missing landing, an unresolved judgment sentinel, or an invariant failure under `landing:a-seeded-file-still-carries-the-invariants`. Seeded drift and pin staleness stay informational in both modes.
+Plain `rk status` MUST report and exit 0 for every reportable state — drift, staleness, unresolved sentinels, invariant failures, a pending payload, and no landing at all — and `rk status --check` MUST compute the identical report and exit 1 exactly on a violation: drift to a `rendered` file, a record whose own parameters do not reproduce its recorded bytes or its recorded destination set, an invalid or missing landing, an unresolved judgment sentinel, or an invariant failure under `landing:a-seeded-file-still-carries-the-invariants`. Seeded drift, pin staleness, and a pending payload stay informational in both modes. A pending payload is what the report MUST route an upgrade from, counted as the destinations this binary's projection under the recorded parameters would add, drop, reclassify, or rewrite; the recorded `rk_version` names the binary that wrote the record and MUST prompt nothing on its own, because a release that changes no landed file leaves the target with nothing to take and the two facts answer different questions.
 
 #### Scenario: The same target, judged and not
 
-- GIVEN a landed target with a tuned seeded file and an edited rendered file
+- GIVEN a landed target recorded by an older `rk` whose destinations this payload projects byte for byte, with a tuned seeded file and an edited rendered file
 - WHEN `rk status` and `rk status --check` run
-- THEN both print the same report, the plain run exits 0, and the check exits 1 naming the rendered drift in its violations
+- THEN both print the same report, the plain run exits 0, the check exits 1 naming the rendered drift in its violations, and neither counts a pending destination nor routes to an upgrade the version gap alone does not earn
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 

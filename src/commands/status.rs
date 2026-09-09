@@ -16,7 +16,7 @@ use crate::digest::Digest;
 use crate::error::RkError;
 use crate::landing::invariants::{self, InvariantFailure};
 use crate::landing::manifest::{self, Alignment, Manifest};
-use crate::landing::{self, Kind};
+use crate::landing::{self, Entry, Kind};
 use crate::output::Output;
 use crate::{embedded, registry};
 
@@ -86,6 +86,13 @@ struct Report {
     /// judged, never rewritten, because the file stays the target's.
     #[serde(skip_serializing_if = "Option::is_none")]
     invariant_failures: Option<Vec<InvariantFailure>>,
+    /// How many destinations an upgrade would change: the count this
+    /// binary's payload projects under the recorded parameters against
+    /// what the record names. Zero means nothing to take, whatever the two
+    /// versions say. Absent on a landed target means this binary carries
+    /// no payload for the recorded pair and cannot answer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pending: Option<usize>,
     /// Present only under `--check`: what the judgment failed on.
     #[serde(skip_serializing_if = "Option::is_none")]
     violations: Option<Vec<String>>,
@@ -107,6 +114,9 @@ struct Observed {
     stale: Vec<StalePin>,
     sentinels: Vec<(String, usize, String)>,
     invariants: Vec<InvariantFailure>,
+    /// The destinations an upgrade would change, or `None` where this
+    /// binary carries no payload for the recorded pair and so cannot say.
+    pending: Option<Vec<String>>,
 }
 
 /// Report the target's landing.
@@ -141,7 +151,7 @@ pub fn run(args: &StatusArgs) -> Result<(), RkError> {
             ),
         ]);
         out.emit(&Report {
-            schema: "rk.status/6",
+            schema: "rk.status/7",
             landed: false,
             tech: None,
             forge: None,
@@ -157,6 +167,7 @@ pub fn run(args: &StatusArgs) -> Result<(), RkError> {
             sentinels: None,
             record_drift: None,
             invariant_failures: None,
+            pending: None,
             violations: args.check.then(|| vec!["no landing".to_owned()]),
         })?;
         if args.check {
@@ -178,7 +189,7 @@ pub fn run(args: &StatusArgs) -> Result<(), RkError> {
 
     let violations = violations_of(&observed);
     out.emit(&Report {
-        schema: "rk.status/6",
+        schema: "rk.status/7",
         landed: true,
         tech: Some(manifest.tech),
         forge: Some(manifest.forge),
@@ -197,6 +208,7 @@ pub fn run(args: &StatusArgs) -> Result<(), RkError> {
         stale_pins: Some(observed.stale),
         sentinels: Some(observed.sentinels.len()),
         invariant_failures: Some(observed.invariants),
+        pending: observed.pending.as_ref().map(Vec::len),
         violations: args.check.then(|| violations.clone()),
     })?;
 
@@ -271,6 +283,7 @@ fn observe(args: &StatusArgs, manifest: &Manifest) -> Result<Observed, RkError> 
         stale: Vec::new(),
         sentinels: Vec::new(),
         invariants: Vec::new(),
+        pending: None,
     };
     for file in &manifest.files {
         let Some(bytes) = landing::read_recorded(&args.target, &file.destination)? else {
@@ -320,12 +333,29 @@ fn observe(args: &StatusArgs, manifest: &Manifest) -> Result<Observed, RkError> 
         &args.target,
     ));
     let same_payload = manifest.payload_sha256 == crate::commands::payload::report().payload_sha256;
+    // One projection serves both readers below, because both ask what this
+    // binary's payload makes of the recorded parameters. A pair this
+    // binary does not carry cannot be projected at all: under its own
+    // payload that is a defect in this binary and still fails, and under a
+    // landing from another rk it is a fact to report rather than an error.
+    let projected = match project(args, manifest) {
+        Ok(entries) => Some(entries),
+        Err(err) if same_payload => return Err(err),
+        Err(_) => None,
+    };
     if same_payload {
         observe_parameter_drift(manifest, &mut observed);
+        if let Some(entries) = projected.as_deref() {
+            observe_record_set(manifest, entries, &mut observed.record_drift);
+        }
     }
-    if same_payload {
-        observe_record_set(args, manifest, &mut observed.record_drift)?;
-    }
+    // What an upgrade would change, which is the only honest ground for
+    // telling an operator to run one. The recorded version says who wrote
+    // the record, and two releases apart can carry identical bytes for
+    // this pair, so it answers a different question and prompts nothing.
+    observed.pending = projected
+        .as_deref()
+        .map(|entries| pending_of(manifest, entries));
     // Stale means behind, not merely different: a landing from a newer rk
     // can carry pins ahead of this binary's registry, and that is the
     // alignment line's story, not a freshness complaint.
@@ -389,20 +419,10 @@ fn observe_parameter_drift(manifest: &Manifest, observed: &mut Observed) {
     }
 }
 
-/// The record-set consistency step: the recorded digests judge each
-/// named file, and the block re-render judges the two block records, but
-/// neither can see a record whose parameters and file list disagree — a
-/// nix flag flipped in the record with no file landed, or a once-withheld
-/// capability whose target grew into the supported shape. So the
-/// projection is reconstructed from the record's own parameters, the same
-/// withhold judgment applied, and the two destination sets compared both
-/// ways. Called only under this binary's own payload: an older landing's
-/// set legitimately differs, and that is the alignment line's story.
-fn observe_record_set(
-    args: &StatusArgs,
-    manifest: &Manifest,
-    record_drift: &mut Vec<String>,
-) -> Result<(), RkError> {
+/// What this binary's payload projects under the record's own parameters,
+/// with the same withhold judgment a landing applies, so the comparison
+/// stands against what an upgrade would actually offer this target.
+fn project(args: &StatusArgs, manifest: &Manifest) -> Result<Vec<Entry>, RkError> {
     let mut projected = landing::projection(
         &manifest.tech,
         &manifest.forge,
@@ -417,7 +437,52 @@ fn observe_record_set(
         Some(manifest),
         &mut projected,
     )?;
-    for entry in &projected {
+    Ok(projected)
+}
+
+/// The destinations an upgrade would change, read off the record alone.
+///
+/// A destination the projection adds or drops changes the record either
+/// way, and a `rendered` one whose candidate digest differs from the
+/// recorded digest is rewritten. A `seeded` or `state` destination the
+/// record already names is never rewritten, so only a change of kind
+/// counts for it. Disk drift is a separate story, told by its own lines:
+/// an edited file is the target's doing, not a newer payload's.
+fn pending_of(manifest: &Manifest, projected: &[Entry]) -> Vec<String> {
+    let mut pending = Vec::new();
+    for entry in projected {
+        let changed = manifest.file(&entry.destination).is_none_or(|record| {
+            record.kind != entry.kind
+                || (entry.kind == Kind::Rendered && record.sha256 != Digest::of(&entry.rendered))
+        });
+        if changed {
+            pending.push(entry.destination.clone());
+        }
+    }
+    for file in &manifest.files {
+        if !projected
+            .iter()
+            .any(|entry| entry.destination == file.destination)
+        {
+            pending.push(file.destination.clone());
+        }
+    }
+    pending.sort();
+    pending.dedup();
+    pending
+}
+
+/// The record-set consistency step: the recorded digests judge each
+/// named file, and the block re-render judges the two block records, but
+/// neither can see a record whose parameters and file list disagree — a
+/// nix flag flipped in the record with no file landed, or a once-withheld
+/// capability whose target grew into the supported shape. So the
+/// projection is reconstructed from the record's own parameters, the same
+/// withhold judgment applied, and the two destination sets compared both
+/// ways. Called only under this binary's own payload: an older landing's
+/// set legitimately differs, and that is the alignment line's story.
+fn observe_record_set(manifest: &Manifest, projected: &[Entry], record_drift: &mut Vec<String>) {
+    for entry in projected {
         if manifest.file(&entry.destination).is_none() {
             record_drift.push(format!(
                 "the recorded parameters project {}, which the record does not name",
@@ -436,7 +501,6 @@ fn observe_record_set(
             ));
         }
     }
-    Ok(())
 }
 
 /// The human lines, identical with and without `--check`.
@@ -460,16 +524,22 @@ fn render_human(
         if manifest.parameters.nix { ", nix" } else { "" },
         args.target
     ));
-    match alignment {
-        Alignment::BinaryNewer => out.result_line(format!(
-            "binary {} is newer; run 'rk upgrade'",
-            env!("CARGO_PKG_VERSION")
-        )),
-        Alignment::TargetNewer => out.result_line(format!(
+    if alignment == Alignment::TargetNewer {
+        out.result_line(format!(
             "binary {} is older than this landing; install the matching rk",
             env!("CARGO_PKG_VERSION")
+        ));
+    }
+    match observed.pending.as_deref() {
+        None => out.result_line(format!(
+            "this binary carries no {}/{} payload, so what an upgrade would change is unknown",
+            manifest.tech, manifest.forge
         )),
-        Alignment::Aligned => {}
+        Some(paths) => {
+            for path in paths {
+                out.result_line(format!("PENDING {path} (this payload would change it)"));
+            }
+        }
     }
     for path in &observed.drift_rendered {
         out.result_line(format!("DRIFT {path} (rendered, release-kit-owned)"));
@@ -513,7 +583,11 @@ fn render_human(
             args.target
         ));
     }
-    if alignment == Alignment::BinaryNewer {
+    if observed
+        .pending
+        .as_deref()
+        .is_none_or(|paths| !paths.is_empty())
+    {
         next.push(format!(
             "rk upgrade --target {} takes this landing to {}",
             args.target,
@@ -538,7 +612,7 @@ mod tests {
     #[test]
     fn the_status_report_schema_snapshot_holds() {
         let landed = Report {
-            schema: "rk.status/6",
+            schema: "rk.status/7",
             landed: true,
             tech: Some("rust".into()),
             forge: Some("github".into()),
@@ -566,11 +640,12 @@ mod tests {
                 reason: "github-attestations is not effectively true".into(),
                 remediation: "set github-attestations = true in [dist]",
             }]),
+            pending: Some(2),
             violations: None,
         };
         assert_eq!(
             serde_json::to_string(&landed).expect("a report serializes"),
-            r#"{"schema":"rk.status/6","landed":true,"tech":"rust","forge":"github","workflow":"worktree","style":"trunk","nix":true,"rk_version":"0.1.0","binary_version":"0.2.0","alignment":"binary-newer","drift":{"rendered":0,"seeded":1},"missing":[],"stale_pins":[{"tool":"release-plz","landed":"0.3.160","available":"0.3.170"}],"sentinels":1,"record_drift":0,"invariant_failures":[{"code":"attestations-disabled","destination":"dist-workspace.toml","reason":"github-attestations is not effectively true","remediation":"set github-attestations = true in [dist]"}]}"#
+            r#"{"schema":"rk.status/7","landed":true,"tech":"rust","forge":"github","workflow":"worktree","style":"trunk","nix":true,"rk_version":"0.1.0","binary_version":"0.2.0","alignment":"binary-newer","drift":{"rendered":0,"seeded":1},"missing":[],"stale_pins":[{"tool":"release-plz","landed":"0.3.160","available":"0.3.170"}],"sentinels":1,"record_drift":0,"invariant_failures":[{"code":"attestations-disabled","destination":"dist-workspace.toml","reason":"github-attestations is not effectively true","remediation":"set github-attestations = true in [dist]"}],"pending":2}"#
         );
         let absent = Report {
             landed: false,
@@ -588,12 +663,13 @@ mod tests {
             sentinels: None,
             record_drift: None,
             invariant_failures: None,
+            pending: None,
             violations: None,
             ..landed
         };
         assert_eq!(
             serde_json::to_string(&absent).expect("a report serializes"),
-            r#"{"schema":"rk.status/6","landed":false}"#,
+            r#"{"schema":"rk.status/7","landed":false}"#,
             "an absent landing reports one field a caller can branch on"
         );
     }

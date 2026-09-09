@@ -2,7 +2,7 @@
 
 External sources behind `SPEC-landing.md`: how comparable tools record what they generated into a project, how they judge whether it is still theirs, what each one does when it is not, and what a forge's own configuration language allows a landed file to leave to the target. Each entry states what the source says and which rule it bears on.
 
-Verified against the listed sources on 2026-08-28 and re-checked on 2026-08-29; the arming entries verified on 2026-09-03; the release-marker entries verified on 2026-09-05; the run-mode entry verified on 2026-09-07; the GitLab composition entries verified on 2026-09-08.
+Verified against the listed sources on 2026-08-28 and re-checked on 2026-08-29; the arming entries verified on 2026-09-03; the release-marker entries verified on 2026-09-05; the run-mode entry verified on 2026-09-07; the GitLab composition entries verified on 2026-09-08; the writer-version entries verified on 2026-09-09.
 
 ## cargo-dist, on generated files that refuse to drift
 
@@ -144,6 +144,30 @@ Bearing: the `project-jobs` bridge, the GitLab 18.2 version floor `rk setup step
 - <https://docs.gitlab.com/ci/yaml/#stages>
 
 Bearing: the `test` stage both rendered GitLab parents declare last, and the `stage: test` the landed `mr-title` job carries. This is the defect the bridge would have inherited, since the bridge sits in an ordinary stage too.
+
+## The writer's version, and why no comparable tool prompts from it
+
+Verified 2026-09-09. Across this family a record carries up to three separable facts, and the version of the executable that wrote it is never the one that answers "is there something to take". Terraform state is the only member carrying all three at once and separates them explicitly: `version` is the state format version and is 4 for every Terraform 1.x, `terraform_version` records the Terraform that wrote the snapshot, and `serial` is a monotonic counter incremented on each modification, with `lineage` a UUID fixed at creation because serials compare only within one lineage. Terraform refuses a state written by a newer Terraform, the same conservative direction as `landing:a-target-is-never-downgraded`, and it prompts nothing merely because the running binary is newer than `terraform_version`. `Cargo.lock` carries a top-level `version` that is the lockfile format version alone — cargo writes no cargo version into it — and an older cargo hard-errors on a format it does not understand rather than warning. copier's answers file records `_commit`, the template version, and cruft's record carries `template` and `commit`; neither writes the scaffolding executable's own version at all. cargo-dist's `cargo-dist-version` is the apparent counterexample and is materially different: it is a pin that the generated CI fetches and runs, a human edits it deliberately when upgrading, and drift is caught separately by `dist generate --check` comparing regenerated content, which is why bumping the pin without regenerating is the documented way to trip that check.
+
+- <https://developer.hashicorp.com/terraform/language/state/backends>
+- <https://developer.hashicorp.com/terraform/cli/commands/state/push>
+- <https://github.com/hashicorp/terraform/pull/7109>
+- <https://doc.rust-lang.org/stable/nightly-rustc/cargo/core/resolver/enum.ResolveVersion.html>
+- <https://github.com/rust-lang/cargo/issues/10046>
+- <https://copier.readthedocs.io/en/stable/configuring/>
+- <https://cruft.github.io/cruft/>
+- <https://axodotdev.github.io/cargo-dist/book/workspaces/simple-guide.html>
+
+Bearing: `landing:status-judges-only-under-check`, for the pending count the upgrade prompt reads and for the recorded `rk_version` prompting nothing on its own. The distinction the family draws is between a stamp and a pin: `rk_version` is written from `CARGO_PKG_VERSION` at every landing, adoption, and upgrade, so it is a stamp, and a stamp of a release-automation tool necessarily lags its own crate version, because the version is derived from the commit that already carries the record. `cargo-dist-version` never drifts that way only because nothing writes it automatically.
+
+## release-plz, on what a release request can and cannot carry
+
+Verified 2026-09-09. The configuration reference documents `[workspace]`, `[[package]]`, and `[changelog]`, and no command hook of any kind: there is no facility for running a command while the release request is built, and so none for adding a generated file to it. `allow_dirty` permits pre-existing changes during an update, which is not a generation step. A surrounding workflow can read the action's `pr` output, check out its head, commit, and push, but release-plz refreshes that branch by force-push, and in this project's landed workflow the same job arms the request for auto-merge immediately afterwards.
+
+- <https://release-plz.dev/docs/config>
+- <https://release-plz.dev/docs/github/output>
+
+Bearing: `landing:status-judges-only-under-check`, as the option not taken. Keeping the recorded version equal to the crate version would take custom orchestration racing the force-push and the arm, to hold a fact that answers no question the report asks.
 
 ## semantic-release and GoReleaser, on where their configuration lives
 
