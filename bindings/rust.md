@@ -177,6 +177,7 @@ Three things the shape rests on. The official `nixos/nix` image enables neither 
 ## Operate specifics
 
 - `release_always = false` in `release-plz.toml`: the release half fires only on the merge of the bot's own request, which the branch heuristic recognizes by its `release-plz-*` head branch, so an ordinary work merge publishes nothing and the release decision stays on the one merge button.
+- `git_tag_name = "v{{ version }}"`: this tag shape assumes one released package and keeps GitHub tags inside the protection installed for `refs/tags/v*`. Because `release-plz.toml` is seeded, an existing target adds the line by hand. A target already releasing under the package-prefixed form moves its next tag to the `v{{ version }}` shape and splits its history across two conventions; an existing single-crate target changes nothing.
 - `git_release_enable = false`: cargo-dist owns the GitHub release, because it is the half holding the installers. Both creating it leaves dist failing on an existing tag name and every release page empty. The tag stays release-plz's.
 - `semver_check = false` for a binary-only crate, or one whose lib target exists only for its own tests; cargo-semver-checks gates the bump only when external consumers hold the API.
 - `cargo binstall <crate>` resolves cargo-dist's artifacts from the first release with no configuration.

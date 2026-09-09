@@ -349,6 +349,35 @@ fn snippet_lists_every_landable_file() {
 }
 
 #[test]
+fn rust_release_plz_seeds_pin_the_protected_single_package_tag_shape() {
+    let expected =
+        "# This tag shape assumes one released package.\ngit_tag_name = \"v{{ version }}\"";
+    for path in [
+        "rust/github/release-plz.toml",
+        "rust/gitlab/release-plz.toml",
+    ] {
+        let output = rk()
+            .args(["snippet", path])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let text = String::from_utf8(output).expect("the snippet is UTF-8");
+        assert_eq!(
+            text.matches(expected).count(),
+            1,
+            "{path}: the adjacent tag-shape pin must occur exactly once"
+        );
+        assert_eq!(
+            text.matches("git_tag_name =").count(),
+            1,
+            "{path}: git_tag_name must occur exactly once"
+        );
+    }
+}
+
+#[test]
 fn payload_reports_the_version_and_every_root() {
     let mut expected =
         predicate::str::contains(format!("release-kit {}", env!("CARGO_PKG_VERSION")))

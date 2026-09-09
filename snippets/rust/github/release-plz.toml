@@ -7,6 +7,8 @@ changelog_update = true
 # one merge button.
 release_always = false
 publish = true
+# This tag shape assumes one released package.
+git_tag_name = "v{{ version }}"
 # cargo-dist owns the GitHub release, because it is the half that has the
 # installers to attach. release-plz creating it first leaves dist's host job
 # failing on "a release with the same tag name already exists" and every
