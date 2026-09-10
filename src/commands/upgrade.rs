@@ -219,14 +219,17 @@ fn project(
     recorded: &Manifest,
     style: Style,
 ) -> Result<(Vec<landing::Entry>, Vec<landing::Withheld>), RkError> {
-    let mut entries = landing::projection(
+    let params = landing::Params::resolve(
         &recorded.tech,
-        &recorded.forge,
-        &recorded.parameters.repo,
+        &landing::Resolved {
+            forge: recorded.forge.clone(),
+            repo: Some(recorded.parameters.repo.clone()),
+        },
         recorded.parameters.workflow,
         Some(style),
         recorded.parameters.nix,
     )?;
+    let mut entries = landing::projection(&params)?;
     let withheld = landing::withhold_nix(
         &args.target,
         recorded.parameters.nix,

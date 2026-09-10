@@ -21,6 +21,77 @@ use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
 use crate::{atomic, embedded};
 
+/// The complete input to a payload projection. Comparisons reconstruct it
+/// from the landing record; landing verbs resolve their candidate inputs.
+#[derive(Debug)]
+pub struct Params {
+    tech: String,
+    forge: String,
+    repo: String,
+    workflow: Workflow,
+    style: Option<Style>,
+    nix: bool,
+}
+
+impl Params {
+    /// Reconstruct every projection parameter from the record alone,
+    /// including the compatibility defaults applied when it was loaded.
+    #[must_use]
+    pub fn from_record(record: &manifest::Manifest) -> Self {
+        Self {
+            tech: record.tech.clone(),
+            forge: record.forge.clone(),
+            repo: record.parameters.repo.clone(),
+            workflow: record.parameters.workflow,
+            style: record.parameters.style,
+            nix: record.parameters.nix,
+        }
+    }
+
+    /// Resolve a landing candidate from the selected technology, the
+    /// detection result with forge and repository overrides applied, and
+    /// the invocation's workflow, style, and Nix choices. A preview may
+    /// supply the owner placeholder where its repository is unresolved.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RkError::Missing`] where no repository was resolved.
+    pub fn resolve(
+        tech: &str,
+        resolved: &Resolved,
+        workflow: Workflow,
+        style: Option<Style>,
+        nix: bool,
+    ) -> Result<Self, RkError> {
+        Ok(Self {
+            tech: tech.to_owned(),
+            forge: resolved.forge.clone(),
+            repo: resolved.repo.clone().ok_or_else(repo_unresolved)?,
+            workflow,
+            style,
+            nix,
+        })
+    }
+
+    /// The project path used by parameter-bearing blocks.
+    #[must_use]
+    pub fn repo(&self) -> &str {
+        &self.repo
+    }
+
+    /// The mode used by parameter-bearing blocks.
+    #[must_use]
+    pub const fn workflow(&self) -> Workflow {
+        self.workflow
+    }
+
+    /// The release style used by parameter-bearing blocks.
+    #[must_use]
+    pub const fn style(&self) -> Option<Style> {
+        self.style
+    }
+}
+
 /// Who owns a landed file's bytes after landing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -510,24 +581,17 @@ pub fn pair_files(tech: &str, forge: &str) -> Result<Vec<(String, &'static [u8])
 /// Returns the [`pair_files`] errors, and [`RkError::Other`] for a
 /// snippet destination the kind table does not classify, which is a
 /// defect in this binary.
-pub fn projection(
-    tech: &str,
-    forge: &str,
-    repo: &str,
-    workflow: Workflow,
-    style: Option<Style>,
-    nix: bool,
-) -> Result<Vec<Entry>, RkError> {
+pub fn projection(params: &Params) -> Result<Vec<Entry>, RkError> {
     let mut entries = Vec::new();
-    for (destination, baseline) in pair_files(tech, forge)? {
-        if !nix && NIX_DESTINATIONS.contains(&destination.as_str()) {
+    for (destination, baseline) in pair_files(&params.tech, &params.forge)? {
+        if !params.nix && NIX_DESTINATIONS.contains(&destination.as_str()) {
             continue;
         }
         let kind = kind_of(&destination).ok_or_else(|| {
             anyhow::anyhow!("the payload does not classify {destination}; the kind table is stale")
         })?;
         let rendered = match kind {
-            Kind::Rendered => render(baseline, repo, style),
+            Kind::Rendered => render(baseline, &params.repo, params.style),
             Kind::Seeded | Kind::State => baseline.to_vec(),
         };
         entries.push(Entry {
@@ -539,15 +603,15 @@ pub fn projection(
         });
     }
     for (destination, template) in [
-        (AGENTS_DESTINATION, routing_block(workflow)),
-        (HOOKS_DESTINATION, hooks_block(workflow)),
+        (AGENTS_DESTINATION, routing_block(params.workflow)),
+        (HOOKS_DESTINATION, hooks_block(params.workflow)),
     ] {
         entries.push(Entry {
             destination: destination.to_owned(),
             kind: Kind::Rendered,
             placement: Placement::Block,
             baseline: template.as_bytes().to_vec(),
-            rendered: render(template.as_bytes(), repo, style),
+            rendered: render(template.as_bytes(), &params.repo, params.style),
         });
     }
     entries.sort_by(|a, b| a.destination.cmp(&b.destination));
@@ -1126,18 +1190,95 @@ mod tests {
         assert!(!bindings.contains("_shared"), "{listing}");
     }
 
+    /// A loaded record reaches the projection unchanged, including old
+    /// records' absent style and the two workflow modes.
+    #[test]
+    fn params_from_a_record_round_trips() {
+        use super::{Params, manifest};
+        let dir = tempfile::tempdir().expect("a scratch target exists");
+        let target = camino::Utf8Path::from_path(dir.path()).expect("utf-8 path");
+        for tech in ["rust", "bash"] {
+            for forge in ["github", "gitlab"] {
+                for workflow in [Workflow::Branches, Workflow::Worktree] {
+                    for style in [None, Some(Style::Trunk), Some(Style::Lines)] {
+                        for nix in [false, true] {
+                            let record = manifest::Manifest {
+                                schema_version: manifest::SCHEMA_VERSION,
+                                rk_version: "0.1.0".to_owned(),
+                                payload_sha256: crate::digest::Digest::of(b""),
+                                origin: "init".to_owned(),
+                                tech: tech.to_owned(),
+                                forge: forge.to_owned(),
+                                landed_at: "2026-08-29T00:00:00Z".to_owned(),
+                                parameters: manifest::Parameters {
+                                    repo: "acme/team/widget".to_owned(),
+                                    workflow,
+                                    style,
+                                    nix,
+                                },
+                                files: Vec::new(),
+                                pins: std::collections::BTreeMap::new(),
+                            };
+                            manifest::write(target, &record).expect("the record writes");
+                            let loaded = manifest::load(target)
+                                .expect("the record loads")
+                                .expect("the record exists");
+                            let params = Params::from_record(&loaded);
+                            assert_eq!(params.tech, tech);
+                            assert_eq!(params.forge, forge);
+                            assert_eq!(params.repo(), "acme/team/widget");
+                            assert_eq!(params.workflow(), workflow);
+                            assert_eq!(params.style(), style);
+                            assert_eq!(params.nix, nix);
+                            let entries = projection(&params).expect("the record projects");
+                            let mut expected: Vec<_> = pair_files(tech, forge)
+                                .expect("the pair lists")
+                                .into_iter()
+                                .filter(|(path, _)| {
+                                    nix || !super::NIX_DESTINATIONS.contains(&path.as_str())
+                                })
+                                .collect();
+                            let routing = super::routing_block(workflow);
+                            let hooks = super::hooks_block(workflow);
+                            expected.push((AGENTS_DESTINATION.to_owned(), routing.as_bytes()));
+                            expected.push((HOOKS_DESTINATION.to_owned(), hooks.as_bytes()));
+                            expected.sort_by(|a, b| a.0.cmp(&b.0));
+                            assert_eq!(entries.len(), expected.len());
+                            for (entry, (destination, baseline)) in entries.iter().zip(expected) {
+                                assert_eq!(entry.destination, destination);
+                                assert_eq!(entry.baseline, baseline);
+                                let rendered = match entry.kind {
+                                    Kind::Rendered => {
+                                        super::render(baseline, "acme/team/widget", style)
+                                    }
+                                    Kind::Seeded | Kind::State => baseline.to_vec(),
+                                };
+                                assert_eq!(entry.rendered, rendered, "{destination}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// A rendered projection carries no unsubstituted token and no
     /// mechanical sentinel; the one judgment sentinel stays in its seeded
     /// file.
     #[test]
     fn a_projection_renders_owned_files_and_keeps_seeded_judgment() {
         let entries = projection(
-            "rust",
-            "github",
-            "acme/widget",
-            Workflow::Branches,
-            Some(Style::Trunk),
-            false,
+            &super::Params::resolve(
+                "rust",
+                &super::Resolved {
+                    forge: "github".to_owned(),
+                    repo: Some("acme/widget".to_owned()),
+                },
+                Workflow::Branches,
+                Some(Style::Trunk),
+                false,
+            )
+            .expect("the parameters resolve"),
         )
         .expect("the pair projects");
         let workflow = entries
@@ -1188,12 +1329,17 @@ mod tests {
         use super::NIX_DESTINATIONS;
         let paths = |nix: bool, forge: &str| -> Vec<String> {
             projection(
-                "rust",
-                forge,
-                "acme/widget",
-                Workflow::Worktree,
-                Some(Style::Trunk),
-                nix,
+                &super::Params::resolve(
+                    "rust",
+                    &super::Resolved {
+                        forge: forge.to_owned(),
+                        repo: Some("acme/widget".to_owned()),
+                    },
+                    Workflow::Worktree,
+                    Some(Style::Trunk),
+                    nix,
+                )
+                .expect("the parameters resolve"),
             )
             .expect("the pair projects")
             .into_iter()
@@ -1220,12 +1366,17 @@ mod tests {
                 .any(|destination| destination.contains("nix.yml"))
         );
         let bash = projection(
-            "bash",
-            "github",
-            "acme/widget",
-            Workflow::Worktree,
-            Some(Style::Trunk),
-            true,
+            &super::Params::resolve(
+                "bash",
+                &super::Resolved {
+                    forge: "github".to_owned(),
+                    repo: Some("acme/widget".to_owned()),
+                },
+                Workflow::Worktree,
+                Some(Style::Trunk),
+                true,
+            )
+            .expect("the parameters resolve"),
         )
         .expect("an out-of-matrix pair projects the smaller product");
         assert!(
@@ -1264,12 +1415,17 @@ mod tests {
         let target = camino::Utf8Path::from_path(dir.path()).expect("utf-8 path");
         let entries = || {
             projection(
-                "rust",
-                "github",
-                "acme/widget",
-                Workflow::Worktree,
-                Some(Style::Trunk),
-                true,
+                &super::Params::resolve(
+                    "rust",
+                    &super::Resolved {
+                        forge: "github".to_owned(),
+                        repo: Some("acme/widget".to_owned()),
+                    },
+                    Workflow::Worktree,
+                    Some(Style::Trunk),
+                    true,
+                )
+                .expect("the parameters resolve"),
             )
             .expect("the pair projects")
         };

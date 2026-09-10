@@ -103,7 +103,7 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
         ));
     }
     let resolved = landing::resolve(&args.target, args.forge.as_deref(), args.repo.as_deref())?;
-    let repo = resolved.repo.ok_or_else(landing::repo_unresolved)?;
+    let repo = resolved.repo.clone().ok_or_else(landing::repo_unresolved)?;
     let tech = resolved_tech(args)?;
     let workflow = Workflow::parse(&args.workflow)?;
     // The style is required rather than defaulted: it changes the release
@@ -114,14 +114,8 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
             "an adoption verifies against one rendered candidate; pass --style <trunk|lines>, the release style this target runs".into(),
         )
     })?)?;
-    let mut entries = landing::projection(
-        &tech,
-        &resolved.forge,
-        &repo,
-        workflow,
-        Some(style),
-        args.nix,
-    )?;
+    let params = landing::Params::resolve(&tech, &resolved, workflow, Some(style), args.nix)?;
+    let mut entries = landing::projection(&params)?;
     // A target whose flake pair is its own is verified without the pair
     // and the workflow, exactly as a landing would have withheld them, so
     // the record an adoption writes is one a later upgrade reproduces.

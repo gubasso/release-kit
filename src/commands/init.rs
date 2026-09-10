@@ -103,17 +103,16 @@ pub fn run(args: &InitArgs) -> Result<(), RkError> {
         ));
     }
     let resolved = landing::resolve(&args.target, args.forge.as_deref(), args.repo.as_deref())?;
-    let forge = resolved.forge;
+    let forge = &resolved.forge;
     let workflow = Workflow::parse(&args.workflow)?;
     let style = Style::parse(&args.style)?;
     if args.apply {
-        let repo = resolved.repo.ok_or_else(landing::repo_unresolved)?;
-        let mut entries =
-            landing::projection(&args.tech, &forge, &repo, workflow, Some(style), args.nix)?;
+        let params =
+            landing::Params::resolve(&args.tech, &resolved, workflow, Some(style), args.nix)?;
+        let repo = params.repo();
+        let mut entries = landing::projection(&params)?;
         let withheld = landing::withhold_nix(&args.target, args.nix, None, &mut entries)?;
-        apply(
-            out, args, &forge, &repo, workflow, style, &entries, withheld,
-        )
+        apply(out, args, forge, repo, workflow, style, &entries, withheld)
     } else {
         // A preview lists destinations and compares nothing, so an
         // unresolved repository only means the owner substitution is
@@ -124,18 +123,21 @@ pub fn run(args: &InitArgs) -> Result<(), RkError> {
             );
         }
         let repo = resolved.repo;
-        let mut entries = landing::projection(
+        let params = landing::Params::resolve(
             &args.tech,
-            &forge,
-            repo.as_deref().unwrap_or("OWNER"),
+            &landing::Resolved {
+                forge: forge.clone(),
+                repo: Some(repo.clone().unwrap_or_else(|| "OWNER".to_owned())),
+            },
             workflow,
             Some(style),
             args.nix,
         )?;
+        let mut entries = landing::projection(&params)?;
         // The preview withholds exactly as the apply would, so what is
         // listed is what lands.
         let withheld = landing::withhold_nix(&args.target, args.nix, None, &mut entries)?;
-        preview(out, args, &forge, repo, workflow, style, &entries, withheld)
+        preview(out, args, forge, repo, workflow, style, &entries, withheld)
     }
 }
 
