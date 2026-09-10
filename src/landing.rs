@@ -53,12 +53,13 @@ impl Kind {
 /// OIDC permission, so release-kit owns them; the tool configurations are
 /// per-project judgment; the two state files are rewritten by the release
 /// automation itself.
-const KINDS: [(&str, Kind); 15] = [
+const KINDS: [(&str, Kind); 16] = [
     (".github/workflows/release-plz.yml", Kind::Rendered),
     (".github/workflows/release-please.yml", Kind::Rendered),
     (".github/workflows/release.yml", Kind::Rendered),
     (".github/workflows/pr-title.yml", Kind::Rendered),
     (".gitlab-ci.yml", Kind::Rendered),
+    ("SECURITY.md", Kind::Rendered),
     (".gitlab/ci/mr-title.yml", Kind::Rendered),
     ("release-plz.toml", Kind::Seeded),
     ("dist-workspace.toml", Kind::Seeded),
@@ -124,6 +125,9 @@ pub fn destinations() -> impl Iterator<Item = &'static str> {
 /// function of payload plus parameters.
 pub const OWNER_TOKEN: &[u8] = b"OWNER";
 
+/// The full recorded project path, including nested namespaces.
+pub const REPO_TOKEN: &[u8] = b"RK_REPO";
+
 /// The one scope shape: the title checks' regular expression.
 pub const SCOPE_SHAPE_TOKEN: &[u8] = b"RK_SCOPE_SHAPE";
 
@@ -134,7 +138,8 @@ pub const STYLE_TOKEN: &[u8] = b"RK_STYLE";
 /// Substitute the landing parameters into a `rendered` file's bytes.
 ///
 /// The repository's owner — the project path's first segment — replaces
-/// every `OWNER` occurrence, the one scope shape replaces the scope
+/// every `OWNER` occurrence; the full path replaces `RK_REPO` last.
+/// The one scope shape replaces the scope
 /// token, and the recorded style replaces the style token. The scope
 /// shape rests on no parameter, so it substitutes always. An unresolved
 /// style leaves its token standing, which only a preview renders under:
@@ -146,7 +151,8 @@ pub fn render(baseline: &[u8], repo: &str, style: Option<Style>) -> Vec<u8> {
     if let Some(style) = style {
         out = substitute(&out, STYLE_TOKEN, style.as_str().as_bytes());
     }
-    substitute(&out, SCOPE_SHAPE_TOKEN, SCOPE_SHAPE.as_bytes())
+    out = substitute(&out, SCOPE_SHAPE_TOKEN, SCOPE_SHAPE.as_bytes());
+    substitute(&out, REPO_TOKEN, repo.as_bytes())
 }
 
 /// Every `token` occurrence replaced with `value`.
@@ -983,6 +989,25 @@ mod tests {
         splice_hooks_block,
     };
     use crate::embedded;
+
+    #[test]
+    fn private_reporting_path_tokens_are_reproducible() {
+        for repo in [
+            "acme/widget",
+            "acme/group/widget",
+            "acme/OWNER-RK_STYLE-RK_SCOPE_SHAPE",
+        ] {
+            assert_eq!(
+                super::render(
+                    b"RK_REPO RK_REPO OWNER RK_STYLE RK_SCOPE_SHAPE",
+                    repo,
+                    Some(super::Style::Trunk)
+                ),
+                format!("{repo} {repo} acme trunk {}", super::SCOPE_SHAPE).as_bytes()
+            );
+        }
+        assert_eq!(super::kind_of("SECURITY.md"), Some(super::Kind::Rendered));
+    }
 
     /// Every snippet destination has a declared kind: a new landable file
     /// without a classification fails here, not at a landing. The shared

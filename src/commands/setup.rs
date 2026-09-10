@@ -574,9 +574,16 @@ fn execute(
                 return Err(fail(&mut engine, error));
             }
         };
-        engine
-            .out
-            .frame(format!("ok {}: {}", step.name, status.line()));
+        engine.out.frame(format!(
+            "{} {}: {}",
+            if matches!(status, Done::Skipped(_)) {
+                "skipped"
+            } else {
+                "ok"
+            },
+            step.name,
+            status.line()
+        ));
         let mut finished = engine.event(EventKind::StepFinished, Some(step.name));
         finished.status = Some(status.wire().into());
         finished.exit_code = Some(0);
@@ -614,6 +621,8 @@ fn elapsed_ms(clock: Instant) -> u64 {
 enum Done {
     /// The desired state already held; nothing ran.
     Satisfied(String),
+    /// The target is ineligible for this step.
+    Skipped(String),
     /// The script ran and the postcondition was read back.
     Changed(String, Option<String>),
     /// A read-only step ran and passed.
@@ -624,6 +633,7 @@ impl Done {
     const fn wire(&self) -> &'static str {
         match self {
             Self::Satisfied(_) => "satisfied",
+            Self::Skipped(_) => "skipped",
             Self::Changed(..) => "applied",
             Self::Passed(_) => "passed",
         }
@@ -631,7 +641,9 @@ impl Done {
 
     fn line(&self) -> String {
         match self {
-            Self::Satisfied(detail) | Self::Passed(detail) => detail.clone(),
+            Self::Satisfied(detail) | Self::Passed(detail) | Self::Skipped(detail) => {
+                detail.clone()
+            }
             Self::Changed(detail, limitation) => limitation.as_ref().map_or_else(
                 || detail.clone(),
                 |limit| format!("{detail} (limitation: {limit})"),
@@ -936,8 +948,21 @@ fn apply_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
                 // as it does after the write, so no mutation ever rides on
                 // an unreadable forge answer.
                 match observe_with(engine, step.name)? {
-                    StepState::Satisfied { detail, .. } => {
+                    StepState::Satisfied { detail, limitation } => {
+                        let detail = if step.name == "private-vulnerability-reporting" {
+                            limitation.map_or_else(
+                                || detail.clone(),
+                                |limit| format!("{detail} (limitation: {limit})"),
+                            )
+                        } else {
+                            detail
+                        };
                         return Ok(Done::Satisfied(detail));
+                    }
+                    StepState::Inapplicable { detail }
+                        if step.name == "private-vulnerability-reporting" =>
+                    {
+                        return Ok(Done::Skipped(detail));
                     }
                     StepState::Unsatisfied { .. } | StepState::Inapplicable { .. } => {}
                     StepState::Unknown { detail } => {
@@ -1049,6 +1074,9 @@ fn run_forge_step_with(
     let state = observe_with(engine, step.name)?;
     match state {
         StepState::Satisfied { detail, limitation } => Ok(Done::Changed(detail, limitation)),
+        StepState::Inapplicable { detail } if step.name == "private-vulnerability-reporting" => {
+            Ok(Done::Skipped(detail))
+        }
         StepState::Unsatisfied { detail } | StepState::Inapplicable { detail } => {
             Err(RkError::refusal(
                 Diagnostic::new(

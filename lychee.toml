@@ -10,6 +10,9 @@ accept = ["100..=103", "200..=299", "429"]
 
 exclude = [
   "https://example.invalid/.*",
+  # A payload template carries a substitution token where the landed file
+  # carries the target's project path. The link resolves at the target.
+  '^https://github\.com/RK_REPO/',
   # Owner-only settings pages: 404 to anyone not signed in as the owner.
   '^https://github\.com/[^/]+/[^/]+/settings(/|$)',
   # Bot-gated: reachable in a browser, 401 or 403 to any checker.

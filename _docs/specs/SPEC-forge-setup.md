@@ -17,6 +17,7 @@
   - [`forge-setup:the-setup-asserts-the-squash-title-source` — The setup asserts the squash title source](#forge-setupthe-setup-asserts-the-squash-title-source--the-setup-asserts-the-squash-title-source)
   - [`forge-setup:the-setup-asserts-the-squash-body-source` — The setup asserts the squash body source](#forge-setupthe-setup-asserts-the-squash-body-source--the-setup-asserts-the-squash-body-source)
   - [`forge-setup:a-merge-carries-the-trunk-it-was-tested-against` — A merge carries the trunk it was tested against](#forge-setupa-merge-carries-the-trunk-it-was-tested-against--a-merge-carries-the-trunk-it-was-tested-against)
+  - [`forge-setup:the-setup-proves-a-private-reporting-channel` — The setup proves a private reporting channel](#forge-setupthe-setup-proves-a-private-reporting-channel--the-setup-proves-a-private-reporting-channel)
 
 <!--TOC-->
 
@@ -239,3 +240,33 @@ The release request is the one branch whose contents are computed: a merge that 
 - THEN `protect-trunk` reports satisfied without a second setting, because the merge method carries the requirement
 
 Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `forge-setup:the-setup-proves-a-private-reporting-channel` — The setup proves a private reporting channel
+
+When the required private-vulnerability-reporting step runs, the setup MUST enable and read back GitHub's reporting switch for a repository proven public, report a private GitHub repository as inapplicable without calling that endpoint, and on GitLab read the issue intake configuration and report its confidential-issue limitation by name, with unreadable answers remaining unknown.
+
+#### Scenario: Public GitHub reporting is disabled
+
+- GIVEN a public repository whose reporting switch is disabled
+- WHEN the step applies and then applies again
+- THEN one PUT enables reporting, readback proves it, and the rerun writes nothing
+
+#### Scenario: Private GitHub targets apply
+
+- GIVEN a repository proven private
+- WHEN single-step or full apply runs
+- THEN reporting is skipped successfully without calling its endpoint or materializing its script
+
+#### Scenario: Applicability or reporting is unreadable
+
+- GIVEN unreadable visibility or a public repository whose reporting endpoint fails unexpectedly
+- WHEN the step observes or applies
+- THEN the state stays unknown and no unproven success is reported
+
+#### Scenario: GitLab intake is configured
+
+- GIVEN enabled, disabled, or restricted issue access
+- WHEN the step checks or applies
+- THEN enabled access names the confidential-issue limitation, disabled or restricted access remains unsatisfied, and all cases make zero writes
+
+Verify: `cargo nextest run -E 'binary(cli) and test(private_reporting)'`

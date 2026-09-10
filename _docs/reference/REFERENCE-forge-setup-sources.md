@@ -339,3 +339,17 @@ release-plz issue 1030, "Handle race condition on PR merged", is closed, resolve
 - <https://github.com/release-plz/release-plz/pull/1761>
 
 Bearing: `forge-setup:a-merge-carries-the-trunk-it-was-tested-against` and the freshness decision record. A stale computed release can publish a range its version and changelog do not describe.
+
+## Private vulnerability reporting
+
+Checked 2026-09-10. Bearing: `forge-setup:the-setup-proves-a-private-reporting-channel`, `forge-setup:a-check-reports-what-the-forge-enforces`, and setup runbook steps 3g and 4a.
+
+- [GitHub repository REST API](https://docs.github.com/en/rest/repos/repos#check-if-private-vulnerability-reporting-is-enabled-for-a-repository): GET reads `enabled`, PUT enables, and 422 is documented. Fine-grained GET permission is Metadata read; PUT requires Administration write.
+- [GitHub repository configuration](https://docs.github.com/en/code-security/how-tos/report-and-fix-vulnerabilities/configure-vulnerability-reporting/configure-for-a-repository): eligibility is public repositories. The policy's `security/advisories/new` route rests on the supplied ticket's 2026-09-09 observation, not a new live probe.
+- [GitLab Projects API](https://docs.gitlab.com/api/projects/#project-feature-visibility-level): `issues_access_level` distinguishes enabled, private, and disabled access; `issues_enabled` is deprecated. Project access is not proof of submission by every reporter.
+- [GitLab confidential issues](https://docs.gitlab.com/user/project/issues/confidential_issues/): reporters select confidentiality, and access determines who can submit and read a report.
+- [GitLab project settings](https://docs.gitlab.com/user/project/settings/#configure-project-features-and-permissions): Maintainer or Owner permission; Settings > General > Visibility, project features, permissions; enable Work items and Save changes. [Supported project settings](https://gitlab.com/gitlab-org/gitlab/-/raw/v18.2.0-ee/doc/user/project/settings/_index.md) separately confirms the older Issues label. [Supported feature permissions](https://gitlab.com/gitlab-org/gitlab/-/raw/v18.2.0-ee/doc/development/permissions/predefined_roles.md) names Everyone with Access for issue visibility.
+- [GitLab supported issue creation](https://gitlab.com/gitlab-org/gitlab/-/raw/v18.2.0-ee/doc/user/project/issues/create_issues.md): the supported interface names Issues, uses `/-/issues/new`, and accepts `issue[confidential]=true`. [Current issue creation](https://docs.gitlab.com/user/project/issues/create_issues/) uses `/-/work_items/new`; current settings name Work items. The guide requires checking confidentiality rather than relying on the route alone.
+- [GitLab supported repository link filter](https://gitlab.com/gitlab-org/gitlab/-/raw/v18.2.0-ee/lib/banzai/filter/repository_link_filter.rb): URI-relative paths are rewritten as repository paths. The GitLab policy therefore uses a prose procedure on the target's instance and the public confidentiality instructions, without a guessed contact URL or scanner score claim.
+
+Bearing: `landing:a-rendered-file-is-reproducible`. The policy derives its full project path from the existing recorded `parameters.repo`; the rendering adds no host field or schema revision.

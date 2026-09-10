@@ -1,6 +1,7 @@
-//! The ordered step table: one step per executable item in
-//! `method/02-setup.md`, in the chapter's order, each defined by what it
-//! proves rather than by how a forge achieves it.
+//! The setup step table, defined by what each step proves.
+//!
+//! Steps follow `method/02-setup.md`, with reporting intake after the
+//! protection inventory.
 
 /// What a step touches when it applies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,14 +36,14 @@ pub struct StepSpec {
     pub prereqs: &'static [&'static str],
 }
 
-/// The fourteen steps, in the chapter's order.
+/// The fifteen steps, with reporting intake last.
 ///
 /// `package-check`, `branch-reminder`, and `forge-version` belong to no
 /// forge tree — the first reads its command from the technology binding,
 /// the second writes an embedded hook body into the target's own git
 /// directory, and the third is one read-only API call the observer already
 /// makes — which makes them the three steps outside the parity rule.
-pub const STEPS: [StepSpec; 14] = [
+pub const STEPS: [StepSpec; 15] = [
     StepSpec {
         name: "package-check",
         chapter: "§0",
@@ -169,6 +170,15 @@ pub const STEPS: [StepSpec; 14] = [
         optional: false,
         prereqs: &[],
     },
+    StepSpec {
+        name: "private-vulnerability-reporting",
+        chapter: "§3",
+        mutates: Mutates::Forge,
+        proves: "a vulnerability report has a private intake path, with the forge's limits named",
+        destructive: false,
+        optional: false,
+        prereqs: &[],
+    },
 ];
 
 /// Look one step up by name.
@@ -198,6 +208,13 @@ mod tests {
                 );
             }
         }
+        let reporting = &STEPS[STEPS.len() - 1];
+        assert_eq!(reporting.name, "private-vulnerability-reporting");
+        assert_eq!(reporting.chapter, "§3");
+        assert_eq!(reporting.mutates, super::Mutates::Forge);
+        assert!(!reporting.optional && !reporting.destructive);
+        assert!(reporting.prereqs.is_empty());
+        assert_eq!(STEPS[STEPS.len() - 2].name, "protections-check");
         assert!(spec("package-check").is_some());
         assert!(spec("no-such-step").is_none());
     }

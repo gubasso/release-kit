@@ -298,12 +298,23 @@ The forge carries no project-level switch; availability follows from the pipelin
 
 ```bash
 rk setup check --target .
-# check: every step reports satisfied — protect-trunk reads back strict_required_status_checks_policy=true with required checks on GitHub, or merge_method=ff on GitLab; auto-merge names its limitation where no switch exists, and protect-release-lines is skipped while no line exists
+# check: the protection steps report satisfied — protect-trunk reads back strict_required_status_checks_policy=true with required checks on GitHub, or merge_method=ff on GitLab; auto-merge names its limitation where no switch exists, and protect-release-lines is skipped while no line exists
+# private-vulnerability-reporting unsatisfied or unknown: continue at 3g before calling setup ready
 # protect-trunk unsatisfied: return to 3c; a loose or absent strict policy faults even when checks are required
 # install-bot unknown: rerun with 2b's exports in the environment; rk forge <forge> owns why only the bot reads its own installation
 ```
 
 Where the forge enforces less than a step claims, the check names the weaker guarantee rather than passing; tag protection on GitLab is the case this exists for, per `rk forge gitlab`.
+
+### 3g. Provide a private vulnerability reporting channel
+
+1. Run `rk setup step private-vulnerability-reporting --target . --apply` (check: public GitHub reports applied after enabling and reading back the switch, or satisfied on a rerun; private GitHub reports skipped without calling the public-only endpoint; GitLab reports satisfied with its confidential-issue limitation).
+2. Inspect the step's result (check: GitLab names that confidentiality is a per-report choice subject to reporter access, not a project-level switch or proof that every external reporter can submit). For unknown authentication or connectivity, repair that access and rerun 3g. For disabled or restricted GitLab intake, have a Maintainer or Owner explicitly decide whether to allow intake before changing access, then use these controls and rerun 3g:
+   - Open project Settings > General and expand Visibility, project features, permissions.
+   - Enable Work items (Issues on the supported older interface).
+   - Set its access to Everyone with access; leave all other settings unchanged.
+   - Select Save changes (check: the project readback shows `issues_access_level: "enabled"`; otherwise return to these controls).
+3. Run `rk setup check --target .` (check: this step reports satisfied for public GitHub, skipped for private GitHub, or satisfied with the named limitation for GitLab; return to 3g for any other reporting result). Policy presence is checked after its producer, step 4a; setup writes no policy and creates no test report.
 
 ## 4. Land the workflow files
 
@@ -314,10 +325,14 @@ The apply names no scope vocabulary. The title check holds a scope to lowercase 
 ```bash
 rk init --tech <tech> --target .             # preview every destination
 rk init --tech <tech> --target . --apply     # write the files and the landing record
-# check: the apply reports each written file and every sentinel left to fill
+# check: the apply reports each written file, including SECURITY.md, and every sentinel left to fill
 # already landed: the apply refuses; rk upgrade --target . --apply takes an existing landing to a newer payload
 # a record from before the style parameter: the upgrade refuses until --style names one
 ```
+
+Check `SECURITY.md` after landing: its project path must name this target and its instructions must describe the intended private reporting channel; return to 4a with the correct repository parameter if it does not. Existing landings receive the policy through `rk upgrade`. This rendered policy is release-kit-owned: hand edits conflict on upgrade, and no contact override exists yet.
+
+After the policy is published on the target through step 4c or 4f, check that the hosted file is visible and that the reporter can reach the intended private form. On GitLab, open this project's new issue form on its own instance and verify confidentiality is selected; do not guess a host for the policy. On private GitHub, verify the stated existing private conversation is available instead. Submit no report for this check. If the channel is unavailable, return to 3g; if the hosted file is absent, return to 4c or 4f.
 
 Then answer every reported sentinel and confirm the record:
 
