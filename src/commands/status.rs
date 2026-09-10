@@ -385,14 +385,15 @@ fn observe(args: &StatusArgs, manifest: &Manifest) -> Result<Observed, RkError> 
 /// destination already reported as rendered drift is the file's own
 /// story, not the record's, and is skipped too.
 fn observe_parameter_drift(manifest: &Manifest, observed: &mut Observed) {
+    let params = landing::Params::from_record(manifest);
     for (destination, template) in [
         (
             landing::AGENTS_DESTINATION,
-            landing::routing_block(manifest.parameters.workflow),
+            landing::routing_block(params.workflow()),
         ),
         (
             landing::HOOKS_DESTINATION,
-            landing::hooks_block(manifest.parameters.workflow),
+            landing::hooks_block(params.workflow()),
         ),
     ] {
         let Some(record) = manifest.file(destination) else {
@@ -406,11 +407,7 @@ fn observe_parameter_drift(manifest: &Manifest, observed: &mut Observed) {
         {
             continue;
         }
-        let candidate = landing::render(
-            template.as_bytes(),
-            &manifest.parameters.repo,
-            manifest.parameters.style,
-        );
+        let candidate = landing::render(template.as_bytes(), params.repo(), params.style());
         if Digest::of(&candidate) != record.sha256 {
             observed
                 .parameter_drift
@@ -423,14 +420,7 @@ fn observe_parameter_drift(manifest: &Manifest, observed: &mut Observed) {
 /// with the same withhold judgment a landing applies, so the comparison
 /// stands against what an upgrade would actually offer this target.
 fn project(args: &StatusArgs, manifest: &Manifest) -> Result<Vec<Entry>, RkError> {
-    let mut projected = landing::projection(
-        &manifest.tech,
-        &manifest.forge,
-        &manifest.parameters.repo,
-        manifest.parameters.workflow,
-        manifest.parameters.style,
-        manifest.parameters.nix,
-    )?;
+    let mut projected = landing::projection(&landing::Params::from_record(manifest))?;
     landing::withhold_nix(
         &args.target,
         manifest.parameters.nix,
