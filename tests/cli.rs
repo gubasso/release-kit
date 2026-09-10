@@ -586,6 +586,7 @@ fn init_preview_human_lines_are_snapshot_held() {
          .github/workflows/release-plz.yml\n\
          .pre-commit-config.yaml\n\
          AGENTS.md\n\
+         SECURITY.md\n\
          dist-workspace.toml\n\
          release-plz.toml\n\
          Next:\n  rk init --tech rust --forge github --repo <owner/name> --workflow worktree --style trunk --target {path} --apply\n"
@@ -2224,13 +2225,14 @@ fn init_propagates_an_unreadable_destination_and_writes_nothing() {
 
 /// The forge-mutating step names: every one exists in both trees under the
 /// same name, per `forge-setup:every-supported-forge-runs-every-step`.
-const FORGE_STEPS: [&str; 11] = [
+const FORGE_STEPS: [&str; 12] = [
     "auto-merge",
     "bot-secrets",
     "ci-permissions",
     "default-branch",
     "install-bot",
     "merge-cleanup",
+    "private-vulnerability-reporting",
     "protect-release-lines",
     "protect-tags",
     "protect-trunk",
@@ -2286,7 +2288,7 @@ fn every_listed_step_resolves_to_a_script_in_every_tree() {
             Some(rest.split_whitespace().next()?.to_owned())
         })
         .collect();
-    assert_eq!(listed.len(), 14, "fourteen steps list: {text}");
+    assert_eq!(listed.len(), 15, "fifteen steps list: {text}");
     listed.retain(|name| {
         !["package-check", "branch-reminder", "forge-version"].contains(&name.as_str())
     });
@@ -2920,7 +2922,22 @@ api)
   done
   path="${path#/}"; path="${path%%\?*}"
   case "$method $path" in
+  "GET repos/acme/widget/private-vulnerability-reporting")
+    if [[ -f "$STATE/reporting_get_error" ]]; then echo "HTTP $(cat "$STATE/reporting_get_error")" >&2; exit 1; fi
+    if [[ -f "$STATE/reporting_post_error" && -f "$STATE/reporting_written" && -z "$query" ]]; then echo 'HTTP 500' >&2; exit 1; fi
+    enabled="$(cat "$STATE/reporting_enabled" 2>/dev/null || echo false)"
+    if [[ "$query" == .enabled ]]; then echo "$enabled"; else echo "{\"enabled\":$enabled}"; fi;;
+  "PUT repos/acme/widget/private-vulnerability-reporting")
+    if [[ -f "$STATE/reporting_put_error" ]]; then echo 'HTTP 403' >&2; exit 1; fi
+    touch "$STATE/reporting_written"
+    [[ -f "$STATE/reporting_no_change" ]] || echo true > "$STATE/reporting_enabled"
+    if [[ -f "$STATE/reporting_readback_error" ]]; then echo 500 > "$STATE/reporting_get_error"; fi
+    exit 0;;
   "GET repos/acme/widget")
+    if [[ -f "$STATE/visibility_error" ]]; then echo "HTTP $(cat "$STATE/visibility_error")" >&2; exit 1; fi
+    if [[ -f "$STATE/visibility_body" ]]; then cat "$STATE/visibility_body"; exit 0; fi
+    private="$(cat "$STATE/private" 2>/dev/null || echo false)"
+    if [[ "$query" == .private && -f "$STATE/visibility_change" ]]; then private=true; echo true > "$STATE/private"; fi
     if [[ -f "$STATE/fail_repo" ]]; then echo "gh: Internal Server Error (HTTP 500)" >&2; exit 1; fi
     deleting="$(cat "$STATE/delete_branch_on_merge" 2>/dev/null || echo false)"
     self_merging="$(cat "$STATE/allow_auto_merge" 2>/dev/null || echo false)"
@@ -2929,11 +2946,12 @@ api)
     squash_message="null"
     [[ -f "$STATE/squash_merge_commit_message" ]] && squash_message="\"$(cat "$STATE/squash_merge_commit_message")\""
     if [[ "$query" == ".id" ]]; then echo 1
+    elif [[ "$query" == ".private" ]]; then echo "$private"
     elif [[ "$query" == ".delete_branch_on_merge" ]]; then echo "$deleting"
     elif [[ "$query" == ".allow_auto_merge" ]]; then echo "$self_merging"
     elif [[ "$query" == ".squash_merge_commit_title" ]]; then echo "${squash_title//\"/}"
     elif [[ "$query" == ".squash_merge_commit_message" ]]; then echo "${squash_message//\"/}"
-    else echo "{\"id\":1,\"default_branch\":\"$(cat "$STATE/default_branch")\",\"delete_branch_on_merge\":$deleting,\"allow_auto_merge\":$self_merging,\"squash_merge_commit_title\":$squash_title,\"squash_merge_commit_message\":$squash_message}"; fi;;
+    else echo "{\"private\":$private,\"id\":1,\"default_branch\":\"$(cat "$STATE/default_branch")\",\"delete_branch_on_merge\":$deleting,\"allow_auto_merge\":$self_merging,\"squash_merge_commit_title\":$squash_title,\"squash_merge_commit_message\":$squash_message}"; fi;;
   "PATCH repos/acme/widget")
     for f in "${fields[@]}"; do
       case "$f" in
@@ -3094,12 +3112,16 @@ api)
     done
     echo '{}';;
   "GET projects/"*)
+    if [[ -f "$STATE/issues_error" ]]; then echo "HTTP $(cat "$STATE/issues_error")" >&2; exit 1; fi
+    if [[ -f "$STATE/issues_body" ]]; then cat "$STATE/issues_body"; exit 0; fi
+    access="$(cat "$STATE/issues_access" 2>/dev/null || echo enabled)"
+    legacy="$(cat "$STATE/issues_legacy" 2>/dev/null || echo true)"
     removing="$(cat "$STATE/remove_source_branch" 2>/dev/null || echo false)"
     piped="$(cat "$STATE/pipeline_required" 2>/dev/null || echo false)"
     merging="$(cat "$STATE/merge_method" 2>/dev/null || echo merge)"
     squashing="$(cat "$STATE/squash_option" 2>/dev/null || echo never)"
     template="$(cat "$STATE/squash_commit_template" 2>/dev/null || echo)"
-    echo "{\"id\":1,\"default_branch\":\"$(cat "$STATE/default_branch")\",\"jobs_enabled\":true,\"only_allow_merge_if_pipeline_succeeds\":$piped,\"merge_method\":\"$merging\",\"squash_option\":\"$squashing\",\"remove_source_branch_after_merge\":$removing,\"squash_commit_template\":\"$template\"}";;
+    echo "{\"issues_access_level\":\"$access\",\"issues_enabled\":$legacy,\"id\":1,\"default_branch\":\"$(cat "$STATE/default_branch")\",\"jobs_enabled\":true,\"only_allow_merge_if_pipeline_succeeds\":$piped,\"merge_method\":\"$merging\",\"squash_option\":\"$squashing\",\"remove_source_branch_after_merge\":$removing,\"squash_commit_template\":\"$template\"}";;
   *) echo '{}';;
   esac
   exit 0;;
@@ -3400,6 +3422,12 @@ fn a_full_github_apply_lands_reasserts_and_checks_clean() {
     assert!(!fixture.state("branch_main").exists());
     assert!(!fixture.state("branch_develop").exists());
     assert!(fixture.state("installed").is_file());
+    assert_eq!(
+        std::fs::read_to_string(fixture.state("reporting_enabled"))
+            .unwrap()
+            .trim(),
+        "true"
+    );
     let rulesets = std::fs::read_to_string(fixture.state("rulesets.index")).expect("reads");
     assert_eq!(
         rulesets.lines().count(),
@@ -17470,4 +17498,804 @@ fn an_ssh_alias_clone_refuses_its_web_url_and_names_the_remedy() {
         .env("RK_MOCK_DIR", mock.path())
         .assert()
         .success();
+}
+
+const PRIVATE_REPORTING: &str = "private-vulnerability-reporting";
+
+fn reporting_apply(fixture: &ForgeFixture, forge: &str) -> Command {
+    let mut command = fixture.rk(&["setup", "step", PRIVATE_REPORTING]);
+    command.args(["--repo", "acme/widget", "--forge", forge, "--apply"]);
+    command
+}
+
+fn reporting_full_apply(fixture: &ForgeFixture) -> Command {
+    fixture.seed_gate();
+    let mut command = fixture.rk(&["setup"]);
+    command
+        .args([
+            "--repo",
+            "acme/widget",
+            "--forge",
+            "github",
+            "--apply",
+            "--required-check",
+            "test-check",
+        ])
+        .env("RK_BOT_APP_ID", "314159")
+        .env("RK_BOT_PRIVATE_KEY_FILE", fixture.key_file());
+    command
+}
+
+fn reporting_event(bytes: &[u8], expected: &str) {
+    let rows: Vec<serde_json::Value> = String::from_utf8_lossy(bytes)
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("NDJSON"))
+        .collect();
+    assert_eq!(rows[0]["schema"], "rk.events/1");
+    assert!(
+        rows.iter().any(|row| row["type"] == "step_finished"
+            && row["step"] == PRIVATE_REPORTING
+            && row["status"] == expected),
+        "{rows:?}"
+    );
+}
+
+#[test]
+fn private_reporting_github_enables_and_rechecks() {
+    let fixture = ForgeFixture::new();
+    let out = reporting_apply(&fixture, "github")
+        .arg("--json")
+        .assert()
+        .success();
+    reporting_event(&out.get_output().stdout, "applied");
+    assert_eq!(
+        fixture
+            .log()
+            .matches("api -X PUT repos/acme/widget/private-vulnerability-reporting")
+            .count(),
+        1
+    );
+    assert_eq!(fixture.log().lines().filter(|line| line.starts_with("api repos/acme/widget/private-vulnerability-reporting")).count(), 3);
+    assert_eq!(
+        std::fs::read_to_string(fixture.state("reporting_enabled"))
+            .unwrap()
+            .trim(),
+        "true"
+    );
+}
+
+#[test]
+fn private_reporting_github_rerun_does_not_write() {
+    let fixture = ForgeFixture::new();
+    fixture.seed("reporting_enabled", "true");
+    let out = reporting_apply(&fixture, "github")
+        .arg("--json")
+        .assert()
+        .success();
+    reporting_event(&out.get_output().stdout, "satisfied");
+    assert!(!fixture.log().contains("PUT"));
+    assert!(!fixture.latest_run().join("scripts").exists());
+}
+
+#[test]
+fn private_reporting_github_full_apply_includes_required_step() {
+    let fixture = ForgeFixture::new();
+    let out = reporting_full_apply(&fixture)
+        .arg("--json")
+        .assert()
+        .success();
+    reporting_event(&out.get_output().stdout, "applied");
+    let rows: Vec<serde_json::Value> = String::from_utf8_lossy(&out.get_output().stdout)
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let finished: Vec<_> = rows
+        .iter()
+        .filter(|row| row["type"] == "step_finished")
+        .collect();
+    assert_eq!(finished.last().unwrap()["step"], PRIVATE_REPORTING);
+    reporting_full_apply(&fixture).assert().success();
+    assert_eq!(
+        fixture
+            .log()
+            .matches("api -X PUT repos/acme/widget/private-vulnerability-reporting")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn private_reporting_github_private_skips_single_and_full() {
+    let fixture = ForgeFixture::new();
+    fixture.seed("private", "true");
+    reporting_apply(&fixture, "github")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "skipped private-vulnerability-reporting",
+        ));
+    assert!(!fixture.latest_run().join("scripts").exists());
+    for mut command in [
+        reporting_apply(&fixture, "github"),
+        reporting_full_apply(&fixture),
+    ] {
+        let out = command.arg("--json").assert().success();
+        reporting_event(&out.get_output().stdout, "skipped");
+        let run = fixture.latest_run();
+        let scripts = run.join("scripts");
+        if scripts.exists() {
+            assert!(!std::fs::read_dir(scripts).unwrap().any(|entry| {
+                entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .contains(PRIVATE_REPORTING)
+            }));
+        }
+        let journal = std::fs::read(run.join("events.jsonl")).unwrap();
+        reporting_event(&journal, "skipped");
+        let rows: Vec<serde_json::Value> = String::from_utf8_lossy(&journal)
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert!(rows.iter().any(|row| row["type"] == "step_finished"
+            && row["step"] == PRIVATE_REPORTING
+            && row["status"] == "skipped"
+            && row["exit_code"] == 0));
+    }
+    assert!(!fixture.log().contains("/private-vulnerability-reporting"));
+    assert!(
+        !fixture.log().contains("-q .private"),
+        "the guarded script never ran"
+    );
+}
+
+#[test]
+fn private_reporting_github_visibility_change_skips_postcheck() {
+    let fixture = ForgeFixture::new();
+    fixture.seed("visibility_change", "yes");
+    let out = reporting_apply(&fixture, "github")
+        .arg("--json")
+        .assert()
+        .success();
+    reporting_event(&out.get_output().stdout, "skipped");
+    assert!(!fixture.log().contains("PUT"));
+    assert_eq!(
+        fixture
+            .log()
+            .matches("/private-vulnerability-reporting")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn private_reporting_github_unknown_visibility_blocks_write() {
+    for body in [
+        "{}",
+        r#"{"private":"false"}"#,
+        r#"{"private":null}"#,
+        "bad json",
+    ] {
+        let fixture = ForgeFixture::new();
+        fixture.seed("visibility_body", body);
+        reporting_apply(&fixture, "github")
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("cannot observe"));
+        assert!(!fixture.log().contains("/private-vulnerability-reporting"));
+    }
+    for code in ["404", "403", "500"] {
+        let fixture = ForgeFixture::new();
+        fixture.seed("visibility_error", code);
+        reporting_apply(&fixture, "github").assert().failure();
+        assert!(!fixture.log().contains("/private-vulnerability-reporting"));
+    }
+}
+
+#[test]
+fn private_reporting_github_endpoint_failure_is_unknown() {
+    for code in ["404", "403", "422", "500"] {
+        let fixture = ForgeFixture::new();
+        fixture.seed("reporting_get_error", code);
+        reporting_apply(&fixture, "github")
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("cannot observe"));
+        assert!(!fixture.log().contains("PUT"));
+    }
+    for value in ["null", "\"true\"", "garbage"] {
+        let fixture = ForgeFixture::new();
+        fixture.seed("reporting_enabled", value);
+        reporting_apply(&fixture, "github").assert().failure();
+        assert!(!fixture.log().contains("PUT"));
+    }
+}
+
+#[test]
+fn private_reporting_github_write_and_readback_failures_fail() {
+    for mode in [
+        "reporting_put_error",
+        "reporting_readback_error",
+        "reporting_no_change",
+        "reporting_post_error",
+    ] {
+        let fixture = ForgeFixture::new();
+        fixture.seed(mode, "yes");
+        let out = reporting_apply(&fixture, "github")
+            .arg("--json")
+            .assert()
+            .failure();
+        assert!(
+            !String::from_utf8_lossy(&out.get_output().stdout).contains("\"status\":\"applied\"")
+        );
+        assert_eq!(
+            fixture
+                .log()
+                .matches("api -X PUT repos/acme/widget/private-vulnerability-reporting")
+                .count(),
+            1
+        );
+    }
+}
+
+#[test]
+fn private_reporting_gitlab_enabled_names_limitation() {
+    let fixture = ForgeFixture::new();
+    reporting_apply(&fixture, "gitlab")
+        .assert()
+        .success()
+        .stderr(
+            predicate::str::contains("reporter must enable confidentiality")
+                .and(predicate::str::contains("every external reporter")),
+        );
+    assert!(!fixture.log().contains("-X"));
+    assert!(!fixture.latest_run().join("scripts").exists());
+    let out = fixture
+        .rk(&["setup", "check"])
+        .args(["--repo", "acme/widget", "--forge", "gitlab"])
+        .assert()
+        .failure();
+    assert!(
+        String::from_utf8_lossy(&out.get_output().stdout)
+            .contains("reporter must enable confidentiality")
+    );
+}
+
+#[test]
+fn private_reporting_gitlab_disabled_and_restricted_fail() {
+    for access in ["disabled", "private"] {
+        let fixture = ForgeFixture::new();
+        fixture.seed("issues_access", access);
+        reporting_apply(&fixture, "gitlab").assert().failure();
+        assert!(!fixture.log().contains("-X"));
+    }
+}
+
+#[test]
+fn private_reporting_gitlab_unknown_is_not_success() {
+    for body in [
+        "{}",
+        "bad json",
+        r#"{"issues_access_level":null}"#,
+        r#"{"issues_access_level":true}"#,
+        r#"{"issues_access_level":"other"}"#,
+        r#"{"issues_access_level":"enabled","issues_enabled":"true"}"#,
+    ] {
+        let fixture = ForgeFixture::new();
+        fixture.seed("issues_body", body);
+        reporting_apply(&fixture, "gitlab")
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("cannot observe"));
+        assert!(!fixture.log().contains("-X"));
+    }
+}
+
+fn reporting_observation(
+    forge: release_kit::detect::Forge,
+    responses: &[(i32, &str)],
+    expected: &str,
+) {
+    use release_kit::setup::{
+        context::Ctx,
+        observe::{StepState, observe},
+        process::Outcome,
+    };
+    let ctx = Ctx {
+        target: ".".into(),
+        repo: "acme/group/widget".into(),
+        forge,
+        host: None,
+        required_check: None,
+        cli: "fake-forge".into(),
+        tech: Some("bash"),
+    };
+    let mut calls = Vec::new();
+    let mut answers = responses.iter();
+    let state = observe(&ctx, PRIVATE_REPORTING, &mut |exec| {
+        calls.push(
+            exec.args
+                .iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect::<Vec<_>>(),
+        );
+        let (code, body) = answers.next().expect("no unexpected read");
+        Ok(Outcome {
+            exit_code: *code,
+            stdout: body.as_bytes().to_vec(),
+            stderr: if *code == 0 {
+                Vec::new()
+            } else {
+                body.as_bytes().to_vec()
+            },
+        })
+    })
+    .unwrap();
+    assert!(answers.next().is_none());
+    let actual = match state {
+        StepState::Satisfied { limitation, .. } => {
+            assert_eq!(
+                limitation.is_some(),
+                forge == release_kit::detect::Forge::Gitlab
+            );
+            "satisfied"
+        }
+        StepState::Unsatisfied { .. } => "unsatisfied",
+        StepState::Inapplicable { .. } => "skipped",
+        StepState::Unknown { .. } => "unknown",
+    };
+    assert_eq!(actual, expected, "{responses:?}");
+    let root = if forge == release_kit::detect::Forge::Github {
+        "repos/acme/group/widget"
+    } else {
+        "projects/acme%2Fgroup%2Fwidget"
+    };
+    assert_eq!(calls[0], ["api", root]);
+    if calls.len() == 2 {
+        assert_eq!(calls[1], ["api", &format!("{root}/{PRIVATE_REPORTING}")]);
+    }
+}
+
+#[test]
+fn private_reporting_observer_matrix() {
+    use release_kit::detect::Forge::{Github, Gitlab};
+    for (body, state) in [
+        (r#"{"private":true}"#, "skipped"),
+        ("{}", "unknown"),
+        (r#"{"private":null}"#, "unknown"),
+        (r#"{"private":"false"}"#, "unknown"),
+        ("bad json", "unknown"),
+    ] {
+        reporting_observation(Github, &[(0, body)], state);
+    }
+    for (body, state) in [
+        (r#"{"enabled":true}"#, "satisfied"),
+        (r#"{"enabled":false}"#, "unsatisfied"),
+        ("{}", "unknown"),
+        (r#"{"enabled":"true"}"#, "unknown"),
+        (r#"{"enabled":null}"#, "unknown"),
+        ("bad", "unknown"),
+    ] {
+        reporting_observation(Github, &[(0, r#"{"private":false}"#), (0, body)], state);
+    }
+    for code in ["HTTP 404", "HTTP 403", "HTTP 422", "HTTP 500"] {
+        reporting_observation(Github, &[(1, code)], "unknown");
+        reporting_observation(Github, &[(0, r#"{"private":false}"#), (1, code)], "unknown");
+        reporting_observation(Gitlab, &[(1, code)], "unknown");
+    }
+    for (body, state) in [
+        (r#"{"issues_access_level":"enabled"}"#, "satisfied"),
+        (r#"{"issues_access_level":"private"}"#, "unsatisfied"),
+        (r#"{"issues_access_level":"disabled"}"#, "unsatisfied"),
+        (
+            r#"{"issues_access_level":"enabled","issues_enabled":false}"#,
+            "unsatisfied",
+        ),
+        (
+            r#"{"issues_access_level":"enabled","issues_enabled":null}"#,
+            "unknown",
+        ),
+        (
+            r#"{"issues_access_level":"enabled","issues_enabled":"true"}"#,
+            "unknown",
+        ),
+        ("{}", "unknown"),
+        (r#"{"issues_access_level":true}"#, "unknown"),
+        (r#"{"issues_access_level":"other"}"#, "unknown"),
+        ("bad json", "unknown"),
+    ] {
+        reporting_observation(Gitlab, &[(0, body)], state);
+    }
+    for visibility in ["private", "internal", "public"] {
+        reporting_observation(
+            Gitlab,
+            &[(
+                0,
+                &format!(
+                    r#"{{"issues_access_level":"enabled","issues_enabled":true,"visibility":"{visibility}"}}"#
+                ),
+            )],
+            "satisfied",
+        );
+    }
+}
+
+#[test]
+fn private_reporting_check_is_read_only_and_reports_step_state() {
+    for (key, value, status) in [
+        ("private", "true", "skipped"),
+        ("reporting_enabled", "true", "satisfied"),
+        ("reporting_enabled", "false", "unsatisfied"),
+        ("visibility_body", "{}", "unknown"),
+    ] {
+        let fixture = ForgeFixture::new();
+        fixture.seed(key, value);
+        let out = fixture
+            .rk(&["setup", "check"])
+            .args(["--repo", "acme/widget", "--forge", "github", "--json"])
+            .assert()
+            .failure();
+        reporting_event(&out.get_output().stdout, status);
+        assert!(!fixture.log().contains("-X"));
+    }
+}
+
+fn reporting_script(fixture: &ForgeFixture, forge: &str, repo: &str) -> std::process::Output {
+    // Only the mocks and the utilities they need are on this PATH; this
+    // also works on hosts whose tools live outside the traditional dirs.
+    for name in ["sh", "bash", "cat", "env", "touch", "sed", "tr"] {
+        let destination = fixture.mock.path().join(name);
+        if !destination.exists() {
+            let source = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+                .map(|dir| dir.join(name))
+                .find(|path| path.is_file())
+                .expect("utility on PATH");
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(source, destination).unwrap();
+            #[cfg(not(unix))]
+            std::fs::copy(source, destination).unwrap();
+        }
+    }
+    std::process::Command::new("sh")
+        .arg(repo_path(&format!("setup/{forge}/{PRIVATE_REPORTING}")))
+        .env_clear()
+        .env("PATH", fixture.mock.path())
+        .env("RK_REPO", repo)
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn private_reporting_shell_branches_and_failures() {
+    for (key, value, success, puts) in [
+        ("private", "false", true, 1),
+        ("private", "true", true, 0),
+        ("private", "null", false, 0),
+        ("visibility_error", "403", false, 0),
+        ("reporting_put_error", "yes", false, 1),
+        ("reporting_no_change", "yes", false, 1),
+        ("reporting_readback_error", "yes", false, 1),
+    ] {
+        let fixture = ForgeFixture::new();
+        fixture.seed(key, value);
+        let output = reporting_script(&fixture, "github", "acme/widget");
+        assert_eq!(output.status.success(), success, "{key}: {output:?}");
+        assert_eq!(fixture.log().matches("-X PUT").count(), puts);
+        if puts == 0 {
+            assert!(!fixture.log().contains("/private-vulnerability-reporting"));
+        }
+    }
+    for (body, success) in [
+        (r#"{"issues_access_level":"enabled"}"#, true),
+        (
+            "{\n  \"issues_access_level\": \"enabled\",\n  \"issues_enabled\": true\n}",
+            true,
+        ),
+        (r#"{"issues_access_level":"private"}"#, false),
+        (r#"{"issues_access_level":"disabled"}"#, false),
+        (
+            r#"{"issues_access_level":"enabled","issues_enabled":false}"#,
+            false,
+        ),
+        (
+            r#"{"issues_access_level":"enabled","issues_enabled":"true"}"#,
+            false,
+        ),
+        (r#"{"issues_access_level":null}"#, false),
+        ("{}", false),
+    ] {
+        let fixture = ForgeFixture::new();
+        fixture.seed("issues_body", body);
+        let output = reporting_script(&fixture, "gitlab", "acme/group/widget");
+        assert_eq!(output.status.success(), success, "{body}: {output:?}");
+        assert_eq!(fixture.log(), "api projects/acme%2Fgroup%2Fwidget\n");
+    }
+    let fixture = ForgeFixture::new();
+    fixture.seed("issues_error", "500");
+    assert!(
+        !reporting_script(&fixture, "gitlab", "acme/group/widget")
+            .status
+            .success()
+    );
+    assert_eq!(fixture.log(), "api projects/acme%2Fgroup%2Fwidget\n");
+}
+
+#[test]
+fn private_reporting_gitlab_subgroup_path_is_encoded() {
+    reporting_observation(
+        release_kit::detect::Forge::Gitlab,
+        &[(0, r#"{"issues_access_level":"enabled"}"#)],
+        "satisfied",
+    );
+    let fixture = ForgeFixture::new();
+    assert!(
+        reporting_script(&fixture, "gitlab", "acme/group/widget")
+            .status
+            .success()
+    );
+    assert_eq!(fixture.log(), "api projects/acme%2Fgroup%2Fwidget\n");
+}
+
+fn reporting_tree(target: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+    fn visit(root: &Path, dir: &Path, files: &mut std::collections::BTreeMap<PathBuf, Vec<u8>>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                visit(root, &path, files);
+            } else {
+                files.insert(
+                    path.strip_prefix(root).unwrap().to_owned(),
+                    std::fs::read(path).unwrap(),
+                );
+            }
+        }
+    }
+    let mut files = std::collections::BTreeMap::new();
+    visit(target, target, &mut files);
+    files
+}
+
+fn reporting_old_record(target: &Path) {
+    let mut manifest = read_manifest(target);
+    manifest["files"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|entry| entry["destination"] != "SECURITY.md");
+    write_manifest(target, &manifest);
+    std::fs::remove_file(target.join("SECURITY.md")).unwrap();
+}
+
+fn reporting_resolve_seeds(target: &Path) {
+    for file in read_manifest(target)["files"].as_array().unwrap() {
+        if file["kind"] == "seeded" {
+            let path = target.join(file["destination"].as_str().unwrap());
+            let body = std::fs::read_to_string(&path).unwrap();
+            std::fs::write(
+                path,
+                body.lines()
+                    .filter(|line| !line.contains("TODO(release-kit)"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+                    + "\n",
+            )
+            .unwrap();
+        }
+    }
+}
+
+#[test]
+fn private_reporting_policy_lands_in_every_supported_pair() {
+    for (tech, forge) in [
+        ("rust", "github"),
+        ("python", "github"),
+        ("bash", "github"),
+        ("rust", "gitlab"),
+        ("bash", "gitlab"),
+    ] {
+        let target = tempfile::tempdir().unwrap();
+        let repo = if forge == "gitlab" {
+            "acme/group/widget"
+        } else {
+            "acme/widget"
+        };
+        let mut preview = rk();
+        preview
+            .args([
+                "init", "--tech", tech, "--forge", forge, "--repo", repo, "--target",
+            ])
+            .arg(target.path());
+        preview
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("SECURITY.md"));
+        assert!(reporting_tree(target.path()).is_empty());
+        preview.arg("--apply").assert().success();
+        let manifest = read_manifest(target.path());
+        let file = manifest_file(&manifest, "SECURITY.md");
+        let baseline =
+            std::fs::read(repo_path(&format!("snippets/_shared/{forge}/SECURITY.md"))).unwrap();
+        let bytes = std::fs::read(target.path().join("SECURITY.md")).unwrap();
+        assert_eq!(
+            bytes,
+            release_kit::landing::render(&baseline, repo, Some(release_kit::landing::Style::Trunk))
+        );
+        assert_eq!(file["kind"], "rendered");
+        assert_eq!(file["baseline_sha256"], Digest::of(&baseline).to_string());
+        assert_eq!(file["sha256"], Digest::of(&bytes).to_string());
+        assert_eq!(manifest["parameters"]["repo"], repo);
+        assert_eq!(
+            manifest["files"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|file| file["destination"] == "SECURITY.md")
+                .count(),
+            1
+        );
+        let body = String::from_utf8(bytes).unwrap();
+        assert!(body.contains(repo));
+        assert!(!body.contains("RK_REPO") && !body.contains("TODO(release-kit)"));
+        if forge == "github" {
+            assert!(body.contains("https://github.com/acme/widget/security/advisories/new"));
+        } else {
+            assert!(!body.contains("https://gitlab.com") && !body.contains("](/"));
+        }
+        assert!(!target.path().join("setup").exists());
+    }
+}
+
+#[test]
+fn private_reporting_policy_upgrade_adds_missing_destination() {
+    let target = tempfile::tempdir().unwrap();
+    land_rust(target.path()).success();
+    reporting_resolve_seeds(target.path());
+    reporting_old_record(target.path());
+    let before = reporting_tree(target.path());
+    rk().args(["upgrade", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("SECURITY.md"));
+    assert_eq!(reporting_tree(target.path()), before);
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    assert_eq!(
+        manifest_file(&read_manifest(target.path()), "SECURITY.md")["kind"],
+        "rendered"
+    );
+    let policy = std::fs::read(target.path().join("SECURITY.md")).unwrap();
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    assert_eq!(
+        std::fs::read(target.path().join("SECURITY.md")).unwrap(),
+        policy
+    );
+    rk().args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+}
+
+#[test]
+fn private_reporting_policy_conflicts_are_atomic() {
+    for upgrade in [false, true] {
+        let target = tempfile::tempdir().unwrap();
+        if upgrade {
+            land_rust(target.path()).success();
+            reporting_old_record(target.path());
+        }
+        std::fs::write(target.path().join("SECURITY.md"), "A custom policy\n").unwrap();
+        let before = reporting_tree(target.path());
+        if upgrade {
+            rk().args(["upgrade", "--apply", "--target"])
+                .arg(target.path())
+                .assert()
+                .code(73)
+                .stderr(predicate::str::contains("SECURITY.md"));
+        } else {
+            land_rust(target.path())
+                .code(73)
+                .stderr(predicate::str::contains("SECURITY.md"));
+        }
+        assert_eq!(reporting_tree(target.path()), before);
+    }
+}
+
+#[test]
+fn private_reporting_policy_owned_drift_is_preserved() {
+    let target = tempfile::tempdir().unwrap();
+    land_rust(target.path()).success();
+    reporting_resolve_seeds(target.path());
+    let path = target.path().join("SECURITY.md");
+    let body = std::fs::read_to_string(&path).unwrap() + "\nA target-specific commitment.\n";
+    std::fs::write(path, body).unwrap();
+    let before = reporting_tree(target.path());
+    rk().args(["status", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("SECURITY.md"));
+    rk().args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .failure();
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("SECURITY.md"));
+    assert_eq!(reporting_tree(target.path()), before);
+}
+
+#[test]
+fn private_reporting_policy_adoption_and_parameter_replay() {
+    for mode in ["matching", "missing", "edited"] {
+        let target = tempfile::tempdir().unwrap();
+        land_rust(target.path()).success();
+        std::fs::remove_dir_all(target.path().join(".release-kit")).unwrap();
+        if mode == "missing" {
+            std::fs::remove_file(target.path().join("SECURITY.md")).unwrap();
+        }
+        if mode == "edited" {
+            std::fs::write(target.path().join("SECURITY.md"), "Custom policy\n").unwrap();
+        }
+        let before = reporting_tree(target.path());
+        let out = rk()
+            .args([
+                "adopt",
+                "--tech",
+                "rust",
+                "--forge",
+                "github",
+                "--repo",
+                "acme/widget",
+                "--workflow",
+                "worktree",
+                "--style",
+                "trunk",
+                "--apply",
+                "--target",
+            ])
+            .arg(target.path())
+            .assert();
+        if mode == "matching" {
+            out.success();
+            let manifest = read_manifest(target.path());
+            assert_eq!(manifest["schema_version"], 5);
+            assert_eq!(manifest_file(&manifest, "SECURITY.md")["kind"], "rendered");
+            assert_eq!(
+                std::fs::read(target.path().join("SECURITY.md")).unwrap(),
+                before[Path::new("SECURITY.md")]
+            );
+        } else {
+            out.code(73).stderr(predicate::str::contains("SECURITY.md"));
+            assert_eq!(reporting_tree(target.path()), before);
+        }
+    }
+    let target = tempfile::tempdir().unwrap();
+    land_rust(target.path()).success();
+    let mut manifest = read_manifest(target.path());
+    manifest["parameters"]["repo"] = "acme/renamed".into();
+    write_manifest(target.path(), &manifest);
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let manifest = read_manifest(target.path());
+    let baseline = std::fs::read(repo_path("snippets/_shared/github/SECURITY.md")).unwrap();
+    assert_eq!(
+        std::fs::read(target.path().join("SECURITY.md")).unwrap(),
+        release_kit::landing::render(
+            &baseline,
+            manifest["parameters"]["repo"].as_str().unwrap(),
+            Some(release_kit::landing::Style::Trunk)
+        )
+    );
+    assert_eq!(manifest["schema_version"], 5);
+    assert_eq!(manifest["parameters"]["style"], "trunk");
 }

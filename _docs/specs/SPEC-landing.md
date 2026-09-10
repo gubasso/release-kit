@@ -66,8 +66,8 @@ A `rendered` file's landed bytes MUST be a deterministic function of the payload
 #### Scenario: The owner substitutes from the repo parameter
 
 - GIVEN a landing run with `--repo acme/widget`
-- WHEN the workflow file lands
-- THEN no `OWNER` token survives in it, the owner reads `acme`, and the record's `parameters.repo` carries `acme/widget` whole
+- WHEN a workflow and `SECURITY.md` land
+- THEN owner and full-path tokens resolve from the same recorded `parameters.repo`: the owner reads `acme`, the policy path reads `acme/widget`, and neither token survives
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 

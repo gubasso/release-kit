@@ -28,6 +28,8 @@ pub const TRUNK_CANDIDATES: [&str; 2] = ["main", "develop"];
 /// `pr-title.yml` that holds the squash title to the commit convention.
 pub const TITLE_CHECK: &str = "pr-title";
 
+const GITLAB_PRIVATE_REPORTING_LIMITATION: &str = "GitLab has no project-level private reporting switch; the reporter must enable confidentiality; this proves project feature access, not successful submission by every external reporter";
+
 /// What one observation found.
 #[derive(Debug)]
 pub enum StepState {
@@ -44,9 +46,8 @@ pub enum StepState {
         /// What was found instead.
         detail: String,
     },
-    /// An optional step's condition does not hold: nothing is wrong, and
-    /// nothing is proven — `check` reports it as skipped, while an explicit
-    /// single-step apply still runs it.
+    /// Eligibility or an optional step's condition does not hold: nothing
+    /// is proven, and `check` reports it as skipped.
     Inapplicable {
         /// Why the step does not apply here.
         detail: String,
@@ -417,6 +418,45 @@ fn last_line(bytes: &[u8]) -> String {
 fn github(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError> {
     let repo = &ctx.repo;
     match step {
+        "private-vulnerability-reporting" => {
+            let visibility_path = format!("repos/{repo}");
+            match api_get(ctx, run, &visibility_path)? {
+                Api::Ok(body) => match body["private"].as_bool() {
+                    Some(true) => {
+                        return Ok(StepState::inapplicable(
+                            "private vulnerability reporting is available for public repositories",
+                        ));
+                    }
+                    Some(false) => {}
+                    None => {
+                        return Ok(StepState::unknown(format!(
+                            "{visibility_path}: repository visibility is unreadable"
+                        )));
+                    }
+                },
+                Api::Missing => {
+                    return Ok(StepState::unknown(format!(
+                        "{visibility_path}: repository visibility is unreadable (404)"
+                    )));
+                }
+                Api::Failed(err) => {
+                    return Ok(StepState::unknown(format!("{visibility_path}: {err}")));
+                }
+            }
+            let path = format!("repos/{repo}/private-vulnerability-reporting");
+            Ok(match api_get(ctx, run, &path)? {
+                Api::Ok(body) => match body["enabled"].as_bool() {
+                    Some(true) => StepState::ok("private vulnerability reporting is enabled"),
+                    Some(false) => StepState::not("private vulnerability reporting is disabled"),
+                    None => StepState::unknown(format!("{path}: enabled is unreadable")),
+                },
+                Api::Missing => {
+                    StepState::unknown(format!("{path}: reporting state is unreadable (404)"))
+                }
+                Api::Failed(err) => StepState::unknown(format!("{path}: {err}")),
+            })
+        }
+
         "default-branch" => Ok(match api_get(ctx, run, &format!("repos/{repo}"))? {
             Api::Ok(body) => {
                 let found = body["default_branch"].as_str().unwrap_or("");
@@ -953,6 +993,36 @@ const GITLAB_TITLE_LIMITATION: &str = "the title gate stops accident, not author
 fn gitlab(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError> {
     let project = ctx.repo.replace('/', "%2F");
     match step {
+        "private-vulnerability-reporting" => {
+            let path = format!("projects/{project}");
+            Ok(match api_get(ctx, run, &path)? {
+                Api::Ok(body) => {
+                    let access = body["issues_access_level"].as_str();
+                    if !matches!(access, Some("enabled" | "private" | "disabled")) {
+                        StepState::unknown("issue intake access is unreadable")
+                    } else if body
+                        .get("issues_enabled")
+                        .is_some_and(|flag| !flag.is_boolean())
+                    {
+                        StepState::unknown("legacy issue intake flag is unreadable")
+                    } else if body["issues_enabled"] == false || access == Some("disabled") {
+                        StepState::not("issue intake is disabled; see setup guide step 3g")
+                    } else if access == Some("private") {
+                        StepState::not("issue intake is restricted; see setup guide step 3g")
+                    } else {
+                        StepState::ok_with_limitation(
+                            "issue intake is enabled",
+                            GITLAB_PRIVATE_REPORTING_LIMITATION,
+                        )
+                    }
+                }
+                Api::Missing => {
+                    StepState::unknown(format!("{path}: issue intake is unreadable (404)"))
+                }
+                Api::Failed(err) => StepState::unknown(format!("{path}: {err}")),
+            })
+        }
+
         "default-branch" => Ok(match api_get(ctx, run, &format!("projects/{project}"))? {
             Api::Ok(body) => {
                 let found = body["default_branch"].as_str().unwrap_or("");
