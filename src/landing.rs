@@ -33,6 +33,36 @@ pub struct Params {
     nix: bool,
 }
 
+/// Explicit invocation answers; absence falls through to configuration.
+#[derive(Default)]
+pub struct Inputs<'a> {
+    /// Binding override.
+    pub tech: Option<&'a str>,
+    /// Forge override.
+    pub forge: Option<&'a str>,
+    /// Repository override.
+    pub repo: Option<&'a str>,
+    /// Workflow override.
+    pub workflow: Option<Workflow>,
+    /// Release style override.
+    pub style: Option<Style>,
+    /// Nix capability override.
+    pub nix: Option<bool>,
+}
+
+/// Compatibility policy for a landing candidate.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Purpose {
+    /// A first landing.
+    Init,
+    /// A preview may leave the repository unresolved.
+    Preview,
+    /// An existing record supplies compatibility answers.
+    Upgrade,
+    /// A pre-record target requires an explicit release style.
+    Adopt,
+}
+
 impl Params {
     /// Reconstruct every projection parameter from the record alone,
     /// including the compatibility defaults applied when it was loaded.
@@ -48,29 +78,101 @@ impl Params {
         }
     }
 
-    /// Resolve a landing candidate from the selected technology, the
-    /// detection result with forge and repository overrides applied, and
-    /// the invocation's workflow, style, and Nix choices. A preview may
-    /// supply the owner placeholder where its repository is unresolved.
+    /// Resolve flags, configuration, recorded compatibility inputs or detection,
+    /// and finally the compiled defaults. Comparisons use `from_record` alone.
     ///
     /// # Errors
-    ///
-    /// Returns [`RkError::Missing`] where no repository was resolved.
+    /// Refuses unresolved identity or a style an existing target has not answered.
     pub fn resolve(
-        tech: &str,
-        resolved: &Resolved,
-        workflow: Workflow,
-        style: Option<Style>,
-        nix: bool,
+        target: &Utf8Path,
+        flags: &Inputs<'_>,
+        config: Option<&crate::config::Config>,
+        record: Option<&manifest::Manifest>,
+        purpose: Purpose,
     ) -> Result<Self, RkError> {
+        let answer = |flag: Option<&str>, configured: Option<&str>, recorded: Option<&str>| {
+            flag.or_else(|| configured.filter(|value| !value.is_empty()))
+                .or(recorded)
+                .map(str::to_owned)
+        };
+        let forge = answer(
+            flags.forge,
+            config.map(|c| c.project.forge.as_str()),
+            record.map(|r| r.forge.as_str()),
+        );
+        let repo = answer(
+            flags.repo,
+            config.map(|c| c.project.repo.as_str()),
+            record.map(|r| r.parameters.repo.as_str()),
+        );
+        let resolved = resolve(target, forge.as_deref(), repo.as_deref())?;
+        let tech = answer(
+            flags.tech,
+            config.map(|c| c.project.tech.as_str()),
+            record.map(|r| r.tech.as_str()),
+        )
+        .or_else(|| crate::detect::tech_of(target.as_std_path()).map(str::to_owned))
+        .ok_or_else(|| {
+            RkError::missing(
+                Diagnostic::new(
+                    Reason::TargetNotFound,
+                    "no technology detected: the target has no version file",
+                )
+                .action("pass --tech <rust|python|bash>"),
+            )
+        })?;
+        pair_files(&tech, &resolved.forge)?;
+        let workflow = flags
+            .workflow
+            .or_else(|| config.and_then(|c| c.landing.workflow))
+            .or_else(|| record.map(|r| r.parameters.workflow))
+            .unwrap_or(if purpose == Purpose::Adopt {
+                Workflow::Branches
+            } else {
+                Workflow::Worktree
+            });
+        let style = flags
+            .style
+            .or_else(|| config.and_then(|c| c.landing.style))
+            .or_else(|| record.and_then(|r| r.parameters.style));
+        let style = match (style, purpose) {
+            (None, Purpose::Upgrade | Purpose::Adopt) => return Err(RkError::Usage("the target carries no style parameter; set landing.style in .release-kit/config.toml or pass --style <trunk|lines>".into())),
+            (value, _) => Some(value.unwrap_or(Style::Trunk)),
+        };
+        let repo = resolved
+            .repo
+            .or_else(|| (purpose == Purpose::Preview).then(|| "OWNER".to_owned()))
+            .ok_or_else(repo_unresolved)?;
         Ok(Self {
-            tech: tech.to_owned(),
-            forge: resolved.forge.clone(),
-            repo: resolved.repo.clone().ok_or_else(repo_unresolved)?,
+            tech,
+            forge: resolved.forge,
+            repo,
             workflow,
             style,
-            nix,
+            nix: flags
+                .nix
+                .or_else(|| config.and_then(|c| c.landing.nix))
+                .or_else(|| record.map(|r| r.parameters.nix))
+                .unwrap_or(false),
         })
+    }
+
+    /// The binding selected for this landing.
+    #[must_use]
+    pub fn tech(&self) -> &str {
+        &self.tech
+    }
+
+    /// The forge selected for this landing.
+    #[must_use]
+    pub fn forge(&self) -> &str {
+        &self.forge
+    }
+
+    /// Whether this landing opted into Nix.
+    #[must_use]
+    pub const fn nix(&self) -> bool {
+        self.nix
     }
 
     /// The project path used by parameter-bearing blocks.
@@ -1262,13 +1364,36 @@ mod tests {
         }
     }
 
+    fn resolved_test_params(
+        tech: &str,
+        resolved: &super::Resolved,
+        workflow: Workflow,
+        style: Option<Style>,
+        nix: bool,
+    ) -> Result<super::Params, crate::error::RkError> {
+        super::Params::resolve(
+            camino::Utf8Path::new("."),
+            &super::Inputs {
+                tech: Some(tech),
+                forge: Some(&resolved.forge),
+                repo: resolved.repo.as_deref(),
+                workflow: Some(workflow),
+                style,
+                nix: Some(nix),
+            },
+            None,
+            None,
+            super::Purpose::Init,
+        )
+    }
+
     /// A rendered projection carries no unsubstituted token and no
     /// mechanical sentinel; the one judgment sentinel stays in its seeded
     /// file.
     #[test]
     fn a_projection_renders_owned_files_and_keeps_seeded_judgment() {
         let entries = projection(
-            &super::Params::resolve(
+            &resolved_test_params(
                 "rust",
                 &super::Resolved {
                     forge: "github".to_owned(),
@@ -1329,7 +1454,7 @@ mod tests {
         use super::NIX_DESTINATIONS;
         let paths = |nix: bool, forge: &str| -> Vec<String> {
             projection(
-                &super::Params::resolve(
+                &resolved_test_params(
                     "rust",
                     &super::Resolved {
                         forge: forge.to_owned(),
@@ -1366,7 +1491,7 @@ mod tests {
                 .any(|destination| destination.contains("nix.yml"))
         );
         let bash = projection(
-            &super::Params::resolve(
+            &resolved_test_params(
                 "bash",
                 &super::Resolved {
                     forge: "github".to_owned(),
@@ -1415,7 +1540,7 @@ mod tests {
         let target = camino::Utf8Path::from_path(dir.path()).expect("utf-8 path");
         let entries = || {
             projection(
-                &super::Params::resolve(
+                &resolved_test_params(
                     "rust",
                     &super::Resolved {
                         forge: "github".to_owned(),

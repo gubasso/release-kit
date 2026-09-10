@@ -73,25 +73,15 @@ impl Default for Project {
 }
 
 /// The `landing` table.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Landing {
     /// P: worktree or branches.
-    pub workflow: Workflow,
+    pub workflow: Option<Workflow>,
     /// P: trunk or lines.
-    pub style: Style,
+    pub style: Option<Style>,
     /// P: opt-in Nix capability.
-    pub nix: bool,
-}
-
-impl Default for Landing {
-    fn default() -> Self {
-        Self {
-            workflow: Workflow::Worktree,
-            style: Style::Trunk,
-            nix: false,
-        }
-    }
+    pub nix: Option<bool>,
 }
 
 /// The `security` table.
@@ -377,13 +367,30 @@ fn render(config: &Config) -> Result<Vec<u8>, RkError> {
         ),
         (
             "RK_CONFIG_LANDING_WORKFLOW",
-            config.landing.workflow.as_str().into(),
+            config
+                .landing
+                .workflow
+                .ok_or_else(|| invalid("landing.workflow is unresolved"))?
+                .as_str()
+                .into(),
         ),
         (
             "RK_CONFIG_LANDING_STYLE",
-            config.landing.style.as_str().into(),
+            config
+                .landing
+                .style
+                .ok_or_else(|| invalid("landing.style is unresolved"))?
+                .as_str()
+                .into(),
         ),
-        ("RK_CONFIG_LANDING_NIX", config.landing.nix.into()),
+        (
+            "RK_CONFIG_LANDING_NIX",
+            config
+                .landing
+                .nix
+                .ok_or_else(|| invalid("landing.nix is unresolved"))?
+                .into(),
+        ),
         (
             "RK_CONFIG_SECURITY_ADVISORIES",
             config.security.advisories.clone().into(),
@@ -532,7 +539,15 @@ fn protection_fields(protection: &Protection) -> Vec<(&'static str, toml_edit::V
 ///
 /// # Errors
 /// Refuses an invalid key, invalid resulting content, or unreadable file; writes atomically.
-pub fn rewrite_key(target: &Path, key: &str, mut value: toml_edit::Value) -> Result<(), RkError> {
+pub fn rewrite_key(target: &Path, key: &str, value: toml_edit::Value) -> Result<(), RkError> {
+    let path = target.join(CONFIG_PATH);
+    let text = std::fs::read_to_string(&path)?;
+    let next = rewrite_text(&text, key, value)?;
+    crate::atomic::write(&path, next.as_bytes())?;
+    Ok(())
+}
+
+fn rewrite_text(text: &str, key: &str, mut value: toml_edit::Value) -> Result<String, RkError> {
     if ![
         "project.repo",
         "project.forge",
@@ -545,9 +560,7 @@ pub fn rewrite_key(target: &Path, key: &str, mut value: toml_edit::Value) -> Res
     {
         return Err(invalid(format!("{key} is not a landing parameter")));
     }
-    let path = target.join(CONFIG_PATH);
-    let text = std::fs::read_to_string(&path)?;
-    parse(&text)?;
+    parse(text)?;
     let mut document = text
         .parse::<toml_edit::DocumentMut>()
         .map_err(|error| invalid(error.to_string()))?;
@@ -556,13 +569,132 @@ pub fn rewrite_key(target: &Path, key: &str, mut value: toml_edit::Value) -> Res
         item = &mut item[segment];
     }
     if let Some(old) = item.as_value() {
+        if old
+            .as_str()
+            .zip(value.as_str())
+            .is_some_and(|(old, new)| old == new)
+            || old
+                .as_bool()
+                .zip(value.as_bool())
+                .is_some_and(|(old, new)| old == new)
+        {
+            return Ok(text.to_owned());
+        }
         *value.decor_mut() = old.decor().clone();
     }
     *item = toml_edit::Item::Value(value);
     let next = document.to_string();
     parse(&next)?;
-    crate::atomic::write(&path, next.as_bytes())?;
-    Ok(())
+    Ok(next)
+}
+
+/// Resolved landing input, including every key a preview would write.
+#[derive(Debug, serde::Serialize)]
+pub struct Plan {
+    /// Added or updated configuration.
+    pub action: &'static str,
+    /// Keys whose configured answers differ from the record.
+    pub changes: Vec<String>,
+    /// The exact authored TOML the apply writes.
+    pub content: String,
+}
+
+impl Plan {
+    /// Resolve the output without writing it; existing comments survive.
+    ///
+    /// # Errors
+    /// Propagates unreadable or invalid configuration.
+    pub fn new(
+        target: &Path,
+        params: &crate::landing::Params,
+        existing: Option<&Config>,
+        record: Option<&crate::landing::manifest::Manifest>,
+    ) -> Result<Self, RkError> {
+        let mut resolved = existing.cloned().unwrap_or_default();
+        resolved.project.tech = params.tech().into();
+        resolved.project.forge = params.forge().into();
+        resolved.project.repo = params.repo().into();
+        resolved.landing = Landing {
+            workflow: Some(params.workflow()),
+            style: params.style(),
+            nix: Some(params.nix()),
+        };
+        let content = if existing.is_some() {
+            let mut text = std::fs::read_to_string(target.join(CONFIG_PATH))?;
+            for (key, value) in parameter_values(&resolved) {
+                text = rewrite_text(&text, key, value)?;
+            }
+            text
+        } else {
+            String::from_utf8(render(&resolved)?).map_err(|e| invalid(e.to_string()))?
+        };
+        parse(&content)?;
+        Ok(Self {
+            action: if existing.is_some() {
+                "updated"
+            } else {
+                "added"
+            },
+            changes: record.map_or_else(Vec::new, |record| pending(&resolved, record)),
+            content,
+        })
+    }
+
+    /// Write the prepared configuration before the landing record.
+    ///
+    /// # Errors
+    /// Propagates an atomic write failure.
+    pub fn apply(&self, target: &Path) -> Result<(), RkError> {
+        crate::atomic::write(&target.join(CONFIG_PATH), self.content.as_bytes())?;
+        Ok(())
+    }
+}
+
+fn parameter_values(config: &Config) -> Vec<(&'static str, toml_edit::Value)> {
+    let mut values = Vec::new();
+    for (key, value) in [
+        ("project.repo", &config.project.repo),
+        ("project.forge", &config.project.forge),
+        ("project.tech", &config.project.tech),
+    ] {
+        if !value.is_empty() {
+            values.push((key, value.clone().into()));
+        }
+    }
+    if let Some(value) = config.landing.workflow {
+        values.push(("landing.workflow", value.as_str().into()));
+    }
+    if let Some(value) = config.landing.style {
+        values.push(("landing.style", value.as_str().into()));
+    }
+    if let Some(value) = config.landing.nix {
+        values.push(("landing.nix", value.into()));
+    }
+    values
+}
+
+/// Only explicit class P answers can be pending; comparisons still use the record.
+#[must_use]
+pub fn pending(config: &Config, record: &crate::landing::manifest::Manifest) -> Vec<String> {
+    let mut recorded = Config::default();
+    recorded.project.repo.clone_from(&record.parameters.repo);
+    recorded.project.forge.clone_from(&record.forge);
+    recorded.project.tech.clone_from(&record.tech);
+    recorded.landing = Landing {
+        workflow: Some(record.parameters.workflow),
+        style: record.parameters.style,
+        nix: Some(record.parameters.nix),
+    };
+    let baseline = parameter_values(&recorded);
+    parameter_values(config)
+        .into_iter()
+        .filter(|(key, value)| {
+            !baseline
+                .iter()
+                .any(|(other, old)| key == other && value.to_string() == old.to_string())
+        })
+        .map(|(key, _)| key.to_owned())
+        .collect()
 }
 
 /// The trunk accessor for callers without a setup context.
@@ -581,6 +713,20 @@ mod tests {
     use crate::landing::{Style, Workflow};
 
     #[test]
+    fn an_omitted_landing_key_is_distinguishable_from_an_explicit_default() {
+        let omitted = parse("schema_version = 1\n").expect("omitted answers parse");
+        let explicit = parse(
+            "schema_version = 1\n[landing]\nworkflow = 'worktree'\nstyle = 'trunk'\nnix = false\n",
+        )
+        .expect("explicit defaults parse");
+        assert_eq!(omitted.landing, super::Landing::default());
+        assert_eq!(explicit.landing.workflow, Some(Workflow::Worktree));
+        assert_eq!(explicit.landing.style, Some(Style::Trunk));
+        assert_eq!(explicit.landing.nix, Some(false));
+        assert_ne!(omitted, explicit);
+    }
+
+    #[test]
     fn the_landed_config_template_round_trips() {
         let dir = tempfile::tempdir().expect("a target exists");
         let mut config = Config::default();
@@ -588,9 +734,9 @@ mod tests {
         config.project.forge = "gitlab".into();
         config.project.tech = "bash".into();
         config.project.trunk = "main".into();
-        config.landing.workflow = Workflow::Branches;
-        config.landing.style = Style::Lines;
-        config.landing.nix = true;
+        config.landing.workflow = Some(Workflow::Branches);
+        config.landing.style = Some(Style::Lines);
+        config.landing.nix = Some(true);
         config.security.advisories = "acme/private".into();
         config.security.contact = "A \"quoted\" contact\nRK_CONFIG_SECURITY_RESPONSE\\end".into();
         config.security.response = "90d".into();
@@ -616,7 +762,15 @@ mod tests {
         config.protection.gitlab.squash_commit_template =
             "%{title}\n\nContext: %{description}".into();
         config.protection.gitlab.merge_access_level = 40;
-        for expected in [Config::default(), config] {
+        let defaults = Config {
+            landing: super::Landing {
+                workflow: Some(Workflow::Worktree),
+                style: Some(Style::Trunk),
+                nix: Some(false),
+            },
+            ..Config::default()
+        };
+        for expected in [defaults, config] {
             write(dir.path(), &expected).expect("the template renders");
             assert_eq!(load(dir.path()).expect("the config reads"), Some(expected));
             let text =
@@ -721,7 +875,7 @@ mod tests {
                 .expect("present")
                 .landing
                 .style,
-            Style::Lines
+            Some(Style::Lines)
         );
         rewrite_key(dir.path(), "project.repo", "acme/widget".into())
             .expect("an omitted table can be added");

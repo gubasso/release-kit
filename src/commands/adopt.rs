@@ -1,13 +1,13 @@
 //! `rk adopt`: a pre-record target becomes a recorded one.
 //!
-//! Adoption is a verification pass that happens to end in one write. The
+//! Adoption verifies the payload before writing configuration and its record. The
 //! candidate payload is rendered first, exactly as `rk init` would
 //! produce it; every `rendered` destination must match it byte for byte,
 //! and one mismatch refuses the whole adoption listing every mismatch in
 //! one run. Blessing whatever is on disk would launder arbitrary drift
 //! into release-kit ownership, so nothing here ever takes the disk as the
 //! baseline — and no target file is ever changed: not a byte, not a mode,
-//! not a sentinel. The one write is the manifest, last, after every check
+//! not a sentinel. Configuration writes before the manifest, after every check
 //! has passed.
 
 use serde::Serialize;
@@ -57,6 +57,7 @@ struct Report {
     /// absent where nothing was withheld.
     #[serde(skip_serializing_if = "Option::is_none")]
     withheld: Option<Vec<landing::Withheld>>,
+    config: crate::config::Plan,
     /// Every destination, with its verification result.
     files: Vec<FileEntry>,
     /// What plausibly follows.
@@ -64,7 +65,7 @@ struct Report {
 }
 
 /// Verify the target against the rendered candidate and, on `--apply`,
-/// write the record and nothing else.
+/// write the config and record inside `.release-kit/`.
 ///
 /// # Errors
 ///
@@ -102,24 +103,31 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
             .target_state("unchanged"),
         ));
     }
-    let resolved = landing::resolve(&args.target, args.forge.as_deref(), args.repo.as_deref())?;
-    let repo = resolved.repo.clone().ok_or_else(landing::repo_unresolved)?;
-    let tech = resolved_tech(args)?;
-    let workflow = Workflow::parse(&args.workflow)?;
-    // The style is required rather than defaulted: it changes the release
-    // workflow's bytes, and an adoption verifies bytes against exactly one
-    // rendered candidate, so neither value is a safe guess.
-    let style = Style::parse(args.style.as_deref().ok_or_else(|| {
-        RkError::Usage(
-            "an adoption verifies against one rendered candidate; pass --style <trunk|lines>, the release style this target runs".into(),
-        )
-    })?)?;
-    let params = landing::Params::resolve(&tech, &resolved, workflow, Some(style), args.nix)?;
+    let config = crate::config::load(args.target.as_std_path())?;
+    let params = landing::Params::resolve(
+        &args.target,
+        &landing::Inputs {
+            tech: args.tech.as_deref(),
+            forge: args.forge.as_deref(),
+            repo: args.repo.as_deref(),
+            workflow: args.workflow.as_deref().map(Workflow::parse).transpose()?,
+            style: args.style.as_deref().map(Style::parse).transpose()?,
+            nix: args.nix.then_some(true),
+        },
+        config.as_ref(),
+        None,
+        landing::Purpose::Adopt,
+    )?;
+    let config =
+        crate::config::Plan::new(args.target.as_std_path(), &params, config.as_ref(), None)?;
+    let tech = params.tech().to_owned();
+    let repo = params.repo().to_owned();
+    let workflow = params.workflow();
+    let style = params
+        .style()
+        .ok_or_else(|| RkError::Usage("landing style is unresolved".into()))?;
     let mut entries = landing::projection(&params)?;
-    // A target whose flake pair is its own is verified without the pair
-    // and the workflow, exactly as a landing would have withheld them, so
-    // the record an adoption writes is one a later upgrade reproduces.
-    let withheld = landing::withhold_nix(&args.target, args.nix, None, &mut entries)?;
+    let withheld = landing::withhold_nix(&args.target, params.nix(), None, &mut entries)?;
     let (files, records) = verify(args, workflow, &entries)?;
 
     for file in &files {
@@ -133,6 +141,7 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
     }
 
     if args.apply {
+        config.apply(args.target.as_std_path())?;
         manifest::write(
             &args.target,
             &Manifest {
@@ -141,13 +150,13 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
                 payload_sha256: crate::commands::payload::report().payload_sha256,
                 origin: "adopt".to_owned(),
                 tech: tech.clone(),
-                forge: resolved.forge.clone(),
+                forge: params.forge().to_owned(),
                 landed_at: manifest::now(),
                 parameters: Parameters {
                     repo: repo.clone(),
                     workflow,
                     style: Some(style),
-                    nix: args.nix,
+                    nix: params.nix(),
                 },
                 files: records,
                 pins: registry::pins_for(&tech)
@@ -161,30 +170,37 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
 
     let next = if args.apply {
         vec![
-            "commit the record".to_owned(),
+            "commit the config and the record".to_owned(),
             format!("rk status --target {} reports this landing", args.target),
         ]
     } else {
         vec![format!(
-            "rk adopt --tech {tech} --forge {} --repo {repo} --workflow {} --style {}{} --target {} --apply writes the record and nothing else",
-            resolved.forge,
+            "rk adopt --tech {tech} --forge {} --repo {repo} --workflow {} --style {}{} --target {} --apply writes the config and the record inside .release-kit/",
+            params.forge().to_owned(),
             workflow.as_str(),
             style.as_str(),
-            if args.nix { " --nix" } else { "" },
+            if params.nix() { " --nix" } else { "" },
             args.target
         )]
     };
+    out.result_line(format!(
+        "{} {}\n{}",
+        config.action,
+        crate::config::CONFIG_PATH,
+        config.content
+    ));
     out.next(&next);
     out.emit(&Report {
-        schema: "rk.adopt/4",
+        schema: "rk.adopt/5",
+        config,
         mode: if args.apply { "apply" } else { "preview" },
         target: args.target.to_string(),
         tech,
-        forge: resolved.forge,
+        forge: params.forge().to_owned(),
         repo,
         workflow: workflow.as_str(),
         style: style.as_str(),
-        nix: args.nix,
+        nix: params.nix(),
         withheld: (!withheld.is_empty()).then_some(withheld),
         files,
         next,
@@ -273,39 +289,22 @@ fn verify(
     ))
 }
 
-/// The technology whose payload the target runs: the flag, or detection
-/// from the version file.
-fn resolved_tech(args: &AdoptArgs) -> Result<String, RkError> {
-    args.tech.as_deref().map_or_else(
-        || {
-            crate::detect::tech_of(args.target.as_std_path())
-                .map(str::to_owned)
-                .ok_or_else(|| {
-                    RkError::missing(
-                        Diagnostic::new(
-                            Reason::TargetNotFound,
-                            "no technology detected: the target has no version file",
-                        )
-                        .expected("a Cargo.toml, pyproject.toml, or VERSION file")
-                        .action("pass --tech <rust|python|bash>"),
-                    )
-                })
-        },
-        |tech| Ok(tech.to_owned()),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
 
     use super::{FileEntry, Report};
 
-    /// The complete `rk.adopt/4` shape, held by snapshot.
+    /// The complete `rk.adopt/5` shape, held by snapshot.
     #[test]
     fn the_adopt_report_schema_snapshot_holds() {
         let report = Report {
-            schema: "rk.adopt/4",
+            schema: "rk.adopt/5",
+            config: crate::config::Plan {
+                action: "added",
+                changes: vec![],
+                content: "schema_version = 1\n".into(),
+            },
             mode: "apply",
             target: "/tmp/t".into(),
             tech: "rust".into(),
@@ -320,11 +319,11 @@ mod tests {
                 kind: "seeded",
                 action: "differs",
             }],
-            next: vec!["commit the record".into()],
+            next: vec!["commit the config and the record".into()],
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.adopt/4","mode":"apply","target":"/tmp/t","tech":"rust","forge":"github","repo":"acme/widget","workflow":"branches","style":"trunk","nix":false,"files":[{"path":"release-plz.toml","kind":"seeded","action":"differs"}],"next":["commit the record"]}"#
+            r#"{"schema":"rk.adopt/5","mode":"apply","target":"/tmp/t","tech":"rust","forge":"github","repo":"acme/widget","workflow":"branches","style":"trunk","nix":false,"config":{"action":"added","changes":[],"content":"schema_version = 1\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"differs"}],"next":["commit the config and the record"]}"#
         );
     }
 }

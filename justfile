@@ -27,7 +27,7 @@ test:
 build:
     set -eu; d=$(mktemp -d); trap 'rm -rf "$d"' EXIT; mkdir -p "$d/.git"; \
     cargo run -q -- init --tech rust --forge github --repo acme/widget --target "$d" --apply >/dev/null; \
-    test -f "$d/release-plz.toml"; test -f "$d/.release-kit/manifest.json"; \
+    test -f "$d/release-plz.toml"; test -f "$d/.release-kit/manifest.json"; test -f "$d/.release-kit/config.toml"; \
     sed -i '/TODO(release-kit)/d' "$d/release-plz.toml"; printf 'semver_check = true\n' >> "$d/release-plz.toml"; \
     cargo run -q -- upgrade --target "$d" --apply >/dev/null; \
     grep -q 'semver_check = true' "$d/release-plz.toml"; \

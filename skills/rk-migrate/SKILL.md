@@ -27,6 +27,7 @@ The pre-flight's last step already ran `rk assess --target . --json` and `rk sta
 - `brownfield` with no record is this skill's subject: the runbook, start to end.
 - `greenfield` belongs to the rk-setup skill, because there is nothing to migrate; hand off and stop.
 - `needs-decision` is the operator's call, asked with `AskUserQuestion` and the report's evidence — the tags, the branches — before any plan claims to know what the release activity is.
+- A pending configuration is runbook step 2c: preview `rk upgrade`, then apply the answered keys; status keeps that pending input informational under `--check`. An absent config is step 2b, seeded from the record on apply.
 - A recorded target routes by `rk status`, whatever the verdict says: an older record or a missing parameter is runbook step 2b, a mode or style change is step 2c, and drift is the finding the report names.
 
 ## The inventory
@@ -43,7 +44,7 @@ Gate each of these: print the exact command, say what it changes and why, wait, 
 - `rk setup step single-trunk --apply` — runbook step 5b; destructive, and its ancestry guard refusing is a stop, not an obstacle.
 - `install-bot` and `bot-secrets` — the bot identity and its credentials; `rk forge <name>` carries the walkthrough.
 - Registry actions: the first hand publish, registering the trusted publisher, turning on enforcement. `rk guide setup` names each with its reason.
-- The release style, on a record that predates it — runbook step 2b. Ask it with `AskUserQuestion` the way rk-setup's step 6 states, because arming an existing project's release request changes what a green trunk does.
+- The release style, on a record that predates it and whose config leaves it unanswered — runbook step 2b. Ask it with `AskUserQuestion` the way rk-setup's step 6 states, because arming an existing project's release request changes what a green trunk does.
 - The development environment, where the project obtains `rk` by a host install or a hand-rolled bump — runbook step 6. Ask it with `AskUserQuestion` the way rk-setup's step 6 states, with the replacement as the default; the migration is not done while the cleanup's `leftovers` list is non-empty.
 - Regenerating what a landed configuration generates — runbook step 2e; it needs the binding's generator installed at its pin, and `rk status --check` names the generated file while the committed one predates the landing.
 - The predecessor's removal itself, and every other removal: what it removes is committed first, per the chapter's recoverability section.

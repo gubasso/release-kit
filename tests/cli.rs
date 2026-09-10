@@ -591,12 +591,23 @@ fn init_preview_human_lines_are_snapshot_held() {
          release-plz.toml\n\
          Next:\n  rk init --tech rust --forge github --repo <owner/name> --workflow worktree --style trunk --target {path} --apply\n"
     );
-    rk().args([
-        "init", "--tech", "rust", "--forge", "github", "--target", &path,
-    ])
-    .assert()
-    .success()
-    .stdout(predicate::eq(expected));
+    let output = rk()
+        .args([
+            "init", "--tech", "rust", "--forge", "github", "--target", &path,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8(output).expect("UTF-8 report");
+    let start = text
+        .find("added .release-kit/config.toml\n")
+        .expect("config preview");
+    let end = text.find("Next:\n").expect("next block");
+    assert!(text[start..end].contains("schema_version = 1"));
+    assert!(text[start..end].contains("required_check = \"\""));
+    assert_eq!(format!("{}{}", &text[..start], &text[end..]), expected);
 }
 
 #[test]
@@ -618,7 +629,7 @@ fn init_json_emits_one_object_and_nothing_else() {
             .stdout
             .clone();
         let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-        assert_eq!(report["schema"], "rk.init/4");
+        assert_eq!(report["schema"], "rk.init/5");
         assert_eq!(report["mode"], mode);
         assert!(
             report["files"].as_array().is_some_and(|f| !f.is_empty()),
@@ -5705,7 +5716,7 @@ fn status_json_is_one_object_over_a_fresh_landing() {
         .stdout
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["schema"], "rk.status/7");
+    assert_eq!(report["schema"], "rk.status/8");
     assert_eq!(report["landed"], true);
     assert_eq!(report["tech"], "rust");
     assert_eq!(report["style"], "trunk");
@@ -9292,6 +9303,8 @@ fn status_check_flags_a_manifest_whose_workflow_contradicts_its_landed_blocks() 
 fn an_upgrade_migrates_a_schema_1_record_to_the_current_schema() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
     land_rust(target.path()).success();
+    std::fs::remove_file(target.path().join(".release-kit/config.toml"))
+        .expect("a pre-config target");
     let mut manifest = read_manifest(target.path());
     manifest["schema_version"] = serde_json::json!(1);
     manifest
@@ -9507,6 +9520,7 @@ fn a_mode_change_upgrades_from_the_record() {
         "AGENTS.md",
         ".pre-commit-config.yaml",
         ".release-kit/manifest.json",
+        ".release-kit/config.toml",
     ];
     let after = tree_digests(target.path());
     for (path, digest) in &before {
@@ -18298,4 +18312,255 @@ fn private_reporting_policy_adoption_and_parameter_replay() {
     );
     assert_eq!(manifest["schema_version"], 5);
     assert_eq!(manifest["parameters"]["style"], "trunk");
+}
+
+fn edit_target_config(target: &Path, from: &str, to: &str) {
+    let path = target.join(".release-kit/config.toml");
+    let text = std::fs::read_to_string(&path).expect("config exists");
+    assert!(text.contains(from), "{from} absent from config");
+    std::fs::write(path, text.replace(from, to)).expect("config edits");
+}
+
+fn clear_landing_sentinels(target: &Path) {
+    let path = target.join("release-plz.toml");
+    let text = std::fs::read_to_string(&path).expect("seed exists");
+    let text = text
+        .lines()
+        .filter(|line| !line.contains("TODO(release-kit)"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(path, format!("{text}\n")).expect("judgments answered");
+}
+
+#[test]
+fn a_landing_writes_the_config_beside_the_record() {
+    let target = tempfile::tempdir().expect("target");
+    land_rust(target.path()).success();
+    let config = release_kit::config::load(target.path())
+        .expect("config reads")
+        .expect("config present");
+    let manifest = read_manifest(target.path());
+    assert_eq!(config.project.repo, manifest["parameters"]["repo"]);
+    assert_eq!(config.project.tech, manifest["tech"]);
+    assert_eq!(config.project.forge, manifest["forge"]);
+    assert_eq!(
+        config.landing.style.expect("style").as_str(),
+        manifest["parameters"]["style"]
+    );
+    assert_eq!(
+        config.landing.workflow.expect("workflow").as_str(),
+        manifest["parameters"]["workflow"]
+    );
+    assert_eq!(
+        config.landing.nix.expect("nix"),
+        manifest["parameters"]["nix"]
+    );
+    assert!(config.setup.required_check.is_empty());
+    assert!(config.setup.bot.app_id.is_empty());
+}
+
+#[test]
+fn an_edited_config_is_reported_and_check_still_passes() {
+    let target = tempfile::tempdir().expect("target");
+    land_rust(target.path()).success();
+    clear_landing_sentinels(target.path());
+    edit_target_config(target.path(), "style = \"trunk\"", "style = \"lines\"");
+    let before = tree_digests(target.path());
+    for check in [false, true] {
+        let mut cmd = rk();
+        cmd.args(["status", "--json", "--target"])
+            .arg(target.path());
+        if check {
+            cmd.arg("--check");
+        }
+        let output = cmd.assert().success().get_output().stdout.clone();
+        let report: serde_json::Value = serde_json::from_slice(&output).expect("report");
+        assert_eq!(report["config"]["state"], "pending");
+        assert_eq!(
+            report["config"]["pending"],
+            serde_json::json!(["landing.style"])
+        );
+        assert_eq!(report["drift"]["rendered"], 0);
+        assert_eq!(report["style"], "trunk");
+    }
+    assert_eq!(tree_digests(target.path()), before);
+}
+
+#[test]
+fn an_upgrade_takes_the_config_over_the_record() {
+    let target = tempfile::tempdir().expect("target");
+    land_rust(target.path()).success();
+    clear_landing_sentinels(target.path());
+    edit_target_config(target.path(), "style = \"trunk\"", "style = \"lines\"");
+    edit_target_config(
+        target.path(),
+        "repo = \"acme/widget\"",
+        "repo = \"other/widget\"",
+    );
+    let before = tree_digests(target.path());
+    rk().args(["upgrade", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "configuration changes landing.style",
+        ))
+        .stdout(predicate::str::contains(
+            "configuration changes project.repo",
+        ));
+    assert_eq!(tree_digests(target.path()), before);
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let record = read_manifest(target.path());
+    assert_eq!(record["parameters"]["style"], "lines");
+    assert_eq!(record["parameters"]["repo"], "other/widget");
+    let workflow = std::fs::read_to_string(target.path().join(".github/workflows/release-plz.yml"))
+        .expect("workflow");
+    assert!(workflow.contains("RELEASE_STYLE: lines"));
+    assert!(workflow.contains("'other'"));
+    rk().args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("config: aligned"));
+}
+
+#[test]
+fn a_schema_5_target_with_no_config_upgrades_to_one() {
+    let target = tempfile::tempdir().expect("target");
+    land_rust(target.path()).success();
+    clear_landing_sentinels(target.path());
+    std::fs::remove_file(target.path().join(".release-kit/config.toml"))
+        .expect("pre-config target");
+    rk().args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("config: absent"));
+    let before = tree_digests(target.path());
+    let output = rk()
+        .args(["upgrade", "--apply", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&output).expect("report");
+    assert_eq!(report["config"]["action"], "added");
+    assert!(
+        report["files"]
+            .as_array()
+            .expect("files")
+            .iter()
+            .all(|file| file["action"] != "updated" && file["action"] != "added")
+    );
+    let after = tree_digests(target.path());
+    assert_eq!(after.len(), before.len() + 1);
+    for (path, digest) in before {
+        if path != ".release-kit/manifest.json" {
+            assert!(after.contains(&(path, digest)));
+        }
+    }
+}
+
+#[test]
+fn a_pre_style_record_upgrades_from_the_config() {
+    let target = tempfile::tempdir().expect("target");
+    land_rust_with_workflow(target.path(), "branches").success();
+    let mut record = read_manifest(target.path());
+    record["parameters"]
+        .as_object_mut()
+        .expect("parameters")
+        .remove("style");
+    write_manifest(target.path(), &record);
+    let path = target.path().join(".release-kit/config.toml");
+    std::fs::write(
+        &path,
+        "schema_version = 1\n[landing]\nworkflow = 'branches'\n",
+    )
+    .expect("unanswered style");
+    let before = tree_digests(target.path());
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .code(64)
+        .stderr(predicate::str::contains("landing.style"));
+    assert_eq!(tree_digests(target.path()), before);
+    std::fs::write(path, "schema_version = 1\n[landing]\nstyle = 'trunk'\n")
+        .expect("answered style");
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    assert_eq!(read_manifest(target.path())["parameters"]["style"], "trunk");
+}
+
+#[test]
+fn a_flag_overrides_the_config_and_the_apply_writes_it_back() {
+    let target = tempfile::tempdir().expect("target");
+    land_rust(target.path()).success();
+    edit_target_config(
+        target.path(),
+        "style = \"trunk\"",
+        "style = \"trunk\" # operator choice",
+    );
+    let before = tree_digests(target.path());
+    rk().args(["upgrade", "--style", "lines", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    assert_eq!(tree_digests(target.path()), before);
+    rk().args(["upgrade", "--style", "lines", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let text =
+        std::fs::read_to_string(target.path().join(".release-kit/config.toml")).expect("config");
+    assert!(text.contains("style = \"lines\" # operator choice"));
+    assert_eq!(read_manifest(target.path())["parameters"]["style"], "lines");
+}
+
+#[test]
+fn an_init_over_a_config_with_no_record_relands() {
+    let target = tempfile::tempdir().expect("target");
+    std::fs::create_dir(target.path().join(".release-kit")).expect("config dir");
+    std::fs::write(target.path().join(".release-kit/config.toml"), "schema_version = 1\n[project]\ntech = 'rust'\nforge = 'github'\nrepo = 'acme/widget'\n[landing]\nworkflow = 'branches'\nstyle = 'lines'\nnix = true\n").expect("half landing");
+    let before = tree_digests(target.path());
+    rk().args(["init", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    assert_eq!(tree_digests(target.path()), before);
+    rk().args(["init", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let record = read_manifest(target.path());
+    assert_eq!(record["parameters"]["workflow"], "branches");
+    assert_eq!(record["parameters"]["style"], "lines");
+    assert_eq!(record["parameters"]["nix"], true);
+}
+
+#[test]
+fn an_adoption_writes_the_config_and_the_record_and_nothing_else() {
+    let target = tempfile::tempdir().expect("target");
+    land_rust_with_workflow(target.path(), "branches").success();
+    std::fs::remove_file(target.path().join(".release-kit/manifest.json"))
+        .expect("pre-record target");
+    let before = tree_digests(target.path());
+    rk().args(["adopt", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let after = tree_digests(target.path());
+    for item in before
+        .into_iter()
+        .filter(|(path, _)| !path.starts_with(".release-kit/"))
+    {
+        assert!(after.contains(&item));
+    }
+    assert_eq!(read_manifest(target.path())["origin"], "adopt");
 }

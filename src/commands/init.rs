@@ -69,6 +69,7 @@ struct Report {
     /// absent where nothing was withheld.
     #[serde(skip_serializing_if = "Option::is_none")]
     withheld: Option<Vec<landing::Withheld>>,
+    config: crate::config::Plan,
     /// Every destination, with its kind and action.
     files: Vec<FileEntry>,
     /// The sentinels an apply left to fill; absent in a preview.
@@ -102,42 +103,65 @@ pub fn run(args: &InitArgs) -> Result<(), RkError> {
             .target_state("unchanged"),
         ));
     }
-    let resolved = landing::resolve(&args.target, args.forge.as_deref(), args.repo.as_deref())?;
-    let forge = &resolved.forge;
-    let workflow = Workflow::parse(&args.workflow)?;
-    let style = Style::parse(&args.style)?;
+    let config = crate::config::load(args.target.as_std_path())?;
+    let params = landing::Params::resolve(
+        &args.target,
+        &landing::Inputs {
+            tech: args.tech.as_deref(),
+            forge: args.forge.as_deref(),
+            repo: args.repo.as_deref(),
+            workflow: args.workflow.as_deref().map(Workflow::parse).transpose()?,
+            style: args.style.as_deref().map(Style::parse).transpose()?,
+            nix: args.nix.then_some(true),
+        },
+        config.as_ref(),
+        None,
+        if args.apply {
+            landing::Purpose::Init
+        } else {
+            landing::Purpose::Preview
+        },
+    )?;
+    let config_plan =
+        crate::config::Plan::new(args.target.as_std_path(), &params, config.as_ref(), None)?;
+    let mut effective = args.clone();
+    effective.tech = Some(params.tech().into());
+    effective.nix = params.nix();
+    let mut entries = landing::projection(&params)?;
+    let withheld = landing::withhold_nix(&args.target, params.nix(), None, &mut entries)?;
+    let style = params
+        .style()
+        .ok_or_else(|| RkError::Usage("landing style is unresolved".into()))?;
     if args.apply {
-        let params =
-            landing::Params::resolve(&args.tech, &resolved, workflow, Some(style), args.nix)?;
-        let repo = params.repo();
-        let mut entries = landing::projection(&params)?;
-        let withheld = landing::withhold_nix(&args.target, args.nix, None, &mut entries)?;
-        apply(out, args, forge, repo, workflow, style, &entries, withheld)
+        apply(
+            out,
+            &effective,
+            params.forge(),
+            params.repo(),
+            params.workflow(),
+            style,
+            &entries,
+            withheld,
+            config_plan,
+        )
     } else {
-        // A preview lists destinations and compares nothing, so an
-        // unresolved repository only means the owner substitution is
-        // shown unrendered: the placeholder substitutes to itself.
-        if resolved.repo.is_none() {
+        let repo = (params.repo() != "OWNER").then(|| params.repo().to_owned());
+        if repo.is_none() {
             out.frame(
                 "note: no repository detected; an apply derives the owner from --repo <path>",
             );
         }
-        let repo = resolved.repo;
-        let params = landing::Params::resolve(
-            &args.tech,
-            &landing::Resolved {
-                forge: forge.clone(),
-                repo: Some(repo.clone().unwrap_or_else(|| "OWNER".to_owned())),
-            },
-            workflow,
-            Some(style),
-            args.nix,
-        )?;
-        let mut entries = landing::projection(&params)?;
-        // The preview withholds exactly as the apply would, so what is
-        // listed is what lands.
-        let withheld = landing::withhold_nix(&args.target, args.nix, None, &mut entries)?;
-        preview(out, args, forge, repo, workflow, style, &entries, withheld)
+        preview(
+            out,
+            &effective,
+            params.forge(),
+            repo,
+            params.workflow(),
+            style,
+            &entries,
+            withheld,
+            config_plan,
+        )
     }
 }
 
@@ -152,12 +176,13 @@ fn preview(
     style: Style,
     entries: &[Entry],
     withheld: Vec<landing::Withheld>,
+    config: crate::config::Plan,
 ) -> Result<(), RkError> {
     let repo_argument = repo.as_deref().unwrap_or("<owner/name>");
     let nix_flag = if args.nix { " --nix" } else { "" };
     let next = vec![format!(
         "rk init --tech {} --forge {forge} --repo {repo_argument} --workflow {} --style {}{nix_flag} --target {} --apply",
-        args.tech,
+        args.tech.as_deref().unwrap_or_default(),
         workflow.as_str(),
         style.as_str(),
         args.target
@@ -169,14 +194,21 @@ fn preview(
     for entry in entries {
         out.result_line(&entry.destination);
     }
+    out.result_line(format!(
+        "{} {}\n{}",
+        config.action,
+        crate::config::CONFIG_PATH,
+        config.content
+    ));
     for entry in &withheld {
         out.result_line(format!("withheld {}: {}", entry.path, entry.reason));
     }
     out.next(&next);
     out.emit(&Report {
-        schema: "rk.init/4",
+        schema: "rk.init/5",
+        config,
         mode: "preview",
-        tech: args.tech.clone(),
+        tech: args.tech.clone().unwrap_or_default(),
         forge: forge.to_owned(),
         target: args.target.to_string(),
         repo,
@@ -210,6 +242,7 @@ fn apply(
     style: Style,
     entries: &[Entry],
     withheld: Vec<landing::Withheld>,
+    config: crate::config::Plan,
 ) -> Result<(), RkError> {
     refuse_a_recorded_target(args)?;
     landing::hooks_splice_refusal(&args.target)?;
@@ -261,6 +294,25 @@ fn apply(
         out.result_line(format!("withheld {}: {}", entry.path, entry.reason));
     }
 
+    config.apply(args.target.as_std_path())?;
+    out.result_line(format!("{} {}", config.action, crate::config::CONFIG_PATH));
+    for (key, empty_line) in [
+        ("setup.required_check", "required_check = \"\""),
+        ("setup.bot.app_id", "app_id = \"\""),
+    ] {
+        if let Some((index, _)) = config
+            .content
+            .lines()
+            .enumerate()
+            .find(|(_, line)| line.starts_with(empty_line))
+        {
+            sentinels.push(SentinelEntry {
+                path: crate::config::CONFIG_PATH.into(),
+                line: index + 1,
+                text: format!("set {key} before forge setup"),
+            });
+        }
+    }
     // The record, last, after every file has landed.
     manifest::write(
         &args.target,
@@ -269,7 +321,7 @@ fn apply(
             rk_version: env!("CARGO_PKG_VERSION").to_owned(),
             payload_sha256: crate::commands::payload::report().payload_sha256,
             origin: "init".to_owned(),
-            tech: args.tech.clone(),
+            tech: args.tech.clone().unwrap_or_default(),
             forge: forge.to_owned(),
             landed_at: manifest::now(),
             parameters: Parameters {
@@ -279,7 +331,7 @@ fn apply(
                 nix: args.nix,
             },
             files: records,
-            pins: registry::pins_for(&args.tech)
+            pins: registry::pins_for(args.tech.as_deref().unwrap_or_default())
                 .into_iter()
                 .map(|pin| (pin.name, pin.version))
                 .collect(),
@@ -309,9 +361,10 @@ fn apply(
     ];
     out.next(&next);
     out.emit(&Report {
-        schema: "rk.init/4",
+        schema: "rk.init/5",
+        config,
         mode: "apply",
-        tech: args.tech.clone(),
+        tech: args.tech.clone().unwrap_or_default(),
         forge: forge.to_owned(),
         target: args.target.to_string(),
         repo: Some(repo.to_owned()),
@@ -427,13 +480,18 @@ mod tests {
 
     use super::{FileEntry, Report, SentinelEntry};
 
-    /// The complete `rk.init/3` shape, held by snapshot in both modes: a
+    /// The complete `rk.init/5` shape, held by snapshot in both modes: a
     /// field rename or removal fails here and becomes a schema-version
     /// bump instead of a silent parser break at some agent.
     #[test]
     fn the_init_report_schema_snapshot_holds() {
         let apply = Report {
-            schema: "rk.init/4",
+            schema: "rk.init/5",
+            config: crate::config::Plan {
+                action: "added",
+                changes: vec![],
+                content: "schema_version = 1\n".into(),
+            },
             mode: "apply",
             tech: "rust".into(),
             forge: "github".into(),
@@ -460,7 +518,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&apply).expect("a report serializes"),
-            r##"{"schema":"rk.init/4","mode":"apply","tech":"rust","forge":"github","target":"/tmp/t","repo":"acme/widget","workflow":"worktree","style":"trunk","nix":true,"withheld":[{"path":"flake.nix","reason":"the target already carries flake.nix"}],"files":[{"path":"release-plz.toml","kind":"seeded","action":"write"}],"sentinels":[{"path":"/tmp/t/release-plz.toml","line":3,"text":"# TODO(release-kit): keep false for a binary-only crate"}],"next":["commit the landed files, the record included"]}"##
+            r##"{"schema":"rk.init/5","mode":"apply","tech":"rust","forge":"github","target":"/tmp/t","repo":"acme/widget","workflow":"worktree","style":"trunk","nix":true,"withheld":[{"path":"flake.nix","reason":"the target already carries flake.nix"}],"config":{"action":"added","changes":[],"content":"schema_version = 1\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"write"}],"sentinels":[{"path":"/tmp/t/release-plz.toml","line":3,"text":"# TODO(release-kit): keep false for a binary-only crate"}],"next":["commit the landed files, the record included"]}"##
         );
         let preview = Report {
             sentinels: None,
@@ -472,7 +530,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&preview).expect("a report serializes"),
-            r#"{"schema":"rk.init/4","mode":"preview","tech":"rust","forge":"github","target":"/tmp/t","workflow":"worktree","style":"trunk","nix":false,"files":[{"path":"release-plz.toml","kind":"seeded","action":"write"}],"next":["commit the landed files, the record included"]}"#,
+            r#"{"schema":"rk.init/5","mode":"preview","tech":"rust","forge":"github","target":"/tmp/t","workflow":"worktree","style":"trunk","nix":false,"config":{"action":"added","changes":[],"content":"schema_version = 1\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"write"}],"next":["commit the landed files, the record included"]}"#,
             "a preview omits the sentinels, the unresolved repo, and an empty withheld list rather than serializing null"
         );
     }

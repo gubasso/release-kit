@@ -45,9 +45,13 @@ Branching for a release exists for older lines. A `release/<major>.<minor>` bran
 | Do you owe someone a patch-only release?       | Branch for release |
 | Does a sign-off gate stand before a ship?      | Branch for release |
 
-Which style a project runs is a recorded landing parameter: `rk status` reports it, the runbooks resolve their `On trunk:` and `On lines:` variants from it, and `rk upgrade --style <style>` changes it — the same axis the workflow mode already rides. [Release lines](./09-release-lines.md) owns the second style's whole life.
+Which style a project runs is a recorded landing parameter: `rk status` reports it, the runbooks resolve their `On trunk:` and `On lines:` variants from it, and `landing.style` in `.release-kit/config.toml` states the next landing’s answer, taken up by `rk upgrade --apply` or overridden by `--style <style>` — the same axis the workflow mode already rides. [Release lines](./09-release-lines.md) owns the second style's whole life.
 
 Default to the trunk. Cut the first release branch the day someone actually needs a backport — retroactively, from the tag — never ahead of the need.
+
+## The committed answers
+
+`.release-kit/config.toml` is the input a person edits. The landing verbs resolve invocation flags, configured answers, detection and compiled defaults in that order; an existing record supplies compatibility answers where the config is silent. They write the resolved config before the manifest. The manifest records what landed, and every comparison re-renders from its parameters alone. Editing the config makes an input pending: `rk status` reports it in both modes, and `--check` keeps it informational until a landing takes it up.
 
 ## What a technology changes
 
