@@ -74,19 +74,47 @@ pub fn run(args: &GuideArgs) -> Result<(), RkError> {
     let style = args.style.as_deref().map(Style::parse).transpose()?;
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let config = crate::config::load(&cwd)?;
     let detected = detect::detect(&cwd);
-    let forge = forge.or_else(|| detected.forge.map(detect::Forge::as_str));
-    let tech = tech.or_else(|| detect::tech_of(&cwd).map(str::to_owned));
-    let repo = args.repo.clone().or(detected.repo);
+    let forge = forge
+        .or_else(|| {
+            config
+                .as_ref()
+                .map(|c| c.project.forge.as_str())
+                .filter(|v| !v.is_empty())
+        })
+        .or_else(|| detected.forge.map(detect::Forge::as_str));
+    let tech = tech
+        .or_else(|| {
+            config
+                .as_ref()
+                .map(|c| c.project.tech.clone())
+                .filter(|v| !v.is_empty())
+        })
+        .or_else(|| detect::tech_of(&cwd).map(str::to_owned));
+    let repo = args
+        .repo
+        .clone()
+        .or_else(|| {
+            config
+                .as_ref()
+                .map(|c| c.project.repo.clone())
+                .filter(|v| !v.is_empty())
+        })
+        .or(detected.repo);
     // The workflow axis resolves from the landing record — the mode is a
     // committed project decision, not a detection guess — and stays open
     // where no record exists, the honest pre-landing fallback.
     let record =
         camino::Utf8Path::from_path(&cwd).and_then(|path| manifest::load(path).ok().flatten());
-    let workflow = workflow.or_else(|| record.as_ref().map(|record| record.parameters.workflow));
+    let workflow = workflow
+        .or_else(|| config.as_ref().and_then(|c| c.landing.workflow))
+        .or_else(|| record.as_ref().map(|record| record.parameters.workflow));
     // The style axis resolves the same way: a committed project decision,
     // open where no record exists.
-    let style = style.or_else(|| record.as_ref().and_then(|record| record.parameters.style));
+    let style = style
+        .or_else(|| config.as_ref().and_then(|c| c.landing.style))
+        .or_else(|| record.as_ref().and_then(|record| record.parameters.style));
 
     let rendered = render(
         &text,

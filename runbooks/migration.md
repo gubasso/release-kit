@@ -27,7 +27,7 @@ Every line of those reports that is not green is one entry in the inventory. Not
 
 ### 2a. Adopt a target with no record
 
-Adoption verifies the disk against one rendered candidate and never blesses the disk. `--workflow` and `--style` choose the candidate; `--style` is required because it changes the release workflow's bytes.
+Adoption verifies the disk against one rendered candidate and never blesses the disk. `landing.workflow` and `landing.style` in `.release-kit/config.toml` choose the candidate, and invocation flags override them; style requires an answer from one of those inputs.
 
 ```bash
 rk adopt --target . --workflow <mode> --style <style>
@@ -35,30 +35,33 @@ rk adopt --target . --workflow <mode> --style <style>
 rk snippet <tech>/<forge>/<path>
 # check: the candidate's bytes for one destination; rk payload lists them all with their digests
 rk adopt --target . --workflow <mode> --style <style> --apply
-# check: wrote .release-kit/manifest.json, and nothing else changed
+# check: the config and manifest exist inside .release-kit/; every payload destination is unchanged
 ```
 
 - a refusal naming the two marked blocks: the alignment is still owed; bring `AGENTS.md` and `.pre-commit-config.yaml` to the candidate's blocks, then rerun. It is never an error to force past.
-- `--workflow branches` is the default, the compatibility-safe reading of a pre-record target; the mode change to `worktree`, where wanted, is its own entry through 2c.
+- `branches` is the default when neither the config nor a flag answers workflow, the compatibility-safe reading of a pre-record target; the mode change to `worktree`, where wanted, is its own entry through 2c.
 
 ### 2b. Upgrade a recorded target
 
 ```bash
 rk upgrade --target .
-# check: the preview lists every action; a conflict line names a release-kit-owned file the target edited
+# check: the preview names differing config keys and every file action; a conflict line names a release-kit-owned file the target edited
 rk upgrade --target . --apply
-# check: rewrote .release-kit/manifest.json; every sentinel left to fill is listed
+# check: the config is written before .release-kit/manifest.json; every sentinel left to fill is listed
 ```
 
-- a record without the style parameter: `--style <style>`, asked of the operator first, because arming an existing project's release request changes what a green trunk does.
+- a record without the style parameter: answer `landing.style` in the config or pass `--style <style>`, asked of the operator only where the config is silent, because arming an existing project's release request changes what a green trunk does.
+- an absent config: the upgrade seeds it from the record; where the payload is unchanged, only that file is added.
 - a hook block lacking the `rk-message` content guard: the upgrade re-renders the block; a hand-edited block is reconciled first, per 2d.
 
 ### 2c. Change a landing parameter
 
+Edit `landing.workflow` or `landing.style` in `.release-kit/config.toml`. Check: `rk status --check` reports the key as pending and exits 0 on an otherwise healthy landing. Preview and apply with the following commands; the optional flags override the file and write back on apply.
+
 ```bash
 rk upgrade --target . --workflow <mode>            # or --style <style>
 rk upgrade --target . --workflow <mode> --apply
-# check: the two blocks and the record moved; the committed diff is the visible change
+# check: the affected rendered files, config, and record moved; the committed diff is the visible change
 ```
 
 On worktree:

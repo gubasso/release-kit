@@ -40,6 +40,31 @@ struct StalePin {
     available: String,
 }
 
+/// Configuration is informational, independent of every drift comparison.
+#[derive(Debug, serde::Serialize)]
+struct ConfigState {
+    state: &'static str,
+    pending: Vec<String>,
+}
+
+fn config_state(config: Option<&crate::config::Config>, record: Option<&Manifest>) -> ConfigState {
+    let pending = config
+        .zip(record)
+        .map_or_else(Vec::new, |(config, record)| {
+            crate::config::pending(config, record)
+        });
+    ConfigState {
+        state: if config.is_none() {
+            "absent"
+        } else if pending.is_empty() {
+            "aligned"
+        } else {
+            "pending"
+        },
+        pending,
+    }
+}
+
 /// The machine form of a status report.
 #[derive(Debug, Serialize)]
 struct Report {
@@ -47,6 +72,7 @@ struct Report {
     schema: &'static str,
     /// Whether a landing record exists; every other field needs one.
     landed: bool,
+    config: ConfigState,
     #[serde(skip_serializing_if = "Option::is_none")]
     tech: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -98,6 +124,57 @@ struct Report {
     violations: Option<Vec<String>>,
 }
 
+fn report_absent(
+    out: Output,
+    args: &StatusArgs,
+    config: Option<&crate::config::Config>,
+) -> Result<(), RkError> {
+    out.result_line(format!("config: {}", config_state(config, None).state));
+    out.result_line(format!("no landing at {}", args.target));
+    out.next(&[
+        format!(
+            "rk init --tech <tech> --target {} lands the workflow",
+            args.target
+        ),
+        format!(
+            "rk adopt --target {} records a landing made before the record existed",
+            args.target
+        ),
+    ]);
+    out.emit(&Report {
+        schema: "rk.status/8",
+        landed: false,
+        config: config_state(config, None),
+        tech: None,
+        forge: None,
+        workflow: None,
+        style: None,
+        nix: None,
+        rk_version: None,
+        binary_version: None,
+        alignment: None,
+        drift: None,
+        missing: None,
+        stale_pins: None,
+        sentinels: None,
+        record_drift: None,
+        invariant_failures: None,
+        pending: None,
+        violations: args.check.then(|| vec!["no landing".to_owned()]),
+    })?;
+    if args.check {
+        return Err(RkError::check_failed(
+            Diagnostic::new(
+                Reason::StateDrift,
+                format!("no landing at {}, and --check requires one", args.target),
+            )
+            .expected("a target carrying .release-kit/manifest.json")
+            .action("rk init lands the workflow; rk adopt records an existing landing"),
+        ));
+    }
+    Ok(())
+}
+
 /// What one pass over the record and the disk observed.
 struct Observed {
     drift_rendered: Vec<String>,
@@ -138,59 +215,27 @@ pub fn run(args: &StatusArgs) -> Result<(), RkError> {
             .expected("an existing repository to report on"),
         ));
     }
+    let config = crate::config::load(args.target.as_std_path())?;
     let Some(manifest) = manifest::load(&args.target)? else {
-        out.result_line(format!("no landing at {}", args.target));
-        out.next(&[
-            format!(
-                "rk init --tech <tech> --target {} lands the workflow",
-                args.target
-            ),
-            format!(
-                "rk adopt --target {} records a landing made before the record existed",
-                args.target
-            ),
-        ]);
-        out.emit(&Report {
-            schema: "rk.status/7",
-            landed: false,
-            tech: None,
-            forge: None,
-            workflow: None,
-            style: None,
-            nix: None,
-            rk_version: None,
-            binary_version: None,
-            alignment: None,
-            drift: None,
-            missing: None,
-            stale_pins: None,
-            sentinels: None,
-            record_drift: None,
-            invariant_failures: None,
-            pending: None,
-            violations: args.check.then(|| vec!["no landing".to_owned()]),
-        })?;
-        if args.check {
-            return Err(RkError::check_failed(
-                Diagnostic::new(
-                    Reason::StateDrift,
-                    format!("no landing at {}, and --check requires one", args.target),
-                )
-                .expected("a target carrying .release-kit/manifest.json")
-                .action("rk init lands the workflow; rk adopt records an existing landing"),
-            ));
-        }
-        return Ok(());
+        return report_absent(out, args, config.as_ref());
     };
 
+    let config = config_state(config.as_ref(), Some(&manifest));
+    out.result_line(format!("config: {}", config.state));
+    for key in &config.pending {
+        out.result_line(format!(
+            "config pending: {key}; rk upgrade --apply takes it up"
+        ));
+    }
     let observed = observe(args, &manifest)?;
     let alignment = manifest::alignment(&manifest.rk_version, env!("CARGO_PKG_VERSION"));
     render_human(out, args, &manifest, alignment, &observed);
 
     let violations = violations_of(&observed);
     out.emit(&Report {
-        schema: "rk.status/7",
+        schema: "rk.status/8",
         landed: true,
+        config,
         tech: Some(manifest.tech),
         forge: Some(manifest.forge),
         workflow: Some(manifest.parameters.workflow.as_str()),
@@ -597,13 +642,17 @@ mod tests {
 
     use super::{Drift, InvariantFailure, Report, StalePin};
 
-    /// The complete `rk.status/5` shape, held by snapshot in both the
+    /// The complete `rk.status/8` shape, held by snapshot in both the
     /// landed and absent forms.
     #[test]
     fn the_status_report_schema_snapshot_holds() {
         let landed = Report {
-            schema: "rk.status/7",
+            schema: "rk.status/8",
             landed: true,
+            config: super::ConfigState {
+                state: "pending",
+                pending: vec!["landing.style".into()],
+            },
             tech: Some("rust".into()),
             forge: Some("github".into()),
             workflow: Some("worktree"),
@@ -635,10 +684,14 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&landed).expect("a report serializes"),
-            r#"{"schema":"rk.status/7","landed":true,"tech":"rust","forge":"github","workflow":"worktree","style":"trunk","nix":true,"rk_version":"0.1.0","binary_version":"0.2.0","alignment":"binary-newer","drift":{"rendered":0,"seeded":1},"missing":[],"stale_pins":[{"tool":"release-plz","landed":"0.3.160","available":"0.3.170"}],"sentinels":1,"record_drift":0,"invariant_failures":[{"code":"attestations-disabled","destination":"dist-workspace.toml","reason":"github-attestations is not effectively true","remediation":"set github-attestations = true in [dist]"}],"pending":2}"#
+            r#"{"schema":"rk.status/8","landed":true,"config":{"state":"pending","pending":["landing.style"]},"tech":"rust","forge":"github","workflow":"worktree","style":"trunk","nix":true,"rk_version":"0.1.0","binary_version":"0.2.0","alignment":"binary-newer","drift":{"rendered":0,"seeded":1},"missing":[],"stale_pins":[{"tool":"release-plz","landed":"0.3.160","available":"0.3.170"}],"sentinels":1,"record_drift":0,"invariant_failures":[{"code":"attestations-disabled","destination":"dist-workspace.toml","reason":"github-attestations is not effectively true","remediation":"set github-attestations = true in [dist]"}],"pending":2}"#
         );
         let absent = Report {
             landed: false,
+            config: super::ConfigState {
+                state: "absent",
+                pending: vec![],
+            },
             tech: None,
             forge: None,
             workflow: None,
@@ -659,7 +712,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&absent).expect("a report serializes"),
-            r#"{"schema":"rk.status/7","landed":false}"#,
+            r#"{"schema":"rk.status/8","landed":false,"config":{"state":"absent","pending":[]}}"#,
             "an absent landing reports one field a caller can branch on"
         );
     }

@@ -37,7 +37,7 @@ Rules governing what `rk init`, `rk status`, `rk upgrade`, and `rk adopt` owe a 
 
 ### `landing:a-landing-leaves-a-record` — A landing leaves a record
 
-A successful `rk init --apply` MUST write `.release-kit/manifest.json` last, after every file has landed through the temp-plus-rename writer, and a refused landing MUST leave the target unchanged, the record included. The record is committed with the landing: every reader it exists for — a clone, a CI job, an agent — sees only committed files, and it carries digests of committed files, nothing secret and nothing machine-specific.
+A successful `rk init --apply` MUST write `.release-kit/config.toml` inside `.release-kit/` before `.release-kit/manifest.json`, with the record last, after every payload file has landed through the temp-plus-rename writer, and a refused landing MUST leave the target unchanged, the record included. The record is committed with the landing: every reader it exists for — a clone, a CI job, an agent — sees only committed files, and it carries digests of committed files, nothing secret and nothing machine-specific.
 
 #### Scenario: A rendered destination conflicts on apply
 
@@ -61,7 +61,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `landing:a-rendered-file-is-reproducible` — A rendered file is reproducible
 
-A `rendered` file's landed bytes MUST be a deterministic function of the payload and the recorded parameters only, and every substituted value MUST be recorded in the manifest's `parameters`, so a later command can re-render the candidate and compare it against the disk. A value the payload substitutes from one constant — the commit scope's shape — is not a parameter, so it MUST NOT be recorded, and a parameter an earlier schema recorded and this binary substitutes nowhere MUST read without it and rewrite without it.
+A `rendered` file's landed bytes MUST be a deterministic function of the payload and the recorded parameters only, and every substituted value MUST be recorded in the manifest's `parameters`, so every re-render and comparison reads the manifest parameters alone, whatever a later configuration says. A value the payload substitutes from one constant — the commit scope's shape — is not a parameter, so it MUST NOT be recorded, and a parameter an earlier schema recorded and this binary substitutes nowhere MUST read without it and rewrite without it.
 
 #### Scenario: The owner substitutes from the repo parameter
 
@@ -73,7 +73,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `landing:the-release-style-is-a-landing-parameter` — The release style is a landing parameter
 
-The release style MUST be recorded in the manifest as `trunk` or `lines`, reported by every parameter-bearing report, rendered into the landed release workflow as the one value that arms or does not arm the bot's request, resolved as the runbooks' style axis, and changed only through the landing verbs; a record predating the field carries no style, and `rk upgrade` MUST refuse until one names it, because neither value is a compatibility-safe reading of a target nobody asked.
+The release style MUST be recorded in the manifest as `trunk` or `lines`, reported by every parameter-bearing report, rendered into the landed release workflow as the one value that arms or does not arm the bot's request, resolved as the runbooks' style axis, and taken from committed configuration or an invocation flag by the landing verbs; a record predating the field carries no style, and `rk upgrade` MUST refuse until `landing.style` in the config or `--style` answers it, because neither value is a compatibility-safe reading of a target nobody asked.
 
 #### Scenario: A pre-style record upgrades
 
@@ -85,13 +85,13 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `landing:a-rendered-file-carries-no-judgment` — A rendered file carries no judgment
 
-A sentinel needing operator judgment MUST NOT appear in a `rendered` file: a value a `rendered` file needs becomes a landing parameter, and a judgment stays in a `seeded` file, where an edit is expected and costs nothing.
+A sentinel needing operator judgment MUST NOT appear in a `rendered` file: a value a `rendered` file needs becomes a landing parameter, and a judgment stays in a `seeded` file or the committed configuration, where an edit is expected and costs nothing.
 
 #### Scenario: A landing reports its remaining sentinels
 
 - GIVEN a rust landing with the repository resolved
 - WHEN `rk init --apply` reports the sentinels left to fill
-- THEN every reported line sits in a `seeded` file, and the landed workflow carries none
+- THEN every reported line sits in a `seeded` file or names an unanswered setup key in the config, and the landed workflow carries none
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 
@@ -157,7 +157,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `landing:status-judges-only-under-check` — Status judges only under check
 
-Plain `rk status` MUST report and exit 0 for every reportable state — drift, staleness, unresolved sentinels, invariant failures, a pending payload, and no landing at all — and `rk status --check` MUST compute the identical report and exit 1 exactly on a violation: drift to a `rendered` file, a record whose own parameters do not reproduce its recorded bytes or its recorded destination set, an invalid or missing landing, an unresolved judgment sentinel, or an invariant failure under `landing:a-seeded-file-still-carries-the-invariants`. Seeded drift, pin staleness, and a pending payload stay informational in both modes. A pending payload is what the report MUST route an upgrade from, counted as the destinations this binary's projection under the recorded parameters would add, drop, reclassify, or rewrite; the recorded `rk_version` names the binary that wrote the record and MUST prompt nothing on its own, because a release that changes no landed file leaves the target with nothing to take and the two facts answer different questions.
+Plain `rk status` MUST report and exit 0 for every reportable state — drift, staleness, unresolved sentinels, invariant failures, a pending payload, and no landing at all — and `rk status --check` MUST compute the identical report and exit 1 exactly on a violation: drift to a `rendered` file, a record whose own parameters do not reproduce its recorded bytes or its recorded destination set, an invalid or missing landing, an unresolved judgment sentinel, or an invariant failure under `landing:a-seeded-file-still-carries-the-invariants`. Seeded drift, pin staleness, a pending payload, and committed configuration the landing verbs have yet to take up stay informational in both modes. A pending payload is what the report MUST route an upgrade from, counted as the destinations this binary's projection under the recorded parameters would add, drop, reclassify, or rewrite; the recorded `rk_version` names the binary that wrote the record and MUST prompt nothing on its own, because a release that changes no landed file leaves the target with nothing to take and the two facts answer different questions.
 
 #### Scenario: The same target, judged and not
 
@@ -187,13 +187,13 @@ Verify: `cargo nextest run -E 'test(/^assess_/)'`
 
 ### `landing:an-adoption-writes-the-record-and-nothing-else` — An adoption writes the record and nothing else
 
-`rk adopt` MUST verify every `rendered` destination byte for byte against the rendered candidate, refuse listing every mismatch and every missing expected file in one run, and end a successful pass with exactly one write — the record, last, with its origin stating the adoption — leaving every target file untouched.
+`rk adopt` MUST verify every `rendered` destination byte for byte against the rendered candidate, refuse listing every mismatch and every missing expected file in one run, and end a successful pass by writing only inside `.release-kit/` — the config and then the record, last, with its origin stating the adoption — leaving every payload destination untouched.
 
 #### Scenario: A pre-record target is adopted
 
 - GIVEN a repository running the convention with no record, matching what this payload renders
 - WHEN `rk adopt --apply` runs
-- THEN the manifest appears with `origin` set to `adopt`, no other file changes, and `rk status` then reports the landing
+- THEN the manifest appears with `origin` set to `adopt`, the config appears beside it, every payload destination stays unchanged, and `rk status` then reports the landing
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 

@@ -1,0 +1,61 @@
+# The committed answers this project gives release-kit.
+# Landing verbs record resolved parameters in .release-kit/manifest.json.
+# P: landing parameter. N: free name. F: invariant floor.
+# A value below a floor refuses by name; read `rk method invariants`.
+
+schema_version = 1
+
+[project]
+repo = "gubasso/release-kit" # P: project path on the forge, nested groups included
+forge = "github" # P: github or gitlab; empty means detect
+tech = "rust" # P: payload binding; empty means detect
+trunk = "master" # N: the one permanent branch
+
+[landing]
+workflow = "worktree" # P: worktree or branches
+style = "trunk" # P: trunk or lines
+nix = false # P: opt-in Nix capability
+
+[security]
+advisories = "" # N: project receiving vulnerability reports
+contact = "" # N: contact when the form is unavailable
+response = "best-effort" # N: best-effort or a response window
+
+[setup]
+required_check = "" # N: the check the merge must pass
+retired_branches = ["main", "develop"] # N: long-lived branches retired by the trunk
+line_prefix = "release/" # N: release-line branch prefix
+release_lines = false # N: run release-line protection in a full apply
+
+[setup.bot]
+app_id = "" # N: public App identifier; private credentials stay outside this file
+installation_id = 0 # N: verified cache; zero means discover
+
+[protection]
+trunk_ruleset = "master-protection" # N: trunk ruleset name
+tag_ruleset = "release-tags" # N: tag ruleset name
+lines_ruleset = "release-lines" # N: release-line ruleset name
+title_check = "pr-title" # N: title job context
+tag_pattern = "refs/tags/v*" # F: invariant, covers every published version
+bypass_actors = [] # F: invariant, empty
+allowed_merge_methods = ["squash"] # F: invariant, exactly squash
+strict_required_status_checks = true # F: invariant, true
+owned_trunk_rules = ["deletion", "non_fast_forward", "pull_request", "required_status_checks"] # F: invariant, contains all four rules
+required_approving_review_count = 0 # F: floor zero; higher is stricter
+dismiss_stale_reviews_on_push = false # F: floor false; true is stricter
+require_code_owner_review = false # F: floor false; true is stricter
+require_last_push_approval = false # F: floor false; true is stricter
+
+[protection.github]
+squash_title_source = "PR_TITLE" # F: invariant, PR_TITLE
+squash_body_source = "PR_BODY" # F: invariant, PR_BODY
+
+[protection.gitlab]
+merge_method = "ff" # F: invariant, linear history
+squash_option = "always" # F: invariant, always squash
+squash_commit_template = """
+%{title}
+
+%{description}""" # F: invariant, references title and description
+push_access_level = 0 # F: invariant, zero
+merge_access_level = 30 # F: floor thirty

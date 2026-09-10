@@ -8,7 +8,7 @@ use clap::Args;
 ///
 /// Strict: every rendered file must match what this payload would
 /// render, and no target file is ever changed.
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args)]
 pub struct AdoptArgs {
     /// The repository to adopt.
     #[arg(long, default_value = ".")]
@@ -34,11 +34,11 @@ pub struct AdoptArgs {
     /// branches. It chooses which candidate adoption verifies against and
     /// never blesses the disk; the default is branches, the
     /// compatibility-safe reading of a pre-record target.
-    #[arg(long, default_value = "branches")]
-    pub workflow: String,
+    #[arg(long)]
+    pub workflow: Option<String>,
 
     /// The release style the candidate is rendered under: trunk or lines.
-    /// Required: the style changes the release workflow's bytes, and an
+    /// Required from the config or this flag: the style changes the bytes. An
     /// adoption verifies bytes against exactly one rendered candidate, so
     /// neither value is a safe guess.
     #[arg(long)]
@@ -51,7 +51,7 @@ pub struct AdoptArgs {
     #[arg(long)]
     pub nix: bool,
 
-    /// Write the record; without it the verification runs and nothing is
+    /// Write the config and record; without it verification runs and nothing is
     /// touched.
     #[arg(long)]
     pub apply: bool,

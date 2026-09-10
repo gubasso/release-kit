@@ -95,7 +95,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `maintenance:the-workflow-mode-is-a-landing-parameter` — The workflow mode is a landing parameter
 
-The working-copy mode MUST be recorded in the manifest, rendered into the landed blocks, reported by every parameter-bearing report, judged by `rk status --check`, and changed only through the landing verbs; a record predating the field MUST read as `branches`, and adoption MUST default to `branches`, so no upgrade or adoption ever imposes a guard the project did not choose.
+The working-copy mode MUST be recorded in the manifest, rendered into the landed blocks, reported by every parameter-bearing report, judged by `rk status --check`, and taken from committed configuration or an invocation flag by the landing verbs; a record predating the field MUST read as `branches`, and adoption with neither configuration nor a flag answering the mode MUST default to `branches`, so no upgrade or adoption ever imposes a guard the project did not choose.
 
 #### Scenario: A pre-mode record upgrades
 

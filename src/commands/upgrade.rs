@@ -59,6 +59,7 @@ struct Report {
     /// absent where nothing was withheld.
     #[serde(skip_serializing_if = "Option::is_none")]
     withheld: Option<Vec<landing::Withheld>>,
+    config: crate::config::Plan,
     /// Every destination, with its action.
     files: Vec<FileEntry>,
     /// What plausibly follows.
@@ -83,41 +84,40 @@ struct Decision<'a> {
 /// [`RkError::Io`] on filesystem failure.
 pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
     let out = Output::new(args.json);
-    let mut recorded = load_upgradable(&args.target)?;
-    // The mode change is an upgrade with exactly one overridden
-    // parameter; everything else — tech, forge, repo, lineage — comes
-    // from the record, untouched.
-    if let Some(raw) = args.workflow.as_deref() {
-        recorded.parameters.workflow = Workflow::parse(raw)?;
+    let recorded = load_upgradable(&args.target)?;
+    let existing = crate::config::load(args.target.as_std_path())?;
+    let params = resolve_params(args, &recorded, existing.as_ref())?;
+    let config = crate::config::Plan::new(
+        args.target.as_std_path(),
+        &params,
+        existing.as_ref(),
+        Some(&recorded),
+    )?;
+    for key in &config.changes {
+        out.result_line(format!("configuration changes {key}"));
     }
-    if let Some(raw) = args.style.as_deref() {
-        recorded.parameters.style = Some(Style::parse(raw)?);
-    }
-    // A pre-style record refuses rather than guessing: neither value is a
-    // compatibility-safe reading of a target nobody asked, because the
-    // style decides whether the landed release workflow arms the bot's
-    // request.
-    let Some(style) = recorded.parameters.style else {
-        return Err(RkError::Usage(
-            "the record carries no style parameter; pass --style <trunk|lines> — trunk arms the bot's release request to merge itself, lines keeps every merge a human's — and the upgrade records it".into(),
-        ));
-    };
-    resolve_nix(&mut recorded, args.nix.as_deref())?;
-    let (entries, withheld) = project(args, &recorded, style)?;
+    out.result_line(format!("{} {}", config.action, crate::config::CONFIG_PATH));
+    let style = params
+        .style()
+        .ok_or_else(|| RkError::Usage("landing style is unresolved".into()))?;
+    let mut entries = landing::projection(&params)?;
+    let withheld =
+        landing::withhold_nix(&args.target, params.nix(), Some(&recorded), &mut entries)?;
     refuse_non_regular(&args.target, &entries)?;
 
     let (decisions, conflicts) = decide_all(args, &recorded, &entries)?;
     // A file this payload stops shipping is a file the target owns from
     // that moment: left in place, named, and dropped from the record.
-    let mut dropped: Vec<String> = Vec::new();
-    for file in &recorded.files {
-        if !entries
-            .iter()
-            .any(|entry| entry.destination == file.destination)
-        {
-            dropped.push(file.destination.clone());
-        }
-    }
+    let dropped: Vec<String> = recorded
+        .files
+        .iter()
+        .filter(|file| {
+            !entries
+                .iter()
+                .any(|entry| entry.destination == file.destination)
+        })
+        .map(|file| file.destination.clone())
+        .collect();
 
     if args.apply && !conflicts.is_empty() {
         return Err(refuse_conflicts(&conflicts));
@@ -131,18 +131,7 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
                 collect_sentinels(entry, &mut sentinels);
             }
         }
-        out.result_line(match decision.action {
-            "drift" => format!(
-                "drift {} (seeded, target-owned)",
-                decision.record.destination
-            ),
-            "kept" => format!("kept {} (target-owned)", decision.record.destination),
-            "conflict" => format!(
-                "conflict {} (edited, release-kit-owned)",
-                decision.record.destination
-            ),
-            action => format!("{action} {}", decision.record.destination),
-        });
+        out.result_line(describe(decision));
     }
     for path in &dropped {
         out.result_line(format!(
@@ -154,7 +143,8 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
     }
 
     if args.apply {
-        rewrite_record(&args.target, &recorded, &decisions)?;
+        config.apply(args.target.as_std_path())?;
+        rewrite_record(&args.target, &recorded, &params, &decisions)?;
         out.result_line(format!("rewrote {}", manifest::MANIFEST_PATH));
         for sentinel in &sentinels {
             out.result_line(format!("fill this sentinel: {sentinel}"));
@@ -164,16 +154,17 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
     let next = next_lines(args, conflicts.is_empty());
     out.next(&next);
     out.emit(&Report {
-        schema: "rk.upgrade/4",
+        schema: "rk.upgrade/5",
+        config,
         mode: if args.apply { "apply" } else { "preview" },
         target: args.target.to_string(),
-        tech: recorded.tech.clone(),
-        forge: recorded.forge.clone(),
+        tech: params.tech().into(),
+        forge: params.forge().into(),
         from_version: recorded.rk_version.clone(),
         to_version: env!("CARGO_PKG_VERSION"),
-        workflow: recorded.parameters.workflow.as_str(),
+        workflow: params.workflow().as_str(),
         style: style.as_str(),
-        nix: recorded.parameters.nix,
+        nix: params.nix(),
         withheld: (!withheld.is_empty()).then_some(withheld),
         files: decisions
             .iter()
@@ -192,51 +183,50 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
     })
 }
 
-/// The Nix opt-in changes in either direction: `on` adds the capability's
-/// files and records it, `off` drops them from the record while the files
-/// stay the target's own. Omitted, the recorded choice is kept.
-fn resolve_nix(recorded: &mut Manifest, flag: Option<&str>) -> Result<(), RkError> {
-    match flag {
-        None => Ok(()),
-        Some("on") => {
-            recorded.parameters.nix = true;
-            Ok(())
-        }
-        Some("off") => {
-            recorded.parameters.nix = false;
-            Ok(())
-        }
-        Some(other) => Err(RkError::Usage(format!(
-            "unknown --nix value '{other}'; the values are: on, off"
-        ))),
+fn describe(decision: &Decision<'_>) -> String {
+    match decision.action {
+        "drift" => format!(
+            "drift {} (seeded, target-owned)",
+            decision.record.destination
+        ),
+        "kept" => format!("kept {} (target-owned)", decision.record.destination),
+        "conflict" => format!(
+            "conflict {} (edited, release-kit-owned)",
+            decision.record.destination
+        ),
+        action => format!("{action} {}", decision.record.destination),
     }
 }
 
-/// The projection this record produces, with the Nix entries the target
-/// cannot take withheld exactly as a landing would withhold them.
-fn project(
+fn resolve_params(
     args: &UpgradeArgs,
     recorded: &Manifest,
-    style: Style,
-) -> Result<(Vec<landing::Entry>, Vec<landing::Withheld>), RkError> {
-    let params = landing::Params::resolve(
-        &recorded.tech,
-        &landing::Resolved {
-            forge: recorded.forge.clone(),
-            repo: Some(recorded.parameters.repo.clone()),
-        },
-        recorded.parameters.workflow,
-        Some(style),
-        recorded.parameters.nix,
-    )?;
-    let mut entries = landing::projection(&params)?;
-    let withheld = landing::withhold_nix(
+    existing: Option<&crate::config::Config>,
+) -> Result<landing::Params, RkError> {
+    let nix = match args.nix.as_deref() {
+        None => None,
+        Some("on") => Some(true),
+        Some("off") => Some(false),
+        Some(other) => {
+            return Err(RkError::Usage(format!(
+                "unknown --nix value '{other}'; the values are: on, off"
+            )));
+        }
+    };
+    landing::Params::resolve(
         &args.target,
-        recorded.parameters.nix,
+        &landing::Inputs {
+            tech: args.tech.as_deref(),
+            forge: args.forge.as_deref(),
+            repo: args.repo.as_deref(),
+            workflow: args.workflow.as_deref().map(Workflow::parse).transpose()?,
+            style: args.style.as_deref().map(Style::parse).transpose()?,
+            nix,
+        },
+        existing,
         Some(recorded),
-        &mut entries,
-    )?;
-    Ok((entries, withheld))
+        landing::Purpose::Upgrade,
+    )
 }
 
 /// The collect-then-refuse conflict answer: the whole list in one run, so
@@ -260,6 +250,14 @@ fn refuse_conflicts(conflicts: &[String]) -> RkError {
 /// preview was run with rides into the follow-up command, so following
 /// it applies the decision that was previewed, never a different one.
 fn next_lines(args: &UpgradeArgs, clean: bool) -> Vec<String> {
+    let identity_flags: String = [
+        ("tech", args.tech.as_deref()),
+        ("forge", args.forge.as_deref()),
+        ("repo", args.repo.as_deref()),
+    ]
+    .into_iter()
+    .filter_map(|(key, value)| value.map(|value| format!(" --{key} {value}")))
+    .collect();
     let workflow_flag = args
         .workflow
         .as_deref()
@@ -279,23 +277,24 @@ fn next_lines(args: &UpgradeArgs, clean: bool) -> Vec<String> {
         ]
     } else if clean {
         vec![format!(
-            "rk upgrade{workflow_flag}{style_flag}{nix_flag} --target {} --apply writes",
+            "rk upgrade{identity_flags}{workflow_flag}{style_flag}{nix_flag} --target {} --apply writes",
             args.target
         )]
     } else {
         vec![format!(
-            "resolve each conflict above; rk upgrade{workflow_flag}{style_flag}{nix_flag} --target {} --apply refuses until then",
+            "resolve each conflict above; rk upgrade{identity_flags}{workflow_flag}{style_flag}{nix_flag} --target {} --apply refuses until then",
             args.target
         )]
     }
 }
 
 /// The record after a successful apply, rewritten whole: new version, new
-/// digests, new pins; the first landing's instant, origin, and parameters
-/// are preserved.
+/// digests, new pins and resolved parameters; the first landing's instant
+/// and origin are preserved.
 fn rewrite_record(
     target: &camino::Utf8Path,
     recorded: &Manifest,
+    params: &landing::Params,
     decisions: &[Decision],
 ) -> Result<(), RkError> {
     manifest::write(
@@ -305,20 +304,20 @@ fn rewrite_record(
             rk_version: env!("CARGO_PKG_VERSION").to_owned(),
             payload_sha256: crate::commands::payload::report().payload_sha256,
             origin: recorded.origin.clone(),
-            tech: recorded.tech.clone(),
-            forge: recorded.forge.clone(),
+            tech: params.tech().into(),
+            forge: params.forge().into(),
             landed_at: recorded.landed_at.clone(),
             parameters: manifest::Parameters {
-                repo: recorded.parameters.repo.clone(),
-                workflow: recorded.parameters.workflow,
-                style: recorded.parameters.style,
-                nix: recorded.parameters.nix,
+                repo: params.repo().into(),
+                workflow: params.workflow(),
+                style: params.style(),
+                nix: params.nix(),
             },
             files: decisions
                 .iter()
                 .map(|decision| clone_record(&decision.record))
                 .collect(),
-            pins: registry::pins_for(&recorded.tech)
+            pins: registry::pins_for(params.tech())
                 .into_iter()
                 .map(|pin| (pin.name, pin.version))
                 .collect(),
@@ -603,11 +602,16 @@ mod tests {
 
     use super::{FileEntry, Report};
 
-    /// The complete `rk.upgrade/3` shape, held by snapshot.
+    /// The complete `rk.upgrade/5` shape, held by snapshot.
     #[test]
     fn the_upgrade_report_schema_snapshot_holds() {
         let report = Report {
-            schema: "rk.upgrade/4",
+            schema: "rk.upgrade/5",
+            config: crate::config::Plan {
+                action: "added",
+                changes: vec![],
+                content: "schema_version = 1\n".into(),
+            },
             mode: "preview",
             target: "/tmp/t".into(),
             tech: "rust".into(),
@@ -627,7 +631,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.upgrade/4","mode":"preview","target":"/tmp/t","tech":"rust","forge":"github","from_version":"0.1.0","to_version":"0.2.0","workflow":"branches","style":"trunk","nix":false,"files":[{"path":"release-plz.toml","kind":"seeded","action":"drift"}],"next":["rk upgrade --target /tmp/t --apply writes"]}"#
+            r#"{"schema":"rk.upgrade/5","mode":"preview","target":"/tmp/t","tech":"rust","forge":"github","from_version":"0.1.0","to_version":"0.2.0","workflow":"branches","style":"trunk","nix":false,"config":{"action":"added","changes":[],"content":"schema_version = 1\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"drift"}],"next":["rk upgrade --target /tmp/t --apply writes"]}"#
         );
     }
 }

@@ -4,11 +4,11 @@ use camino::Utf8PathBuf;
 use clap::Args;
 
 /// Land a technology's deterministic files into a target repository.
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args)]
 pub struct InitArgs {
     /// The technology whose files land; one of the bindings.
     #[arg(long)]
-    pub tech: String,
+    pub tech: Option<String>,
 
     /// The repository the files land into.
     #[arg(long)]
@@ -30,16 +30,16 @@ pub struct InitArgs {
     /// commits nothing) or branches (branches worked in the main
     /// checkout, worktrees optional beside them). Recorded as a landing
     /// parameter and rendered into the landed blocks.
-    #[arg(long, default_value = "worktree")]
-    pub workflow: String,
+    #[arg(long)]
+    pub workflow: Option<String>,
 
     /// The release style this project chooses: trunk (the bot's release
     /// request carries auto-merge from creation, so a green trunk ships
     /// itself) or lines (every request waits for a human's merge).
     /// Recorded as a landing parameter and rendered into the landed
     /// release workflow.
-    #[arg(long, default_value = "trunk")]
-    pub style: String,
+    #[arg(long)]
+    pub style: Option<String>,
 
     /// Opt the landing into the Nix capability: a seeded package
     /// expression, a seed flake pair where the target has none, and the

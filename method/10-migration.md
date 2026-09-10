@@ -47,7 +47,9 @@ Three steps remove something a mistake cannot rebuild: the second branch's delet
 
 ## Changing a landing parameter
 
-A workflow-mode or release-style change is a named migration, never a side effect of a code-change request: `rk upgrade --workflow <mode>` or `rk upgrade --style <style>`, previewed, applied on approval, committed through the trunk's one path. [Worktrees](./08-worktrees.md) owns the transition for branches open across a mode change, and [release lines](./09-release-lines.md) owns what the style changes; this chapter adds only that the change is an inventory entry with its own verification, not a line in another entry.
+A workflow-mode or release-style change is a named migration: edit `landing.workflow` or `landing.style` in `.release-kit/config.toml`, preview with `rk upgrade`, and apply with `rk upgrade --apply` through the trunk’s one path. A flag overrides the configured key and an apply writes it back while preserving comments. [Worktrees](./08-worktrees.md) owns the transition for branches open across a mode change, and [release lines](./09-release-lines.md) owns what the style changes; this chapter adds only that the change is an inventory entry with its own verification, not a line in another entry.
+
+An existing target with no config keeps its recorded parameters. Its first upgrade adds the config from those parameters and compiled defaults, with every payload byte unchanged where the payload itself is unchanged. A pre-style record needs the config or a flag to answer style; an omitted key still leaves that decision open. Adoption verifies the candidate first, then writes the config and the record inside `.release-kit/`, leaving payload destinations untouched.
 
 ## Boundary tests
 
