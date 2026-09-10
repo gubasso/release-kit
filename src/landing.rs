@@ -227,7 +227,7 @@ pub fn render(baseline: &[u8], repo: &str, style: Option<Style>) -> Vec<u8> {
 }
 
 /// Every `token` occurrence replaced with `value`.
-fn substitute(baseline: &[u8], token: &[u8], value: &[u8]) -> Vec<u8> {
+pub(crate) fn substitute(baseline: &[u8], token: &[u8], value: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(baseline.len());
     let mut rest = baseline;
     while let Some(at) = find(rest, token) {

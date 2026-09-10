@@ -156,6 +156,10 @@ mod tests {
             ),
             (RkError::Refused("left unchanged".into()), 73),
             (
+                RkError::refusal(Diagnostic::new(Reason::ConfigInvalid, "bad config")),
+                73,
+            ),
+            (
                 RkError::refusal(Diagnostic::new(Reason::TargetNotFound, "no target")),
                 73,
             ),
