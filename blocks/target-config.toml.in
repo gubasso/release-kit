@@ -1,0 +1,58 @@
+# The committed answers this project gives release-kit.
+# Landing verbs record resolved parameters in .release-kit/manifest.json.
+# P: landing parameter. N: free name. F: invariant floor.
+# A value below a floor refuses by name; read `rk method invariants`.
+
+schema_version = RK_CONFIG_SCHEMA_VERSION
+
+[project]
+repo = RK_CONFIG_PROJECT_REPO # P: project path on the forge, nested groups included
+forge = RK_CONFIG_PROJECT_FORGE # P: github or gitlab; empty means detect
+tech = RK_CONFIG_PROJECT_TECH # P: payload binding; empty means detect
+trunk = RK_CONFIG_PROJECT_TRUNK # N: the one permanent branch
+
+[landing]
+workflow = RK_CONFIG_LANDING_WORKFLOW # P: worktree or branches
+style = RK_CONFIG_LANDING_STYLE # P: trunk or lines
+nix = RK_CONFIG_LANDING_NIX # P: opt-in Nix capability
+
+[security]
+advisories = RK_CONFIG_SECURITY_ADVISORIES # N: project receiving vulnerability reports
+contact = RK_CONFIG_SECURITY_CONTACT # N: contact when the form is unavailable
+response = RK_CONFIG_SECURITY_RESPONSE # N: best-effort or a response window
+
+[setup]
+required_check = RK_CONFIG_SETUP_REQUIRED_CHECK # N: the check the merge must pass
+retired_branches = RK_CONFIG_SETUP_RETIRED_BRANCHES # N: long-lived branches retired by the trunk
+line_prefix = RK_CONFIG_SETUP_LINE_PREFIX # N: release-line branch prefix
+release_lines = RK_CONFIG_SETUP_RELEASE_LINES # N: run release-line protection in a full apply
+
+[setup.bot]
+app_id = RK_CONFIG_SETUP_BOT_APP_ID # N: public App identifier; private credentials stay outside this file
+installation_id = RK_CONFIG_SETUP_BOT_INSTALLATION_ID # N: verified cache; zero means discover
+
+[protection]
+trunk_ruleset = RK_CONFIG_PROTECTION_TRUNK_RULESET # N: trunk ruleset name
+tag_ruleset = RK_CONFIG_PROTECTION_TAG_RULESET # N: tag ruleset name
+lines_ruleset = RK_CONFIG_PROTECTION_LINES_RULESET # N: release-line ruleset name
+title_check = RK_CONFIG_PROTECTION_TITLE_CHECK # N: title job context
+tag_pattern = RK_CONFIG_PROTECTION_TAG_PATTERN # F: invariant, covers every published version
+bypass_actors = RK_CONFIG_PROTECTION_BYPASS_ACTORS # F: invariant, empty
+allowed_merge_methods = RK_CONFIG_PROTECTION_ALLOWED_MERGE_METHODS # F: invariant, exactly squash
+strict_required_status_checks = RK_CONFIG_PROTECTION_STRICT_REQUIRED_STATUS_CHECKS # F: invariant, true
+owned_trunk_rules = RK_CONFIG_PROTECTION_OWNED_TRUNK_RULES # F: invariant, contains all four rules
+required_approving_review_count = RK_CONFIG_PROTECTION_REQUIRED_APPROVING_REVIEW_COUNT # F: floor zero; higher is stricter
+dismiss_stale_reviews_on_push = RK_CONFIG_PROTECTION_DISMISS_STALE_REVIEWS_ON_PUSH # F: floor false; true is stricter
+require_code_owner_review = RK_CONFIG_PROTECTION_REQUIRE_CODE_OWNER_REVIEW # F: floor false; true is stricter
+require_last_push_approval = RK_CONFIG_PROTECTION_REQUIRE_LAST_PUSH_APPROVAL # F: floor false; true is stricter
+
+[protection.github]
+squash_title_source = RK_CONFIG_PROTECTION_GITHUB_SQUASH_TITLE_SOURCE # F: invariant, PR_TITLE
+squash_body_source = RK_CONFIG_PROTECTION_GITHUB_SQUASH_BODY_SOURCE # F: invariant, PR_BODY
+
+[protection.gitlab]
+merge_method = RK_CONFIG_PROTECTION_GITLAB_MERGE_METHOD # F: invariant, linear history
+squash_option = RK_CONFIG_PROTECTION_GITLAB_SQUASH_OPTION # F: invariant, always squash
+squash_commit_template = RK_CONFIG_PROTECTION_GITLAB_SQUASH_COMMIT_TEMPLATE # F: invariant, references title and description
+push_access_level = RK_CONFIG_PROTECTION_GITLAB_PUSH_ACCESS_LEVEL # F: invariant, zero
+merge_access_level = RK_CONFIG_PROTECTION_GITLAB_MERGE_ACCESS_LEVEL # F: floor thirty

@@ -58,11 +58,13 @@ pub enum Reason {
     Io,
     /// A defect in this binary.
     Internal,
+    /// A hand-authored target configuration is invalid.
+    ConfigInvalid,
 }
 
 /// Every reason, in declaration order; a test asserts against this so an
 /// addition is deliberate and a rename impossible.
-pub const REASONS: [Reason; 18] = [
+pub const REASONS: [Reason; 19] = [
     Reason::Usage,
     Reason::TargetNotFound,
     Reason::ForgeUndetected,
@@ -81,6 +83,7 @@ pub const REASONS: [Reason; 18] = [
     Reason::SubprocessFailed,
     Reason::Io,
     Reason::Internal,
+    Reason::ConfigInvalid,
 ];
 
 impl Reason {
@@ -106,6 +109,7 @@ impl Reason {
             Self::SubprocessFailed => "subprocess-failed",
             Self::Io => "io",
             Self::Internal => "internal",
+            Self::ConfigInvalid => "config-invalid",
         }
     }
 }
@@ -258,6 +262,7 @@ mod tests {
                 "subprocess-failed",
                 "io",
                 "internal",
+                "config-invalid",
             ]
         );
     }

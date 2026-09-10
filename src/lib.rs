@@ -14,6 +14,7 @@ pub mod atomic;
 pub mod branches;
 pub mod cli;
 pub mod commands;
+pub mod config;
 pub mod depend;
 pub mod detect;
 pub mod devshell;
