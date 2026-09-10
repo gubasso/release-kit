@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.12](https://github.com/gubasso/release-kit/compare/v0.3.11...v0.3.12) - 2026-09-10
+
+### Added
+
+- *(setup)* give a landed target a private vulnerability reporting channel ([#144](https://github.com/gubasso/release-kit/pull/144))
+
 ## [0.3.11](https://github.com/gubasso/release-kit/compare/v0.3.10...v0.3.11) - 2026-09-09
 
 ### Other
