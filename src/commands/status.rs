@@ -452,7 +452,7 @@ fn observe_parameter_drift(manifest: &Manifest, observed: &mut Observed) {
         {
             continue;
         }
-        let candidate = landing::render(template.as_bytes(), params.repo(), params.style());
+        let candidate = landing::render(template.as_bytes(), &params);
         if Digest::of(&candidate) != record.sha256 {
             observed
                 .parameter_drift

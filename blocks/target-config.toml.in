@@ -9,7 +9,7 @@ schema_version = RK_CONFIG_SCHEMA_VERSION
 repo = RK_CONFIG_PROJECT_REPO # P: project path on the forge, nested groups included
 forge = RK_CONFIG_PROJECT_FORGE # P: github or gitlab; empty means detect
 tech = RK_CONFIG_PROJECT_TECH # P: payload binding; empty means detect
-trunk = RK_CONFIG_PROJECT_TRUNK # N: the one permanent branch
+trunk = RK_CONFIG_PROJECT_TRUNK # P: the one permanent branch, rendered into every artifact naming it
 
 [landing]
 workflow = RK_CONFIG_LANDING_WORKFLOW # P: worktree or branches
@@ -24,7 +24,7 @@ response = RK_CONFIG_SECURITY_RESPONSE # N: best-effort or a response window
 [setup]
 required_check = RK_CONFIG_SETUP_REQUIRED_CHECK # N: the check the merge must pass
 retired_branches = RK_CONFIG_SETUP_RETIRED_BRANCHES # N: long-lived branches retired by the trunk
-line_prefix = RK_CONFIG_SETUP_LINE_PREFIX # N: release-line branch prefix
+line_prefix = RK_CONFIG_SETUP_LINE_PREFIX # P: release-line branch prefix, rendered into the release triggers
 release_lines = RK_CONFIG_SETUP_RELEASE_LINES # N: run release-line protection in a full apply
 
 [setup.bot]

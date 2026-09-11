@@ -12,7 +12,7 @@ use serde_json::Value;
 use crate::detect::Forge;
 use crate::error::RkError;
 use crate::setup::app_jwt::{self, AppApi};
-use crate::setup::context::{Ctx, TRUNK_BRANCH};
+use crate::setup::context::Ctx;
 use crate::setup::process::{Exec, Outcome};
 use crate::setup::workflow_jobs;
 
@@ -288,8 +288,9 @@ fn forge_version(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkError> {
 ///
 /// Propagates executor failures.
 pub fn single_trunk_guard(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkError> {
+    let trunk = ctx.trunk();
     for candidate in TRUNK_CANDIDATES {
-        if candidate == TRUNK_BRANCH {
+        if candidate == trunk {
             continue;
         }
         let state = match ctx.forge {
@@ -311,6 +312,7 @@ fn github_candidate_guard(
     run: &mut Runner,
     candidate: &str,
 ) -> Result<StepState, RkError> {
+    let trunk = ctx.trunk();
     match api_get(
         ctx,
         run,
@@ -323,15 +325,15 @@ fn github_candidate_guard(
     match api_get(
         ctx,
         run,
-        &format!("repos/{}/compare/{candidate}...{TRUNK_BRANCH}", ctx.repo),
+        &format!("repos/{}/compare/{candidate}...{trunk}", ctx.repo),
     )? {
         Api::Ok(body) => {
             let status = body["status"].as_str().unwrap_or("");
             Ok(if matches!(status, "ahead" | "identical") {
-                StepState::ok(format!("{candidate} is an ancestor of {TRUNK_BRANCH}"))
+                StepState::ok(format!("{candidate} is an ancestor of {trunk}"))
             } else {
                 StepState::not(format!(
-                    "{candidate} is not an ancestor of {TRUNK_BRANCH} ({status}); deleting it would lose work"
+                    "{candidate} is not an ancestor of {trunk} ({status}); deleting it would lose work"
                 ))
             })
         }
@@ -346,6 +348,7 @@ fn gitlab_candidate_guard(
     run: &mut Runner,
     candidate: &str,
 ) -> Result<StepState, RkError> {
+    let trunk = ctx.trunk();
     let project = ctx.repo.replace('/', "%2F");
     match api_get(
         ctx,
@@ -359,7 +362,7 @@ fn gitlab_candidate_guard(
     match api_get(
         ctx,
         run,
-        &format!("projects/{project}/repository/compare?from={TRUNK_BRANCH}&to={candidate}"),
+        &format!("projects/{project}/repository/compare?from={trunk}&to={candidate}"),
     )? {
         Api::Ok(body) => {
             let ahead = body["commits"]
@@ -367,10 +370,10 @@ fn gitlab_candidate_guard(
                 .is_some_and(|list| !list.is_empty());
             Ok(if ahead {
                 StepState::not(format!(
-                    "{candidate} carries commits {TRUNK_BRANCH} does not; deleting it would lose work"
+                    "{candidate} carries commits {trunk} does not; deleting it would lose work"
                 ))
             } else {
-                StepState::ok(format!("{candidate} is an ancestor of {TRUNK_BRANCH}"))
+                StepState::ok(format!("{candidate} is an ancestor of {trunk}"))
             })
         }
         Api::Missing => Ok(StepState::unknown("the comparison is not readable")),
@@ -416,6 +419,7 @@ fn last_line(bytes: &[u8]) -> String {
 
 #[allow(clippy::too_many_lines)]
 fn github(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError> {
+    let trunk = ctx.trunk();
     let repo = &ctx.repo;
     match step {
         "private-vulnerability-reporting" => {
@@ -460,8 +464,8 @@ fn github(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
         "default-branch" => Ok(match api_get(ctx, run, &format!("repos/{repo}"))? {
             Api::Ok(body) => {
                 let found = body["default_branch"].as_str().unwrap_or("");
-                if found == TRUNK_BRANCH {
-                    StepState::ok(format!("{TRUNK_BRANCH} is the default branch"))
+                if found == trunk {
+                    StepState::ok(format!("{trunk} is the default branch"))
                 } else {
                     StepState::not(format!("the default branch is {found}"))
                 }
@@ -471,7 +475,7 @@ fn github(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
         }),
         "single-trunk" => {
             for candidate in TRUNK_CANDIDATES {
-                if candidate == TRUNK_BRANCH {
+                if candidate == trunk {
                     continue;
                 }
                 match api_get(ctx, run, &format!("repos/{repo}/git/ref/heads/{candidate}"))? {
@@ -608,7 +612,7 @@ fn github(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
             match api_get(ctx, run, &format!("repos/{repo}/rulesets"))? {
                 Api::Ok(body) => {
                     let owned = [
-                        format!("{TRUNK_BRANCH}-protection"),
+                        format!("{trunk}-protection"),
                         "release-tags".to_owned(),
                         "release-lines".to_owned(),
                     ];
@@ -758,7 +762,8 @@ fn unowned_rule_faults(rules: &[Value]) -> Vec<String> {
 }
 
 fn github_trunk_ruleset(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkError> {
-    let name = format!("{TRUNK_BRANCH}-protection");
+    let trunk = ctx.trunk();
+    let name = format!("{trunk}-protection");
     let detail = match github_ruleset_body(ctx, run, &name)? {
         RulesetLookup::Found(detail) => detail,
         RulesetLookup::Absent => {
@@ -778,11 +783,9 @@ fn github_trunk_ruleset(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkErro
     if detail["target"] != "branch" {
         faults.push(format!("{name} does not target branches"));
     }
-    let expected_ref = serde_json::json!([format!("refs/heads/{TRUNK_BRANCH}")]);
+    let expected_ref = serde_json::json!([format!("refs/heads/{trunk}")]);
     if detail["conditions"]["ref_name"]["include"] != expected_ref {
-        faults.push(format!(
-            "{name} does not cover refs/heads/{TRUNK_BRANCH} alone"
-        ));
+        faults.push(format!("{name} does not cover refs/heads/{trunk} alone"));
     }
     // A matching exclusion negates the include, so the owned shape is an
     // exclusion list that is exactly empty.
@@ -874,7 +877,11 @@ fn github_trunk_ruleset(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkErro
 /// as a convention instead.
 fn gate_faults(ctx: &Ctx) -> Option<String> {
     let check = ctx.required_check.as_deref()?;
-    workflow_jobs::faults(&workflow_jobs::read_gate(&ctx.target, check), check)
+    workflow_jobs::faults(
+        &workflow_jobs::read_gate(&ctx.target, check, ctx.trunk()),
+        check,
+        ctx.trunk(),
+    )
 }
 
 /// What the repository's squash message settings hold.
@@ -991,6 +998,7 @@ const GITLAB_TITLE_LIMITATION: &str = "the title gate stops accident, not author
 
 #[allow(clippy::too_many_lines)]
 fn gitlab(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError> {
+    let trunk = ctx.trunk();
     let project = ctx.repo.replace('/', "%2F");
     match step {
         "private-vulnerability-reporting" => {
@@ -1026,8 +1034,8 @@ fn gitlab(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
         "default-branch" => Ok(match api_get(ctx, run, &format!("projects/{project}"))? {
             Api::Ok(body) => {
                 let found = body["default_branch"].as_str().unwrap_or("");
-                if found == TRUNK_BRANCH {
-                    StepState::ok(format!("{TRUNK_BRANCH} is the default branch"))
+                if found == trunk {
+                    StepState::ok(format!("{trunk} is the default branch"))
                 } else {
                     StepState::not(format!("the default branch is {found}"))
                 }
@@ -1037,7 +1045,7 @@ fn gitlab(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
         }),
         "single-trunk" => {
             for candidate in TRUNK_CANDIDATES {
-                if candidate == TRUNK_BRANCH {
+                if candidate == trunk {
                     continue;
                 }
                 match api_get(
@@ -1173,11 +1181,11 @@ fn gitlab(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
             let protection = match api_get(
                 ctx,
                 run,
-                &format!("projects/{project}/protected_branches/{TRUNK_BRANCH}"),
+                &format!("projects/{project}/protected_branches/{trunk}"),
             )? {
                 Api::Ok(body) => body,
                 Api::Missing => {
-                    return Ok(StepState::not(format!("{TRUNK_BRANCH} is not protected")));
+                    return Ok(StepState::not(format!("{trunk} is not protected")));
                 }
                 Api::Failed(err) => return Ok(StepState::unknown(err)),
             };
@@ -1204,17 +1212,17 @@ fn gitlab(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
             let mut faults = Vec::new();
             if !no_push {
                 faults.push(format!(
-                    "{TRUNK_BRANCH} still takes a direct push: the forge honors the most permissive of {} push grants",
+                    "{trunk} still takes a direct push: the forge honors the most permissive of {} push grants",
                     grants.len()
                 ));
             }
             if !can_merge {
                 faults.push(format!(
-                    "{TRUNK_BRANCH} merge grants are not exactly the one owned maintainer level"
+                    "{trunk} merge grants are not exactly the one owned maintainer level"
                 ));
             }
             if protection["allow_force_push"] != false {
-                faults.push(format!("{TRUNK_BRANCH} allows force pushes"));
+                faults.push(format!("{trunk} allows force pushes"));
             }
             if settings["only_allow_merge_if_pipeline_succeeds"] != true {
                 faults.push("the pipeline requirement is off".to_owned());
@@ -1230,7 +1238,7 @@ fn gitlab(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
             }
             Ok(if faults.is_empty() {
                 StepState::ok_with_limitation(
-                    format!("{TRUNK_BRANCH} holds the release-merge shape"),
+                    format!("{trunk} holds the release-merge shape"),
                     GITLAB_TITLE_LIMITATION,
                 )
             } else {

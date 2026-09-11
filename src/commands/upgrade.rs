@@ -312,6 +312,8 @@ fn rewrite_record(
                 workflow: params.workflow(),
                 style: params.style(),
                 nix: params.nix(),
+                trunk: params.trunk().to_owned(),
+                line_prefix: params.line_prefix().to_owned(),
             },
             files: decisions
                 .iter()

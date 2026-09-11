@@ -1,6 +1,6 @@
 # The release automation and the crates.io trusted publisher for GitLab CI.
 #
-# Both jobs run on every push to the trunk, and to a release/* line when a
+# Both jobs run on every push to the trunk, and to a RK_LINE_PREFIX* line when a
 # project keeps older lines. release-plz maintains the one release merge
 # request against the pushed branch, and merging it is the release: the bump
 # push is what makes the release job tag the commit, create the GitLab
@@ -29,7 +29,7 @@ stages:
 workflow:
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-    - if: '$CI_PROJECT_ROOT_NAMESPACE == "OWNER" && ($CI_COMMIT_BRANCH == "master" || $CI_COMMIT_BRANCH =~ /^release\//)'
+    - if: '$CI_PROJECT_ROOT_NAMESPACE == "OWNER" && ($CI_COMMIT_BRANCH == "RK_TRUNK_BRANCH" || $CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/)'
 
 # The project's own jobs, in a pipeline of their own. This forge
 # reverse-deep-merges an include, so a file the project owns would
@@ -72,7 +72,7 @@ project-jobs:
 release-request:
   extends: .release-plz
   rules:
-    - if: '$CI_COMMIT_BRANCH == "master" || $CI_COMMIT_BRANCH =~ /^release\//'
+    - if: '$CI_COMMIT_BRANCH == "RK_TRUNK_BRANCH" || $CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/'
   resource_group: release-request
   variables:
     RELEASE_STYLE: RK_STYLE
@@ -93,7 +93,7 @@ release-request:
         echo "the lines style merges each release by hand; not arming."
         exit 0
       fi
-      if [ "$CI_COMMIT_BRANCH" != "master" ]; then
+      if [ "$CI_COMMIT_BRANCH" != "RK_TRUNK_BRANCH" ]; then
         echo "a line's request is never armed; its candidate is what a human validated."
         exit 0
       fi
@@ -117,7 +117,7 @@ release-request:
 release:
   extends: .release-plz
   rules:
-    - if: '$CI_COMMIT_BRANCH == "master" || $CI_COMMIT_BRANCH =~ /^release\//'
+    - if: '$CI_COMMIT_BRANCH == "RK_TRUNK_BRANCH" || $CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/'
   resource_group: release
   id_tokens:
     CRATES_IO_ID_TOKEN:

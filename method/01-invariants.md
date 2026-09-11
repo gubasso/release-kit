@@ -24,7 +24,15 @@ The registry refuses a second upload of the same version, and a moved tag serves
 
 ## Trunk is written through pull requests only
 
-`master` takes no direct push and no force-push, requires the named passing check, and merges only by squash, so one pull request is one commit and the history stays linear. Nothing in the pipeline writes the branch outside a merge, so the ruleset names no bypass actor; the bot's bump rides the same merge button as everyone's work.
+The trunk takes no direct push and no force-push, requires the named passing check, and merges only by squash, so one pull request is one commit and the history stays linear. Nothing in the pipeline writes the branch outside a merge, so the ruleset names no bypass actor; the bot's bump rides the same merge button as everyone's work.
+
+The trunk's name is the project's own. `master` is the default, and a project states another in `project.trunk` in its committed configuration; the landing renders that name into every artifact that names a branch, and records it, so the binary and the landed bytes cannot disagree about which branch is the trunk.
+
+## A protection carries a name and a policy
+
+The name is the project's. release-kit reads it from the committed configuration without judgment, because what a project calls its trunk, its rulesets, or its release lines makes no invariant here true or false.
+
+The policy is the method's. The same file carries it as a key with a floor. A value below a floor is refused by name, and the refusal names the key, the floor, and this chapter. A value above a floor is the project being stricter than the method asks, which the method permits: every floor here states a minimum and none states a maximum.
 
 ## The trunk is always releasable
 

@@ -143,6 +143,7 @@ pub fn run(args: &InitArgs) -> Result<(), RkError> {
             &entries,
             withheld,
             config_plan,
+            &params,
         )
     } else {
         let repo = (params.repo() != "OWNER").then(|| params.repo().to_owned());
@@ -243,6 +244,7 @@ fn apply(
     entries: &[Entry],
     withheld: Vec<landing::Withheld>,
     config: crate::config::Plan,
+    params: &landing::Params,
 ) -> Result<(), RkError> {
     refuse_a_recorded_target(args)?;
     landing::hooks_splice_refusal(&args.target)?;
@@ -329,6 +331,8 @@ fn apply(
                 workflow,
                 style: Some(style),
                 nix: args.nix,
+                trunk: params.trunk().to_owned(),
+                line_prefix: params.line_prefix().to_owned(),
             },
             files: records,
             pins: registry::pins_for(args.tech.as_deref().unwrap_or_default())

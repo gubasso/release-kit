@@ -2,7 +2,7 @@
 # publishing is tagging, and the tarball attached to the release page is the
 # distribution.
 #
-# The release jobs run on every push to the trunk, and to a release/* line
+# The release jobs run on every push to the trunk, and to a RK_LINE_PREFIX* line
 # when a project keeps older lines. The release-request job drives git-cliff
 # to maintain the one release merge request — VERSION plus the changelog —
 # against the pushed branch, and merging that request is the release: the
@@ -29,7 +29,7 @@ stages:
 workflow:
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-    - if: '$CI_PROJECT_ROOT_NAMESPACE == "OWNER" && ($CI_COMMIT_BRANCH == "master" || $CI_COMMIT_BRANCH =~ /^release\//)'
+    - if: '$CI_PROJECT_ROOT_NAMESPACE == "OWNER" && ($CI_COMMIT_BRANCH == "RK_TRUNK_BRANCH" || $CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/)'
 
 # The project's own jobs, in a pipeline of their own. This forge
 # reverse-deep-merges an include, so a file the project owns would
@@ -72,7 +72,7 @@ project-jobs:
 release-request:
   extends: .tooling
   rules:
-    - if: '$CI_COMMIT_BRANCH == "master" || $CI_COMMIT_BRANCH =~ /^release\//'
+    - if: '$CI_COMMIT_BRANCH == "RK_TRUNK_BRANCH" || $CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/'
   resource_group: release-request
   variables:
     RELEASE_STYLE: RK_STYLE
@@ -118,7 +118,7 @@ release-request:
         echo "the lines style merges each release by hand; not arming."
         exit 0
       fi
-      if [ "$CI_COMMIT_BRANCH" != "master" ]; then
+      if [ "$CI_COMMIT_BRANCH" != "RK_TRUNK_BRANCH" ]; then
         echo "a line's request is never armed; its candidate is what a human validated."
         exit 0
       fi
@@ -145,7 +145,7 @@ release-request:
 tag-and-build:
   extends: .tooling
   rules:
-    - if: '$CI_COMMIT_BRANCH == "master" || $CI_COMMIT_BRANCH =~ /^release\//'
+    - if: '$CI_COMMIT_BRANCH == "RK_TRUNK_BRANCH" || $CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/'
   resource_group: release
   variables:
     RUNNER_GENERATE_ARTIFACTS_METADATA: "true"
@@ -199,7 +199,7 @@ provenance:
   stage: provenance
   needs: ["tag-and-build"]
   rules:
-    - if: '$CI_COMMIT_BRANCH == "master" || $CI_COMMIT_BRANCH =~ /^release\//'
+    - if: '$CI_COMMIT_BRANCH == "RK_TRUNK_BRANCH" || $CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/'
   image: alpine:3
   id_tokens:
     SIGSTORE_ID_TOKEN:
@@ -263,7 +263,7 @@ attach:
   stage: publish
   needs: ["tag-and-build", "provenance"]
   rules:
-    - if: '$CI_COMMIT_BRANCH == "master" || $CI_COMMIT_BRANCH =~ /^release\//'
+    - if: '$CI_COMMIT_BRANCH == "RK_TRUNK_BRANCH" || $CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/'
   resource_group: release
   image: alpine:3
   before_script:

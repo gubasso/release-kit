@@ -80,8 +80,9 @@ struct ListReport {
 }
 
 fn list(target: &Utf8Path, out: Output) -> Result<(), RkError> {
-    let local = ref_names(target, "refs/heads/release/")?;
-    let remote: Vec<String> = ref_names(target, "refs/remotes/origin/release/")?
+    let prefix = crate::config::line_prefix_of(target.as_std_path())?;
+    let local = ref_names(target, &format!("refs/heads/{prefix}"))?;
+    let remote: Vec<String> = ref_names(target, &format!("refs/remotes/origin/{prefix}"))?
         .into_iter()
         .filter_map(|name| name.strip_prefix("origin/").map(str::to_owned))
         .collect();
@@ -91,7 +92,7 @@ fn list(target: &Utf8Path, out: Output) -> Result<(), RkError> {
     let seats = inventory(target)?;
     let mut rows = Vec::new();
     for branch in names {
-        let Some(line) = branch.strip_prefix("release/") else {
+        let Some(line) = branch.strip_prefix(&prefix) else {
             continue;
         };
         let is_local = local.contains(&branch);
@@ -166,7 +167,7 @@ fn open(
     apply: bool,
     out: Output,
 ) -> Result<(), RkError> {
-    let branch = line_branch(line)?;
+    let branch = line_branch(line, &crate::config::line_prefix_of(target.as_std_path())?)?;
     let Some(base) = base else {
         return Err(RkError::Usage(format!(
             "a line is a snapshot of a chosen commit, so {branch} takes no default base; pass --base \"v<version>\", the tag it patches"
@@ -289,7 +290,7 @@ struct RcReport {
 }
 
 fn rc(line: &str, target: &Utf8Path, out: Output) -> Result<(), RkError> {
-    line_branch(line)?;
+    line_branch(line, &crate::config::line_prefix_of(target.as_std_path())?)?;
     let newest_release = newest_tag(target, line, false)?;
     let newest_candidate = newest_tag(target, line, true)?;
     let next_candidate = newest_candidate
@@ -338,7 +339,7 @@ struct RetireReport {
 }
 
 fn retire(line: &str, target: &Utf8Path, apply: bool, out: Output) -> Result<(), RkError> {
-    let branch = line_branch(line)?;
+    let branch = line_branch(line, &crate::config::line_prefix_of(target.as_std_path())?)?;
     if !branch_exists(target, &branch)? {
         return Err(RkError::refusal(
             Diagnostic::new(
@@ -437,8 +438,8 @@ fn retire(line: &str, target: &Utf8Path, apply: bool, out: Output) -> Result<(),
     })
 }
 
-/// `release/<line>` for a well-formed `<major>.<minor>`.
-fn line_branch(line: &str) -> Result<String, RkError> {
+/// `<prefix><line>` for a well-formed `<major>.<minor>`.
+fn line_branch(line: &str, prefix: &str) -> Result<String, RkError> {
     let well_formed = line.split_once('.').is_some_and(|(major, minor)| {
         !major.is_empty()
             && !minor.is_empty()
@@ -450,7 +451,7 @@ fn line_branch(line: &str) -> Result<String, RkError> {
             "'{line}' is not a line; a line is <major>.<minor>, as in 1.1"
         )));
     }
-    Ok(format!("release/{line}"))
+    Ok(format!("{prefix}{line}"))
 }
 
 /// The short names under one ref prefix.
@@ -493,16 +494,18 @@ fn newest_tag(target: &Utf8Path, line: &str, candidates: bool) -> Result<Option<
 /// makes a retirement safe, per
 /// `maintenance:a-line-is-never-retired-before-its-tags`.
 fn uncovered_commits(target: &Utf8Path, branch: &str) -> Result<Vec<String>, RkError> {
-    let line = branch.strip_prefix("release/").unwrap_or(branch);
+    let prefix = crate::config::line_prefix_of(target.as_std_path())?;
+    let trunk = crate::config::trunk_of(target.as_std_path())?;
+    let line = branch.strip_prefix(&prefix).unwrap_or(branch);
     let mut args = vec![
         "rev-list".to_owned(),
         branch.to_owned(),
         "--not".to_owned(),
         format!("--tags=v{line}.*"),
     ];
-    for trunk in ["master", "origin/master"] {
-        if resolve_commit(target, trunk).is_ok() {
-            args.push(trunk.to_owned());
+    for reference in [trunk.clone(), format!("origin/{trunk}")] {
+        if resolve_commit(target, &reference).is_ok() {
+            args.push(reference);
         }
     }
     let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();

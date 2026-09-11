@@ -1,12 +1,12 @@
 # The whole release pipeline: there is no registry, so publishing is tagging
 # and the tarball attached to the release page is the distribution.
 #
-# Both jobs run on every push to the trunk, and to a release/* line when a
+# Both jobs run on every push to the trunk, and to a RK_LINE_PREFIX* line when a
 # project keeps older lines. The release-request job drives git-cliff to
 # maintain the one release pull request — VERSION plus the changelog — against
 # the pushed branch, and merging that request is the release: the bump push is
 # what makes tag-and-attach tag the commit, build the tarball with make dist,
-# and attach it. On a release/* line the same pair backports a patch and tags
+# and attach it. On a RK_LINE_PREFIX* line the same pair backports a patch and tags
 # it there.
 name: release
 
@@ -14,7 +14,7 @@ permissions: {}
 
 on:
   push:
-    branches: [master, 'release/**']
+    branches: [RK_TRUNK_BRANCH, 'RK_LINE_PREFIX**']
 
 jobs:
   # The release request. git-cliff maintains no pull request on its own, so
@@ -91,7 +91,7 @@ jobs:
             echo "the lines style merges each release by hand; not arming."
             exit 0
           fi
-          if [ "$REF" != "master" ]; then
+          if [ "$REF" != "RK_TRUNK_BRANCH" ]; then
             echo "a line's request is never armed; its candidate is what a human validated."
             exit 0
           fi

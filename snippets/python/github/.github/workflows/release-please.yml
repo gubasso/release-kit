@@ -2,13 +2,13 @@
 # registered at PyPI, together with the pypi environment the publish job runs
 # in; no other workflow may carry id-token: write.
 #
-# Both jobs run on every push to the trunk, and to a release/* line when a
+# Both jobs run on every push to the trunk, and to a RK_LINE_PREFIX* line when a
 # project keeps older lines. release-please maintains the one release pull
 # request against the pushed branch — it only bumps pyproject.toml and writes
 # the changelog, because skip-github-release in release-please-config.json
 # keeps it from tagging — and merging that request is the release: the bump
 # push is what makes tag-and-publish tag the commit, build the distributions,
-# and publish them over OIDC. On a release/* line the same pair backports a
+# and publish them over OIDC. On a RK_LINE_PREFIX* line the same pair backports a
 # patch and tags it there.
 name: release-please
 
@@ -16,7 +16,7 @@ permissions: {}
 
 on:
   push:
-    branches: [master, 'release/**']
+    branches: [RK_TRUNK_BRANCH, 'RK_LINE_PREFIX**']
 
 jobs:
   release-please-pr:
@@ -64,7 +64,7 @@ jobs:
             echo "the lines style merges each release by hand; not arming."
             exit 0
           fi
-          if [ "$REF" != "master" ]; then
+          if [ "$REF" != "RK_TRUNK_BRANCH" ]; then
             echo "a line's request is never armed; its candidate is what a human validated."
             exit 0
           fi

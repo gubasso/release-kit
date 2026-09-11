@@ -19,7 +19,7 @@ use crate::issue::{self, Resolved};
 use crate::landing::manifest::{self, Workflow};
 use crate::output::Output;
 use crate::probes;
-use crate::setup::context::{TRUNK_BRANCH, resolve_cli};
+use crate::setup::context::resolve_cli;
 
 /// One `rk issue start` report.
 #[derive(Debug, Serialize)]
@@ -437,6 +437,7 @@ fn unreachable_tip(branch: &str, resolved: &Resolved) -> RkError {
 /// operator is about to start work on: a clean checkout is what that
 /// asks for, and the remedy is one command.
 fn branch_seatable(main: &Utf8Path, branch: &str) -> Result<(), RkError> {
+    let trunk = crate::config::trunk_of(main.as_std_path())?;
     if let Some(seat) = crate::commands::worktree::seat_of(main, branch)? {
         if seat != main {
             return Err(RkError::refusal(
@@ -447,7 +448,7 @@ fn branch_seatable(main: &Utf8Path, branch: &str) -> Result<(), RkError> {
                     ),
                 )
                 .expected("the branch free, or already in the main checkout")
-                .action(format!("git -C {seat} switch {TRUNK_BRANCH}, then rerun"))
+                .action(format!("git -C {seat} switch {trunk}, then rerun"))
                 .target_state("unchanged"),
             ));
         }

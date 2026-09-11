@@ -157,6 +157,8 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
                     workflow,
                     style: Some(style),
                     nix: params.nix(),
+                    trunk: params.trunk().to_owned(),
+                    line_prefix: params.line_prefix().to_owned(),
                 },
                 files: records,
                 pins: registry::pins_for(&tech)

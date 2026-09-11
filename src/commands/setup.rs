@@ -487,9 +487,10 @@ fn render_invocation(ctx: &Ctx, step: &StepSpec) -> String {
                 .map(|value| format!(" RK_REQUIRED_CHECK={value}"))
                 .unwrap_or_default();
             format!(
-                "would run: sh <embedded setup/{}/{name}> with RK_REPO={} RK_TRUNK_BRANCH=master{check}",
+                "would run: sh <embedded setup/{}/{name}> with RK_REPO={} RK_TRUNK_BRANCH={}{check}",
                 ctx.forge.as_str(),
-                ctx.repo
+                ctx.repo,
+                ctx.trunk()
             )
         }
     }
@@ -513,15 +514,7 @@ fn next_for_apply(ctx: &Ctx, steps: &[&StepSpec]) -> String {
 
 /// A `Ctx` copy for engine ownership; the context is plain data.
 fn clone_ctx(ctx: &Ctx) -> Ctx {
-    Ctx {
-        target: ctx.target.clone(),
-        repo: ctx.repo.clone(),
-        forge: ctx.forge,
-        host: ctx.host.clone(),
-        required_check: ctx.required_check.clone(),
-        cli: ctx.cli.clone(),
-        tech: ctx.tech,
-    }
+    ctx.clone()
 }
 
 /// Apply: run the selected steps in order, each through the full lifecycle.
