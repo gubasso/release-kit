@@ -1,0 +1,28 @@
+# What this project's gates judge.
+#
+# Edit this file, then run `sdd hooks --apply`. The managed region of
+# .pre-commit-config.yaml is rendered from here, so it stays wholly owned by
+# sdd and an upgrade never meets your edit.
+#
+# `sdd gate --explain <path>` answers why a gate judged a path, or did not,
+# and names the pattern that decided.
+#
+# Patterns are globs. `*` does not cross a `/` and `**` descends. A leading
+# `!` or `#`, an absolute path, and a `..` component are refused.
+#
+# Four layers compose, in this order, highest last:
+#
+#   1. the gate's registry default
+#   2. its `gates:` entry below
+#   3. a --include or --exclude flag
+#   4. the `reserved:` list, which no gate escapes
+#
+# Every `exclude` layer extends. A `gates:` `include` replaces the registry
+# default rather than adding to it, because an include is a whitelist and
+# extending one could only widen what the gate judges.
+
+# Paths no delivered gate judges. Another tool owns these.
+reserved: []
+
+# Per-gate filters. A gate not named here takes its registry default.
+gates: {}
