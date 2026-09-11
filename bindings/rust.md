@@ -25,7 +25,7 @@ On GitLab, `.gitlab-ci.yml` is the one landed pipeline, and a project declares i
 
 ## Setup specifics
 
-- Step 0 is `cargo publish --dry-run` plus reading `cargo package --list`. crates.io hard-rejects a publish with no `description` and rejects a `categories` value that is not a canonical slug; both surface here without credentials.
+- Step 0 is `cargo publish --dry-run` plus reading `cargo package --list`. crates.io hard-rejects a publish with no `description` and rejects a `categories` value that is not a canonical slug; both surface here without credentials. `rk setup step package-check` runs that listing itself where `cargo metadata --no-deps` selects one default package whose manifest is the target's root `Cargo.toml`, and reports whether the `.crate` carries `SECURITY.md`. A virtual workspace, several default members, or a sole nested member gets the packaging result alone with the inclusion named unproved: `cargo package --list` prints no stable delimiter across several packages, and a nested package cannot include a file above its own root. Read the listing by hand for those shapes, per package, before the first release.
 - The `.crate` hard limit is 10 MB. For a binary crate no consumer reads any file in the tarball beyond build inputs, so `exclude` in `Cargo.toml` keeps it lean. `exclude` is the safer default over `include`: `include` is an allowlist that drops `README.md` and a plain `LICENSE` unless each is listed.
 - Publishing needs a verified email on the account: an unverified one fails at the upload, after the token is minted.
 

@@ -136,15 +136,37 @@ pub fn observe(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkE
     }
 }
 
+/// The policy a consumer must find in the artifact they downloaded. A
+/// reporting policy readable on the forge alone is a policy the consumer
+/// who has only the package cannot follow.
+const POLICY_DESTINATION: &str = "SECURITY.md";
+
+/// What Python's check cannot answer. PEP 517 lets a project choose its
+/// build backend, and an sdist and a wheel can carry different files, so
+/// one `python3 -m build` run supplies no listing contract across both
+/// outputs.
+const PYTHON_LIMITATION: &str = "sdist and wheel policy inclusion is unproved: PEP 517 leaves the file set to the build backend and the two outputs can differ; inspect both before publishing";
+
+/// What Bash's check cannot answer. Its binding builds the tarball with
+/// `git archive`, where an `export-ignore` attribute drops a tracked file.
+const BASH_LIMITATION: &str = "the make dist tarball is not inspected: git archive honours export-ignore, so SECURITY.md inclusion is unproved; inspect the generated tarball before publishing";
+
 /// §0: the technology's own no-credential packaging check; the one step that
 /// reads its command from the binding rather than from a forge tree.
+///
+/// Publishability is the whole of the check for every binding. Policy reach
+/// is asserted only where the binding has a deterministic listing command
+/// the step can run with no credentials, which today is a sole Cargo
+/// package rooted at the target; every other shape reports its successful
+/// packaging result with the unproved inclusion named.
 fn package_check(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkError> {
     let (program, args): (&str, &[&str]) = match ctx.tech {
         Some("rust") => ("cargo", &["publish", "--dry-run", "--allow-dirty"]),
         Some("python") => ("python3", &["-m", "build"]),
         Some("bash") => {
-            return Ok(StepState::ok(
+            return Ok(StepState::ok_with_limitation(
                 "no registry for this technology; there is nothing to package",
+                BASH_LIMITATION,
             ));
         }
         Some(other) => {
@@ -158,22 +180,121 @@ fn package_check(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkError> {
             ));
         }
     };
-    let exec = Exec {
+    let outcome = run(&cargo_exec(ctx, program, args))?;
+    if !outcome.success() {
+        return Ok(StepState::not(format!(
+            "the packaging check failed: {}",
+            last_line(&outcome.stderr)
+        )));
+    }
+    let built = "the package builds and passes the registry's dry run";
+    Ok(match ctx.tech {
+        Some("rust") => policy_in_the_crate(ctx, run, built)?,
+        _ => StepState::ok_with_limitation(built, PYTHON_LIMITATION),
+    })
+}
+
+/// One no-credential Cargo invocation against the target.
+fn cargo_exec(ctx: &Ctx, program: &str, args: &[&str]) -> Exec {
+    Exec {
         program: program.into(),
         args: args.iter().map(Into::into).collect(),
         env: ctx.child_env("package-check"),
         cwd: ctx.target.as_std_path().to_path_buf(),
         stdin: None,
+    }
+}
+
+/// Whether the published crate carries the root policy, for the one shape
+/// Cargo answers unambiguously.
+///
+/// `cargo package --list` prints one path per line for one package and
+/// emits no stable delimiter when it selects several, and a nested package
+/// cannot include a file above its own root. So the listing runs only for a
+/// sole selected default member whose manifest is the target's own
+/// `Cargo.toml`; a virtual workspace, several default members, and a sole
+/// nested member each keep the successful publishability result and name
+/// the limitation instead of claiming a reach they cannot prove.
+fn policy_in_the_crate(ctx: &Ctx, run: &mut Runner, built: &str) -> Result<StepState, RkError> {
+    let metadata = run(&cargo_exec(
+        ctx,
+        "cargo",
+        &["metadata", "--no-deps", "--format-version", "1"],
+    ))?;
+    if !metadata.success() {
+        return Ok(StepState::unknown(format!(
+            "{built}, and the policy check could not run: cargo metadata failed: {}",
+            last_line(&metadata.stderr)
+        )));
+    }
+    let root_manifest = ctx.target.as_std_path().join("Cargo.toml");
+    let selected = sole_root_package(&metadata.stdout, &root_manifest);
+    let Some(manifest) = selected else {
+        return Ok(StepState::ok_with_limitation(
+            built,
+            format!(
+                "{POLICY_DESTINATION} inclusion is unproved: the package check lists files only for a single default package rooted at the target, and this workspace selects a different shape; inspect the published archive before releasing"
+            ),
+        ));
     };
-    let outcome = run(&exec)?;
-    Ok(if outcome.success() {
-        StepState::ok("the package builds and passes the registry's dry run")
+    let listing = run(&cargo_exec(
+        ctx,
+        "cargo",
+        &[
+            "package",
+            "--list",
+            "--allow-dirty",
+            "--manifest-path",
+            &manifest,
+        ],
+    ))?;
+    if !listing.success() {
+        return Ok(StepState::unknown(format!(
+            "{built}, and the policy check could not run: cargo package --list failed: {}",
+            last_line(&listing.stderr)
+        )));
+    }
+    // An exact line, never a substring: `docs/SECURITY.md` and
+    // `SECURITY.md.bak` are different files and neither is the policy.
+    let carried = String::from_utf8_lossy(&listing.stdout)
+        .lines()
+        .any(|line| line.trim() == POLICY_DESTINATION);
+    Ok(if carried {
+        StepState::ok(format!(
+            "{built}, and the published package carries {POLICY_DESTINATION}"
+        ))
     } else {
         StepState::not(format!(
-            "the packaging check failed: {}",
-            last_line(&outcome.stderr)
+            "{built}, but the published package omits {POLICY_DESTINATION}: add /{POLICY_DESTINATION} to [package].include, remove the [package].exclude entry matching it, or stop ignoring the file"
         ))
     })
+}
+
+/// The manifest path of the one selected default package rooted at the
+/// target, or `None` for every other workspace shape.
+fn sole_root_package(metadata: &[u8], root_manifest: &std::path::Path) -> Option<String> {
+    let document: Value = serde_json::from_slice(metadata).ok()?;
+    let defaults: Vec<&str> = document
+        .get("workspace_default_members")?
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    let [only] = defaults.as_slice() else {
+        return None;
+    };
+    let manifest = document
+        .get("packages")?
+        .as_array()?
+        .iter()
+        .find(|package| package.get("id").and_then(Value::as_str) == Some(*only))?
+        .get("manifest_path")?
+        .as_str()?;
+    // Compare what each path resolves to, so a symlinked or
+    // differently-spelled target directory still reads as the root.
+    let same =
+        std::fs::canonicalize(manifest).ok()? == std::fs::canonicalize(root_manifest).ok()?;
+    same.then(|| manifest.to_owned())
 }
 
 /// §1: the post-merge reminder hook, judged from the target's own files;

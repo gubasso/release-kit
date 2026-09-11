@@ -22,6 +22,7 @@ A one-line `VERSION` file is the committed source of truth, and `git-cliff --bum
 - The landed `VERSION` is `0.0.0`, the unreleased baseline; with no tag in the repository, the first release request bumps straight to the `initial_tag` that `cliff.toml` configures, so the baseline and the computed first version can never collide.
 - The Makefile honours `PREFIX`, `DESTDIR`, `bindir`, `libdir`, and `datadir`. Every downstream packaging tool assumes that contract, so it is the installability gate this binding runs where others dry-run against a registry.
 - `make dist` produces the tarball and its `.sha256` from `git archive`, so the artifact is a pure function of the tag.
+- `git archive` honours the `export-ignore` attribute, so a tracked file can be absent from the tarball. `rk setup step package-check` inspects nothing here and names that gap: run `make dist` and `tar -tzf` the result before the first release, and check that `SECURITY.md` is in it.
 - An `install.sh` one-liner must verify the checksum before extracting; a curl-pipe installer that skips it is the one fair complaint against the pattern. The checksum sits on the same release page as the tarball, so it proves the download arrived intact and nothing about where it came from; the attestation is what answers the second question.
 
 ## Provenance

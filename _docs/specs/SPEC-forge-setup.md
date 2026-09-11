@@ -19,6 +19,7 @@
   - [`forge-setup:the-setup-asserts-the-squash-body-source` — The setup asserts the squash body source](#forge-setupthe-setup-asserts-the-squash-body-source--the-setup-asserts-the-squash-body-source)
   - [`forge-setup:a-merge-carries-the-trunk-it-was-tested-against` — A merge carries the trunk it was tested against](#forge-setupa-merge-carries-the-trunk-it-was-tested-against--a-merge-carries-the-trunk-it-was-tested-against)
   - [`forge-setup:the-setup-proves-a-private-reporting-channel` — The setup proves a private reporting channel](#forge-setupthe-setup-proves-a-private-reporting-channel--the-setup-proves-a-private-reporting-channel)
+  - [`forge-setup:a-package-check-states-policy-reach` — A package check states policy reach](#forge-setupa-package-check-states-policy-reach--a-package-check-states-policy-reach)
 
 <!--TOC-->
 
@@ -289,3 +290,21 @@ When the required private-vulnerability-reporting step runs, the setup MUST enab
 - THEN enabled access names the confidential-issue limitation, disabled or restricted access remains unsatisfied, and all cases make zero writes
 
 Verify: `cargo nextest run -E 'binary(cli) and test(private_reporting)'`
+
+### `forge-setup:a-package-check-states-policy-reach` — A package check states policy reach
+
+The `package-check` step MUST judge whether the published artifact carries the landed reporting policy wherever the binding has a deterministic, credential-free listing command, and MUST otherwise keep its successful publishability result and name the inclusion as unproved. The judgment MUST rest on an exact path match in that listing, never a substring, and a listing that cannot run MUST leave the reach unknown rather than reported either way. This rule owns the assertion because no forge supplies this evidence, so `forge-setup:a-check-reports-what-the-forge-enforces` does not reach it.
+
+#### Scenario: A sole Cargo package rooted at the target
+
+- GIVEN a Rust target whose workspace selects one default package at the repository root
+- WHEN `package-check` observes after a successful dry run
+- THEN the listing runs and an exact `SECURITY.md` line reports satisfied, its absence reports unsatisfied naming `include`, `exclude`, and ignored files, and a failed listing reports unknown while keeping the dry-run result
+
+#### Scenario: A shape whose reach no command proves
+
+- GIVEN a Rust workspace with no sole root package, a Python project, or a Bash project
+- WHEN `package-check` observes
+- THEN no listing command runs, the packaging result stays satisfied, and the report names policy inclusion as unproved with the release-time inspection that answers it
+
+Verify: `cargo nextest run -E 'binary(cli) and test(package_check)'`

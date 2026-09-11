@@ -48,7 +48,7 @@ pub const STEPS: [StepSpec; 15] = [
         name: "package-check",
         chapter: "§0",
         mutates: Mutates::Nothing,
-        proves: "the package is publishable with no credentials",
+        proves: "the package is publishable with no credentials, and carries the reporting policy where the binding can list it",
         destructive: false,
         optional: false,
         prereqs: &[],
