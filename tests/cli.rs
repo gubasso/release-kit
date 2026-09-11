@@ -18849,39 +18849,39 @@ fn required_check_refuses_on_github_when_neither_answers() {
 /// configuration can serve a project on either forge.
 #[test]
 fn a_committed_required_check_does_not_refuse_on_gitlab() {
-    let target = tempfile::tempdir().expect("a tempdir");
-    rk().args(["init", "--tech", "rust", "--forge", "gitlab"])
-        .args(["--repo", "acme/widget", "--target"])
-        .arg(target.path())
-        .arg("--apply")
+    let fixture = ForgeFixture::new();
+    let dir = fixture.target.path().join(".release-kit");
+    std::fs::create_dir_all(&dir).expect("the config directory exists");
+    std::fs::write(
+        dir.join("config.toml"),
+        "schema_version = 1\n\n[setup]\nrequired_check = \"gate\"\n",
+    )
+    .expect("the config writes");
+
+    // The committed value reaches a GitHub run and is refused nowhere.
+    fixture
+        .rk(&["setup"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("RK_REQUIRED_CHECK=gate"));
+
+    // On GitLab the same committed value is simply not read, so the run
+    // previews rather than refusing.
+    fixture
+        .rk(&["setup"])
+        .args(["--repo", "acme/widget", "--forge", "gitlab"])
         .assert()
         .success();
-    set_config_key(
-        target.path(),
-        "required_check = \"\"",
-        "required_check = \"gate\"",
-    );
 
-    rk().args([
-        "setup",
-        "--repo",
-        "acme/widget",
-        "--forge",
-        "gitlab",
-        "--target",
-    ])
-    .arg(target.path())
-    .assert()
-    .success();
-
-    rk().args(["setup", "--repo", "acme/widget", "--forge", "gitlab"])
-        .args(["--required-check", "gate", "--target"])
-        .arg(target.path())
+    // The flag, however, is still a usage error there.
+    fixture
+        .rk(&["setup"])
+        .args(["--repo", "acme/widget", "--forge", "gitlab"])
+        .args(["--required-check", "gate"])
         .assert()
-        .failure()
-        .stderr(predicates::str::contains(
-            "--required-check is refused on gitlab",
-        ));
+        .code(64)
+        .stderr(predicate::str::contains("whole pipeline"));
 }
 
 /// SATISFIES target-config:an-absent-config-changes-nothing
