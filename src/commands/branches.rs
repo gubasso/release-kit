@@ -437,8 +437,6 @@ fn last_line(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use super::{Report, Row, recheck_verdict};
 
     /// The last-instant probe fails closed: no answer is an error, a

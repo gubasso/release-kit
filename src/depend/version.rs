@@ -64,8 +64,6 @@ pub fn tag_for(version: &str, style: TagStyle) -> String {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use camino::Utf8PathBuf;
 
     use super::{TagStyle, resolve, tag_for};

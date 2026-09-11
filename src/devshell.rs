@@ -271,8 +271,6 @@ pub fn normalize_tag(raw: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use camino::Utf8Path;
 
     use super::{has_sync_line, locked_node, normalize_tag, state_key};

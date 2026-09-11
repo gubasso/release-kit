@@ -116,8 +116,6 @@ pub fn artifacts() -> Vec<(String, &'static [u8])> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use super::{PAYLOAD_ROOTS, artifacts, root_files};
 
     /// The inventory and this module must name the same roots: a root

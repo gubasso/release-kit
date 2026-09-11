@@ -469,8 +469,6 @@ fn nix(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use camino::Utf8PathBuf;
 
     use super::{Recovery, open_at, owner_gone, recover_at};

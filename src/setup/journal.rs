@@ -340,8 +340,6 @@ fn restrict_file(path: &std::path::Path) {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use super::{META_SCHEMA, Meta, ScriptRecord, SecretHandling};
 
     /// The `rk.run-meta/1` schema, held by snapshot.

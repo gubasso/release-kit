@@ -334,8 +334,6 @@ fn is_current(pinned: &str, available: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use super::{PinResult, Report, is_current, latest_version};
 
     #[test]

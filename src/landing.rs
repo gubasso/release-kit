@@ -1216,8 +1216,6 @@ pub fn hooks_splice_refusal(target: &Utf8Path) -> Result<(), RkError> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use super::{
         AGENTS_DESTINATION, BLOCK_BEGIN, BLOCK_END, BRANCH_GRAMMAR, HOOK_TYPES_LINE, HOOKS_BEGIN,
         HOOKS_DESTINATION, HOOKS_END, Kind, SCOPE_SHAPE, Style, Workflow, extract_block,

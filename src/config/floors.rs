@@ -154,8 +154,6 @@ pub fn check(config: &Config) -> Result<(), RkError> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use super::{FLOORS, check};
     use crate::config::Config;
 

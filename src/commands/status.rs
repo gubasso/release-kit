@@ -638,8 +638,6 @@ fn render_human(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use super::{Drift, InvariantFailure, Report, StalePin};
 
     /// The complete `rk.status/8` shape, held by snapshot in both the

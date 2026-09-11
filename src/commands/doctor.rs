@@ -61,8 +61,6 @@ pub fn run(args: &DoctorArgs) -> Result<(), RkError> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use crate::probes::{ProbeClass, ProbeResult, ProbeStatus};
 
     /// The complete `rk.doctor/1` shape, held by snapshot.

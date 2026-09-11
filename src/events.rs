@@ -138,8 +138,6 @@ fn base64(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use super::{ChildStream, Event, EventKind, base64};
 
     /// The `rk.events/1` schema, held by snapshot: a field rename fails

@@ -162,8 +162,10 @@ pub struct Bot {
 /// The `protection` table.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields, default)]
-// These are independent policy switches in the committed TOML schema.
-#[allow(clippy::struct_excessive_bools)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "these are independent policy switches in the committed TOML schema, not a state machine a smaller type could carry"
+)]
 pub struct Protection {
     /// N: trunk ruleset name. Absent derives `<trunk>-protection`, which
     /// is the name the setup script built before the key existed, so a
@@ -419,7 +421,10 @@ fn inline(values: &BTreeMap<String, String>) -> toml_edit::Value {
     toml_edit::Value::InlineTable(table)
 }
 
-#[allow(clippy::too_many_lines)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the render list is one token per authored line of the config template, and splitting it would hide that correspondence"
+)]
 fn render(config: &Config) -> Result<Vec<u8>, RkError> {
     // The trunk names the ruleset the setup installs, so the written
     // configuration states the name a target actually gets rather than a
@@ -812,8 +817,6 @@ pub fn line_prefix_of(target: &Path) -> Result<String, RkError> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use super::{CONFIG_PATH, Config, load, parse, rewrite_key, trunk_of, write};
     use crate::landing::{Style, Workflow};
 

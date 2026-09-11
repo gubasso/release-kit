@@ -1,0 +1,7 @@
+# The production restrictions on unwrap, expect, and panic exist so a
+# released binary never aborts on a bad assumption. A test asserts by
+# panicking, so the restriction has no meaning there. Stating the exemption
+# once here is what keeps it out of every test module in the tree.
+allow-expect-in-tests = true
+allow-unwrap-in-tests = true
+allow-panic-in-tests = true

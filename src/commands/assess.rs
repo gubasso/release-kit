@@ -134,8 +134,6 @@ fn join_or_none(items: &[String]) -> String {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use super::Report;
     use crate::assess::{Classification, Evidence, Landing};
 

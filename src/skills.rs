@@ -116,8 +116,6 @@ pub fn shared() -> Vec<SharedArtifact> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use super::{all, shared};
 
     #[test]

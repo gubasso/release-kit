@@ -423,7 +423,10 @@ fn last_line(bytes: &[u8]) -> String {
         .to_owned()
 }
 
-#[allow(clippy::too_many_lines)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one arm per setup step, so the match is what makes an unobserved step a compile error"
+)]
 fn github(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError> {
     let trunk = ctx.trunk();
     let repo = &ctx.repo;
@@ -1009,7 +1012,10 @@ const STALE_MERGE_FAULT: &str = "the trunk permits a merge from a branch that do
 /// the title gate rides the request's own pipeline on this forge.
 const GITLAB_TITLE_LIMITATION: &str = "the title gate stops accident, not authority: a merge request runs its own CI configuration, and a title edit starts no new pipeline";
 
-#[allow(clippy::too_many_lines)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one arm per setup step, so the match is what makes an unobserved step a compile error"
+)]
 fn gitlab(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError> {
     let trunk = ctx.trunk();
     let project = ctx.repo.replace('/', "%2F");

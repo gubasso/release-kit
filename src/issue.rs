@@ -1083,8 +1083,6 @@ fn encode(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use super::{
         Minted, Reference, admissible, agrees, gitlab_branch_name, linked_branch, parameterize,
         parse_reference,

@@ -83,6 +83,7 @@ unimplemented = "deny"
 panic = "deny"
 wildcard_imports = "deny"
 exit = "deny"
+allow_attributes_without_reason = "deny"
 
 [dev-dependencies]
 assert_cmd = "2.2.2"

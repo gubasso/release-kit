@@ -527,8 +527,6 @@ pub fn uninstall(layout: &Layout, apply: bool) -> Result<Vec<Action>, RkError> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
-
     use camino::Utf8PathBuf;
 
     use super::{Action, Layout, install, leftovers, uninstall};

@@ -207,8 +207,6 @@ fn roots(home: &Utf8Path, agent: Agent) -> Vec<Utf8PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use camino::Utf8Path;
 
     use super::roots;

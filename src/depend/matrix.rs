@@ -536,8 +536,6 @@ fn asdf_fragment(tokens: &Tokens, text: Option<&str>) -> Fragment {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use camino::Utf8PathBuf;
 
     use super::{Channel, Kind, Manager, Mode, Support, choose, preference, recommend, support};

@@ -167,7 +167,10 @@ pub fn run(args: &InitArgs) -> Result<(), RkError> {
 }
 
 /// List every destination and write nothing.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the landing parameters are one flat set the caller resolves once, and a struct around them would add a type nothing else reads"
+)]
 fn preview(
     out: Output,
     args: &InitArgs,
@@ -233,7 +236,11 @@ fn preview(
 /// Land the files — all-or-nothing against `rendered` conflicts — write
 /// the record last, and report the judgment sentinels the operator still
 /// owes.
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+#[allow(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    reason = "the landing parameters are one flat set the caller resolves once, and the landing is all-or-nothing, so its ordered steps stay in one place"
+)]
 fn apply(
     out: Output,
     args: &InitArgs,
@@ -480,8 +487,6 @@ fn collect_sentinels(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use super::{FileEntry, Report, SentinelEntry};
 
     /// The complete `rk.init/5` shape, held by snapshot in both modes: a

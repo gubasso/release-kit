@@ -721,8 +721,6 @@ fn is_blank(line: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use super::*;
 
     fn report(text: &str, check: &str) -> GateReport {

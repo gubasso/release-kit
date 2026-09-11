@@ -172,8 +172,6 @@ pub fn two_files_dirty(target: &Utf8Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use super::{Acquired, take};
 
     #[test]

@@ -98,8 +98,6 @@ impl Record {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use camino::Utf8PathBuf;
 
     use super::{HEADER, Record};
