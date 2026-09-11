@@ -20,6 +20,7 @@ The publish job runs in a GitHub environment, because PyPI's trusted-publisher r
 ## Setup specifics
 
 - Step 0 is `python -m build` plus `twine check dist/*`, which catches metadata rejects without credentials.
+- Step 0 does not prove that the built distributions carry `SECURITY.md`, and `rk setup step package-check` says so. PEP 517 leaves the file set to the build backend, and an sdist and a wheel can carry different files, so no one command lists both under every backend. Inspect each before the first release: `tar -tzf dist/<name>-<version>.tar.gz` and `unzip -l dist/<name>-<version>-*.whl`, and add the policy through the backend's own include configuration where it is missing.
 - The bootstrap publish is `twine upload` with a project-scoped API token, revoked after the trusted publisher is registered. A brand-new project name can also be registered on PyPI as a pending publisher before the first upload, which skips the token entirely; take that path when the name is not yet claimed.
 - PyPI trusted publishing is the direct analogue of crates.io's, so the setup sequence maps one to one.
 

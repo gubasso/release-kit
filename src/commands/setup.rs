@@ -507,9 +507,9 @@ fn render_invocation(ctx: &Ctx, step: &StepSpec) -> String {
             "would write: the post-merge reminder hook at $(git rev-parse --git-path hooks)/post-merge".to_owned()
         }
         "package-check" => match ctx.tech {
-            Some("rust") => "would run: cargo publish --dry-run --allow-dirty".to_owned(),
-            Some("python") => "would run: python3 -m build".to_owned(),
-            Some("bash") => "nothing to run: no registry for this technology".to_owned(),
+            Some("rust") => "would run: cargo publish --dry-run --allow-dirty, then cargo metadata --no-deps --format-version 1, then cargo package --list --allow-dirty for a single default package rooted at the target; another workspace shape reports SECURITY.md inclusion as unproved".to_owned(),
+            Some("python") => "would run: python3 -m build; sdist and wheel SECURITY.md inclusion stays unproved".to_owned(),
+            Some("bash") => "nothing to run: no registry for this technology; the make dist tarball is not inspected".to_owned(),
             _ => "needs: a version file naming the technology".to_owned(),
         },
         "forge-version" => {

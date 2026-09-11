@@ -83,6 +83,8 @@ A request naming an issue — an issue URL, or "fix", "address", "implement", or
 
 After trunk protection is applied, follow `rk guide setup` step 3f to read back the freshness requirement; `rk forge <name>` names the enforcing setting for each forge.
 
+When `package-check` reports a limitation, read it out rather than treating the step as done: `rk method setup` owns why the gate asks whether the artifact carries the reporting policy, and `rk binding <tech>` names the inspection that answers it for this target. Do not restate either; route the operator to them and carry the limitation into the release plan as a manual check.
+
 ## Verify
 
 The landed files hold the invariants of `rk method invariants`: exactly one workflow carries the OIDC permission and its filename is the one registered; the version file leads and no tag is hand-authored; the trunk is written through squash-merged pull requests only; every artifact a consumer downloads is attested by the run that built it. The proof of the whole setup is one release cut end to end with `rk method operate`.

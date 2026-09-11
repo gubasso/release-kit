@@ -2933,6 +2933,34 @@ const FAKE_PEM: &str =
 /// The needle inside `FAKE_PEM`: what must reach stdin and nothing else.
 const PEM_NEEDLE: &str = "c2VrcmV0LXBlbS1ieXRlcyE=";
 
+/// A cargo stand-in for the packaging gate: each of the three calls
+/// succeeds by default and fails where its state file exists, and the
+/// metadata and listing answers are whatever the test seeded.
+const MOCK_CARGO: &str = r#"#!/usr/bin/env bash
+STATE="__STATE__"
+printf 'cargo %s\n' "$*" >> "$STATE/log"
+case "$1" in
+publish)
+  if [[ -f "$STATE/cargo_publish_fail" ]]; then echo "error: missing description" >&2; exit 1; fi
+  exit 0;;
+metadata)
+  if [[ -f "$STATE/cargo_metadata_fail" ]]; then echo "error: no Cargo.toml" >&2; exit 1; fi
+  cat "$STATE/cargo_metadata"; exit 0;;
+package)
+  if [[ -f "$STATE/cargo_package_fail" ]]; then echo "error: cannot list" >&2; exit 1; fi
+  cat "$STATE/cargo_listing"; exit 0;;
+esac
+exit 0
+"#;
+
+/// A python3 stand-in for the packaging gate: `-m build` succeeds and the
+/// run is logged, so no test depends on a build backend being installed.
+const MOCK_PYTHON3: &str = r#"#!/usr/bin/env bash
+STATE="__STATE__"
+printf 'python3 %s\n' "$*" >> "$STATE/log"
+exit 0
+"#;
+
 const MOCK_GH: &str = r#"#!/usr/bin/env bash
 STATE="__STATE__"
 printf '%s\n' "$*" >> "$STATE/log"
@@ -3253,6 +3281,8 @@ impl ForgeFixture {
             ("glab", MOCK_GLAB),
             ("openssl", MOCK_OPENSSL),
             ("curl", MOCK_CURL),
+            ("cargo", MOCK_CARGO),
+            ("python3", MOCK_PYTHON3),
         ] {
             let path = fixture.mock.path().join(name);
             std::fs::write(
@@ -3369,6 +3399,54 @@ impl ForgeFixture {
 
     fn state(&self, name: &str) -> PathBuf {
         self.mock.path().join(name)
+    }
+
+    /// Make the target a Rust crate and seed the two Cargo answers the
+    /// packaging gate reads. `members` is the workspace's default member
+    /// list, each entry paired with the manifest the metadata reports for
+    /// it, so a test states the workspace shape rather than a flag.
+    fn seed_cargo(&self, members: &[(&str, PathBuf)], listing: &str) {
+        std::fs::write(
+            self.target.path().join("Cargo.toml"),
+            "[package]\nname = \"widget\"\nversion = \"0.1.0\"\n",
+        )
+        .expect("the crate manifest writes");
+        let ids: Vec<String> = members.iter().map(|(id, _)| format!("\"{id}\"")).collect();
+        let packages: Vec<String> = members
+            .iter()
+            .map(|(id, manifest)| {
+                format!(
+                    "{{\"id\":\"{id}\",\"manifest_path\":\"{}\"}}",
+                    manifest.to_string_lossy()
+                )
+            })
+            .collect();
+        self.seed(
+            "cargo_metadata",
+            &format!(
+                "{{\"workspace_default_members\":[{}],\"packages\":[{}]}}",
+                ids.join(","),
+                packages.join(",")
+            ),
+        );
+        self.seed("cargo_listing", listing);
+    }
+
+    /// The target's own root manifest, as Cargo would report it.
+    fn root_manifest(&self) -> PathBuf {
+        self.target.path().join("Cargo.toml")
+    }
+
+    /// The same command with the mock directory ahead of `PATH`, so the
+    /// packaging gate spawns the stand-ins rather than a real toolchain.
+    fn rk_with_cargo(&self, args: &[&str]) -> Command {
+        let mut command = self.rk(args);
+        let path = std::env::var("PATH").unwrap_or_default();
+        command.env(
+            "PATH",
+            format!("{}:{path}", self.mock.path().to_string_lossy()),
+        );
+        command
     }
 
     fn log(&self) -> String {
@@ -3926,6 +4004,185 @@ fn install_bot_refuses_to_apply_when_the_forge_is_unreachable() {
         !fixture.log().contains("-X PUT"),
         "an undecided observation must precede every mutation"
     );
+}
+
+/// The one `package-check` line a check run prints.
+fn package_check_line(fixture: &ForgeFixture) -> String {
+    let out = fixture
+        .rk_with_cargo(&["setup", "check"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .assert()
+        .get_output()
+        .clone();
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .find(|line| line.contains("package-check"))
+        .unwrap_or_else(|| {
+            panic!(
+                "the check reports the step: {}",
+                String::from_utf8_lossy(&out.stdout)
+            )
+        })
+        .to_owned()
+}
+
+/// A sole default package rooted at the target is the one shape whose
+/// listing Cargo answers unambiguously, so it is the one shape that earns
+/// a policy verdict: present satisfies, absent faults with the three
+/// causes named, and a near miss is not a match.
+#[test]
+fn package_check_proves_the_policy_for_a_sole_root_crate() {
+    for (listing, expected) in [
+        (
+            "Cargo.toml\nSECURITY.md\nsrc/main.rs\n",
+            "carries SECURITY.md",
+        ),
+        (
+            "Cargo.toml\n  SECURITY.md  \nsrc/main.rs\n",
+            "carries SECURITY.md",
+        ),
+    ] {
+        let fixture = ForgeFixture::new();
+        fixture.seed_cargo(&[("widget 0.1.0", fixture.root_manifest())], listing);
+        let line = package_check_line(&fixture);
+        assert!(line.starts_with("ok package-check"), "{line}");
+        assert!(line.contains(expected), "{line}");
+        assert!(!line.contains("limitation"), "{line}");
+        assert!(
+            fixture.log().contains("cargo package --list"),
+            "the listing ran: {}",
+            fixture.log()
+        );
+    }
+
+    // A different path and a near-miss name are different files.
+    for listing in [
+        "Cargo.toml\ndocs/SECURITY.md\n",
+        "Cargo.toml\nSECURITY.md.bak\n",
+        "Cargo.toml\nsrc/main.rs\n",
+    ] {
+        let fixture = ForgeFixture::new();
+        fixture.seed_cargo(&[("widget 0.1.0", fixture.root_manifest())], listing);
+        let line = package_check_line(&fixture);
+        assert!(line.starts_with("unsatisfied package-check"), "{line}");
+        for cause in ["[package].include", "[package].exclude", "ignoring"] {
+            assert!(line.contains(cause), "{listing}: {line}");
+        }
+    }
+}
+
+/// A failed dry run keeps its own result and asks no further question; a
+/// metadata or listing failure leaves the reach unknown while the
+/// publishability it already proved stays in the detail.
+#[test]
+fn package_check_never_trades_one_failure_for_another() {
+    let fixture = ForgeFixture::new();
+    fixture.seed_cargo(
+        &[("widget 0.1.0", fixture.root_manifest())],
+        "SECURITY.md\n",
+    );
+    fixture.seed("cargo_publish_fail", "1");
+    let line = package_check_line(&fixture);
+    assert!(line.starts_with("unsatisfied package-check"), "{line}");
+    assert!(
+        !fixture.log().contains("cargo metadata"),
+        "a failed dry run asks nothing further: {}",
+        fixture.log()
+    );
+
+    for state in ["cargo_metadata_fail", "cargo_package_fail"] {
+        let fixture = ForgeFixture::new();
+        fixture.seed_cargo(
+            &[("widget 0.1.0", fixture.root_manifest())],
+            "SECURITY.md\n",
+        );
+        fixture.seed(state, "1");
+        let line = package_check_line(&fixture);
+        assert!(line.starts_with("unknown package-check"), "{state}: {line}");
+        assert!(line.contains("passes the registry's dry run"), "{line}");
+    }
+}
+
+/// Every shape whose reach no command proves keeps its packaging result
+/// and names the gap, and none of them spawns a listing.
+#[test]
+fn package_check_names_an_unproved_reach_rather_than_claiming_one() {
+    for shape in [
+        "a virtual workspace",
+        "several default members",
+        "a sole nested member",
+    ] {
+        let fixture = ForgeFixture::new();
+        std::fs::create_dir_all(fixture.target.path().join("crates/widget"))
+            .expect("the nested crate dir exists");
+        let nested = fixture.target.path().join("crates/widget/Cargo.toml");
+        std::fs::write(&nested, "[package]\nname = \"b\"\n").expect("the nested manifest writes");
+        let members = match shape {
+            "a virtual workspace" => vec![],
+            "several default members" => vec![
+                ("a 0.1.0", fixture.root_manifest()),
+                ("b 0.1.0", nested.clone()),
+            ],
+            _ => vec![("b 0.1.0", nested.clone())],
+        };
+        fixture.seed_cargo(&members, "SECURITY.md\n");
+        let line = package_check_line(&fixture);
+        assert!(line.starts_with("ok package-check"), "{shape}: {line}");
+        assert!(line.contains("unproved"), "{shape}: {line}");
+        assert!(
+            !fixture.log().contains("cargo package --list"),
+            "{shape}: no listing runs where none is unambiguous"
+        );
+    }
+}
+
+/// Bash and Python keep the results they already had and gain the honest
+/// statement of what those results do not prove.
+#[test]
+fn package_check_names_the_binding_limitation_for_bash_and_python() {
+    let fixture = ForgeFixture::new();
+    let line = package_check_line(&fixture);
+    assert!(line.starts_with("ok package-check"), "{line}");
+    assert!(line.contains("make dist"), "{line}");
+    assert!(line.contains("unproved"), "{line}");
+
+    let fixture = ForgeFixture::new();
+    std::fs::write(
+        fixture.target.path().join("pyproject.toml"),
+        "[project]\nname = \"widget\"\n",
+    )
+    .expect("the project file writes");
+    std::fs::remove_file(fixture.target.path().join("VERSION")).expect("the bash marker goes");
+    let line = package_check_line(&fixture);
+    assert!(line.contains("package-check"), "{line}");
+    assert!(line.contains("sdist and wheel"), "{line}");
+}
+
+/// The preview names every command the step would run and the shape each
+/// verdict rests on, so an operator reads the boundary before applying.
+#[test]
+fn the_package_check_preview_names_its_commands_and_its_boundary() {
+    let fixture = ForgeFixture::new();
+    fixture.seed_cargo(
+        &[("widget 0.1.0", fixture.root_manifest())],
+        "SECURITY.md\n",
+    );
+    let out = fixture
+        .rk(&["setup", "step", "package-check"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let text = String::from_utf8_lossy(&out.stdout);
+    for expected in [
+        "cargo publish --dry-run --allow-dirty",
+        "cargo metadata --no-deps --format-version 1",
+        "cargo package --list --allow-dirty",
+        "single default package rooted at the target",
+    ] {
+        assert!(text.contains(expected), "{expected} absent: {text}");
+    }
 }
 
 /// A check against an unconfigured forge reports per step and exits 1.

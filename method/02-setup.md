@@ -10,6 +10,8 @@ A project may run part of this chapter rather than all of it. The common shape t
 
 Run the registry's dry-run packaging check first, before anything that needs credentials. It catches the common rejects — a missing description, an invalid category — with no token and no remote configuration, and every later step assumes the package is publishable.
 
+The same gate asks a second question: does the artifact a consumer downloads carry the reporting policy? A policy a consumer can read on the forge alone is a policy the consumer who has only the package cannot follow. The gate answers it only where the binding has a listing command that names the published files with no credentials, and says so plainly where it does not: the packaging result stands, and the report names the inclusion as unproved together with the release-time inspection that settles it. A proxy success would be worse than the gap, because it would retire the manual check without replacing it. Each binding states which of the two it has.
+
 ## 1. Make the trunk the sole long-lived branch
 
 Make `master` the repository default, so the bot's release request targets it with no configuration, and the only long-lived branch: merge in and delete every other one. Work that kept a second branch alive lands on the trunk behind a flag instead. Then have the forge delete a branch when its merge lands, so keeping the trunk sole costs no one a habit. Locally, a post-merge reminder hook closes the same loop from the clone's side: after a pull, `rk branches prune` names the merged branches the clone still holds, and deleting one stays the operator's action.
