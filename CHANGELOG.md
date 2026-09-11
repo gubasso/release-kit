@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.13](https://github.com/gubasso/release-kit/compare/v0.3.12...v0.3.13) - 2026-09-11
+
+### Added
+
+- *(landing/trunk)* make the trunk and the line prefix landing parameters ([#150](https://github.com/gubasso/release-kit/pull/150))
+- *(landing/config)* the landing verbs write and read the config
+- *(config)* read the target config, refuse a bad one
+
+### Other
+
+- *(landing/params)* collapse the projection parameter tail
+
 ## [0.3.12](https://github.com/gubasso/release-kit/compare/v0.3.11...v0.3.12) - 2026-09-10
 
 ### Added
