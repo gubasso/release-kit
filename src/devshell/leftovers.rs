@@ -321,8 +321,6 @@ fn workflow_files(target: &Utf8Path) -> Result<Vec<String>, RkError> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use camino::Utf8PathBuf;
 
     use super::{Action, is_recipe_head, list_members_named, scan, swap_envrc};

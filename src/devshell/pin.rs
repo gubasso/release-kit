@@ -131,8 +131,6 @@ fn match_line(line: &str) -> Option<Match> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::panic)]
-
     use super::{PIN_PREFIX, Pin, Scan, rewrite, scan};
 
     fn one(text: &str) -> Pin {

@@ -207,8 +207,6 @@ pub fn redact(chunk: &[u8], secrets: &[impl AsRef<[u8]>]) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use super::{Exec, Zeroizing, redact, run};
     use std::path::PathBuf;
 

@@ -215,8 +215,6 @@ pub fn tech_or_node(dir: &Utf8Path) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use super::{MISE_FILES, Manager, first_mention, manager_files, tech_or_node};
 
     #[test]

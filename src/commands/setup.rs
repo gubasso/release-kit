@@ -719,7 +719,10 @@ impl Done {
 }
 
 /// One step, full lifecycle.
-#[allow(clippy::too_many_lines)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one step is observe, compare, apply, and verify in one place, and splitting it would separate a verdict from the observation it rests on"
+)]
 fn apply_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
     // Prerequisites are observed, not remembered: the forge is the
     // authority on whether an earlier step's state holds.

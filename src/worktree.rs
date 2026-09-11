@@ -426,8 +426,6 @@ pub fn classify(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use camino::{Utf8Path, Utf8PathBuf};
 
     use super::{Layout, Worktree, WtClass, classify, derived_path, flatten, parse_worktrees};

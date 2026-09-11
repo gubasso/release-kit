@@ -219,8 +219,6 @@ pub fn outputs_argument_present(text: &str, input: &str) -> Option<bool> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use super::{
         BLOCK_NAMES, Tokens, block, flake_ref, fragment, nix_input_name, outputs_argument_present,
         render, seed,

@@ -433,8 +433,6 @@ pub fn guard_patterns() -> Vec<(&'static str, &'static str)> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use super::{
         Finding, Report, attribution_hits, bot_title, fixed_draft_hits, guard_patterns, path_token,
     };

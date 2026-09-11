@@ -1,9 +1,12 @@
 //! End-to-end tests over the built binary: every subcommand, the landing
 //! round-trip, and the payload's presence in the embedded form.
 
-// Integration tests: assertion style is the point, so the production
-// restrictions on unwrap/expect/panic do not apply here.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "a test asserts by panicking, and the allow-*-in-tests keys in clippy.toml reach a #[test] function and a #[cfg(test)] module, never an integration crate's helpers"
+)]
 
 use std::path::{Path, PathBuf};
 
@@ -3451,7 +3454,10 @@ fn setup_json_is_ndjson_opening_with_the_schema() {
 /// rerun re-asserts, no secret reaches argv or the journal, and check then
 /// reports every step satisfied.
 #[test]
-#[allow(clippy::too_many_lines)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one test walks apply, rerun, and check in order, because the order is what it holds"
+)]
 fn a_full_github_apply_lands_reasserts_and_checks_clean() {
     let fixture = ForgeFixture::new();
     fixture.seed_gate();
@@ -14377,7 +14383,10 @@ fn every_envrc_path_exits_zero() {
 
 /// The same outcomes under `--caller operator` take the exit-code matrix.
 #[test]
-#[allow(clippy::too_many_lines)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the case table is the test, and each row names one exit code"
+)]
 fn an_operator_run_fails_loudly_where_the_envrc_run_reports() {
     let cases: Vec<(&str, i32, &str, Arrange)> = vec![
         (

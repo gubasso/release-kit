@@ -234,8 +234,6 @@ pub fn render_error(err: &RkError, json: bool) {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     /// No handler prints past the boundary: neither a print macro nor a
     /// direct standard-stream handle appears anywhere under `src/` outside
     /// this module, so every result and every diagnostic goes through one

@@ -197,8 +197,6 @@ fn devshell_package_present(text: &str) -> Option<bool> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::panic)]
-
     use super::{
         PIN_TOKEN, block, devshell_package_present, envrc_line, fragment, outputs_argument_present,
         render, seed_envrc, seed_flake,

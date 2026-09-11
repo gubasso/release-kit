@@ -576,8 +576,6 @@ fn is_immutable(reference: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use camino::Utf8Path;
 
     use super::{failures, target_failures, workflow_matches_configuration};

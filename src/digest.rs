@@ -62,8 +62,6 @@ impl<'de> serde::Deserialize<'de> for Digest {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use super::Digest;
 
     #[test]

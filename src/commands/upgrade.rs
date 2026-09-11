@@ -600,8 +600,6 @@ fn clone_record(record: &FileRecord) -> FileRecord {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use super::{FileEntry, Report};
 
     /// The complete `rk.upgrade/5` shape, held by snapshot.

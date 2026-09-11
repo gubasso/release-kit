@@ -191,7 +191,10 @@ struct SyncReport<'a> {
 
 /// One transaction step.
 #[derive(Debug, Clone, Serialize)]
-#[allow(clippy::struct_field_names)]
+#[allow(
+    clippy::struct_field_names,
+    reason = "the fields are the keys of a serialized machine shape, so they answer to the schema rather than to the struct name"
+)]
 struct Step {
     /// `rewrite-pin`, `flake-update`, `current-system`, or `build`.
     step: &'static str,
@@ -1202,8 +1205,6 @@ fn status_next(observed: &Observed) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use super::{AddReport, CleanReport, Host, Manual, StatusReport, Step, SyncReport};
 
     /// The complete `rk.devshell-sync/1` shape, held by snapshot.

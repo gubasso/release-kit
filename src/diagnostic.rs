@@ -232,8 +232,6 @@ impl Diagnostic {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use super::{Diagnostic, REASONS, Reason};
 
     /// The vocabulary is closed and append-only: this list is the one a

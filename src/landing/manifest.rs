@@ -412,8 +412,6 @@ fn numeric_core(version: &str) -> Vec<u64> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use super::{Alignment, FileRecord, Manifest, Parameters, Style, Workflow, alignment};
     use crate::digest::Digest;
     use crate::landing::Kind;

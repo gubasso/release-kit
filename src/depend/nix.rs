@@ -262,8 +262,6 @@ fn attribute_positions<'a>(text: &'a str, name: &str) -> Vec<(usize, &'a str)> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use super::{
         attribute_value, binding_value, input_declaration, names_attribute, scrub,
         without_let_bindings,

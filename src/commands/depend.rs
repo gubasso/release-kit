@@ -559,8 +559,6 @@ fn add_next(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use camino::Utf8PathBuf;
 
     use super::{AddReport, AssessReport, ManagerRow, SourceView, TargetView};
@@ -590,7 +588,10 @@ mod tests {
 
     /// The complete `rk.depend-assess/1` shape, held by snapshot.
     #[test]
-    #[allow(clippy::too_many_lines)]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the snapshot is one literal shape, and splitting it would hide what the schema holds"
+    )]
     fn the_depend_assess_schema_snapshot_holds() {
         let channels = vec![ChannelEvidence {
             channel: Channel::Crates,

@@ -133,8 +133,6 @@ pub fn observe_hook(target: &Utf8Path) -> HookState {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     /// The body opens with a shebang, carries the marker, probes each
     /// verb separately before its quiet prune, and ends by succeeding
     /// whatever happened above.

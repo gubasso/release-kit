@@ -124,14 +124,16 @@ const fn ymd_from_days(days: i64) -> (i64, u32, u32) {
         month_point - 9
     };
     let year = year_of_era + era * 400 + if month <= 2 { 1 } else { 0 };
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "the civil-from-days algorithm bounds month to 1 through 12 and day to 1 through 31, so neither cast truncates and neither value is negative"
+    )]
     (year, month as u32, day as u32)
 }
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use super::{info_enabled, rfc3339, write_record};
 
     #[test]

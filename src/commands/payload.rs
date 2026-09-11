@@ -100,8 +100,6 @@ pub fn run(args: &PayloadArgs) -> Result<(), RkError> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use super::{Artifact, Report, aggregate, report};
     use crate::digest::Digest;
 

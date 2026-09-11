@@ -230,8 +230,6 @@ fn last_line(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use serde_json::json;
 
     use super::{Branch, Class, classify, confirmation, parse_branches};

@@ -890,7 +890,10 @@ struct Judged {
 /// — never the main checkout or a healthy linked one — confirm against
 /// the forge under `--verify`, and remove worktree before branch under
 /// `--apply`, re-observing at the moment of action.
-#[allow(clippy::too_many_lines)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the prune order is the safety property, so report, confirm, and remove worktree before branch stay in one body where the order cannot drift"
+)]
 fn prune(
     target: &Utf8Path,
     repo_flag: Option<&str>,
@@ -1270,8 +1273,6 @@ fn last_line(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use super::{ListReport, ListRow, PruneReport, PruneRow};
 
     /// The complete `rk.worktree-list/1` shape, held by snapshot in the

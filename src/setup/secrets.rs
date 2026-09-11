@@ -322,8 +322,6 @@ fn refuse(message: impl Into<String>, action: impl Into<String>) -> RkError {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use super::*;
 
     /// PEM armor around `label`, assembled rather than written out: a

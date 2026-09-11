@@ -73,7 +73,10 @@ struct Report {
 /// `rendered` mismatch or missing expected file — listing every one in
 /// one run — and [`RkError::Missing`] where detection resolves no
 /// technology, forge, or repository and no flag covers the gap.
-#[allow(clippy::too_many_lines)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one adopt run is one linear sequence of checks against one target, and cutting it would separate a refusal from the order it is reported in"
+)]
 pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
     let out = Output::new(args.json);
     if !args.target.is_dir() {
@@ -293,8 +296,6 @@ fn verify(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use super::{FileEntry, Report};
 
     /// The complete `rk.adopt/5` shape, held by snapshot.
