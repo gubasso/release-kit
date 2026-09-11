@@ -26,6 +26,18 @@ use crate::error::RkError;
 // A target that names none keeps the compiled default, so a landing
 // predating the key behaves exactly as it did.
 
+/// A policy boolean as the JSON word a forge body carries.
+const fn bool_word(value: bool) -> &'static str {
+    if value { "true" } else { "false" }
+}
+
+/// A policy list as the JSON array a forge body carries. Every element
+/// passed the floor table, so this quotes rather than escapes.
+fn json_list(values: &[String]) -> String {
+    let inner: Vec<String> = values.iter().map(|value| format!("\"{value}\"")).collect();
+    format!("[{}]", inner.join(", "))
+}
+
 /// The variables that pass through from the operator's environment to a
 /// step: the interpreter's search path, the forge CLI's configuration and
 /// authentication, and nothing else.
@@ -90,6 +102,10 @@ pub struct Ctx {
     lines_ruleset: String,
     /// The context the landed title job reports under.
     title_check: String,
+    /// The floored policy this target states. Every value here passed the
+    /// floor table at load, so a run can pass it to a step without
+    /// judging it again.
+    protection: crate::config::Protection,
 }
 
 impl Ctx {
@@ -204,7 +220,8 @@ impl Ctx {
             trunk_ruleset: protection.trunk_ruleset(&trunk),
             tag_ruleset: protection.tag_ruleset.clone(),
             lines_ruleset: protection.lines_ruleset.clone(),
-            title_check: protection.title_check,
+            title_check: protection.title_check.clone(),
+            protection,
             trunk,
             line_prefix: crate::config::line_prefix_of(target.as_std_path())?,
             retired_branches,
@@ -241,9 +258,10 @@ impl Ctx {
             release_lines: false,
             bot_app_id: None,
             trunk_ruleset: format!("{}-protection", crate::config::TRUNK_DEFAULT),
-            tag_ruleset: defaults.tag_ruleset,
-            lines_ruleset: defaults.lines_ruleset,
-            title_check: defaults.title_check,
+            tag_ruleset: defaults.tag_ruleset.clone(),
+            lines_ruleset: defaults.lines_ruleset.clone(),
+            title_check: defaults.title_check.clone(),
+            protection: defaults,
         }
     }
 
@@ -301,6 +319,12 @@ impl Ctx {
         &self.title_check
     }
 
+    /// The floored policy this target states, already judged at load.
+    #[must_use]
+    pub const fn protection(&self) -> &crate::config::Protection {
+        &self.protection
+    }
+
     /// Whether this run targets a GitLab instance that is not gitlab.com,
     /// where registry trusted publishing cannot reach.
     #[must_use]
@@ -325,6 +349,68 @@ impl Ctx {
             ("RK_TAG_RULESET".into(), self.tag_ruleset.clone().into()),
             ("RK_LINES_RULESET".into(), self.lines_ruleset.clone().into()),
             ("RK_TITLE_CHECK".into(), self.title_check.clone().into()),
+            // The floored policy, already judged against the floor table
+            // at load. A step receives values, never a judgment: one
+            // owner decides what passes, and it is not a shell script.
+            (
+                "RK_TAG_PATTERN".into(),
+                self.protection.tag_pattern.clone().into(),
+            ),
+            (
+                "RK_REVIEW_COUNT".into(),
+                self.protection
+                    .required_approving_review_count
+                    .to_string()
+                    .into(),
+            ),
+            (
+                "RK_DISMISS_STALE_REVIEWS".into(),
+                bool_word(self.protection.dismiss_stale_reviews_on_push).into(),
+            ),
+            (
+                "RK_CODE_OWNER_REVIEW".into(),
+                bool_word(self.protection.require_code_owner_review).into(),
+            ),
+            (
+                "RK_LAST_PUSH_APPROVAL".into(),
+                bool_word(self.protection.require_last_push_approval).into(),
+            ),
+            (
+                "RK_MERGE_METHODS".into(),
+                json_list(&self.protection.allowed_merge_methods).into(),
+            ),
+            (
+                "RK_STRICT_CHECKS".into(),
+                bool_word(self.protection.strict_required_status_checks).into(),
+            ),
+            (
+                "RK_SQUASH_TITLE_SOURCE".into(),
+                self.protection.github.squash_title_source.clone().into(),
+            ),
+            (
+                "RK_SQUASH_BODY_SOURCE".into(),
+                self.protection.github.squash_body_source.clone().into(),
+            ),
+            (
+                "RK_GITLAB_MERGE_METHOD".into(),
+                self.protection.gitlab.merge_method.clone().into(),
+            ),
+            (
+                "RK_GITLAB_SQUASH_OPTION".into(),
+                self.protection.gitlab.squash_option.clone().into(),
+            ),
+            (
+                "RK_GITLAB_SQUASH_TEMPLATE".into(),
+                self.protection.gitlab.squash_commit_template.clone().into(),
+            ),
+            (
+                "RK_GITLAB_PUSH_LEVEL".into(),
+                self.protection.gitlab.push_access_level.to_string().into(),
+            ),
+            (
+                "RK_GITLAB_MERGE_LEVEL".into(),
+                self.protection.gitlab.merge_access_level.to_string().into(),
+            ),
             ("GH_PAGER".into(), "".into()),
             ("GLAB_PAGER".into(), "".into()),
         ];

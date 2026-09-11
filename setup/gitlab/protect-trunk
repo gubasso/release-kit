@@ -10,6 +10,13 @@
 set -eu
 : "${RK_REPO:?rk sets this; run this script through rk setup}"
 : "${RK_TRUNK_BRANCH:?rk sets this; run this script through rk setup}"
+# The policy below. rk judged every value against the floor table before
+# this ran, so this script substitutes and never decides.
+: "${RK_GITLAB_MERGE_METHOD:?rk sets this; run this script through rk setup}"
+: "${RK_GITLAB_SQUASH_OPTION:?rk sets this; run this script through rk setup}"
+: "${RK_GITLAB_SQUASH_TEMPLATE:?rk sets this; run this script through rk setup}"
+: "${RK_GITLAB_PUSH_LEVEL:?rk sets this; run this script through rk setup}"
+: "${RK_GITLAB_MERGE_LEVEL:?rk sets this; run this script through rk setup}"
 
 project="$(printf '%s' "$RK_REPO" | sed 's|/|%2F|g')"
 
@@ -37,12 +44,12 @@ if glab api "projects/$project/protected_branches/$RK_TRUNK_BRANCH" >/dev/null 2
   else
     glab api -X DELETE "projects/$project/protected_branches/$RK_TRUNK_BRANCH" >/dev/null
     glab api -X POST "projects/$project/protected_branches" \
-      -f "name=$RK_TRUNK_BRANCH" -F push_access_level=0 -F merge_access_level=40 \
+      -f "name=$RK_TRUNK_BRANCH" -F "push_access_level=$RK_GITLAB_PUSH_LEVEL" -F "merge_access_level=$RK_GITLAB_MERGE_LEVEL" \
       -F allow_force_push=false >/dev/null
   fi
 else
   glab api -X POST "projects/$project/protected_branches" \
-    -f "name=$RK_TRUNK_BRANCH" -F push_access_level=0 -F merge_access_level=40 \
+    -f "name=$RK_TRUNK_BRANCH" -F "push_access_level=$RK_GITLAB_PUSH_LEVEL" -F "merge_access_level=$RK_GITLAB_MERGE_LEVEL" \
     -F allow_force_push=false >/dev/null
 fi
 
@@ -50,8 +57,8 @@ fi
 # documented default, and asserting it keeps the trunk's commit message the
 # merge request's title even where a project once set something else.
 glab api -X PUT "projects/$project" \
-  -F only_allow_merge_if_pipeline_succeeds=true -f merge_method=ff -f squash_option=always \
-  -f 'squash_commit_template=%{title}' >/dev/null
+  -F only_allow_merge_if_pipeline_succeeds=true -f "merge_method=$RK_GITLAB_MERGE_METHOD" -f "squash_option=$RK_GITLAB_SQUASH_OPTION" \
+  -f "squash_commit_template=$RK_GITLAB_SQUASH_TEMPLATE" >/dev/null
 
 echo "check: prints the protection, the pipeline requirement, the merge method, the squash setting, and the squash template"
 glab api "projects/$project/protected_branches/$RK_TRUNK_BRANCH" | compact | grep -o "\"name\":\"$RK_TRUNK_BRANCH\""

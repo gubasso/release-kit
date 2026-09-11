@@ -735,16 +735,12 @@ fn github_ruleset(
     }
 }
 
-/// The trunk ruleset, checked for the shape a release merge needs.
-/// The rule kinds the setup writes and can reproduce. It also drives the
-/// missing-rule fault, so a kind this convention refuses must stay out of
-/// it: adding one here would demand that rule on every target.
-const OWNED_TRUNK_RULES: [&str; 4] = [
-    "deletion",
-    "non_fast_forward",
-    "pull_request",
-    "required_status_checks",
-];
+// The trunk ruleset is checked for the shape a release merge needs.
+// The rule kinds the setup writes and can reproduce come from
+// `protection.owned_trunk_rules`, floored to contain all four. The set
+// also drives the missing-rule fault, so a kind this convention refuses
+// must stay out of it: adding one would demand that rule on every target.
+// The floor is what stops a target dropping one it needs.
 
 /// A fault line for every rule on the trunk that the setup does not own.
 ///
@@ -753,11 +749,11 @@ const OWNED_TRUNK_RULES: [&str; 4] = [
 /// other unowned kind reads generically: an unowned rule is one the setup
 /// cannot reproduce or explain, and it can block the very merge the method
 /// depends on.
-fn unowned_rule_faults(rules: &[Value]) -> Vec<String> {
+fn unowned_rule_faults(rules: &[Value], owned: &[String]) -> Vec<String> {
     rules
         .iter()
         .filter_map(|rule| rule["type"].as_str())
-        .filter(|kind| !OWNED_TRUNK_RULES.contains(kind))
+        .filter(|kind| !owned.iter().any(|name| name == kind))
         .map(|kind| {
             if kind == "merge_queue" {
                 MERGE_QUEUE_FAULT.to_owned()
@@ -802,14 +798,19 @@ fn github_trunk_ruleset(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkErro
     if !detail["bypass_actors"].as_array().is_none_or(Vec::is_empty) {
         faults.push("a bypass actor is named".to_owned());
     }
-    for required in OWNED_TRUNK_RULES {
+    for required in &ctx.protection().owned_trunk_rules {
         if !has(required) {
             faults.push(format!("the {required} rule is missing"));
         }
     }
-    faults.extend(unowned_rule_faults(&rules));
+    faults.extend(unowned_rule_faults(
+        &rules,
+        &ctx.protection().owned_trunk_rules,
+    ));
     if let Some(request) = rules.iter().find(|rule| rule["type"] == "pull_request") {
-        if request["parameters"]["allowed_merge_methods"] != serde_json::json!(["squash"]) {
+        if request["parameters"]["allowed_merge_methods"]
+            != serde_json::json!(ctx.protection().allowed_merge_methods)
+        {
             faults.push("the merge method is not exactly a squash merge".to_owned());
         }
     }
@@ -817,7 +818,9 @@ fn github_trunk_ruleset(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkErro
         .iter()
         .find(|rule| rule["type"] == "required_status_checks")
     {
-        if checks["parameters"]["strict_required_status_checks_policy"] != true {
+        if checks["parameters"]["strict_required_status_checks_policy"]
+            != ctx.protection().strict_required_status_checks
+        {
             faults.push(STALE_MERGE_FAULT.to_owned());
         }
         let contexts: Vec<&str> = checks["parameters"]["required_status_checks"]
@@ -912,15 +915,17 @@ fn squash_merge_sources(ctx: &Ctx, run: &mut Runner) -> Result<MergeSources, RkE
     Ok(match api_get(ctx, run, &format!("repos/{}", ctx.repo))? {
         Api::Ok(body) => {
             let mut faults = Vec::new();
-            if body["squash_merge_commit_title"] != "PR_TITLE" {
+            let owned_title = ctx.protection().github.squash_title_source.as_str();
+            let owned_body = ctx.protection().github.squash_body_source.as_str();
+            if body["squash_merge_commit_title"] != owned_title {
                 faults.push(format!(
-                    "the squash title source is {} where the setup owns PR_TITLE",
+                    "the squash title source is {} where the setup owns {owned_title}",
                     body["squash_merge_commit_title"]
                 ));
             }
-            if body["squash_merge_commit_message"] != "PR_BODY" {
+            if body["squash_merge_commit_message"] != owned_body {
                 faults.push(format!(
-                    "the squash message source is {} where the setup owns PR_BODY",
+                    "the squash message source is {} where the setup owns {owned_body}",
                     body["squash_merge_commit_message"]
                 ));
             }
@@ -1205,7 +1210,9 @@ fn gitlab(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
                 .as_array()
                 .cloned()
                 .unwrap_or_default();
-            let no_push = grants.len() == 1 && grants[0]["access_level"] == 0;
+            let policy = ctx.protection();
+            let no_push =
+                grants.len() == 1 && grants[0]["access_level"] == policy.gitlab.push_access_level;
             // The merge grant is owned exactly too: a merge level of 0 keeps
             // every release request unmergeable while the push shape reads
             // clean, so both halves are checked.
@@ -1213,7 +1220,8 @@ fn gitlab(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
                 .as_array()
                 .cloned()
                 .unwrap_or_default();
-            let can_merge = merges.len() == 1 && merges[0]["access_level"] == 40;
+            let can_merge =
+                merges.len() == 1 && merges[0]["access_level"] == policy.gitlab.merge_access_level;
             let settings = match api_get(ctx, run, &format!("projects/{project}"))? {
                 Api::Ok(body) => body,
                 Api::Missing | Api::Failed(_) => Value::Null,
@@ -1236,13 +1244,13 @@ fn gitlab(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
             if settings["only_allow_merge_if_pipeline_succeeds"] != true {
                 faults.push("the pipeline requirement is off".to_owned());
             }
-            if settings["merge_method"] != "ff" {
+            if settings["merge_method"] != policy.gitlab.merge_method.as_str() {
                 faults.push("the merge method is not fast-forward".to_owned());
             }
-            if settings["squash_option"] != "always" {
+            if settings["squash_option"] != policy.gitlab.squash_option.as_str() {
                 faults.push("merge requests do not always squash".to_owned());
             }
-            if settings["squash_commit_template"] != "%{title}" {
+            if settings["squash_commit_template"] != policy.gitlab.squash_commit_template.as_str() {
                 faults.push("the squash template is not the merge request's title".to_owned());
             }
             Ok(if faults.is_empty() {

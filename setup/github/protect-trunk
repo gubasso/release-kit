@@ -16,6 +16,16 @@ set -eu
 : "${RK_TRUNK_BRANCH:?rk sets this; run this script through rk setup}"
 : "${RK_TRUNK_RULESET:?rk sets this; run this script through rk setup}"
 : "${RK_TITLE_CHECK:?rk sets this; run this script through rk setup}"
+# The policy below. rk judged every value against the floor table before
+# this ran, so this script substitutes and never decides.
+: "${RK_REVIEW_COUNT:?rk sets this; run this script through rk setup}"
+: "${RK_DISMISS_STALE_REVIEWS:?rk sets this; run this script through rk setup}"
+: "${RK_CODE_OWNER_REVIEW:?rk sets this; run this script through rk setup}"
+: "${RK_LAST_PUSH_APPROVAL:?rk sets this; run this script through rk setup}"
+: "${RK_MERGE_METHODS:?rk sets this; run this script through rk setup}"
+: "${RK_STRICT_CHECKS:?rk sets this; run this script through rk setup}"
+: "${RK_SQUASH_TITLE_SOURCE:?rk sets this; run this script through rk setup}"
+: "${RK_SQUASH_BODY_SOURCE:?rk sets this; run this script through rk setup}"
 : "${RK_REQUIRED_CHECK:?rk sets this from --required-check}"
 
 name="$RK_TRUNK_RULESET"
@@ -40,20 +50,20 @@ fi <<JSON
     {
       "type": "pull_request",
       "parameters": {
-        "required_approving_review_count": 0,
-        "dismiss_stale_reviews_on_push": false,
-        "require_code_owner_review": false,
-        "require_last_push_approval": false,
+        "required_approving_review_count": $RK_REVIEW_COUNT,
+        "dismiss_stale_reviews_on_push": $RK_DISMISS_STALE_REVIEWS,
+        "require_code_owner_review": $RK_CODE_OWNER_REVIEW,
+        "require_last_push_approval": $RK_LAST_PUSH_APPROVAL,
         "required_review_thread_resolution": false,
         "require_extra_approval_for_unattributed_changes": false,
-        "allowed_merge_methods": ["squash"]
+        "allowed_merge_methods": $RK_MERGE_METHODS
       }
     },
     {
       "type": "required_status_checks",
       "parameters": {
         "do_not_enforce_on_create": true,
-        "strict_required_status_checks_policy": true,
+        "strict_required_status_checks_policy": $RK_STRICT_CHECKS,
         "required_status_checks": [
           { "context": "$RK_REQUIRED_CHECK" },
           { "context": "$RK_TITLE_CHECK" }
@@ -68,7 +78,7 @@ JSON
 # one-commit request the forge otherwise offers that commit's own subject,
 # so a branch commit named wip could become the trunk's message.
 gh api -X PATCH "repos/$RK_REPO" \
-  -f squash_merge_commit_title=PR_TITLE -f squash_merge_commit_message=PR_BODY >/dev/null
+  -f "squash_merge_commit_title=$RK_SQUASH_TITLE_SOURCE" -f "squash_merge_commit_message=$RK_SQUASH_BODY_SOURCE" >/dev/null
 
 echo "check: prints $name and the squash message sources"
 gh api "repos/$RK_REPO/rulesets" -q ".[] | select(.name == \"$name\") | .name"
