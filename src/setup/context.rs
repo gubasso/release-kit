@@ -91,6 +91,9 @@ pub struct Ctx {
     /// Whether a full apply runs the release-line protection, which a
     /// project that keeps no line does not want run at all.
     release_lines: bool,
+    /// The steps this target declared it does not run, each against its
+    /// stated reason. A run reports them and judges none of them.
+    excluded_steps: std::collections::BTreeMap<String, String>,
     /// The bot App's public identifier where this target states one; the
     /// environment still wins over it, and no private credential is here.
     bot_app_id: Option<String>,
@@ -181,28 +184,17 @@ impl Ctx {
         };
         let cli = resolve_cli(forge)?;
         let config = crate::config::load(target.as_std_path())?;
+        let answers = config
+            .as_ref()
+            .map_or_else(crate::config::Setup::default, |held| held.setup.clone());
         // The flag wins, and the committed answer fills the gap on GitHub
         // alone: GitLab names no individual check and refuses a supplied
         // one, so a shared configuration must not make that refusal fire.
         let required_check = required_check.map(str::to_owned).or_else(|| {
-            (forge == Forge::Github)
-                .then(|| {
-                    config
-                        .as_ref()
-                        .map(|held| held.setup.required_check.clone())
-                        .filter(|name| !name.is_empty())
-                })
-                .flatten()
+            Some(answers.required_check.clone())
+                .filter(|name| !name.is_empty() && forge == Forge::Github)
         });
-        let retired_branches = config.as_ref().map_or_else(
-            || crate::config::Setup::default().retired_branches,
-            |held| held.setup.retired_branches.clone(),
-        );
-        let release_lines = config.as_ref().is_some_and(|held| held.setup.release_lines);
-        let bot_app_id = config
-            .as_ref()
-            .map(|held| held.setup.bot.app_id.clone())
-            .filter(|id| !id.is_empty());
+        let bot_app_id = Some(answers.bot.app_id.clone()).filter(|id| !id.is_empty());
         let trunk = crate::config::trunk_of(target.as_std_path())?;
         let protection = config
             .as_ref()
@@ -224,8 +216,9 @@ impl Ctx {
             protection,
             trunk,
             line_prefix: crate::config::line_prefix_of(target.as_std_path())?,
-            retired_branches,
-            release_lines,
+            retired_branches: answers.retired_branches,
+            release_lines: answers.release_lines,
+            excluded_steps: answers.excluded_steps,
             bot_app_id,
         })
     }
@@ -256,6 +249,7 @@ impl Ctx {
             line_prefix: crate::config::LINE_PREFIX_DEFAULT.to_owned(),
             retired_branches: crate::config::Setup::default().retired_branches,
             release_lines: false,
+            excluded_steps: std::collections::BTreeMap::new(),
             bot_app_id: None,
             trunk_ruleset: format!("{}-protection", crate::config::TRUNK_DEFAULT),
             tag_ruleset: defaults.tag_ruleset.clone(),
@@ -287,6 +281,20 @@ impl Ctx {
     #[must_use]
     pub const fn release_lines(&self) -> bool {
         self.release_lines
+    }
+
+    /// Why this target does not run the named step, where it declared an
+    /// exclusion for it. The reason is what the report prints, so an
+    /// excluded step is always visible with the answer behind it.
+    #[must_use]
+    pub fn excluded(&self, step: &str) -> Option<&str> {
+        self.excluded_steps.get(step).map(String::as_str)
+    }
+
+    /// How many steps this target declared it does not run.
+    #[must_use]
+    pub fn excluded_count(&self) -> usize {
+        self.excluded_steps.len()
     }
 
     /// The bot App's public identifier this target states, where it does.

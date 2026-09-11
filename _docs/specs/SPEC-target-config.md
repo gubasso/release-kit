@@ -12,6 +12,7 @@
   - [`target-config:an-invariant-bearing-key-carries-a-floor` — An invariant-bearing key carries a floor](#target-configan-invariant-bearing-key-carries-a-floor--an-invariant-bearing-key-carries-a-floor)
   - [`target-config:the-trunk-branch-has-one-owner` — The trunk branch has one owner](#target-configthe-trunk-branch-has-one-owner--the-trunk-branch-has-one-owner)
   - [`target-config:a-setup-fact-is-committed-once` — A setup fact is committed once](#target-configa-setup-fact-is-committed-once--a-setup-fact-is-committed-once)
+  - [`target-config:an-exclusion-narrows-scope-and-not-policy` — An exclusion narrows scope and not policy](#target-configan-exclusion-narrows-scope-and-not-policy--an-exclusion-narrows-scope-and-not-policy)
   - [`target-config:an-untaken-config-is-reported-and-not-judged` — An untaken config is reported and not judged](#target-configan-untaken-config-is-reported-and-not-judged--an-untaken-config-is-reported-and-not-judged)
 
 <!--TOC-->
@@ -129,6 +130,18 @@ A setup fact the operator would otherwise retype MUST resolve from the committed
 - THEN the refusal names `setup.required_check` before it names the flag
 
 Verify: `cargo nextest run -E 'test(required_check) or test(the_release_lines_step_runs_when_the_config_asks) or test(retired_branches_come_from_the_config)'`
+
+### `target-config:an-exclusion-narrows-scope-and-not-policy` — An exclusion narrows scope and not policy
+
+A target states the setup steps it does not run in `setup.excluded_steps`, as a step id against the reason a report prints. The reader MUST refuse an id that names no setup step, naming it and its nearest known step, MUST refuse an exclusion that states no reason, and MUST judge every floor unchanged, because an exclusion says which steps this target runs and says nothing about what the method requires of the steps it does run. Nothing in this file needs a landing to be read: the setup verbs load it wherever it is, so the target class that lands no payload can still declare its model. [The setup specification](./SPEC-forge-setup.md) binds what a run does with the declaration.
+
+#### Scenario: A target excludes a step and weakens a policy
+
+- GIVEN a configuration excluding `protect-trunk` and permitting merge commits
+- WHEN the reader loads it
+- THEN it refuses naming `protection.allowed_merge_methods`, because the exclusion lifts no floor
+
+Verify: `cargo nextest run -E 'test(config) or test(params_from_a_record)'`
 
 ### `target-config:an-untaken-config-is-reported-and-not-judged` — An untaken config is reported and not judged
 

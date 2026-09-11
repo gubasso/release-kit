@@ -75,6 +75,10 @@ pub struct Event {
     /// The chunk's bytes, base64-encoded so invalid UTF-8 travels
     /// losslessly; the journal transcript keeps the raw bytes in order.
     pub data_b64: Option<String>,
+    /// The one line the human report prints beside a step's status, where
+    /// the emitting command has one. A field appends, so a consumer
+    /// reading an older shape is unaffected and the schema holds.
+    pub detail: Option<String>,
 }
 
 impl Event {
@@ -95,6 +99,7 @@ impl Event {
             duration_ms: None,
             stream: None,
             data_b64: None,
+            detail: None,
         }
     }
 
@@ -146,7 +151,7 @@ mod tests {
             Event::opening(0, "2026-08-29T14:10:31Z".into(), "01K5NQ7X".into(), "setup");
         assert_eq!(
             serde_json::to_string(&event).expect("an event serializes"),
-            r#"{"schema":"rk.events/1","seq":0,"time":"2026-08-29T14:10:31Z","run_id":"01K5NQ7X","command":"setup","type":"schema","step":null,"status":null,"reason":null,"exit_code":null,"duration_ms":null,"stream":null,"data_b64":null}"#
+            r#"{"schema":"rk.events/1","seq":0,"time":"2026-08-29T14:10:31Z","run_id":"01K5NQ7X","command":"setup","type":"schema","step":null,"status":null,"reason":null,"exit_code":null,"duration_ms":null,"stream":null,"data_b64":null,"detail":null}"#
         );
         event.seq = 12;
         event.kind = EventKind::StepFinished;
@@ -154,9 +159,10 @@ mod tests {
         event.status = Some("satisfied".into());
         event.exit_code = Some(0);
         event.duration_ms = Some(418);
+        event.detail = Some("the tag ruleset protects refs/tags/v*".into());
         assert_eq!(
             serde_json::to_string(&event).expect("an event serializes"),
-            r#"{"schema":"rk.events/1","seq":12,"time":"2026-08-29T14:10:31Z","run_id":"01K5NQ7X","command":"setup","type":"step_finished","step":"protect-tags","status":"satisfied","reason":null,"exit_code":0,"duration_ms":418,"stream":null,"data_b64":null}"#
+            r#"{"schema":"rk.events/1","seq":12,"time":"2026-08-29T14:10:31Z","run_id":"01K5NQ7X","command":"setup","type":"step_finished","step":"protect-tags","status":"satisfied","reason":null,"exit_code":0,"duration_ms":418,"stream":null,"data_b64":null,"detail":"the tag ruleset protects refs/tags/v*"}"#
         );
     }
 
@@ -168,7 +174,7 @@ mod tests {
             .child_output(ChildStream::Stderr, &[0x66, 0x6f, 0x6f, 0xff, 0xfe]);
         assert_eq!(
             serde_json::to_string(&event).expect("an event serializes"),
-            r#"{"schema":"rk.events/1","seq":3,"time":"2026-08-29T14:10:31Z","run_id":"01K5NQ7X","command":"setup","type":"child_output","step":null,"status":null,"reason":null,"exit_code":null,"duration_ms":null,"stream":"stderr","data_b64":"Zm9v//4="}"#
+            r#"{"schema":"rk.events/1","seq":3,"time":"2026-08-29T14:10:31Z","run_id":"01K5NQ7X","command":"setup","type":"child_output","step":null,"status":null,"reason":null,"exit_code":null,"duration_ms":null,"stream":"stderr","data_b64":"Zm9v//4=","detail":null}"#
         );
     }
 

@@ -26,6 +26,7 @@ required_check = RK_CONFIG_SETUP_REQUIRED_CHECK # N: the check the merge must pa
 retired_branches = RK_CONFIG_SETUP_RETIRED_BRANCHES # N: long-lived branches retired by the trunk
 line_prefix = RK_CONFIG_SETUP_LINE_PREFIX # P: release-line branch prefix, rendered into the release triggers
 release_lines = RK_CONFIG_SETUP_RELEASE_LINES # N: true runs protect-release-lines in a full apply
+excluded_steps = RK_CONFIG_SETUP_EXCLUDED_STEPS # N: step = why this target does not run it; `rk setup check` reports it and does not judge it
 
 [setup.bot]
 app_id = RK_CONFIG_SETUP_BOT_APP_ID # N: public App identifier; private credentials stay outside this file

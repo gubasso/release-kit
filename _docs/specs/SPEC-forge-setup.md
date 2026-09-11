@@ -10,6 +10,7 @@
   - [`forge-setup:key-material-never-reaches-the-environment` — Key material never reaches the environment](#forge-setupkey-material-never-reaches-the-environment--key-material-never-reaches-the-environment)
   - [`forge-setup:every-supported-forge-runs-every-step` — Every supported forge runs every step](#forge-setupevery-supported-forge-runs-every-step--every-supported-forge-runs-every-step)
   - [`forge-setup:a-check-reports-what-the-forge-enforces` — A check reports what the forge enforces](#forge-setupa-check-reports-what-the-forge-enforces--a-check-reports-what-the-forge-enforces)
+  - [`forge-setup:the-check-judges-the-steps-the-target-runs` — The check judges the steps the target runs](#forge-setupthe-check-judges-the-steps-the-target-runs--the-check-judges-the-steps-the-target-runs)
   - [`forge-setup:an-unowned-protection-names-its-consequence` — An unowned protection names its consequence](#forge-setupan-unowned-protection-names-its-consequence--an-unowned-protection-names-its-consequence)
   - [`forge-setup:the-setup-refuses-a-forge-below-the-floor` — The setup refuses a forge below the floor](#forge-setupthe-setup-refuses-a-forge-below-the-floor--the-setup-refuses-a-forge-below-the-floor)
   - [`forge-setup:the-required-check-is-shaped-to-report` — The required check is shaped to report](#forge-setupthe-required-check-is-shaped-to-report--the-required-check-is-shaped-to-report)
@@ -110,6 +111,24 @@ Where a forge cannot enforce what a step's proof claims, `rk setup check` MUST r
 - GIVEN a protected `v*` pattern on a forge whose Owners can still delete a protected tag
 - WHEN `rk setup check` runs
 - THEN the step reports satisfied with the limitation named, so nobody believes an immutability the forge does not provide
+
+Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `forge-setup:the-check-judges-the-steps-the-target-runs` — The check judges the steps the target runs
+
+`rk setup check` MUST judge the steps the target's committed configuration says it runs, MUST report every excluded step as `excluded` carrying that target's stated reason in both the human report and the event stream, and MUST count only the judged steps in its verdict; a full run MUST state the same exclusion and run nothing for that step, and a step named on the command line MUST refuse rather than apply, because the committed file is the one statement of which steps this target runs and a run that installed what the file excludes would leave the forge and the declaration disagreeing with nobody to notice. An exclusion is reported rather than dropped, so a reader can tell a chosen subset from an incomplete setup. A command that can never read clean stops being a gate: a real regression then arrives as one more line in a report that already carries several permanent ones.
+
+#### Scenario: A target takes the trunk half and none of the release half
+
+- GIVEN a configuration excluding each release-side step with its reason, and one step the target still runs unsatisfied on the forge
+- WHEN `rk setup check` runs
+- THEN each excluded step reports as excluded with its reason, the verdict names the unsatisfied step alone, and removing every such regression makes the same command exit 0
+
+#### Scenario: An excluded step is named by hand
+
+- GIVEN a configuration excluding `protect-tags`
+- WHEN `rk setup step protect-tags --apply` runs
+- THEN the refusal names the key and the stated reason, and no forge call is made
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 

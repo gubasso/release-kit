@@ -19167,3 +19167,233 @@ fn a_stricter_policy_still_installs_the_protection() {
         "the protection was installed rather than refused:\n{calls}"
     );
 }
+
+/// Every step the unconfigured fixture cannot satisfy, as the exclusion
+/// table a target that runs none of them commits.
+const EVERY_UNRUN_STEP: [(&str, &str); 13] = [
+    (
+        "default-branch",
+        "the forge default is this project's trunk already",
+    ),
+    (
+        "single-trunk",
+        "the second branch is a vendor mirror kept on purpose",
+    ),
+    ("merge-cleanup", "branches are deleted at the desk"),
+    ("branch-reminder", "the clone runs its own post-merge hook"),
+    ("ci-permissions", "no workflow writes to this repository"),
+    (
+        "install-bot",
+        "nothing publishes, so no bot identity exists",
+    ),
+    ("bot-secrets", "no bot identity, so no credentials to store"),
+    (
+        "protect-trunk",
+        "changes merge locally; there is no request per change",
+    ),
+    ("protect-tags", "this project cuts no tags"),
+    (
+        "auto-merge",
+        "no request merges itself without a release decision",
+    ),
+    (
+        "protections-check",
+        "the owned protections are the two this target keeps",
+    ),
+    (
+        "private-vulnerability-reporting",
+        "the security policy routes reports to the parent project",
+    ),
+    ("package-check", "there is no package"),
+];
+
+/// Write a configuration excluding each named step, with its reason.
+fn seed_exclusions(target: &Path, steps: &[(&str, &str)]) {
+    let dir = target.join(".release-kit");
+    std::fs::create_dir_all(&dir).expect("the config directory exists");
+    let mut text = String::from("schema_version = 1\n\n[setup.excluded_steps]\n");
+    for (step, reason) in steps {
+        use std::fmt::Write as _;
+        let _ = writeln!(text, "\"{step}\" = \"{reason}\"");
+    }
+    std::fs::write(dir.join("config.toml"), text).expect("the config writes");
+}
+
+/// SATISFIES forge-setup:the-check-judges-the-steps-the-target-runs
+/// A target that runs a chosen subset reads clean, each excluded step is
+/// visible with its stated reason, and a regression in the subset it does
+/// run still fails the check.
+#[test]
+fn an_excluded_step_is_reported_and_left_out_of_the_verdict() {
+    let fixture = ForgeFixture::new();
+    seed_exclusions(fixture.target.path(), &EVERY_UNRUN_STEP);
+
+    let clean = fixture
+        .rk(&["setup", "check"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let text = String::from_utf8_lossy(&clean.stdout);
+    assert!(
+        text.contains(
+            "excluded protect-trunk — changes merge locally; there is no request per change"
+        ),
+        "an exclusion is reported with its reason:\n{text}"
+    );
+    assert!(
+        text.contains("13 steps excluded by .release-kit/config.toml"),
+        "the excluded set is counted rather than hidden:\n{text}"
+    );
+    assert!(
+        !text.contains("unsatisfied"),
+        "no step the target runs is unsatisfied here:\n{text}"
+    );
+
+    // One step back in scope, unchanged on the forge: the same command now
+    // fails, and it names that step alone.
+    seed_exclusions(
+        fixture.target.path(),
+        &EVERY_UNRUN_STEP
+            .iter()
+            .filter(|(step, _)| *step != "protect-tags")
+            .copied()
+            .collect::<Vec<_>>(),
+    );
+    let broken = fixture
+        .rk(&["setup", "check"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .assert()
+        .code(1)
+        .get_output()
+        .clone();
+    let text = String::from_utf8_lossy(&broken.stdout);
+    assert!(text.contains("unsatisfied protect-tags"), "{text}");
+    assert_eq!(
+        text.matches("unsatisfied ").count(),
+        1,
+        "only the step the target runs is judged:\n{text}"
+    );
+    let stderr = String::from_utf8_lossy(&broken.stderr);
+    assert!(stderr.contains("1 step is not satisfied"), "{stderr}");
+}
+
+/// SATISFIES forge-setup:the-check-judges-the-steps-the-target-runs
+/// The exclusions stay auditable in the machine form: each excluded step
+/// carries its own reason on the event stream.
+#[test]
+fn the_json_stream_carries_every_exclusion_with_its_reason() {
+    let fixture = ForgeFixture::new();
+    seed_exclusions(fixture.target.path(), &EVERY_UNRUN_STEP);
+    let out = fixture
+        .rk(&["setup", "check"])
+        .args(["--repo", "acme/widget", "--forge", "github", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let events: Vec<serde_json::Value> = String::from_utf8_lossy(&out)
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("every line is one JSON object"))
+        .collect();
+    for (step, reason) in EVERY_UNRUN_STEP {
+        let found = events.iter().any(|event| {
+            event["step"] == step && event["status"] == "excluded" && event["detail"] == reason
+        });
+        assert!(found, "{step} travels with its reason");
+    }
+}
+
+/// SATISFIES forge-setup:the-check-judges-the-steps-the-target-runs
+/// A full apply runs nothing it was told the target does not run, and the
+/// GitHub refusal over the required check does not fire for a protection
+/// this target excludes.
+#[test]
+fn a_full_apply_skips_an_excluded_step_and_demands_nothing_for_it() {
+    let fixture = ForgeFixture::new();
+    seed_exclusions(
+        fixture.target.path(),
+        &[
+            (
+                "protect-trunk",
+                "changes merge locally; there is no request per change",
+            ),
+            (
+                "protections-check",
+                "the owned protections are the two this target keeps",
+            ),
+        ],
+    );
+    let out = fixture
+        .rk(&["setup"])
+        .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
+        .env("RK_BOT_APP_ID", "314159")
+        .env("RK_BOT_PRIVATE_KEY_FILE", fixture.key_file())
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !text.contains("--required-check"),
+        "an excluded protection asks for no check name:\n{text}"
+    );
+    assert!(
+        text.contains("protect-trunk — excluded (.release-kit/config.toml"),
+        "the skip states itself:\n{text}"
+    );
+    assert!(
+        text.contains("  excluded protect-trunk"),
+        "the run's summary keeps the exclusion:\n{text}"
+    );
+    // protect-tags is the one protection this target runs, so exactly one
+    // ruleset is created: the excluded step materialized no script and
+    // wrote nothing.
+    assert_eq!(
+        fixture
+            .log()
+            .matches("api -X POST repos/acme/widget/rulesets")
+            .count(),
+        1,
+        "an excluded step writes nothing to the forge:\n{}",
+        fixture.log()
+    );
+}
+
+/// SATISFIES forge-setup:the-check-judges-the-steps-the-target-runs
+/// Naming an excluded step is refused rather than run: the committed file
+/// is the one statement of the model, so changing it is the auditable act.
+#[test]
+fn an_excluded_step_named_by_hand_refuses_to_apply() {
+    let fixture = ForgeFixture::new();
+    seed_exclusions(
+        fixture.target.path(),
+        &[("protect-tags", "this project cuts no tags")],
+    );
+    fixture
+        .rk(&["setup", "step", "protect-tags"])
+        .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
+        .assert()
+        .code(64)
+        .stderr(predicate::str::contains("this project cuts no tags"))
+        .stderr(predicate::str::contains("setup.excluded_steps"));
+    assert_eq!(fixture.log(), "", "the refusal precedes every forge call");
+
+    // A preview mutates nothing, so it states the exclusion rather than
+    // the invocation it would otherwise rehearse.
+    fixture
+        .rk(&["setup", "step", "protect-tags"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "excluded by .release-kit/config.toml: this project cuts no tags",
+        ))
+        .stdout(predicate::str::contains("would run:").not());
+}
