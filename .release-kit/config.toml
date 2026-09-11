@@ -52,9 +52,6 @@ squash_body_source = "PR_BODY" # F: invariant, PR_BODY
 [protection.gitlab]
 merge_method = "ff" # F: invariant, linear history
 squash_option = "always" # F: invariant, always squash
-squash_commit_template = """
-%{title}
-
-%{description}""" # F: invariant, references title and description
+squash_commit_template = "%{title}" # F: invariant, references title
 push_access_level = 0 # F: invariant, zero
-merge_access_level = 30 # F: floor thirty
+merge_access_level = 40 # F: floor thirty

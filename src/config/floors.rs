@@ -114,12 +114,13 @@ pub const FLOORS: &[Floor] = &[
     },
     Floor {
         key: "protection.gitlab.squash_commit_template",
-        minimum: "references %{title} and %{description}",
+        minimum: "references %{title}",
         heading: "Trunk is written through pull requests only",
-        accepts: |p| {
-            p.gitlab.squash_commit_template.contains("%{title}")
-                && p.gitlab.squash_commit_template.contains("%{description}")
-        },
+        // The title alone, deliberately. `forge-setup:the-setup-asserts-
+        // the-squash-body-source` states that GitLab's template puts no
+        // request description on the trunk, so requiring `%{description}`
+        // here would contradict the setup this table is meant to floor.
+        accepts: |p| p.gitlab.squash_commit_template.contains("%{title}"),
     },
     Floor {
         key: "protection.gitlab.push_access_level",

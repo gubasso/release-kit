@@ -274,7 +274,7 @@ impl Default for Gitlab {
                 .trim_end_matches('\n')
                 .to_owned(),
             push_access_level: 0,
-            merge_access_level: 30,
+            merge_access_level: 40,
         }
     }
 }

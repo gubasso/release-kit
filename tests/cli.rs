@@ -2354,6 +2354,20 @@ fn every_setup_script_passes_the_static_battery() {
         "RK_TAG_RULESET",
         "RK_LINES_RULESET",
         "RK_TITLE_CHECK",
+        "RK_TAG_PATTERN",
+        "RK_REVIEW_COUNT",
+        "RK_DISMISS_STALE_REVIEWS",
+        "RK_CODE_OWNER_REVIEW",
+        "RK_LAST_PUSH_APPROVAL",
+        "RK_MERGE_METHODS",
+        "RK_STRICT_CHECKS",
+        "RK_SQUASH_TITLE_SOURCE",
+        "RK_SQUASH_BODY_SOURCE",
+        "RK_GITLAB_MERGE_METHOD",
+        "RK_GITLAB_SQUASH_OPTION",
+        "RK_GITLAB_SQUASH_TEMPLATE",
+        "RK_GITLAB_PUSH_LEVEL",
+        "RK_GITLAB_MERGE_LEVEL",
     ];
     for forge in ["github", "gitlab"] {
         for (name, text) in script_files(forge) {
@@ -19050,4 +19064,106 @@ fn the_trunk_ruleset_derives_from_the_trunk_where_none_is_named() {
         .assert()
         .success()
         .stdout(predicate::str::contains("RK_TRUNK_RULESET=main-protection"));
+}
+
+/// Land a configuration carrying one protection line, and return the
+/// target. Every floor is judged when the file is read, so any verb that
+/// reads it is enough to exercise the refusal.
+fn target_with_protection(line: &str) -> tempfile::TempDir {
+    let target = tempfile::tempdir().expect("a tempdir");
+    std::fs::create_dir_all(target.path().join(".release-kit")).expect("the directory exists");
+    std::fs::write(
+        target.path().join(".release-kit/config.toml"),
+        format!("schema_version = 1\n\n[protection]\n{line}\n"),
+    )
+    .expect("the config writes");
+    target
+}
+
+/// SATISFIES target-config:an-invariant-bearing-key-carries-a-floor
+/// A weaker policy is refused by name, and the refusal teaches: it states
+/// the key, the floor, and the chapter the floor comes from. A refusal
+/// naming the key alone tells the operator nothing about what to write.
+#[test]
+fn a_policy_below_its_floor_refuses_naming_the_key_the_floor_and_the_chapter() {
+    for (line, key) in [
+        (
+            "allowed_merge_methods = [\"squash\", \"merge\"]",
+            "protection.allowed_merge_methods",
+        ),
+        ("bypass_actors = [\"admin\"]", "protection.bypass_actors"),
+        (
+            "strict_required_status_checks = false",
+            "protection.strict_required_status_checks",
+        ),
+        (
+            "owned_trunk_rules = [\"deletion\", \"pull_request\"]",
+            "protection.owned_trunk_rules",
+        ),
+        (
+            "tag_pattern = \"refs/tags/release-*\"",
+            "protection.tag_pattern",
+        ),
+    ] {
+        let target = target_with_protection(line);
+        rk().args(["status", "--target"])
+            .arg(target.path())
+            .assert()
+            .failure()
+            .stderr(predicates::str::contains(key))
+            .stderr(predicates::str::contains("rk method invariants"));
+    }
+}
+
+/// SATISFIES target-config:an-invariant-bearing-key-carries-a-floor
+/// A floor states a minimum and never a maximum, so a project free to be
+/// stricter stays able to. These four would each refuse if the table
+/// compared for equality rather than for a floor.
+#[test]
+fn a_stricter_policy_passes_its_floor() {
+    for line in [
+        "required_approving_review_count = 2",
+        "dismiss_stale_reviews_on_push = true",
+        "require_code_owner_review = true",
+        "require_last_push_approval = true",
+    ] {
+        let target = target_with_protection(line);
+        rk().args(["status", "--target"])
+            .arg(target.path())
+            .assert()
+            .code(predicates::ord::ne(78));
+    }
+}
+
+/// SATISFIES target-config:an-invariant-bearing-key-carries-a-floor
+/// A stricter policy runs rather than refusing. The step receives the
+/// value and substitutes it, so a project asking for two approvals gets a
+/// protection installed rather than a refusal.
+#[test]
+fn a_stricter_policy_still_installs_the_protection() {
+    let fixture = ForgeFixture::new();
+    let dir = fixture.target.path().join(".release-kit");
+    std::fs::create_dir_all(&dir).expect("the config directory exists");
+    std::fs::write(
+        dir.join("config.toml"),
+        concat!(
+            "schema_version = 1\n\n",
+            "[setup]\nrequired_check = \"test-check\"\n\n",
+            "[protection]\nrequired_approving_review_count = 2\n",
+        ),
+    )
+    .expect("the config writes");
+    fixture.seed_gate();
+    fixture.seed("default_branch", "master");
+
+    fixture
+        .rk(&["setup", "step", "protect-trunk", "--apply"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .assert()
+        .success();
+    let calls = fixture.log();
+    assert!(
+        calls.contains("rulesets"),
+        "the protection was installed rather than refused:\n{calls}"
+    );
 }
