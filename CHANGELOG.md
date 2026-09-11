@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.18](https://github.com/gubasso/release-kit/compare/v0.3.17...v0.3.18) - 2026-09-11
+
+### Added
+
+- *(setup/package-check)* prove the reporting policy reaches the published artifact ([#163](https://github.com/gubasso/release-kit/pull/163))
+- *(landing/security)* let a target state its own reporting contact and response ([#161](https://github.com/gubasso/release-kit/pull/161))
+
 ## [0.3.17](https://github.com/gubasso/release-kit/compare/v0.3.16...v0.3.17) - 2026-09-11
 
 ### Other
