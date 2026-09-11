@@ -33,6 +33,8 @@ pub struct Params {
     nix: bool,
     trunk: String,
     line_prefix: String,
+    security_contact: String,
+    security_response: String,
 }
 
 /// Explicit invocation answers; absence falls through to configuration.
@@ -79,6 +81,8 @@ impl Params {
             nix: record.parameters.nix,
             trunk: record.parameters.trunk.clone(),
             line_prefix: record.parameters.line_prefix.clone(),
+            security_contact: record.parameters.security_contact.clone(),
+            security_response: record.parameters.security_response.clone(),
         }
     }
 
@@ -155,6 +159,22 @@ impl Params {
             .and_then(|c| c.setup.line_prefix.clone())
             .or_else(|| record.map(|r| r.parameters.line_prefix.clone()))
             .unwrap_or_else(|| crate::config::LINE_PREFIX_DEFAULT.to_owned());
+        // An explicitly present key wins, including an empty contact,
+        // which is how a target resets a recorded custom contact. An
+        // omitted key falls through to the record, so an upgrade under an
+        // older configuration keeps the policy the target already carries.
+        let security_contact = config
+            .and_then(|c| c.security.contact.clone())
+            .or_else(|| record.map(|r| r.parameters.security_contact.clone()))
+            .unwrap_or_default();
+        let security_contact =
+            crate::config::canonical_contact(&security_contact).map_err(crate::config::invalid)?;
+        let security_response = config
+            .and_then(|c| c.security.response.clone())
+            .or_else(|| record.map(|r| r.parameters.security_response.clone()))
+            .unwrap_or_else(|| crate::config::RESPONSE_DEFAULT.to_owned());
+        let security_response = crate::config::canonical_response(&security_response)
+            .map_err(crate::config::invalid)?;
         Ok(Self {
             tech,
             forge: resolved.forge,
@@ -168,6 +188,8 @@ impl Params {
                 .unwrap_or(false),
             trunk,
             line_prefix,
+            security_contact,
+            security_response,
         })
     }
 
@@ -218,6 +240,19 @@ impl Params {
     pub fn line_prefix(&self) -> &str {
         &self.line_prefix
     }
+
+    /// The contact the landed policy names, empty for the forge's own
+    /// authored wording.
+    #[must_use]
+    pub fn security_contact(&self) -> &str {
+        &self.security_contact
+    }
+
+    /// The acknowledgment window the landed policy promises.
+    #[must_use]
+    pub fn security_response(&self) -> &str {
+        &self.security_response
+    }
 }
 
 #[cfg(test)]
@@ -235,6 +270,17 @@ impl Params {
             nix: false,
             trunk: crate::config::TRUNK_DEFAULT.to_owned(),
             line_prefix: crate::config::LINE_PREFIX_DEFAULT.to_owned(),
+            security_contact: String::new(),
+            security_response: crate::config::RESPONSE_DEFAULT.to_owned(),
+        }
+    }
+
+    /// The same set with the two security parameters answered.
+    pub(crate) fn for_test_security(contact: &str, response: &str) -> Self {
+        Self {
+            security_contact: contact.to_owned(),
+            security_response: response.to_owned(),
+            ..Self::for_test("acme/widget", Some(Style::Trunk))
         }
     }
 }
@@ -369,6 +415,74 @@ pub const LINE_PREFIX_TOKEN: &[u8] = b"RK_LINE_PREFIX";
 /// This one substitutes first: the plain token is its own prefix.
 pub const LINE_PREFIX_RE_TOKEN: &[u8] = b"RK_LINE_PREFIX_RE";
 
+/// The three replaceable spans of a landed security policy, each as its
+/// ordered begin and end marker.
+///
+/// A span is not a token. Each forge's policy carries its own authored
+/// prose inside the markers, so a landing that answers neither security
+/// parameter strips the markers and reproduces the file the forge's
+/// snippet states, byte for byte and in that forge's own words. A landing
+/// that answers one replaces the interior of the spans that fact belongs
+/// to. The markers are HTML comments because the snippet is Markdown a
+/// reader may open before it is ever rendered.
+pub const SECURITY_SPANS: [(&[u8], &[u8]); 3] = [
+    (
+        b"<!--RK_SECURITY_CONTACT_BEGIN-->",
+        b"<!--RK_SECURITY_CONTACT_END-->",
+    ),
+    (
+        b"<!--RK_SECURITY_RESPONSE_BEGIN-->",
+        b"<!--RK_SECURITY_RESPONSE_END-->",
+    ),
+    (
+        b"<!--RK_SECURITY_DEADLINE_BEGIN-->",
+        b"<!--RK_SECURITY_DEADLINE_END-->",
+    ),
+];
+
+/// The sentence a policy with an acknowledgment window states in place of
+/// the forge's best-effort wording.
+fn acknowledgment(response: &str) -> String {
+    format!("Maintainers acknowledge a report within {response}.")
+}
+
+/// What a policy with an acknowledgment window says about deadlines: the
+/// authored sentence disclaims a response deadline, which a stated window
+/// contradicts, so only the disclosure half survives.
+const DISCLOSURE_ONLY: &[u8] = b"This policy commits to no disclosure deadline.";
+
+/// The replacement for each span under one parameter set, or `None` where
+/// the forge's authored interior stands.
+fn security_replacements(params: &Params) -> [Option<Vec<u8>>; 3] {
+    let contact = (!params.security_contact().is_empty())
+        .then(|| params.security_contact().as_bytes().to_vec());
+    let promised = params.security_response() != crate::config::RESPONSE_DEFAULT;
+    [
+        contact,
+        promised.then(|| acknowledgment(params.security_response()).into_bytes()),
+        promised.then(|| DISCLOSURE_ONLY.to_vec()),
+    ]
+}
+
+/// One marked span replaced, or the markers alone removed.
+///
+/// Exactly one ordered begin and end pair is a span; anything else is a
+/// payload defect a test holds, so this leaves such bytes untouched rather
+/// than growing a runtime failure mode into every rendered file.
+fn replace_span(baseline: &[u8], begin: &[u8], end: &[u8], value: Option<&[u8]>) -> Vec<u8> {
+    let ordered = find(baseline, begin)
+        .zip(find(baseline, end))
+        .filter(|(start, stop)| stop > start);
+    let Some((start, stop)) = ordered else {
+        return baseline.to_vec();
+    };
+    let mut out = Vec::with_capacity(baseline.len());
+    out.extend_from_slice(&baseline[..start]);
+    out.extend_from_slice(value.unwrap_or_else(|| &baseline[start + begin.len()..stop]));
+    out.extend_from_slice(&baseline[stop + end.len()..]);
+    out
+}
+
 /// Substitute the landing parameters into a `rendered` file's bytes.
 ///
 /// The repository's owner — the project path's first segment — replaces
@@ -382,6 +496,10 @@ pub const LINE_PREFIX_RE_TOKEN: &[u8] = b"RK_LINE_PREFIX_RE";
 /// The trunk and the line prefix substitute from the same parameters, so
 /// a target that renames either carries the new name in every artifact
 /// that names it rather than in the binary's behavior alone.
+///
+/// The security policy's marked spans resolve last, after every token, so
+/// a contact that happens to spell a token name lands literally rather
+/// than being read as one more substitution site.
 #[must_use]
 pub fn render(baseline: &[u8], params: &Params) -> Vec<u8> {
     let repo = params.repo();
@@ -395,7 +513,11 @@ pub fn render(baseline: &[u8], params: &Params) -> Vec<u8> {
     let escaped = params.line_prefix().replace('/', "\\/");
     out = substitute(&out, LINE_PREFIX_RE_TOKEN, escaped.as_bytes());
     out = substitute(&out, LINE_PREFIX_TOKEN, params.line_prefix().as_bytes());
-    substitute(&out, REPO_TOKEN, repo.as_bytes())
+    out = substitute(&out, REPO_TOKEN, repo.as_bytes());
+    for ((begin, end), value) in SECURITY_SPANS.iter().zip(security_replacements(params)) {
+        out = replace_span(&out, begin, end, value.as_deref());
+    }
+    out
 }
 
 /// Every `token` occurrence replaced with `value`.
@@ -1242,6 +1364,113 @@ mod tests {
         assert_eq!(super::kind_of("SECURITY.md"), Some(super::Kind::Rendered));
     }
 
+    /// Both forge policies carry exactly one ordered pair of every
+    /// security marker. The span renderer treats anything else as a
+    /// payload defect and leaves the bytes alone, so this test is what
+    /// keeps a defect out of a release rather than out of one landing.
+    #[test]
+    fn each_forge_policy_carries_one_ordered_pair_of_every_span() {
+        for forge in ["github", "gitlab"] {
+            let bytes = embedded::SNIPPETS
+                .get_file(format!("_shared/{forge}/SECURITY.md"))
+                .expect("the policy ships")
+                .contents();
+            let text = String::from_utf8_lossy(bytes);
+            for (begin, end) in super::SECURITY_SPANS {
+                let begin = String::from_utf8_lossy(begin);
+                let end = String::from_utf8_lossy(end);
+                assert_eq!(text.matches(begin.as_ref()).count(), 1, "{forge} {begin}");
+                assert_eq!(text.matches(end.as_ref()).count(), 1, "{forge} {end}");
+                assert!(
+                    text.find(begin.as_ref()) < text.find(end.as_ref()),
+                    "{forge}: {begin} must precede {end}"
+                );
+            }
+        }
+    }
+
+    /// The default answers reproduce each forge's authored policy exactly,
+    /// markers removed and each forge's own wording kept; an answered one
+    /// states it; and a contact spelling a token name lands literally,
+    /// because the spans resolve after every substitution.
+    #[test]
+    fn the_security_spans_render_per_answer() {
+        for forge in ["github", "gitlab"] {
+            let bytes = embedded::SNIPPETS
+                .get_file(format!("_shared/{forge}/SECURITY.md"))
+                .expect("the policy ships")
+                .contents();
+            let authored = String::from_utf8_lossy(bytes);
+            let stripped = {
+                let mut text = authored.clone().into_owned();
+                for (begin, end) in super::SECURITY_SPANS {
+                    text = text.replace(&String::from_utf8_lossy(begin).into_owned(), "");
+                    text = text.replace(&String::from_utf8_lossy(end).into_owned(), "");
+                }
+                text
+            };
+            let default = super::Params {
+                forge: forge.to_owned(),
+                ..super::Params::for_test_security("", crate::config::RESPONSE_DEFAULT)
+            };
+            let rendered = String::from_utf8(render(bytes, &default)).expect("text");
+            assert_eq!(
+                rendered,
+                stripped.replace("RK_REPO", "acme/widget"),
+                "{forge}: the default answers must reproduce the authored policy"
+            );
+            assert!(!rendered.contains("RK_SECURITY"), "{forge}: {rendered}");
+
+            let answered = super::Params {
+                forge: forge.to_owned(),
+                ..super::Params::for_test_security("OWNER RK_REPO <team@acme.example>", "14 days")
+            };
+            let rendered = String::from_utf8(render(bytes, &answered)).expect("text");
+            assert!(
+                rendered.contains("OWNER RK_REPO <team@acme.example>"),
+                "{forge}: a contact spelling a token name lands literally: {rendered}"
+            );
+            assert!(
+                rendered.contains("Maintainers acknowledge a report within 14 days."),
+                "{forge}: {rendered}"
+            );
+            assert!(
+                rendered.contains("This policy commits to no disclosure deadline."),
+                "{forge}: {rendered}"
+            );
+            assert!(
+                !rendered.contains("best-effort basis"),
+                "{forge}: a stated window replaces the best-effort sentence: {rendered}"
+            );
+            assert!(
+                !rendered.contains("no response or disclosure deadline"),
+                "{forge}: a stated window contradicts the response disclaimer: {rendered}"
+            );
+        }
+    }
+
+    /// A defective span leaves the bytes alone rather than producing a
+    /// half-written sentence: the payload test above is what catches one.
+    #[test]
+    fn a_defective_span_renders_unchanged() {
+        let (begin, end) = super::SECURITY_SPANS[0];
+        let begin = String::from_utf8_lossy(begin).into_owned();
+        let end = String::from_utf8_lossy(end).into_owned();
+        let params = super::Params::for_test_security("team@acme.example", "1 day");
+        for baseline in [
+            format!("contact {begin}a maintainer\n"),
+            format!("contact a maintainer{end}\n"),
+            format!("contact {end}a maintainer{begin}\n"),
+            "contact a maintainer\n".to_owned(),
+        ] {
+            assert_eq!(
+                render(baseline.as_bytes(), &params),
+                baseline.as_bytes(),
+                "{baseline}"
+            );
+        }
+    }
+
     /// Every snippet destination has a declared kind: a new landable file
     /// without a classification fails here, not at a landing. The shared
     /// zone's files are enumerated the same way.
@@ -1386,6 +1615,8 @@ mod tests {
                                     nix,
                                     trunk: crate::config::TRUNK_DEFAULT.to_owned(),
                                     line_prefix: crate::config::LINE_PREFIX_DEFAULT.to_owned(),
+                                    security_contact: String::new(),
+                                    security_response: crate::config::RESPONSE_DEFAULT.to_owned(),
                                 },
                                 files: Vec::new(),
                                 pins: std::collections::BTreeMap::new(),

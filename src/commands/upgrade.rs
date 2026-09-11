@@ -314,6 +314,8 @@ fn rewrite_record(
                 nix: params.nix(),
                 trunk: params.trunk().to_owned(),
                 line_prefix: params.line_prefix().to_owned(),
+                security_contact: params.security_contact().to_owned(),
+                security_response: params.security_response().to_owned(),
             },
             files: decisions
                 .iter()
