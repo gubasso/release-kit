@@ -11,6 +11,7 @@
   - [`target-config:an-absent-config-changes-nothing` — An absent config changes nothing](#target-configan-absent-config-changes-nothing--an-absent-config-changes-nothing)
   - [`target-config:an-invariant-bearing-key-carries-a-floor` — An invariant-bearing key carries a floor](#target-configan-invariant-bearing-key-carries-a-floor--an-invariant-bearing-key-carries-a-floor)
   - [`target-config:the-trunk-branch-has-one-owner` — The trunk branch has one owner](#target-configthe-trunk-branch-has-one-owner--the-trunk-branch-has-one-owner)
+  - [`target-config:a-setup-fact-is-committed-once` — A setup fact is committed once](#target-configa-setup-fact-is-committed-once--a-setup-fact-is-committed-once)
   - [`target-config:an-untaken-config-is-reported-and-not-judged` — An untaken config is reported and not judged](#target-configan-untaken-config-is-reported-and-not-judged--an-untaken-config-is-reported-and-not-judged)
 
 <!--TOC-->
@@ -110,6 +111,24 @@ Every trunk consumer MUST read `project.trunk` through the setup context or the 
 - THEN the release trigger and every branch guard name main, and the record carries it
 
 Verify: `cargo nextest run -E 'test(config) or test(the_trunk_branch_comes_from_the_config) or test(the_line_prefix_comes_from_the_config)'`
+
+### `target-config:a-setup-fact-is-committed-once` — A setup fact is committed once
+
+A setup fact the operator would otherwise retype MUST resolve from the committed configuration where no flag answers it, and an invocation flag MUST override it. The required check resolves this way on GitHub alone, because GitLab names no individual check and refuses a supplied one; the release-line protection runs in a full apply where `setup.release_lines` asks for it; the retired long-lived branches come from `setup.retired_branches`; and the bot App's public identifier comes from `setup.bot.app_id` where the environment carries none.
+
+#### Scenario: A project commits its required check
+
+- GIVEN a configuration with `setup.required_check = "gate"` and no flag
+- WHEN a GitHub setup runs
+- THEN the step receives that check, and the refusal that names the key does not fire
+
+#### Scenario: Neither the file nor the flag names the check
+
+- GIVEN a GitHub target whose `setup.required_check` is empty and no flag
+- WHEN a full apply runs
+- THEN the refusal names `setup.required_check` before it names the flag
+
+Verify: `cargo nextest run -E 'test(required_check) or test(the_release_lines_step_runs_when_the_config_asks) or test(retired_branches_come_from_the_config)'`
 
 ### `target-config:an-untaken-config-is-reported-and-not-judged` — An untaken config is reported and not judged
 

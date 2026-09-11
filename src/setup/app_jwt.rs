@@ -50,21 +50,29 @@ pub struct AppCredentials {
 ///
 /// Refuses an `RK_BOT_APP_ID` that is not the numeric id — the value
 /// lands in a JSON claim, so anything else would sign a malformed token.
-pub fn app_id() -> Result<Option<String>, RkError> {
-    let Some(app_id) = secrets::value_of("RK_BOT_APP_ID") else {
+pub fn app_id(configured: Option<&str>) -> Result<Option<String>, RkError> {
+    // The environment wins: an operator running against another App for
+    // one command must not be overruled by a committed file. The
+    // committed identifier is the fallback, so the common case needs no
+    // export at all.
+    let from_env = secrets::value_of("RK_BOT_APP_ID");
+    let held = from_env
+        .as_ref()
+        .and_then(|value| value.to_str())
+        .or(configured);
+    let Some(app_id) = held else {
         return Ok(None);
     };
-    let numeric = app_id
-        .to_str()
-        .filter(|id| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()));
+    let numeric =
+        Some(app_id).filter(|id| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()));
     let Some(app_id) = numeric else {
         return Err(RkError::refusal(
             Diagnostic::new(
                 Reason::PrerequisiteUnmet,
-                "RK_BOT_APP_ID is not a numeric App id",
+                "the bot App id is not numeric",
             )
             .expected("the App ID from the App's settings page, digits only")
-            .action("copy the App ID, not the Client ID; the setup guide's step 5 collects it")
+            .action("set setup.bot.app_id in .release-kit/config.toml, or export RK_BOT_APP_ID; copy the App ID, not the Client ID, as the setup guide's step 5 says")
             .step("install-bot"),
         ));
     };

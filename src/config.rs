@@ -134,13 +134,16 @@ impl Default for Setup {
 }
 
 /// The `setup.bot` table.
+///
+/// The App's public identifier and nothing else. The installation id is
+/// not here: it is the forge's own state, one cheap call answers it, and a
+/// cached copy that goes stale buys a refusal the operator must resolve by
+/// hand. The private key and the token are never here at all.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Bot {
     /// N: public App identifier; private credentials stay outside this file.
     pub app_id: String,
-    /// N: verified cache; zero means discover.
-    pub installation_id: i64,
 }
 
 /// The `protection` table.
@@ -432,10 +435,6 @@ fn render(config: &Config) -> Result<Vec<u8>, RkError> {
         (
             "RK_CONFIG_SETUP_BOT_APP_ID",
             config.setup.bot.app_id.clone().into(),
-        ),
-        (
-            "RK_CONFIG_SETUP_BOT_INSTALLATION_ID",
-            config.setup.bot.installation_id.into(),
         ),
     ];
     fields.extend(protection_fields(&config.protection));
@@ -779,7 +778,6 @@ mod tests {
         config.setup.line_prefix = Some("stable/".into());
         config.setup.release_lines = true;
         config.setup.bot.app_id = "123".into();
-        config.setup.bot.installation_id = 456;
         config.protection.trunk_ruleset = "primary".into();
         config.protection.tag_ruleset = "versions".into();
         config.protection.lines_ruleset = "maintenance".into();

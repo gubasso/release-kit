@@ -25,7 +25,7 @@ pub struct SetupArgs {
     #[arg(long)]
     pub forge: Option<String>,
 
-    /// The check the gate must pass; required on github, refused on gitlab.
+    /// The check the gate must pass; overrides `setup.required_check`, refused on gitlab.
     #[arg(long)]
     pub required_check: Option<String>,
 
@@ -76,7 +76,7 @@ pub enum SetupAction {
         /// Override the detected forge: github or gitlab.
         #[arg(long)]
         forge: Option<String>,
-        /// The check the gate must pass; required on github, refused on gitlab.
+        /// The check the gate must pass; overrides `setup.required_check`, refused on gitlab.
         #[arg(long)]
         required_check: Option<String>,
         /// Run the step; without it the step is previewed and nothing runs.
