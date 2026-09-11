@@ -21,9 +21,10 @@ use crate::detect::{self, Forge};
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
 
-/// The trunk every setup asserts: the one permanent branch; named so a
-/// later option can change it.
-pub const TRUNK_BRANCH: &str = "master";
+// The trunk every setup asserts is the one permanent branch the target
+// states in its own committed configuration, read through `Ctx::trunk`.
+// A target that names none keeps the compiled default, so a landing
+// predating the key behaves exactly as it did.
 
 /// The variables that pass through from the operator's environment to a
 /// step: the interpreter's search path, the forge CLI's configuration and
@@ -50,7 +51,7 @@ const PASSTHROUGH: [&str; 11] = [
 pub use super::secrets::VALUE_VARS as SECRET_VARS;
 
 /// One resolved run context.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Ctx {
     /// The repository being set up.
     pub target: Utf8PathBuf,
@@ -66,6 +67,12 @@ pub struct Ctx {
     pub cli: PathBuf,
     /// The detected technology, where the version file names one.
     pub tech: Option<&'static str>,
+    /// The one permanent branch this target states, or the compiled
+    /// default where it states none.
+    trunk: String,
+    /// The release-line prefix this target states, or the compiled
+    /// default where it states none.
+    line_prefix: String,
 }
 
 impl Ctx {
@@ -148,7 +155,47 @@ impl Ctx {
             required_check: required_check.map(str::to_owned),
             cli,
             tech: detect::tech_of(target.as_std_path()),
+            trunk: crate::config::trunk_of(target.as_std_path())?,
+            line_prefix: crate::config::line_prefix_of(target.as_std_path())?,
         })
+    }
+
+    /// A context the integration tests build directly, for an observer
+    /// exercised against recorded forge answers rather than a repository.
+    /// The trunk and the prefix take their compiled defaults, because such
+    /// a test reads no target configuration.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn for_tests(
+        target: Utf8PathBuf,
+        repo: String,
+        forge: Forge,
+        cli: PathBuf,
+        tech: Option<&'static str>,
+    ) -> Self {
+        Self {
+            target,
+            repo,
+            forge,
+            host: None,
+            required_check: None,
+            cli,
+            tech,
+            trunk: crate::config::TRUNK_DEFAULT.to_owned(),
+            line_prefix: crate::config::LINE_PREFIX_DEFAULT.to_owned(),
+        }
+    }
+
+    /// The one permanent branch this run asserts.
+    #[must_use]
+    pub fn trunk(&self) -> &str {
+        &self.trunk
+    }
+
+    /// The release-line prefix this run asserts.
+    #[must_use]
+    pub fn line_prefix(&self) -> &str {
+        &self.line_prefix
     }
 
     /// Whether this run targets a GitLab instance that is not gitlab.com,
@@ -169,7 +216,8 @@ impl Ctx {
         let mut env: Vec<(OsString, OsString)> = vec![
             ("RK_FORGE".into(), self.forge.as_str().into()),
             ("RK_REPO".into(), self.repo.clone().into()),
-            ("RK_TRUNK_BRANCH".into(), TRUNK_BRANCH.into()),
+            ("RK_TRUNK_BRANCH".into(), self.trunk.clone().into()),
+            ("RK_LINE_PREFIX".into(), self.line_prefix.clone().into()),
             ("GH_PAGER".into(), "".into()),
             ("GLAB_PAGER".into(), "".into()),
         ];

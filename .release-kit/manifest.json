@@ -1,7 +1,7 @@
 {
   "schema_version": 5,
   "rk_version": "0.3.12",
-  "payload_sha256": "93c09b45213218ba803a41dda419411dd94d10f7a48e4d2a4164857053b558d6",
+  "payload_sha256": "5947c81e343429a44d0d1245a40fc2346c34bd9fcd320be49a41bc07fe6e800a",
   "origin": "adopt",
   "tech": "rust",
   "forge": "github",
@@ -10,7 +10,9 @@
     "repo": "gubasso/release-kit",
     "workflow": "worktree",
     "style": "trunk",
-    "nix": false
+    "nix": false,
+    "trunk": "master",
+    "line_prefix": "release/"
   },
   "files": [
     {
@@ -23,19 +25,19 @@
       "destination": ".github/workflows/release-plz.yml",
       "kind": "rendered",
       "sha256": "dae0bfc1282b30535df0a13562b0b3ea5b4ff59af63009301f5ee86a9406c968",
-      "baseline_sha256": "4fb58d8ee980491f9ce7a650829864261cd51a27d6eea0801290a96e3e148fa5"
+      "baseline_sha256": "2815a2dd91138807ad760fa5e43cde3220beb2980846417ad2b7c5d2f0ba4905"
     },
     {
       "destination": ".pre-commit-config.yaml",
       "kind": "rendered",
       "sha256": "78149baea10341037a25dd728b31ae014c9d391a1c75375076d494663783e6f1",
-      "baseline_sha256": "78149baea10341037a25dd728b31ae014c9d391a1c75375076d494663783e6f1"
+      "baseline_sha256": "96ddd38956586d8ea9a74bcc30b00c90199d6a9b8ecdee8df80da8da3676f1bd"
     },
     {
       "destination": "AGENTS.md",
       "kind": "rendered",
       "sha256": "2c8d67375a633a9a6028766cc51630c4c03fed7ab89290e833590c4ee8ff50e1",
-      "baseline_sha256": "2c8d67375a633a9a6028766cc51630c4c03fed7ab89290e833590c4ee8ff50e1"
+      "baseline_sha256": "5748807dd5d66494c4c0b393441827805560eb5b346007059599d93313a1cbc5"
     },
     {
       "destination": "SECURITY.md",

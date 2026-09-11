@@ -95,7 +95,7 @@ Verify: `cargo nextest run -E 'test(config) or test(params_from_a_record)'`
 
 ### `target-config:the-trunk-branch-has-one-owner` — The trunk branch has one owner
 
-Every trunk consumer MUST read `project.trunk` through the setup context or the shared config accessor, whose compiled default is `master`.
+Every trunk consumer MUST read `project.trunk` through the setup context or the shared config accessor, whose compiled default is `master`, and every landed artifact naming a branch MUST carry the rendered trunk and the rendered `setup.line_prefix` rather than either literal, so the binary's behavior and the landed bytes name one branch.
 
 #### Scenario: A target names main as its trunk
 
@@ -103,7 +103,13 @@ Every trunk consumer MUST read `project.trunk` through the setup context or the 
 - WHEN a consumer requests the trunk
 - THEN the accessor returns main
 
-Verify: `cargo nextest run -E 'test(config) or test(params_from_a_record)'`
+#### Scenario: A target on its own trunk lands a workflow that runs there
+
+- GIVEN a landed target whose configuration sets `project.trunk = "main"`
+- WHEN the landing renders the release workflow and the hook block
+- THEN the release trigger and every branch guard name main, and the record carries it
+
+Verify: `cargo nextest run -E 'test(config) or test(the_trunk_branch_comes_from_the_config) or test(the_line_prefix_comes_from_the_config)'`
 
 ### `target-config:an-untaken-config-is-reported-and-not-judged` — An untaken config is reported and not judged
 

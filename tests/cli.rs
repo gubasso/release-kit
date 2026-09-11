@@ -101,6 +101,35 @@ fn land_rust(target: &Path) -> assert_cmd::assert::Assert {
         .assert()
 }
 
+/// A projection parameter set built the only way production builds one:
+/// from a record. The renderer takes `Params`, so a test that renders a
+/// baseline states the record it renders under rather than a loose tuple.
+fn render_params(
+    repo: &str,
+    style: Option<release_kit::landing::Style>,
+) -> release_kit::landing::Params {
+    use release_kit::landing::manifest::{Manifest, Parameters};
+    release_kit::landing::Params::from_record(&Manifest {
+        schema_version: release_kit::landing::manifest::SCHEMA_VERSION,
+        rk_version: "0.0.0".to_owned(),
+        payload_sha256: Digest::of(b""),
+        origin: "init".to_owned(),
+        tech: "rust".to_owned(),
+        forge: "github".to_owned(),
+        landed_at: "2026-08-29T00:00:00Z".to_owned(),
+        parameters: Parameters {
+            repo: repo.to_owned(),
+            workflow: release_kit::landing::Workflow::Worktree,
+            style,
+            nix: false,
+            trunk: release_kit::config::TRUNK_DEFAULT.to_owned(),
+            line_prefix: release_kit::config::LINE_PREFIX_DEFAULT.to_owned(),
+        },
+        files: Vec::new(),
+        pins: std::collections::BTreeMap::new(),
+    })
+}
+
 /// The landing record a target carries, parsed.
 fn read_manifest(target: &Path) -> serde_json::Value {
     let bytes = std::fs::read(target.join(".release-kit/manifest.json"))
@@ -2206,8 +2235,7 @@ fn the_routing_block_reads_as_plain_prose() {
     ] {
         let rendered = release_kit::landing::render(
             release_kit::landing::routing_block(workflow).as_bytes(),
-            "acme/widget",
-            None,
+            &render_params("acme/widget", None),
         );
         let text = String::from_utf8(rendered).expect("the block is text");
         let findings = prose_findings(&text);
@@ -7431,7 +7459,7 @@ fn the_rust_github_seed_attests_the_release_payload_in_the_host_phase() {
 fn this_projects_ci_gate_is_shaped_to_report() {
     let root = camino::Utf8Path::from_path(Path::new(env!("CARGO_MANIFEST_DIR")))
         .expect("a utf-8 manifest directory");
-    let report = release_kit::setup::workflow_jobs::read_gate(root, "gate");
+    let report = release_kit::setup::workflow_jobs::read_gate(root, "gate", "master");
     assert_eq!(
         report.reading,
         release_kit::setup::workflow_jobs::GateReading::Gated,
@@ -7447,7 +7475,7 @@ fn this_projects_ci_gate_is_shaped_to_report() {
         "exactly one job reports the required context, so the protection is unambiguous"
     );
     assert!(
-        release_kit::setup::workflow_jobs::faults(&report, "gate").is_none(),
+        release_kit::setup::workflow_jobs::faults(&report, "gate", "master").is_none(),
         "the reader faults nothing against this repository's own workflows"
     );
 }
@@ -10584,7 +10612,14 @@ fn worktree_json_failure_is_one_diagnostic_line() {
 /// The `rk-worktree-location` entry's script, extracted from the rendered
 /// worktree-mode hook block — the exact bytes a landing writes.
 fn guard_script() -> String {
-    let block = release_kit::landing::hooks_block(release_kit::landing::Workflow::Worktree);
+    // The guard names the trunk, so the block carries a token and the
+    // script under test is the rendered form a landing writes.
+    let template = release_kit::landing::hooks_block(release_kit::landing::Workflow::Worktree);
+    let block = String::from_utf8(release_kit::landing::render(
+        template.as_bytes(),
+        &render_params("acme/widget", Some(release_kit::landing::Style::Trunk)),
+    ))
+    .expect("the rendered block stays text");
     let entry = block
         .lines()
         .skip_while(|line| !line.contains("id: rk-worktree-location"))
@@ -17816,15 +17851,13 @@ fn reporting_observation(
         observe::{StepState, observe},
         process::Outcome,
     };
-    let ctx = Ctx {
-        target: ".".into(),
-        repo: "acme/group/widget".into(),
+    let ctx = Ctx::for_tests(
+        ".".into(),
+        "acme/group/widget".into(),
         forge,
-        host: None,
-        required_check: None,
-        cli: "fake-forge".into(),
-        tech: Some("bash"),
-    };
+        "fake-forge".into(),
+        Some("bash"),
+    );
     let mut calls = Vec::new();
     let mut answers = responses.iter();
     let state = observe(&ctx, PRIVATE_REPORTING, &mut |exec| {
@@ -18132,7 +18165,10 @@ fn private_reporting_policy_lands_in_every_supported_pair() {
         let bytes = std::fs::read(target.path().join("SECURITY.md")).unwrap();
         assert_eq!(
             bytes,
-            release_kit::landing::render(&baseline, repo, Some(release_kit::landing::Style::Trunk))
+            release_kit::landing::render(
+                &baseline,
+                &render_params(repo, Some(release_kit::landing::Style::Trunk))
+            )
         );
         assert_eq!(file["kind"], "rendered");
         assert_eq!(file["baseline_sha256"], Digest::of(&baseline).to_string());
@@ -18306,8 +18342,10 @@ fn private_reporting_policy_adoption_and_parameter_replay() {
         std::fs::read(target.path().join("SECURITY.md")).unwrap(),
         release_kit::landing::render(
             &baseline,
-            manifest["parameters"]["repo"].as_str().unwrap(),
-            Some(release_kit::landing::Style::Trunk)
+            &render_params(
+                manifest["parameters"]["repo"].as_str().unwrap(),
+                Some(release_kit::landing::Style::Trunk)
+            )
         )
     );
     assert_eq!(manifest["schema_version"], 5);
@@ -18563,4 +18601,184 @@ fn an_adoption_writes_the_config_and_the_record_and_nothing_else() {
         assert!(after.contains(&item));
     }
     assert_eq!(read_manifest(target.path())["origin"], "adopt");
+}
+
+/// The seeded `release-plz.toml` lands with a TODO sentinel the operator
+/// answers; a test that judges the landing with `--check` answers it the
+/// way the scratch round trip does, so the sentinel is not mistaken for
+/// this change's own violation.
+fn answer_the_seeded_sentinel(target: &Path) {
+    let path = target.join("release-plz.toml");
+    let text = std::fs::read_to_string(&path).expect("the seeded file reads");
+    let kept: Vec<&str> = text
+        .lines()
+        .filter(|line| !line.contains("TODO(release-kit)"))
+        .collect();
+    std::fs::write(&path, format!("{}\nsemver_check = true\n", kept.join("\n")))
+        .expect("the seeded file rewrites");
+}
+
+/// SATISFIES target-config:the-trunk-branch-has-one-owner
+/// A target that names its own trunk gets that name in its landed bytes,
+/// in its record, and in what the setup preview says it would run. The
+/// release trigger is the sharp case: a workflow that still selected
+/// `master` would never run on the project's own trunk.
+#[test]
+fn the_trunk_branch_comes_from_the_config() {
+    let target = tempfile::tempdir().expect("a tempdir");
+    land_rust(target.path()).success();
+
+    let config = target.path().join(".release-kit/config.toml");
+    let text = std::fs::read_to_string(&config).expect("the landed config reads");
+    std::fs::write(
+        &config,
+        text.replace("trunk = \"master\"", "trunk = \"main\""),
+    )
+    .expect("the config rewrites");
+
+    rk().args(["upgrade", "--target"])
+        .arg(target.path())
+        .arg("--apply")
+        .assert()
+        .success();
+
+    let workflow = std::fs::read_to_string(target.path().join(".github/workflows/release-plz.yml"))
+        .expect("the release workflow reads");
+    assert!(
+        workflow.contains("branches: [main, 'release/**']"),
+        "the release trigger names the configured trunk, not master:\n{workflow}"
+    );
+    assert!(
+        !workflow.contains("master"),
+        "no master literal survives in the landed workflow"
+    );
+
+    let hooks = std::fs::read_to_string(target.path().join(".pre-commit-config.yaml"))
+        .expect("the hooks read");
+    assert!(
+        hooks.contains("args: [--branch, main]"),
+        "the no-commit-to-branch guard names the configured trunk"
+    );
+    assert!(
+        hooks.contains("refs/heads/main"),
+        "the push guard names the configured trunk"
+    );
+
+    let manifest = read_manifest(target.path());
+    assert_eq!(
+        manifest["parameters"]["trunk"], "main",
+        "the record carries the trunk, so a re-render reproduces these bytes"
+    );
+
+    answer_the_seeded_sentinel(target.path());
+    rk().args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+}
+
+/// SATISFIES target-config:the-config-is-input-and-the-record-is-the-record
+/// A target that names its own release-line prefix gets it in the release
+/// trigger and in the record. A landing that still wrote `release/` would
+/// leave the project's own lines outside their own release workflow.
+#[test]
+fn the_line_prefix_comes_from_the_config() {
+    let target = tempfile::tempdir().expect("a tempdir");
+    land_rust(target.path()).success();
+
+    let config = target.path().join(".release-kit/config.toml");
+    let text = std::fs::read_to_string(&config).expect("the landed config reads");
+    std::fs::write(
+        &config,
+        text.replace("line_prefix = \"release/\"", "line_prefix = \"stable/\""),
+    )
+    .expect("the config rewrites");
+
+    rk().args(["upgrade", "--target"])
+        .arg(target.path())
+        .arg("--apply")
+        .assert()
+        .success();
+
+    let workflow = std::fs::read_to_string(target.path().join(".github/workflows/release-plz.yml"))
+        .expect("the release workflow reads");
+    assert!(
+        workflow.contains("branches: [master, 'stable/**']"),
+        "the release trigger names the configured prefix:\n{workflow}"
+    );
+
+    let manifest = read_manifest(target.path());
+    assert_eq!(manifest["parameters"]["line_prefix"], "stable/");
+}
+
+/// SATISFIES landing:a-rendered-file-is-reproducible
+/// A record written before either key existed still loads, still reads the
+/// values such a landing actually wrote, and still judges clean. This is
+/// the whole compatibility path for every target landed before this
+/// change.
+#[test]
+fn a_record_predating_the_keys_reads_the_compiled_defaults() {
+    let target = tempfile::tempdir().expect("a tempdir");
+    land_rust(target.path()).success();
+
+    let mut manifest = read_manifest(target.path());
+    let parameters = manifest["parameters"]
+        .as_object_mut()
+        .expect("the parameters are an object");
+    parameters.remove("trunk");
+    parameters.remove("line_prefix");
+    write_manifest(target.path(), &manifest);
+
+    answer_the_seeded_sentinel(target.path());
+    rk().args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+
+    // The sharper proof than reading the report: an upgrade re-renders
+    // from the record alone, so identical bytes mean the compiled
+    // defaults are exactly what such a landing wrote.
+    let before = std::fs::read(target.path().join(".github/workflows/release-plz.yml"))
+        .expect("the release workflow reads");
+    rk().args(["upgrade", "--target"])
+        .arg(target.path())
+        .arg("--apply")
+        .assert()
+        .success();
+    assert_eq!(
+        std::fs::read(target.path().join(".github/workflows/release-plz.yml"))
+            .expect("the release workflow reads"),
+        before,
+        "a record predating the keys re-renders byte-identically"
+    );
+
+    let manifest = read_manifest(target.path());
+    assert_eq!(
+        manifest["parameters"]["trunk"], "master",
+        "the upgrade records the trunk such a landing wrote"
+    );
+    assert_eq!(manifest["parameters"]["line_prefix"], "release/");
+}
+
+/// SATISFIES forge-setup:every-supported-forge-runs-every-step
+/// The setup preview states the trunk it would pass a step, and a target
+/// on its own trunk must not be told that `master` is what would run.
+#[test]
+fn the_setup_preview_prints_the_configured_trunk() {
+    let target = tempfile::tempdir().expect("a tempdir");
+    land_rust(target.path()).success();
+    let config = target.path().join(".release-kit/config.toml");
+    let text = std::fs::read_to_string(&config).expect("the landed config reads");
+    std::fs::write(
+        &config,
+        text.replace("trunk = \"master\"", "trunk = \"main\""),
+    )
+    .expect("the config rewrites");
+
+    rk().args(["setup", "--repo", "acme/widget", "--forge", "github"])
+        .args(["--required-check", "gate", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("RK_TRUNK_BRANCH=main"));
 }

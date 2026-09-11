@@ -181,6 +181,26 @@ pub struct Parameters {
     /// it.
     #[serde(default)]
     pub nix: bool,
+    /// The one permanent branch, rendered into every landed artifact that
+    /// names it. A record predating the field reads as `master`, which is
+    /// what such a landing wrote, so the projection stays reproducible.
+    #[serde(default = "trunk_master")]
+    pub trunk: String,
+    /// The release-line branch prefix, rendered into the release triggers
+    /// and branch guards. A record predating the field reads as
+    /// `release/`, which is what such a landing wrote.
+    #[serde(default = "line_prefix_release")]
+    pub line_prefix: String,
+}
+
+/// The trunk a record predating the field carries.
+fn trunk_master() -> String {
+    crate::config::TRUNK_DEFAULT.to_owned()
+}
+
+/// The prefix a record predating the field carries.
+fn line_prefix_release() -> String {
+    crate::config::LINE_PREFIX_DEFAULT.to_owned()
 }
 
 /// One landed destination.
@@ -416,6 +436,8 @@ mod tests {
                 workflow: Workflow::Worktree,
                 style: Some(Style::Trunk),
                 nix: true,
+                trunk: crate::config::TRUNK_DEFAULT.to_owned(),
+                line_prefix: crate::config::LINE_PREFIX_DEFAULT.to_owned(),
             },
             files: vec![
                 FileRecord {
@@ -437,7 +459,7 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&manifest).expect("a manifest serializes"),
             format!(
-                r#"{{"schema_version":5,"rk_version":"0.1.0","payload_sha256":"{empty}","origin":"init","tech":"rust","forge":"github","landed_at":"2026-08-29T00:00:00Z","parameters":{{"repo":"acme/widget","workflow":"worktree","style":"trunk","nix":true}},"files":[{{"destination":"release-plz.toml","kind":"seeded","sha256":"{empty}","baseline_sha256":"{empty}"}},{{"destination":"VERSION","kind":"state","sha256":"{empty}"}}],"pins":{{"release-plz":"0.3.160"}}}}"#
+                r#"{{"schema_version":5,"rk_version":"0.1.0","payload_sha256":"{empty}","origin":"init","tech":"rust","forge":"github","landed_at":"2026-08-29T00:00:00Z","parameters":{{"repo":"acme/widget","workflow":"worktree","style":"trunk","nix":true,"trunk":"master","line_prefix":"release/"}},"files":[{{"destination":"release-plz.toml","kind":"seeded","sha256":"{empty}","baseline_sha256":"{empty}"}},{{"destination":"VERSION","kind":"state","sha256":"{empty}"}}],"pins":{{"release-plz":"0.3.160"}}}}"#
             ),
             "a state file must omit baseline_sha256 rather than serializing null"
         );

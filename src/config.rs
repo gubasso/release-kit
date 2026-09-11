@@ -48,7 +48,7 @@ impl Default for Config {
 }
 
 /// The `project` table.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Project {
     /// P: project path on the forge, nested groups included.
@@ -57,20 +57,17 @@ pub struct Project {
     pub forge: String,
     /// P: payload binding; empty means detect.
     pub tech: String,
-    /// N: the one permanent branch.
-    pub trunk: String,
+    /// P: the one permanent branch, rendered into every landed artifact
+    /// that names it. Absent means the landing has not answered it, so a
+    /// record's own answer survives an upgrade that predates the key.
+    pub trunk: Option<String>,
 }
 
-impl Default for Project {
-    fn default() -> Self {
-        Self {
-            repo: String::new(),
-            forge: String::new(),
-            tech: String::new(),
-            trunk: "master".into(),
-        }
-    }
-}
+/// The compiled trunk, used where neither a configuration nor a record answers.
+pub const TRUNK_DEFAULT: &str = "master";
+
+/// The compiled release-line prefix, used where nothing else answers.
+pub const LINE_PREFIX_DEFAULT: &str = "release/";
 
 /// The `landing` table.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
@@ -114,8 +111,10 @@ pub struct Setup {
     pub required_check: String,
     /// N: long-lived branches retired by the trunk.
     pub retired_branches: Vec<String>,
-    /// N: release-line branch prefix.
-    pub line_prefix: String,
+    /// P: release-line branch prefix, rendered into the release triggers
+    /// and branch guards a landing writes. Absent means unanswered, so a
+    /// record's own answer survives an upgrade that predates the key.
+    pub line_prefix: Option<String>,
     /// N: run release-line protection in a full apply.
     pub release_lines: bool,
     /// Public bot identity.
@@ -127,7 +126,7 @@ impl Default for Setup {
         Self {
             required_check: String::new(),
             retired_branches: vec!["main".into(), "develop".into()],
-            line_prefix: "release/".into(),
+            line_prefix: None,
             release_lines: false,
             bot: Bot::default(),
         }
@@ -352,6 +351,7 @@ fn array(values: &[String]) -> toml_edit::Value {
     toml_edit::Value::Array(values.iter().collect())
 }
 
+#[allow(clippy::too_many_lines)]
 fn render(config: &Config) -> Result<Vec<u8>, RkError> {
     let mut fields: Vec<(&str, toml_edit::Value)> = vec![
         ("RK_CONFIG_SCHEMA_VERSION", config.schema_version.into()),
@@ -363,7 +363,12 @@ fn render(config: &Config) -> Result<Vec<u8>, RkError> {
         ("RK_CONFIG_PROJECT_TECH", config.project.tech.clone().into()),
         (
             "RK_CONFIG_PROJECT_TRUNK",
-            config.project.trunk.clone().into(),
+            config
+                .project
+                .trunk
+                .clone()
+                .ok_or_else(|| invalid("project.trunk is unresolved"))?
+                .into(),
         ),
         (
             "RK_CONFIG_LANDING_WORKFLOW",
@@ -413,7 +418,12 @@ fn render(config: &Config) -> Result<Vec<u8>, RkError> {
         ),
         (
             "RK_CONFIG_SETUP_LINE_PREFIX",
-            config.setup.line_prefix.clone().into(),
+            config
+                .setup
+                .line_prefix
+                .clone()
+                .ok_or_else(|| invalid("setup.line_prefix is unresolved"))?
+                .into(),
         ),
         (
             "RK_CONFIG_SETUP_RELEASE_LINES",
@@ -552,9 +562,11 @@ fn rewrite_text(text: &str, key: &str, mut value: toml_edit::Value) -> Result<St
         "project.repo",
         "project.forge",
         "project.tech",
+        "project.trunk",
         "landing.workflow",
         "landing.style",
         "landing.nix",
+        "setup.line_prefix",
     ]
     .contains(&key)
     {
@@ -619,6 +631,8 @@ impl Plan {
             style: params.style(),
             nix: Some(params.nix()),
         };
+        resolved.project.trunk = Some(params.trunk().to_owned());
+        resolved.setup.line_prefix = Some(params.line_prefix().to_owned());
         let content = if existing.is_some() {
             let mut text = std::fs::read_to_string(target.join(CONFIG_PATH))?;
             for (key, value) in parameter_values(&resolved) {
@@ -670,6 +684,12 @@ fn parameter_values(config: &Config) -> Vec<(&'static str, toml_edit::Value)> {
     if let Some(value) = config.landing.nix {
         values.push(("landing.nix", value.into()));
     }
+    if let Some(value) = config.project.trunk.clone() {
+        values.push(("project.trunk", value.into()));
+    }
+    if let Some(value) = config.setup.line_prefix.clone() {
+        values.push(("setup.line_prefix", value.into()));
+    }
     values
 }
 
@@ -685,6 +705,8 @@ pub fn pending(config: &Config, record: &crate::landing::manifest::Manifest) -> 
         style: record.parameters.style,
         nix: Some(record.parameters.nix),
     };
+    recorded.project.trunk = Some(record.parameters.trunk.clone());
+    recorded.setup.line_prefix = Some(record.parameters.line_prefix.clone());
     let baseline = parameter_values(&recorded);
     parameter_values(config)
         .into_iter()
@@ -702,7 +724,19 @@ pub fn pending(config: &Config, record: &crate::landing::manifest::Manifest) -> 
 /// # Errors
 /// Propagates invalid configuration and I/O failures.
 pub fn trunk_of(target: &Path) -> Result<String, RkError> {
-    Ok(load(target)?.unwrap_or_default().project.trunk)
+    Ok(load(target)?
+        .and_then(|config| config.project.trunk)
+        .unwrap_or_else(|| TRUNK_DEFAULT.to_owned()))
+}
+
+/// The release-line prefix for callers without a setup context.
+///
+/// # Errors
+/// Propagates invalid configuration and I/O failures.
+pub fn line_prefix_of(target: &Path) -> Result<String, RkError> {
+    Ok(load(target)?
+        .and_then(|config| config.setup.line_prefix)
+        .unwrap_or_else(|| LINE_PREFIX_DEFAULT.to_owned()))
 }
 
 #[cfg(test)]
@@ -733,7 +767,7 @@ mod tests {
         config.project.repo = "acme/nested/widget".into();
         config.project.forge = "gitlab".into();
         config.project.tech = "bash".into();
-        config.project.trunk = "main".into();
+        config.project.trunk = Some("main".into());
         config.landing.workflow = Some(Workflow::Branches);
         config.landing.style = Some(Style::Lines);
         config.landing.nix = Some(true);
@@ -742,7 +776,7 @@ mod tests {
         config.security.response = "90d".into();
         config.setup.required_check = "build / test".into();
         config.setup.retired_branches = vec!["develop".into(), "old\"branch".into()];
-        config.setup.line_prefix = "stable/".into();
+        config.setup.line_prefix = Some("stable/".into());
         config.setup.release_lines = true;
         config.setup.bot.app_id = "123".into();
         config.setup.bot.installation_id = 456;
@@ -767,6 +801,14 @@ mod tests {
                 workflow: Some(Workflow::Worktree),
                 style: Some(Style::Trunk),
                 nix: Some(false),
+            },
+            project: super::Project {
+                trunk: Some(super::TRUNK_DEFAULT.into()),
+                ..super::Project::default()
+            },
+            setup: super::Setup {
+                line_prefix: Some(super::LINE_PREFIX_DEFAULT.into()),
+                ..super::Setup::default()
             },
             ..Config::default()
         };

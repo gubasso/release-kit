@@ -19,10 +19,10 @@ use serde::Serialize;
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
 use crate::landing::{self, manifest};
-use crate::setup::context::TRUNK_BRANCH;
 
-/// The prefix of the convention's own long-lived branch form.
-const RELEASE_LINE_PREFIX: &str = "release/";
+// The trunk and the release-line prefix come from the target's own
+// committed configuration; a target that states neither keeps the
+// compiled defaults in `crate::config`.
 
 /// Files that mark a release mechanism, whichever tool owns it.
 ///
@@ -227,6 +227,9 @@ fn package_json_names_a_release(target: &Utf8Path) -> Result<bool, RkError> {
 /// corrupt repository, an ownership refusal, a git that does not run —
 /// is an error, because an unreadable history must not read as none.
 fn git_evidence(target: &Utf8Path) -> Result<(bool, usize, Vec<String>), RkError> {
+    let trunk = crate::config::trunk_of(target.as_std_path())?;
+    let line_prefix = crate::config::line_prefix_of(target.as_std_path())?;
+    let (trunk, line_prefix) = (trunk.as_str(), line_prefix.as_str());
     match git_lines(target, &["rev-parse", "--git-dir"]) {
         Ok(_) => {}
         Err(GitFailure::NotARepository) => return Ok((false, 0, Vec::new())),
@@ -243,7 +246,11 @@ fn git_evidence(target: &Utf8Path) -> Result<(bool, usize, Vec<String>), RkError
         ],
     )
     .map_err(GitFailure::into_error)?;
-    Ok((true, tags.len(), long_lived_among(&refs)))
+    Ok((
+        true,
+        tags.len(),
+        long_lived_among(&refs, trunk, line_prefix),
+    ))
 }
 
 /// The long-lived branch names among `refs`, given as full ref names.
@@ -253,7 +260,7 @@ fn git_evidence(target: &Utf8Path) -> Result<(bool, usize, Vec<String>), RkError
 /// name is long-lived when it is a catalog entry other than the trunk or
 /// carries the release-line prefix; each appears once, sorted.
 #[must_use]
-pub fn long_lived_among(refs: &[String]) -> Vec<String> {
+pub fn long_lived_among(refs: &[String], trunk: &str, line_prefix: &str) -> Vec<String> {
     let mut names = std::collections::BTreeSet::new();
     for reference in refs {
         let name = if let Some(local) = reference.strip_prefix("refs/heads/") {
@@ -266,8 +273,8 @@ pub fn long_lived_among(refs: &[String]) -> Vec<String> {
         } else {
             continue;
         };
-        let catalogued = name != TRUNK_BRANCH && LONG_LIVED_BRANCHES.contains(&name);
-        if catalogued || name.starts_with(RELEASE_LINE_PREFIX) {
+        let catalogued = name != trunk && LONG_LIVED_BRANCHES.contains(&name);
+        if catalogued || name.starts_with(line_prefix) {
             names.insert(name.to_owned());
         }
     }
@@ -432,11 +439,20 @@ mod tests {
         .map(|name| (*name).to_owned())
         .collect();
         assert_eq!(
-            long_lived_among(&refs),
+            long_lived_among(&refs, "master", "release/"),
             vec!["develop", "main", "release/1.2"]
         );
-        assert!(long_lived_among(&["refs/heads/master".to_owned()]).is_empty());
-        assert!(long_lived_among(&["refs/heads/feat/develop".to_owned()]).is_empty());
+        assert!(
+            long_lived_among(&["refs/heads/master".to_owned()], "master", "release/").is_empty()
+        );
+        assert!(
+            long_lived_among(
+                &["refs/heads/feat/develop".to_owned()],
+                "master",
+                "release/"
+            )
+            .is_empty()
+        );
     }
 
     #[test]

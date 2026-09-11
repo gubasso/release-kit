@@ -425,7 +425,11 @@ fn workflow_matches_configuration(config: &str, workflow: &str) -> Vec<Invariant
     }
     // The forge executes the workflow, not the configuration: a target
     // that set skip and never regenerated still reports the job.
-    if crate::setup::workflow_jobs::request_trigger(workflow).is_some() {
+    // This reader asks only whether a request trigger exists at all, and
+    // never which branches it names, so the trunk it passes is immaterial.
+    if crate::setup::workflow_jobs::request_trigger(workflow, crate::config::TRUNK_DEFAULT)
+        .is_some()
+    {
         failures.push(InvariantFailure::new(
             "workflow-runs-on-a-request",
             GENERATED_WORKFLOW,

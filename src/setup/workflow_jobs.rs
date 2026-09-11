@@ -20,7 +20,6 @@
 use camino::Utf8Path;
 
 use crate::landing::invariants::before_comment;
-use crate::setup::context::TRUNK_BRANCH;
 
 /// What the workflows say about the required check.
 #[derive(Debug, PartialEq, Eq)]
@@ -151,7 +150,7 @@ pub struct Trigger {
 
 impl Trigger {
     /// Read the filters one request event carries.
-    fn from_filters(filters: &[(String, Vec<String>)]) -> Self {
+    fn from_filters(filters: &[(String, Vec<String>)], trunk: &str) -> Self {
         let mut trigger = Self::default();
         for (key, items) in filters {
             match key.as_str() {
@@ -160,7 +159,7 @@ impl Trigger {
                 // back out, so a list carrying one is not proven either way.
                 "branches" => {
                     let negated = items.iter().any(|item| item.starts_with('!'));
-                    if negated || !items.iter().any(|item| covers_trunk(item)) {
+                    if negated || !items.iter().any(|item| covers_trunk(item, trunk)) {
                         trigger.misses_trunk = Some(format!("branches: [{}]", items.join(", ")));
                     }
                 }
@@ -168,7 +167,10 @@ impl Trigger {
                 // run the forge's matcher, so only a literal other name is
                 // proven harmless.
                 "branches-ignore" => {
-                    if items.iter().any(|item| covers_trunk(item) || is_glob(item)) {
+                    if items
+                        .iter()
+                        .any(|item| covers_trunk(item, trunk) || is_glob(item))
+                    {
                         trigger.misses_trunk =
                             Some(format!("branches-ignore: [{}]", items.join(", ")));
                     }
@@ -203,8 +205,8 @@ impl Trigger {
 
 /// Whether a branch pattern names the trunk: its exact name, or a glob
 /// that matches every branch. Any other glob is not proven to.
-fn covers_trunk(pattern: &str) -> bool {
-    pattern == TRUNK_BRANCH || pattern == "*" || pattern == "**"
+fn covers_trunk(pattern: &str, trunk: &str) -> bool {
+    pattern == trunk || pattern == "*" || pattern == "**"
 }
 
 /// Whether a branch pattern carries a glob or negation character, so its
@@ -223,8 +225,8 @@ struct Workflow {
 /// Read every workflow under the target's `.github/workflows` and judge
 /// the named check against the jobs that report on a pull request.
 #[must_use]
-pub fn read_gate(target: &Utf8Path, required_check: &str) -> GateReport {
-    let (workflows, unreadable) = read_workflows(&target.join(".github/workflows"));
+pub fn read_gate(target: &Utf8Path, required_check: &str, trunk: &str) -> GateReport {
+    let (workflows, unreadable) = read_workflows(&target.join(".github/workflows"), trunk);
     let mut report = GateReport {
         reading: GateReading::NoRequestWorkflows,
         gate_condition: None,
@@ -242,7 +244,7 @@ pub fn read_gate(target: &Utf8Path, required_check: &str) -> GateReport {
 /// Every request-running workflow under the directory, in name order, and
 /// every path that could not be read. A missing directory is neither: a
 /// target with no workflows reads as none, not as unreadable.
-fn read_workflows(dir: &Utf8Path) -> (Vec<Workflow>, Vec<String>) {
+fn read_workflows(dir: &Utf8Path, trunk: &str) -> (Vec<Workflow>, Vec<String>) {
     let mut unreadable: Vec<String> = Vec::new();
     let mut workflows: Vec<Workflow> = Vec::new();
     match std::fs::read_dir(dir) {
@@ -266,7 +268,7 @@ fn read_workflows(dir: &Utf8Path) -> (Vec<Workflow>, Vec<String>) {
                     unreadable.push(name);
                     continue;
                 };
-                if let Some(trigger) = request_trigger(&text) {
+                if let Some(trigger) = request_trigger(&text, trunk) {
                     workflows.push(Workflow {
                         name,
                         trigger,
@@ -341,7 +343,7 @@ fn judge(report: &mut GateReport, workflows: &[Workflow], required_check: &str) 
 /// Every part is a fault on `protect-trunk`, not a limitation: a required
 /// check that cannot report is a broken trunk protection.
 #[must_use]
-pub fn faults(report: &GateReport, required_check: &str) -> Option<String> {
+pub fn faults(report: &GateReport, required_check: &str, trunk: &str) -> Option<String> {
     let mut parts: Vec<String> = Vec::new();
     match &report.reading {
         GateReading::Gated => {}
@@ -384,7 +386,7 @@ pub fn faults(report: &GateReport, required_check: &str) -> Option<String> {
     }
     if let Some(filter) = &report.gate_trigger.misses_trunk {
         parts.push(format!(
-            "the pull_request trigger of the workflow carrying {required_check} reads {filter}, which does not prove it runs for a request against {TRUNK_BRANCH}, so the check would never report there"
+            "the pull_request trigger of the workflow carrying {required_check} reads {filter}, which does not prove it runs for a request against {trunk}, so the check would never report there"
         ));
     }
     if let Some(filter) = &report.gate_trigger.types_filtered {
@@ -408,7 +410,7 @@ pub fn faults(report: &GateReport, required_check: &str) -> Option<String> {
 /// The landing invariant reads it too, to ask whether a generated
 /// workflow reports on a request at all: one reader owns the forms `on`
 /// takes, so a form one of them learns is a form both know.
-pub(crate) fn request_trigger(workflow: &str) -> Option<Trigger> {
+pub(crate) fn request_trigger(workflow: &str, trunk: &str) -> Option<Trigger> {
     let mut in_on = false;
     let mut event_indent: Option<usize> = None;
     let mut in_request_event = false;
@@ -417,7 +419,7 @@ pub(crate) fn request_trigger(workflow: &str) -> Option<Trigger> {
     let mut found: Option<Trigger> = None;
     let close_event = |filters: &mut Vec<(String, Vec<String>)>, found: &mut Option<Trigger>| {
         if let Some(trigger) = found {
-            trigger.merge(Trigger::from_filters(filters));
+            trigger.merge(Trigger::from_filters(filters, trunk));
         }
         filters.clear();
     };
@@ -731,6 +733,7 @@ mod tests {
         read_gate(
             Utf8Path::from_path(dir.path()).expect("utf-8 tempdir"),
             check,
+            "master",
         )
     }
 
@@ -741,11 +744,17 @@ mod tests {
     #[test]
     fn the_trigger_is_read_in_every_on_form() {
         assert_eq!(
-            request_trigger("on:\n  push:\n  pull_request:\n    branches: [master]\n"),
+            request_trigger(
+                "on:\n  push:\n  pull_request:\n    branches: [master]\n",
+                "master"
+            ),
             Some(unfiltered())
         );
         assert_eq!(
-            request_trigger("on:\n  push:\n  pull_request:\n    branches: [main]\n"),
+            request_trigger(
+                "on:\n  push:\n  pull_request:\n    branches: [main]\n",
+                "master"
+            ),
             Some(Trigger {
                 misses_trunk: Some("branches: [main]".to_owned()),
                 ..Trigger::default()
@@ -753,7 +762,8 @@ mod tests {
         );
         assert_eq!(
             request_trigger(
-                "on:\n  pull_request:\n    branches-ignore:\n      - master\n    types: [opened]\n"
+                "on:\n  pull_request:\n    branches-ignore:\n      - master\n    types: [opened]\n",
+                "master"
             ),
             Some(Trigger {
                 misses_trunk: Some("branches-ignore: [master]".to_owned()),
@@ -763,37 +773,53 @@ mod tests {
         );
         assert_eq!(
             request_trigger(
-                "on:\n  pull_request:\n    branches: ['**']\n    types: [opened, synchronize, reopened]\n"
+                "on:\n  pull_request:\n    branches: ['**']\n    types: [opened, synchronize, reopened]\n",
+                "master"
             ),
             Some(unfiltered())
         );
         assert_eq!(
-            request_trigger("on:\n  pull_request:\n    branches: ['**', '!master']\n"),
+            request_trigger(
+                "on:\n  pull_request:\n    branches: ['**', '!master']\n",
+                "master"
+            ),
             Some(Trigger {
                 misses_trunk: Some("branches: [**, !master]".to_owned()),
                 ..Trigger::default()
             })
         );
         assert_eq!(
-            request_trigger("on:\n  pull_request:\n    branches: ['!master', '**']\n"),
+            request_trigger(
+                "on:\n  pull_request:\n    branches: ['!master', '**']\n",
+                "master"
+            ),
             Some(Trigger {
                 misses_trunk: Some("branches: [!master, **]".to_owned()),
                 ..Trigger::default()
             })
         );
         assert_eq!(
-            request_trigger("on:\n  pull_request:\n    branches-ignore: ['mast*']\n"),
+            request_trigger(
+                "on:\n  pull_request:\n    branches-ignore: ['mast*']\n",
+                "master"
+            ),
             Some(Trigger {
                 misses_trunk: Some("branches-ignore: [mast*]".to_owned()),
                 ..Trigger::default()
             })
         );
         assert_eq!(
-            request_trigger("on:\n  pull_request:\n    branches-ignore: [dependabot]\n"),
+            request_trigger(
+                "on:\n  pull_request:\n    branches-ignore: [dependabot]\n",
+                "master"
+            ),
             Some(unfiltered())
         );
         assert_eq!(
-            request_trigger("on:\n  pull_request:\n    branches-ignore: ['ma[as]ter']\n"),
+            request_trigger(
+                "on:\n  pull_request:\n    branches-ignore: ['ma[as]ter']\n",
+                "master"
+            ),
             Some(Trigger {
                 misses_trunk: Some("branches-ignore: [ma[as]ter]".to_owned()),
                 ..Trigger::default()
@@ -801,40 +827,50 @@ mod tests {
         );
         assert_eq!(
             request_trigger(
-                "on:\n  pull_request:\n    branches: [\"release/**\", 'a,b', master]\n"
+                "on:\n  pull_request:\n    branches: [\"release/**\", 'a,b', master]\n",
+                "master"
             ),
             Some(unfiltered())
         );
         assert_eq!(
-            request_trigger("on:\n  pull_request:\n    branches: [\"topic\\\",master,tail\"]\n"),
+            request_trigger(
+                "on:\n  pull_request:\n    branches: [\"topic\\\",master,tail\"]\n",
+                "master"
+            ),
             Some(Trigger {
                 misses_trunk: Some("branches: [topic\\\",master,tail]".to_owned()),
                 ..Trigger::default()
             })
         );
         assert_eq!(
-            request_trigger("on: [push, pull_request]\n"),
+            request_trigger("on: [push, pull_request]\n", "master"),
             Some(unfiltered())
         );
         assert_eq!(
-            request_trigger("on: pull_request_target\n"),
+            request_trigger("on: pull_request_target\n", "master"),
             Some(unfiltered())
         );
         assert_eq!(
-            request_trigger("on:\n  - push\n  - pull_request\n"),
+            request_trigger("on:\n  - push\n  - pull_request\n", "master"),
             Some(unfiltered())
         );
         assert_eq!(
-            request_trigger("\"on\":\n  pull_request:\n"),
+            request_trigger("\"on\":\n  pull_request:\n", "master"),
             Some(unfiltered())
         );
-        assert_eq!(request_trigger("on: push\n"), None);
+        assert_eq!(request_trigger("on: push\n", "master"), None);
         assert_eq!(
-            request_trigger("on:\n  push:\n  workflow_dispatch:\njobs:\n  pull_request:\n"),
+            request_trigger(
+                "on:\n  push:\n  workflow_dispatch:\njobs:\n  pull_request:\n",
+                "master"
+            ),
             None
         );
         assert_eq!(
-            request_trigger("on:\n  pull_request:\n    paths:\n      - 'docs/**'\n  push:\n"),
+            request_trigger(
+                "on:\n  pull_request:\n    paths:\n      - 'docs/**'\n  push:\n",
+                "master"
+            ),
             Some(Trigger {
                 paths_filtered: true,
                 ..Trigger::default()
@@ -842,7 +878,8 @@ mod tests {
         );
         assert_eq!(
             request_trigger(
-                "on:\n  push:\n    paths: [x]\n  pull_request:\n    branches: [master]\n"
+                "on:\n  push:\n    paths: [x]\n  pull_request:\n    branches: [master]\n",
+                "master"
             ),
             Some(unfiltered())
         );
@@ -1003,7 +1040,7 @@ jobs:
             "test",
         );
         assert_eq!(subset.reading, GateReading::Gated);
-        assert_eq!(faults(&subset, "test"), None);
+        assert_eq!(faults(&subset, "test", "master"), None);
 
         let missing = report("on: [pull_request]\njobs:\n  lint:\n  unit:\n", "test");
         assert_eq!(
@@ -1073,14 +1110,18 @@ jobs:
             "test",
         );
         assert_eq!(duplicated.reporting, 2);
-        let text = faults(&duplicated, "test").expect("a fault");
+        let text = faults(&duplicated, "test", "master").expect("a fault");
         assert!(
             text.contains("no longer stands for the gate alone"),
             "{text}"
         );
 
         let dir = tempfile::tempdir().expect("a tempdir");
-        let empty = read_gate(Utf8Path::from_path(dir.path()).expect("utf-8"), "test");
+        let empty = read_gate(
+            Utf8Path::from_path(dir.path()).expect("utf-8"),
+            "test",
+            "master",
+        );
         assert_eq!(empty.reading, GateReading::NoRequestWorkflows);
         assert!(empty.unreadable.is_empty());
     }
@@ -1095,10 +1136,14 @@ jobs:
             "on: [pull_request]\njobs:\n  test:\n    if: always()\n",
         )
         .expect("the workflow writes");
-        let report = read_gate(Utf8Path::from_path(dir.path()).expect("utf-8"), "test");
+        let report = read_gate(
+            Utf8Path::from_path(dir.path()).expect("utf-8"),
+            "test",
+            "master",
+        );
         assert_eq!(report.reading, GateReading::Gated);
         assert_eq!(report.unreadable, vec!["broken.yml".to_owned()]);
-        let text = faults(&report, "test").expect("a fault");
+        let text = faults(&report, "test", "master").expect("a fault");
         assert!(text.contains("[broken.yml] could not be read"), "{text}");
         // The unreadable file leaves uniqueness unproven; the text must not
         // convert that into a claim of uniqueness.
@@ -1114,7 +1159,7 @@ jobs:
             reporting: 1,
             unreadable: Vec::new(),
         };
-        assert_eq!(faults(&base(), "test"), None);
+        assert_eq!(faults(&base(), "test", "master"), None);
         let cases = [
             GateReport {
                 reading: GateReading::NoRequestWorkflows,
@@ -1168,7 +1213,7 @@ jobs:
             },
         ];
         for case in &cases {
-            let text = faults(case, "test").expect("a fault");
+            let text = faults(case, "test", "master").expect("a fault");
             assert!(!text.contains('\n'), "{text}");
             assert!(
                 text.starts_with(|c: char| c.is_lowercase() || c == '['),

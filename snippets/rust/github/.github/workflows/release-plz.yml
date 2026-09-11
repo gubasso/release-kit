@@ -2,7 +2,7 @@
 # is registered at crates.io; cargo-dist's release.yml builds binaries and
 # must never be registered there.
 #
-# Both halves run on every push to the trunk, and to a release/* line when a
+# Both halves run on every push to the trunk, and to a RK_LINE_PREFIX* line when a
 # project keeps older lines. The pull-request half maintains the one release
 # pull request against the pushed branch; the release half publishes and tags
 # only on the push that lands the bot's own bump, which release_always = false
@@ -16,13 +16,13 @@ permissions: {}
 
 on:
   push:
-    branches: [master, 'release/**']
+    branches: [RK_TRUNK_BRANCH, 'RK_LINE_PREFIX**']
 
 jobs:
   # Merging the release pull request is the release: the bump push lands here,
   # and this half publishes over OIDC and pushes the tag. The app token is what
   # makes the tag trigger release.yml; a tag pushed with GITHUB_TOKEN starts no
-  # further workflow. On a release/* line the same job tags the line's patch.
+  # further workflow. On a RK_LINE_PREFIX* line the same job tags the line's patch.
   release-plz-release:
     if: github.repository_owner == 'OWNER'
     runs-on: ubuntu-latest
@@ -105,7 +105,7 @@ jobs:
             echo "the lines style merges each release by hand; not arming."
             exit 0
           fi
-          if [ "$REF" != "master" ]; then
+          if [ "$REF" != "RK_TRUNK_BRANCH" ]; then
             echo "a line's request is never armed; its candidate is what a human validated."
             exit 0
           fi

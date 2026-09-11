@@ -16,7 +16,7 @@ use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
 use crate::maintenance;
 use crate::output::Output;
-use crate::setup::context::{TRUNK_BRANCH, resolve_cli};
+use crate::setup::context::resolve_cli;
 
 /// The closing line a report ends with while some reported row still
 /// names a move the operator may make; it states who owns the deletion,
@@ -153,6 +153,7 @@ fn prune(
     quiet: bool,
     out: Output,
 ) -> Result<(), RkError> {
+    let trunk = crate::config::trunk_of(target.as_std_path())?;
     if !target.is_dir() {
         return Err(RkError::missing(
             Diagnostic::new(
@@ -189,7 +190,7 @@ fn prune(
     let mut judged: Vec<(&Branch, Class)> = branches
         .iter()
         .filter_map(|branch| {
-            classify(branch, current.as_deref(), TRUNK_BRANCH).map(|class| (branch, class))
+            classify(branch, current.as_deref(), &trunk).map(|class| (branch, class))
         })
         .collect();
 

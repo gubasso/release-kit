@@ -19,7 +19,7 @@ use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
 use crate::maintenance;
 use crate::output::Output;
-use crate::setup::context::{TRUNK_BRANCH, resolve_cli};
+use crate::setup::context::resolve_cli;
 use crate::worktree::{Layout, Worktree, WtClass, classify, derived_path, matches_grammar};
 
 /// The closing line a prune report ends with while some reported row
@@ -408,6 +408,7 @@ pub(crate) fn plan_seat(
     base: Option<&str>,
     apply: bool,
 ) -> Result<Seat, RkError> {
+    let trunk = crate::config::trunk_of(target.as_std_path())?;
     let worktrees = inventory(target)?;
     let layout = layout_of(&worktrees)?;
 
@@ -426,11 +427,11 @@ pub(crate) fn plan_seat(
             last_line(&checked.stderr)
         )));
     }
-    if branch == TRUNK_BRANCH {
+    if branch == trunk {
         return Err(RkError::refusal(
             Diagnostic::new(
                 Reason::PrerequisiteUnmet,
-                format!("{TRUNK_BRANCH} takes no worktree; the main checkout is its seat"),
+                format!("{trunk} takes no worktree; the main checkout is its seat"),
             )
             .expected("a short-lived branch to seat")
             .target_state("unchanged"),
@@ -505,6 +506,7 @@ fn judge_registered(
     path: &Utf8Path,
     main: &Utf8Path,
 ) -> Result<Seat, RkError> {
+    let trunk = crate::config::trunk_of(main.as_std_path())?;
     if seat.path == path {
         // Satisfied only while the seat actually stands: a record whose
         // directory was deleted by hand is a stale record, not a standing
@@ -539,7 +541,7 @@ fn judge_registered(
     // the branch leaves it; a linked worktree moves to the derived path,
     // keeping its standing state.
     let recovery = if seat.path == main {
-        format!("git switch {TRUNK_BRANCH} there, then re-run")
+        format!("git switch {trunk} there, then re-run")
     } else {
         format!("git worktree move {} {path}", seat.path)
     };
@@ -696,6 +698,7 @@ fn resolve_source(
     base: Option<&str>,
     path: &Utf8Path,
 ) -> Result<Source, RkError> {
+    let trunk = crate::config::trunk_of(target.as_std_path())?;
     let resolve = |name: &str| -> Result<Option<String>, RkError> {
         let resolved = git(
             target,
@@ -767,13 +770,13 @@ fn resolve_source(
         ));
     }
     let (kind, shown) = base.map_or_else(
-        || ("trunk", format!("origin/{TRUNK_BRANCH}")),
+        || ("trunk", format!("origin/{trunk}")),
         |base| ("base", base.to_owned()),
     );
     let resolved = match resolve(&shown)? {
         Some(oid) => Some(oid),
         // A clone with no remote still creates from its own trunk.
-        None if kind == "trunk" => resolve(TRUNK_BRANCH)?,
+        None if kind == "trunk" => resolve(&trunk)?,
         None => None,
     };
     let oid = resolved.ok_or_else(|| {
@@ -897,6 +900,7 @@ fn prune(
     quiet: bool,
     out: Output,
 ) -> Result<(), RkError> {
+    let trunk = crate::config::trunk_of(target.as_std_path())?;
     let worktrees = inventory(target)?;
     let layout = layout_of(&worktrees)?;
     let branches = branch_inventory(target)?;
@@ -934,14 +938,7 @@ fn prune(
             continue;
         }
         let dirty = worktree.prunable.is_none() && is_dirty(&worktree.path);
-        let class = classify(
-            worktree,
-            observation,
-            &layout,
-            &seat_refs,
-            TRUNK_BRANCH,
-            dirty,
-        );
+        let class = classify(worktree, observation, &layout, &seat_refs, &trunk, dirty);
         judged.push(Judged {
             worktree: worktree.clone(),
             tip: observation.map(|branch| branch.tip.clone()),

@@ -31,6 +31,8 @@ pub struct Params {
     workflow: Workflow,
     style: Option<Style>,
     nix: bool,
+    trunk: String,
+    line_prefix: String,
 }
 
 /// Explicit invocation answers; absence falls through to configuration.
@@ -75,6 +77,8 @@ impl Params {
             workflow: record.parameters.workflow,
             style: record.parameters.style,
             nix: record.parameters.nix,
+            trunk: record.parameters.trunk.clone(),
+            line_prefix: record.parameters.line_prefix.clone(),
         }
     }
 
@@ -143,6 +147,14 @@ impl Params {
             .repo
             .or_else(|| (purpose == Purpose::Preview).then(|| "OWNER".to_owned()))
             .ok_or_else(repo_unresolved)?;
+        let trunk = config
+            .and_then(|c| c.project.trunk.clone())
+            .or_else(|| record.map(|r| r.parameters.trunk.clone()))
+            .unwrap_or_else(|| crate::config::TRUNK_DEFAULT.to_owned());
+        let line_prefix = config
+            .and_then(|c| c.setup.line_prefix.clone())
+            .or_else(|| record.map(|r| r.parameters.line_prefix.clone()))
+            .unwrap_or_else(|| crate::config::LINE_PREFIX_DEFAULT.to_owned());
         Ok(Self {
             tech,
             forge: resolved.forge,
@@ -154,6 +166,8 @@ impl Params {
                 .or_else(|| config.and_then(|c| c.landing.nix))
                 .or_else(|| record.map(|r| r.parameters.nix))
                 .unwrap_or(false),
+            trunk,
+            line_prefix,
         })
     }
 
@@ -191,6 +205,37 @@ impl Params {
     #[must_use]
     pub const fn style(&self) -> Option<Style> {
         self.style
+    }
+
+    /// The one permanent branch this landing writes into its artifacts.
+    #[must_use]
+    pub fn trunk(&self) -> &str {
+        &self.trunk
+    }
+
+    /// The release-line prefix this landing writes into its artifacts.
+    #[must_use]
+    pub fn line_prefix(&self) -> &str {
+        &self.line_prefix
+    }
+}
+
+#[cfg(test)]
+impl Params {
+    /// A parameter set for tests alone. Production code reaches `Params`
+    /// through `from_record` and `resolve` and through nothing else, and
+    /// this constructor is compiled out of the shipped binary.
+    pub(crate) fn for_test(repo: &str, style: Option<Style>) -> Self {
+        Self {
+            tech: "rust".to_owned(),
+            forge: "github".to_owned(),
+            repo: repo.to_owned(),
+            workflow: Workflow::Worktree,
+            style,
+            nix: false,
+            trunk: crate::config::TRUNK_DEFAULT.to_owned(),
+            line_prefix: crate::config::LINE_PREFIX_DEFAULT.to_owned(),
+        }
     }
 }
 
@@ -308,6 +353,22 @@ pub const SCOPE_SHAPE_TOKEN: &[u8] = b"RK_SCOPE_SHAPE";
 /// landed release workflow, `lines` leaves every request unarmed.
 pub const STYLE_TOKEN: &[u8] = b"RK_STYLE";
 
+/// The one permanent branch. A landed release trigger, ref guard, and
+/// branch guard each name it, so a target whose trunk is not `master`
+/// needs its own answer in its own bytes.
+pub const TRUNK_BRANCH_TOKEN: &[u8] = b"RK_TRUNK_BRANCH";
+
+/// The release-line branch prefix, naming the lines a release trigger
+/// accepts beside the trunk.
+pub const LINE_PREFIX_TOKEN: &[u8] = b"RK_LINE_PREFIX";
+
+/// The same prefix, escaped for a slash-delimited regular expression.
+///
+/// A GitLab rule names a line that way, and a raw `release/` would close
+/// the delimiter and break the pipeline, so the two forms are two tokens.
+/// This one substitutes first: the plain token is its own prefix.
+pub const LINE_PREFIX_RE_TOKEN: &[u8] = b"RK_LINE_PREFIX_RE";
+
 /// Substitute the landing parameters into a `rendered` file's bytes.
 ///
 /// The repository's owner — the project path's first segment — replaces
@@ -317,14 +378,23 @@ pub const STYLE_TOKEN: &[u8] = b"RK_STYLE";
 /// shape rests on no parameter, so it substitutes always. An unresolved
 /// style leaves its token standing, which only a preview renders under:
 /// an apply refuses before reaching here.
+///
+/// The trunk and the line prefix substitute from the same parameters, so
+/// a target that renames either carries the new name in every artifact
+/// that names it rather than in the binary's behavior alone.
 #[must_use]
-pub fn render(baseline: &[u8], repo: &str, style: Option<Style>) -> Vec<u8> {
+pub fn render(baseline: &[u8], params: &Params) -> Vec<u8> {
+    let repo = params.repo();
     let owner = repo.split('/').next().unwrap_or(repo);
     let mut out = substitute(baseline, OWNER_TOKEN, owner.as_bytes());
-    if let Some(style) = style {
+    if let Some(style) = params.style() {
         out = substitute(&out, STYLE_TOKEN, style.as_str().as_bytes());
     }
     out = substitute(&out, SCOPE_SHAPE_TOKEN, SCOPE_SHAPE.as_bytes());
+    out = substitute(&out, TRUNK_BRANCH_TOKEN, params.trunk().as_bytes());
+    let escaped = params.line_prefix().replace('/', "\\/");
+    out = substitute(&out, LINE_PREFIX_RE_TOKEN, escaped.as_bytes());
+    out = substitute(&out, LINE_PREFIX_TOKEN, params.line_prefix().as_bytes());
     substitute(&out, REPO_TOKEN, repo.as_bytes())
 }
 
@@ -693,7 +763,7 @@ pub fn projection(params: &Params) -> Result<Vec<Entry>, RkError> {
             anyhow::anyhow!("the payload does not classify {destination}; the kind table is stale")
         })?;
         let rendered = match kind {
-            Kind::Rendered => render(baseline, &params.repo, params.style),
+            Kind::Rendered => render(baseline, params),
             Kind::Seeded | Kind::State => baseline.to_vec(),
         };
         entries.push(Entry {
@@ -713,7 +783,7 @@ pub fn projection(params: &Params) -> Result<Vec<Entry>, RkError> {
             kind: Kind::Rendered,
             placement: Placement::Block,
             baseline: template.as_bytes().to_vec(),
-            rendered: render(template.as_bytes(), &params.repo, params.style),
+            rendered: render(template.as_bytes(), params),
         });
     }
     entries.sort_by(|a, b| a.destination.cmp(&b.destination));
@@ -1166,8 +1236,7 @@ mod tests {
             assert_eq!(
                 super::render(
                     b"RK_REPO RK_REPO OWNER RK_STYLE RK_SCOPE_SHAPE",
-                    repo,
-                    Some(super::Style::Trunk)
+                    &super::Params::for_test(repo, Some(super::Style::Trunk))
                 ),
                 format!("{repo} {repo} acme trunk {}", super::SCOPE_SHAPE).as_bytes()
             );
@@ -1204,12 +1273,12 @@ mod tests {
     #[test]
     fn rendering_substitutes_every_owner_occurrence() {
         let baseline = b"if: repository_owner == 'OWNER'\n# OWNER again: OWNER\n";
-        let rendered = render(baseline, "acme/sub/widget", None);
+        let rendered = render(baseline, &super::Params::for_test("acme/sub/widget", None));
         let text = String::from_utf8(rendered).expect("rendered bytes stay text");
         assert_eq!(text, "if: repository_owner == 'acme'\n# acme again: acme\n");
 
         let baseline = b"match (RK_SCOPE_SHAPE)\n";
-        let rendered = render(baseline, "acme/widget", None);
+        let rendered = render(baseline, &super::Params::for_test("acme/widget", None));
         let text = String::from_utf8(rendered).expect("rendered bytes stay text");
         assert_eq!(text, format!("match ({SCOPE_SHAPE})\n"));
     }
@@ -1317,6 +1386,8 @@ mod tests {
                                     workflow,
                                     style,
                                     nix,
+                                    trunk: crate::config::TRUNK_DEFAULT.to_owned(),
+                                    line_prefix: crate::config::LINE_PREFIX_DEFAULT.to_owned(),
                                 },
                                 files: Vec::new(),
                                 pins: std::collections::BTreeMap::new(),
@@ -1350,9 +1421,10 @@ mod tests {
                                 assert_eq!(entry.destination, destination);
                                 assert_eq!(entry.baseline, baseline);
                                 let rendered = match entry.kind {
-                                    Kind::Rendered => {
-                                        super::render(baseline, "acme/team/widget", style)
-                                    }
+                                    Kind::Rendered => super::render(
+                                        baseline,
+                                        &super::Params::for_test("acme/team/widget", style),
+                                    ),
                                     Kind::Seeded | Kind::State => baseline.to_vec(),
                                 };
                                 assert_eq!(entry.rendered, rendered, "{destination}");
