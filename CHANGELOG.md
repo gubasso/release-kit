@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.15](https://github.com/gubasso/release-kit/compare/v0.3.14...v0.3.15) - 2026-09-11
+
+### Added
+
+- *(setup/protection)* give every protection value a floored config key ([#155](https://github.com/gubasso/release-kit/pull/155))
+
 ## [0.3.14](https://github.com/gubasso/release-kit/compare/v0.3.13...v0.3.14) - 2026-09-11
 
 ### Added
