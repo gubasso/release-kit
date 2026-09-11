@@ -340,6 +340,8 @@ fn apply(
                 nix: args.nix,
                 trunk: params.trunk().to_owned(),
                 line_prefix: params.line_prefix().to_owned(),
+                security_contact: params.security_contact().to_owned(),
+                security_response: params.security_response().to_owned(),
             },
             files: records,
             pins: registry::pins_for(args.tech.as_deref().unwrap_or_default())

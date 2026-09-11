@@ -127,6 +127,8 @@ fn render_params(
             nix: false,
             trunk: release_kit::config::TRUNK_DEFAULT.to_owned(),
             line_prefix: release_kit::config::LINE_PREFIX_DEFAULT.to_owned(),
+            security_contact: String::new(),
+            security_response: release_kit::config::RESPONSE_DEFAULT.to_owned(),
         },
         files: Vec::new(),
         pins: std::collections::BTreeMap::new(),
@@ -5444,7 +5446,7 @@ fn a_landing_writes_the_record_with_its_identity() {
         .success()
         .stdout(predicate::str::contains("wrote .release-kit/manifest.json"));
     let manifest = read_manifest(target.path());
-    assert_eq!(manifest["schema_version"], 5);
+    assert_eq!(manifest["schema_version"], 6);
     assert_eq!(manifest["rk_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(manifest["origin"], "init");
     assert_eq!(manifest["tech"], "rust");
@@ -9385,7 +9387,7 @@ fn an_upgrade_migrates_a_schema_1_record_to_the_current_schema() {
         .assert()
         .success();
     let migrated = read_manifest(target.path());
-    assert_eq!(migrated["schema_version"], 5);
+    assert_eq!(migrated["schema_version"], 6);
     assert_eq!(migrated["parameters"]["workflow"], "branches");
     assert_eq!(migrated["parameters"]["style"], "trunk");
     let hooks = std::fs::read_to_string(target.path().join(".pre-commit-config.yaml"))
@@ -9467,7 +9469,7 @@ fn an_upgrade_drops_the_recorded_scope_vocabulary() {
         );
 
     let migrated = read_manifest(target.path());
-    assert_eq!(migrated["schema_version"], 5);
+    assert_eq!(migrated["schema_version"], 6);
     assert!(
         migrated["parameters"]["scopes"].is_null(),
         "the vocabulary leaves the record: {migrated}"
@@ -18344,7 +18346,7 @@ fn private_reporting_policy_adoption_and_parameter_replay() {
         if mode == "matching" {
             out.success();
             let manifest = read_manifest(target.path());
-            assert_eq!(manifest["schema_version"], 5);
+            assert_eq!(manifest["schema_version"], 6);
             assert_eq!(manifest_file(&manifest, "SECURITY.md")["kind"], "rendered");
             assert_eq!(
                 std::fs::read(target.path().join("SECURITY.md")).unwrap(),
@@ -18376,8 +18378,323 @@ fn private_reporting_policy_adoption_and_parameter_replay() {
             )
         )
     );
-    assert_eq!(manifest["schema_version"], 5);
+    assert_eq!(manifest["schema_version"], 6);
     assert_eq!(manifest["parameters"]["style"], "trunk");
+}
+
+/// One forge's authored policy with the security markers removed and
+/// nothing else changed: exactly what a landing answering neither security
+/// parameter must write. Derived from the payload's own marker list, so a
+/// renamed marker cannot slip past this helper.
+fn authored_policy(forge: &str) -> String {
+    let mut text =
+        std::fs::read_to_string(repo_path(&format!("snippets/_shared/{forge}/SECURITY.md")))
+            .expect("the forge policy ships");
+    for marker in release_kit::landing::SECURITY_SPANS
+        .iter()
+        .flat_map(|(begin, end)| [*begin, *end])
+    {
+        text = text.replace(std::str::from_utf8(marker).expect("a marker is text"), "");
+    }
+    text
+}
+
+/// Land one pair into a fresh target and return it.
+fn land_pair(tech: &str, forge: &str) -> tempfile::TempDir {
+    let target = tempfile::tempdir().expect("a scratch target exists");
+    rk().args(["init", "--tech", tech, "--forge", forge])
+        .args(["--repo", "acme/widget", "--target"])
+        .arg(target.path())
+        .arg("--apply")
+        .assert()
+        .success();
+    target
+}
+
+/// The landed policy, as text.
+fn landed_policy(target: &Path) -> String {
+    std::fs::read_to_string(target.join("SECURITY.md")).expect("the policy landed")
+}
+
+/// Unanswered security parameters reproduce every pair's authored policy
+/// byte for byte, in that forge's own words, with no marker surviving.
+#[test]
+fn the_default_policy_lands_as_its_forge_authored_it() {
+    for (tech, forge) in [
+        ("rust", "github"),
+        ("rust", "gitlab"),
+        ("python", "github"),
+        ("bash", "github"),
+        ("bash", "gitlab"),
+    ] {
+        let target = land_pair(tech, forge);
+        let landed = landed_policy(target.path());
+        assert_eq!(
+            landed,
+            authored_policy(forge).replace("RK_REPO", "acme/widget"),
+            "({tech}, {forge})"
+        );
+        assert!(!landed.contains("RK_SECURITY"), "({tech}, {forge})");
+        let manifest = read_manifest(target.path());
+        assert_eq!(manifest["parameters"]["security_contact"], "");
+        assert_eq!(manifest["parameters"]["security_response"], "best-effort");
+    }
+}
+
+/// A committed contact reaches the landed policy in each forge's own
+/// sentence, is recorded, and is inserted literally even where it spells a
+/// substitution token.
+#[test]
+fn a_committed_contact_lands_in_both_forge_policies() {
+    for (forge, expected) in [
+        (
+            "github",
+            "If it is unavailable, contact OWNER RK_REPO <team@acme.example> before sending sensitive details.",
+        ),
+        (
+            "gitlab",
+            "If the form is unavailable, use OWNER RK_REPO <team@acme.example> to arrange access.",
+        ),
+    ] {
+        let target = land_pair("rust", forge);
+        edit_target_config(
+            target.path(),
+            "contact = \"\"",
+            "contact = \"  OWNER RK_REPO <team@acme.example>  \"",
+        );
+        rk().args(["upgrade", "--apply", "--target"])
+            .arg(target.path())
+            .assert()
+            .success();
+        let landed = landed_policy(target.path());
+        assert!(landed.contains(expected), "{forge}: {landed}");
+        let manifest = read_manifest(target.path());
+        assert_eq!(
+            manifest["parameters"]["security_contact"], "OWNER RK_REPO <team@acme.example>",
+            "the recorded value is trimmed"
+        );
+        let config = std::fs::read_to_string(target.path().join(".release-kit/config.toml"))
+            .expect("the config reads");
+        assert!(
+            config.contains("contact = \"OWNER RK_REPO <team@acme.example>\""),
+            "{config}"
+        );
+    }
+}
+
+/// An explicit empty contact resets a recorded one; an omitted key leaves
+/// the record in force; neither reaches the policy through a value the
+/// reader refuses.
+#[test]
+fn a_contact_resets_on_empty_and_survives_an_omitted_key() {
+    let target = land_pair("rust", "github");
+    let authored = landed_policy(target.path());
+    edit_target_config(
+        target.path(),
+        "contact = \"\"",
+        "contact = \"team@acme.example\"",
+    );
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    assert!(landed_policy(target.path()).contains("contact team@acme.example before"));
+
+    // Deleting the key leaves the recorded answer in force.
+    edit_target_config(target.path(), "contact = \"team@acme.example\"", "");
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    assert!(landed_policy(target.path()).contains("contact team@acme.example before"));
+    assert_eq!(
+        read_manifest(target.path())["parameters"]["security_contact"],
+        "team@acme.example"
+    );
+
+    // An explicit empty answer takes the policy back to the forge's own
+    // wording, which an omitted key could never do.
+    edit_target_config(
+        target.path(),
+        "contact = \"team@acme.example\"",
+        "contact = \"\"",
+    );
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    assert_eq!(landed_policy(target.path()), authored);
+}
+
+/// Both security answers are held to their grammar before anything is
+/// written, and the refusal names the key.
+#[test]
+fn an_unstateable_security_answer_refuses_before_any_write() {
+    for (from, to, named) in [
+        (
+            "contact = \"\"",
+            "contact = \"one\\ntwo\"",
+            "security.contact",
+        ),
+        (
+            "response = \"best-effort\"",
+            "response = \"90d\"",
+            "security.response",
+        ),
+        (
+            "response = \"best-effort\"",
+            "response = \"0 days\"",
+            "security.response",
+        ),
+    ] {
+        let target = land_pair("rust", "github");
+        edit_target_config(target.path(), from, to);
+        let before = reporting_tree(target.path());
+        rk().args(["upgrade", "--apply", "--target"])
+            .arg(target.path())
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(named));
+        assert_eq!(reporting_tree(target.path()), before, "{to}");
+    }
+}
+
+/// A stated window replaces the best-effort sentence and narrows the
+/// deadline disclaimer to disclosure alone.
+#[test]
+fn a_stated_window_renders_as_an_acknowledgment_promise() {
+    for (value, sentence) in [
+        ("1 day", "Maintainers acknowledge a report within 1 day."),
+        (
+            "14 days",
+            "Maintainers acknowledge a report within 14 days.",
+        ),
+        (
+            "1 business day",
+            "Maintainers acknowledge a report within 1 business day.",
+        ),
+        (
+            "14 business days",
+            "Maintainers acknowledge a report within 14 business days.",
+        ),
+    ] {
+        let target = land_pair("rust", "github");
+        edit_target_config(
+            target.path(),
+            "response = \"best-effort\"",
+            &format!("response = \"{value}\""),
+        );
+        rk().args(["upgrade", "--apply", "--target"])
+            .arg(target.path())
+            .assert()
+            .success();
+        let landed = landed_policy(target.path());
+        assert!(landed.contains(sentence), "{value}: {landed}");
+        assert!(
+            landed.contains("This policy commits to no disclosure deadline."),
+            "{value}: {landed}"
+        );
+        assert!(!landed.contains("best-effort basis"), "{value}: {landed}");
+    }
+}
+
+/// A record from before the parameters upgrades without changing one byte
+/// of the policy, and the new record states what that policy already said.
+#[test]
+fn a_pre_policy_record_upgrades_without_touching_the_policy() {
+    let target = land_pair("rust", "github");
+    let policy = landed_policy(target.path());
+    let mut manifest = read_manifest(target.path());
+    manifest["schema_version"] = serde_json::json!(5);
+    manifest["parameters"]
+        .as_object_mut()
+        .expect("the parameters are a table")
+        .retain(|key, _| !key.starts_with("security_"));
+    write_manifest(target.path(), &manifest);
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    assert_eq!(landed_policy(target.path()), policy);
+    let manifest = read_manifest(target.path());
+    assert_eq!(manifest["schema_version"], 6);
+    assert_eq!(manifest["parameters"]["security_contact"], "");
+    assert_eq!(manifest["parameters"]["security_response"], "best-effort");
+}
+
+/// An edited security answer is pending configuration, not file drift:
+/// `rk status --check` stays at exit 0 and the next upgrade takes it.
+#[test]
+fn an_edited_security_answer_reports_as_pending() {
+    let target = land_pair("rust", "github");
+    clear_landing_sentinels(target.path());
+    edit_target_config(
+        target.path(),
+        "response = \"best-effort\"",
+        "response = \"2 days\"",
+    );
+    rk().args(["status", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("security.response"));
+    rk().args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    assert_eq!(
+        read_manifest(target.path())["parameters"]["security_response"],
+        "2 days"
+    );
+    rk().args(["status", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("security.response").not());
+}
+
+/// A pre-record target whose policy already states its own contact adopts
+/// when the configuration names it, and the refusal names the keys when it
+/// does not.
+#[test]
+fn a_customized_policy_adopts_only_against_a_matching_config() {
+    for matching in [false, true] {
+        let target = land_pair("rust", "github");
+        let customized = landed_policy(target.path()).replace(
+            "contact a maintainer through an existing private conversation before",
+            "contact team@acme.example before",
+        );
+        std::fs::write(target.path().join("SECURITY.md"), &customized).unwrap();
+        if matching {
+            edit_target_config(
+                target.path(),
+                "contact = \"\"",
+                "contact = \"team@acme.example\"",
+            );
+        }
+        std::fs::remove_file(target.path().join(".release-kit/manifest.json")).unwrap();
+        let assertion = rk()
+            .args(["adopt", "--style", "trunk", "--apply", "--target"])
+            .arg(target.path())
+            .assert();
+        if matching {
+            assertion.success();
+            assert_eq!(landed_policy(target.path()), customized);
+            assert_eq!(
+                read_manifest(target.path())["parameters"]["security_contact"],
+                "team@acme.example"
+            );
+        } else {
+            assertion.code(73).stderr(
+                predicate::str::contains("security.contact")
+                    .and(predicate::str::contains("security.response")),
+            );
+        }
+    }
 }
 
 fn edit_target_config(target: &Path, from: &str, to: &str) {

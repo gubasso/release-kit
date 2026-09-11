@@ -61,13 +61,13 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `landing:a-rendered-file-is-reproducible` — A rendered file is reproducible
 
-A `rendered` file's landed bytes MUST be a deterministic function of the payload and the recorded parameters only, and every substituted value MUST be recorded in the manifest's `parameters`, so every re-render and comparison reads the manifest parameters alone, whatever a later configuration says. A value the payload substitutes from one constant — the commit scope's shape — is not a parameter, so it MUST NOT be recorded, and a parameter an earlier schema recorded and this binary substitutes nowhere MUST read without it and rewrite without it.
+A `rendered` file's landed bytes MUST be a deterministic function of the payload and the recorded parameters only, and every substituted value MUST be recorded in the manifest's `parameters`, so every re-render and comparison reads the manifest parameters alone, whatever a later configuration says. A value the payload substitutes from one constant — the commit scope's shape — is not a parameter, so it MUST NOT be recorded, and a parameter an earlier schema recorded and this binary substitutes nowhere MUST read without it and rewrite without it. A parameter a payload file supplies its own fallback for MUST carry that fallback in the authored snippet inside removable markers rather than in the binary, so a record predating the parameter renders its file byte for byte and a per-forge wording stays the forge's own; the record's value MUST be held to the same grammar the configuration key is, because the record is what a re-render reads.
 
-#### Scenario: The owner substitutes from the repo parameter
+#### Scenario: The owner and the security contact substitute from the parameters
 
-- GIVEN a landing run with `--repo acme/widget`
+- GIVEN a landing run with `--repo acme/widget` and no `security.contact`
 - WHEN a workflow and `SECURITY.md` land
-- THEN owner and full-path tokens resolve from the same recorded `parameters.repo`: the owner reads `acme`, the policy path reads `acme/widget`, and neither token survives
+- THEN owner and full-path tokens resolve from the recorded `parameters.repo`, the policy keeps the forge's authored fallback with no marker left, and a later run naming a contact states it and records it
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 

@@ -83,25 +83,78 @@ pub struct Landing {
 }
 
 /// The `security` table.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Security {
     /// N: project receiving vulnerability reports.
     pub advisories: String,
-    /// N: contact when the form is unavailable.
-    pub contact: String,
-    /// N: best-effort or a response window.
-    pub response: String,
+    /// P: contact when the forge channel is unavailable, rendered into the
+    /// landed policy. Absent means the landing has not answered it, so a
+    /// record's own answer survives an upgrade that predates the key; an
+    /// explicit empty string resets the policy to the forge's own prose.
+    pub contact: Option<String>,
+    /// P: the acknowledgment window the landed policy promises. Absent
+    /// means unanswered, exactly as `contact` does.
+    pub response: Option<String>,
 }
 
-impl Default for Security {
-    fn default() -> Self {
-        Self {
-            advisories: String::new(),
-            contact: String::new(),
-            response: "best-effort".into(),
-        }
+/// The compiled response stance, used where nothing else answers: the
+/// policy promises no window at all.
+pub const RESPONSE_DEFAULT: &str = "best-effort";
+
+/// The canonical form of a security contact, or why it is refused.
+///
+/// One trimmed line. The value is rendered into `SECURITY.md` verbatim, so
+/// a line feed, a carriage return, or any other ASCII control character
+/// would break the sentence it lands in and is refused before any write.
+/// Emptiness is not a refusal: it selects the forge's own authored prose.
+///
+/// # Errors
+/// The refusal text, naming the key and what it accepts.
+pub fn canonical_contact(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.chars().any(char::is_control) {
+        return Err(format!(
+            "security.contact carries a control character; it is one line naming an address, a URL, a person, or a team, and empty selects the forge's own wording, found {trimmed:?}"
+        ));
     }
+    Ok(trimmed.to_owned())
+}
+
+/// The canonical form of a response stance, or why it is refused.
+///
+/// Either `best-effort` or a plural-correct day count: `1 day`, `<n> days`,
+/// `1 business day`, or `<n> business days`, with `n` a `u32` above one
+/// written without a sign or a leading zero. The grammar is narrow because
+/// the rendered sentence is a public promise, and only a value this
+/// renderer can state exactly may reach it. An empty value reads as the
+/// compiled default.
+///
+/// # Errors
+/// The refusal text, naming the key and every accepted form.
+pub fn canonical_response(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed == RESPONSE_DEFAULT {
+        return Ok(RESPONSE_DEFAULT.to_owned());
+    }
+    let refusal = || {
+        format!(
+            "security.response must be one of: best-effort, 1 day, <n> days, 1 business day, <n> business days, where n is a whole number above one; found {trimmed:?}"
+        )
+    };
+    let (count, unit) = trimmed.split_once(' ').ok_or_else(refusal)?;
+    let plural = match unit {
+        "day" | "business day" => false,
+        "days" | "business days" => true,
+        _ => return Err(refusal()),
+    };
+    let number: u32 = count.parse().map_err(|_| refusal())?;
+    // A canonical count round-trips, which refuses a sign and a leading
+    // zero without a second pass over the text.
+    if count != number.to_string() || (number > 1) != plural {
+        return Err(refusal());
+    }
+    Ok(trimmed.to_owned())
 }
 
 /// The `setup` table.
@@ -339,6 +392,12 @@ fn parse(text: &str) -> Result<Config, RkError> {
             "project.tech must name a supported payload binding",
         ));
     }
+    if let Some(contact) = &config.security.contact {
+        canonical_contact(contact).map_err(invalid)?;
+    }
+    if let Some(response) = &config.security.response {
+        canonical_response(response).map_err(invalid)?;
+    }
     exclusions(&config.setup.excluded_steps)?;
     floors::check(&config)?;
     Ok(config)
@@ -475,11 +534,16 @@ fn render(config: &Config) -> Result<Vec<u8>, RkError> {
         ),
         (
             "RK_CONFIG_SECURITY_CONTACT",
-            config.security.contact.clone().into(),
+            config.security.contact.clone().unwrap_or_default().into(),
         ),
         (
             "RK_CONFIG_SECURITY_RESPONSE",
-            config.security.response.clone().into(),
+            config
+                .security
+                .response
+                .clone()
+                .unwrap_or_else(|| RESPONSE_DEFAULT.to_owned())
+                .into(),
         ),
         (
             "RK_CONFIG_SETUP_REQUIRED_CHECK",
@@ -642,6 +706,8 @@ fn rewrite_text(text: &str, key: &str, mut value: toml_edit::Value) -> Result<St
         "landing.workflow",
         "landing.style",
         "landing.nix",
+        "security.contact",
+        "security.response",
         "setup.line_prefix",
     ]
     .contains(&key)
@@ -709,6 +775,8 @@ impl Plan {
         };
         resolved.project.trunk = Some(params.trunk().to_owned());
         resolved.setup.line_prefix = Some(params.line_prefix().to_owned());
+        resolved.security.contact = Some(params.security_contact().to_owned());
+        resolved.security.response = Some(params.security_response().to_owned());
         let content = if existing.is_some() {
             let mut text = std::fs::read_to_string(target.join(CONFIG_PATH))?;
             for (key, value) in parameter_values(&resolved) {
@@ -766,6 +834,14 @@ fn parameter_values(config: &Config) -> Vec<(&'static str, toml_edit::Value)> {
     if let Some(value) = config.setup.line_prefix.clone() {
         values.push(("setup.line_prefix", value.into()));
     }
+    // An empty contact is an answer, not an absence: it resets the landed
+    // policy to the forge's own prose, so it projects like any other value.
+    if let Some(value) = config.security.contact.clone() {
+        values.push(("security.contact", value.into()));
+    }
+    if let Some(value) = config.security.response.clone() {
+        values.push(("security.response", value.into()));
+    }
     values
 }
 
@@ -783,6 +859,8 @@ pub fn pending(config: &Config, record: &crate::landing::manifest::Manifest) -> 
     };
     recorded.project.trunk = Some(record.parameters.trunk.clone());
     recorded.setup.line_prefix = Some(record.parameters.line_prefix.clone());
+    recorded.security.contact = Some(record.parameters.security_contact.clone());
+    recorded.security.response = Some(record.parameters.security_response.clone());
     let baseline = parameter_values(&recorded);
     parameter_values(config)
         .into_iter()
@@ -868,9 +946,13 @@ mod tests {
         config.landing.workflow = Some(Workflow::Branches);
         config.landing.style = Some(Style::Lines);
         config.landing.nix = Some(true);
-        config.security.advisories = "acme/private".into();
-        config.security.contact = "A \"quoted\" contact\nRK_CONFIG_SECURITY_RESPONSE\\end".into();
-        config.security.response = "90d".into();
+        // The escaping subject moved to the one unrestricted string in this
+        // table: `contact` is now a class P value the reader holds to a
+        // single control-free line, so it can carry neither.
+        config.security.advisories =
+            "A \"quoted\" project\nRK_CONFIG_SECURITY_RESPONSE\\end".into();
+        config.security.contact = Some("security team, room 3 \"the vault\"".into());
+        config.security.response = Some("14 business days".into());
         config.setup.required_check = "build / test".into();
         config.setup.retired_branches = vec!["develop".into(), "old\"branch".into()];
         config.setup.line_prefix = Some("stable/".into());
@@ -917,6 +999,13 @@ mod tests {
             setup: super::Setup {
                 line_prefix: Some(super::LINE_PREFIX_DEFAULT.into()),
                 ..super::Setup::default()
+            },
+            // Writing states both security answers, so a reader sees the
+            // policy the target landed rather than an implied one.
+            security: super::Security {
+                contact: Some(String::new()),
+                response: Some(super::RESPONSE_DEFAULT.into()),
+                ..super::Security::default()
             },
             // Writing resolves the derived ruleset name, so the file states
             // the name the setup installs rather than leaving it implied.
@@ -1094,10 +1183,84 @@ mod tests {
                 .repo,
             "acme/widget"
         );
+        rewrite_key(
+            dir.path(),
+            "security.contact",
+            "security@acme.example".into(),
+        )
+        .expect("the contact is a landing parameter now");
+        rewrite_key(dir.path(), "security.response", "14 days".into())
+            .expect("the response is a landing parameter now");
+        let held = load(dir.path()).expect("reads").expect("present");
+        assert_eq!(
+            held.security.contact.as_deref(),
+            Some("security@acme.example")
+        );
+        assert_eq!(held.security.response.as_deref(), Some("14 days"));
+        let text = std::fs::read_to_string(&path).expect("the text reads");
+        assert!(text.contains("# keep me"), "the comment survives: {text}");
         let before = std::fs::read(&path).expect("the bytes read");
-        for (key, value) in [("security.contact", "other"), ("landing.style", "unknown")] {
+        for (key, value) in [
+            ("security.advisories", "acme/private"),
+            ("security.response", "90d"),
+            ("landing.style", "unknown"),
+        ] {
             assert!(rewrite_key(dir.path(), key, value.into()).is_err());
             assert_eq!(std::fs::read(&path).expect("the bytes read"), before);
         }
+    }
+
+    /// The two security answers are one line and one narrow grammar,
+    /// because both land verbatim in a public policy.
+    #[test]
+    fn the_security_answers_are_held_to_their_grammar() {
+        for value in ["team@acme.example", "  https://acme.example/report  ", ""] {
+            super::canonical_contact(value).expect("a control-free line is a contact");
+        }
+        for value in ["one\ntwo", "one\rtwo", "one\u{7}two"] {
+            let refusal = super::canonical_contact(value).expect_err("a control character refuses");
+            assert!(refusal.contains("security.contact"), "{refusal}");
+        }
+        assert_eq!(
+            super::canonical_contact("  team@acme.example  "),
+            Ok("team@acme.example".to_owned()),
+            "surrounding whitespace is trimmed"
+        );
+        for value in [
+            "best-effort",
+            "1 day",
+            "2 days",
+            "14 days",
+            "1 business day",
+            "14 business days",
+        ] {
+            assert_eq!(super::canonical_response(value), Ok(value.to_owned()));
+        }
+        assert_eq!(
+            super::canonical_response(""),
+            Ok(super::RESPONSE_DEFAULT.to_owned()),
+            "an empty answer reads as the compiled default"
+        );
+        for value in [
+            "0 days",
+            "1 days",
+            "2 day",
+            "+2 days",
+            "02 days",
+            "4294967296 days",
+            "90d",
+            "two days",
+            "we answer quickly",
+            "2 weeks",
+        ] {
+            let refusal =
+                super::canonical_response(value).expect_err("an unstateable window refuses");
+            assert!(refusal.contains("security.response"), "{value}: {refusal}");
+            assert!(refusal.contains("business days"), "{value}: {refusal}");
+        }
+        let refusal = parse("schema_version = 1\n[security]\nresponse = '90d'\n")
+            .expect_err("the reader refuses it too")
+            .to_string();
+        assert!(refusal.contains("security.response"), "{refusal}");
     }
 }

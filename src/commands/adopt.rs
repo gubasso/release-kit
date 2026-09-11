@@ -162,6 +162,8 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
                     nix: params.nix(),
                     trunk: params.trunk().to_owned(),
                     line_prefix: params.line_prefix().to_owned(),
+                    security_contact: params.security_contact().to_owned(),
+                    security_response: params.security_response().to_owned(),
                 },
                 files: records,
                 pins: registry::pins_for(&tech)
@@ -287,9 +289,17 @@ fn verify(
             "every rendered destination matching the {} candidate, byte for byte",
             workflow.as_str()
         ))
-        .action(
-            "align first: rk adopt without --apply lists every differing destination; bring each to the selected candidate's bytes — rk snippet and rk payload print them — then re-run, or select the other candidate with --workflow or --style",
-        )
+        .action(format!(
+            "align first: rk adopt without --apply lists every differing destination; bring each to the selected candidate's bytes — rk snippet and rk payload print them — then re-run, or select the other candidate with --workflow or --style{}",
+            // A policy the target wrote its own contact into is the one
+            // mismatch a committed answer resolves rather than an edit:
+            // naming the keys turns a dead end into the next step.
+            if mismatches.iter().any(|path| path == "SECURITY.md") {
+                ". SECURITY.md states two facts a target owns: set security.contact and security.response in .release-kit/config.toml to the wording this policy already carries, and the candidate matches"
+            } else {
+                ""
+            }
+        ))
         .target_state("unchanged"),
     ))
 }

@@ -18,8 +18,8 @@ nix = RK_CONFIG_LANDING_NIX # P: opt-in Nix capability
 
 [security]
 advisories = RK_CONFIG_SECURITY_ADVISORIES # N: project receiving vulnerability reports
-contact = RK_CONFIG_SECURITY_CONTACT # N: contact when the form is unavailable
-response = RK_CONFIG_SECURITY_RESPONSE # N: best-effort or a response window
+contact = RK_CONFIG_SECURITY_CONTACT # P: one line naming who receives a report when the forge channel is unavailable; empty keeps the forge's own wording
+response = RK_CONFIG_SECURITY_RESPONSE # P: the acknowledgment window the policy promises: best-effort, 1 day, <n> days, 1 business day, or <n> business days
 
 [setup]
 required_check = RK_CONFIG_SETUP_REQUIRED_CHECK # N: the check the merge must pass; empty asks for --required-check

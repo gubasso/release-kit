@@ -33,8 +33,11 @@ pub const MANIFEST_PATH: &str = ".release-kit/manifest.json";
 /// upgrade never sprouts files nobody requested — and schema 4 — the
 /// scope-vocabulary record, whose `scopes` parameter this binary renders
 /// nowhere, so a read drops it and the next rewrite lands without it —
+/// and schema 5 — the pre-policy record, whose absent security parameters
+/// read as the empty contact and the best-effort stance, which is exactly
+/// what such a landing wrote into `SECURITY.md`, so its bytes reproduce —
 /// and refuses anything else by name.
-pub const SCHEMA_VERSION: u64 = 5;
+pub const SCHEMA_VERSION: u64 = 6;
 
 /// The oldest schema this binary still reads.
 const OLDEST_READABLE_SCHEMA: u64 = 1;
@@ -191,6 +194,17 @@ pub struct Parameters {
     /// `release/`, which is what such a landing wrote.
     #[serde(default = "line_prefix_release")]
     pub line_prefix: String,
+    /// The contact the landed policy names where the forge's own channel
+    /// is unavailable, empty for the forge's authored wording. A record
+    /// predating the field reads as empty, which is what such a landing
+    /// wrote.
+    #[serde(default, deserialize_with = "read_contact")]
+    pub security_contact: String,
+    /// The acknowledgment window the landed policy promises. A record
+    /// predating the field reads as `best-effort`, which is what such a
+    /// landing wrote.
+    #[serde(default = "response_best_effort", deserialize_with = "read_response")]
+    pub security_response: String,
 }
 
 /// The trunk a record predating the field carries.
@@ -201,6 +215,47 @@ fn trunk_master() -> String {
 /// The prefix a record predating the field carries.
 fn line_prefix_release() -> String {
     crate::config::LINE_PREFIX_DEFAULT.to_owned()
+}
+
+/// The stance a record predating the field carries.
+fn response_best_effort() -> String {
+    crate::config::RESPONSE_DEFAULT.to_owned()
+}
+
+/// A recorded contact, refused where the configuration reader would refuse
+/// it or where it is not already canonical.
+///
+/// The record is the one input a re-render reads, so a hand-edited record
+/// must not reach bytes the configured path could never have produced.
+fn read_contact<'de, D: serde::Deserializer<'de>>(reader: D) -> Result<String, D::Error> {
+    canonical(reader, "security_contact", crate::config::canonical_contact)
+}
+
+/// A recorded response stance, held to the same grammar as the key.
+fn read_response<'de, D: serde::Deserializer<'de>>(reader: D) -> Result<String, D::Error> {
+    canonical(
+        reader,
+        "security_response",
+        crate::config::canonical_response,
+    )
+}
+
+/// One recorded string held to its canonical form.
+fn canonical<'de, D: serde::Deserializer<'de>>(
+    reader: D,
+    field: &str,
+    judge: impl Fn(&str) -> Result<String, String>,
+) -> Result<String, D::Error> {
+    let raw = String::deserialize(reader)?;
+    let canonical = judge(&raw)
+        .map_err(|reason| serde::de::Error::custom(format!("parameters.{field}: {reason}")))?;
+    if canonical == raw {
+        Ok(canonical)
+    } else {
+        Err(serde::de::Error::custom(format!(
+            "parameters.{field} is not canonical: the record carries {raw:?} where a landing writes {canonical:?}"
+        )))
+    }
 }
 
 /// One landed destination.
@@ -416,13 +471,13 @@ mod tests {
     use crate::digest::Digest;
     use crate::landing::Kind;
 
-    /// The complete record shape at schema 5, held by snapshot: a field
+    /// The complete record shape at schema 6, held by snapshot: a field
     /// rename or removal fails here and becomes a schema-version bump
     /// instead of a silent break at every reader.
     #[test]
     fn the_manifest_schema_snapshot_holds() {
         let manifest = Manifest {
-            schema_version: 5,
+            schema_version: 6,
             rk_version: "0.1.0".into(),
             payload_sha256: Digest::of(b""),
             origin: "init".into(),
@@ -436,6 +491,8 @@ mod tests {
                 nix: true,
                 trunk: crate::config::TRUNK_DEFAULT.to_owned(),
                 line_prefix: crate::config::LINE_PREFIX_DEFAULT.to_owned(),
+                security_contact: String::new(),
+                security_response: crate::config::RESPONSE_DEFAULT.to_owned(),
             },
             files: vec![
                 FileRecord {
@@ -457,7 +514,7 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&manifest).expect("a manifest serializes"),
             format!(
-                r#"{{"schema_version":5,"rk_version":"0.1.0","payload_sha256":"{empty}","origin":"init","tech":"rust","forge":"github","landed_at":"2026-08-29T00:00:00Z","parameters":{{"repo":"acme/widget","workflow":"worktree","style":"trunk","nix":true,"trunk":"master","line_prefix":"release/"}},"files":[{{"destination":"release-plz.toml","kind":"seeded","sha256":"{empty}","baseline_sha256":"{empty}"}},{{"destination":"VERSION","kind":"state","sha256":"{empty}"}}],"pins":{{"release-plz":"0.3.160"}}}}"#
+                r#"{{"schema_version":6,"rk_version":"0.1.0","payload_sha256":"{empty}","origin":"init","tech":"rust","forge":"github","landed_at":"2026-08-29T00:00:00Z","parameters":{{"repo":"acme/widget","workflow":"worktree","style":"trunk","nix":true,"trunk":"master","line_prefix":"release/","security_contact":"","security_response":"best-effort"}},"files":[{{"destination":"release-plz.toml","kind":"seeded","sha256":"{empty}","baseline_sha256":"{empty}"}},{{"destination":"VERSION","kind":"state","sha256":"{empty}"}}],"pins":{{"release-plz":"0.3.160"}}}}"#
             ),
             "a state file must omit baseline_sha256 rather than serializing null"
         );
@@ -490,11 +547,49 @@ mod tests {
             !manifest.parameters.nix,
             "a pre-nix record reads as opt-out, so an upgrade adds nothing unrequested"
         );
+        assert_eq!(
+            manifest.parameters.security_contact, "",
+            "a pre-policy record names no contact, which is what its policy landed"
+        );
+        assert_eq!(
+            manifest.parameters.security_response,
+            crate::config::RESPONSE_DEFAULT,
+            "a pre-policy record promises no window, which is what its policy landed"
+        );
 
-        std::fs::write(target.join(super::MANIFEST_PATH), record(6)).expect("the record writes");
-        let refused = super::load(target).expect_err("a schema-6 record refuses");
+        std::fs::write(target.join(super::MANIFEST_PATH), record(7)).expect("the record writes");
+        let refused = super::load(target).expect_err("a schema-7 record refuses");
         let message = refused.to_string();
-        assert!(message.contains('6'), "{message}");
+        assert!(message.contains('7'), "{message}");
+    }
+
+    /// The record is the one input a re-render reads, so a hand-edited
+    /// record must not reach bytes the configured path could never write:
+    /// a value the configuration reader refuses, and a value it would
+    /// canonicalize, both refuse at deserialization.
+    #[test]
+    fn a_record_carrying_an_uncanonical_security_parameter_refuses() {
+        let dir = tempfile::tempdir().expect("a scratch target exists");
+        let target = camino::Utf8Path::from_path(dir.path()).expect("utf-8 path");
+        std::fs::create_dir_all(target.join(".release-kit")).expect("the record dir writes");
+        for (field, value) in [
+            // A JSON escape, so the record parses and the value it decodes
+            // to is the line feed the policy could never carry.
+            ("security_contact", "team@acme.example\\nsecond line"),
+            ("security_contact", "  team@acme.example  "),
+            ("security_response", "90d"),
+            ("security_response", "0 days"),
+            ("security_response", "07 days"),
+            ("security_response", "1 days"),
+            ("security_response", ""),
+        ] {
+            let record = format!(
+                r#"{{"schema_version":6,"rk_version":"0.1.0","payload_sha256":"0000000000000000000000000000000000000000000000000000000000000000","origin":"init","tech":"rust","forge":"github","landed_at":"2026-08-29T00:00:00Z","parameters":{{"repo":"acme/widget","{field}":"{value}"}},"files":[],"pins":{{}}}}"#
+            );
+            std::fs::write(target.join(super::MANIFEST_PATH), record).expect("the record writes");
+            let refused = super::load(target).expect_err("an uncanonical record refuses");
+            assert!(refused.to_string().contains(field), "{field}: {refused}");
+        }
     }
 
     #[test]
