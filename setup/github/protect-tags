@@ -6,8 +6,9 @@
 # place.
 set -eu
 : "${RK_REPO:?rk sets this; run this script through rk setup}"
+: "${RK_TAG_RULESET:?rk sets this; run this script through rk setup}"
 
-name=release-tags
+name="$RK_TAG_RULESET"
 id="$(gh api "repos/$RK_REPO/rulesets" -q ".[] | select(.name == \"$name\") | .id" | head -n 1)"
 
 if [ -n "$id" ]; then

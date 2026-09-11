@@ -26,9 +26,12 @@ pub type Runner<'a> = dyn FnMut(&Exec) -> Result<Outcome, RkError> + 'a;
 // default branch and the retired second branch, so a target that names
 // none behaves exactly as it did.
 
-/// The landed title check's context, fixed by the payload: the job in
-/// `pr-title.yml` that holds the squash title to the commit convention.
-pub const TITLE_CHECK: &str = "pr-title";
+// The landed title check's context is the job in `pr-title.yml` that
+// holds the squash title to the commit convention. The target names it in
+// `protection.title_check`, read through `Ctx::title_check`; the landed
+// job keeps its own name as a payload constant, so a target that renames
+// the key without renaming the job breaks its own trunk protection and
+// this observer reports it.
 
 const GITLAB_PRIVATE_REPORTING_LIMITATION: &str = "GitLab has no project-level private reporting switch; the reporter must enable confidentiality; this proves project feature access, not successful submission by every external reporter";
 
@@ -567,13 +570,13 @@ fn github(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
         "protect-tags" => github_ruleset(
             ctx,
             run,
-            "release-tags",
+            ctx.tag_ruleset(),
             "tag",
             "refs/tags/v*",
             &["deletion", "update"],
         ),
         "protect-release-lines" => {
-            match github_ruleset_body(ctx, run, "release-lines")? {
+            match github_ruleset_body(ctx, run, ctx.lines_ruleset())? {
                 RulesetLookup::Absent => {
                     return Ok(StepState::inapplicable(
                         "release/* is unprotected; optional — applied only where older lines exist",
@@ -585,7 +588,7 @@ fn github(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
             github_ruleset(
                 ctx,
                 run,
-                "release-lines",
+                ctx.lines_ruleset(),
                 "branch",
                 "refs/heads/release/*",
                 &["deletion", "non_fast_forward"],
@@ -616,9 +619,9 @@ fn github(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
             match api_get(ctx, run, &format!("repos/{repo}/rulesets"))? {
                 Api::Ok(body) => {
                     let owned = [
-                        format!("{trunk}-protection"),
-                        "release-tags".to_owned(),
-                        "release-lines".to_owned(),
+                        ctx.trunk_ruleset().to_owned(),
+                        ctx.tag_ruleset().to_owned(),
+                        ctx.lines_ruleset().to_owned(),
                     ];
                     for ruleset in body.as_array().into_iter().flatten() {
                         let name = ruleset["name"].as_str().unwrap_or("");
@@ -767,7 +770,7 @@ fn unowned_rule_faults(rules: &[Value]) -> Vec<String> {
 
 fn github_trunk_ruleset(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkError> {
     let trunk = ctx.trunk();
-    let name = format!("{trunk}-protection");
+    let name = ctx.trunk_ruleset().to_owned();
     let detail = match github_ruleset_body(ctx, run, &name)? {
         RulesetLookup::Found(detail) => detail,
         RulesetLookup::Absent => {
@@ -834,7 +837,8 @@ fn github_trunk_ruleset(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkErro
         } else if let Some(expected) = &ctx.required_check {
             let mut held = contexts.clone();
             held.sort_unstable();
-            let mut owned_contexts = [expected.as_str(), TITLE_CHECK];
+            let title_check = ctx.title_check();
+            let mut owned_contexts = [expected.as_str(), title_check];
             owned_contexts.sort_unstable();
             if held != owned_contexts {
                 faults.push(format!(
@@ -843,8 +847,8 @@ fn github_trunk_ruleset(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkErro
                     owned_contexts.join(", ")
                 ));
             }
-        } else if !contexts.contains(&TITLE_CHECK) {
-            faults.push(format!("the {TITLE_CHECK} check is not required"));
+        } else if !contexts.contains(&ctx.title_check()) {
+            faults.push(format!("the {} check is not required", ctx.title_check()));
         }
     }
     match squash_merge_sources(ctx, run)? {

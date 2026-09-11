@@ -158,8 +158,10 @@ pub struct Bot {
 // These are independent policy switches in the committed TOML schema.
 #[allow(clippy::struct_excessive_bools)]
 pub struct Protection {
-    /// N: trunk ruleset name.
-    pub trunk_ruleset: String,
+    /// N: trunk ruleset name. Absent derives `<trunk>-protection`, which
+    /// is the name the setup script built before the key existed, so a
+    /// target that states none keeps the ruleset it already has.
+    pub trunk_ruleset: Option<String>,
     /// N: tag ruleset name.
     pub tag_ruleset: String,
     /// N: release-line ruleset name.
@@ -193,7 +195,7 @@ pub struct Protection {
 impl Default for Protection {
     fn default() -> Self {
         Self {
-            trunk_ruleset: "master-protection".into(),
+            trunk_ruleset: None,
             tag_ruleset: "release-tags".into(),
             lines_ruleset: "release-lines".into(),
             title_check: "pr-title".into(),
@@ -214,6 +216,17 @@ impl Default for Protection {
             github: Github::default(),
             gitlab: Gitlab::default(),
         }
+    }
+}
+
+impl Protection {
+    /// The trunk ruleset's name: the target's own answer, or the name the
+    /// setup script derived before the key existed.
+    #[must_use]
+    pub fn trunk_ruleset(&self, trunk: &str) -> String {
+        self.trunk_ruleset
+            .clone()
+            .unwrap_or_else(|| format!("{trunk}-protection"))
     }
 }
 
@@ -362,6 +375,14 @@ fn array(values: &[String]) -> toml_edit::Value {
 
 #[allow(clippy::too_many_lines)]
 fn render(config: &Config) -> Result<Vec<u8>, RkError> {
+    // The trunk names the ruleset the setup installs, so the written
+    // configuration states the name a target actually gets rather than a
+    // literal that would be wrong for any trunk but the default.
+    let trunk = config
+        .project
+        .trunk
+        .clone()
+        .ok_or_else(|| invalid("project.trunk is unresolved"))?;
     let mut fields: Vec<(&str, toml_edit::Value)> = vec![
         ("RK_CONFIG_SCHEMA_VERSION", config.schema_version.into()),
         ("RK_CONFIG_PROJECT_REPO", config.project.repo.clone().into()),
@@ -370,15 +391,7 @@ fn render(config: &Config) -> Result<Vec<u8>, RkError> {
             config.project.forge.clone().into(),
         ),
         ("RK_CONFIG_PROJECT_TECH", config.project.tech.clone().into()),
-        (
-            "RK_CONFIG_PROJECT_TRUNK",
-            config
-                .project
-                .trunk
-                .clone()
-                .ok_or_else(|| invalid("project.trunk is unresolved"))?
-                .into(),
-        ),
+        ("RK_CONFIG_PROJECT_TRUNK", trunk.clone().into()),
         (
             "RK_CONFIG_LANDING_WORKFLOW",
             config
@@ -443,7 +456,7 @@ fn render(config: &Config) -> Result<Vec<u8>, RkError> {
             config.setup.bot.app_id.clone().into(),
         ),
     ];
-    fields.extend(protection_fields(&config.protection));
+    fields.extend(protection_fields(&config.protection, trunk.as_str()));
     let template = crate::embedded::BLOCKS
         .get_file("target-config.toml.in")
         .and_then(include_dir::File::contents_utf8)
@@ -465,11 +478,14 @@ fn render(config: &Config) -> Result<Vec<u8>, RkError> {
     Ok(bytes)
 }
 
-fn protection_fields(protection: &Protection) -> Vec<(&'static str, toml_edit::Value)> {
+fn protection_fields(
+    protection: &Protection,
+    trunk: &str,
+) -> Vec<(&'static str, toml_edit::Value)> {
     vec![
         (
             "RK_CONFIG_PROTECTION_TRUNK_RULESET",
-            protection.trunk_ruleset.clone().into(),
+            protection.trunk_ruleset(trunk).into(),
         ),
         (
             "RK_CONFIG_PROTECTION_TAG_RULESET",
@@ -807,7 +823,7 @@ mod tests {
         config.setup.line_prefix = Some("stable/".into());
         config.setup.release_lines = true;
         config.setup.bot.app_id = "123".into();
-        config.protection.trunk_ruleset = "primary".into();
+        config.protection.trunk_ruleset = Some("primary".into());
         config.protection.tag_ruleset = "versions".into();
         config.protection.lines_ruleset = "maintenance".into();
         config.protection.title_check = "intent".into();
@@ -836,6 +852,12 @@ mod tests {
             setup: super::Setup {
                 line_prefix: Some(super::LINE_PREFIX_DEFAULT.into()),
                 ..super::Setup::default()
+            },
+            // Writing resolves the derived ruleset name, so the file states
+            // the name the setup installs rather than leaving it implied.
+            protection: super::Protection {
+                trunk_ruleset: Some(format!("{}-protection", super::TRUNK_DEFAULT)),
+                ..super::Protection::default()
             },
             ..Config::default()
         };
