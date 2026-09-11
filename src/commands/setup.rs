@@ -104,6 +104,20 @@ pub fn run(args: &SetupArgs) -> Result<(), RkError> {
     }
 }
 
+/// Whether a full run skips this step at this target.
+///
+/// `optional` is the payload's claim that a step is not universal; the
+/// target's own configuration answers whether it wants this one. Today
+/// `protect-release-lines` is the single such step, and a project that
+/// sets `setup.release_lines` gets it run rather than skipped and
+/// remembered.
+fn skipped_by_a_full_run(ctx: &Ctx, step: &StepSpec, selected: usize) -> bool {
+    if !step.optional || selected <= 1 {
+        return false;
+    }
+    !(step.name == "protect-release-lines" && ctx.release_lines())
+}
+
 /// On GitLab `--required-check` is a usage error, per the forge document:
 /// the forge requires the whole pipeline and names no individual check, and
 /// a flag silently discarded would read as configured while nothing uses it.
@@ -128,11 +142,12 @@ fn require_check_for(ctx: &Ctx, steps: &[&StepSpec]) -> Result<(), RkError> {
         return Err(RkError::refusal(
             Diagnostic::new(
                 Reason::PrerequisiteUnmet,
-                "protect-trunk refuses without --required-check, and nothing was written",
+                "protect-trunk refuses until the required check is named, and nothing was written",
             )
             .expected("the name of the CI check the release merge must pass")
             .action(format!(
-                "pass --required-check <name>; gh api repos/{}/commits/HEAD/check-runs lists the project's check names",
+                "set setup.required_check in {}, or pass --required-check <name>; gh api repos/{}/commits/HEAD/check-runs lists the project's check names",
+                crate::config::CONFIG_PATH,
                 ctx.repo
             ))
             .step("protect-trunk"),
@@ -435,9 +450,9 @@ fn preview(out: Output, ctx: &Ctx, steps: &[&StepSpec]) -> Result<(), RkError> {
         {
             out.result_line("  needs: --required-check <name> before apply");
         }
-        if step.optional && steps.len() > 1 {
+        if skipped_by_a_full_run(&engine.ctx, step, steps.len()) {
             out.result_line(format!(
-                "  optional: a full apply skips it; rk setup step {} --apply runs it",
+                "  optional: a full apply skips it; set setup.release_lines, or rk setup step {} --apply runs it",
                 step.name
             ));
         }
@@ -530,9 +545,9 @@ fn execute(
     for (idx, step) in steps.iter().enumerate() {
         // An optional step applies only by name: a full run states the skip
         // rather than acting on a condition the operator never asserted.
-        if step.optional && steps.len() > 1 {
+        if skipped_by_a_full_run(&engine.ctx, step, steps.len()) {
             engine.out.frame(format!(
-                "step {}/{} {} — skipped (optional; rk setup step {} --apply runs it)",
+                "step {}/{} {} — skipped (optional; set setup.release_lines, or rk setup step {} --apply runs it)",
                 idx + 1,
                 steps.len(),
                 step.name,
@@ -1151,7 +1166,7 @@ fn app_jwt_for(engine: &mut Engine) -> Result<Result<String, String>, RkError> {
     if let Some(jwt) = &engine.app_jwt {
         return Ok(Ok(jwt.clone()));
     }
-    let app_id = app_jwt::app_id()?;
+    let app_id = app_jwt::app_id(engine.ctx.bot_app_id())?;
     let key_bytes = key_file_for(engine)?.map(|key| key.bytes.clone());
     let (Some(app_id), Some(key_bytes)) = (app_id, key_bytes) else {
         return Ok(Err(format!(

@@ -18782,3 +18782,192 @@ fn the_setup_preview_prints_the_configured_trunk() {
         .success()
         .stdout(predicates::str::contains("RK_TRUNK_BRANCH=main"));
 }
+
+/// Set one key in a landed target's committed configuration.
+fn set_config_key(target: &Path, old: &str, new: &str) {
+    let path = target.join(".release-kit/config.toml");
+    let text = std::fs::read_to_string(&path).expect("the landed config reads");
+    assert!(text.contains(old), "the config carries {old}:\n{text}");
+    std::fs::write(&path, text.replace(old, new)).expect("the config rewrites");
+}
+
+/// SATISFIES forge-setup:every-supported-forge-runs-every-step
+/// A committed required check answers the GitHub refusal, so the operator
+/// stops retyping it on every invocation.
+#[test]
+fn required_check_comes_from_the_config_on_github() {
+    let target = tempfile::tempdir().expect("a tempdir");
+    land_rust(target.path()).success();
+    set_config_key(
+        target.path(),
+        "required_check = \"\"",
+        "required_check = \"gate\"",
+    );
+
+    rk().args([
+        "setup",
+        "--repo",
+        "acme/widget",
+        "--forge",
+        "github",
+        "--target",
+    ])
+    .arg(target.path())
+    .assert()
+    .success()
+    .stdout(predicates::str::contains("RK_REQUIRED_CHECK=gate"));
+}
+
+/// SATISFIES forge-setup:every-supported-forge-runs-every-step
+/// Where neither the committed key nor the flag names the check, the
+/// refusal names the file first: a value the operator can commit beats one
+/// they must remember.
+#[test]
+fn required_check_refuses_on_github_when_neither_answers() {
+    let target = tempfile::tempdir().expect("a tempdir");
+    land_rust(target.path()).success();
+
+    rk().args([
+        "setup",
+        "--repo",
+        "acme/widget",
+        "--forge",
+        "github",
+        "--target",
+    ])
+    .arg(target.path())
+    .arg("--apply")
+    .assert()
+    .failure()
+    .stderr(predicates::str::contains("setup.required_check"))
+    .stderr(predicates::str::contains(".release-kit/config.toml"));
+}
+
+/// SATISFIES forge-setup:every-supported-forge-runs-every-step
+/// GitLab names no individual check, so a supplied flag is still a usage
+/// error. A committed value must not make that refusal fire, because one
+/// configuration can serve a project on either forge.
+#[test]
+fn a_committed_required_check_does_not_refuse_on_gitlab() {
+    let fixture = ForgeFixture::new();
+    let dir = fixture.target.path().join(".release-kit");
+    std::fs::create_dir_all(&dir).expect("the config directory exists");
+    std::fs::write(
+        dir.join("config.toml"),
+        "schema_version = 1\n\n[setup]\nrequired_check = \"gate\"\n",
+    )
+    .expect("the config writes");
+
+    // The committed value reaches a GitHub run and is refused nowhere.
+    fixture
+        .rk(&["setup"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("RK_REQUIRED_CHECK=gate"));
+
+    // On GitLab the same committed value is simply not read, so the run
+    // previews rather than refusing.
+    fixture
+        .rk(&["setup"])
+        .args(["--repo", "acme/widget", "--forge", "gitlab"])
+        .assert()
+        .success();
+
+    // The flag, however, is still a usage error there.
+    fixture
+        .rk(&["setup"])
+        .args(["--repo", "acme/widget", "--forge", "gitlab"])
+        .args(["--required-check", "gate"])
+        .assert()
+        .code(64)
+        .stderr(predicate::str::contains("whole pipeline"));
+}
+
+/// SATISFIES target-config:an-absent-config-changes-nothing
+/// A project that keeps a third long-lived branch names it, and the
+/// single-trunk step retires that one rather than a compiled guess.
+#[test]
+fn retired_branches_come_from_the_config() {
+    let target = tempfile::tempdir().expect("a tempdir");
+    land_rust(target.path()).success();
+    set_config_key(
+        target.path(),
+        "retired_branches = [\"main\", \"develop\"]",
+        "retired_branches = [\"legacy\"]",
+    );
+
+    let observed = rk()
+        .args(["status", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    assert!(
+        observed.get_output().status.success(),
+        "an edited config stays informational"
+    );
+
+    // The configuration reaches the step through the context, so the
+    // preview that names what would run is the reader's proof.
+    rk().args(["setup", "step", "single-trunk", "--repo", "acme/widget"])
+        .args(["--forge", "github", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+}
+
+/// SATISFIES forge-setup:every-supported-forge-runs-every-step
+/// A project that keeps release lines says so once, and a full apply runs
+/// the protection instead of skipping it and asking the operator to
+/// remember a second command.
+#[test]
+fn the_release_lines_step_runs_when_the_config_asks() {
+    let target = tempfile::tempdir().expect("a tempdir");
+    land_rust(target.path()).success();
+    set_config_key(
+        target.path(),
+        "required_check = \"\"",
+        "required_check = \"gate\"",
+    );
+
+    let skipped = rk()
+        .args([
+            "setup",
+            "--repo",
+            "acme/widget",
+            "--forge",
+            "github",
+            "--target",
+        ])
+        .arg(target.path())
+        .assert()
+        .success();
+    let text = String::from_utf8_lossy(&skipped.get_output().stdout).into_owned();
+    assert!(
+        text.contains("setup.release_lines"),
+        "the skip names the key that would run it:\n{text}"
+    );
+
+    set_config_key(
+        target.path(),
+        "release_lines = false",
+        "release_lines = true",
+    );
+    let runs = rk()
+        .args([
+            "setup",
+            "--repo",
+            "acme/widget",
+            "--forge",
+            "github",
+            "--target",
+        ])
+        .arg(target.path())
+        .assert()
+        .success();
+    let text = String::from_utf8_lossy(&runs.get_output().stdout).into_owned();
+    assert!(
+        !text.contains("setup.release_lines"),
+        "a project that asked for lines is not told to ask again:\n{text}"
+    );
+}

@@ -20,9 +20,11 @@ use crate::setup::workflow_jobs;
 /// journaling, and redaction around the process adapter.
 pub type Runner<'a> = dyn FnMut(&Exec) -> Result<Outcome, RkError> + 'a;
 
-/// The long-lived branch names `single-trunk` retires when each is an
-/// ancestor of the trunk: the common default and the retired second branch.
-pub const TRUNK_CANDIDATES: [&str; 2] = ["main", "develop"];
+// The long-lived branch names `single-trunk` retires when each is an
+// ancestor of the trunk come from the target's own configuration, read
+// through `Ctx::retired_branches`. The compiled default is the common
+// default branch and the retired second branch, so a target that names
+// none behaves exactly as it did.
 
 /// The landed title check's context, fixed by the payload: the job in
 /// `pr-title.yml` that holds the squash title to the commit convention.
@@ -289,7 +291,8 @@ fn forge_version(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkError> {
 /// Propagates executor failures.
 pub fn single_trunk_guard(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkError> {
     let trunk = ctx.trunk();
-    for candidate in TRUNK_CANDIDATES {
+    for candidate in ctx.retired_branches() {
+        let candidate = candidate.as_str();
         if candidate == trunk {
             continue;
         }
@@ -474,7 +477,8 @@ fn github(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
             Api::Failed(err) => StepState::unknown(err),
         }),
         "single-trunk" => {
-            for candidate in TRUNK_CANDIDATES {
+            for candidate in ctx.retired_branches() {
+                let candidate = candidate.as_str();
                 if candidate == trunk {
                     continue;
                 }
@@ -1044,7 +1048,8 @@ fn gitlab(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
             Api::Failed(err) => StepState::unknown(err),
         }),
         "single-trunk" => {
-            for candidate in TRUNK_CANDIDATES {
+            for candidate in ctx.retired_branches() {
+                let candidate = candidate.as_str();
                 if candidate == trunk {
                     continue;
                 }

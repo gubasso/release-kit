@@ -29,7 +29,6 @@ release_lines = false # N: run release-line protection in a full apply
 
 [setup.bot]
 app_id = "" # N: public App identifier; private credentials stay outside this file
-installation_id = 0 # N: verified cache; zero means discover
 
 [protection]
 trunk_ruleset = "master-protection" # N: trunk ruleset name

@@ -73,6 +73,15 @@ pub struct Ctx {
     /// The release-line prefix this target states, or the compiled
     /// default where it states none.
     line_prefix: String,
+    /// The long-lived branches a single trunk retires, as this target
+    /// names them.
+    retired_branches: Vec<String>,
+    /// Whether a full apply runs the release-line protection, which a
+    /// project that keeps no line does not want run at all.
+    release_lines: bool,
+    /// The bot App's public identifier where this target states one; the
+    /// environment still wins over it, and no private credential is here.
+    bot_app_id: Option<String>,
 }
 
 impl Ctx {
@@ -147,16 +156,42 @@ impl Ctx {
             ));
         };
         let cli = resolve_cli(forge)?;
+        let config = crate::config::load(target.as_std_path())?;
+        // The flag wins, and the committed answer fills the gap on GitHub
+        // alone: GitLab names no individual check and refuses a supplied
+        // one, so a shared configuration must not make that refusal fire.
+        let required_check = required_check.map(str::to_owned).or_else(|| {
+            (forge == Forge::Github)
+                .then(|| {
+                    config
+                        .as_ref()
+                        .map(|held| held.setup.required_check.clone())
+                        .filter(|name| !name.is_empty())
+                })
+                .flatten()
+        });
+        let retired_branches = config.as_ref().map_or_else(
+            || crate::config::Setup::default().retired_branches,
+            |held| held.setup.retired_branches.clone(),
+        );
+        let release_lines = config.as_ref().is_some_and(|held| held.setup.release_lines);
+        let bot_app_id = config
+            .as_ref()
+            .map(|held| held.setup.bot.app_id.clone())
+            .filter(|id| !id.is_empty());
         Ok(Self {
             target: target.clone(),
             repo,
             forge,
             host: detected.host,
-            required_check: required_check.map(str::to_owned),
+            required_check,
             cli,
             tech: detect::tech_of(target.as_std_path()),
             trunk: crate::config::trunk_of(target.as_std_path())?,
             line_prefix: crate::config::line_prefix_of(target.as_std_path())?,
+            retired_branches,
+            release_lines,
+            bot_app_id,
         })
     }
 
@@ -183,6 +218,9 @@ impl Ctx {
             tech,
             trunk: crate::config::TRUNK_DEFAULT.to_owned(),
             line_prefix: crate::config::LINE_PREFIX_DEFAULT.to_owned(),
+            retired_branches: crate::config::Setup::default().retired_branches,
+            release_lines: false,
+            bot_app_id: None,
         }
     }
 
@@ -196,6 +234,24 @@ impl Ctx {
     #[must_use]
     pub fn line_prefix(&self) -> &str {
         &self.line_prefix
+    }
+
+    /// The long-lived branches this run's single-trunk step retires.
+    #[must_use]
+    pub fn retired_branches(&self) -> &[String] {
+        &self.retired_branches
+    }
+
+    /// Whether a full apply runs the release-line protection.
+    #[must_use]
+    pub const fn release_lines(&self) -> bool {
+        self.release_lines
+    }
+
+    /// The bot App's public identifier this target states, where it does.
+    #[must_use]
+    pub fn bot_app_id(&self) -> Option<&str> {
+        self.bot_app_id.as_deref()
     }
 
     /// Whether this run targets a GitLab instance that is not gitlab.com,

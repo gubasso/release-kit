@@ -22,14 +22,13 @@ contact = RK_CONFIG_SECURITY_CONTACT # N: contact when the form is unavailable
 response = RK_CONFIG_SECURITY_RESPONSE # N: best-effort or a response window
 
 [setup]
-required_check = RK_CONFIG_SETUP_REQUIRED_CHECK # N: the check the merge must pass
+required_check = RK_CONFIG_SETUP_REQUIRED_CHECK # N: the check the merge must pass; empty asks for --required-check
 retired_branches = RK_CONFIG_SETUP_RETIRED_BRANCHES # N: long-lived branches retired by the trunk
 line_prefix = RK_CONFIG_SETUP_LINE_PREFIX # P: release-line branch prefix, rendered into the release triggers
-release_lines = RK_CONFIG_SETUP_RELEASE_LINES # N: run release-line protection in a full apply
+release_lines = RK_CONFIG_SETUP_RELEASE_LINES # N: true runs protect-release-lines in a full apply
 
 [setup.bot]
 app_id = RK_CONFIG_SETUP_BOT_APP_ID # N: public App identifier; private credentials stay outside this file
-installation_id = RK_CONFIG_SETUP_BOT_INSTALLATION_ID # N: verified cache; zero means discover
 
 [protection]
 trunk_ruleset = RK_CONFIG_PROTECTION_TRUNK_RULESET # N: trunk ruleset name

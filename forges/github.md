@@ -77,7 +77,7 @@ On the App's own settings page, which the registration lands on:
 2. Private keys section, click Generate a private key.
    - a `.pem` downloads at once; GitHub keeps only the public half and never shows the file again, so store it before leaving the page
 3. Move the file outside every repository, then `chmod 600` it; `bot-secrets` refuses a group-readable key.
-4. Export the pair for `rk setup`: `RK_BOT_APP_ID` holds the App ID, `RK_BOT_PRIVATE_KEY_FILE` holds the path to the `.pem`, never its contents. `install-bot` and `bot-secrets` read the pair; nothing else identifies the App.
+4. Give `rk setup` the pair. The App ID is a public identifier, so `setup.bot.app_id` in `.release-kit/config.toml` holds it once and the export becomes unnecessary; `RK_BOT_APP_ID` still wins where it is set, for a run against another App. `RK_BOT_PRIVATE_KEY_FILE` holds the path to the `.pem` and is never committed, and neither is the key itself. `install-bot` and `bot-secrets` read the pair; nothing else identifies the App.
 
 ### Install it on this repository
 
