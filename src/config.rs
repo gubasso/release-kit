@@ -3,6 +3,7 @@
 
 pub mod floors;
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::Path;
 
@@ -117,6 +118,11 @@ pub struct Setup {
     pub line_prefix: Option<String>,
     /// N: run release-line protection in a full apply.
     pub release_lines: bool,
+    /// N: the steps this target does not run, each against the reason a
+    /// report prints. An exclusion narrows what the setup judges and
+    /// weakens no floor: every value a step the target still runs reads is
+    /// floored exactly as before.
+    pub excluded_steps: BTreeMap<String, String>,
     /// Public bot identity.
     pub bot: Bot,
 }
@@ -128,6 +134,7 @@ impl Default for Setup {
             retired_branches: vec!["main".into(), "develop".into()],
             line_prefix: None,
             release_lines: false,
+            excluded_steps: BTreeMap::new(),
             bot: Bot::default(),
         }
     }
@@ -330,8 +337,35 @@ fn parse(text: &str) -> Result<Config, RkError> {
             "project.tech must name a supported payload binding",
         ));
     }
+    exclusions(&config.setup.excluded_steps)?;
     floors::check(&config)?;
     Ok(config)
+}
+
+/// Judge the declared exclusions: every id names a step this binary runs,
+/// and every exclusion states why.
+///
+/// A reason is required because the exclusions are the audit trail. A
+/// reader must be able to tell a chosen subset from an incomplete setup,
+/// and a line that names a step and says nothing tells them neither.
+fn exclusions(excluded: &BTreeMap<String, String>) -> Result<(), RkError> {
+    for (name, reason) in excluded {
+        if crate::setup::steps::spec(name).is_none() {
+            let nearest = crate::setup::steps::STEPS
+                .iter()
+                .min_by_key(|step| distance(name, step.name))
+                .map_or("", |step| step.name);
+            return Err(invalid(format!(
+                "setup.excluded_steps names {name}, which is no setup step; nearest known step: {nearest}"
+            )));
+        }
+        if reason.trim().is_empty() {
+            return Err(invalid(format!(
+                "setup.excluded_steps names {name} with no reason; an excluded step is reported with why it is out of scope"
+            )));
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn invalid(message: impl std::fmt::Display) -> RkError {
@@ -371,6 +405,18 @@ pub fn write(target: &Path, config: &Config) -> Result<(), RkError> {
 
 fn array(values: &[String]) -> toml_edit::Value {
     toml_edit::Value::Array(values.iter().collect())
+}
+
+/// The exclusions as the one-line inline table the template carries. A
+/// landing writes an empty one; an operator who wants several may turn it
+/// into a `[setup.excluded_steps]` table, which this reader parses the
+/// same way.
+fn inline(values: &BTreeMap<String, String>) -> toml_edit::Value {
+    let mut table = toml_edit::InlineTable::new();
+    for (key, value) in values {
+        table.insert(key, value.clone().into());
+    }
+    toml_edit::Value::InlineTable(table)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -450,6 +496,10 @@ fn render(config: &Config) -> Result<Vec<u8>, RkError> {
         (
             "RK_CONFIG_SETUP_RELEASE_LINES",
             config.setup.release_lines.into(),
+        ),
+        (
+            "RK_CONFIG_SETUP_EXCLUDED_STEPS",
+            inline(&config.setup.excluded_steps),
         ),
         (
             "RK_CONFIG_SETUP_BOT_APP_ID",
@@ -822,6 +872,18 @@ mod tests {
         config.setup.retired_branches = vec!["develop".into(), "old\"branch".into()];
         config.setup.line_prefix = Some("stable/".into());
         config.setup.release_lines = true;
+        config.setup.excluded_steps = [
+            (
+                "package-check".to_owned(),
+                "nothing is published".to_owned(),
+            ),
+            (
+                "protect-trunk".to_owned(),
+                "this project merges \"locally\"".to_owned(),
+            ),
+        ]
+        .into_iter()
+        .collect();
         config.setup.bot.app_id = "123".into();
         config.protection.trunk_ruleset = Some("primary".into());
         config.protection.tag_ruleset = "versions".into();
@@ -899,6 +961,57 @@ mod tests {
                 assert!(error.contains(expected), "{error}");
             }
         }
+    }
+
+    /// An exclusion removes a step from scope, so a typo in one would
+    /// silently keep judging a step the target does not run, and a
+    /// reasonless one would leave a report nobody can audit.
+    #[test]
+    fn an_exclusion_names_a_real_step_and_states_why() {
+        for (text, expected) in [
+            (
+                "[setup.excluded_steps]\nprotect-trunkk = 'we merge locally'\n",
+                vec!["protect-trunkk", "nearest known step: protect-trunk"],
+            ),
+            (
+                "[setup.excluded_steps]\nprotect-trunk = '  '\n",
+                vec!["protect-trunk", "no reason"],
+            ),
+        ] {
+            let error = parse(&format!("schema_version = 1\n{text}"))
+                .expect_err("the exclusion refuses")
+                .to_string();
+            for want in expected {
+                assert!(error.contains(want), "{error}");
+            }
+        }
+        let held = parse(
+            "schema_version = 1\n[setup.excluded_steps]\nprotect-trunk = 'we merge locally'\n",
+        )
+        .expect("a named step with a reason parses");
+        assert_eq!(
+            held.setup
+                .excluded_steps
+                .get("protect-trunk")
+                .map(String::as_str),
+            Some("we merge locally")
+        );
+    }
+
+    /// An exclusion narrows what the setup judges. It never weakens the
+    /// method's policy, so the floors bind a target that runs a subset
+    /// exactly as they bind one that runs every step.
+    #[test]
+    fn an_exclusion_does_not_lift_a_floor() {
+        let error = parse(
+            "schema_version = 1\n[setup.excluded_steps]\nprotect-trunk = 'we merge locally'\n\n[protection]\nallowed_merge_methods = ['squash', 'merge']\n",
+        )
+        .expect_err("the floor binds an excluded step's keys too")
+        .to_string();
+        assert!(
+            error.contains("protection.allowed_merge_methods"),
+            "{error}"
+        );
     }
 
     #[test]

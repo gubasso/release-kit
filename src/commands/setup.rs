@@ -75,6 +75,7 @@ pub fn run(args: &SetupArgs) -> Result<(), RkError> {
             )?;
             reject_check_flag_on_gitlab(&ctx)?;
             if *apply {
+                refuse_an_excluded_step(&ctx, selected)?;
                 require_check_for(&ctx, &[selected])?;
                 execute(Output::new(*json), ctx, &[selected], "setup step")
             } else {
@@ -118,6 +119,21 @@ fn skipped_by_a_full_run(ctx: &Ctx, step: &StepSpec, selected: usize) -> bool {
     !(step.name == "protect-release-lines" && ctx.release_lines())
 }
 
+/// A step the target declared it does not run is refused by name rather
+/// than applied. The committed file is the one statement of which steps
+/// this target runs, so a run that installed what the file excludes would
+/// leave the forge and the declaration disagreeing with nobody to notice;
+/// changing the model is one edit, and that edit is the auditable act.
+fn refuse_an_excluded_step(ctx: &Ctx, step: &StepSpec) -> Result<(), RkError> {
+    ctx.excluded(step.name).map_or(Ok(()), |reason| {
+        Err(RkError::Usage(format!(
+            "{} is excluded by {}: {reason}; remove it from setup.excluded_steps to run it",
+            step.name,
+            crate::config::CONFIG_PATH
+        )))
+    })
+}
+
 /// On GitLab `--required-check` is a usage error, per the forge document:
 /// the forge requires the whole pipeline and names no individual check, and
 /// a flag silently discarded would read as configured while nothing uses it.
@@ -133,11 +149,14 @@ fn reject_check_flag_on_gitlab(ctx: &Ctx) -> Result<(), RkError> {
 /// On GitHub the trunk protection needs the check name before any step
 /// runs: a wrong or missing one does not fail, it hangs the merge button,
 /// so a full apply refuses up front rather than writing eight steps and
-/// stopping.
+/// stopping. A target that excludes the protection is asked for nothing,
+/// because the value would answer a step this run never reaches.
 fn require_check_for(ctx: &Ctx, steps: &[&StepSpec]) -> Result<(), RkError> {
     let needs = ctx.forge == Forge::Github
         && ctx.required_check.is_none()
-        && steps.iter().any(|step| step.name == "protect-trunk");
+        && steps
+            .iter()
+            .any(|step| step.name == "protect-trunk" && ctx.excluded(step.name).is_none());
     if needs {
         return Err(RkError::refusal(
             Diagnostic::new(
@@ -437,6 +456,17 @@ fn preview(out: Output, ctx: &Ctx, steps: &[&StepSpec]) -> Result<(), RkError> {
             step.name,
             step.proves
         ));
+        if let Some(reason) = engine.ctx.excluded(step.name).map(str::to_owned) {
+            out.result_line(format!(
+                "  excluded by {}: {reason}",
+                crate::config::CONFIG_PATH
+            ));
+            let mut event = engine.event(EventKind::StepFinished, Some(step.name));
+            event.status = Some("excluded".into());
+            event.detail = Some(reason);
+            engine.emit(&event);
+            continue;
+        }
         // Preview is the rehearsal of apply, so a credential apply could
         // not use is a preview failure: the operator learns it here rather
         // than one flag later, and before an invocation is claimed.
@@ -552,6 +582,24 @@ fn execute(
     let mut engine = Engine::open(out, ctx, command, true)?;
     let mut done: Vec<(String, String)> = Vec::new();
     for (idx, step) in steps.iter().enumerate() {
+        // A declared exclusion states the skip and runs nothing. A single
+        // step named on the command line never arrives here: that form
+        // refuses before the run opens.
+        if let Some(reason) = engine.ctx.excluded(step.name).map(str::to_owned) {
+            engine.out.frame(format!(
+                "step {}/{} {} — excluded ({}: {reason})",
+                idx + 1,
+                steps.len(),
+                step.name,
+                crate::config::CONFIG_PATH
+            ));
+            let mut finished = engine.event(EventKind::StepFinished, Some(step.name));
+            finished.status = Some("excluded".into());
+            finished.detail = Some(reason);
+            engine.emit(&finished);
+            done.push((step.name.to_owned(), "excluded".to_owned()));
+            continue;
+        }
         // An optional step applies only by name: a full run states the skip
         // rather than acting on a condition the operator never asserted.
         if skipped_by_a_full_run(&engine.ctx, step, steps.len()) {
@@ -603,6 +651,7 @@ fn execute(
         ));
         let mut finished = engine.event(EventKind::StepFinished, Some(step.name));
         finished.status = Some(status.wire().into());
+        finished.detail = Some(status.line());
         finished.exit_code = Some(0);
         finished.duration_ms = Some(elapsed_ms(clock));
         engine.emit(&finished);
@@ -1351,6 +1400,21 @@ fn check(out: Output, ctx: Ctx) -> Result<(), RkError> {
     let mut unverifiable = 0usize;
     for step in &STEPS {
         let clock = Instant::now();
+        // A step the target declared it does not run is stated and judged
+        // by nothing: no forge call, no verdict, and no weight in the exit
+        // code. The reason travels with it, so a reader can tell a chosen
+        // subset from an incomplete setup.
+        if let Some(reason) = engine.ctx.excluded(step.name).map(str::to_owned) {
+            engine
+                .out
+                .result_line(format!("excluded {} — {reason}", step.name));
+            let mut finished = engine.event(EventKind::StepFinished, Some(step.name));
+            finished.status = Some("excluded".into());
+            finished.detail = Some(reason);
+            finished.duration_ms = Some(elapsed_ms(clock));
+            engine.emit(&finished);
+            continue;
+        }
         let state = observe_with(&mut engine, step.name)?;
         let (label, wire) = match &state {
             StepState::Satisfied { .. } => ("ok", "satisfied"),
@@ -1380,8 +1444,16 @@ fn check(out: Output, ctx: Ctx) -> Result<(), RkError> {
         engine.out.result_line(line);
         let mut finished = engine.event(EventKind::StepFinished, Some(step.name));
         finished.status = Some(wire.into());
+        finished.detail = Some(state_detail(&state));
         finished.duration_ms = Some(elapsed_ms(clock));
         engine.emit(&finished);
+    }
+    if engine.ctx.excluded_count() > 0 {
+        let excluded = step_count(engine.ctx.excluded_count());
+        engine.out.result_line(format!(
+            "{excluded} excluded by {}; this check judges the rest",
+            crate::config::CONFIG_PATH
+        ));
     }
     if unsatisfied > 0 || unverifiable > 0 {
         let error = RkError::check_failed(
