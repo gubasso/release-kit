@@ -501,8 +501,17 @@ fn render_invocation(ctx: &Ctx, step: &StepSpec) -> String {
                 .filter(|_| ctx.forge == Forge::Github && name == "protect-trunk")
                 .map(|value| format!(" RK_REQUIRED_CHECK={value}"))
                 .unwrap_or_default();
+            // The ruleset a protection step installs is the one
+            // per-target fact the operator most needs to see before an
+            // apply, because a renamed ruleset leaves the old one standing.
+            let ruleset = match name {
+                "protect-trunk" => format!(" RK_TRUNK_RULESET={} RK_TITLE_CHECK={}", ctx.trunk_ruleset(), ctx.title_check()),
+                "protect-tags" => format!(" RK_TAG_RULESET={}", ctx.tag_ruleset()),
+                "protect-release-lines" => format!(" RK_LINES_RULESET={}", ctx.lines_ruleset()),
+                _ => String::new(),
+            };
             format!(
-                "would run: sh <embedded setup/{}/{name}> with RK_REPO={} RK_TRUNK_BRANCH={}{check}",
+                "would run: sh <embedded setup/{}/{name}> with RK_REPO={} RK_TRUNK_BRANCH={}{ruleset}{check}",
                 ctx.forge.as_str(),
                 ctx.repo,
                 ctx.trunk()

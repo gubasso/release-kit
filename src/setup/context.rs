@@ -82,6 +82,14 @@ pub struct Ctx {
     /// The bot App's public identifier where this target states one; the
     /// environment still wins over it, and no private credential is here.
     bot_app_id: Option<String>,
+    /// The ruleset that protects the trunk, as this target names it.
+    trunk_ruleset: String,
+    /// The ruleset that makes published tags immutable.
+    tag_ruleset: String,
+    /// The ruleset that protects the release lines.
+    lines_ruleset: String,
+    /// The context the landed title job reports under.
+    title_check: String,
 }
 
 impl Ctx {
@@ -179,6 +187,12 @@ impl Ctx {
             .as_ref()
             .map(|held| held.setup.bot.app_id.clone())
             .filter(|id| !id.is_empty());
+        let trunk = crate::config::trunk_of(target.as_std_path())?;
+        let protection = config
+            .as_ref()
+            .map_or_else(crate::config::Protection::default, |held| {
+                held.protection.clone()
+            });
         Ok(Self {
             target: target.clone(),
             repo,
@@ -187,7 +201,11 @@ impl Ctx {
             required_check,
             cli,
             tech: detect::tech_of(target.as_std_path()),
-            trunk: crate::config::trunk_of(target.as_std_path())?,
+            trunk_ruleset: protection.trunk_ruleset(&trunk),
+            tag_ruleset: protection.tag_ruleset.clone(),
+            lines_ruleset: protection.lines_ruleset.clone(),
+            title_check: protection.title_check,
+            trunk,
             line_prefix: crate::config::line_prefix_of(target.as_std_path())?,
             retired_branches,
             release_lines,
@@ -208,6 +226,7 @@ impl Ctx {
         cli: PathBuf,
         tech: Option<&'static str>,
     ) -> Self {
+        let defaults = crate::config::Protection::default();
         Self {
             target,
             repo,
@@ -221,6 +240,10 @@ impl Ctx {
             retired_branches: crate::config::Setup::default().retired_branches,
             release_lines: false,
             bot_app_id: None,
+            trunk_ruleset: format!("{}-protection", crate::config::TRUNK_DEFAULT),
+            tag_ruleset: defaults.tag_ruleset,
+            lines_ruleset: defaults.lines_ruleset,
+            title_check: defaults.title_check,
         }
     }
 
@@ -254,6 +277,30 @@ impl Ctx {
         self.bot_app_id.as_deref()
     }
 
+    /// The ruleset that protects the trunk.
+    #[must_use]
+    pub fn trunk_ruleset(&self) -> &str {
+        &self.trunk_ruleset
+    }
+
+    /// The ruleset that makes published tags immutable.
+    #[must_use]
+    pub fn tag_ruleset(&self) -> &str {
+        &self.tag_ruleset
+    }
+
+    /// The ruleset that protects the release lines.
+    #[must_use]
+    pub fn lines_ruleset(&self) -> &str {
+        &self.lines_ruleset
+    }
+
+    /// The context the landed title job reports under.
+    #[must_use]
+    pub fn title_check(&self) -> &str {
+        &self.title_check
+    }
+
     /// Whether this run targets a GitLab instance that is not gitlab.com,
     /// where registry trusted publishing cannot reach.
     #[must_use]
@@ -274,6 +321,10 @@ impl Ctx {
             ("RK_REPO".into(), self.repo.clone().into()),
             ("RK_TRUNK_BRANCH".into(), self.trunk.clone().into()),
             ("RK_LINE_PREFIX".into(), self.line_prefix.clone().into()),
+            ("RK_TRUNK_RULESET".into(), self.trunk_ruleset.clone().into()),
+            ("RK_TAG_RULESET".into(), self.tag_ruleset.clone().into()),
+            ("RK_LINES_RULESET".into(), self.lines_ruleset.clone().into()),
+            ("RK_TITLE_CHECK".into(), self.title_check.clone().into()),
             ("GH_PAGER".into(), "".into()),
             ("GLAB_PAGER".into(), "".into()),
         ];

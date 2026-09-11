@@ -2349,6 +2349,11 @@ fn every_setup_script_passes_the_static_battery() {
         "RK_BOT_PRIVATE_KEY_FILE",
         "RK_BOT_TOKEN",
         "RK_BOT_INSTALLATION",
+        "RK_LINE_PREFIX",
+        "RK_TRUNK_RULESET",
+        "RK_TAG_RULESET",
+        "RK_LINES_RULESET",
+        "RK_TITLE_CHECK",
     ];
     for forge in ["github", "gitlab"] {
         for (name, text) in script_files(forge) {
@@ -18970,4 +18975,79 @@ fn the_release_lines_step_runs_when_the_config_asks() {
         !text.contains("setup.release_lines"),
         "a project that asked for lines is not told to ask again:\n{text}"
     );
+}
+
+/// SATISFIES target-config:a-setup-fact-is-committed-once
+/// The three ruleset names and the title check are the project's own. The
+/// setup installs what the target names, and the observer looks for the
+/// same thing, so the two cannot disagree about what a ruleset is called.
+#[test]
+fn the_protection_names_come_from_the_config() {
+    let fixture = ForgeFixture::new();
+    let dir = fixture.target.path().join(".release-kit");
+    std::fs::create_dir_all(&dir).expect("the config directory exists");
+    std::fs::write(
+        dir.join("config.toml"),
+        concat!(
+            "schema_version = 1\n\n",
+            "[setup]\nrequired_check = \"gate\"\n\n",
+            "[protection]\n",
+            "trunk_ruleset = \"primary-guard\"\n",
+            "tag_ruleset = \"tag-guard\"\n",
+            "lines_ruleset = \"line-guard\"\n",
+            "title_check = \"title-guard\"\n",
+        ),
+    )
+    .expect("the config writes");
+
+    let preview = fixture
+        .rk(&["setup"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .assert()
+        .success();
+    let text = String::from_utf8_lossy(&preview.get_output().stdout).into_owned();
+    for name in [
+        "RK_TRUNK_RULESET=primary-guard",
+        "RK_TAG_RULESET=tag-guard",
+        "RK_LINES_RULESET=line-guard",
+        "RK_TITLE_CHECK=title-guard",
+    ] {
+        assert!(
+            text.contains(name),
+            "the preview states what would run, so it names {name}:\n{text}"
+        );
+    }
+}
+
+/// SATISFIES target-config:the-trunk-branch-has-one-owner
+/// A target that names no ruleset keeps the name the setup script built
+/// before the key existed, which derives from its own trunk. A target on
+/// `main` must not be handed a `master-protection` ruleset.
+#[test]
+fn the_trunk_ruleset_derives_from_the_trunk_where_none_is_named() {
+    let target = tempfile::tempdir().expect("a tempdir");
+    land_rust(target.path()).success();
+    let text = std::fs::read_to_string(target.path().join(".release-kit/config.toml"))
+        .expect("the landed config reads");
+    assert!(
+        text.contains("trunk_ruleset = \"master-protection\""),
+        "a first landing states the derived name rather than implying it:\n{text}"
+    );
+
+    // A target that states another trunk and names no ruleset resolves the
+    // derived name at use time, so its setup installs the right one.
+    let fixture = ForgeFixture::new();
+    let dir = fixture.target.path().join(".release-kit");
+    std::fs::create_dir_all(&dir).expect("the config directory exists");
+    std::fs::write(
+        dir.join("config.toml"),
+        "schema_version = 1\n\n[project]\ntrunk = \"main\"\n\n[setup]\nrequired_check = \"gate\"\n",
+    )
+    .expect("the config writes");
+    fixture
+        .rk(&["setup", "step", "protect-trunk"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("RK_TRUNK_RULESET=main-protection"));
 }
