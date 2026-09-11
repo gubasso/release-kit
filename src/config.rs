@@ -144,6 +144,12 @@ impl Default for Setup {
 pub struct Bot {
     /// N: public App identifier; private credentials stay outside this file.
     pub app_id: String,
+    /// Accepted and ignored. Version 0.3.13 wrote this key, so a target
+    /// landed by it must still parse; nothing reads the value and no new
+    /// configuration carries it. Removing it outright would refuse every
+    /// such target, because this reader denies an unknown key by design.
+    #[serde(default, skip_serializing)]
+    pub installation_id: Option<i64>,
 }
 
 /// The `protection` table.
@@ -757,6 +763,29 @@ mod tests {
         assert_eq!(explicit.landing.style, Some(Style::Trunk));
         assert_eq!(explicit.landing.nix, Some(false));
         assert_ne!(omitted, explicit);
+    }
+
+    /// A configuration written by 0.3.13 carries `installation_id`, which
+    /// this version reads and ignores. Refusing it would strand every
+    /// target that release landed.
+    #[test]
+    fn a_config_from_the_release_that_wrote_installation_id_still_reads() {
+        let dir = tempfile::tempdir().expect("a tempdir");
+        std::fs::create_dir_all(dir.path().join(".release-kit")).expect("the directory exists");
+        std::fs::write(
+            dir.path().join(CONFIG_PATH),
+            "schema_version = 1\n\n[setup.bot]\napp_id = \"123\"\ninstallation_id = 0\n",
+        )
+        .expect("the config writes");
+        let held = load(dir.path())
+            .expect("the config reads")
+            .expect("it is present");
+        assert_eq!(held.setup.bot.app_id, "123");
+        assert_eq!(
+            held.setup.bot.installation_id,
+            Some(0),
+            "the key parses; nothing reads it"
+        );
     }
 
     #[test]
