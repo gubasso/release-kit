@@ -1,5 +1,20 @@
 # Known Issues Specification
 
+<!--TOC-->
+
+- [Purpose](#purpose)
+- [Requirements](#requirements)
+  - [`known-issues:case-id-is-a-slug` — A case id is a slug](#known-issuescase-id-is-a-slug--a-case-id-is-a-slug)
+  - [`known-issues:a-record-carries-one-state` — A record carries one state](#known-issuesa-record-carries-one-state--a-record-carries-one-state)
+  - [`known-issues:a-record-carries-one-filing-state` — A record carries one filing state](#known-issuesa-record-carries-one-filing-state--a-record-carries-one-filing-state)
+  - [`known-issues:a-record-carries-its-retirement-condition` — A record carries its retirement condition](#known-issuesa-record-carries-its-retirement-condition--a-record-carries-its-retirement-condition)
+  - [`known-issues:a-record-records-its-last-check` — A record records its last check](#known-issuesa-record-records-its-last-check--a-record-records-its-last-check)
+  - [`known-issues:a-record-walks-the-mechanism` — A record walks its mechanism](#known-issuesa-record-walks-the-mechanism--a-record-walks-its-mechanism)
+  - [`known-issues:a-filed-record-carries-its-report` — A filed record carries its report](#known-issuesa-filed-record-carries-its-report--a-filed-record-carries-its-report)
+  - [`known-issues:a-bugzilla-report-body-fits-in-79-columns` — A Bugzilla report body fits in 79 columns](#known-issuesa-bugzilla-report-body-fits-in-79-columns--a-bugzilla-report-body-fits-in-79-columns)
+
+<!--TOC-->
+
 ## Purpose
 
 Rules governing known-issue records — the zone that holds an external defect this project works around. Covers the case id, the two state axes, the retirement condition, the mechanism walkthrough, and the body a filed record carries. Where the zone sits and how a suppression cites a record belong to `SPEC-spec-to-code.md`; the markdown a record is written in belongs to `SPEC-docs-format.md`.
@@ -53,6 +68,18 @@ The author MUST give a masked record a non-empty `retire_when:` value, and MUST 
 - THEN nothing retires the workaround, and the next reader takes it for a design choice
 
 Verify: `pre-commit run ki-retire-when --all-files`
+
+### `known-issues:a-record-records-its-last-check` — A record records its last check
+
+Where `state:` is `masked` or `monitoring`, the author MUST give the record an ISO `checked:` date not after today, and no other record one.
+
+#### Scenario: A retire condition is never tested against reality
+
+- GIVEN a masked record whose retire condition names two upstream issues
+- WHEN a reader asks whether either one shipped
+- THEN nothing in the record says when anyone last looked, and the mask outlives the bug
+
+Verify: `pre-commit run ki-checked-date --all-files`
 
 ### `known-issues:a-record-walks-the-mechanism` — A record walks its mechanism
 

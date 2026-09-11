@@ -14,7 +14,8 @@
     ".git",
     "node_modules",
     "target",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "AGENTS.md"
   ],
   "plugins": [
     "https://plugins.dprint.dev/markdown-0.22.0.wasm",

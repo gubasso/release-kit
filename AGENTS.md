@@ -4,13 +4,9 @@ This repository is the canonical knowledge product for the release-kit workflow.
 
 ## Before acting
 
-- Load each `_docs/specs/SPEC-<domain>.md` affected by the work.
-- Apply stated rules and cite their `<domain>:<rule>` IDs in reports and failures.
-- Do not load `_docs/decisions/` unless someone asks why a rule exists.
+- Apply stated rules and cite their `<domain>:<rule>` IDs in reports and failures. The Documentation block below carries which documents to load.
 - Load `_docs/reference/REFERENCE-<domain>-sources.md` only to check a rule against the upstream documentation it rests on, or to re-verify a fact a forge or a registry may have moved.
-- Update the owning method chapter or binding in the same change as behavior.
-- Update a skill in the same change as the behavior it describes.
-- Run `sdd verify` before handoff.
+- Update the owning method chapter, binding, or skill in the same change as the behavior it describes.
 
 ## Ownership boundaries
 
@@ -26,20 +22,14 @@ This repository is the canonical knowledge product for the release-kit workflow.
 - Where anything lands for a third-party application is decided inside each project, case by case, against that application's own documentation with a dated citation in `_docs/reference/` — never inferred from a convention this repository follows, and never generalized from one application to another.
 - `skill-shared/` is what every skill shares, installed once to `~/.local/state/release-kit/skills/shared/` and named there by absolute path: the two agent roots make no relative path reach one file from both. The plan gate every skill routes to lives there.
 - Every pinned tool is declared once, in `versions.toml`; a snippet pin changes together with its registry entry.
-- `_docs/` is this repository's own spec-driven-docs instance plus its decisions; it never ships in the crate.
-- `_docs/specs/` and this repository's integration with the instance are instance-owned; `.spec-driven-docs/` belongs to the sdd canon.
+- `_docs/` is this repository's own spec-driven-docs instance plus its decisions, instance-owned and never shipped in the crate; `.spec-driven-docs/` belongs to the sdd canon.
 - Keep each durable fact in one owner and link to it elsewhere.
 - `LICENSE` splits terms on the product boundary: CC BY 4.0 for the method, MIT for the distribution.
 
 ## Authoring
 
-- Keep the root digest at or below 100 lines and subtree digests at or below 150 lines.
-- Keep chapters at or below 200 lines and decision records at or below 350 words; runbooks and forge documents follow the guide rule below rather than the chapter cap, and stay as lean as the procedure allows.
-- Use headings, lists, tables, fenced blocks with a language, inline code, and links. Use no bold or italic text.
-- Keep prose unwrapped: one source line per paragraph or list item.
-- Write guides as numbered steps in prerequisite order: every step carries its check, a manual step enumerates every field and value, and a divergent rerun names its destination.
-- Verify every upstream-owned fact in a guide against an official reference and record the dated citation in `_docs/reference/`, keeping the guide lean.
-- State what is true now. Decision records are the only history-bearing document class.
+- The markdown shape, the size budgets, and the guide rules are adopted specs: `_docs/specs/SPEC-docs-format.md`, `_docs/specs/SPEC-docs-foundations.md`, and `_docs/specs/SPEC-guides.md`. Read them rather than a restatement here.
+- Runbooks and forge documents follow the guide rules rather than the chapter cap, and stay as lean as the procedure allows. Decision records are the only history-bearing document class.
 - Keep exploratory material in `.draft/`; promotion is a rewrite into the owning zone.
 
 ## Text that leaves this machine
@@ -60,8 +50,7 @@ This repository is the canonical knowledge product for the release-kit workflow.
 
 ## Routing
 
-- The method spine and recovery paths: `method/README.md`.
-- Technology specifics: `bindings/README.md`.
+- The method spine and recovery paths: `method/README.md`. Technology specifics: `bindings/README.md`.
 - Forge specifics and the bot-identity walkthroughs: `forges/README.md`, served by `rk forge`.
 - The procedure's how, step by step: `runbooks/README.md`, served by `rk guide`; its chapter owns each step's why, and the pair states each procedure once.
 - This repository's overlay over `rk guide setup` and `rk guide release` — its coordinates, its deviations, and the proof transcript: `_docs/guides/release/README.md`. It names no account, repository, or crate: the guides are public and carry no operator's particulars.
@@ -76,9 +65,7 @@ This repository is the canonical knowledge product for the release-kit workflow.
 - Pinned tools and freshness: `versions.toml`, served by `rk versions`; `rk versions --check` and `rk devshell sync` are the two verbs that fetch.
 - A consumer's `rk` from its own flake, pinned and kept fresh: `rk devshell`, with `rk guide setup` carrying the procedure, bound by `_docs/specs/SPEC-packaging.md`.
 - Another project taken as a dev or prod dependency of a target: `rk depend`, with `rk guide dependencies` as the procedure and `rk method dependencies` as its why, bound by `_docs/specs/SPEC-dependencies.md`.
-- The payload's identity and digests: `rk payload`, with `--json` as the machine form.
-- Host readiness and the whole command surface: `rk doctor` and `rk usage`.
-- Docs format and budgets: `sdd spec docs-format`; this repository is an sdd instance.
+- The payload's identity and digests: `rk payload`, with `--json` as the machine form. Host readiness and the whole command surface: `rk doctor` and `rk usage`.
 - What the binary carries and writes outside a target: `_docs/specs/SPEC-distribution.md`, served by `rk skill --help`.
 
 <!-- BEGIN release-kit -->
@@ -98,3 +85,14 @@ This repository is the canonical knowledge product for the release-kit workflow.
 - The full method is `rk method --list`. The recovery paths are `rk method recovery`.
 
 <!-- END release-kit -->
+
+<!-- BEGIN spec-driven-docs docs -->
+## Documentation
+
+- Load the affected specs before editing governed content: `_docs/specs/SPEC-<domain>.md`.
+- Treat decision records as immutable rationale and load them only when asked why.
+- Read the writing style before you author or edit prose: `sdd method writing-style`.
+- Write and edit step-by-step guides to the adopted guides spec, `_docs/specs/SPEC-guides.md`.
+- Run `sdd verify` before handoff.
+- Keep adopted specs, the tracking registry, and local integration instance-owned.
+<!-- END spec-driven-docs docs -->

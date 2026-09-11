@@ -1,10 +1,13 @@
 {
-  "schema_version": 2,
-  "canon_version": "0.4.5",
+  "schema_version": 3,
+  "canon_version": "0.6.6",
   "canon_source": "https://github.com/gubasso/spec-driven-docs",
   "profile": "knowledge-base",
   "docs_root": "_docs",
   "installed_at": "2026-08-28T12:28:47Z",
+  "plan_zone": {
+    "kind": "env"
+  },
   "managed_files": [
     {
       "source": ".markdownlint/adr.markdownlint-cli2.jsonc",
@@ -24,58 +27,88 @@
   ],
   "adopted_files": [
     {
+      "source": "instance/seeds/config.yaml",
+      "destination": ".spec-driven-docs/config.yaml",
+      "sha256": "6ed6163824597452b3fa5e7095ce53f0e6abe8f50321b5eff6936d36009a5ec2",
+      "baseline_sha256": "6ed6163824597452b3fa5e7095ce53f0e6abe8f50321b5eff6936d36009a5ec2"
+    },
+    {
       "source": "_docs/specs/SPEC-decision-records.md",
       "destination": "_docs/specs/SPEC-decision-records.md",
       "sha256": "8e9c9c9c0f59ebf596df2b19b225653fa85ff5358eaa12a69a7d51119e7a8635",
-      "baseline_sha256": "8e9c9c9c0f59ebf596df2b19b225653fa85ff5358eaa12a69a7d51119e7a8635"
+      "baseline_sha256": "c39e7d7f3559493ae5293c24b52f49364c657f7840c4d5002012254932aef8f3"
     },
     {
       "source": "_docs/specs/SPEC-instance.md",
       "destination": "_docs/specs/SPEC-instance.md",
       "sha256": "645cbd1a532d133da11277c4e56e8b1287cd89d0e8185d9d2dc0130a5920958c",
-      "baseline_sha256": "645cbd1a532d133da11277c4e56e8b1287cd89d0e8185d9d2dc0130a5920958c"
+      "baseline_sha256": "90db9197f6bedee5a31c02885aa9eefc197f5e375da116a034cc40618193a298"
     },
     {
       "source": "_docs/specs/SPEC-docs-format.md",
       "destination": "_docs/specs/SPEC-docs-format.md",
       "sha256": "a69a019fe377b596ab14c7c1cf601626163ef10ad539a67f778e0261c39728bd",
-      "baseline_sha256": "a69a019fe377b596ab14c7c1cf601626163ef10ad539a67f778e0261c39728bd"
+      "baseline_sha256": "8aa97f98f069e4208ee77b362a2fb0b70baa29a7ddb704e02f960b923609e22f"
     },
     {
       "source": "_docs/specs/SPEC-docs-foundations.md",
       "destination": "_docs/specs/SPEC-docs-foundations.md",
       "sha256": "8454b4a097bf9ed11d7141dbaa6779947c4d7074b13fba1b15e378d326008520",
-      "baseline_sha256": "8454b4a097bf9ed11d7141dbaa6779947c4d7074b13fba1b15e378d326008520"
+      "baseline_sha256": "58b9db7faf8e7d6176f3e1f4a074efca1c6a156dfcac38881f4d7c757cfabcc1"
     },
     {
       "source": "_docs/specs/SPEC-docs-specs.md",
       "destination": "_docs/specs/SPEC-docs-specs.md",
       "sha256": "d0cfbd0f42177b7aff2977b57ab668cb70e9af84d6950ab63f7f658df670c933",
-      "baseline_sha256": "d0cfbd0f42177b7aff2977b57ab668cb70e9af84d6950ab63f7f658df670c933"
+      "baseline_sha256": "c62e033081d5427e6aa2eb0a33fb0d8e9821d620fa91782ff3a1df1de05f92bb"
     },
     {
       "source": "_docs/specs/SPEC-comparison-docs.md",
       "destination": "_docs/specs/SPEC-comparison-docs.md",
       "sha256": "8a4944ceb4109baa6a945951ad952ce8d1222cbf55e2b311aeba6987f2007fde",
-      "baseline_sha256": "8a4944ceb4109baa6a945951ad952ce8d1222cbf55e2b311aeba6987f2007fde"
+      "baseline_sha256": "e9e3525239db5ad1408ab2b3d9b78624524b36885b7ffa478618a0b65f3de804"
     },
     {
       "source": "_docs/specs/SPEC-known-issues.md",
       "destination": "_docs/specs/SPEC-known-issues.md",
-      "sha256": "f062754460dec37d841d08d37e1a6e2bcd9e93e9d17a158eeb35d3368f7f7ab3",
-      "baseline_sha256": "f062754460dec37d841d08d37e1a6e2bcd9e93e9d17a158eeb35d3368f7f7ab3"
+      "sha256": "79deae7b7214783550528e73d10ce8452d2b264643997d1b99255f30ecd971f8",
+      "baseline_sha256": "00f3396494b816eba4904f90567db12729e99aa8e71e21d3018f40728c07336f"
     },
     {
       "source": "_docs/specs/SPEC-spec-to-code.md",
       "destination": "_docs/specs/SPEC-spec-to-code.md",
-      "sha256": "62f72c226ee3f360fbd0263821e7d93e08c4abff35e7a9c89e4b66fcbae442ea",
-      "baseline_sha256": "9062d227a2ddba668fce74ffc51e4018afe9b403bec0555ef953b589f1ad3189"
+      "sha256": "078a8bde85b0894763c49081dcb505b3646b93327e792b857a078a61df1b9f93",
+      "baseline_sha256": "d65421dbb7ad96237efa69dec877a3b24481016b252c162a76ffcde17b5857ba"
     },
     {
       "source": "_docs/specs/SPEC-guides.md",
       "destination": "_docs/specs/SPEC-guides.md",
       "sha256": "5737c83008683de6dabb1e4f9b5df09aeee6966e8c475036337ee6c525507fb3",
-      "baseline_sha256": "5737c83008683de6dabb1e4f9b5df09aeee6966e8c475036337ee6c525507fb3"
+      "baseline_sha256": "20c6656e745037d41ca24479296f6ccfe54e3f1614cb460c57fe487797787e31"
+    },
+    {
+      "source": "_docs/specs/SPEC-writing-style.md",
+      "destination": "_docs/specs/SPEC-writing-style.md",
+      "sha256": "72f36ffb29d6df4d798e73f075d54e4ca9ef9f950b77fbc4a74691f3d25564d8",
+      "baseline_sha256": "72f36ffb29d6df4d798e73f075d54e4ca9ef9f950b77fbc4a74691f3d25564d8"
+    },
+    {
+      "source": "_docs/specs/SPEC-tracking.md",
+      "destination": "_docs/specs/SPEC-tracking.md",
+      "sha256": "1d06d5913a17c9ff071463e99f869ee5da5ef2488da5b9967c14fe689f3ed9ca",
+      "baseline_sha256": "1d06d5913a17c9ff071463e99f869ee5da5ef2488da5b9967c14fe689f3ed9ca"
+    },
+    {
+      "source": "_docs/specs/SPEC-tracking/tracking.schema.json",
+      "destination": "_docs/specs/SPEC-tracking/tracking.schema.json",
+      "sha256": "fef4d042821345c8fb948e5c45e4b24ae5365b8d8bdf3a48f14c98a47e140bab",
+      "baseline_sha256": "fef4d042821345c8fb948e5c45e4b24ae5365b8d8bdf3a48f14c98a47e140bab"
+    },
+    {
+      "source": "templates/TEMPLATE-tracking.yaml",
+      "destination": "_docs/reference/tracking.yaml",
+      "sha256": "02dda0bbcaedb41598132fb8af48f11fe1e0f774870097687722664b08523388",
+      "baseline_sha256": "02dda0bbcaedb41598132fb8af48f11fe1e0f774870097687722664b08523388"
     },
     {
       "source": "templates/TEMPLATE-spec.md",
@@ -87,13 +120,13 @@
       "source": "templates/TEMPLATE-adr.md",
       "destination": "_docs/decisions/TEMPLATE-adr.md",
       "sha256": "982e5a5e4af3ece93f592c94b7e41b612b8abb5b62966b43e91c390bf1418f8b",
-      "baseline_sha256": "982e5a5e4af3ece93f592c94b7e41b612b8abb5b62966b43e91c390bf1418f8b"
+      "baseline_sha256": "37ecdef6201b00983c816a03680890aad8f6f4fb643fec70ea029ac2dae1658f"
     },
     {
       "source": "templates/TEMPLATE-agents-digest.md",
       "destination": "_docs/reference/TEMPLATE-agents-digest.md",
       "sha256": "64212ee68f8603449d649c3224765c3e6845143785a7b6f714482f8924853ff2",
-      "baseline_sha256": "64212ee68f8603449d649c3224765c3e6845143785a7b6f714482f8924853ff2"
+      "baseline_sha256": "14ca07309ac94599fcda015d2413cd67769a738b1b49f2a22b3a200e8d6c15fd"
     },
     {
       "source": "templates/TEMPLATE-guide.md",
@@ -105,13 +138,17 @@
       "source": "templates/TEMPLATE-known-issue.md",
       "destination": "_docs/reference/TEMPLATE-known-issue.md",
       "sha256": "a88508f87a54a1a3b7cfc63ce1411cbaa1c6def6c9fd41cbf0eed05b7a5e03ff",
-      "baseline_sha256": "a88508f87a54a1a3b7cfc63ce1411cbaa1c6def6c9fd41cbf0eed05b7a5e03ff"
+      "baseline_sha256": "17175f356d71bf0b8b17fdf52403b4344dca37193811e2cb28975b95fbb6ceb3"
     }
   ],
   "integration_blocks": [
     {
       "path": ".pre-commit-config.yaml",
-      "marker_hash": "15d2f181fd12614d2fc702183b32c1c49eaacb09a8d8427f04852e6aacc9586c"
+      "marker_hash": "cfdc3c3f021024c47f0f568284e7d16517638e328ff2960dd83946a2e352e6b4"
+    },
+    {
+      "path": "AGENTS.md",
+      "marker_hash": "595212e3d5eb3caaf204c27d297b1f1226fac06fbe78602067b47b2cceb3fa3b"
     }
   ]
 }

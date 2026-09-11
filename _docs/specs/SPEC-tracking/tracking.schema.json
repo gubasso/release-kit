@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:spec-driven-docs:tracking.schema.json",
+  "title": "Tracking registry",
+  "description": "Structural shape of <root>/reference/tracking.yaml. The Rust validator enforces the cross-field, filesystem, and uniqueness rules this schema cannot.",
+  "type": "object",
+  "required": ["schema_version", "tracked"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": 1 },
+    "tracked": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/entry" }
+    }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "required": ["id", "path", "last_checked", "cadence_days", "why", "revalidate", "dependents"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$" },
+        "path": { "$ref": "#/$defs/relpath" },
+        "last_checked": { "type": "string", "format": "date", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+        "cadence_days": { "type": "integer", "minimum": 1 },
+        "why": { "type": "string", "minLength": 1 },
+        "revalidate": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "dependents": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/relpath" }
+        },
+        "source": { "$ref": "#/$defs/source" }
+      }
+    },
+    "source": {
+      "type": "object",
+      "required": ["kind", "repository", "reference", "revision", "license"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "const": "git" },
+        "repository": { "type": "string", "pattern": "^https://[^\\s]+$" },
+        "reference": { "type": "string", "pattern": "^refs/[^\\s]+$" },
+        "revision": { "type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$" },
+        "license": { "type": "string", "minLength": 1 }
+      }
+    },
+    "relpath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^/][^\\s]*$"
+    }
+  }
+}

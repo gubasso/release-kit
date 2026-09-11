@@ -1,0 +1,19 @@
+# Tracking registry — the machine-readable record of facts that expire.
+# One entry per document holding a fact that ages without a local change.
+# See specs/SPEC-tracking.md for the shape, and run `sdd track status` to
+# read freshness offline or `sdd track check` to compare a pinned Git
+# revision to its upstream over the network.
+#
+# Example entry (delete this comment block and add real entries):
+#   - id: model-pricing
+#     path: reference/model-pricing.md
+#     last_checked: 2026-01-01
+#     cadence_days: 30
+#     why: provider prices change without notice
+#     revalidate:
+#       - re-fetch from the provider's official pricing page
+#       - update the page and advance last_checked
+#     dependents:
+#       - guides/cost-estimation.md
+schema_version: 1
+tracked: []

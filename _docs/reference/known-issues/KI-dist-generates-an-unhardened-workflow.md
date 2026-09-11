@@ -3,6 +3,7 @@ upstream: https://github.com/axodotdev/cargo-dist/issues
 affects: .github/workflows/release.yml
 state: masked
 filing: deferred
+checked: 2026-09-11
 workaround: zizmor.yml ignores the two audits for release.yml, and the actionlint hook excludes the file
 retire_when: each mask retires with its own upstream fix, once the cargo-dist pin here reaches the release carrying it. The template-injection ignore retires with cargo-dist#2320. The excessive-permissions ignore retires when the workflow-level contents write drops to the jobs that need it. The actionlint exclusion retires with cargo-dist#62, the shell-quoting fix, which is separate from #2320.
 ---
