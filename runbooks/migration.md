@@ -12,7 +12,7 @@ The setup runbook's prerequisites, unchanged: `rk` on `PATH`, this binary's skil
 rk assess --target .
 # check: the verdict and its evidence; brownfield is this runbook's subject, greenfield takes rk guide setup instead, and needs-decision is the operator's answer before any plan
 rk status --target .
-# check: none, or the landing with its version, drift, sentinels, and invariants; a recorded target routes by this report, not by the verdict
+# check: none, or the landing with its version, drift, sentinels, and invariants; a recorded target routes by this report to rk guide reconcile, not by the verdict
 rk setup check --target .
 # check: what the forge enforces today, step by step
 rk versions --check
@@ -42,6 +42,8 @@ rk adopt --target . --workflow <mode> --style <style> --apply
 - `branches` is the default when neither the config nor a flag answers workflow, the compatibility-safe reading of a pre-record target; the mode change to `worktree`, where wanted, is its own entry through 2c.
 
 ### 2b. Upgrade a recorded target
+
+The upgrade is a plan, decided and applied: [the reconcile runbook](./reconcile.md) steps 2, 4, and 6 carry the open form, and its step 5 carries the owned drift, the tuned seeded file, and the generated artifact. The front below is the same landing in one process.
 
 ```bash
 rk upgrade --target .

@@ -324,6 +324,8 @@ Where the forge enforces less than a step claims, the check names the weaker gua
 
 The apply names no scope vocabulary. The title check holds a scope to lowercase letters, digits, and `_ . / -`, the commit hook requires that a scope is there, and the landed `AGENTS.md` block tells the author how to pick the word. `--workflow` chooses the working-copy mode and defaults to `worktree` — every code-changing branch in a linked worktree, the main checkout commits nothing; `--workflow branches` leaves branches workable in the main checkout, with worktrees optional beside them. `--style` chooses the release style and defaults to `trunk` — the bot's request carries auto-merge from creation, so a green trunk ships itself; `--style lines` leaves every request unarmed, for a project that keeps older lines and validates a candidate by hand (check: `rk status` prints the mode and the style).
 
+The landing is a plan, decided and applied: [the reconcile runbook](./reconcile.md) steps 2, 4, and 6 carry the open form, where the plan is read before it runs, and the front below is the same landing in one process.
+
 ```bash
 rk init --tech <tech> --target .             # preview every destination
 rk init --tech <tech> --target . --apply     # write the files and the landing record

@@ -194,6 +194,7 @@ fn method_lists_every_chapter() {
             .and(predicate::str::contains("operate"))
             .and(predicate::str::contains("recovery"))
             .and(predicate::str::contains("migration"))
+            .and(predicate::str::contains("reconcile"))
             .and(predicate::str::contains("diff-surface")),
     );
 }
@@ -2569,6 +2570,7 @@ fn the_runbooks_match_their_method_chapters() {
         ("method/08-worktrees.md", "runbooks/worktree.md"),
         ("method/10-migration.md", "runbooks/migration.md"),
         ("method/11-dependencies.md", "runbooks/dependencies.md"),
+        ("method/12-reconcile.md", "runbooks/reconcile.md"),
     ] {
         let rendered = std::fs::read_to_string(repo_path(runbook)).expect("reads");
         assert_eq!(
@@ -2650,6 +2652,7 @@ fn guide_lists_and_serves_byte_identically_when_nothing_resolves() {
         predicate::str::contains("release")
             .and(predicate::str::contains("migration"))
             .and(predicate::str::contains("dependencies"))
+            .and(predicate::str::contains("reconcile"))
             .and(predicate::str::contains("setup"))
             .and(predicate::str::contains("backport")),
     );
@@ -22845,5 +22848,134 @@ fn a_release_changing_a_destination_without_guidance_is_named() {
     assert!(
         described,
         "a landed destination changed since {tag} ({changed:?}) and no guidance file names a release above it; add guidance/<next version>.md, or record the release under guidance.no_steps in compatibility.toml"
+    );
+}
+
+/// `rk guide reconcile` prints the runbook with detection filled in, the
+/// way every other runbook is served.
+#[test]
+fn the_reconcile_runbook_renders() {
+    let target = tempfile::tempdir().expect("a target exists");
+    land_rust(target.path()).success();
+    let out = rk()
+        .args(["guide", "reconcile", "--repo", "acme/widget"])
+        .current_dir(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8_lossy(&out);
+    assert!(text.starts_with("# Reconcile runbook"), "{text}");
+    assert!(
+        text.contains("rk snippet rust/<forge>/<path>"),
+        "detection fills <tech>: {text}"
+    );
+    assert!(text.contains("rk reconcile plan --target ."), "{text}");
+    assert!(text.contains("rk reconcile apply <plan-id>"), "{text}");
+}
+
+/// `rk method reconcile` prints the chapter, and the list names it.
+#[test]
+fn the_reconcile_chapter_renders() {
+    rk().args(["method", "reconcile"])
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("# 12 — Reconcile"));
+    rk().args(["method", "--list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("reconcile"));
+}
+
+/// SATISFIES distribution:a-runbook-renders-the-spine
+/// The reconcile pair shares one eight-step spine: the chapter's sequence
+/// and the runbook's `## N.` headings, in order.
+#[test]
+fn the_reconcile_runbook_renders_the_spine() {
+    let chapter = std::fs::read_to_string(repo_path("method/12-reconcile.md")).expect("reads");
+    let runbook = std::fs::read_to_string(repo_path("runbooks/reconcile.md")).expect("reads");
+    let sequence: Vec<&str> = chapter
+        .lines()
+        .filter(|line| {
+            line.split_once(". ")
+                .is_some_and(|(n, _)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+        })
+        .collect();
+    let headings = numbered_headings(&runbook);
+    assert_eq!(sequence.len(), 8, "{sequence:?}");
+    assert_eq!(sequence.len(), headings.len(), "{headings:?}");
+    for (step, heading) in sequence.iter().zip(&headings) {
+        let (n, title) = step.split_once(". ").expect("a numbered line");
+        let word = title.split(['.', ',']).next().expect("a title").trim();
+        assert!(
+            heading.starts_with(&format!("## {n}. {word}")),
+            "step {n}: chapter says '{word}', runbook says '{heading}'"
+        );
+    }
+}
+
+/// The setup and migration runbooks name the reconcile runbook's steps by
+/// number for the landing, and carry no second plan-decide-apply sequence.
+#[test]
+fn the_setup_and_migration_runbooks_route_their_landing_steps_to_reconcile() {
+    for path in ["runbooks/setup.md", "runbooks/migration.md"] {
+        let text = std::fs::read_to_string(repo_path(path)).expect("reads");
+        assert!(
+            text.contains("[the reconcile runbook](./reconcile.md) steps 2, 4, and 6"),
+            "{path} routes its landing to reconcile by step number"
+        );
+        assert!(
+            !text.contains("rk reconcile apply"),
+            "{path} restates the apply the reconcile runbook owns"
+        );
+    }
+    let migration = std::fs::read_to_string(repo_path("runbooks/migration.md")).expect("reads");
+    assert!(
+        migration.contains("its step 5 carries the owned drift"),
+        "the migration runbook routes the reconciliations to reconcile step 5"
+    );
+}
+
+/// The migration chapter's recorded-landing sentence names the reconcile
+/// chapter, so a recorded target has a route.
+#[test]
+fn the_migration_chapter_sends_a_recorded_target_to_the_reconcile_chapter() {
+    let text = std::fs::read_to_string(repo_path("method/10-migration.md")).expect("reads");
+    let sentence = text
+        .lines()
+        .find(|line| line.starts_with("A recorded landing is a fourth state"))
+        .expect("the recorded-landing sentence");
+    assert!(
+        sentence.contains("[reconcile](./12-reconcile.md)"),
+        "{sentence}"
+    );
+    let setup = std::fs::read_to_string(repo_path("method/02-setup.md")).expect("reads");
+    assert!(
+        setup.contains("[reconcile](./12-reconcile.md)"),
+        "the setup chapter sends its landing mechanics to reconcile"
+    );
+}
+
+/// The runbook's header states once that a plan holds target bytes and is
+/// never committed or posted, because no gate sees a plan.
+#[test]
+fn the_reconcile_runbook_states_the_plan_handling_rule() {
+    let text = std::fs::read_to_string(repo_path("runbooks/reconcile.md")).expect("reads");
+    let header: String = text
+        .lines()
+        .take_while(|line| !line.starts_with("## "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        header.contains("A plan holds bytes from the target"),
+        "{header}"
+    );
+    assert!(header.contains("never committed"), "{header}");
+    assert!(header.contains("never pasted"), "{header}");
+    assert_eq!(
+        text.matches("never pasted").count(),
+        1,
+        "the rule is stated once"
     );
 }

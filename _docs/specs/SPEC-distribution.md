@@ -96,7 +96,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `distribution:a-runbook-renders-the-spine` — A runbook renders the spine
 
-A runbook MUST carry the same numbered steps, in the same order, as the method chapter it renders, and the pair MUST state each procedure exactly once: the chapter owns each step's why and the runbook owns its how — the commands, the checks, and the hand forms. A substep MUST elaborate a step the runbook has and MUST NOT add one.
+A runbook MUST carry the same numbered steps, in the same order, as the method chapter it renders, and the pair MUST state each procedure exactly once: the chapter owns each step's why and the runbook owns its how — the commands, the checks, and the hand forms. A substep MUST elaborate a step the runbook has and MUST NOT add one. The reconcile runbook MUST render the reconcile chapter under the same rule, and the setup and migration runbooks MUST route their landing steps to it by step number rather than restate them, because the plan, decide, apply procedure is stated once for every landing write.
 
 #### Scenario: A method chapter gains a step and the runbook is not updated
 
