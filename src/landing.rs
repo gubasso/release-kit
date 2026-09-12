@@ -1127,7 +1127,7 @@ pub fn nix_withheld(
 }
 
 /// One destination a landing withholds, with why.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Withheld {
     /// The destination that stays out.
     pub path: String,

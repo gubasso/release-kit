@@ -150,7 +150,7 @@ pub struct Resolution {
 }
 
 /// The explicit answers a request carries.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Flags {
     /// Binding override.
     pub tech: Option<String>,

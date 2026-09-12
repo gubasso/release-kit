@@ -175,6 +175,21 @@ mod tests {
                 77,
             ),
             (RkError::Io(std::io::Error::other("disk fell over")), 74),
+            // The apply's two cases: a plan that is not ready, or whose
+            // inputs moved, refuses as every refusal does; a postcondition
+            // that fails after the writes landed is a check that ran and
+            // found a violation.
+            (
+                RkError::refusal(Diagnostic::new(Reason::PlanNotReady, "blocked")),
+                73,
+            ),
+            (
+                RkError::check_failed(Diagnostic::new(
+                    Reason::PostconditionFailed,
+                    "the record does not read back",
+                )),
+                1,
+            ),
             (RkError::Other(anyhow::anyhow!("unclassified")), 70),
         ];
         for (err, code) in cases {

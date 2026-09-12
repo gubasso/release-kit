@@ -1,27 +1,29 @@
 //! `rk init`: land a technology's deterministic files into a target.
 //!
-//! Dry-run by default: without `--apply` the destinations are listed and
-//! nothing is touched. The payload is rendered before anything is
-//! compared — the repository owner substitutes into `rendered` files from
-//! the detection-resolved `--repo` parameter — so the comparison is
-//! against what would be written, not against the raw payload. Apply is
-//! all-or-nothing against conflicts on `rendered` files; a differing
+//! A front over the engine: the plan is computed with the setup intent,
+//! and on `--apply` the engine executes exactly its operations through
+//! one staged transaction with the record last. Dry-run by default:
+//! without `--apply` the destinations are listed and nothing is touched.
+//! The payload is rendered before anything is compared, so the comparison
+//! is against what would be written, not against the raw payload. Apply
+//! is all-or-nothing against conflicts on `rendered` files; a differing
 //! `seeded` or `state` file is the target's own and is reported and kept.
-//! Every write goes through the temp-plus-rename writer, and the landing
-//! record is written last: a refused landing writes nothing, the record
-//! included.
+//! A refused landing writes nothing, the record included.
 
 use camino::Utf8Path;
 use serde::Serialize;
 
 use crate::cli::init::InitArgs;
+use crate::commands::reconcile::{self, FrontApplied, Trace};
 use crate::diagnostic::{Diagnostic, Reason};
+use crate::embedded;
 use crate::error::RkError;
-use crate::landing::manifest::{self, FileRecord, Manifest, Parameters, Style, Workflow};
-use crate::landing::{self, Entry, Kind};
+use crate::landing::manifest::{self, Style, Workflow};
+use crate::landing::{self, Kind};
 use crate::output::Output;
+use crate::plan::gather::Flags;
+use crate::plan::{Disposition, Intent, PlanRequest, Planned};
 use crate::release::EmbeddedReleaseSource;
-use crate::{digest::Digest, embedded, registry};
 
 /// One destination and what happened to it.
 #[derive(Debug, Serialize)]
@@ -76,6 +78,9 @@ struct Report {
     /// The sentinels an apply left to fill; absent in a preview.
     #[serde(skip_serializing_if = "Option::is_none")]
     sentinels: Option<Vec<SentinelEntry>>,
+    /// The plan the apply executed; absent in a preview.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    plan: Option<Trace>,
     /// What plausibly follows.
     next: Vec<String>,
 }
@@ -125,16 +130,39 @@ pub fn run(args: &InitArgs) -> Result<(), RkError> {
             landing::Purpose::Preview
         },
     )?;
-    let config_plan =
-        crate::config::Plan::new(args.target.as_std_path(), &params, config.as_ref(), None)?;
     let mut effective = args.clone();
     effective.tech = Some(params.tech().into());
     effective.nix = params.nix();
-    let mut entries = landing::projection(&source, &params)?;
-    let withheld = landing::withhold_nix(&args.target, params.nix(), None, &mut entries)?;
     let style = params
         .style()
         .ok_or_else(|| RkError::Usage("landing style is unresolved".into()))?;
+    // The resolved answers ride into the plan as flags, so the planner
+    // resolves the same parameters and asks no decision the front already
+    // answered by its defaults.
+    let request = PlanRequest {
+        target: args.target.clone(),
+        intent: Intent::Setup,
+        selector: "embedded".into(),
+        fetch: false,
+        observe_forge: false,
+        flags: Flags {
+            tech: Some(params.tech().to_owned()),
+            forge: Some(params.forge().to_owned()),
+            repo: args
+                .repo
+                .clone()
+                .or_else(|| (params.repo() != "OWNER").then(|| params.repo().to_owned())),
+            workflow: Some(params.workflow().as_str().to_owned()),
+            style: Some(style.as_str().to_owned()),
+            nix: Some(params.nix()),
+        },
+        decisions: std::collections::BTreeMap::new(),
+    };
+    let planned = reconcile::compute(&request, &manifest::now())?;
+    let config_plan = planned
+        .config
+        .clone()
+        .ok_or_else(|| RkError::Usage("landing parameters are unresolved".into()))?;
     if args.apply {
         apply(
             out,
@@ -143,10 +171,9 @@ pub fn run(args: &InitArgs) -> Result<(), RkError> {
             params.repo(),
             params.workflow(),
             style,
-            &entries,
-            withheld,
+            &planned,
+            &request,
             config_plan,
-            &params,
         )
     } else {
         let repo = (params.repo() != "OWNER").then(|| params.repo().to_owned());
@@ -162,8 +189,7 @@ pub fn run(args: &InitArgs) -> Result<(), RkError> {
             repo,
             params.workflow(),
             style,
-            &entries,
-            withheld,
+            &planned,
             config_plan,
         )
     }
@@ -181,8 +207,7 @@ fn preview(
     repo: Option<String>,
     workflow: Workflow,
     style: Style,
-    entries: &[Entry],
-    withheld: Vec<landing::Withheld>,
+    planned: &Planned,
     config: crate::config::Plan,
 ) -> Result<(), RkError> {
     let repo_argument = repo.as_deref().unwrap_or("<owner/name>");
@@ -198,8 +223,8 @@ fn preview(
         "DRY RUN: rk init writes these files into {}; re-run with --apply",
         args.target
     ));
-    for entry in entries {
-        out.result_line(&entry.destination);
+    for outcome in &planned.outcomes {
+        out.result_line(&outcome.path);
     }
     out.result_line(format!(
         "{} {}\n{}",
@@ -207,12 +232,12 @@ fn preview(
         crate::config::CONFIG_PATH,
         config.content
     ));
-    for entry in &withheld {
+    for entry in &planned.withheld {
         out.result_line(format!("withheld {}: {}", entry.path, entry.reason));
     }
     out.next(&next);
     out.emit(&Report {
-        schema: "rk.init/5",
+        schema: "rk.init/6",
         config,
         mode: "preview",
         tech: args.tech.clone().unwrap_or_default(),
@@ -222,23 +247,25 @@ fn preview(
         workflow: workflow.as_str(),
         style: style.as_str(),
         nix: args.nix,
-        withheld: (!withheld.is_empty()).then_some(withheld),
-        files: entries
+        withheld: (!planned.withheld.is_empty()).then(|| planned.withheld.clone()),
+        files: planned
+            .outcomes
             .iter()
-            .map(|entry| FileEntry {
-                path: entry.destination.clone(),
-                kind: entry.kind.as_str(),
+            .map(|outcome| FileEntry {
+                path: outcome.path.clone(),
+                kind: outcome.kind.as_str(),
                 action: "land",
             })
             .collect(),
         sentinels: None,
+        plan: None,
         next,
     })
 }
 
-/// Land the files — all-or-nothing against `rendered` conflicts — write
-/// the record last, and report the judgment sentinels the operator still
-/// owes.
+/// Land the files through the engine — all-or-nothing against `rendered`
+/// conflicts — with the record last, and report the judgment sentinels
+/// the operator still owes.
 #[allow(
     clippy::too_many_arguments,
     clippy::too_many_lines,
@@ -251,26 +278,22 @@ fn apply(
     repo: &str,
     workflow: Workflow,
     style: Style,
-    entries: &[Entry],
-    withheld: Vec<landing::Withheld>,
+    planned: &Planned,
+    request: &PlanRequest,
     config: crate::config::Plan,
-    params: &landing::Params,
 ) -> Result<(), RkError> {
     refuse_a_recorded_target(args)?;
     landing::hooks_splice_refusal(&EmbeddedReleaseSource, &args.target)?;
-    let planned = plan(&args.target, entries)?;
+    refuse_conflicts(planned)?;
+    let applied = reconcile::apply_in_process(planned, request, "init")?;
     let mut file_entries = Vec::new();
-    let mut records = Vec::new();
     let mut sentinels = Vec::new();
-    for Planned {
-        entry,
-        action,
-        found,
-    } in planned
-    {
-        if action == "write" {
-            landing::write_destination(&args.target, entry)?;
-        }
+    for outcome in &planned.outcomes {
+        let action = match outcome.disposition {
+            Disposition::Write => "write",
+            Disposition::Kept | Disposition::Drift | Disposition::State => "kept",
+            Disposition::Unchanged | Disposition::Conflict | Disposition::Missing => "unchanged",
+        };
         out.result_line(format!(
             "{} {}",
             match action {
@@ -278,35 +301,25 @@ fn apply(
                 "kept" => "kept (target-owned)",
                 _ => "unchanged",
             },
-            entry.destination
+            outcome.path
         ));
-        // What the destination now holds: the rendered bytes, or the
+        // What the destination now holds: the written bytes, or the
         // target's own where a seeded or state file was kept.
-        let landed = match (action, found) {
-            ("kept", Some(bytes)) => bytes,
-            _ => entry.rendered.clone(),
+        let landed: Vec<u8> = match FrontApplied::written(planned, &outcome.path) {
+            Some(bytes) => bytes.to_vec(),
+            None => landing::read_recorded(&args.target, &outcome.path)?.unwrap_or_default(),
         };
-        collect_sentinels(&args.target, &entry.destination, &landed, &mut sentinels);
-        records.push(FileRecord {
-            destination: entry.destination.clone(),
-            kind: entry.kind,
-            sha256: Digest::of(&landed),
-            baseline_sha256: match entry.kind {
-                Kind::State => None,
-                Kind::Rendered | Kind::Seeded => Some(Digest::of(&entry.baseline)),
-            },
-        });
+        collect_sentinels(&args.target, &outcome.path, &landed, &mut sentinels);
         file_entries.push(FileEntry {
-            path: entry.destination.clone(),
-            kind: entry.kind.as_str(),
+            path: outcome.path.clone(),
+            kind: outcome.kind.as_str(),
             action,
         });
     }
-    for entry in &withheld {
+    for entry in &planned.withheld {
         out.result_line(format!("withheld {}: {}", entry.path, entry.reason));
     }
 
-    config.apply(args.target.as_std_path())?;
     out.result_line(format!("{} {}", config.action, crate::config::CONFIG_PATH));
     for (key, empty_line) in [
         ("setup.required_check", "required_check = \"\""),
@@ -325,35 +338,8 @@ fn apply(
             });
         }
     }
-    // The record, last, after every file has landed.
-    manifest::write(
-        &args.target,
-        &Manifest {
-            schema_version: manifest::SCHEMA_VERSION,
-            rk_version: env!("CARGO_PKG_VERSION").to_owned(),
-            payload_sha256: EmbeddedReleaseSource::manifest_ref().payload_sha256.clone(),
-            origin: "init".to_owned(),
-            tech: args.tech.clone().unwrap_or_default(),
-            forge: forge.to_owned(),
-            landed_at: manifest::now(),
-            parameters: Parameters {
-                repo: repo.to_owned(),
-                workflow,
-                style: Some(style),
-                nix: args.nix,
-                trunk: params.trunk().to_owned(),
-                line_prefix: params.line_prefix().to_owned(),
-                security_contact: params.security_contact().to_owned(),
-                security_response: params.security_response().to_owned(),
-            },
-            files: records,
-            pins: registry::pins_for(args.tech.as_deref().unwrap_or_default())
-                .into_iter()
-                .map(|pin| (pin.name, pin.version))
-                .collect(),
-        },
-    )?;
     out.result_line(format!("wrote {}", manifest::MANIFEST_PATH));
+    out.result_line(applied.line());
 
     if sentinels.is_empty() {
         out.result_line("no sentinels to fill");
@@ -377,7 +363,7 @@ fn apply(
     ];
     out.next(&next);
     out.emit(&Report {
-        schema: "rk.init/5",
+        schema: "rk.init/6",
         config,
         mode: "apply",
         tech: args.tech.clone().unwrap_or_default(),
@@ -387,11 +373,13 @@ fn apply(
         workflow: workflow.as_str(),
         style: style.as_str(),
         nix: args.nix,
-        withheld: (!withheld.is_empty()).then_some(withheld),
+        withheld: (!planned.withheld.is_empty()).then(|| planned.withheld.clone()),
         files: file_entries,
         sentinels: Some(sentinels),
+        plan: Some(applied.trace()),
         next,
-    })
+    })?;
+    applied.applied.failure().map_or(Ok(()), Err)
 }
 
 /// A re-landing over an existing record is `rk upgrade`'s job, not a
@@ -418,44 +406,23 @@ fn refuse_a_recorded_target(args: &InitArgs) -> Result<(), RkError> {
     ))
 }
 
-/// One planned destination: what was found there, and what an apply does
-/// about it.
-struct Planned<'a> {
-    /// The projected artifact.
-    entry: &'a Entry,
-    /// `write`, `unchanged`, or `kept`.
-    action: &'static str,
-    /// The bytes the destination already held, where it held any.
-    found: Option<Vec<u8>>,
-}
-
-/// The read pass before anything writes: every destination is read and
-/// classified, so an unreadable path — a directory where a file should
-/// land, a permission failure — surfaces here and the target is never
-/// left half-written, and every `rendered` conflict is collected before
-/// the one refusal.
-fn plan<'a>(target: &Utf8Path, entries: &'a [Entry]) -> Result<Vec<Planned<'a>>, RkError> {
-    let mut conflicts: Vec<&str> = Vec::new();
-    let mut planned = Vec::new();
-    for entry in entries {
-        let found = landing::read_destination(target, entry)?;
-        let action = match (&found, entry.kind) {
-            (None, _) => "write",
-            (Some(bytes), _) if *bytes == entry.rendered => "unchanged",
-            (Some(_), Kind::Rendered) => {
-                conflicts.push(entry.destination.as_str());
-                "conflict"
-            }
-            (Some(_), Kind::Seeded | Kind::State) => "kept",
-        };
-        planned.push(Planned {
-            entry,
-            action,
-            found,
-        });
-    }
+/// Every `rendered` conflict the plan found, refused in one run before
+/// anything writes.
+fn refuse_conflicts(planned: &Planned) -> Result<(), RkError> {
+    let conflicts: Vec<&str> = planned
+        .outcomes
+        .iter()
+        .filter(|outcome| {
+            outcome.kind == Kind::Rendered
+                && matches!(
+                    outcome.disposition,
+                    Disposition::Conflict | Disposition::Missing
+                )
+        })
+        .map(|outcome| outcome.path.as_str())
+        .collect();
     if conflicts.is_empty() {
-        return Ok(planned);
+        return Ok(());
     }
     Err(RkError::refusal(
         Diagnostic::new(
@@ -493,14 +460,15 @@ fn collect_sentinels(
 #[cfg(test)]
 mod tests {
     use super::{FileEntry, Report, SentinelEntry};
+    use crate::digest::Digest;
 
-    /// The complete `rk.init/5` shape, held by snapshot in both modes: a
+    /// The complete `rk.init/6` shape, held by snapshot in both modes: a
     /// field rename or removal fails here and becomes a schema-version
     /// bump instead of a silent parser break at some agent.
     #[test]
     fn the_init_report_schema_snapshot_holds() {
         let apply = Report {
-            schema: "rk.init/5",
+            schema: "rk.init/6",
             config: crate::config::Plan {
                 action: "added",
                 changes: vec![],
@@ -528,11 +496,20 @@ mod tests {
                 line: 3,
                 text: "# TODO(release-kit): keep false for a binary-only crate".into(),
             }]),
+            plan: Some(crate::commands::reconcile::Trace {
+                plan_id: "0123456789abcdef".into(),
+                input_fingerprint: Digest::of(b"a"),
+                stored: true,
+                run_id: Some("run".into()),
+            }),
             next: vec!["commit the landed files, the record included".into()],
         };
         assert_eq!(
             serde_json::to_string(&apply).expect("a report serializes"),
-            r##"{"schema":"rk.init/5","mode":"apply","tech":"rust","forge":"github","target":"/tmp/t","repo":"acme/widget","workflow":"worktree","style":"trunk","nix":true,"withheld":[{"path":"flake.nix","reason":"the target already carries flake.nix"}],"config":{"action":"added","changes":[],"content":"schema_version = 1\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"write"}],"sentinels":[{"path":"/tmp/t/release-plz.toml","line":3,"text":"# TODO(release-kit): keep false for a binary-only crate"}],"next":["commit the landed files, the record included"]}"##
+            format!(
+                r##"{{"schema":"rk.init/6","mode":"apply","tech":"rust","forge":"github","target":"/tmp/t","repo":"acme/widget","workflow":"worktree","style":"trunk","nix":true,"withheld":[{{"path":"flake.nix","reason":"the target already carries flake.nix"}}],"config":{{"action":"added","changes":[],"content":"schema_version = 1\n"}},"files":[{{"path":"release-plz.toml","kind":"seeded","action":"write"}}],"sentinels":[{{"path":"/tmp/t/release-plz.toml","line":3,"text":"# TODO(release-kit): keep false for a binary-only crate"}}],"plan":{{"plan_id":"0123456789abcdef","input_fingerprint":"{}","stored":true,"run_id":"run"}},"next":["commit the landed files, the record included"]}}"##,
+                Digest::of(b"a")
+            )
         );
         let preview = Report {
             sentinels: None,
@@ -540,12 +517,13 @@ mod tests {
             mode: "preview",
             nix: false,
             withheld: None,
+            plan: None,
             ..apply
         };
         assert_eq!(
             serde_json::to_string(&preview).expect("a report serializes"),
-            r#"{"schema":"rk.init/5","mode":"preview","tech":"rust","forge":"github","target":"/tmp/t","workflow":"worktree","style":"trunk","nix":false,"config":{"action":"added","changes":[],"content":"schema_version = 1\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"write"}],"next":["commit the landed files, the record included"]}"#,
-            "a preview omits the sentinels, the unresolved repo, and an empty withheld list rather than serializing null"
+            r#"{"schema":"rk.init/6","mode":"preview","tech":"rust","forge":"github","target":"/tmp/t","workflow":"worktree","style":"trunk","nix":false,"config":{"action":"added","changes":[],"content":"schema_version = 1\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"write"}],"next":["commit the landed files, the record included"]}"#,
+            "a preview omits the sentinels, the unresolved repo, the plan, and an empty withheld list rather than serializing null"
         );
     }
 }

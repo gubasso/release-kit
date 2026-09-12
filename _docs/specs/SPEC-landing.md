@@ -37,7 +37,7 @@ Rules governing what `rk init`, `rk status`, `rk upgrade`, and `rk adopt` owe a 
 
 ### `landing:a-landing-leaves-a-record` — A landing leaves a record
 
-A successful `rk init --apply` MUST write `.release-kit/config.toml` inside `.release-kit/` before `.release-kit/manifest.json`, with the record last, after every payload file has landed through the temp-plus-rename writer, and a refused landing MUST leave the target unchanged, the record included. The record is committed with the landing: every reader it exists for — a clone, a CI job, an agent — sees only committed files, and it carries digests of committed files, nothing secret and nothing machine-specific.
+A successful `rk init --apply` MUST write `.release-kit/config.toml` inside `.release-kit/` before `.release-kit/manifest.json`, with the record last, after every payload file has landed through the temp-plus-rename writer, and a refused landing MUST leave the target unchanged, the record included. Every landing write MUST be an operation of a stored plan, as `reconcile:every-front-lands-through-the-engine` binds. The record is committed with the landing: every reader it exists for — a clone, a CI job, an agent — sees only committed files, and it carries digests of committed files, nothing secret and nothing machine-specific.
 
 #### Scenario: A rendered destination conflicts on apply
 

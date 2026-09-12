@@ -66,11 +66,17 @@ pub enum Reason {
     /// A fetched release bundle failed its verification against the
     /// registry's own checksum, and nothing of it was kept.
     BundleUnverified,
+    /// A stored plan is not ready: a required precondition does not hold
+    /// or a decision the operator owns waits, and nothing was written.
+    PlanNotReady,
+    /// An apply's writes landed and a postcondition then found the target
+    /// short of what the plan promised.
+    PostconditionFailed,
 }
 
 /// Every reason, in declaration order; a test asserts against this so an
 /// addition is deliberate and a rename impossible.
-pub const REASONS: [Reason; 21] = [
+pub const REASONS: [Reason; 23] = [
     Reason::Usage,
     Reason::TargetNotFound,
     Reason::ForgeUndetected,
@@ -92,6 +98,8 @@ pub const REASONS: [Reason; 21] = [
     Reason::ConfigInvalid,
     Reason::RegistryUnreachable,
     Reason::BundleUnverified,
+    Reason::PlanNotReady,
+    Reason::PostconditionFailed,
 ];
 
 impl Reason {
@@ -120,6 +128,8 @@ impl Reason {
             Self::ConfigInvalid => "config-invalid",
             Self::RegistryUnreachable => "registry-unreachable",
             Self::BundleUnverified => "bundle-unverified",
+            Self::PlanNotReady => "plan-not-ready",
+            Self::PostconditionFailed => "postcondition-failed",
         }
     }
 }
@@ -273,6 +283,8 @@ mod tests {
                 "config-invalid",
                 "registry-unreachable",
                 "bundle-unverified",
+                "plan-not-ready",
+                "postcondition-failed",
             ]
         );
     }

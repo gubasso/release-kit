@@ -1,25 +1,27 @@
 //! `rk adopt`: a pre-record target becomes a recorded one.
 //!
-//! Adoption verifies the payload before writing configuration and its record. The
-//! candidate payload is rendered first, exactly as `rk init` would
-//! produce it; every `rendered` destination must match it byte for byte,
-//! and one mismatch refuses the whole adoption listing every mismatch in
-//! one run. Blessing whatever is on disk would launder arbitrary drift
-//! into release-kit ownership, so nothing here ever takes the disk as the
-//! baseline — and no target file is ever changed: not a byte, not a mode,
-//! not a sentinel. Configuration writes before the manifest, after every check
-//! has passed.
+//! A front over the engine: the plan is computed with the adopt intent,
+//! which verifies every destination and writes none, and on `--apply`
+//! the engine writes the configuration and the record, last, through
+//! one staged transaction. The candidate payload is rendered first,
+//! exactly as `rk init` would produce it; every `rendered` destination
+//! must match it byte for byte, and one mismatch refuses the whole
+//! adoption listing every mismatch in one run. Blessing whatever is on
+//! disk would launder arbitrary drift into release-kit ownership, so
+//! nothing here ever takes the disk as the baseline — and no target file
+//! is ever changed: not a byte, not a mode, not a sentinel.
 
 use serde::Serialize;
 
 use crate::cli::adopt::AdoptArgs;
+use crate::commands::reconcile::{self, FrontApplied, Trace};
 use crate::diagnostic::{Diagnostic, Reason};
-use crate::digest::Digest;
 use crate::error::RkError;
-use crate::landing::manifest::{self, FileRecord, Manifest, Parameters, Style, Workflow};
+use crate::landing::manifest::{self, Style, Workflow};
 use crate::landing::{self, Kind};
 use crate::output::Output;
-use crate::registry;
+use crate::plan::gather::Flags;
+use crate::plan::{Disposition, Intent, PlanRequest, Planned};
 use crate::release::EmbeddedReleaseSource;
 
 /// One verified destination.
@@ -61,6 +63,9 @@ struct Report {
     config: crate::config::Plan,
     /// Every destination, with its verification result.
     files: Vec<FileEntry>,
+    /// The plan the apply executed; absent in a preview.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    plan: Option<Trace>,
     /// What plausibly follows.
     next: Vec<String>,
 }
@@ -124,17 +129,34 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
         None,
         landing::Purpose::Adopt,
     )?;
-    let config =
-        crate::config::Plan::new(args.target.as_std_path(), &params, config.as_ref(), None)?;
     let tech = params.tech().to_owned();
     let repo = params.repo().to_owned();
     let workflow = params.workflow();
     let style = params
         .style()
         .ok_or_else(|| RkError::Usage("landing style is unresolved".into()))?;
-    let mut entries = landing::projection(&source, &params)?;
-    let withheld = landing::withhold_nix(&args.target, params.nix(), None, &mut entries)?;
-    let (files, records) = verify(args, workflow, &entries)?;
+    let request = PlanRequest {
+        target: args.target.clone(),
+        intent: Intent::Adopt,
+        selector: "embedded".into(),
+        fetch: false,
+        observe_forge: false,
+        flags: Flags {
+            tech: Some(tech.clone()),
+            forge: Some(params.forge().to_owned()),
+            repo: Some(repo.clone()),
+            workflow: Some(workflow.as_str().to_owned()),
+            style: Some(style.as_str().to_owned()),
+            nix: Some(params.nix()),
+        },
+        decisions: std::collections::BTreeMap::new(),
+    };
+    let planned = reconcile::compute(&request, &manifest::now())?;
+    let config = planned
+        .config
+        .clone()
+        .ok_or_else(|| RkError::Usage("landing parameters are unresolved".into()))?;
+    let files = verify(args, workflow, &planned)?;
 
     for file in &files {
         out.result_line(match file.action {
@@ -142,41 +164,18 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
             action => format!("{action} {}", file.path),
         });
     }
-    for entry in &withheld {
+    for entry in &planned.withheld {
         out.result_line(format!("withheld {}: {}", entry.path, entry.reason));
     }
 
-    if args.apply {
-        config.apply(args.target.as_std_path())?;
-        manifest::write(
-            &args.target,
-            &Manifest {
-                schema_version: manifest::SCHEMA_VERSION,
-                rk_version: env!("CARGO_PKG_VERSION").to_owned(),
-                payload_sha256: EmbeddedReleaseSource::manifest_ref().payload_sha256.clone(),
-                origin: "adopt".to_owned(),
-                tech: tech.clone(),
-                forge: params.forge().to_owned(),
-                landed_at: manifest::now(),
-                parameters: Parameters {
-                    repo: repo.clone(),
-                    workflow,
-                    style: Some(style),
-                    nix: params.nix(),
-                    trunk: params.trunk().to_owned(),
-                    line_prefix: params.line_prefix().to_owned(),
-                    security_contact: params.security_contact().to_owned(),
-                    security_response: params.security_response().to_owned(),
-                },
-                files: records,
-                pins: registry::pins_for(&tech)
-                    .into_iter()
-                    .map(|pin| (pin.name, pin.version))
-                    .collect(),
-            },
-        )?;
+    let applied = if args.apply {
+        let applied = reconcile::apply_in_process(&planned, &request, "adopt")?;
         out.result_line(format!("wrote {}", manifest::MANIFEST_PATH));
-    }
+        out.result_line(applied.line());
+        Some(applied)
+    } else {
+        None
+    };
 
     let next = if args.apply {
         vec![
@@ -201,7 +200,7 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
     ));
     out.next(&next);
     out.emit(&Report {
-        schema: "rk.adopt/5",
+        schema: "rk.adopt/6",
         config,
         mode: if args.apply { "apply" } else { "preview" },
         target: args.target.to_string(),
@@ -211,68 +210,68 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
         workflow: workflow.as_str(),
         style: style.as_str(),
         nix: params.nix(),
-        withheld: (!withheld.is_empty()).then_some(withheld),
+        withheld: (!planned.withheld.is_empty()).then(|| planned.withheld.clone()),
         files,
+        plan: applied.as_ref().map(FrontApplied::trace),
         next,
-    })
+    })?;
+    applied
+        .and_then(|applied| applied.applied.failure())
+        .map_or(Ok(()), Err)
 }
 
-/// The verification pass: every destination checked against the rendered
-/// candidate, every failure collected before the one refusal, so an
-/// operator resolves everything and re-runs once.
+/// The verification pass, read off the plan: every destination checked
+/// against the rendered candidate, every failure collected before the one
+/// refusal, so an operator resolves everything and re-runs once.
 fn verify(
     args: &AdoptArgs,
     workflow: Workflow,
-    entries: &[landing::Entry],
-) -> Result<(Vec<FileEntry>, Vec<FileRecord>), RkError> {
+    planned: &Planned,
+) -> Result<Vec<FileEntry>, RkError> {
     let mut mismatches: Vec<String> = Vec::new();
     let mut missing: Vec<String> = Vec::new();
     let mut files = Vec::new();
-    let mut records = Vec::new();
     // An ill-formed hook file lists beside the mismatches rather than
     // refusing alone, so one run still names everything unadoptable.
-    let mut defects: Vec<String> = Vec::new();
-    if let Some(defect) = landing::hooks_file_defect(&EmbeddedReleaseSource, &args.target)? {
-        defects.push(defect);
-    }
-    for entry in entries {
-        let Some(bytes) = landing::read_destination(&args.target, entry)? else {
+    let defects: Vec<String> = planned
+        .plan
+        .preconditions
+        .iter()
+        .filter(|p| p.id == "hooks-file-spliceable")
+        .filter_map(|p| match &p.evaluation {
+            crate::plan::Evaluation::Unsatisfied { reason } => Some(reason.clone()),
+            _ => None,
+        })
+        .collect();
+    for outcome in &planned.outcomes {
+        if outcome.disposition == Disposition::Write {
             // A block-placed artifact reads as absent from a file that
             // exists; the operator's remedy differs, so the label must.
-            let label = if args.target.join(&entry.destination).exists() {
-                format!("{} (carries no release-kit block)", entry.destination)
+            let label = if args.target.join(&outcome.path).exists() {
+                format!("{} (carries no release-kit block)", outcome.path)
             } else {
-                format!("{} (expected and missing)", entry.destination)
+                format!("{} (expected and missing)", outcome.path)
             };
             missing.push(label);
             continue;
-        };
-        let action = match entry.kind {
-            Kind::Rendered | Kind::Seeded if bytes == entry.rendered => "matches",
-            Kind::Rendered => {
-                mismatches.push(entry.destination.clone());
+        }
+        let action = match (outcome.kind, outcome.disposition) {
+            (Kind::Rendered | Kind::Seeded, Disposition::Unchanged) => "matches",
+            (Kind::Rendered, _) => {
+                mismatches.push(outcome.path.clone());
                 "differs"
             }
-            Kind::Seeded => "differs",
-            Kind::State => "state",
+            (Kind::Seeded, _) => "differs",
+            (Kind::State, _) => "state",
         };
         files.push(FileEntry {
-            path: entry.destination.clone(),
-            kind: entry.kind.as_str(),
+            path: outcome.path.clone(),
+            kind: outcome.kind.as_str(),
             action,
-        });
-        records.push(FileRecord {
-            destination: entry.destination.clone(),
-            kind: entry.kind,
-            sha256: Digest::of(&bytes),
-            baseline_sha256: match entry.kind {
-                Kind::State => None,
-                Kind::Rendered | Kind::Seeded => Some(Digest::of(&entry.baseline)),
-            },
         });
     }
     if mismatches.is_empty() && missing.is_empty() && defects.is_empty() {
-        return Ok((files, records));
+        return Ok(files);
     }
     let listed: Vec<String> = mismatches
         .iter()
@@ -311,11 +310,11 @@ fn verify(
 mod tests {
     use super::{FileEntry, Report};
 
-    /// The complete `rk.adopt/5` shape, held by snapshot.
+    /// The complete `rk.adopt/6` shape, held by snapshot.
     #[test]
     fn the_adopt_report_schema_snapshot_holds() {
         let report = Report {
-            schema: "rk.adopt/5",
+            schema: "rk.adopt/6",
             config: crate::config::Plan {
                 action: "added",
                 changes: vec![],
@@ -335,11 +334,12 @@ mod tests {
                 kind: "seeded",
                 action: "differs",
             }],
+            plan: None,
             next: vec!["commit the config and the record".into()],
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.adopt/5","mode":"apply","target":"/tmp/t","tech":"rust","forge":"github","repo":"acme/widget","workflow":"branches","style":"trunk","nix":false,"config":{"action":"added","changes":[],"content":"schema_version = 1\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"differs"}],"next":["commit the config and the record"]}"#
+            r#"{"schema":"rk.adopt/6","mode":"apply","target":"/tmp/t","tech":"rust","forge":"github","repo":"acme/widget","workflow":"branches","style":"trunk","nix":false,"config":{"action":"added","changes":[],"content":"schema_version = 1\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"differs"}],"next":["commit the config and the record"]}"#
         );
     }
 }

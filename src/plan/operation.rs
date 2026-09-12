@@ -7,13 +7,13 @@
 //! at apply time. There is no operation that runs a command, and there
 //! will not be one.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::digest::Digest;
 use crate::landing::Kind;
 
 /// One typed change an apply makes.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "kebab-case")]
 pub enum Operation {
     /// Write a whole file at `path`.

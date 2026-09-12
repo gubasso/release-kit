@@ -6,12 +6,12 @@
 //! once cites each one through `evidence_refs`, rather than the plan
 //! carrying one stamp that describes none of them.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::digest::Digest;
 
 /// What class of thing an evidence item is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum EvidenceKind {
     /// The landing record at the target.
@@ -33,7 +33,7 @@ pub enum EvidenceKind {
 }
 
 /// One observed value.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvidenceItem {
     /// A stable id other fields cite.
     pub id: String,

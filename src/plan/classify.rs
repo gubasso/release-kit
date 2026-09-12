@@ -13,10 +13,10 @@
 //! findings, and neither needs the other to change shape when a new
 //! finding appears.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// The corpus verdict, computed from the repository's evidence alone.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Verdict {
     /// No release mechanism and no release history: land the workflow.
@@ -67,7 +67,7 @@ pub fn verdict(facts: &RepositoryFacts) -> Verdict {
 }
 
 /// Which procedure a plan is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Classification {
     /// No record and a greenfield verdict: a first landing.
@@ -100,12 +100,12 @@ impl Classification {
 }
 
 /// One fact the classification compresses.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Finding {
     /// A stable code: `release-marker`, `payload-collision`, `tag`,
     /// `long-lived-branch`, `owned-drift`, `owned-missing`,
     /// `record-invalid`, `record-newer`.
-    pub code: &'static str,
+    pub code: std::borrow::Cow<'static, str>,
     /// What was found, one line.
     pub detail: String,
 }
