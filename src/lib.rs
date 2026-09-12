@@ -3,9 +3,9 @@
 //! The library exists so the crate's own tests can link the modules; the
 //! `rk` binary in `main.rs` is the product. `embedded` holds the payload
 //! and `payload_roots` its one inventory, `cli` the argument surface,
-//! `commands` the handlers, `self_depend` the consumer pin, `depend` the
-//! dependency matrix, `skills` the
-//! user-scope skill install,
+//! `commands` the handlers, `release` the seam every landing verb reads a
+//! release bundle through, `self_depend` the consumer pin, `depend` the
+//! dependency matrix, `skills` the user-scope skill install,
 //! `digest` the one hash type, and `error` the one exit-code matrix.
 
 pub mod applog;
@@ -29,6 +29,7 @@ pub mod output;
 pub mod payload_roots;
 pub mod probes;
 pub mod registry;
+pub mod release;
 pub mod self_depend;
 pub mod setup;
 pub mod skills;

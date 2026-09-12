@@ -205,6 +205,7 @@ pub fn run_all() -> Vec<ProbeResult> {
             "curl; install-bot reads the installation, and rk versions --check and rk self-depend sync fetch with it",
             &["--version"],
         ),
+        registry(),
         nix(),
         direnv(),
         tool(
@@ -251,6 +252,36 @@ fn tool(
             format!("{default_bin} is not on PATH"),
             format!("install {label}"),
         ),
+    }
+}
+
+/// The crates.io index answers, so another release's bundle can be
+/// fetched through the seam. Soft: a host that cannot fetch is a
+/// constraint on a plan that names a release this binary does not carry,
+/// never a broken install, and every offline verb runs without it.
+fn registry() -> ProbeResult {
+    let id = "registry";
+    let curl = std::env::var_os("RK_CURL_BIN").unwrap_or_else(|| "curl".into());
+    let answered = Command::new(curl)
+        .args([
+            "-fsSL",
+            "--max-time",
+            "5",
+            "-o",
+            "/dev/null",
+            "https://index.crates.io/config.json",
+        ])
+        .status()
+        .is_ok_and(|status| status.success());
+    if answered {
+        ProbeResult::ok(id, ProbeClass::Soft, "the crates.io index answers")
+    } else {
+        ProbeResult::failed(
+            id,
+            ProbeClass::Soft,
+            "the crates.io index does not answer",
+            "reach the network before rk payload --release or a plan naming a release this binary does not carry; every offline verb runs without it",
+        )
     }
 }
 

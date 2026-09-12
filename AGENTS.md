@@ -65,7 +65,7 @@ This repository is the canonical knowledge product for the release-kit workflow.
 - Pinned tools and freshness: `versions.toml`, served by `rk versions`; `rk versions --check` and `rk self-depend sync` are the two verbs that fetch.
 - A consumer's `rk` from its own flake, pinned and kept fresh: `rk self-depend`, with `rk guide setup` carrying the procedure, bound by `_docs/specs/SPEC-packaging.md`.
 - Another project taken as a dev or prod dependency of a target: `rk depend`, with `rk guide dependencies` as the procedure and `rk method dependencies` as its why, bound by `_docs/specs/SPEC-dependencies.md`.
-- The payload's identity and digests: `rk payload`, with `--json` as the machine form. Host readiness and the whole command surface: `rk doctor` and `rk usage`.
+- The payload's identity and digests: `rk payload`, with `--json` as the machine form and `--release <version>` for another release's bundle through the seam, bound by `_docs/specs/SPEC-release-bundle.md`. Host readiness and the whole command surface: `rk doctor` and `rk usage`.
 - What the binary carries and writes outside a target: `_docs/specs/SPEC-distribution.md`, served by `rk skill --help`.
 
 <!-- BEGIN release-kit -->

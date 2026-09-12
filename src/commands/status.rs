@@ -18,6 +18,7 @@ use crate::landing::invariants::{self, InvariantFailure};
 use crate::landing::manifest::{self, Alignment, Manifest};
 use crate::landing::{self, Entry, Kind};
 use crate::output::Output;
+use crate::release::EmbeddedReleaseSource;
 use crate::{embedded, registry};
 
 /// Drift counts by owned kind; `state` files are never compared.
@@ -363,7 +364,7 @@ fn observe(args: &StatusArgs, manifest: &Manifest) -> Result<Observed, RkError> 
         // an ill-formed file reads as rendered drift, never as clean.
         if file.destination == landing::HOOKS_DESTINATION
             && !observed.drift_rendered.contains(&file.destination)
-            && landing::hooks_file_defect(&args.target)?.is_some()
+            && landing::hooks_file_defect(&EmbeddedReleaseSource, &args.target)?.is_some()
         {
             observed.drift_rendered.push(file.destination.clone());
         }
@@ -377,7 +378,8 @@ fn observe(args: &StatusArgs, manifest: &Manifest) -> Result<Observed, RkError> 
         &manifest.forge,
         &args.target,
     ));
-    let same_payload = manifest.payload_sha256 == crate::commands::payload::report().payload_sha256;
+    let same_payload =
+        manifest.payload_sha256 == EmbeddedReleaseSource::manifest_ref().payload_sha256;
     // One projection serves both readers below, because both ask what this
     // binary's payload makes of the recorded parameters. A pair this
     // binary does not carry cannot be projected at all: under its own
@@ -389,7 +391,7 @@ fn observe(args: &StatusArgs, manifest: &Manifest) -> Result<Observed, RkError> 
         Err(_) => None,
     };
     if same_payload {
-        observe_parameter_drift(manifest, &mut observed);
+        observe_parameter_drift(manifest, &mut observed)?;
         if let Some(entries) = projected.as_deref() {
             observe_record_set(manifest, entries, &mut observed.record_drift);
         }
@@ -429,16 +431,16 @@ fn observe(args: &StatusArgs, manifest: &Manifest) -> Result<Observed, RkError> 
 /// alignment line's story and the upgrade's job, not parameter drift. A
 /// destination already reported as rendered drift is the file's own
 /// story, not the record's, and is skipped too.
-fn observe_parameter_drift(manifest: &Manifest, observed: &mut Observed) {
+fn observe_parameter_drift(manifest: &Manifest, observed: &mut Observed) -> Result<(), RkError> {
     let params = landing::Params::from_record(manifest);
     for (destination, template) in [
         (
             landing::AGENTS_DESTINATION,
-            landing::routing_block(params.workflow()),
+            landing::routing_block(&EmbeddedReleaseSource, params.workflow())?,
         ),
         (
             landing::HOOKS_DESTINATION,
-            landing::hooks_block(params.workflow()),
+            landing::hooks_block(&EmbeddedReleaseSource, params.workflow())?,
         ),
     ] {
         let Some(record) = manifest.file(destination) else {
@@ -459,13 +461,17 @@ fn observe_parameter_drift(manifest: &Manifest, observed: &mut Observed) {
                 .push(format!("{destination} (parameters.workflow)"));
         }
     }
+    Ok(())
 }
 
 /// What this binary's payload projects under the record's own parameters,
 /// with the same withhold judgment a landing applies, so the comparison
 /// stands against what an upgrade would actually offer this target.
 fn project(args: &StatusArgs, manifest: &Manifest) -> Result<Vec<Entry>, RkError> {
-    let mut projected = landing::projection(&landing::Params::from_record(manifest))?;
+    let mut projected = landing::projection(
+        &EmbeddedReleaseSource,
+        &landing::Params::from_record(manifest),
+    )?;
     landing::withhold_nix(
         &args.target,
         manifest.parameters.nix,
