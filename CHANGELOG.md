@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.21](https://github.com/gubasso/release-kit/compare/v0.3.20...v0.3.21) - 2026-09-12
+
+### Added
+
+- *(self-depend/managers)* read the rk pin through a manager axis ([#169](https://github.com/gubasso/release-kit/pull/169))
+
 ## [0.3.20](https://github.com/gubasso/release-kit/compare/v0.3.19...v0.3.20) - 2026-09-12
 
 ### Other
