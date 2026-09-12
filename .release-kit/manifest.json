@@ -1,7 +1,7 @@
 {
   "schema_version": 6,
   "rk_version": "0.3.18",
-  "payload_sha256": "687db31c65dba1cf45724d3808967f8108752a7e71842e93b103ee523e9718aa",
+  "payload_sha256": "4bc6e0c66e4047289d3df6fd9c5a70b8d7933b608f90f99b539b222081293c97",
   "origin": "adopt",
   "tech": "rust",
   "forge": "github",

@@ -18,7 +18,7 @@ Chosen option: the binary owns the transaction and the cleanup — one implement
 
 The verb records nothing in `.release-kit/manifest.json`: it is not a landing verb and `.envrc` is not a landable kind, so `rk devshell status` is the reporter instead.
 
-Enforced by `packaging:the-consumer-pin-has-two-facts-and-one-mover`, `packaging:a-pin-bump-is-all-or-nothing`, `packaging:the-unattended-caller-never-fails-the-shell`, `packaging:add-serves-a-template-and-edits-no-owned-flake`, `packaging:a-wired-target-runs-one-bump-mechanism`, and `packaging:the-cleanup-removes-only-what-it-can-judge`.
+Enforced by `packaging:the-consumer-pin-has-two-facts-and-one-mover`, `packaging:a-pin-bump-is-all-or-nothing`, `packaging:the-unattended-caller-never-fails-the-shell`, `packaging:add-serves-a-fragment-and-edits-no-owned-file`, `packaging:a-wired-target-runs-one-bump-mechanism`, and `packaging:the-cleanup-removes-only-what-it-can-judge`.
 
 ## Consequences
 

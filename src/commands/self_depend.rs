@@ -1,16 +1,17 @@
-//! `rk self-depend status | add | clean | sync`: the consumer half of the
-//! release-kit flake.
+//! `rk self-depend status | add | clean | sync`: the consumer half of
+//! release-kit's own distribution.
 //!
-//! The producer half already ships: the flake at every tag, and the
-//! landed package expression. This handler serves a consumer that pins
-//! that flake as a devshell input. `status` is the offline reporter and
-//! fetches nothing; `add` serves the fragments and seeds the pair where a
-//! target has neither file, never editing a file the target owns;
-//! `clean` removes what a predecessor mechanism left and names the rest,
-//! so the wiring is a replacement and never an addition; `sync` moves
-//! the pin to the latest release inside a fenced transaction, both files
-//! or neither. Every report goes through the output boundary with a
-//! versioned schema.
+//! The producer half already ships: the crate, the flake at every tag,
+//! and the release archives. This handler serves a consumer that pins
+//! one of those through the tool manager it runs. `status` is the offline
+//! reporter and fetches nothing; `add` serves the fragments for one
+//! manager and venue pair and seeds the manager file where a target has
+//! none, never editing a file the target owns; `clean` removes what a
+//! predecessor mechanism left and names the rest, so the wiring is a
+//! replacement and never an addition; `sync` moves the pin to the latest
+//! release through the wired manager, inside a fenced transaction for
+//! the flake pair, both files or neither. Every report goes through the
+//! output boundary with a versioned schema.
 
 use serde::Serialize;
 
@@ -27,8 +28,10 @@ use crate::self_depend::discover::{self, Discovery};
 use crate::self_depend::fragments::{self, Fragment};
 use crate::self_depend::guard::{self, Acquired};
 use crate::self_depend::leftovers::{self, Action, Leftover};
-use crate::self_depend::manager::{Entry, Manager};
+use crate::self_depend::manager::{self, Entry, Manager, PinRead};
+use crate::self_depend::matrix::{self, Mode, Pair, Support};
 use crate::self_depend::txn::{self, AbortFailure, Recovery, StepFailure};
+use crate::self_depend::venue::Venue;
 use crate::self_depend::{self, Observed, Presence, pin};
 
 /// The `rk.self-depend-status/2` document.
@@ -66,7 +69,7 @@ struct StatusReport<'a> {
     next: &'a [String],
 }
 
-/// The `rk.self-depend-add/1` document.
+/// The `rk.self-depend-add/2` document.
 #[derive(Debug, Serialize)]
 struct AddReport<'a> {
     /// The shape version of this document.
@@ -79,8 +82,21 @@ struct AddReport<'a> {
     tag: &'a str,
     /// `binary` or `argument`: where the tag came from.
     tag_source: &'static str,
-    /// Whether `flake.nix` existed before the run.
-    flake: Presence,
+    /// The manager the fragments are for.
+    manager: Manager,
+    /// The venue the manager fetches rk from.
+    venue: Venue,
+    /// How the pair lands here: `fragment` into the present file, `seed`
+    /// of the absent file, or `manual` with its reason.
+    support: Mode,
+    /// Why the pair is manual, from the closed set, where it is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<&'static str>,
+    /// The manager file, relative to the target: the present one, or
+    /// the one a seed writes.
+    file: &'a str,
+    /// Whether the manager file existed before the run.
+    file_present: Presence,
     /// Whether `.envrc` existed before the run.
     envrc: Presence,
     /// The seed files this run wrote, relative to the target; empty in
@@ -89,7 +105,7 @@ struct AddReport<'a> {
     /// Why an owned file was refused, where one was.
     #[serde(skip_serializing_if = "Option::is_none")]
     refusal: Option<&'a str>,
-    /// The four fragments, in application order.
+    /// The fragments, in application order, the `.envrc` line last.
     fragments: &'a [Fragment],
     /// What plausibly follows.
     next: &'a [String],
@@ -135,7 +151,7 @@ struct Manual {
     reason: &'static str,
 }
 
-/// The `rk.self-depend-sync/1` document.
+/// The `rk.self-depend-sync/2` document.
 #[derive(Debug, Serialize)]
 struct SyncReport<'a> {
     /// The shape version of this document.
@@ -146,18 +162,24 @@ struct SyncReport<'a> {
     caller: &'static str,
     /// The target, canonical.
     target: &'a str,
+    /// The manager whose pin the run reads and moves, where one was
+    /// resolved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    manager: Option<Manager>,
     /// The closed outcome vocabulary: `bumped`, `current`, `ahead`,
     /// `would-bump`, `pending-recovery`, `recovery-failed`, `skipped-ci`,
     /// `skipped-disabled`, `skipped-stamped`, `skipped-locked`,
-    /// `lock-unavailable`, `not-wired`, `unpinned`, `no-flake`,
+    /// `lock-unavailable`, `not-wired`, `unpinned`, `no-manager`,
     /// `ambiguous-pin`, `refused-dirty`, `unreachable`, `unparsable`,
     /// `update-failed`, `build-failed`, `restore-failed`, or
     /// `cleanup-failed`.
     outcome: &'static str,
-    /// The pinned tag before the run, where the pin was read.
+    /// The pinned version before the run, as the manager records it,
+    /// where the pin was read.
     #[serde(skip_serializing_if = "Option::is_none")]
     from: Option<&'a str>,
-    /// The tag the run moved to or would move to, where one was resolved.
+    /// The version the run moved to or would move to, in the same form,
+    /// where one was resolved.
     #[serde(skip_serializing_if = "Option::is_none")]
     to: Option<&'a str>,
     /// One line of detail for an outcome that has one.
@@ -200,6 +222,7 @@ struct Step {
 #[derive(Debug, Default)]
 struct SyncRun {
     outcome: &'static str,
+    manager: Option<Manager>,
     from: Option<String>,
     to: Option<String>,
     detail: Option<String>,
@@ -310,25 +333,68 @@ fn leftover_line(leftover: &Leftover) -> String {
     line
 }
 
-/// Serve the fragments; seed the files a target lacks under `--apply`.
+/// Serve the fragments for one pair; seed the manager file a target
+/// lacks under `--apply`, and the `.envrc` beside it for the flake pair.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one pass from the observation to the report, so every refusal is judged before any write"
+)]
 fn add(args: &AddArgs) -> Result<(), RkError> {
     let out = Output::new(args.json);
     let observed = self_depend::observe(&args.target)?;
     let (tag, tag_source) = resolve_tag(args.tag.as_deref())?;
-    let fragments = fragments::fragments(&tag, &observed);
+    let pair = matrix::choose(&observed, args.manager, args.venue)?;
+    let entry = observed.entry(pair.manager);
+    let file = entry
+        .and_then(|entry| entry.file.clone())
+        .unwrap_or_else(|| pair.manager.default_file().to_owned());
+    let file_present = entry.map_or(Presence::Absent, |entry| entry.present);
+    let (support, reason) = match matrix::support(pair.manager, pair.venue) {
+        Support::Fragment if file_present.is_present() => (Mode::Fragment, None),
+        Support::Fragment => (Mode::Seed, None),
+        Support::Manual(reason) => (Mode::Manual, Some(reason)),
+    };
+    // One target runs one bump mechanism: a second manager naming
+    // release-kit is two pins, refused before any write.
+    if let Some(wired) = observed.wired.filter(|wired| *wired != pair.manager) {
+        return Err(RkError::refusal(
+            Diagnostic::new(
+                Reason::DestructiveRefusal,
+                format!(
+                    "the target already pins release-kit through {}; a second manager is a second bump mechanism",
+                    wired.as_str()
+                ),
+            )
+            .expected(format!(
+                "one manager naming release-kit; rk self-depend add --manager {} serves that one",
+                wired.as_str()
+            ))
+            .target_state("nothing was written"),
+        ));
+    }
+    let fragments = fragments::fragments(pair, &tag, &observed);
     let mode = if args.apply { "apply" } else { "preview" };
+    let flake_pair = pair.manager == Manager::Flake && pair.venue == Venue::Flake;
     let mut written = Vec::new();
     let mut owned = Vec::new();
-    if args.apply {
-        for (name, present, seed) in [
-            ("flake.nix", observed.flake, fragments::seed_flake(&tag)),
-            (".envrc", observed.envrc, fragments::seed_envrc()),
-        ] {
+    if args.apply && support != Mode::Manual {
+        let mut seeds = vec![(file.clone(), file_present, fragments::seed(pair, &tag))];
+        if flake_pair {
+            seeds.push((
+                ".envrc".to_owned(),
+                observed.envrc,
+                Some(fragments::seed_envrc()),
+            ));
+        }
+        for (name, present, seed) in seeds {
+            let Some(seed) = seed else {
+                continue;
+            };
             if present.is_present() {
                 owned.push(name);
             } else {
-                crate::atomic::write(observed.target.join(name).as_std_path(), seed.as_bytes())?;
-                written.push(name.to_owned());
+                crate::atomic::write(observed.target.join(&name).as_std_path(), seed.as_bytes())?;
+                written.push(name);
             }
         }
     }
@@ -346,14 +412,40 @@ fn add(args: &AddArgs) -> Result<(), RkError> {
         out.result_line("DRY RUN: rk self-depend add prints the fragments; --apply seeds only the files the target lacks");
     }
     out.result_line(format!("tag {tag} (from the {tag_source})"));
-    for (name, present) in [("flake.nix", observed.flake), (".envrc", observed.envrc)] {
-        out.result_line(match present {
-            Presence::Present => {
-                format!("{name} present: the target owns it, so its fragments are applied by hand")
+    out.result_line(match (support, reason) {
+        (Mode::Manual, Some(reason)) => format!(
+            "pair {} via {}: manual ({reason}); nothing is written",
+            pair.manager.as_str(),
+            pair.venue.as_str()
+        ),
+        (mode, _) => format!(
+            "pair {} via {}: {}",
+            pair.manager.as_str(),
+            pair.venue.as_str(),
+            match mode {
+                Mode::Fragment => "fragments into the present file",
+                Mode::Seed => "seeded on --apply",
+                Mode::Manual => "manual",
             }
-            Presence::Absent => format!("{name} absent: --apply seeds it"),
+        ),
+    });
+    if support != Mode::Manual {
+        out.result_line(match file_present {
+            Presence::Present => {
+                format!("{file} present: the target owns it, so its fragments are applied by hand")
+            }
+            Presence::Absent => format!("{file} absent: --apply seeds it"),
         });
     }
+    out.result_line(match (observed.envrc, flake_pair) {
+        (Presence::Present, _) => {
+            ".envrc present: the target owns it, so the sync line is applied by hand".to_owned()
+        }
+        (Presence::Absent, true) => ".envrc absent: --apply seeds it".to_owned(),
+        (Presence::Absent, false) => {
+            ".envrc absent: the sync line is applied by hand once the shell loads rk".to_owned()
+        }
+    });
     for fragment in &fragments {
         out.result_line(format!(
             "--- {} into {} ({} at {}){}",
@@ -369,21 +461,34 @@ fn add(args: &AddArgs) -> Result<(), RkError> {
         ));
         out.result_line(&fragment.text);
     }
-    let next = add_next(&observed, args.apply, &written);
+    let next = add_next(&observed, pair, &file, args.apply, &written);
     out.next(&next);
     out.emit(&AddReport {
-        schema: "rk.self-depend-add/1",
+        schema: "rk.self-depend-add/2",
         mode,
         target: observed.target.as_str(),
         tag: &tag,
         tag_source,
-        flake: observed.flake,
+        manager: pair.manager,
+        venue: pair.venue,
+        support,
+        reason,
+        file: &file,
+        file_present,
         envrc: observed.envrc,
         written: &written,
         refusal: refusal.as_deref(),
         fragments: &fragments,
         next: &next,
     })?;
+    if args.apply && support == Mode::Manual {
+        return Err(RkError::Usage(format!(
+            "{} via {} is manual ({}); nothing can be written, and the report names the edit",
+            pair.manager.as_str(),
+            pair.venue.as_str(),
+            reason.unwrap_or_default()
+        )));
+    }
     let Some(message) = refusal else {
         return Ok(());
     };
@@ -397,7 +502,7 @@ fn add(args: &AddArgs) -> Result<(), RkError> {
     };
     Err(RkError::refusal(
         Diagnostic::new(Reason::DestructiveRefusal, message)
-            .expected("a target with no flake.nix and no .envrc, or the fragments applied by hand")
+            .expected("a target with no file for the pair, or the fragments applied by hand")
             .target_state(state),
     ))
 }
@@ -515,23 +620,58 @@ fn gate_and_decide(
             None => {}
         }
     }
-    if observed.pending {
-        return decide(args, observed, key, run);
-    }
-    if observed.flake.is_present() && guard::two_files_dirty(&observed.target) {
-        run.outcome = "refused-dirty";
-        run.from = observed.pin_tag().map(str::to_owned);
-        run.detail = Some(
-            "flake.nix or flake.lock carries uncommitted edits; commit or stash them first"
-                .to_owned(),
-        );
-        return Ok(());
-    }
     decide(args, observed, key, run)
 }
 
-/// The decision sequence: the wiring, the target tag, the comparison,
-/// and — under `--apply` on a behind pin — the transaction.
+/// The manager whose pin a sync reads: the flag, else the one manager
+/// naming release-kit. Where none or several do, the outcome is set and
+/// `None` returned.
+fn sync_manager(args: &SyncArgs, observed: &Observed, run: &mut SyncRun) -> Option<Manager> {
+    if let Some(manager) = args.manager {
+        return Some(manager);
+    }
+    if let Some(wired) = observed.wired {
+        return Some(wired);
+    }
+    if observed
+        .managers
+        .iter()
+        .all(|entry| !entry.present.is_present())
+    {
+        run.outcome = "no-manager";
+        return None;
+    }
+    let named: Vec<&str> = observed
+        .managers
+        .iter()
+        .filter(|entry| entry.read.names())
+        .map(|entry| entry.manager.as_str())
+        .collect();
+    if named.len() > 1 {
+        run.outcome = "ambiguous-pin";
+        run.detail = Some(format!(
+            "{} manager files name release-kit: {}",
+            named.len(),
+            named.join(" and ")
+        ));
+    } else {
+        run.outcome = "not-wired";
+    }
+    None
+}
+
+/// The files a sync judges for uncommitted edits: the flake pair for
+/// the flake manager, the one manager file otherwise.
+fn sync_files(manager: Manager, file: &str) -> Vec<&str> {
+    if manager == Manager::Flake {
+        vec!["flake.nix", "flake.lock"]
+    } else {
+        vec![file]
+    }
+}
+
+/// The decision sequence: the wiring, the dirty check, the target tag,
+/// the comparison, and — under `--apply` on a behind pin — the move.
 fn decide(
     args: &SyncArgs,
     observed: &Observed,
@@ -544,30 +684,47 @@ fn decide(
             Some("an interrupted run left its marker; --apply recovers it first".to_owned());
         return Ok(());
     }
-    if !observed.flake.is_present() {
-        run.outcome = "no-flake";
+    let Some(manager) = sync_manager(args, observed, run) else {
         return Ok(());
-    }
-    let pin = match &observed.scan {
-        pin::Scan::Many(count) => {
+    };
+    run.manager = Some(manager);
+    let Some(entry) = observed
+        .entry(manager)
+        .filter(|entry| entry.present.is_present())
+    else {
+        run.outcome = "no-manager";
+        run.detail = Some(format!("the target carries no {} file", manager.as_str()));
+        return Ok(());
+    };
+    let file = entry.file.clone().unwrap_or_default();
+    let (line, from) = match &entry.read {
+        PinRead::Many { count } => {
             run.outcome = "ambiguous-pin";
-            run.detail = Some(format!(
-                "{count} lines name the release-kit input in flake.nix"
-            ));
+            run.detail = Some(format!("{count} lines name release-kit in {file}"));
             return Ok(());
         }
-        pin::Scan::None => {
+        PinRead::Absent => {
             run.outcome = "not-wired";
             return Ok(());
         }
-        pin::Scan::Unpinned(line) => {
+        PinRead::Unpinned { line } => {
             run.outcome = "unpinned";
-            run.detail = Some(format!("flake.nix line {line} names the input with no tag"));
+            run.detail = Some(format!(
+                "{file} line {line} names release-kit with no version"
+            ));
             return Ok(());
         }
-        pin::Scan::One(pin) => pin,
+        PinRead::One { line, version } => (*line, version.clone()),
     };
-    run.from = Some(pin.tag.clone());
+    run.from = Some(from.clone());
+    if guard::files_dirty(&observed.target, &sync_files(manager, &file)) {
+        run.outcome = "refused-dirty";
+        run.detail = Some(format!(
+            "{} carries uncommitted edits; commit or stash them first",
+            sync_files(manager, &file).join(" or ")
+        ));
+        return Ok(());
+    }
     let to = match args.tag.as_deref() {
         Some(raw) => self_depend::normalize_tag(raw).ok_or_else(|| {
             RkError::Usage(format!(
@@ -588,8 +745,9 @@ fn decide(
             }
         },
     };
+    let to = manager.recorded(&to);
     run.to = Some(to.clone());
-    match discover::version_order(&pin.tag, &to) {
+    match discover::version_order(&from, &to) {
         std::cmp::Ordering::Equal => {
             run.outcome = "current";
             return Ok(());
@@ -609,7 +767,54 @@ fn decide(
         run.outcome = "would-bump";
         return Ok(());
     }
-    apply_bump(observed, key, pin, &to, run)
+    if manager == Manager::Flake {
+        let pin::Scan::One(pin) = &observed.scan else {
+            run.outcome = "not-wired";
+            return Ok(());
+        };
+        return apply_bump(observed, key, pin, &to, run);
+    }
+    move_one_fact(observed, entry, &file, line, &from, &to, run);
+    Ok(())
+}
+
+/// A one-fact manager moves its one fact: no lock to refresh and no
+/// build to fence, so the atomic write is the whole transaction.
+fn move_one_fact(
+    observed: &Observed,
+    entry: &Entry,
+    file: &str,
+    line: usize,
+    from: &str,
+    to: &str,
+    run: &mut SyncRun,
+) {
+    let text = entry.text.as_deref().unwrap_or_default();
+    let rewritten = manager::rewrite_line(text, line, from, to);
+    let step = match crate::atomic::write(
+        observed.target.join(file).as_std_path(),
+        rewritten.as_bytes(),
+    ) {
+        Ok(()) => {
+            run.outcome = "bumped";
+            Step {
+                step: "rewrite-pin",
+                status: "ok",
+                detail: None,
+            }
+        }
+        Err(source) => {
+            run.outcome = "update-failed";
+            run.detail = Some(format!("rewrite-pin failed: {source}"));
+            run.restored = Some(Vec::new());
+            Step {
+                step: "rewrite-pin",
+                status: "failed",
+                detail: Some(source.to_string()),
+            }
+        }
+    };
+    run.steps = Some(vec![step]);
 }
 
 /// Rewrite, refresh, and build inside one transaction; a failure
@@ -718,7 +923,7 @@ const fn is_quiet(outcome: &str) -> bool {
         outcome.as_bytes(),
         b"current"
             | b"ahead"
-            | b"no-flake"
+            | b"no-manager"
             | b"not-wired"
             | b"unpinned"
             | b"skipped-ci"
@@ -765,13 +970,14 @@ fn render_sync(
     };
     out.next(&next);
     out.emit(&SyncReport {
-        schema: "rk.self-depend-sync/1",
+        schema: "rk.self-depend-sync/2",
         mode: if args.apply { "apply" } else { "preview" },
         caller: match args.caller {
             Caller::Envrc => "envrc",
             Caller::Operator => "operator",
         },
         target: observed.target.as_str(),
+        manager: run.manager,
         outcome: run.outcome,
         from: run.from.as_deref(),
         to: run.to.as_deref(),
@@ -802,12 +1008,20 @@ fn sync_line(run: &SyncRun) -> String {
 /// What plausibly follows a sync.
 fn sync_next(observed: &Observed, run: &SyncRun) -> Vec<String> {
     let target = &observed.target;
+    let files = run
+        .manager
+        .map(|manager| {
+            let file = observed
+                .entry(manager)
+                .and_then(|entry| entry.file.clone())
+                .unwrap_or_else(|| manager.default_file().to_owned());
+            sync_files(manager, &file).join(" ")
+        })
+        .unwrap_or_default();
     let mut next = match run.outcome {
         "bumped" => vec![
-            format!(
-                "git -C {target} diff -- flake.nix flake.lock shows the two-file change to review and commit"
-            ),
-            "the next direnv reload takes the new rk; nothing here commits".to_owned(),
+            format!("git -C {target} diff -- {files} shows the change to review and commit"),
+            "the next shell reload takes the new rk; nothing here commits".to_owned(),
         ],
         "would-bump" => vec![format!(
             "rk self-depend sync --caller operator --apply --target {target} moves the pin, locks it, and proves the build"
@@ -821,14 +1035,14 @@ fn sync_next(observed: &Observed, run: &SyncRun) -> Vec<String> {
         "pending-recovery" => vec![format!(
             "rk self-depend sync --caller operator --apply --target {target} restores both files first"
         )],
-        "no-flake" | "not-wired" | "unpinned" => vec![format!(
+        "no-manager" | "not-wired" | "unpinned" => vec![format!(
             "rk self-depend add --target {target} prints the fragments; --apply seeds the files a target lacks"
         )],
         "ambiguous-pin" => vec![format!(
-            "leave exactly one release-kit input line in {target}/flake.nix, then rerun"
+            "leave exactly one line naming release-kit, in one manager file under {target}, then rerun"
         )],
         "refused-dirty" => vec![format!(
-            "git -C {target} status -- flake.nix flake.lock names the edits; commit or stash them, then rerun"
+            "git -C {target} status -- {files} names the edits; commit or stash them, then rerun"
         )],
         "skipped-disabled" => vec![format!(
             "unset {} to let the sync run again",
@@ -874,7 +1088,7 @@ fn exit_for(caller: Caller, run: &SyncRun) -> Result<(), RkError> {
     match run.outcome {
         "ambiguous-pin" | "refused-dirty" => Err(RkError::refusal(
             Diagnostic::new(Reason::StateDrift, detail)
-                .expected("exactly one committed pin line in flake.nix")
+                .expected("exactly one committed pin line in one manager file")
                 .target_state("nothing was written"),
         )),
         "unreachable" | "unparsable" => {
@@ -1095,31 +1309,54 @@ fn resolve_tag(argument: Option<&str>) -> Result<(String, &'static str), RkError
 }
 
 /// What plausibly follows an add.
-fn add_next(observed: &Observed, apply: bool, written: &[String]) -> Vec<String> {
+fn add_next(
+    observed: &Observed,
+    pair: Pair,
+    file: &str,
+    apply: bool,
+    written: &[String],
+) -> Vec<String> {
     let target = &observed.target;
+    let flake_pair = pair.manager == Manager::Flake;
     let mut next = Vec::new();
     if !observed.leftovers.is_empty() {
         next.push(format!(
             "rk self-depend clean --target {target} first: the target carries a predecessor bump mechanism, and one project runs one"
         ));
     }
+    if let Support::Manual(reason) = matrix::support(pair.manager, pair.venue) {
+        next.push(format!(
+            "{} via {} is manual ({reason}): apply the edit by hand, or pick a pair the matrix renders",
+            pair.manager.as_str(),
+            pair.venue.as_str()
+        ));
+        return next;
+    }
     if !apply {
         next.push(format!(
             "rk self-depend add --target {target} --apply seeds the files the target lacks; an owned file takes its fragments by hand, in the order above"
         ));
-        next.push(
-            "run rk init --nix before the apply where the landed packaging capability is also wanted: a seeded flake.nix withholds it later".to_owned(),
-        );
+        if flake_pair {
+            next.push(
+                "run rk init --nix before the apply where the landed packaging capability is also wanted: a seeded flake.nix withholds it later".to_owned(),
+            );
+        }
     }
     if !written.is_empty() {
         next.push(format!(
-            "commit {} first — nix reads only tracked files, and the sync refuses uncommitted edits to the pair",
+            "commit {} first: the sync refuses uncommitted edits to the file it moves",
             written.join(" and ")
         ));
     }
-    next.push(format!(
-        "rk self-depend sync --caller operator --apply --target {target} writes the lock and proves the build; commit flake.lock, then direnv allow"
-    ));
+    if flake_pair {
+        next.push(format!(
+            "rk self-depend sync --caller operator --apply --target {target} writes the lock and proves the build; commit flake.lock, then direnv allow"
+        ));
+    } else {
+        next.push(format!(
+            "rk self-depend sync --caller operator --apply --target {target} moves the pin in {file}; the manager's own install takes it from there"
+        ));
+    }
     next
 }
 
@@ -1205,7 +1442,9 @@ fn status_next(observed: &Observed) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{AddReport, CleanReport, Host, Manual, StatusReport, Step, SyncReport};
+    use super::{
+        AddReport, CleanReport, Host, Manual, Mode, StatusReport, Step, SyncReport, Venue,
+    };
 
     /// The complete `rk.self-depend-sync/1` shape, held by snapshot.
     #[test]
@@ -1226,10 +1465,11 @@ mod tests {
         let recovered = vec!["flake.nix".to_owned()];
         let next = vec!["both files are as they were".to_owned()];
         let report = SyncReport {
-            schema: "rk.self-depend-sync/1",
+            schema: "rk.self-depend-sync/2",
             mode: "apply",
             caller: "operator",
             target: "/srv/widget",
+            manager: Some(Manager::Flake),
             outcome: "build-failed",
             from: Some("v0.2.15"),
             to: Some("v0.2.16"),
@@ -1242,14 +1482,15 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.self-depend-sync/1","mode":"apply","caller":"operator","target":"/srv/widget","outcome":"build-failed","from":"v0.2.15","to":"v0.2.16","detail":"build failed: error: builder failed","steps":[{"step":"rewrite-pin","status":"ok"},{"step":"build","status":"failed","detail":"error: builder failed"}],"restored":["flake.nix","flake.lock"],"recovered":["flake.nix"],"stamp":"2026-09-04","next":["both files are as they were"]}"#
+            r#"{"schema":"rk.self-depend-sync/2","mode":"apply","caller":"operator","target":"/srv/widget","manager":"flake","outcome":"build-failed","from":"v0.2.15","to":"v0.2.16","detail":"build failed: error: builder failed","steps":[{"step":"rewrite-pin","status":"ok"},{"step":"build","status":"failed","detail":"error: builder failed"}],"restored":["flake.nix","flake.lock"],"recovered":["flake.nix"],"stamp":"2026-09-04","next":["both files are as they were"]}"#
         );
         let bare = SyncReport {
-            schema: "rk.self-depend-sync/1",
+            schema: "rk.self-depend-sync/2",
             mode: "preview",
             caller: "envrc",
             target: "/srv/widget",
-            outcome: "no-flake",
+            manager: None,
+            outcome: "no-manager",
             from: None,
             to: None,
             detail: None,
@@ -1261,7 +1502,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&bare).expect("a report serializes"),
-            r#"{"schema":"rk.self-depend-sync/1","mode":"preview","caller":"envrc","target":"/srv/widget","outcome":"no-flake","next":[]}"#,
+            r#"{"schema":"rk.self-depend-sync/2","mode":"preview","caller":"envrc","target":"/srv/widget","outcome":"no-manager","next":[]}"#,
             "an unknown value is omitted, never null"
         );
     }
@@ -1325,7 +1566,7 @@ mod tests {
     fn the_self_depend_add_schema_snapshot_holds() {
         let fragments = vec![Fragment {
             id: "flake-input",
-            file: "flake.nix",
+            file: "flake.nix".to_owned(),
             role: "the pinned release-kit input",
             placement: "insert-into-attrset",
             anchor: Anchor {
@@ -1339,12 +1580,17 @@ mod tests {
         let written = vec![".envrc".to_owned()];
         let next = vec!["direnv allow".to_owned()];
         let report = AddReport {
-            schema: "rk.self-depend-add/1",
+            schema: "rk.self-depend-add/2",
             mode: "apply",
             target: "/srv/widget",
             tag: "v0.2.16",
             tag_source: "binary",
-            flake: Presence::Present,
+            manager: Manager::Flake,
+            venue: Venue::Flake,
+            support: Mode::Fragment,
+            reason: None,
+            file: "flake.nix",
+            file_present: Presence::Present,
             envrc: Presence::Absent,
             written: &written,
             refusal: Some("the target already carries flake.nix"),
@@ -1353,11 +1599,34 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.self-depend-add/1","mode":"apply","target":"/srv/widget","tag":"v0.2.16","tag_source":"binary","flake":"present","envrc":"absent","written":[".envrc"],"refusal":"the target already carries flake.nix","fragments":[{"id":"flake-input","file":"flake.nix","role":"the pinned release-kit input","placement":"insert-into-attrset","anchor":{"kind":"attrset","path":"inputs","needle":"inputs = {"},"text":"release-kit = {};","present":false}],"next":["direnv allow"]}"#
+            r#"{"schema":"rk.self-depend-add/2","mode":"apply","target":"/srv/widget","tag":"v0.2.16","tag_source":"binary","manager":"flake","venue":"flake","support":"fragment","file":"flake.nix","file_present":"present","envrc":"absent","written":[".envrc"],"refusal":"the target already carries flake.nix","fragments":[{"id":"flake-input","file":"flake.nix","role":"the pinned release-kit input","placement":"insert-into-attrset","anchor":{"kind":"attrset","path":"inputs","needle":"inputs = {"},"text":"release-kit = {};","present":false}],"next":["direnv allow"]}"#
+        );
+        let manual = AddReport {
+            schema: "rk.self-depend-add/2",
+            mode: "preview",
+            target: "/srv/widget",
+            tag: "v0.2.16",
+            tag_source: "binary",
+            manager: Manager::Asdf,
+            venue: Venue::Crates,
+            support: Mode::Manual,
+            reason: Some("asdf-plugin-unknown"),
+            file: ".tool-versions",
+            file_present: Presence::Absent,
+            envrc: Presence::Absent,
+            written: &[],
+            refusal: None,
+            fragments: &[],
+            next: &[],
+        };
+        assert_eq!(
+            serde_json::to_string(&manual).expect("a report serializes"),
+            r#"{"schema":"rk.self-depend-add/2","mode":"preview","target":"/srv/widget","tag":"v0.2.16","tag_source":"binary","manager":"asdf","venue":"crates","support":"manual","reason":"asdf-plugin-unknown","file":".tool-versions","file_present":"absent","envrc":"absent","written":[],"fragments":[],"next":[]}"#,
+            "a manual pair carries its reason and no refusal"
         );
         let bare = Fragment {
             id: "envrc-sync",
-            file: ".envrc",
+            file: ".envrc".to_owned(),
             role: "the daily sync on directory entry",
             placement: "append-line",
             anchor: Anchor {
@@ -1413,6 +1682,7 @@ mod tests {
                     line: 4,
                     version: "v0.2.16".to_owned(),
                 },
+                text: None,
             },
             Entry::absent(Manager::Mise),
         ];

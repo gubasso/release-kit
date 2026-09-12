@@ -22,34 +22,34 @@ When the request carries `--no-plan`, skip the plan gate's approval turn only. S
 
 ## Route to the canon
 
-| Need                                       | Command                    |
-| ------------------------------------------ | -------------------------- |
-| Judge this host's readiness                | `rk doctor`                |
-| List method chapters                       | `rk method --list`         |
-| Read a chapter                             | `rk method <chapter>`      |
-| List bindings                              | `rk binding --list`        |
-| Read a technology binding                  | `rk binding <tech>`        |
-| Read a forge's specifics                   | `rk forge <name>`          |
-| The setup recipe, as commands              | `rk guide setup`           |
-| List the landable files                    | `rk snippet --list`        |
-| Print one landable file                    | `rk snippet <tech>/<path>` |
-| Print the pinned-tool registry             | `rk versions`              |
-| List the executable setup steps            | `rk setup --list`          |
-| A landed target's own report               | `rk status --target .`     |
-| The verdict on a target with no record     | `rk assess --target .`     |
-| Judge a message against the content guards | `rk message --check`       |
-| The merged branches this clone still holds | `rk branches prune`        |
-| The worktree lifecycle, as commands        | `rk guide worktree`        |
-| Start work an issue names                  | `rk issue start <issue>`   |
-| The issue-to-branch procedure              | `rk guide issue`           |
-| The release line's whole life, as commands | `rk guide release-lines`   |
-| The line lifecycle verbs                   | `rk lines --help`          |
-| The working-copy forms and the mode        | `rk method worktrees`      |
-| What a project's devshell wiring carries   | `rk self-depend status`    |
-| The flake fragments and the seed pair      | `rk self-depend add`       |
-| The predecessor bump mechanism's removal   | `rk self-depend clean`     |
-| The pin moved to the latest release        | `rk self-depend sync`      |
-| Another project as a dependency            | `rk depend assess`         |
+| Need                                                            | Command                    |
+| --------------------------------------------------------------- | -------------------------- |
+| Judge this host's readiness                                     | `rk doctor`                |
+| List method chapters                                            | `rk method --list`         |
+| Read a chapter                                                  | `rk method <chapter>`      |
+| List bindings                                                   | `rk binding --list`        |
+| Read a technology binding                                       | `rk binding <tech>`        |
+| Read a forge's specifics                                        | `rk forge <name>`          |
+| The setup recipe, as commands                                   | `rk guide setup`           |
+| List the landable files                                         | `rk snippet --list`        |
+| Print one landable file                                         | `rk snippet <tech>/<path>` |
+| Print the pinned-tool registry                                  | `rk versions`              |
+| List the executable setup steps                                 | `rk setup --list`          |
+| A landed target's own report                                    | `rk status --target .`     |
+| The verdict on a target with no record                          | `rk assess --target .`     |
+| Judge a message against the content guards                      | `rk message --check`       |
+| The merged branches this clone still holds                      | `rk branches prune`        |
+| The worktree lifecycle, as commands                             | `rk guide worktree`        |
+| Start work an issue names                                       | `rk issue start <issue>`   |
+| The issue-to-branch procedure                                   | `rk guide issue`           |
+| The release line's whole life, as commands                      | `rk guide release-lines`   |
+| The line lifecycle verbs                                        | `rk lines --help`          |
+| The working-copy forms and the mode                             | `rk method worktrees`      |
+| What a project's devshell wiring carries                        | `rk self-depend status`    |
+| The fragments for one manager and venue pair, and the seed file | `rk self-depend add`       |
+| The predecessor bump mechanism's removal                        | `rk self-depend clean`     |
+| The pin moved to the latest release                             | `rk self-depend sync`      |
+| Another project as a dependency                                 | `rk depend assess`         |
 
 ## Installation scope
 

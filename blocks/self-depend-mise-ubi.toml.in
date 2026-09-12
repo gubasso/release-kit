@@ -1,0 +1,1 @@
+"ubi:RK_DEVSHELL_REPO" = { version = "RK_DEVSHELL_VERSION", exe = "rk" }

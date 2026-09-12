@@ -13714,7 +13714,7 @@ fn self_depend_add_previews_four_fragments_and_writes_nothing() {
 fn self_depend_add_json_carries_each_fragment_with_its_anchor_and_placement() {
     let fixture = SelfDependFixture::new();
     let report = fixture.json(&["self-depend", "add", "--tag", "0.2.15"]);
-    assert_eq!(report["schema"], "rk.self-depend-add/1");
+    assert_eq!(report["schema"], "rk.self-depend-add/2");
     assert_eq!(report["mode"], "preview");
     assert_eq!(report["tag"], "v0.2.15");
     assert_eq!(report["tag_source"], "argument");
@@ -13842,7 +13842,7 @@ fn self_depend_add_apply_seeds_a_flake_and_envrc_where_there_is_none() {
 }
 
 #[test]
-fn self_depend_add_apply_refuses_a_flake_the_target_owns() {
+fn self_depend_add_apply_refuses_a_manager_file_the_target_owns() {
     let fixture = SelfDependFixture::new();
     fixture.write_flake("v0.2.15");
     let before = fixture.read("flake.nix");
@@ -13913,6 +13913,275 @@ fn self_depend_add_apply_creates_only_absent_files() {
     assert_eq!(
         envrc["present"], false,
         "the owned .envrc still lacks the line"
+    );
+}
+
+/// The owned-file refusal covers every manager file, not the flake
+/// alone: exit 73, the file byte-identical, the fragments still printed.
+#[test]
+fn self_depend_add_apply_refuses_every_owned_manager_file() {
+    let cases: [(&str, &str, &str, &str); 3] = [
+        (
+            "mise",
+            "mise.toml",
+            "[tools]\nnode = \"24\"\n",
+            "--- mise-tool into mise.toml",
+        ),
+        (
+            "devbox",
+            "devbox.json",
+            "{\n  \"packages\": [\"nodejs@24\"]\n}\n",
+            "--- devbox-package into devbox.json",
+        ),
+        (
+            "flake",
+            "flake.nix",
+            "{ inputs = { }; outputs = { self }: { }; }\n",
+            "--- flake-input into flake.nix",
+        ),
+    ];
+    for (manager, file, body, line) in cases {
+        let fixture = SelfDependFixture::new();
+        std::fs::write(fixture.target().join(file), body).expect("writes");
+        let out = fixture
+            .rk(&[
+                "self-depend",
+                "add",
+                "--apply",
+                "--manager",
+                manager,
+                "--json",
+            ])
+            .output()
+            .expect("rk runs");
+        assert_eq!(out.status.code(), Some(73), "{manager}");
+        let report: serde_json::Value =
+            serde_json::from_slice(&out.stdout).expect("one JSON object");
+        assert_eq!(report["schema"], "rk.self-depend-add/2");
+        assert_eq!(report["manager"], manager);
+        assert_eq!(report["support"], "fragment");
+        assert_eq!(report["file"], file);
+        assert_eq!(report["file_present"], "present");
+        assert!(
+            report["refusal"]
+                .as_str()
+                .expect("a refusal")
+                .contains(file),
+            "{manager}: {report}"
+        );
+        assert_eq!(
+            fixture.read(file),
+            body,
+            "{manager}: the owned file is byte-identical"
+        );
+        let human = fixture
+            .rk(&["self-depend", "add", "--apply", "--manager", manager])
+            .output()
+            .expect("rk runs");
+        assert!(
+            String::from_utf8_lossy(&human.stdout).contains(line),
+            "{manager}: the fragments still print"
+        );
+    }
+}
+
+/// A manager file the target lacks is seeded whole, and the seed reads
+/// back as one pin through the same manager.
+#[test]
+fn self_depend_add_apply_seeds_a_manager_file_the_target_lacks() {
+    let fixture = SelfDependFixture::new();
+    let report = fixture.json(&[
+        "self-depend",
+        "add",
+        "--apply",
+        "--manager",
+        "mise",
+        "--tag",
+        "v0.2.15",
+    ]);
+    assert_eq!(report["venue"], "crates");
+    assert_eq!(report["support"], "seed");
+    assert_eq!(report["written"], serde_json::json!(["mise.toml"]));
+    assert_eq!(
+        fixture.read("mise.toml"),
+        "[tools]\n\"cargo:release-kit\" = \"0.2.15\"\n"
+    );
+    assert!(
+        !fixture.target().join(".envrc").exists(),
+        "only the flake pair seeds an .envrc: no other manager loads through direnv by default"
+    );
+    let status = fixture.json(&["self-depend", "status"]);
+    assert_eq!(status["wired"], "mise");
+    assert_eq!(manager_entry(&status, "mise")["version"], "0.2.15");
+    let devbox = SelfDependFixture::new();
+    let report = devbox.json(&[
+        "self-depend",
+        "add",
+        "--apply",
+        "--manager",
+        "devbox",
+        "--venue",
+        "flake",
+        "--tag",
+        "0.2.15",
+    ]);
+    assert_eq!(report["support"], "seed");
+    assert_eq!(report["written"], serde_json::json!(["devbox.json"]));
+    assert_eq!(
+        devbox.read("devbox.json"),
+        "{\n  \"packages\": [\n    \"github:gubasso/release-kit/v0.2.15#default\"\n  ]\n}\n"
+    );
+    let status = devbox.json(&["self-depend", "status"]);
+    assert_eq!(manager_entry(&status, "devbox")["version"], "v0.2.15");
+    // The ubi pair renders the archive entry, and asdf is manual with
+    // its reason: nothing is invented and nothing is written.
+    let ubi = fixture.json(&[
+        "self-depend",
+        "add",
+        "--manager",
+        "mise",
+        "--venue",
+        "github-release",
+    ]);
+    assert_eq!(ubi["support"], "fragment");
+    assert_eq!(
+        ubi["fragments"][0]["text"],
+        format!(
+            "\"ubi:gubasso/release-kit\" = {{ version = \"{}\", exe = \"rk\" }}",
+            env!("CARGO_PKG_VERSION")
+        )
+    );
+    let asdf = SelfDependFixture::new();
+    let report = asdf.json(&["self-depend", "add", "--manager", "asdf"]);
+    assert_eq!(report["support"], "manual");
+    assert_eq!(report["reason"], "asdf-plugin-unknown");
+    assert_eq!(report["written"], serde_json::json!([]));
+    asdf.rk(&["self-depend", "add", "--manager", "asdf", "--apply"])
+        .assert()
+        .code(64)
+        .stderr(predicate::str::contains("asdf-plugin-unknown"));
+    assert!(!asdf.target().join(".tool-versions").exists());
+}
+
+/// A target already pinned through one manager refuses a second: two
+/// managers naming release-kit are two bump mechanisms.
+#[test]
+fn self_depend_add_refuses_a_second_bump_mechanism() {
+    let fixture = SelfDependFixture::new();
+    fixture.write_flake("v0.2.15");
+    let out = fixture
+        .rk(&["self-depend", "add", "--manager", "mise", "--apply"])
+        .output()
+        .expect("rk runs");
+    assert_eq!(out.status.code(), Some(73));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("already pins release-kit through flake"),
+        "{stderr}"
+    );
+    assert!(
+        !fixture.target().join("mise.toml").exists(),
+        "nothing was written"
+    );
+    // The same manager is served again: a re-run is not a second mechanism.
+    fixture
+        .rk(&["self-depend", "add", "--manager", "flake"])
+        .assert()
+        .success();
+}
+
+/// A one-fact manager moves its one fact offline: the mise line is
+/// rewritten in place, no lock is refreshed, and no nix is spawned.
+#[test]
+fn self_depend_sync_moves_a_mise_pin() {
+    let fixture = SelfDependFixture::new();
+    std::fs::write(
+        fixture.target().join("mise.toml"),
+        "[tools]\nnode = \"24\"\n\"cargo:release-kit\" = \"0.2.15\" # keep\n",
+    )
+    .expect("writes");
+    fixture.commit_all();
+    let (code, report) = fixture.sync_json(&["self-depend", "sync", "--caller", "operator"]);
+    assert_eq!(code, Some(0), "{report}");
+    assert_eq!(report["outcome"], "would-bump");
+    assert_eq!(report["manager"], "mise");
+    assert_eq!(report["from"], "0.2.15");
+    assert_eq!(report["to"], "0.2.16");
+    let (code, report) = fixture.sync_json(&[
+        "self-depend",
+        "sync",
+        "--apply",
+        "--caller",
+        "operator",
+        "--tag",
+        "v0.2.16",
+    ]);
+    assert_eq!(code, Some(0), "{report}");
+    assert_eq!(report["outcome"], "bumped");
+    assert_eq!(report["from"], "0.2.15");
+    assert_eq!(report["to"], "0.2.16");
+    assert_eq!(
+        report["steps"],
+        serde_json::json!([{"step": "rewrite-pin", "status": "ok"}])
+    );
+    assert_eq!(
+        fixture.read("mise.toml"),
+        "[tools]\nnode = \"24\"\n\"cargo:release-kit\" = \"0.2.16\" # keep\n"
+    );
+    assert!(
+        fixture.nix_log().is_empty(),
+        "a one-fact manager spawns no nix"
+    );
+    assert_eq!(
+        fixture.curl_log().lines().count(),
+        1,
+        "the preview discovered once; --tag makes no request"
+    );
+    let status = fixture.json(&["self-depend", "status"]);
+    assert_eq!(manager_entry(&status, "mise")["version"], "0.2.16");
+    // Uncommitted edits to the manager file are refused the same way.
+    std::fs::write(
+        fixture.target().join("mise.toml"),
+        "[tools]\n\"cargo:release-kit\" = \"0.2.14\"\n",
+    )
+    .expect("writes");
+    let (code, report) =
+        fixture.sync_json(&["self-depend", "sync", "--apply", "--caller", "operator"]);
+    assert_eq!(code, Some(73));
+    assert_eq!(report["outcome"], "refused-dirty");
+    assert!(
+        report["detail"]
+            .as_str()
+            .expect("detail")
+            .contains("mise.toml"),
+        "{report}"
+    );
+}
+
+/// Every venue in the enum has a dated citation from the venue's own
+/// documentation, so an advertised venue carries its source.
+#[test]
+fn every_venue_names_a_dated_citation() {
+    let reference = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("_docs/reference/REFERENCE-packaging-sources.md"),
+    )
+    .expect("the packaging sources reference reads");
+    for venue in release_kit::self_depend::venue::Venue::ALL {
+        let heading = format!("## Venue `{}`", venue.as_str());
+        assert!(
+            reference.contains(&heading),
+            "{}: the reference carries no section for the venue",
+            venue.as_str()
+        );
+    }
+    assert!(
+        reference.contains("Verified against the listed sources on 20"),
+        "the citations are dated"
+    );
+    assert!(
+        reference.contains(release_kit::self_depend::venue::SYSTEM_PACKAGE_REASON),
+        "the system package venue is recorded by its reason, with no variant"
     );
 }
 
@@ -14288,7 +14557,7 @@ fn self_depend_sync_preview_reports_the_bump_and_spawns_no_nix() {
         .stdout(predicate::str::contains("would-bump v0.2.15 -> v0.2.16"));
     let (code, report) = fixture.sync_json(&["self-depend", "sync"]);
     assert_eq!(code, Some(0));
-    assert_eq!(report["schema"], "rk.self-depend-sync/1");
+    assert_eq!(report["schema"], "rk.self-depend-sync/2");
     assert_eq!(report["mode"], "preview");
     assert_eq!(report["caller"], "envrc");
     assert_eq!(report["outcome"], "would-bump");
@@ -14901,7 +15170,7 @@ fn an_operator_run_ignores_the_daily_stamp() {
 #[test]
 fn every_envrc_path_exits_zero() {
     let cases: Vec<(&str, Arrange)> = vec![
-        ("no-flake", Box::new(|_| {})),
+        ("no-manager", Box::new(|_| {})),
         (
             "not-wired",
             Box::new(|f| {
