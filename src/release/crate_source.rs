@@ -150,6 +150,13 @@ impl CrateReleaseSource {
         })
     }
 
+    /// Whether the selector names an exact version whose verified bundle
+    /// the cache already holds, so a read touches no network.
+    #[must_use]
+    pub fn is_cached(&self) -> bool {
+        self.cached_index().is_some()
+    }
+
     /// An exact version's checksum, from a previous verified fetch.
     fn cached_index(&self) -> Option<(String, Digest)> {
         if self.selector == "latest" {

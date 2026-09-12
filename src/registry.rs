@@ -75,6 +75,13 @@ pub fn version_of(name: &str) -> Option<String> {
         .map(|pin| pin.version)
 }
 
+/// The pins one registry text declares: what another release's
+/// `versions.toml`, read through the seam, pins.
+#[must_use]
+pub fn pins_in(text: &str) -> Vec<Pin> {
+    parse(text)
+}
+
 fn parse(text: &str) -> Vec<Pin> {
     toml::from_str::<Registry>(text)
         .map(|registry| registry.tool)

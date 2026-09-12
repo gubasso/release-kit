@@ -57,6 +57,7 @@ fn run(cli: &Cli) -> Result<(), RkError> {
         Commands::Upgrade(args) => commands::upgrade::run(args),
         Commands::Adopt(args) => commands::adopt::run(args),
         Commands::Assess(args) => commands::assess::run(args),
+        Commands::Reconcile(args) => commands::reconcile::run(args),
         Commands::Setup(args) => commands::setup::run(args),
         Commands::Branches(args) => commands::branches::run(args),
         Commands::Lines(args) => commands::lines::run(args),
@@ -120,6 +121,7 @@ const fn name(command: &Commands) -> &'static str {
         Commands::Upgrade(_) => "upgrade",
         Commands::Adopt(_) => "adopt",
         Commands::Assess(_) => "assess",
+        Commands::Reconcile(_) => "reconcile",
         Commands::Setup(_) => "setup",
         Commands::Branches(_) => "branches",
         Commands::Lines(_) => "lines",
@@ -144,6 +146,7 @@ const fn wants_json(command: &Commands) -> bool {
     use release_kit::cli::depend::DependAction;
     use release_kit::cli::issue::IssueAction;
     use release_kit::cli::lines::LinesAction;
+    use release_kit::cli::reconcile::ReconcileAction;
     use release_kit::cli::runs::RunsAction;
     use release_kit::cli::self_depend::SelfDependAction;
     use release_kit::cli::setup::SetupAction;
@@ -156,6 +159,9 @@ const fn wants_json(command: &Commands) -> bool {
         Commands::Upgrade(args) => args.json,
         Commands::Adopt(args) => args.json,
         Commands::Assess(args) => args.json,
+        Commands::Reconcile(args) => match &args.action {
+            ReconcileAction::Plan(plan) => plan.json,
+        },
         Commands::Versions(args) => args.json,
         Commands::Doctor(args) => args.json,
         Commands::Setup(args) => match &args.action {

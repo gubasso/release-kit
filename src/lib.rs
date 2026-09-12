@@ -4,7 +4,8 @@
 //! `rk` binary in `main.rs` is the product. `embedded` holds the payload
 //! and `payload_roots` its one inventory, `cli` the argument surface,
 //! `commands` the handlers, `release` the seam every landing verb reads a
-//! release bundle through, `self_depend` the consumer pin, `depend` the
+//! release bundle through, `plan` the typed document every landing write
+//! comes from, `self_depend` the consumer pin, `depend` the
 //! dependency matrix, `skills` the user-scope skill install,
 //! `digest` the one hash type, and `error` the one exit-code matrix.
 
@@ -27,6 +28,7 @@ pub mod landing;
 pub mod maintenance;
 pub mod output;
 pub mod payload_roots;
+pub mod plan;
 pub mod probes;
 pub mod registry;
 pub mod release;
