@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.19](https://github.com/gubasso/release-kit/compare/v0.3.18...v0.3.19) - 2026-09-12
+
+### Other
+
+- *(self-depend)* rename rk devshell to rk self-depend ([#165](https://github.com/gubasso/release-kit/pull/165))
+
 ## [0.3.18](https://github.com/gubasso/release-kit/compare/v0.3.17...v0.3.18) - 2026-09-11
 
 ### Added
