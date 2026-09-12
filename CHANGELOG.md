@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.28](https://github.com/gubasso/release-kit/compare/v0.3.27...v0.3.28) - 2026-09-12
+
+### Added
+
+- *(skills/setup)* route every arrival through one skill over the plan ([#183](https://github.com/gubasso/release-kit/pull/183))
+
 ## [0.3.27](https://github.com/gubasso/release-kit/compare/v0.3.26...v0.3.27) - 2026-09-12
 
 ### Other
