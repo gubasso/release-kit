@@ -12,7 +12,7 @@ use std::fmt;
 const HEX: [u8; 16] = *b"0123456789abcdef";
 
 /// A SHA-256 digest, in its 64-character lowercase hex form.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Digest(String);
 
 impl Digest {

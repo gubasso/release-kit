@@ -20,6 +20,7 @@ use crate::landing::manifest::{self, FileRecord, Manifest, Parameters, Style, Wo
 use crate::landing::{self, Kind};
 use crate::output::Output;
 use crate::registry;
+use crate::release::EmbeddedReleaseSource;
 
 /// One verified destination.
 #[derive(Debug, Serialize)]
@@ -107,7 +108,9 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
         ));
     }
     let config = crate::config::load(args.target.as_std_path())?;
+    let source = EmbeddedReleaseSource;
     let params = landing::Params::resolve(
+        &source,
         &args.target,
         &landing::Inputs {
             tech: args.tech.as_deref(),
@@ -129,7 +132,7 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
     let style = params
         .style()
         .ok_or_else(|| RkError::Usage("landing style is unresolved".into()))?;
-    let mut entries = landing::projection(&params)?;
+    let mut entries = landing::projection(&source, &params)?;
     let withheld = landing::withhold_nix(&args.target, params.nix(), None, &mut entries)?;
     let (files, records) = verify(args, workflow, &entries)?;
 
@@ -150,7 +153,7 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
             &Manifest {
                 schema_version: manifest::SCHEMA_VERSION,
                 rk_version: env!("CARGO_PKG_VERSION").to_owned(),
-                payload_sha256: crate::commands::payload::report().payload_sha256,
+                payload_sha256: EmbeddedReleaseSource::manifest_ref().payload_sha256.clone(),
                 origin: "adopt".to_owned(),
                 tech: tech.clone(),
                 forge: params.forge().to_owned(),
@@ -229,7 +232,7 @@ fn verify(
     // An ill-formed hook file lists beside the mismatches rather than
     // refusing alone, so one run still names everything unadoptable.
     let mut defects: Vec<String> = Vec::new();
-    if let Some(defect) = landing::hooks_file_defect(&args.target)? {
+    if let Some(defect) = landing::hooks_file_defect(&EmbeddedReleaseSource, &args.target)? {
         defects.push(defect);
     }
     for entry in entries {

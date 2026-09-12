@@ -1254,6 +1254,7 @@ fn doctor_reports_every_probe_and_exits_0() {
             "glab-version",
             "openssl",
             "curl",
+            "registry",
             "nix",
             "direnv",
             "cosign",
@@ -1980,7 +1981,11 @@ fn the_routing_block_bounds_the_agents_initiative() {
         release_kit::landing::Workflow::Worktree,
         release_kit::landing::Workflow::Branches,
     ] {
-        let block = release_kit::landing::routing_block(workflow);
+        let block = release_kit::landing::routing_block(
+            &release_kit::release::EmbeddedReleaseSource,
+            workflow,
+        )
+        .expect("the embedded bundle carries the block");
         for phrase in [
             "guides and never drives",
             "unless the operator's request named that action",
@@ -2239,7 +2244,12 @@ fn the_routing_block_reads_as_plain_prose() {
         release_kit::landing::Workflow::Branches,
     ] {
         let rendered = release_kit::landing::render(
-            release_kit::landing::routing_block(workflow).as_bytes(),
+            release_kit::landing::routing_block(
+                &release_kit::release::EmbeddedReleaseSource,
+                workflow,
+            )
+            .expect("the embedded bundle carries the block")
+            .as_bytes(),
             &render_params("acme/widget", None),
         );
         let text = String::from_utf8(rendered).expect("the block is text");
@@ -10898,7 +10908,11 @@ fn worktree_json_failure_is_one_diagnostic_line() {
 fn guard_script() -> String {
     // The guard names the trunk, so the block carries a token and the
     // script under test is the rendered form a landing writes.
-    let template = release_kit::landing::hooks_block(release_kit::landing::Workflow::Worktree);
+    let template = release_kit::landing::hooks_block(
+        &release_kit::release::EmbeddedReleaseSource,
+        release_kit::landing::Workflow::Worktree,
+    )
+    .expect("the embedded bundle carries the block");
     let block = String::from_utf8(release_kit::landing::render(
         template.as_bytes(),
         &render_params("acme/widget", Some(release_kit::landing::Style::Trunk)),
@@ -13622,7 +13636,8 @@ fn self_depend_status_reports_the_two_host_probes() {
     };
     assert_eq!(failed["host"]["nix"], "failed");
     assert_eq!(failed["host"]["direnv"], "failed");
-    // The doctor carries the same two probes, Soft, in catalog order after curl.
+    // The doctor carries the same two probes, Soft, in catalog order after
+    // curl and the registry probe.
     let doctor = {
         let out = rk_scrubbed()
             .args(["doctor", "--json"])
@@ -13644,8 +13659,9 @@ fn self_depend_status_reports_the_two_host_probes() {
         .iter()
         .position(|id| *id == "curl")
         .expect("curl probed");
-    assert_eq!(ids[curl + 1], "nix");
-    assert_eq!(ids[curl + 2], "direnv");
+    assert_eq!(ids[curl + 1], "registry");
+    assert_eq!(ids[curl + 2], "nix");
+    assert_eq!(ids[curl + 3], "direnv");
     for probe in doctor["probes"].as_array().expect("probes") {
         if probe["id"] == "nix" || probe["id"] == "direnv" {
             assert_eq!(probe["class"], "soft", "{}", probe["id"]);
@@ -20665,4 +20681,514 @@ fn an_excluded_step_named_by_hand_refuses_to_apply() {
             "excluded by .release-kit/config.toml: this project cuts no tags",
         ))
         .stdout(predicate::str::contains("would run:").not());
+}
+
+// --- The release seam: every landing verb reads a bundle through it ---
+
+/// The curl stand-in for the crates venue: serves the sparse index entry
+/// and the crate archive from a registry directory by URL basename, and
+/// honors `-o`. A missing file answers 404, so a URL the source was not
+/// told about is a failure rather than a silent empty body.
+const MOCK_REGISTRY_CURL: &str = r#"#!/usr/bin/env bash
+STATE="__STATE__"
+printf '%s\n' "$*" >> "$STATE/curl-log"
+if [[ -f "$STATE/curl_fail" ]]; then
+  echo "curl: (6) Could not resolve host: index.crates.io" >&2
+  exit 6
+fi
+out=""
+args=("$@")
+url="${args[-1]}"
+for ((i = 0; i < ${#args[@]}; i++)); do
+  if [[ "${args[$i]}" == "-o" ]]; then out="${args[$((i + 1))]}"; fi
+done
+file="$STATE/registry/$(basename "$url")"
+if [[ ! -f "$file" ]]; then
+  echo "curl: (22) The requested URL returned error: 404" >&2
+  exit 22
+fi
+if [[ -n "$out" ]]; then cp "$file" "$out"; else cat "$file"; fi
+"#;
+
+/// A scratch registry: a home that is also the state root, the mocked
+/// curl, and a registry directory the mock serves from.
+struct RegistryFixture {
+    home: tempfile::TempDir,
+    mock: tempfile::TempDir,
+}
+
+impl RegistryFixture {
+    fn new() -> Self {
+        let fixture = Self {
+            home: tempfile::tempdir().expect("a scratch home exists"),
+            mock: tempfile::tempdir().expect("a scratch mock dir exists"),
+        };
+        let path = fixture.mock.path().join("curl");
+        std::fs::write(
+            &path,
+            MOCK_REGISTRY_CURL.replace("__STATE__", &fixture.mock.path().to_string_lossy()),
+        )
+        .expect("the mock writes");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                .expect("the mock is executable");
+        }
+        std::fs::create_dir_all(fixture.registry()).expect("the registry dir exists");
+        fixture
+    }
+
+    fn registry(&self) -> PathBuf {
+        self.mock.path().join("registry")
+    }
+
+    fn curl_log(&self) -> String {
+        std::fs::read_to_string(self.mock.path().join("curl-log")).unwrap_or_default()
+    }
+
+    fn cache(&self) -> PathBuf {
+        self.home.path().join("release-kit/release")
+    }
+
+    /// Publish one release to the mock registry: a crate archive laid out
+    /// the way `cargo package` lays one out, and its index line. The
+    /// index names the archive's real digest, or a wrong one under
+    /// `tamper`, which is the mismatch the source must refuse.
+    fn publish(&self, version: &str, schema: u32, tamper: bool) -> Digest {
+        let build = tempfile::tempdir().expect("a scratch build dir");
+        let root = build.path().join(format!("release-kit-{version}"));
+        for (path, body) in [
+            (
+                "Cargo.toml".to_owned(),
+                format!("[package]\nname = \"release-kit\"\nversion = \"{version}\"\n"),
+            ),
+            (
+                "src/commands/payload.rs".to_owned(),
+                format!("const PAYLOAD_SCHEMA: u32 = {schema};\n"),
+            ),
+            ("versions.toml".to_owned(), "schema = 1\n".to_owned()),
+            (
+                "snippets/_shared/github/SECURITY.md".to_owned(),
+                format!("# Security policy for {version}\n"),
+            ),
+            (
+                "snippets/rust/github/release-plz.toml".to_owned(),
+                "[workspace]\n".to_owned(),
+            ),
+            (
+                "blocks/agents-block.md.in".to_owned(),
+                "<!-- BEGIN release-kit -->\nRK_WORKFLOW_LINE\n<!-- END release-kit -->\n"
+                    .to_owned(),
+            ),
+        ] {
+            let file = root.join(&path);
+            std::fs::create_dir_all(file.parent().expect("a parent")).expect("dirs exist");
+            std::fs::write(file, body).expect("the file writes");
+        }
+        let archive = self.registry().join(format!("release-kit-{version}.crate"));
+        let status = std::process::Command::new("tar")
+            .arg("-czf")
+            .arg(&archive)
+            .arg("-C")
+            .arg(build.path())
+            .arg(format!("release-kit-{version}"))
+            .status()
+            .expect("tar runs");
+        assert!(status.success(), "the fixture archive packs");
+        let real = Digest::of(&std::fs::read(&archive).expect("the archive reads"));
+        let named = if tamper {
+            Digest::of(b"tampered")
+        } else {
+            real.clone()
+        };
+        let index = self.registry().join("release-kit");
+        let lines = std::fs::read_to_string(&index).unwrap_or_default();
+        let line = format!(
+            "{{\"name\":\"release-kit\",\"vers\":\"{version}\",\"deps\":[],\"cksum\":\"{named}\",\"features\":{{}},\"yanked\":false}}\n"
+        );
+        std::fs::write(index, lines + &line).expect("the index writes");
+        real
+    }
+
+    fn payload(&self, selector: &str) -> Command {
+        let mut command = rk();
+        command
+            .args(["payload", "--release", selector, "--json"])
+            .env("HOME", self.home.path())
+            .env("XDG_STATE_HOME", self.home.path())
+            .env("RK_CURL_BIN", self.mock.path().join("curl"));
+        command
+    }
+}
+
+/// The embedded source answers the very document the payload verb prints:
+/// one manifest, two readers, no drift between them.
+#[test]
+fn the_embedded_source_answers_the_manifest_the_payload_verb_emits() {
+    use release_kit::release::{EmbeddedReleaseSource, ReleaseSource as _};
+    let out = rk()
+        .args(["payload", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let printed: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    let manifest = EmbeddedReleaseSource
+        .manifest()
+        .expect("the embedded bundle describes itself");
+    let through_seam = serde_json::to_value(&manifest).expect("a manifest serializes");
+    assert_eq!(printed, through_seam);
+    assert_eq!(printed["payload_schema"], serde_json::Value::from(1));
+}
+
+/// The refactor's proof: every destination the seam projects carries the
+/// bytes the embedded roots hold on disk, composed the way the projection
+/// composed them before the seam existed. A difference here is a defect
+/// in the seam, never a finding about the payload.
+#[test]
+fn projection_through_the_embedded_source_is_byte_identical() {
+    use release_kit::landing::{Placement, Workflow, projection};
+    use release_kit::release::EmbeddedReleaseSource;
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let authored = |name: &str| -> String {
+        let text = std::fs::read_to_string(root.join("blocks").join(name)).expect("a block reads");
+        text.strip_suffix('\n').unwrap_or(&text).to_owned()
+    };
+    for (tech, forge) in [
+        ("rust", "github"),
+        ("rust", "gitlab"),
+        ("python", "github"),
+        ("bash", "github"),
+        ("bash", "gitlab"),
+    ] {
+        for workflow in [Workflow::Worktree, Workflow::Branches] {
+            let params = render_params_for(tech, forge, workflow);
+            let entries = projection(&EmbeddedReleaseSource, &params).expect("the pair projects");
+            assert!(!entries.is_empty(), "{tech}/{forge}");
+            for entry in &entries {
+                let expected: Vec<u8> = match (entry.placement, entry.destination.as_str()) {
+                    (Placement::Block, "AGENTS.md") => {
+                        let line = authored(match workflow {
+                            Workflow::Worktree => "agents-line-worktree.md.in",
+                            Workflow::Branches => "agents-line-branches.md.in",
+                        });
+                        authored("agents-block.md.in")
+                            .replacen("RK_WORKFLOW_LINE", &line, 1)
+                            .into_bytes()
+                    }
+                    (Placement::Block, ".pre-commit-config.yaml") => {
+                        let (guard, skip) = match workflow {
+                            Workflow::Worktree => (
+                                format!("{}\n", authored("pre-commit-worktree-guard.yaml.in")),
+                                "no-commit-to-branch,rk-worktree-location",
+                            ),
+                            Workflow::Branches => (String::new(), "no-commit-to-branch"),
+                        };
+                        authored("pre-commit-block.yaml.in")
+                            .replacen("RK_BRANCH_GRAMMAR", release_kit::landing::BRANCH_GRAMMAR, 1)
+                            .replacen("RK_SWEEP_SKIP", skip, 1)
+                            .replacen("RK_WORKTREE_GUARD", &guard, 1)
+                            .into_bytes()
+                    }
+                    (Placement::Block, other) => panic!("{other}: an unexpected block"),
+                    (Placement::Whole, destination) => {
+                        let pair = root
+                            .join("snippets")
+                            .join(tech)
+                            .join(forge)
+                            .join(destination);
+                        let shared = root.join("snippets/_shared").join(forge).join(destination);
+                        std::fs::read(if pair.is_file() { &pair } else { &shared })
+                            .unwrap_or_else(|_| panic!("{tech}/{forge}/{destination} is on disk"))
+                    }
+                };
+                assert_eq!(
+                    entry.baseline, expected,
+                    "{tech}/{forge} {}: the seam changed the bytes",
+                    entry.destination
+                );
+                if entry.kind != release_kit::landing::Kind::Rendered {
+                    assert_eq!(entry.rendered, entry.baseline, "{}", entry.destination);
+                }
+            }
+        }
+    }
+}
+
+/// Projection parameters for one pair and mode, built from a record the
+/// way production builds them.
+fn render_params_for(
+    tech: &str,
+    forge: &str,
+    workflow: release_kit::landing::Workflow,
+) -> release_kit::landing::Params {
+    use release_kit::landing::manifest::{Manifest, Parameters};
+    release_kit::landing::Params::from_record(&Manifest {
+        schema_version: release_kit::landing::manifest::SCHEMA_VERSION,
+        rk_version: "0.0.0".to_owned(),
+        payload_sha256: Digest::of(b""),
+        origin: "init".to_owned(),
+        tech: tech.to_owned(),
+        forge: forge.to_owned(),
+        landed_at: "2026-08-29T00:00:00Z".to_owned(),
+        parameters: Parameters {
+            repo: "acme/widget".to_owned(),
+            workflow,
+            style: Some(release_kit::landing::Style::Trunk),
+            nix: true,
+            trunk: release_kit::config::TRUNK_DEFAULT.to_owned(),
+            line_prefix: release_kit::config::LINE_PREFIX_DEFAULT.to_owned(),
+            security_contact: String::new(),
+            security_response: release_kit::config::RESPONSE_DEFAULT.to_owned(),
+        },
+        files: Vec::new(),
+        pins: std::collections::BTreeMap::new(),
+    })
+}
+
+/// No landing code reaches an embedded global: the projection, the block
+/// readers, and every front verb name the seam, asserted over the sources
+/// so a later shortcut fails here rather than in a planner that suddenly
+/// describes the wrong release.
+#[test]
+fn every_front_verb_passes_a_release_source() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let globals = [
+        "embedded::SNIPPETS",
+        "embedded::BLOCKS",
+        "embedded::walk",
+        "embedded::artifacts",
+        "embedded::root_files",
+        "include_str!(\"../blocks",
+        "include_str!(\"../snippets",
+    ];
+    for file in [
+        "landing.rs",
+        "commands/init.rs",
+        "commands/upgrade.rs",
+        "commands/adopt.rs",
+        "commands/status.rs",
+        "commands/payload.rs",
+    ] {
+        let text = std::fs::read_to_string(root.join(file)).expect("a source reads");
+        let production = text.split("#[cfg(test)]").next().unwrap_or("");
+        for global in globals {
+            assert!(
+                !production.contains(global),
+                "{file} reaches {global} instead of the seam"
+            );
+        }
+        assert!(
+            production.contains("ReleaseSource"),
+            "{file} names no release source"
+        );
+    }
+}
+
+/// The crate source resolves an exact version at the index, fetches the
+/// archive, verifies it against the index checksum, and answers the
+/// manifest of a release this binary does not carry.
+#[test]
+fn the_crate_source_verifies_against_the_index_checksum() {
+    let fixture = RegistryFixture::new();
+    let cksum = fixture.publish("0.9.0", 1, false);
+    let out = fixture
+        .payload("0.9.0")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["release_kit_version"], "0.9.0");
+    assert_eq!(report["payload_schema"], serde_json::Value::from(1));
+    let paths: Vec<&str> = report["artifacts"]
+        .as_array()
+        .expect("an artifact list")
+        .iter()
+        .map(|a| a["path"].as_str().expect("a path"))
+        .collect();
+    assert_eq!(
+        paths,
+        [
+            "snippets/_shared/github/SECURITY.md",
+            "snippets/rust/github/release-plz.toml",
+            "blocks/agents-block.md.in",
+            "versions.toml",
+        ]
+    );
+    assert!(
+        fixture.cache().join(cksum.to_string()).is_dir(),
+        "the bundle is cached by the index checksum"
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture.cache().join("index/0.9.0"))
+            .expect("the version maps to its checksum")
+            .trim(),
+        cksum.to_string()
+    );
+    let log = fixture.curl_log();
+    assert!(log.contains("index.crates.io/re/le/release-kit"), "{log}");
+    assert!(log.contains("release-kit-0.9.0.crate"), "{log}");
+}
+
+#[test]
+fn the_crate_source_refuses_a_checksum_mismatch_and_caches_nothing() {
+    let fixture = RegistryFixture::new();
+    let _ = fixture.publish("0.9.1", 1, true);
+    let out = fixture
+        .payload("0.9.1")
+        .assert()
+        .code(73)
+        .get_output()
+        .stderr
+        .clone();
+    let diagnostic: serde_json::Value =
+        serde_json::from_slice(&out).expect("stderr is one JSON diagnostic");
+    assert_eq!(diagnostic["reason"], "bundle-unverified");
+    assert_eq!(diagnostic["target_state"], "nothing was cached");
+    let cache = fixture.cache();
+    let bundles: Vec<_> = std::fs::read_dir(&cache)
+        .map(|entries| entries.flatten().collect())
+        .unwrap_or_default();
+    assert!(
+        bundles.iter().all(|entry| entry.file_name() == "index"
+            && std::fs::read_dir(entry.path())
+                .expect("the index dir reads")
+                .next()
+                .is_none()),
+        "nothing is cached after a mismatch: {bundles:?}"
+    );
+}
+
+/// A verified bundle is served from the cache with no network touch, and
+/// so is the exact version that named it.
+#[test]
+fn a_cached_digest_is_served_offline() {
+    let fixture = RegistryFixture::new();
+    let _ = fixture.publish("0.9.2", 1, false);
+    fixture.payload("0.9.2").assert().success();
+    let first = fixture.curl_log().lines().count();
+    assert_eq!(first, 2, "the index and the archive, once each");
+    std::fs::write(fixture.mock.path().join("curl_fail"), "").expect("the network goes away");
+    let out = fixture
+        .payload("0.9.2")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["release_kit_version"], "0.9.2");
+    assert_eq!(
+        fixture.curl_log().lines().count(),
+        first,
+        "the second call touched no network"
+    );
+}
+
+/// The fetch writes under the state directory and nowhere else: a landed
+/// scratch target is byte-identical after it, and the home carries the
+/// cache alone.
+#[test]
+fn the_crate_source_writes_under_the_state_directory_alone() {
+    let fixture = RegistryFixture::new();
+    let _ = fixture.publish("0.9.3", 1, false);
+    let target = tempfile::tempdir().expect("a scratch target exists");
+    std::fs::create_dir_all(target.path().join(".git")).expect("the target is a repository");
+    land_rust(target.path()).success();
+    let before = tree_digests(target.path());
+    fixture
+        .payload("0.9.3")
+        .current_dir(target.path())
+        .assert()
+        .success();
+    assert_eq!(
+        tree_digests(target.path()),
+        before,
+        "the target is untouched"
+    );
+    let mut top: Vec<String> = std::fs::read_dir(fixture.home.path().join("release-kit"))
+        .expect("the state root exists")
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| !name.starts_with("release-kit.log"))
+        .collect();
+    top.sort();
+    assert_eq!(
+        top,
+        ["release"],
+        "the cache is the only state the fetch writes"
+    );
+}
+
+/// `--release latest` resolves at the index to the newest unyanked
+/// version and freezes it; the human report names the source.
+#[test]
+fn payload_release_returns_another_releases_manifest() {
+    let fixture = RegistryFixture::new();
+    let _ = fixture.publish("0.9.4", 1, false);
+    let _ = fixture.publish("0.9.10", 1, false);
+    let out = fixture
+        .payload("latest")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(
+        report["release_kit_version"], "0.9.10",
+        "numeric order, not lexical"
+    );
+    let human = rk()
+        .args(["payload", "--release", "0.9.4"])
+        .env("HOME", fixture.home.path())
+        .env("XDG_STATE_HOME", fixture.home.path())
+        .env("RK_CURL_BIN", fixture.mock.path().join("curl"))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("release-kit 0.9.4\n"))
+        .stdout(predicate::str::contains(
+            "source crates 0.9.4 (index fetched, archive fetched and verified)",
+        ))
+        .stdout(predicate::str::contains("versions.toml: 1 file"));
+    drop(human);
+    let unknown = fixture
+        .payload("7.7.7")
+        .assert()
+        .code(64)
+        .get_output()
+        .stderr
+        .clone();
+    let diagnostic: serde_json::Value =
+        serde_json::from_slice(&unknown).expect("stderr is one JSON diagnostic");
+    assert_eq!(diagnostic["reason"], "usage");
+}
+
+/// A bundle declaring a newer protocol than this engine's is refused by
+/// name, with the engine to install, before any of it is read.
+#[test]
+fn payload_release_refuses_a_newer_schema_naming_the_engine_to_install() {
+    let fixture = RegistryFixture::new();
+    let _ = fixture.publish("9.0.0", release_kit::release::PAYLOAD_SCHEMA + 1, false);
+    let out = fixture
+        .payload("9.0.0")
+        .assert()
+        .code(73)
+        .get_output()
+        .stderr
+        .clone();
+    let diagnostic: serde_json::Value =
+        serde_json::from_slice(&out).expect("stderr is one JSON diagnostic");
+    assert_eq!(diagnostic["reason"], "unsupported-schema");
+    assert!(
+        diagnostic["action"]
+            .as_str()
+            .expect("an action")
+            .contains("install release-kit 9.0.0"),
+        "{diagnostic}"
+    );
 }

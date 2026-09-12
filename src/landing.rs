@@ -17,9 +17,10 @@ use serde::{Deserialize, Serialize};
 
 pub use manifest::{Style, Workflow};
 
+use crate::atomic;
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
-use crate::{atomic, embedded};
+use crate::release::{self, ReleaseManifest, ReleaseSource};
 
 /// The complete input to a payload projection. Comparisons reconstruct it
 /// from the landing record; landing verbs resolve their candidate inputs.
@@ -92,6 +93,7 @@ impl Params {
     /// # Errors
     /// Refuses unresolved identity or a style an existing target has not answered.
     pub fn resolve(
+        source: &dyn ReleaseSource,
         target: &Utf8Path,
         flags: &Inputs<'_>,
         config: Option<&crate::config::Config>,
@@ -129,7 +131,7 @@ impl Params {
                 .action("pass --tech <rust|python|bash>"),
             )
         })?;
-        pair_files(&tech, &resolved.forge)?;
+        pair_files(source, &tech, &resolved.forge)?;
         let workflow = flags
             .workflow
             .or_else(|| config.and_then(|c| c.landing.workflow))
@@ -564,20 +566,29 @@ pub const HOOKS_END: &str = "# END release-kit";
 pub const HOOK_TYPES_LINE: &str = "default_install_hook_types: [pre-commit, commit-msg, pre-push]";
 
 /// The authored routing-block template, `blocks/agents-block.md.in`.
-static AGENTS_BLOCK: &str = include_str!("../blocks/agents-block.md.in");
+const AGENTS_BLOCK: &str = "blocks/agents-block.md.in";
 
 /// The routing block's mode line, worktree form.
-static AGENTS_LINE_WORKTREE: &str = include_str!("../blocks/agents-line-worktree.md.in");
+const AGENTS_LINE_WORKTREE: &str = "blocks/agents-line-worktree.md.in";
 
 /// The routing block's mode line, branches form.
-static AGENTS_LINE_BRANCHES: &str = include_str!("../blocks/agents-line-branches.md.in");
+const AGENTS_LINE_BRANCHES: &str = "blocks/agents-line-branches.md.in";
 
 /// The authored hook-block template, `blocks/pre-commit-block.yaml.in`.
-static PRE_COMMIT_BLOCK: &str = include_str!("../blocks/pre-commit-block.yaml.in");
+const PRE_COMMIT_BLOCK: &str = "blocks/pre-commit-block.yaml.in";
 
 /// The worktree mode's guard entry, `blocks/pre-commit-worktree-guard.yaml.in`.
-static PRE_COMMIT_WORKTREE_GUARD: &str =
-    include_str!("../blocks/pre-commit-worktree-guard.yaml.in");
+const PRE_COMMIT_WORKTREE_GUARD: &str = "blocks/pre-commit-worktree-guard.yaml.in";
+
+/// One authored block, read through the seam as text.
+fn block(
+    source: &dyn ReleaseSource,
+    manifest: &ReleaseManifest,
+    path: &str,
+) -> Result<String, RkError> {
+    let bytes = release::read(source, manifest, path)?;
+    String::from_utf8(bytes).map_err(|_| anyhow::anyhow!("{path}: a block is UTF-8").into())
+}
 
 /// An authored block without the one final newline the repository's
 /// hooks enforce on every file under `blocks/`; a test in
@@ -622,25 +633,36 @@ pub fn scope_is_shaped(scope: &str) -> bool {
 
 /// The routing block for one workflow mode: the whole of target-side
 /// governance, authored as `blocks/agents-block.md.in` and never grown
-/// into a method chapter.
+/// into a method chapter, read from the bundle `source` carries.
 ///
 /// Markers included, without a
 /// trailing newline and with its scope token unrendered: the template
 /// with the mode's one orientation line substituted, everything else —
 /// the agent-boundary line included — byte-identical across modes.
-#[must_use]
-pub fn routing_block(workflow: Workflow) -> String {
-    let line = match workflow {
-        Workflow::Worktree => authored(AGENTS_LINE_WORKTREE),
-        Workflow::Branches => authored(AGENTS_LINE_BRANCHES),
-    };
-    authored(AGENTS_BLOCK).replacen("RK_WORKFLOW_LINE", line, 1)
+///
+/// # Errors
+///
+/// Returns the source's failures for a bundle that does not carry the
+/// block.
+pub fn routing_block(source: &dyn ReleaseSource, workflow: Workflow) -> Result<String, RkError> {
+    let manifest = source.manifest()?;
+    let line = block(
+        source,
+        &manifest,
+        match workflow {
+            Workflow::Worktree => AGENTS_LINE_WORKTREE,
+            Workflow::Branches => AGENTS_LINE_BRANCHES,
+        },
+    )?;
+    let template = block(source, &manifest, AGENTS_BLOCK)?;
+    Ok(authored(&template).replacen("RK_WORKFLOW_LINE", authored(&line), 1))
 }
 
-/// The hook block for one workflow mode, authored as
-/// `blocks/pre-commit-block.yaml.in` with the worktree mode's guard entry
-/// beside it in `blocks/pre-commit-worktree-guard.yaml.in`.
+/// The hook block for one workflow mode, read from the bundle `source`
+/// carries.
 ///
+/// Authored as `blocks/pre-commit-block.yaml.in` with the worktree mode's
+/// guard entry beside it in `blocks/pre-commit-worktree-guard.yaml.in`.
 /// Markers included, without a
 /// trailing newline and with its scope token unrendered. What is landed
 /// is what runs: the worktree mode's block carries the location guard and
@@ -648,19 +670,28 @@ pub fn routing_block(workflow: Workflow) -> String {
 /// guard entry at all — never an entry that reads local state to decide
 /// whether to enforce. The one branch grammar substitutes here from
 /// [`BRANCH_GRAMMAR`].
-#[must_use]
-pub fn hooks_block(workflow: Workflow) -> String {
+///
+/// # Errors
+///
+/// Returns the source's failures for a bundle that does not carry the
+/// block.
+pub fn hooks_block(source: &dyn ReleaseSource, workflow: Workflow) -> Result<String, RkError> {
+    let manifest = source.manifest()?;
     let (guard, skip) = match workflow {
         Workflow::Worktree => (
-            format!("{}\n", authored(PRE_COMMIT_WORKTREE_GUARD)),
+            format!(
+                "{}\n",
+                authored(&block(source, &manifest, PRE_COMMIT_WORKTREE_GUARD)?)
+            ),
             "no-commit-to-branch,rk-worktree-location",
         ),
         Workflow::Branches => (String::new(), "no-commit-to-branch"),
     };
-    authored(PRE_COMMIT_BLOCK)
+    let template = block(source, &manifest, PRE_COMMIT_BLOCK)?;
+    Ok(authored(&template)
         .replacen("RK_BRANCH_GRAMMAR", BRANCH_GRAMMAR, 1)
         .replacen("RK_SWEEP_SKIP", skip, 1)
-        .replacen("RK_WORKTREE_GUARD", &guard, 1)
+        .replacen("RK_WORKTREE_GUARD", &guard, 1))
 }
 
 /// The markers of a block destination, or `None` for a whole-file one.
@@ -798,70 +829,68 @@ pub struct Entry {
 }
 
 /// The landable files of one `(technology, forge)` pair, as
-/// `(destination, payload bytes)`.
+/// `(destination, payload bytes)`, read from the bundle `source` carries.
 ///
 /// # Errors
 ///
 /// Returns [`RkError::Usage`] naming the known bindings for an unknown
 /// technology, and the supported pairs for a pair with no files.
-pub fn pair_files(tech: &str, forge: &str) -> Result<Vec<(String, &'static [u8])>, RkError> {
+pub fn pair_files(
+    source: &dyn ReleaseSource,
+    tech: &str,
+    forge: &str,
+) -> Result<Vec<(String, Vec<u8>)>, RkError> {
+    let manifest = source.manifest()?;
+    let techs: Vec<String> = manifest
+        .dirs_under("snippets")
+        .into_iter()
+        .filter(|name| !name.starts_with('_'))
+        .collect();
     // The shared zone is not a technology: `_shared/<forge>` composes into
     // every pair and never names one.
-    if tech.starts_with('_') || embedded::SNIPPETS.get_dir(tech).is_none() {
-        let known: Vec<String> = embedded::SNIPPETS
-            .dirs()
-            .map(|dir| dir.path().to_string_lossy().into_owned())
-            .filter(|name| !name.starts_with('_'))
-            .collect();
+    if tech.starts_with('_') || !techs.iter().any(|known| known == tech) {
         return Err(RkError::Usage(format!(
             "unknown tech '{tech}'; the bindings are: {}",
-            known.join(", ")
+            techs.join(", ")
         )));
     }
-    let pair = format!("{tech}/{forge}");
-    let pair_dir = embedded::SNIPPETS.get_dir(&pair).ok_or_else(|| {
-        let known: Vec<String> = embedded::SNIPPETS
-            .dirs()
-            .filter(|dir| !dir.path().to_string_lossy().starts_with('_'))
-            .flat_map(include_dir::Dir::dirs)
-            .map(|dir| dir.path().to_string_lossy().replace('/', ", "))
+    let pair = format!("snippets/{tech}/{forge}");
+    if manifest.under(&pair).next().is_none() {
+        let known: Vec<String> = techs
+            .iter()
+            .flat_map(|tech| {
+                manifest
+                    .dirs_under(&format!("snippets/{tech}"))
+                    .into_iter()
+                    .map(move |forge| format!("{tech}, {forge}"))
+            })
             .collect();
-        RkError::Usage(format!(
+        return Err(RkError::Usage(format!(
             "the pair ({tech}, {forge}) has no landable files; the supported pairs are: {}",
             known.join("; ")
-        ))
-    })?;
+        )));
+    }
     // Payload paths carry their zone prefix; destinations do not. The
     // shared zone lands first, and a destination both zones ship is a
     // payload defect refused by name, never one zone silently winning.
-    let mut files: Vec<(String, &'static [u8])> = Vec::new();
-    let shared = format!("_shared/{forge}");
-    if let Some(shared_dir) = embedded::SNIPPETS.get_dir(&shared) {
-        for (path, contents) in embedded::walk(shared_dir) {
-            let rel = path
-                .strip_prefix(&format!("{shared}/"))
-                .map_or(path.as_str(), |rel| rel)
-                .to_owned();
-            files.push((rel, contents));
-        }
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+    for (rel, artifact) in manifest.under(&format!("snippets/_shared/{forge}")) {
+        files.push((rel.to_owned(), source.blob(&artifact.sha256)?));
     }
-    for (path, contents) in embedded::walk(pair_dir) {
-        let rel = path
-            .strip_prefix(&format!("{pair}/"))
-            .map_or(path.as_str(), |rel| rel)
-            .to_owned();
-        if files.iter().any(|(existing, _)| *existing == rel) {
+    for (rel, artifact) in manifest.under(&pair) {
+        if files.iter().any(|(existing, _)| existing == rel) {
             return Err(anyhow::anyhow!(
                 "the shared zone and the pair ({tech}, {forge}) both ship {rel}; the payload is defective"
             )
             .into());
         }
-        files.push((rel, contents));
+        files.push((rel.to_owned(), source.blob(&artifact.sha256)?));
     }
     Ok(files)
 }
 
-/// The whole payload projection for one pair.
+/// The whole payload projection for one pair, from the bundle `source`
+/// carries.
 ///
 /// Under the `repo`, `workflow`,
 /// `style`, and `nix` parameters: every snippet with its kind and
@@ -875,9 +904,9 @@ pub fn pair_files(tech: &str, forge: &str) -> Result<Vec<(String, &'static [u8])
 /// Returns the [`pair_files`] errors, and [`RkError::Other`] for a
 /// snippet destination the kind table does not classify, which is a
 /// defect in this binary.
-pub fn projection(params: &Params) -> Result<Vec<Entry>, RkError> {
+pub fn projection(source: &dyn ReleaseSource, params: &Params) -> Result<Vec<Entry>, RkError> {
     let mut entries = Vec::new();
-    for (destination, baseline) in pair_files(&params.tech, &params.forge)? {
+    for (destination, baseline) in pair_files(source, &params.tech, &params.forge)? {
         if !params.nix && NIX_DESTINATIONS.contains(&destination.as_str()) {
             continue;
         }
@@ -885,20 +914,20 @@ pub fn projection(params: &Params) -> Result<Vec<Entry>, RkError> {
             anyhow::anyhow!("the payload does not classify {destination}; the kind table is stale")
         })?;
         let rendered = match kind {
-            Kind::Rendered => render(baseline, params),
-            Kind::Seeded | Kind::State => baseline.to_vec(),
+            Kind::Rendered => render(&baseline, params),
+            Kind::Seeded | Kind::State => baseline.clone(),
         };
         entries.push(Entry {
             destination,
             kind,
             placement: Placement::Whole,
-            baseline: baseline.to_vec(),
+            baseline,
             rendered,
         });
     }
     for (destination, template) in [
-        (AGENTS_DESTINATION, routing_block(params.workflow)),
-        (HOOKS_DESTINATION, hooks_block(params.workflow)),
+        (AGENTS_DESTINATION, routing_block(source, params.workflow)?),
+        (HOOKS_DESTINATION, hooks_block(source, params.workflow)?),
     ] {
         entries.push(Entry {
             destination: destination.to_owned(),
@@ -1298,15 +1327,20 @@ pub fn write_destination(target: &Utf8Path, entry: &Entry) -> std::io::Result<()
 /// # Errors
 ///
 /// Any read failure other than the file being absent.
-pub fn hooks_file_defect(target: &Utf8Path) -> std::io::Result<Option<String>> {
+pub fn hooks_file_defect(
+    source: &dyn ReleaseSource,
+    target: &Utf8Path,
+) -> Result<Option<String>, RkError> {
     let path = target.join(HOOKS_DESTINATION);
     match std::fs::read(&path) {
         Ok(bytes) => {
             let text = String::from_utf8_lossy(&bytes);
-            Ok(splice_hooks_block(Some(&text), authored(PRE_COMMIT_BLOCK)).err())
+            let manifest = source.manifest()?;
+            let template = block(source, &manifest, PRE_COMMIT_BLOCK)?;
+            Ok(splice_hooks_block(Some(&text), authored(&template)).err())
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e),
+        Err(e) => Err(e.into()),
     }
 }
 
@@ -1319,8 +1353,8 @@ pub fn hooks_file_defect(target: &Utf8Path) -> std::io::Result<Option<String>> {
 /// # Errors
 ///
 /// [`RkError::Refusal`] naming the file, and any read failure.
-pub fn hooks_splice_refusal(target: &Utf8Path) -> Result<(), RkError> {
-    hooks_file_defect(target)?.map_or(Ok(()), |reason| {
+pub fn hooks_splice_refusal(source: &dyn ReleaseSource, target: &Utf8Path) -> Result<(), RkError> {
+    hooks_file_defect(source, target)?.map_or(Ok(()), |reason| {
         Err(RkError::refusal(
             Diagnostic::new(
                 Reason::StateDrift,
@@ -1340,11 +1374,33 @@ pub fn hooks_splice_refusal(target: &Utf8Path) -> Result<(), RkError> {
 mod tests {
     use super::{
         AGENTS_DESTINATION, BLOCK_BEGIN, BLOCK_END, BRANCH_GRAMMAR, HOOK_TYPES_LINE, HOOKS_BEGIN,
-        HOOKS_DESTINATION, HOOKS_END, Kind, SCOPE_SHAPE, Style, Workflow, extract_block,
-        hooks_block, kind_of, pair_files, projection, render, routing_block, splice_agents_block,
-        splice_hooks_block,
+        HOOKS_DESTINATION, HOOKS_END, Kind, SCOPE_SHAPE, Style, Workflow, extract_block, kind_of,
+        render, splice_agents_block, splice_hooks_block,
     };
     use crate::embedded;
+    use crate::release::EmbeddedReleaseSource;
+
+    /// The embedded bundle, which every test here reads through the seam.
+    const SOURCE: EmbeddedReleaseSource = EmbeddedReleaseSource;
+
+    fn pair_files(
+        tech: &str,
+        forge: &str,
+    ) -> Result<Vec<(String, Vec<u8>)>, crate::error::RkError> {
+        super::pair_files(&SOURCE, tech, forge)
+    }
+
+    fn projection(params: &super::Params) -> Result<Vec<super::Entry>, crate::error::RkError> {
+        super::projection(&SOURCE, params)
+    }
+
+    fn routing_block(workflow: Workflow) -> String {
+        super::routing_block(&SOURCE, workflow).expect("the embedded bundle carries the block")
+    }
+
+    fn hooks_block(workflow: Workflow) -> String {
+        super::hooks_block(&SOURCE, workflow).expect("the embedded bundle carries the block")
+    }
 
     #[test]
     fn private_reporting_path_tokens_are_reproducible() {
@@ -1640,10 +1696,10 @@ mod tests {
                                     nix || !super::NIX_DESTINATIONS.contains(&path.as_str())
                                 })
                                 .collect();
-                            let routing = super::routing_block(workflow);
-                            let hooks = super::hooks_block(workflow);
-                            expected.push((AGENTS_DESTINATION.to_owned(), routing.as_bytes()));
-                            expected.push((HOOKS_DESTINATION.to_owned(), hooks.as_bytes()));
+                            let routing = routing_block(workflow);
+                            let hooks = hooks_block(workflow);
+                            expected.push((AGENTS_DESTINATION.to_owned(), routing.into_bytes()));
+                            expected.push((HOOKS_DESTINATION.to_owned(), hooks.into_bytes()));
                             expected.sort_by(|a, b| a.0.cmp(&b.0));
                             assert_eq!(entries.len(), expected.len());
                             for (entry, (destination, baseline)) in entries.iter().zip(expected) {
@@ -1651,10 +1707,10 @@ mod tests {
                                 assert_eq!(entry.baseline, baseline);
                                 let rendered = match entry.kind {
                                     Kind::Rendered => super::render(
-                                        baseline,
+                                        &baseline,
                                         &super::Params::for_test("acme/team/widget", style),
                                     ),
-                                    Kind::Seeded | Kind::State => baseline.to_vec(),
+                                    Kind::Seeded | Kind::State => baseline.clone(),
                                 };
                                 assert_eq!(entry.rendered, rendered, "{destination}");
                             }
@@ -1673,6 +1729,7 @@ mod tests {
         nix: bool,
     ) -> Result<super::Params, crate::error::RkError> {
         super::Params::resolve(
+            &SOURCE,
             camino::Utf8Path::new("."),
             &super::Inputs {
                 tech: Some(tech),

@@ -60,11 +60,17 @@ pub enum Reason {
     Internal,
     /// A hand-authored target configuration is invalid.
     ConfigInvalid,
+    /// A registry or an index the engine reads a release from did not
+    /// answer.
+    RegistryUnreachable,
+    /// A fetched release bundle failed its verification against the
+    /// registry's own checksum, and nothing of it was kept.
+    BundleUnverified,
 }
 
 /// Every reason, in declaration order; a test asserts against this so an
 /// addition is deliberate and a rename impossible.
-pub const REASONS: [Reason; 19] = [
+pub const REASONS: [Reason; 21] = [
     Reason::Usage,
     Reason::TargetNotFound,
     Reason::ForgeUndetected,
@@ -84,6 +90,8 @@ pub const REASONS: [Reason; 19] = [
     Reason::Io,
     Reason::Internal,
     Reason::ConfigInvalid,
+    Reason::RegistryUnreachable,
+    Reason::BundleUnverified,
 ];
 
 impl Reason {
@@ -110,6 +118,8 @@ impl Reason {
             Self::Io => "io",
             Self::Internal => "internal",
             Self::ConfigInvalid => "config-invalid",
+            Self::RegistryUnreachable => "registry-unreachable",
+            Self::BundleUnverified => "bundle-unverified",
         }
     }
 }
@@ -261,6 +271,8 @@ mod tests {
                 "io",
                 "internal",
                 "config-invalid",
+                "registry-unreachable",
+                "bundle-unverified",
             ]
         );
     }

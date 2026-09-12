@@ -1,78 +1,28 @@
-//! `rk payload`: what this binary carries, provably.
+//! `rk payload`: what this binary carries, provably, and what another
+//! release carries, through the seam.
 //!
 //! The version alone does not identify a payload — two locally built
 //! binaries can share a Cargo version while embedding different bytes —
 //! so the report carries a digest per artifact and one aggregate over the
-//! ordered list, computed at runtime over the embedded bytes. A landing
-//! record, a bug report, or a comparison between two installs can then
-//! name the payload it actually saw.
-
-use serde::Serialize;
+//! ordered list, computed at runtime over the bytes. A landing record, a
+//! bug report, or a comparison between two installs can then name the
+//! payload it actually saw. `--release <version>` answers the same
+//! document for a release this binary does not carry, which is the first
+//! proof that the engine reads a bundle it was not compiled with.
 
 use crate::cli::payload::PayloadArgs;
-use crate::digest::Digest;
-use crate::embedded;
 use crate::error::RkError;
 use crate::output::Output;
+use crate::release::{CrateReleaseSource, EmbeddedReleaseSource, ReleaseManifest, ReleaseSource};
 
-/// The version of this report's shape, not of the payload it describes; a
-/// consumer is told when the shape changes without being told when the
-/// content does.
-const PAYLOAD_SCHEMA: u32 = 1;
+/// The machine form of the payload report, `rk.payload/1`: the release
+/// manifest itself.
+pub type Report = ReleaseManifest;
 
-/// One embedded file and the digest of its bytes.
-#[derive(Debug, Serialize)]
-pub struct Artifact {
-    /// The artifact's path, carrying its payload root as the first segment.
-    pub path: String,
-    /// SHA-256 of the embedded bytes.
-    pub sha256: Digest,
-}
-
-/// The machine form of the payload report.
-#[derive(Debug, Serialize)]
-pub struct Report {
-    /// The one version, from `CARGO_PKG_VERSION` and nowhere else.
-    pub release_kit_version: &'static str,
-    /// The version of this document's shape.
-    pub payload_schema: u32,
-    /// One digest over the ordered artifact list, identifying the payload
-    /// as a whole.
-    pub payload_sha256: Digest,
-    /// Every embedded artifact, in root order and sorted within each root.
-    pub artifacts: Vec<Artifact>,
-}
-
-/// Build the report over the embedded payload.
+/// The report over the embedded payload.
 #[must_use]
 pub fn report() -> Report {
-    let artifacts: Vec<Artifact> = embedded::artifacts()
-        .into_iter()
-        .map(|(path, bytes)| Artifact {
-            path,
-            sha256: Digest::of(bytes),
-        })
-        .collect();
-    Report {
-        release_kit_version: env!("CARGO_PKG_VERSION"),
-        payload_schema: PAYLOAD_SCHEMA,
-        payload_sha256: aggregate(&artifacts),
-        artifacts,
-    }
-}
-
-/// The aggregate digest: SHA-256 over one `<path>\n<sha256>\n` record per
-/// artifact, in list order. Any change to any artifact, any rename, and
-/// any reordering of the roots changes it.
-fn aggregate(artifacts: &[Artifact]) -> Digest {
-    let mut lines = String::new();
-    for artifact in artifacts {
-        lines.push_str(&artifact.path);
-        lines.push('\n');
-        lines.push_str(&artifact.sha256.to_string());
-        lines.push('\n');
-    }
-    Digest::of(lines.as_bytes())
+    EmbeddedReleaseSource::manifest_ref().clone()
 }
 
 /// Print the payload report.
@@ -80,13 +30,39 @@ fn aggregate(artifacts: &[Artifact]) -> Digest {
 /// # Errors
 ///
 /// Returns [`RkError::Other`] when the report cannot serialize, which is a
-/// defect in this binary rather than anything a caller can correct.
+/// defect in this binary rather than anything a caller can correct, and
+/// the crate source's refusals under `--release`.
 pub fn run(args: &PayloadArgs) -> Result<(), RkError> {
     let out = Output::new(args.json);
-    let report = report();
+    let (report, source_line) = match args.release.as_deref() {
+        None => (report(), None),
+        Some(selector) => {
+            let source = CrateReleaseSource::new(selector)?;
+            let manifest = source.manifest()?;
+            let resolved = source.resolve()?;
+            let line = format!(
+                "source crates {} ({}, {})",
+                resolved.version,
+                if resolved.index_fetched {
+                    "index fetched"
+                } else {
+                    "index cached"
+                },
+                if resolved.archive_fetched {
+                    "archive fetched and verified"
+                } else {
+                    "archive cached"
+                }
+            );
+            (manifest, Some(line))
+        }
+    };
     out.result_line(format!("release-kit {}", report.release_kit_version));
+    if let Some(line) = source_line {
+        out.result_line(line);
+    }
     out.result_line(format!("payload sha256 {}", report.payload_sha256));
-    for root in embedded::PAYLOAD_ROOTS {
+    for root in crate::payload_roots::PAYLOAD_ROOTS {
         let count = report
             .artifacts
             .iter()
@@ -100,22 +76,29 @@ pub fn run(args: &PayloadArgs) -> Result<(), RkError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Artifact, Report, aggregate, report};
+    use super::{Report, report};
     use crate::digest::Digest;
+    use crate::release::{Artifact, aggregate};
 
     /// The complete `rk.payload/1` shape, held by snapshot against fixture
     /// values, beside the live test that checks the real digests.
     #[test]
     fn the_payload_report_schema_snapshot_holds() {
-        let fixture = Report {
-            release_kit_version: "0.0.0",
-            payload_schema: 1,
-            payload_sha256: Digest::of(b""),
-            artifacts: vec![Artifact {
+        let fixture = Report::new(
+            "0.0.0".into(),
+            1,
+            vec![Artifact {
                 path: "versions.toml".into(),
                 sha256: Digest::of(b""),
             }],
-        };
+        );
+        assert_eq!(
+            fixture.payload_sha256,
+            aggregate(&fixture.artifacts),
+            "the aggregate is computed, never supplied"
+        );
+        let mut fixture = fixture;
+        fixture.payload_sha256 = Digest::of(b"");
         assert_eq!(
             serde_json::to_string(&fixture).expect("a report serializes"),
             r#"{"release_kit_version":"0.0.0","payload_schema":1,"payload_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","artifacts":[{"path":"versions.toml","sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}]}"#
@@ -126,6 +109,7 @@ mod tests {
     fn the_report_names_the_cargo_version_and_every_artifact() {
         let report = report();
         assert_eq!(report.release_kit_version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(report.payload_schema, crate::release::PAYLOAD_SCHEMA);
         assert!(!report.artifacts.is_empty());
         assert_eq!(report.payload_sha256, aggregate(&report.artifacts));
     }

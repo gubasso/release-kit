@@ -20,6 +20,7 @@ use crate::error::RkError;
 use crate::landing::manifest::{self, FileRecord, Manifest, Parameters, Style, Workflow};
 use crate::landing::{self, Entry, Kind};
 use crate::output::Output;
+use crate::release::EmbeddedReleaseSource;
 use crate::{digest::Digest, embedded, registry};
 
 /// One destination and what happened to it.
@@ -104,7 +105,9 @@ pub fn run(args: &InitArgs) -> Result<(), RkError> {
         ));
     }
     let config = crate::config::load(args.target.as_std_path())?;
+    let source = EmbeddedReleaseSource;
     let params = landing::Params::resolve(
+        &source,
         &args.target,
         &landing::Inputs {
             tech: args.tech.as_deref(),
@@ -127,7 +130,7 @@ pub fn run(args: &InitArgs) -> Result<(), RkError> {
     let mut effective = args.clone();
     effective.tech = Some(params.tech().into());
     effective.nix = params.nix();
-    let mut entries = landing::projection(&params)?;
+    let mut entries = landing::projection(&source, &params)?;
     let withheld = landing::withhold_nix(&args.target, params.nix(), None, &mut entries)?;
     let style = params
         .style()
@@ -254,7 +257,7 @@ fn apply(
     params: &landing::Params,
 ) -> Result<(), RkError> {
     refuse_a_recorded_target(args)?;
-    landing::hooks_splice_refusal(&args.target)?;
+    landing::hooks_splice_refusal(&EmbeddedReleaseSource, &args.target)?;
     let planned = plan(&args.target, entries)?;
     let mut file_entries = Vec::new();
     let mut records = Vec::new();
@@ -328,7 +331,7 @@ fn apply(
         &Manifest {
             schema_version: manifest::SCHEMA_VERSION,
             rk_version: env!("CARGO_PKG_VERSION").to_owned(),
-            payload_sha256: crate::commands::payload::report().payload_sha256,
+            payload_sha256: EmbeddedReleaseSource::manifest_ref().payload_sha256.clone(),
             origin: "init".to_owned(),
             tech: args.tech.clone().unwrap_or_default(),
             forge: forge.to_owned(),

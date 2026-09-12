@@ -18,6 +18,7 @@ use crate::error::RkError;
 use crate::landing::manifest::{self, Alignment, FileRecord, Manifest, Style, Workflow};
 use crate::landing::{self, Entry, Kind};
 use crate::output::Output;
+use crate::release::EmbeddedReleaseSource;
 use crate::{embedded, registry};
 
 /// One destination and what the upgrade decided for it.
@@ -100,7 +101,7 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
     let style = params
         .style()
         .ok_or_else(|| RkError::Usage("landing style is unresolved".into()))?;
-    let mut entries = landing::projection(&params)?;
+    let mut entries = landing::projection(&EmbeddedReleaseSource, &params)?;
     let withheld =
         landing::withhold_nix(&args.target, params.nix(), Some(&recorded), &mut entries)?;
     refuse_non_regular(&args.target, &entries)?;
@@ -214,6 +215,7 @@ fn resolve_params(
         }
     };
     landing::Params::resolve(
+        &EmbeddedReleaseSource,
         &args.target,
         &landing::Inputs {
             tech: args.tech.as_deref(),
@@ -302,7 +304,7 @@ fn rewrite_record(
         &Manifest {
             schema_version: manifest::SCHEMA_VERSION,
             rk_version: env!("CARGO_PKG_VERSION").to_owned(),
-            payload_sha256: crate::commands::payload::report().payload_sha256,
+            payload_sha256: EmbeddedReleaseSource::manifest_ref().payload_sha256.clone(),
             origin: recorded.origin.clone(),
             tech: params.tech().into(),
             forge: params.forge().into(),
@@ -381,7 +383,7 @@ fn decide_all<'a>(
 ) -> Result<(Vec<Decision<'a>>, Vec<String>), RkError> {
     let mut conflicts: Vec<String> = Vec::new();
     let mut decisions: Vec<Decision<'a>> = Vec::new();
-    if landing::hooks_file_defect(&args.target)?.is_some() {
+    if landing::hooks_file_defect(&EmbeddedReleaseSource, &args.target)?.is_some() {
         conflicts.push(landing::HOOKS_DESTINATION.to_owned());
     }
     for entry in entries {
