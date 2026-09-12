@@ -151,7 +151,7 @@ impl Params {
         };
         let repo = resolved
             .repo
-            .or_else(|| (purpose == Purpose::Preview).then(|| "OWNER".to_owned()))
+            .or_else(|| (purpose == Purpose::Preview).then(|| REPO_PLACEHOLDER.to_owned()))
             .ok_or_else(repo_unresolved)?;
         let trunk = config
             .and_then(|c| c.project.trunk.clone())
@@ -390,6 +390,12 @@ pub fn destinations() -> impl Iterator<Item = &'static str> {
 /// shape from [`SCOPE_SHAPE`], so the landed bytes stay a deterministic
 /// function of payload plus parameters.
 pub const OWNER_TOKEN: &[u8] = b"OWNER";
+
+/// The repository a preview stands in for where nothing answered.
+///
+/// It is a placeholder, never a project path: a plan that would render
+/// it into a target is blocked, and only a preview may carry it.
+pub const REPO_PLACEHOLDER: &str = "OWNER";
 
 /// The full recorded project path, including nested namespaces.
 pub const REPO_TOKEN: &[u8] = b"RK_REPO";

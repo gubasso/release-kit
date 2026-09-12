@@ -22802,6 +22802,294 @@ fn the_apply_exit_codes_match_the_matrix() {
         .code(74);
 }
 
+/// A stored plan names one checkout. Two targets holding identical bytes
+/// under identical planning inputs are still two targets, so the plan
+/// approved against one refuses to write into the other.
+#[test]
+fn a_stored_plan_refuses_to_apply_to_another_checkout() {
+    let home = tempfile::tempdir().expect("a scratch home exists");
+    let a = plan_target();
+    let b = plan_target();
+    let flags = ["--tech", "rust", "--decide", "workflow-mode=worktree"];
+    let (id, plan) = plan_stored(home.path(), a.path(), &flags);
+    assert_eq!(plan["readiness"], "ready", "the stored plan is ready");
+    assert_eq!(
+        plan["observed_state"]["repository"]["target"]
+            .as_str()
+            .expect("a target"),
+        std::fs::canonicalize(a.path())
+            .expect("the target resolves")
+            .to_string_lossy(),
+        "the plan names the canonical target"
+    );
+    // The stored request carries the resolved path, not the relative one.
+    let request: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(stored_dir(home.path(), &id).join("request.json")).expect("the request"),
+    )
+    .expect("one JSON object");
+    assert!(
+        Path::new(request["target"].as_str().expect("a target")).is_absolute(),
+        "the stored request names an absolute target: {request}"
+    );
+
+    // B is byte-identical to A and takes the same planning inputs.
+    let before_b = tree_digests(b.path());
+    assert_eq!(before_b, tree_digests(a.path()));
+    let (id_b, _) = plan_stored(home.path(), b.path(), &flags);
+    assert_ne!(id_b, id, "two targets are two plans");
+
+    // Applying A's plan from inside B lands in A, the checkout the plan
+    // named. Before the target was bound, the relative target resolved
+    // against the working directory and B took A's approved writes.
+    rk_home(home.path())
+        .current_dir(b.path())
+        .args(["reconcile", "apply", "--json", &id])
+        .assert()
+        .success();
+    assert_eq!(
+        tree_digests(b.path()),
+        before_b,
+        "B is byte-identical: the plan never named it"
+    );
+    assert!(
+        a.path().join(".release-kit/manifest.json").is_file(),
+        "A took the writes its plan approved"
+    );
+}
+
+/// Execution order is a fingerprint input: the record is written last,
+/// and a stored plan that moves it earlier refuses before any write.
+#[test]
+fn a_reordered_stored_plan_refuses() {
+    let home = tempfile::tempdir().expect("a scratch home exists");
+    let target = plan_target();
+    let (id, _) = plan_stored(
+        home.path(),
+        target.path(),
+        &["--tech", "rust", "--decide", "workflow-mode=worktree"],
+    );
+    let before = tree_digests(target.path());
+    let path = stored_dir(home.path(), &id).join("plan.json");
+    let mut plan: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).expect("the plan")).expect("one JSON object");
+    let operations = plan["operations"].as_array_mut().expect("operations");
+    assert!(
+        operations.len() > 1,
+        "a setup plan carries more than one operation"
+    );
+    // Move the record write to the front, changing nothing else.
+    let record = operations.pop().expect("a last operation");
+    assert_eq!(record["op"], "write-record", "the record is planned last");
+    operations.insert(0, record);
+    std::fs::write(&path, serde_json::to_vec(&plan).expect("serializes")).expect("the plan writes");
+
+    let refusal = refusal_of(&apply_stored(home.path(), &id).code(73));
+    assert_eq!(refusal["reason"], "state-drift", "{refusal}");
+    assert_eq!(
+        tree_digests(target.path()),
+        before,
+        "the target is byte-identical"
+    );
+}
+
+/// The planner emits exactly one record write, last, after every file it
+/// describes.
+#[test]
+fn the_record_is_the_last_operation() {
+    let target = plan_target();
+    let plan = plan_json(
+        target.path(),
+        &["--tech", "rust", "--decide", "workflow-mode=worktree"],
+    );
+    let operations = plan["operations"].as_array().expect("operations");
+    let records = operations
+        .iter()
+        .filter(|operation| operation["op"] == "write-record")
+        .count();
+    assert_eq!(records, 1, "one record write: {operations:?}");
+    assert_eq!(
+        operations.last().expect("a last operation")["op"],
+        "write-record",
+        "the record write is last"
+    );
+}
+
+/// The store files a blob under its digest and reads it back by filename,
+/// so apply proves the bytes still digest to that name before it stages
+/// anything. A corrupted blob costs the target nothing.
+#[test]
+fn apply_refuses_a_corrupted_blob_with_the_target_unchanged() {
+    let home = tempfile::tempdir().expect("a scratch home exists");
+    let target = landed_old_target();
+    let (id, plan) = plan_stored(
+        home.path(),
+        target.path(),
+        &["--decide", "partial-guidance=accept"],
+    );
+    let before = tree_digests(target.path());
+    // The bytes a write operation names, not just any blob the store
+    // kept: this is the claim the digest filename makes.
+    let written = plan["operations"]
+        .as_array()
+        .expect("operations")
+        .iter()
+        .find(|operation| operation["op"] == "write-file")
+        .expect("a file write")["after"]
+        .as_str()
+        .expect("an after digest")
+        .to_owned();
+    let blob = stored_dir(home.path(), &id).join("blobs").join(&written);
+    assert!(blob.is_file(), "the store holds {written}");
+    std::fs::write(&blob, b"altered\n").expect("the blob is altered");
+
+    let refusal = refusal_of(&apply_stored(home.path(), &id).code(73));
+    assert_eq!(refusal["reason"], "state-drift", "{refusal}");
+    assert!(
+        refusal["message"]
+            .as_str()
+            .expect("a message")
+            .contains("altered"),
+        "the refusal names the altered blob: {refusal}"
+    );
+    assert_eq!(
+        tree_digests(target.path()),
+        before,
+        "the target is byte-identical"
+    );
+}
+
+/// A precondition that turns decision-required between plan and apply
+/// leaves every canonical line identical, because canonicalization
+/// excludes decision-required evaluations and unselected decisions. Only
+/// the freshly derived readiness sees it, and apply proceeds on ready
+/// alone.
+#[test]
+fn apply_refuses_when_the_world_needs_a_new_decision() {
+    let home = tempfile::tempdir().expect("a scratch home exists");
+    let target = landed_old_target();
+    let (id, plan) = plan_stored(
+        home.path(),
+        target.path(),
+        &["--decide", "partial-guidance=accept"],
+    );
+    assert_eq!(plan["readiness"], "ready", "the stored plan is ready");
+
+    // A manager file that could pin rk but records no version raises the
+    // pin-manager decision on a target behind the candidate. It is no
+    // payload destination, so no operation, record, or required
+    // precondition moves: the fingerprint cannot see it.
+    std::fs::write(
+        target.path().join("mise.toml"),
+        "[tools]\n\"cargo:release-kit\" = \"latest\"\n",
+    )
+    .expect("the manager file writes");
+    let before = tree_digests(target.path());
+
+    let fresh = plan_json(target.path(), &["--decide", "partial-guidance=accept"]);
+    assert_eq!(
+        fresh["input_fingerprint"], plan["input_fingerprint"],
+        "the fingerprint is blind to it"
+    );
+    assert_eq!(fresh["readiness"], "needs-decision", "{fresh}");
+
+    let refusal = refusal_of(&apply_stored(home.path(), &id).code(73));
+    assert_eq!(refusal["reason"], "plan-not-ready", "{refusal}");
+    assert_eq!(
+        tree_digests(target.path()),
+        before,
+        "the target is byte-identical"
+    );
+}
+
+/// The preview placeholder renders and never lands: a target with no
+/// origin remote and no answered repository plans as blocked, because a
+/// rendered file carrying `OWNER` names nobody's project.
+#[test]
+fn an_unresolved_repository_blocks_the_plan() {
+    let target = plan_target();
+    // No --repo, and the target has no origin remote.
+    let out = rk()
+        .args(["reconcile", "plan", "--json", "--target"])
+        .arg(target.path())
+        .args(["--tech", "rust", "--forge", "github"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let plan: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    // The preview still renders: the plan computed and carries its work.
+    assert!(
+        !plan["operations"]
+            .as_array()
+            .expect("operations")
+            .is_empty(),
+        "the preview renders its operations"
+    );
+    assert_eq!(plan["readiness"], "blocked", "{plan}");
+    let repository = plan["preconditions"]
+        .as_array()
+        .expect("preconditions")
+        .iter()
+        .find(|p| p["id"] == "repository-resolved")
+        .expect("the repository precondition");
+    assert_eq!(repository["requirement"], "required");
+    assert_eq!(repository["evaluation"]["state"], "unsatisfied");
+
+    // Answering it satisfies the precondition.
+    let answered = plan_json(target.path(), &["--tech", "rust"]);
+    let repository = answered["preconditions"]
+        .as_array()
+        .expect("preconditions")
+        .iter()
+        .find(|p| p["id"] == "repository-resolved")
+        .expect("the repository precondition");
+    assert_eq!(repository["evaluation"]["state"], "satisfied");
+}
+
+/// An adoption writes the record and nothing else, so a manager pin the
+/// target carries is reported and never moved.
+#[test]
+fn adoption_writes_no_pin() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+    std::fs::remove_dir_all(target.path().join(".release-kit")).expect("the record removes");
+    // A mise pin naming an older release-kit than this engine.
+    let mise = target.path().join("mise.toml");
+    let pinned = "[tools]\n\"cargo:release-kit\" = \"0.1.0\"\n";
+    std::fs::write(&mise, pinned).expect("the pin writes");
+    let before = tree_digests(target.path());
+
+    rk().args([
+        "adopt", "--tech", "rust", "--forge", "github", "--style", "trunk",
+    ])
+    .args([
+        "--workflow",
+        "worktree",
+        "--repo",
+        "acme/widget",
+        "--target",
+    ])
+    .arg(target.path())
+    .arg("--apply")
+    .assert()
+    .success();
+
+    assert_eq!(
+        std::fs::read_to_string(&mise).expect("the pin reads"),
+        pinned,
+        "the adoption left the pin alone"
+    );
+    let after: Vec<(String, String)> = tree_digests(target.path())
+        .into_iter()
+        .filter(|(path, _)| !path.starts_with(".release-kit"))
+        .collect();
+    assert_eq!(
+        after, before,
+        "every file outside .release-kit/ is untouched"
+    );
+}
+
 fn copy_tree(from: &Path, to: &Path) {
     for entry in std::fs::read_dir(from).expect("the tree reads") {
         let entry = entry.expect("an entry");
@@ -23358,5 +23646,286 @@ fn the_reconcile_runbook_states_the_plan_handling_rule() {
         text.matches("never pasted").count(),
         1,
         "the rule is stated once"
+    );
+}
+
+/// One apply holds its target, so a second against the same target
+/// refuses rather than interleaving its staging with the first's.
+///
+/// Two runs that each pass their own validation and then commit over
+/// each other leave one plan's files beside another's record: a target
+/// describing a landing that never happened. The lock is what makes the
+/// second run wait rather than discover that afterwards.
+#[test]
+fn a_second_apply_against_one_target_refuses_while_the_first_holds_it() {
+    let home = tempfile::tempdir().expect("a scratch home exists");
+    let target = plan_target();
+    let (id, _) = plan_stored(
+        home.path(),
+        target.path(),
+        &["--decide", "workflow-mode=worktree"],
+    );
+    // The lock the first run would hold, taken by hand: a second process
+    // cannot be paused mid-apply from here, and the file is the whole of
+    // what the first run holds.
+    let canonical = std::fs::canonicalize(target.path()).expect("the target canonicalizes");
+    let locks = home.path().join("release-kit").join("locks");
+    std::fs::create_dir_all(&locks).expect("the locks directory exists");
+    let held = locks.join(format!(
+        "{}.lock",
+        Digest::of(canonical.to_string_lossy().as_bytes())
+    ));
+    std::fs::write(&held, "4242\n").expect("the lock writes");
+
+    let before = tree_digests(target.path());
+    let refused = apply_stored(home.path(), &id).failure();
+    let diagnostic = refusal_of(&refused);
+    assert_eq!(diagnostic["reason"], "target-busy", "{diagnostic}");
+    assert_eq!(diagnostic["target_state"], "unchanged", "{diagnostic}");
+    assert!(
+        diagnostic["message"]
+            .as_str()
+            .expect("a message")
+            .contains("4242"),
+        "the refusal names what holds the target: {diagnostic}"
+    );
+    assert_eq!(
+        tree_digests(target.path()),
+        before,
+        "a refused apply writes nothing"
+    );
+
+    // The holder gone, the same plan applies: the lock gates the run and
+    // does not spoil the plan.
+    std::fs::remove_file(&held).expect("the lock clears");
+    apply_stored(home.path(), &id).success();
+    assert!(
+        target.path().join(".release-kit/manifest.json").is_file(),
+        "the freed target takes the landing"
+    );
+}
+
+/// A host where no state root resolves has nowhere to put the lock, so
+/// the apply refuses instead of running unguarded.
+///
+/// The front tolerates a missing plan store and a missing journal, so
+/// without this refusal two of these would each stage against one target
+/// and commit over each other. Both invocations here refuse, which is
+/// what proves neither can proceed: the guarantee is that no apply runs
+/// unlocked, not that one of the two wins.
+#[test]
+fn an_apply_refuses_when_it_cannot_take_the_target() {
+    let target = plan_target();
+    let before = tree_digests(target.path());
+    let rootless = || {
+        let mut command = rk();
+        command
+            .env_remove("XDG_STATE_HOME")
+            .env_remove("HOME")
+            .args(["init", "--tech", "rust", "--forge", "github"])
+            .args(["--repo", "acme/widget", "--json", "--target"])
+            .arg(target.path())
+            .arg("--apply");
+        command
+    };
+    for _ in 0..2 {
+        let refused = rootless().assert().failure();
+        let diagnostic = refusal_of(&refused);
+        assert_eq!(diagnostic["reason"], "prerequisite-unmet", "{diagnostic}");
+        assert_eq!(diagnostic["target_state"], "unchanged", "{diagnostic}");
+        assert!(
+            diagnostic["action"]
+                .as_str()
+                .expect("an action")
+                .contains("XDG_STATE_HOME"),
+            "the refusal names what to set: {diagnostic}"
+        );
+    }
+    assert_eq!(
+        tree_digests(target.path()),
+        before,
+        "an apply that took no lock wrote nothing"
+    );
+}
+
+/// A manager file the target carries that names no release-kit raises the
+/// pin decision, because that is exactly the case it exists to ask about.
+///
+/// A present file naming release-kit without a version reads as
+/// `unpinned` and a file naming it not at all reads as `absent`; both are
+/// a manager the target has and does not pin rk through.
+#[test]
+fn a_manager_file_naming_no_release_kit_asks_the_pin_decision() {
+    let target = landed_old_target();
+    std::fs::write(target.path().join("mise.toml"), "[tools]\nnode = \"24\"\n")
+        .expect("the manager file writes");
+    let plan = plan_json(target.path(), &["--decide", "partial-guidance=accept"]);
+    let ids: Vec<&str> = plan["decisions"]
+        .as_array()
+        .expect("decisions")
+        .iter()
+        .map(|decision| decision["id"].as_str().expect("an id"))
+        .collect();
+    assert!(
+        ids.contains(&"pin-manager"),
+        "a present manager file naming no release-kit asks the decision: {ids:?}"
+    );
+    assert_eq!(plan["readiness"], "needs-decision", "{plan}");
+}
+
+/// A decision takes the answers it declares and no others, refused where
+/// the operator typed it.
+///
+/// An unrecognized answer that satisfied its precondition would be
+/// fingerprinted and accepted again on recomputation, so the apply would
+/// write with no declared choice ever selected.
+#[test]
+fn an_unrecognized_decision_answer_refuses_naming_the_choices() {
+    let target = plan_target();
+    let refused = rk()
+        .args(["reconcile", "plan", "--json", "--target"])
+        .arg(target.path())
+        .args(["--forge", "github", "--repo", "acme/widget"])
+        .args(["--decide", "release-activity=typo"])
+        .assert()
+        .failure()
+        .code(64);
+    let rendered = String::from_utf8_lossy(&refused.get_output().stderr).into_owned();
+    assert!(rendered.contains("history"), "{rendered}");
+    assert!(rendered.contains("migrate"), "{rendered}");
+
+    // An id no decision carries is refused the same way.
+    let unknown = rk()
+        .args(["reconcile", "plan", "--json", "--target"])
+        .arg(target.path())
+        .args(["--forge", "github", "--repo", "acme/widget"])
+        .args(["--decide", "not-a-decision=history"])
+        .assert()
+        .failure()
+        .code(64);
+    let rendered = String::from_utf8_lossy(&unknown.get_output().stderr).into_owned();
+    assert!(rendered.contains("release-activity"), "{rendered}");
+
+    // The declared answer still works, so the gate refuses the wrong
+    // answer rather than every answer.
+    rk().args(["reconcile", "plan", "--json", "--target"])
+        .arg(target.path())
+        .args(["--forge", "github", "--repo", "acme/widget"])
+        .args(["--decide", "workflow-mode=worktree"])
+        .assert()
+        .success();
+}
+
+/// A cached bundle is served only where its bytes are the ones the
+/// verified archive unpacked to.
+///
+/// The registry vouches for the archive, and the manifest recomputes its
+/// digests from the directory, so without the seal an altered cache
+/// entry reads back as a release the registry verified.
+#[test]
+fn an_altered_cache_entry_refuses_rather_than_serving_altered_bytes() {
+    let fixture = RegistryFixture::new();
+    let cksum = fixture.publish_full("0.9.7");
+    // The first read fetches, verifies, and seals.
+    fixture.payload("0.9.7").assert().success();
+
+    let cached = fixture
+        .home
+        .path()
+        .join("release-kit")
+        .join("release")
+        .join(cksum.to_string());
+    let snippet = cached.join("versions.toml");
+    assert!(snippet.is_file(), "the cache holds the bundle");
+    std::fs::write(&snippet, "schema = 1\n# altered in the cache\n")
+        .expect("the cached file is altered");
+
+    let refused = fixture.payload("0.9.7").assert().failure();
+    let diagnostic: serde_json::Value =
+        serde_json::from_slice(&refused.get_output().stderr).expect("a JSON diagnostic");
+    assert_eq!(diagnostic["reason"], "bundle-unverified", "{diagnostic}");
+
+    // A seal removed is the same answer: an unsealed cache vouches for
+    // nothing.
+    std::fs::write(&snippet, "schema = 1\n").expect("the file is restored");
+    let seal = fixture
+        .home
+        .path()
+        .join("release-kit")
+        .join("release")
+        .join(format!("{cksum}.seal"));
+    std::fs::remove_file(&seal).expect("the seal clears");
+    let unsealed = fixture.payload("0.9.7").assert().failure();
+    let diagnostic: serde_json::Value =
+        serde_json::from_slice(&unsealed.get_output().stderr).expect("a JSON diagnostic");
+    assert_eq!(diagnostic["reason"], "bundle-unverified", "{diagnostic}");
+}
+
+/// A cached baseline that will not verify is an evidence gap, never a
+/// refusal.
+///
+/// The candidate is what an apply writes and it still refuses unverified;
+/// the recorded release only says what the target started from. A cache
+/// written before the seal existed is exactly this case, and a plan that
+/// cannot be computed at all leaves the operator no way to say so, not
+/// even `--decide partial-baseline=accept`.
+#[test]
+fn an_unsealed_cached_baseline_is_not_observed_with_its_reason() {
+    let fixture = RegistryFixture::new();
+    let cksum = fixture.publish_full("0.9.9");
+    // Fetched, verified, and sealed, so the recorded release is cached.
+    fixture.payload("0.9.9").assert().success();
+
+    let target = plan_target();
+    land_rust(target.path()).success();
+    let mut manifest = read_manifest(target.path());
+    manifest["rk_version"] = serde_json::json!("0.9.9");
+    manifest["payload_sha256"] = serde_json::json!(Digest::of(b"an older payload").to_string());
+    write_manifest(target.path(), &manifest);
+
+    let plan_offline = || {
+        let out = rk()
+            .args(["reconcile", "plan", "--json", "--target"])
+            .arg(target.path())
+            .env("HOME", fixture.home.path())
+            .env("XDG_STATE_HOME", fixture.home.path())
+            .env("RK_CURL_BIN", "/bin/false")
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        serde_json::from_slice::<serde_json::Value>(&out).expect("one JSON object")
+    };
+
+    // Sealed: the baseline reads, so the gap is the seal's absence and
+    // nothing else.
+    let sealed = plan_offline();
+    assert_eq!(sealed["release"]["baseline"]["state"], "cached", "{sealed}");
+
+    let seal = fixture.cache().join(format!("{cksum}.seal"));
+    std::fs::remove_file(&seal).expect("the seal clears");
+    let unsealed = plan_offline();
+    assert_eq!(
+        unsealed["release"]["baseline"]["state"], "not-observed",
+        "{unsealed}"
+    );
+    let reason = unsealed["release"]["baseline"]["reason"]
+        .as_str()
+        .expect("a reason");
+    assert!(
+        reason.contains("0.9.9") && reason.contains("did not verify"),
+        "the gap names the release and why it is a gap: {reason}"
+    );
+    let p = precondition(&unsealed, "baseline-observed");
+    assert_eq!(p["evaluation"]["state"], "not-observed", "{p}");
+    assert_eq!(p["decision"], "partial-baseline", "{p}");
+
+    // A seal that vouches for other bytes is the same answer.
+    std::fs::write(&seal, format!("{cksum}\naltered\n")).expect("a wrong seal writes");
+    let mismatched = plan_offline();
+    assert_eq!(
+        mismatched["release"]["baseline"]["state"], "not-observed",
+        "{mismatched}"
     );
 }

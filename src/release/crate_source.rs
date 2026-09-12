@@ -128,7 +128,15 @@ impl CrateReleaseSource {
             (version, cksum, true)
         };
         let dir = self.cache.join(cksum.to_string());
+        // A cache hit is served only where the extracted tree still
+        // digests to what the verified archive unpacked to. The registry
+        // vouches for the archive, and the seal carries that vouching
+        // forward to the bytes on disk; without the check, an altered
+        // cache entry would be read back as a release the registry
+        // verified, because the manifest recomputes its digests from
+        // whatever the directory now holds.
         let archive_fetched = if dir.is_dir() {
+            verify_seal(&self.cache, &cksum, &dir)?;
             false
         } else {
             self.fetch_and_verify(&version, &cksum, &dir)?;
@@ -263,8 +271,99 @@ impl CrateReleaseSource {
             ));
         }
         std::fs::rename(&tree, dir)?;
+        // The seal, written only now: the archive verified, so the tree
+        // it unpacked to is what the registry's checksum vouches for.
+        std::fs::write(
+            seal_path(&self.cache, cksum),
+            seal_body(cksum, &tree_digest(dir)?),
+        )?;
         Ok(())
     }
+}
+
+/// The seal beside one cached bundle, naming the archive checksum the
+/// registry vouched for and the digest of the tree it unpacked to.
+///
+/// It lives beside the directory rather than inside it, so the tree
+/// digest covers the whole bundle and nothing else.
+fn seal_path(cache: &Path, cksum: &Digest) -> PathBuf {
+    cache.join(format!("{cksum}.seal"))
+}
+
+/// The seal's two lines: the archive checksum, then the tree digest.
+///
+/// Joined rather than formatted, because two escapes in one format
+/// string read to the source scan as an artifact body.
+fn seal_body(cksum: &Digest, tree: &Digest) -> String {
+    [cksum.to_string(), tree.to_string(), String::new()].join("\n")
+}
+
+/// One digest over every file below `dir`, path and bytes, sorted, so a
+/// changed byte, a removed file, and an added file all move it.
+fn tree_digest(dir: &Path) -> Result<Digest, RkError> {
+    let mut files = Vec::new();
+    walk(dir, &mut files)?;
+    files.sort();
+    let mut acc = Vec::new();
+    for file in files {
+        let rel = file
+            .strip_prefix(dir)
+            .map_err(|_| anyhow::anyhow!("{} is outside the bundle", file.display()))?
+            .to_string_lossy()
+            .replace('\\', "/");
+        acc.extend_from_slice(rel.as_bytes());
+        acc.push(b'\n');
+        acc.extend_from_slice(Digest::of(&std::fs::read(&file)?).to_string().as_bytes());
+        acc.push(b'\n');
+    }
+    Ok(Digest::of(&acc))
+}
+
+/// Every regular file below `dir`, recursively.
+fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            walk(&path, out)?;
+        } else if path.is_file() {
+            out.push(path);
+        }
+    }
+    Ok(())
+}
+
+/// A cached bundle read back against the seal the verified archive left.
+///
+/// The seal's first line must be the checksum the directory is named
+/// for, so a seal lifted from another bundle does not vouch for this
+/// one, and its second line must be the tree's digest now.
+fn verify_seal(cache: &Path, cksum: &Digest, dir: &Path) -> Result<(), RkError> {
+    let path = seal_path(cache, cksum);
+    let altered = |detail: String| {
+        RkError::refusal(
+            Diagnostic::new(
+                Reason::BundleUnverified,
+                format!("the cached bundle for {cksum} {detail}"),
+            )
+            .expected("a cached bundle whose bytes are the ones its verified archive unpacked to")
+            .action(format!(
+                "remove {} and its seal, so the next read fetches and verifies the archive again",
+                dir.display()
+            ))
+            .target_state("nothing was read from it"),
+        )
+    };
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Err(altered("carries no seal".to_owned()));
+    };
+    let actual = tree_digest(dir)?;
+    if text != seal_body(cksum, &actual) {
+        return Err(altered(
+            "does not match the seal its verified archive left".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 impl ReleaseSource for CrateReleaseSource {
@@ -432,6 +531,14 @@ fn prune(cache: &Path, retain: usize) -> Result<(), RkError> {
     for (_, path) in bundles.iter().skip(retain) {
         std::fs::remove_dir_all(path)?;
         let gone = path.file_name().map(|n| n.to_string_lossy().into_owned());
+        // The seal goes with the bundle it vouches for, so a later fetch
+        // of the same checksum writes a fresh one rather than reading a
+        // seal left by the tree it replaced.
+        if let Some(gone) = &gone {
+            if let Some(cksum) = Digest::parse(gone) {
+                let _ = std::fs::remove_file(seal_path(cache, &cksum));
+            }
+        }
         let index = cache.join("index");
         if let (Some(gone), Ok(entries)) = (gone, std::fs::read_dir(&index)) {
             for entry in entries.flatten() {

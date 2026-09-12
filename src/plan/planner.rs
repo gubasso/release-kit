@@ -372,16 +372,23 @@ pub fn plan(inputs: Inputs<'_>) -> Result<Planned, RkError> {
             });
         }
     }
-    let mut flake_pin_behind: Option<String> = None;
+    let mut pin_behind: Option<String> = None;
     if let Some(pin) = &observation.pin {
         if trim_v(&pin.version) != trim_v(&candidate_version) {
             // A one-fact manager moves by one rewrite the apply can stage.
             // The flake pair needs nix and the network, which an offline
             // apply never has, so that move stays the sync verb's.
             if pin.manager == "flake" {
-                flake_pin_behind = Some(format!(
+                pin_behind = Some(format!(
                     "the flake pin records {} and the candidate is {candidate_version}; the self-depend sync verb moves it under --apply, with nix and the network",
                     pin.version
+                ));
+            } else if intent == Intent::Adopt {
+                // An adoption writes the record and nothing else, so a
+                // stale pin is reported and never moved.
+                pin_behind = Some(format!(
+                    "the {} pin records {} and the candidate is {candidate_version}; an adoption writes the record alone, so rk self-depend sync moves it",
+                    pin.manager, pin.version
                 ));
             } else if landing_planned {
                 let recorded_form = crate::self_depend::manager::Manager::ALL
@@ -449,6 +456,25 @@ pub fn plan(inputs: Inputs<'_>) -> Result<Planned, RkError> {
             .map_or(Evaluation::Satisfied, |reason| Evaluation::Unsatisfied {
                 reason: reason.clone(),
             }),
+        decision: None,
+        evidence_refs: resolution_refs.clone(),
+    });
+    // The preview placeholder renders, and never lands: a rendered file
+    // carrying `OWNER` names nobody's project, so a plan that would write
+    // one is blocked until the repository is answered.
+    preconditions.push(Precondition {
+        id: "repository-resolved".into(),
+        requirement: Requirement::Required,
+        evaluation: if resolution.repo_placeholder {
+            Evaluation::Unsatisfied {
+                reason: format!(
+                    "no origin remote, no committed repo, and no --repo answered the project path, so the preview stands in {}",
+                    landing::REPO_PLACEHOLDER
+                ),
+            }
+        } else {
+            Evaluation::Satisfied
+        },
         decision: None,
         evidence_refs: resolution_refs.clone(),
     });
@@ -770,7 +796,10 @@ pub fn plan(inputs: Inputs<'_>) -> Result<Planned, RkError> {
         preconditions.push(Precondition {
             id: "release-activity-explained".into(),
             requirement: Requirement::DecisionRequired,
-            evaluation: if answered.is_some() {
+            // Only an answer the decision declares satisfies it, so an
+            // answer outside the closed set leaves the plan waiting
+            // rather than reading as decided.
+            evaluation: if super::decision_answered("release-activity", answered.as_deref()) {
                 Evaluation::Satisfied
             } else {
                 Evaluation::NotObserved {
@@ -793,7 +822,7 @@ pub fn plan(inputs: Inputs<'_>) -> Result<Planned, RkError> {
         decision: None,
         evidence_refs: observation.refs.forge.clone(),
     });
-    if let Some(reason) = flake_pin_behind {
+    if let Some(reason) = pin_behind {
         preconditions.push(Precondition {
             id: "pin-current".into(),
             requirement: Requirement::Advisory,

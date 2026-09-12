@@ -228,7 +228,10 @@ fn manager_axis(
     preconditions.push(Precondition {
         id: "pin-manager-answered".into(),
         requirement: Requirement::DecisionRequired,
-        evaluation: if answered.is_some() {
+        // Only an answer the decision declares satisfies it. An answer
+        // outside the closed set is refused where the operator typed it,
+        // and a stored plan carrying one is judged unanswered here.
+        evaluation: if super::decision_answered(PIN_MANAGER_DECISION, answered.as_deref()) {
             Evaluation::Satisfied
         } else {
             Evaluation::NotObserved {

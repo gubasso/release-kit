@@ -16,6 +16,7 @@ pub mod evidence;
 pub mod fingerprint;
 pub mod gather;
 pub mod guidance;
+pub mod lock;
 pub mod operation;
 pub mod planner;
 pub mod readiness;
@@ -546,6 +547,45 @@ pub struct Choice {
     pub consequence: String,
 }
 
+/// Every decision this engine asks, with the closed set of answers each
+/// one takes.
+///
+/// A decision is a question the operator owns, and its choices are the
+/// whole of what answers it. The catalogue is the one place that pairing
+/// lives, so the parse that reads `--decide` and the evaluation that
+/// judges a stored answer agree by construction. A decision the planner
+/// adds without an entry here fails
+/// [`every_decision_the_planner_asks_is_in_the_catalogue`].
+pub const DECISION_CHOICES: [(&str, &[&str]); 6] = [
+    ("workflow-mode", &["worktree", "branches"]),
+    ("release-style", &["trunk", "lines"]),
+    ("release-activity", &["history", "migrate"]),
+    ("partial-baseline", &["accept", "fetch"]),
+    (guidance::PARTIAL_GUIDANCE_DECISION, &["accept"]),
+    (compatibility::PIN_MANAGER_DECISION, &["wire", "host"]),
+];
+
+/// The answers one decision takes, where the catalogue names it.
+#[must_use]
+pub fn decision_choices(id: &str) -> Option<&'static [&'static str]> {
+    DECISION_CHOICES
+        .iter()
+        .find(|(known, _)| *known == id)
+        .map(|(_, choices)| *choices)
+}
+
+/// Whether `answer` is one this decision declares.
+///
+/// An id the catalogue does not name answers `false`: an unknown
+/// decision has no answer that satisfies it.
+#[must_use]
+pub fn decision_answered(id: &str, answer: Option<&str>) -> bool {
+    match (decision_choices(id), answer) {
+        (Some(choices), Some(answer)) => choices.contains(&answer),
+        _ => false,
+    }
+}
+
 /// One typed check an apply runs at the end and reports.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "check", rename_all = "kebab-case")]
@@ -577,7 +617,8 @@ pub enum Postcondition {
 /// so an apply can compute the same plan again and compare.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanRequest {
-    /// The target, as given.
+    /// The target, absolute and symlink-resolved, so a stored plan names
+    /// one checkout and never whichever directory an apply runs in.
     pub target: camino::Utf8PathBuf,
     /// What the caller asked the plan to be.
     pub intent: Intent,
@@ -591,6 +632,49 @@ pub struct PlanRequest {
     pub flags: gather::Flags,
     /// The decisions selected, by id.
     pub decisions: BTreeMap<String, String>,
+}
+
+impl PlanRequest {
+    /// The same request with its target resolved to an absolute,
+    /// symlink-free path.
+    ///
+    /// Every construction site takes this before the request reaches the
+    /// planner or the store. A relative target would otherwise resolve
+    /// against whichever directory an apply runs in, so a plan approved
+    /// against one checkout could land in another whose content happens
+    /// to match, which the fingerprint alone cannot catch.
+    ///
+    /// # Errors
+    ///
+    /// [`RkError::Usage`] where the target does not exist or cannot be
+    /// resolved, and [`RkError::Other`] where the resolved path is not
+    /// valid UTF-8.
+    pub fn canonicalized(mut self) -> Result<Self, crate::error::RkError> {
+        self.target = canonical_target(&self.target)?;
+        Ok(self)
+    }
+}
+
+/// One target directory as an absolute, symlink-free path.
+///
+/// # Errors
+///
+/// [`RkError::Usage`] where the path does not exist or cannot be
+/// resolved, and [`RkError::Other`] where it is not valid UTF-8.
+pub fn canonical_target(
+    target: &camino::Utf8Path,
+) -> Result<camino::Utf8PathBuf, crate::error::RkError> {
+    let resolved = std::fs::canonicalize(target).map_err(|error| {
+        crate::error::RkError::Usage(format!(
+            "the target {target} does not resolve to a directory: {error}"
+        ))
+    })?;
+    camino::Utf8PathBuf::from_path_buf(resolved).map_err(|path| {
+        crate::error::RkError::Other(anyhow::anyhow!(
+            "the target resolves to {}, which is not valid UTF-8",
+            path.display()
+        ))
+    })
 }
 
 /// A computed plan with the bytes its operations name, and what the
@@ -667,11 +751,11 @@ mod tests {
 
     use super::{
         BaselineState, BundleIdentity, Choice, Classification, Compatibility, Configuration,
-        ConfigurationState, Coverage, Decision, DesiredState, Destination, Evaluation, ForgeFloor,
-        ForgeState, GeneratorFact, Guidance, GuidanceStep, Host, Identity, Installation, Intent,
-        IntermediateFact, Interval, Operation, PLAN_SCHEMA, PinState, Plan, Postcondition,
-        Precondition, Readiness, RecordState, Release, Repository, Requirement, ResolvedRelease,
-        Verdict, Verification,
+        ConfigurationState, Coverage, DECISION_CHOICES, Decision, DesiredState, Destination,
+        Evaluation, ForgeFloor, ForgeState, GeneratorFact, Guidance, GuidanceStep, Host, Identity,
+        Installation, Intent, IntermediateFact, Interval, Operation, PLAN_SCHEMA, PinState, Plan,
+        Postcondition, Precondition, Readiness, RecordState, Release, Repository, Requirement,
+        ResolvedRelease, Verdict, Verification, decision_answered, decision_choices,
     };
     use crate::digest::Digest;
     use crate::landing::Kind;
@@ -863,5 +947,41 @@ mod tests {
             r###"{{"schema":"rk.plan/3","identity":{{"plan_id":"0123456789abcdef","created_at":"2026-01-01T00:00:00Z","engine_version":"0.0.0"}},"classification":"upgrade","findings":[{{"code":"payload-collision","detail":"SECURITY.md"}}],"desired_state":{{"intent":"reconcile","selector":"embedded","release":{{"version":"0.0.0","venue":"embedded","payload_sha256":"{a}","payload_schema":1}},"configuration":{{"tech":"rust","forge":"github","repo":"acme/widget","workflow":"worktree","style":"trunk","nix":false,"trunk":"master","line_prefix":"release/","security_contact":"","security_response":"best-effort","sources":{{"tech":"record"}},"evidence_refs":["record"]}}}},"observed_state":{{"repository":{{"target":"/tmp/t","git":true,"tags":0,"long_lived_branches":[],"release_markers":[],"collisions":["SECURITY.md"],"tech":"rust","forge":"github","repo":"acme/widget","verdict":"brownfield","evidence_refs":["repository"]}},"installation":{{"record":{{"state":"present","rk_version":"0.0.0","payload_sha256":"{a}","schema_version":6,"origin":"init","sha256":"{b}"}},"configuration":{{"present":true,"sha256":"{b}","pending":[]}},"destinations":[{{"path":"SECURITY.md","present":true,"sha256":"{a}","recorded_kind":"rendered"}}],"evidence_refs":["record","configuration"]}},"host":{{"engine_version":"0.0.0","pin":{{"manager":"mise","file":"mise.toml","version":"0.0.0"}},"evidence_refs":["host"]}},"forge":{{"state":"not-observed","reason":"not requested"}}}},"release":{{"candidate":{{"version":"0.0.0","payload_sha256":"{a}","payload_schema":1,"artifacts":1,"evidence_refs":["candidate-bundle"]}},"verification":{{"method":"embedded"}},"baseline":{{"state":"embedded"}},"compatibility":{{"engine_schema":1,"bundle_schema":1,"readable":true,"engine_minimum":"0.0.0","generator":{{"name":"cargo-dist","pin":"0.32.0","artifact":"dist-workspace.toml","host":"0.32.0"}},"forge_floor":{{"forge":"gitlab","minimum":"18.2","observed":"18.2.0"}},"intermediate":[{{"version":"0.0.0","reason":"the record changed shape"}}],"evidence_refs":["candidate-bundle"]}},"guidance":{{"coverage":{{"state":"partial","since":"0.0.0"}},"interval":{{"from":"0.0.0","to":"0.0.0"}},"steps":[{{"version":"0.0.0","title":"release-kit 0.0.0","destinations":[".envrc"],"action":"operator-step","body":"## What to do"}}],"excluded":1,"evidence_refs":["candidate-bundle"]}}}},"operations":[{{"op":"write-record","before":"{b}","after":"{a}"}}],"preconditions":[{{"id":"record-readable","requirement":"required","evaluation":{{"state":"satisfied"}},"evidence_refs":["record"]}}],"decisions":[{{"id":"workflow-mode","question":"which working-copy mode","choices":[{{"answer":"worktree","consequence":"every branch in a linked worktree"}}],"selected":"worktree"}}],"postconditions":[{{"check":"record-reads-back","sha256":"{a}"}}],"evidence":[{{"id":"record","kind":"record","producer":"rk","observed_at":"2026-01-01T00:00:00Z","sha256":"{b}","method":"read"}}],"readiness":"ready","input_fingerprint":"{a}"}}"###
         );
         assert_eq!(json, expected);
+    }
+
+    /// Every decision the planner asks carries its choices in the
+    /// catalogue, and every catalogued answer is one a choice declares.
+    ///
+    /// The catalogue is what the parse and the evaluation both read, so
+    /// a decision added to the planner without an entry here would take
+    /// any answer at the parse and satisfy nothing at the evaluation.
+    #[test]
+    fn every_decision_the_planner_asks_is_in_the_catalogue() {
+        let sources = [
+            include_str!("planner.rs"),
+            include_str!("compatibility.rs"),
+            include_str!("guidance.rs"),
+        ];
+        // Every id the catalogue names is asked somewhere, so an entry
+        // does not outlive the decision it describes.
+        for (id, choices) in DECISION_CHOICES {
+            assert!(
+                sources.iter().any(|source| source.contains(id)),
+                "the catalogue names {id} and no module asks it"
+            );
+            assert!(!choices.is_empty(), "{id} declares no answer");
+            for answer in choices {
+                assert!(
+                    decision_answered(id, Some(answer)),
+                    "{id} does not take its own declared answer {answer}"
+                );
+            }
+            assert!(
+                !decision_answered(id, Some("not-a-declared-answer")),
+                "{id} takes an answer it does not declare"
+            );
+        }
+        assert!(decision_choices("not-a-decision").is_none());
+        assert!(!decision_answered("not-a-decision", Some("anything")));
     }
 }

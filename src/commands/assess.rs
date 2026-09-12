@@ -74,7 +74,8 @@ pub fn run(args: &AssessArgs) -> Result<(), RkError> {
             observe_forge: false,
             flags: crate::plan::gather::Flags::default(),
             decisions: std::collections::BTreeMap::new(),
-        },
+        }
+        .canonicalized()?,
         &crate::landing::manifest::now(),
     )?;
     let plan = PlanSummary {

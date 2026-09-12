@@ -190,6 +190,12 @@ mod tests {
                 )),
                 1,
             ),
+            // A target another run holds is a refusal like any other:
+            // this run wrote nothing, and the operator retries.
+            (
+                RkError::refusal(Diagnostic::new(Reason::TargetBusy, "another run holds it")),
+                73,
+            ),
             (RkError::Other(anyhow::anyhow!("unclassified")), 70),
         ];
         for (err, code) in cases {

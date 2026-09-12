@@ -76,7 +76,8 @@ fn plan(args: &PlanArgs) -> Result<(), RkError> {
             nix,
         },
         decisions,
-    };
+    }
+    .canonicalized()?;
     let planned = compute(&request, &manifest::now())?;
     store::persist(&planned, &request)?;
     render(out, &planned.plan, true);
@@ -95,6 +96,11 @@ fn show(args: &ShowArgs) -> Result<(), RkError> {
 fn apply_stored(args: &ApplyArgs) -> Result<(), RkError> {
     let out = Output::new(args.json);
     let stored = store::load(&args.plan_id)?;
+    // The target is taken before it is observed, so the world the fresh
+    // plan describes is the world this apply goes on to write: another
+    // run committing between the observation and the first rename is
+    // what the lock exists to stop.
+    let _lock = crate::plan::lock::acquire(&stored.request.target)?;
     // The same request at the same instant: a fresh landing's record
     // carries the plan's instant, so recomputing at another one would
     // read as the record moving when nothing did.
@@ -116,7 +122,7 @@ fn apply_stored(args: &ApplyArgs) -> Result<(), RkError> {
             .target_state("unchanged"),
         )
     })?;
-    let applied = apply::run(
+    let applied = apply::run_locked(
         &stored.request.target,
         &stored.plan,
         &stored.blobs,
@@ -394,20 +400,7 @@ pub fn compute_frozen(
                 source: candidate_source,
             }
         }
-        Some((version, _)) => match &baseline_crate {
-            Some(source) => {
-                source.resolve()?;
-                Baseline::Cached {
-                    version: version.clone(),
-                    source,
-                }
-            }
-            None => Baseline::NotObserved {
-                reason: format!(
-                    "the recorded release {version} is not in the release cache; --fetch reads it through the crates venue"
-                ),
-            },
-        },
+        Some((version, _)) => cached_baseline(version, baseline_crate.as_ref()),
     };
     planner::plan(planner::Inputs {
         intent: request.intent,
@@ -430,6 +423,36 @@ pub fn compute_frozen(
     })
 }
 
+/// The baseline for a recorded release the cache may hold.
+///
+/// A baseline that will not verify is an evidence gap, never a refusal.
+/// The candidate is what an apply writes and it refuses unverified; the
+/// recorded release only says what the target started from, so a plan
+/// that cannot read it says so and lets the readiness policy decide. A
+/// cache written before the seal existed is exactly this case, and it
+/// must still be able to plan.
+fn cached_baseline<'a>(version: &str, source: Option<&'a CrateReleaseSource>) -> Baseline<'a> {
+    let Some(source) = source else {
+        return Baseline::NotObserved {
+            reason: format!(
+                "the recorded release {version} is not in the release cache; --fetch reads it through the crates venue"
+            ),
+        };
+    };
+    match source.resolve() {
+        Ok(_) => Baseline::Cached {
+            version: version.to_owned(),
+            source,
+        },
+        Err(error) => Baseline::NotObserved {
+            reason: format!(
+                "the recorded release {version} is in the release cache and did not verify: {}",
+                error.diagnostic().message
+            ),
+        },
+    }
+}
+
 /// `<id>=<answer>` pairs into a map, refusing a malformed one.
 ///
 /// # Errors
@@ -447,6 +470,25 @@ pub fn parse_decisions(raw: &[String]) -> Result<BTreeMap<String, String>, RkErr
         if id.is_empty() || answer.is_empty() {
             return Err(RkError::Usage(format!(
                 "--decide takes <id>=<answer>; '{item}' leaves one side empty"
+            )));
+        }
+        // A decision's choices are the whole of what answers it, so an
+        // unrecognized id or answer is refused where the operator typed
+        // it rather than read as a decision taken.
+        let Some(choices) = crate::plan::decision_choices(id) else {
+            let ids: Vec<&str> = crate::plan::DECISION_CHOICES
+                .iter()
+                .map(|(id, _)| *id)
+                .collect();
+            return Err(RkError::Usage(format!(
+                "--decide names no decision '{id}'; the decisions are: {}",
+                ids.join(", ")
+            )));
+        };
+        if !choices.contains(&answer) {
+            return Err(RkError::Usage(format!(
+                "--decide {id}={answer} is not an answer it takes; the answers are: {}",
+                choices.join(", ")
             )));
         }
         decisions.insert(id.to_owned(), answer.to_owned());

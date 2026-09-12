@@ -163,6 +163,10 @@ pub struct Resolution {
     pub sources: BTreeMap<String, String>,
     /// Why they did not resolve, where they did not.
     pub unresolved: Option<String>,
+    /// Whether the repository is the preview placeholder rather than an
+    /// answer. A preview renders with it; a plan that would write it is
+    /// blocked, because `OWNER` is nobody's project path.
+    pub repo_placeholder: bool,
     /// The Nix destinations withheld, with the one reason.
     pub nix_withheld: Option<(Vec<String>, String)>,
 }
@@ -498,11 +502,16 @@ fn read_pin(
     let Ok(observed) = crate::self_depend::observe(target) else {
         return (None, Vec::new());
     };
+    // A present file that names release-kit without a version reads as
+    // `unpinned`, and one that names it not at all reads as `absent`.
+    // Both are a manager the target carries and does not pin rk through,
+    // which is the case the pin-manager decision exists to ask about.
     let unwired: Vec<String> = observed
         .managers
         .iter()
         .filter(|entry| {
-            entry.present == crate::self_depend::Presence::Present && entry.pin == "unpinned"
+            entry.present == crate::self_depend::Presence::Present
+                && matches!(entry.pin, "unpinned" | "absent")
         })
         .map(|entry| entry.manager.as_str().to_owned())
         .collect();
@@ -585,6 +594,13 @@ pub fn resolve(request: &Request<'_>, observation: &Observation) -> Result<Resol
         Ok(params) => (Some(params), None),
         Err(error) => (None, Some(error.to_string())),
     };
+    // Preview resolution substitutes `OWNER` for a repository nothing
+    // answered, which is what lets a preview render at a target that has
+    // no origin remote. The planner needs to know it is a placeholder so
+    // it never reaches a rendered file.
+    let repo_placeholder = params
+        .as_ref()
+        .is_some_and(|params| params.repo() == landing::REPO_PLACEHOLDER);
     let nix_withheld = match &params {
         Some(params) if params.nix() => landing::nix_withholding(request.target, record)?
             .map(|(set, reason)| (set.iter().map(|path| (*path).to_owned()).collect(), reason)),
@@ -594,6 +610,7 @@ pub fn resolve(request: &Request<'_>, observation: &Observation) -> Result<Resol
         params,
         sources,
         unresolved,
+        repo_placeholder,
         nix_withheld,
     })
 }
