@@ -347,10 +347,20 @@ pub fn load(target: &Utf8Path) -> Result<Option<Manifest>, RkError> {
 ///
 /// Any write failure; the destination then holds what it held.
 pub fn write(target: &Utf8Path, manifest: &Manifest) -> Result<(), RkError> {
-    let text = serde_json::to_string_pretty(manifest).map_err(anyhow::Error::from)?;
     let path = target.join(MANIFEST_PATH);
-    atomic::write(path.as_std_path(), format!("{text}\n").as_bytes())?;
+    atomic::write(path.as_std_path(), &render(manifest)?)?;
     Ok(())
+}
+
+/// The bytes [`write`] puts on disk for a record, so a planner can name
+/// the digest of the record an apply writes before anything is written.
+///
+/// # Errors
+///
+/// A serialization failure, which is a defect in this binary.
+pub fn render(manifest: &Manifest) -> Result<Vec<u8>, RkError> {
+    let text = serde_json::to_string_pretty(manifest).map_err(anyhow::Error::from)?;
+    Ok(format!("{text}\n").into_bytes())
 }
 
 /// The current instant in the record's RFC 3339 form.

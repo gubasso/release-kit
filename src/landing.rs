@@ -1136,6 +1136,30 @@ pub struct Withheld {
     pub reason: String,
 }
 
+/// The Nix destinations an opted-in landing withholds at this target, with
+/// the one reason, or `None` where the capability lands whole.
+///
+/// The judgment [`withhold_nix`] applies, exposed as a value so a planner
+/// can read it without an entry list: an unsupported crate shape names
+/// the whole capability, and a flake pair of the target's own names the
+/// pair.
+///
+/// # Errors
+///
+/// Any read failure from the pair check other than absence.
+pub fn nix_withholding(
+    target: &Utf8Path,
+    recorded: Option<&manifest::Manifest>,
+) -> Result<Option<(&'static [&'static str], String)>, RkError> {
+    if let Some(reason) = nix_unsupported_shape(target) {
+        return Ok(Some((&NIX_DESTINATIONS[..], reason)));
+    }
+    if let Some(reason) = nix_withheld(target, recorded)? {
+        return Ok(Some((&NIX_WITHHOLDABLE[..], reason)));
+    }
+    Ok(None)
+}
+
 /// Drop the Nix destinations this target cannot take from a projection,
 /// naming each with its reason.
 ///
@@ -1157,11 +1181,7 @@ pub fn withhold_nix(
     if !nix {
         return Ok(Vec::new());
     }
-    let (set, reason): (&[&str], String) = if let Some(reason) = nix_unsupported_shape(target) {
-        (&NIX_DESTINATIONS[..], reason)
-    } else if let Some(reason) = nix_withheld(target, recorded)? {
-        (&NIX_WITHHOLDABLE[..], reason)
-    } else {
+    let Some((set, reason)) = nix_withholding(target, recorded)? else {
         return Ok(Vec::new());
     };
     let mut withheld = Vec::new();

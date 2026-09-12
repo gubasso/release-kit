@@ -16,6 +16,7 @@ pub mod lines;
 pub mod message;
 pub mod payload;
 pub mod read;
+pub mod reconcile;
 pub mod runs;
 pub mod self_depend;
 pub mod setup;

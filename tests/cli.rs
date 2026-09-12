@@ -1715,6 +1715,7 @@ fn usage_dumps_every_verb_in_one_call() {
         "rk upgrade",
         "rk adopt",
         "rk assess",
+        "rk reconcile plan",
         "rk versions",
         "rk doctor",
         "rk usage",
@@ -15654,7 +15655,7 @@ fn assess_classifies_a_plain_directory_and_a_release_marker() {
         .stdout
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["schema"], "rk.assess/1");
+    assert_eq!(report["schema"], "rk.assess/2");
     assert_eq!(report["classification"], "brownfield");
     assert_eq!(report["landing"]["recorded"], false);
     assert_eq!(
@@ -21191,4 +21192,646 @@ fn payload_release_refuses_a_newer_schema_naming_the_engine_to_install() {
             .contains("install release-kit 9.0.0"),
         "{diagnostic}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// rk reconcile plan: the typed plan, computed and printed, never persisted.
+// ---------------------------------------------------------------------------
+
+/// A scratch rust target with a version file and a git directory, so the
+/// projection resolves and the nix shape gate has something to read.
+fn plan_target() -> tempfile::TempDir {
+    let target = tempfile::tempdir().expect("a scratch target exists");
+    std::fs::create_dir_all(target.path().join(".git")).expect("the target is a repository");
+    std::fs::write(
+        target.path().join("Cargo.toml"),
+        "[package]\nname = \"widget\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("the version file writes");
+    target
+}
+
+/// One plan as JSON, with the identity flags an empty target needs.
+fn plan_json(target: &Path, extra: &[&str]) -> serde_json::Value {
+    let out = rk()
+        .args(["reconcile", "plan", "--json", "--target"])
+        .arg(target)
+        .args(["--forge", "github", "--repo", "acme/widget"])
+        .args(extra)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    serde_json::from_slice(&out).expect("one JSON object")
+}
+
+/// The same computation through the library, so a test can hold the
+/// instant and read the blob store.
+fn plan_with_clock(
+    target: &Path,
+    clock: &str,
+    decisions: &[(&str, &str)],
+) -> release_kit::plan::Planned {
+    let flags = release_kit::plan::gather::Flags {
+        forge: Some("github".into()),
+        repo: Some("acme/widget".into()),
+        ..release_kit::plan::gather::Flags::default()
+    };
+    let decisions: std::collections::BTreeMap<String, String> = decisions
+        .iter()
+        .map(|(id, answer)| ((*id).to_owned(), (*answer).to_owned()))
+        .collect();
+    release_kit::commands::reconcile::compute(
+        &utf8(target),
+        "embedded",
+        false,
+        false,
+        &flags,
+        &decisions,
+        clock,
+    )
+    .expect("the plan computes")
+}
+
+fn operations_of(plan: &serde_json::Value) -> Vec<&serde_json::Value> {
+    plan["operations"]
+        .as_array()
+        .expect("operations")
+        .iter()
+        .collect()
+}
+
+fn precondition<'a>(plan: &'a serde_json::Value, id: &str) -> &'a serde_json::Value {
+    plan["preconditions"]
+        .as_array()
+        .expect("preconditions")
+        .iter()
+        .find(|p| p["id"] == id)
+        .unwrap_or_else(|| panic!("no precondition {id}: {plan}"))
+}
+
+/// Same inputs, same instant: byte-identical plans through the library.
+#[test]
+fn the_planner_is_deterministic() {
+    let target = plan_target();
+    land_rust(target.path()).success();
+    let clock = "2026-01-01T00:00:00Z";
+    let first = serde_json::to_string(&plan_with_clock(target.path(), clock, &[]).plan)
+        .expect("serializes");
+    let second = serde_json::to_string(&plan_with_clock(target.path(), clock, &[]).plan)
+        .expect("serializes");
+    assert_eq!(first, second);
+}
+
+/// The six target states, each planned over a real scratch target: empty,
+/// brownfield, landed-current, landed-old, drifted, invalid.
+#[test]
+fn each_of_the_six_target_states_classifies_correctly() {
+    let empty = plan_target();
+    let plan = plan_json(empty.path(), &[]);
+    assert_eq!(plan["classification"], "setup", "{plan}");
+    assert_eq!(
+        plan["observed_state"]["repository"]["verdict"],
+        "greenfield"
+    );
+
+    let brown = plan_target();
+    std::fs::write(brown.path().join("CHANGELOG.md"), "# Changelog\n").expect("writes");
+    let plan = plan_json(brown.path(), &[]);
+    assert_eq!(plan["classification"], "migration", "{plan}");
+    assert!(
+        plan["findings"]
+            .as_array()
+            .expect("findings")
+            .iter()
+            .any(|f| f["code"] == "release-marker" && f["detail"] == "CHANGELOG.md"),
+        "{plan}"
+    );
+
+    let current = plan_target();
+    land_rust(current.path()).success();
+    let plan = plan_json(current.path(), &[]);
+    assert_eq!(plan["classification"], "upgrade", "{plan}");
+    assert!(operations_of(&plan).is_empty(), "{plan}");
+    assert_eq!(plan["readiness"], "ready");
+
+    let old = plan_target();
+    land_rust(old.path()).success();
+    let mut manifest = read_manifest(old.path());
+    manifest["rk_version"] = serde_json::json!("0.1.0");
+    // The record's own digest for one rendered file is what an older
+    // payload wrote: the candidate differs, so the file is rewritten.
+    let policy = old.path().join("SECURITY.md");
+    let older = b"# Security policy\n\nOlder wording.\n";
+    std::fs::write(&policy, older).expect("the older file writes");
+    for file in manifest["files"].as_array_mut().expect("files") {
+        if file["destination"] == "SECURITY.md" {
+            file["sha256"] = serde_json::json!(Digest::of(older).to_string());
+        }
+    }
+    write_manifest(old.path(), &manifest);
+    let plan = plan_json(old.path(), &[]);
+    assert_eq!(plan["classification"], "upgrade", "{plan}");
+    assert!(
+        operations_of(&plan)
+            .iter()
+            .any(|op| op["op"] == "write-file" && op["path"] == "SECURITY.md"),
+        "{plan}"
+    );
+
+    let drifted = plan_target();
+    land_rust(drifted.path()).success();
+    let mut edited = std::fs::read(drifted.path().join("SECURITY.md")).expect("reads");
+    edited.extend_from_slice(b"\n# edited by the target\n");
+    std::fs::write(drifted.path().join("SECURITY.md"), edited).expect("writes");
+    let plan = plan_json(drifted.path(), &[]);
+    assert_eq!(plan["classification"], "drift", "{plan}");
+    assert_eq!(plan["readiness"], "blocked");
+
+    let invalid = plan_target();
+    land_rust(invalid.path()).success();
+    let mut manifest = read_manifest(invalid.path());
+    manifest["schema_version"] = serde_json::json!(999);
+    write_manifest(invalid.path(), &manifest);
+    let plan = plan_json(invalid.path(), &[]);
+    assert_eq!(plan["classification"], "invalid", "{plan}");
+    assert_eq!(plan["readiness"], "blocked");
+    assert_eq!(
+        plan["observed_state"]["installation"]["record"]["state"],
+        "invalid"
+    );
+    assert_eq!(
+        precondition(&plan, "record-readable")["evaluation"]["state"],
+        "unsatisfied"
+    );
+}
+
+/// Every destination the projection names is one write, the record is
+/// written last, and nothing carries a byte.
+#[test]
+fn an_empty_target_plans_a_setup_with_every_destination_written() {
+    let target = plan_target();
+    let plan = plan_json(target.path(), &["--workflow", "worktree"]);
+    assert_eq!(plan["classification"], "setup");
+    assert_eq!(plan["readiness"], "ready", "{plan}");
+    let operations = operations_of(&plan);
+    let preview = rk()
+        .args([
+            "init",
+            "--tech",
+            "rust",
+            "--forge",
+            "github",
+            "--repo",
+            "acme/widget",
+            "--json",
+            "--target",
+        ])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let preview: serde_json::Value = serde_json::from_slice(&preview).expect("one JSON object");
+    for file in preview["files"].as_array().expect("files") {
+        let path = file["path"].as_str().expect("a path");
+        let op = operations
+            .iter()
+            .find(|op| op["path"] == path)
+            .unwrap_or_else(|| panic!("{path} is not planned: {plan}"));
+        assert!(
+            op["before"].is_null(),
+            "{path} has no before on an empty target"
+        );
+        assert!(op["after"].is_string());
+        let expected = if path == "AGENTS.md" || path == ".pre-commit-config.yaml" {
+            "splice-block"
+        } else {
+            "write-file"
+        };
+        assert_eq!(op["op"], expected, "{path}");
+    }
+    assert_eq!(
+        operations.last().expect("an operation")["op"],
+        "write-record"
+    );
+    assert!(
+        plan["postconditions"]
+            .as_array()
+            .expect("postconditions")
+            .iter()
+            .any(|p| p["check"] == "status-check-clean"),
+        "{plan}"
+    );
+}
+
+/// A target at this release plans an upgrade with nothing to take.
+#[test]
+fn a_current_target_plans_an_upgrade_with_no_operations() {
+    let target = plan_target();
+    land_rust(target.path()).success();
+    let plan = plan_json(target.path(), &[]);
+    assert_eq!(plan["classification"], "upgrade");
+    assert_eq!(plan["readiness"], "ready");
+    assert!(operations_of(&plan).is_empty(), "{plan}");
+    assert_eq!(plan["release"]["baseline"]["state"], "embedded");
+    assert_eq!(plan["desired_state"]["release"]["venue"], "embedded");
+    rk().args(["reconcile", "plan", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("classification: upgrade")
+                .and(predicate::str::contains("operations: none")),
+        );
+}
+
+/// An edited owned file is a required precondition that does not hold,
+/// collected beside every other one, and the plan is blocked.
+#[test]
+fn an_edited_rendered_file_is_a_blocked_conflict() {
+    let target = plan_target();
+    land_rust(target.path()).success();
+    for name in ["SECURITY.md", ".github/workflows/pr-title.yml"] {
+        let path = target.path().join(name);
+        let mut bytes = std::fs::read(&path).expect("reads");
+        bytes.extend_from_slice(b"\n# edited\n");
+        std::fs::write(&path, bytes).expect("writes");
+    }
+    let plan = plan_json(target.path(), &[]);
+    assert_eq!(plan["classification"], "drift");
+    assert_eq!(plan["readiness"], "blocked");
+    for name in ["SECURITY.md", ".github/workflows/pr-title.yml"] {
+        let p = precondition(&plan, &format!("owned-file-unedited:{name}"));
+        assert_eq!(p["requirement"], "required");
+        assert_eq!(p["evaluation"]["state"], "unsatisfied");
+        assert!(!p["evidence_refs"].as_array().expect("refs").is_empty());
+    }
+    assert!(
+        !operations_of(&plan)
+            .iter()
+            .any(|op| op["op"] == "write-record"),
+        "a blocked plan writes no record: {plan}"
+    );
+}
+
+/// A seeded file the target tuned is never written; the planned record
+/// follows the target's bytes and keeps the baseline it tunes away from.
+#[test]
+fn a_tuned_seeded_file_is_kept_and_its_baseline_moves() {
+    let target = plan_target();
+    land_rust(target.path()).success();
+    let recorded = read_manifest(target.path());
+    let baseline = manifest_file(&recorded, "release-plz.toml")["baseline_sha256"]
+        .as_str()
+        .expect("a baseline")
+        .to_owned();
+    let tuned = b"[workspace]\nsemver_check = true\n";
+    std::fs::write(target.path().join("release-plz.toml"), tuned).expect("writes");
+    let planned = plan_with_clock(target.path(), "2026-01-01T00:00:00Z", &[]);
+    let plan = serde_json::to_value(&planned.plan).expect("serializes");
+    assert_eq!(plan["classification"], "upgrade");
+    assert_eq!(plan["readiness"], "ready", "{plan}");
+    assert!(
+        !operations_of(&plan)
+            .iter()
+            .any(|op| op["path"] == "release-plz.toml"),
+        "a seeded file is never written: {plan}"
+    );
+    let record_op = operations_of(&plan)
+        .into_iter()
+        .find(|op| op["op"] == "write-record")
+        .expect("the record moves");
+    let after = Digest::parse(record_op["after"].as_str().expect("a digest")).expect("a digest");
+    let bytes = planned
+        .blobs
+        .get(&after)
+        .expect("the planned record is in the blob store");
+    let record: serde_json::Value =
+        serde_json::from_slice(bytes).expect("the planned record parses");
+    let file = manifest_file(&record, "release-plz.toml");
+    assert_eq!(file["sha256"], Digest::of(tuned).to_string());
+    assert_eq!(file["baseline_sha256"], baseline);
+}
+
+/// A recorded release this engine does not carry and the cache does not
+/// hold reads as not observed, with the version named.
+#[test]
+fn a_missing_baseline_is_not_observed_with_its_reason() {
+    let home = tempfile::tempdir().expect("a scratch home exists");
+    let target = plan_target();
+    land_rust(target.path()).success();
+    let mut manifest = read_manifest(target.path());
+    manifest["rk_version"] = serde_json::json!("0.1.0");
+    manifest["payload_sha256"] = serde_json::json!(Digest::of(b"another payload").to_string());
+    write_manifest(target.path(), &manifest);
+    let out = rk()
+        .args(["reconcile", "plan", "--json", "--target"])
+        .arg(target.path())
+        .env("HOME", home.path())
+        .env("XDG_STATE_HOME", home.path())
+        .env("RK_CURL_BIN", "/bin/false")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let plan: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(
+        plan["release"]["baseline"]["state"], "not-observed",
+        "{plan}"
+    );
+    let reason = plan["release"]["baseline"]["reason"]
+        .as_str()
+        .expect("a reason");
+    assert!(
+        reason.contains("0.1.0") && reason.contains("--fetch"),
+        "{reason}"
+    );
+    let p = precondition(&plan, "baseline-observed");
+    assert_eq!(p["evaluation"]["state"], "not-observed");
+    assert_eq!(p["evaluation"]["reason"], reason);
+    assert_eq!(p["decision"], "partial-baseline");
+}
+
+/// The wire form of every operation: digests under `before` and `after`,
+/// a manager and two versions for the pin, and never a byte or a command.
+#[test]
+fn every_operation_names_digests_and_no_bytes() {
+    let target = plan_target();
+    std::fs::write(
+        target.path().join("mise.toml"),
+        "[tools]\n\"cargo:release-kit\" = \"0.0.1\"\n",
+    )
+    .expect("writes");
+    let plan = plan_json(target.path(), &["--workflow", "worktree"]);
+    let operations = operations_of(&plan);
+    assert!(
+        operations.iter().any(|op| op["op"] == "update-pin"),
+        "{plan}"
+    );
+    let allowed = ["op", "path", "kind", "marker", "before", "after", "manager"];
+    for op in &operations {
+        let object = op.as_object().expect("an object");
+        for key in object.keys() {
+            assert!(
+                allowed.contains(&key.as_str()),
+                "{key} is not an operation field: {op}"
+            );
+        }
+        let kind = op["op"].as_str().expect("a kind");
+        assert!(
+            [
+                "write-file",
+                "splice-block",
+                "remove-owned-file",
+                "write-record",
+                "update-pin"
+            ]
+            .contains(&kind),
+            "{kind} is not in the closed set"
+        );
+        for field in ["before", "after"] {
+            if let Some(value) = op.get(field).and_then(serde_json::Value::as_str) {
+                if kind == "update-pin" {
+                    assert!(!value.is_empty());
+                } else {
+                    assert!(
+                        Digest::parse(value).is_some(),
+                        "{field} of {op} is not a digest"
+                    );
+                }
+            }
+        }
+    }
+    let text = serde_json::to_string(&plan["operations"]).expect("serializes");
+    assert!(
+        !text.contains("content") && !text.contains("command"),
+        "{text}"
+    );
+}
+
+/// The three requirements against the three evaluations, over the plan
+/// verb: an advisory gap leaves a plan ready, a decision waits, and a
+/// required gap blocks.
+#[test]
+fn a_decision_required_precondition_resolves_when_its_decision_is_selected() {
+    let target = plan_target();
+    let waiting = plan_json(target.path(), &[]);
+    assert_eq!(waiting["readiness"], "needs-decision", "{waiting}");
+    let p = precondition(&waiting, "workflow-mode-answered");
+    assert_eq!(p["requirement"], "decision-required");
+    assert_eq!(p["evaluation"]["state"], "not-observed");
+    assert_eq!(p["decision"], "workflow-mode");
+    let decision = waiting["decisions"]
+        .as_array()
+        .expect("decisions")
+        .iter()
+        .find(|d| d["id"] == "workflow-mode")
+        .expect("the decision");
+    assert!(decision["selected"].is_null());
+    assert_eq!(
+        precondition(&waiting, "forge-observed")["requirement"],
+        "advisory"
+    );
+
+    let answered = plan_json(target.path(), &["--decide", "workflow-mode=branches"]);
+    assert_eq!(answered["readiness"], "ready", "{answered}");
+    assert_eq!(
+        precondition(&answered, "workflow-mode-answered")["evaluation"]["state"],
+        "satisfied"
+    );
+    let decision = answered["decisions"]
+        .as_array()
+        .expect("decisions")
+        .iter()
+        .find(|d| d["id"] == "workflow-mode")
+        .expect("the decision");
+    assert_eq!(decision["selected"], "branches");
+    assert_eq!(
+        answered["desired_state"]["configuration"]["workflow"],
+        "branches"
+    );
+    assert_eq!(
+        answered["desired_state"]["configuration"]["sources"]["workflow"],
+        "decision"
+    );
+
+    rk().args(["reconcile", "plan", "--decide", "nonsense", "--target"])
+        .arg(target.path())
+        .assert()
+        .code(64);
+}
+
+/// Every section of the observed state and the release cites at least
+/// one evidence item, and every cited id is in the ledger.
+#[test]
+fn every_observed_field_cites_evidence() {
+    let target = plan_target();
+    land_rust(target.path()).success();
+    let plan = plan_json(target.path(), &[]);
+    let ids: Vec<&str> = plan["evidence"]
+        .as_array()
+        .expect("evidence")
+        .iter()
+        .map(|item| item["id"].as_str().expect("an id"))
+        .collect();
+    let cites = |value: &serde_json::Value, what: &str| {
+        let refs = value["evidence_refs"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{what} carries no evidence_refs: {value}"));
+        assert!(!refs.is_empty(), "{what} cites nothing");
+        for id in refs {
+            assert!(
+                ids.contains(&id.as_str().expect("an id")),
+                "{what} cites {id}, which is not in the ledger"
+            );
+        }
+    };
+    cites(&plan["observed_state"]["repository"], "repository");
+    cites(&plan["observed_state"]["installation"], "installation");
+    cites(&plan["observed_state"]["host"], "host");
+    cites(&plan["release"]["candidate"], "candidate");
+    cites(&plan["desired_state"]["configuration"], "configuration");
+    for p in plan["preconditions"].as_array().expect("preconditions") {
+        if p["id"] != "pin-wired" && p["id"] != "forge-observed" {
+            cites(p, p["id"].as_str().expect("an id"));
+        }
+    }
+    for item in plan["evidence"].as_array().expect("evidence") {
+        for field in ["id", "kind", "producer", "observed_at", "method"] {
+            assert!(item[field].is_string(), "{field} missing on {item}");
+        }
+    }
+}
+
+/// The instant is not a fingerprint input: two plans at different
+/// instants share one, and differ in their identity.
+#[test]
+fn plans_differing_only_in_excluded_fields_share_a_fingerprint() {
+    let target = plan_target();
+    land_rust(target.path()).success();
+    let first = plan_with_clock(target.path(), "2026-01-01T00:00:00Z", &[]).plan;
+    let second = plan_with_clock(target.path(), "2026-06-01T00:00:00Z", &[]).plan;
+    assert_eq!(first.input_fingerprint, second.input_fingerprint);
+    assert_ne!(first.identity.plan_id, second.identity.plan_id);
+    assert_ne!(first.identity.created_at, second.identity.created_at);
+}
+
+/// A selected decision is a fingerprint input.
+#[test]
+fn changing_a_selected_decision_changes_the_fingerprint() {
+    let target = plan_target();
+    let clock = "2026-01-01T00:00:00Z";
+    let worktree = plan_with_clock(target.path(), clock, &[("workflow-mode", "worktree")]).plan;
+    let branches = plan_with_clock(target.path(), clock, &[("workflow-mode", "branches")]).plan;
+    assert_ne!(worktree.input_fingerprint, branches.input_fingerprint);
+    let again = plan_with_clock(target.path(), clock, &[("workflow-mode", "worktree")]).plan;
+    assert_eq!(worktree.input_fingerprint, again.input_fingerprint);
+}
+
+/// No `--to` and no `--fetch`: the network is never touched, and a
+/// selector this binary does not carry is the one read that reaches it.
+#[test]
+fn reconcile_plan_is_offline_by_default() {
+    let fixture = RegistryFixture::new();
+    std::fs::write(fixture.mock.path().join("curl_fail"), "").expect("the network is gone");
+    let target = plan_target();
+    land_rust(target.path()).success();
+    let run = |args: &[&str]| {
+        let mut command = rk();
+        command
+            .args(["reconcile", "plan", "--json", "--target"])
+            .arg(target.path())
+            .args(args)
+            .env("HOME", fixture.home.path())
+            .env("XDG_STATE_HOME", fixture.home.path())
+            .env("RK_CURL_BIN", fixture.mock.path().join("curl"));
+        command
+    };
+    run(&[]).assert().success();
+    assert_eq!(
+        fixture.curl_log().lines().count(),
+        0,
+        "the default plan touched the network"
+    );
+    let stderr = run(&["--to", "0.9.9"])
+        .assert()
+        .code(73)
+        .get_output()
+        .stderr
+        .clone();
+    let diagnostic: serde_json::Value = serde_json::from_slice(&stderr).expect("one diagnostic");
+    assert_eq!(diagnostic["reason"], "registry-unreachable", "{diagnostic}");
+    assert!(
+        fixture.curl_log().lines().count() > 0,
+        "--to reaches the venue"
+    );
+}
+
+/// The plan verb writes nothing: the target and the state root are
+/// byte-identical afterwards.
+#[test]
+fn reconcile_plan_persists_nothing_in_this_phase() {
+    let home = tempfile::tempdir().expect("a scratch home exists");
+    let target = plan_target();
+    land_rust(target.path()).success();
+    let before_target = tree_digests(target.path());
+    let before_home = tree_digests(home.path());
+    rk().args(["reconcile", "plan", "--target"])
+        .arg(target.path())
+        .env("HOME", home.path())
+        .env("XDG_STATE_HOME", home.path())
+        .env("RUST_LOG", "off")
+        .assert()
+        .success();
+    assert_eq!(tree_digests(target.path()), before_target);
+    assert_eq!(tree_digests(home.path()), before_home);
+}
+
+/// `rk assess` is a front: beside its verdict it prints the plan's
+/// classification and readiness, and its schema says so.
+#[test]
+fn assess_prints_the_plans_classification_and_readiness() {
+    let plain = plan_target();
+    let out = rk()
+        .args(["assess", "--json", "--target"])
+        .arg(plain.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["plan"]["classification"], "setup");
+    // No origin remote: the identity does not resolve, and that is a
+    // required precondition, so the plan is blocked rather than waiting.
+    assert_eq!(report["plan"]["readiness"], "blocked", "{report}");
+
+    let target = branch_fixture();
+    std::fs::write(
+        target.path().join("Cargo.toml"),
+        "[package]\nname = \"widget\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("the version file writes");
+    let out = rk()
+        .args(["assess", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["schema"], "rk.assess/2");
+    assert_eq!(report["classification"], "greenfield");
+    assert_eq!(report["plan"]["classification"], "setup");
+    assert_eq!(report["plan"]["readiness"], "needs-decision");
+    rk().args(["assess", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("plan: setup, needs-decision"));
 }

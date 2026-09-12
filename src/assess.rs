@@ -78,29 +78,10 @@ pub const LONG_LIVED_BRANCHES: [&str; 11] = [
     "prod",
 ];
 
-/// What the target is, for routing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum Classification {
-    /// No release mechanism and no release history: land the workflow.
-    Greenfield,
-    /// A release mechanism is in place: migrate, never land beside it.
-    Brownfield,
-    /// Release activity no mechanism explains: the operator decides.
-    NeedsDecision,
-}
-
-impl Classification {
-    /// The kebab-case verdict word, as the JSON serializes it.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Greenfield => "greenfield",
-            Self::Brownfield => "brownfield",
-            Self::NeedsDecision => "needs-decision",
-        }
-    }
-}
+/// What the target is, for routing: the corpus verdict, owned by the
+/// planner's classification module and served here under the name the
+/// assessment has always used.
+pub use crate::plan::classify::Verdict as Classification;
 
 /// The landing record's presence, the one fact `rk status` owns that the
 /// routing needs before it reads the full report.
@@ -144,13 +125,34 @@ pub struct Evidence {
 /// without a repository.
 #[must_use]
 pub fn classify(evidence: &Evidence) -> Classification {
-    if !evidence.release_markers.is_empty() || !evidence.collisions.is_empty() {
-        return Classification::Brownfield;
-    }
-    if evidence.tags > 0 || !evidence.long_lived_branches.is_empty() {
-        return Classification::NeedsDecision;
-    }
-    Classification::Greenfield
+    crate::plan::classify::verdict(&crate::plan::classify::RepositoryFacts {
+        release_markers: evidence.release_markers.clone(),
+        collisions: evidence.collisions.clone(),
+        tags: evidence.tags,
+        long_lived_branches: evidence.long_lived_branches.clone(),
+    })
+}
+
+/// The repository's facts alone, with no record read: what the planner
+/// gathers beside its own read of the record.
+#[derive(Debug)]
+pub struct Facts {
+    /// The technology the version file names, where one is found.
+    pub tech: Option<&'static str>,
+    /// The forge the origin remote maps to, where one is recognized.
+    pub forge: Option<&'static str>,
+    /// The project path from the origin remote, where one exists.
+    pub repo: Option<String>,
+    /// Release-mechanism files of other tools found at the target.
+    pub release_markers: Vec<String>,
+    /// Payload destinations already present.
+    pub collisions: Vec<String>,
+    /// Whether the target is a git repository.
+    pub git: bool,
+    /// How many tags the repository holds.
+    pub tags: usize,
+    /// Long-lived branches found besides the trunk.
+    pub long_lived_branches: Vec<String>,
 }
 
 /// Gather the evidence at `target`, reading and never writing.
@@ -169,6 +171,28 @@ pub fn gather(target: &Utf8Path) -> Result<Evidence, RkError> {
         recorded: record.is_some(),
         rk_version: record.map(|manifest| manifest.rk_version),
     };
+    let facts = gather_facts(target)?;
+    Ok(Evidence {
+        landing,
+        tech: facts.tech,
+        forge: facts.forge,
+        repo: facts.repo,
+        release_markers: facts.release_markers,
+        collisions: facts.collisions,
+        git: facts.git,
+        tags: facts.tags,
+        long_lived_branches: facts.long_lived_branches,
+    })
+}
+
+/// Gather the repository's facts at `target`, the record aside.
+///
+/// # Errors
+///
+/// [`RkError::Io`] for a disk read that fails for a reason other than
+/// absence, and [`RkError::Subprocess`] where git runs but cannot answer
+/// for a repository.
+pub fn gather_facts(target: &Utf8Path) -> Result<Facts, RkError> {
     let detected = crate::detect::detect(target.as_std_path());
     let mut release_markers: Vec<String> = RELEASE_MARKERS
         .iter()
@@ -187,8 +211,7 @@ pub fn gather(target: &Utf8Path) -> Result<Evidence, RkError> {
     }
     collisions.sort();
     let (git, tags, long_lived_branches) = git_evidence(target)?;
-    Ok(Evidence {
-        landing,
+    Ok(Facts {
         tech: crate::detect::tech_of(target.as_std_path()),
         forge: detected.forge.map(crate::detect::Forge::as_str),
         repo: detected.repo,
@@ -362,60 +385,7 @@ fn git_lines(target: &Utf8Path, args: &[&str]) -> Result<Vec<String>, GitFailure
 
 #[cfg(test)]
 mod tests {
-    use super::{Classification, Evidence, Landing, classify, long_lived_among};
-
-    fn evidence() -> Evidence {
-        Evidence {
-            landing: Landing {
-                recorded: false,
-                rk_version: None,
-            },
-            tech: Some("rust"),
-            forge: Some("github"),
-            repo: Some("acme/widget".into()),
-            release_markers: Vec::new(),
-            collisions: Vec::new(),
-            git: true,
-            tags: 0,
-            long_lived_branches: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn nothing_is_greenfield() {
-        assert_eq!(classify(&evidence()), Classification::Greenfield);
-    }
-
-    #[test]
-    fn a_release_marker_or_a_collision_is_brownfield() {
-        let mut with_marker = evidence();
-        with_marker.release_markers.push("CHANGELOG.md".into());
-        assert_eq!(classify(&with_marker), Classification::Brownfield);
-        let mut with_collision = evidence();
-        with_collision.collisions.push("release-plz.toml".into());
-        assert_eq!(classify(&with_collision), Classification::Brownfield);
-    }
-
-    /// A mechanism outranks unexplained activity: tags beside a marker
-    /// are a history the mechanism made, not a question.
-    #[test]
-    fn a_mechanism_beside_activity_is_still_brownfield() {
-        let mut both = evidence();
-        both.release_markers.push("CHANGELOG.md".into());
-        both.tags = 7;
-        both.long_lived_branches.push("develop".into());
-        assert_eq!(classify(&both), Classification::Brownfield);
-    }
-
-    #[test]
-    fn activity_with_no_mechanism_needs_a_decision() {
-        let mut tagged = evidence();
-        tagged.tags = 1;
-        assert_eq!(classify(&tagged), Classification::NeedsDecision);
-        let mut branched = evidence();
-        branched.long_lived_branches.push("develop".into());
-        assert_eq!(classify(&branched), Classification::NeedsDecision);
-    }
+    use super::{Classification, long_lived_among};
 
     /// The trunk is never evidence against itself; only the remote
     /// segment is stripped, so a topic branch whose last segment is a

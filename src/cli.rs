@@ -15,6 +15,7 @@ pub mod lines;
 pub mod message;
 pub mod payload;
 pub mod read;
+pub mod reconcile;
 pub mod runs;
 pub mod self_depend;
 pub mod setup;
@@ -62,6 +63,8 @@ pub enum Commands {
     Adopt(adopt::AdoptArgs),
     /// Classify a target before anything lands: greenfield, brownfield, or needs-decision.
     Assess(assess::AssessArgs),
+    /// Compute the plan that converges a target toward one release, and print it.
+    Reconcile(reconcile::ReconcileArgs),
     /// Execute the repository-side setup against the detected forge.
     Setup(setup::SetupArgs),
     /// Report and prune local branches the forge already merged.
