@@ -125,7 +125,7 @@ Verify: `cargo nextest run -E 'test(the_store_is_owner_only) or test(show_render
 
 ### `reconcile:apply-revalidates-before-the-first-write` — Apply revalidates before the first write
 
-`rk reconcile apply` MUST compute the same plan again over the stored request, MUST compare the stored fingerprint, the stored document recomputed, and the fresh fingerprint, MUST refuse on any difference naming every field or destination that moved in one pass, and MUST verify that every destination still holds the digest its operation's `before` names, all before the first write, because the stored plan is what the operator reviewed and an apply that acted on anything else would execute what nobody read.
+`rk reconcile apply` MUST compute the same plan again over the stored request, reading the candidate as the release the plan froze, served from the release cache by its exact version and never the selector resolved again, and refusing with `bundle-unverified` where the cache no longer holds that release, MUST compare the stored fingerprint, the stored document recomputed, and the fresh fingerprint, MUST refuse on any difference naming every field or destination that moved in one pass, and MUST verify that every destination still holds the digest its operation's `before` names, all before the first write, because the stored plan is what the operator reviewed and an apply that acted on anything else would execute what nobody read.
 
 #### Scenario: The record moved between plan and apply
 
@@ -133,7 +133,7 @@ Verify: `cargo nextest run -E 'test(the_store_is_owner_only) or test(show_render
 - WHEN `rk reconcile apply <plan-id>` runs
 - THEN it exits 73 with the reason `state-drift` naming the record, and the target is byte-identical afterwards
 
-Verify: `cargo nextest run -E 'test(/^apply_refuses_after_/) or test(no_write_happens_before_revalidation_passes)'`
+Verify: `cargo nextest run -E 'test(/^apply_refuses_after_/) or test(no_write_happens_before_revalidation_passes) or test(apply_never_resolves_the_selector_again)'`
 
 ### `reconcile:apply-proceeds-on-ready-alone` — Apply proceeds on ready alone
 
