@@ -3,12 +3,12 @@
 //!
 //! Approval binds to this digest. Apply regenerates the inputs,
 //! recomputes it, and refuses on any difference, naming what moved. The
-//! inputs are the candidate bundle's digests, the record and
+//! inputs are the target, the candidate bundle's digests, the record and
 //! configuration digests, every operation's path, kind, and before and
-//! after digests, every required precondition's evaluation, and every
-//! selected decision. Excluded on purpose: timestamps, presentation
-//! text, advisory evaluations, and whether a view showed bytes inline or
-//! by digest.
+//! after digests in execution order, every required precondition's
+//! evaluation, and every selected decision. Excluded on purpose:
+//! timestamps, presentation text, advisory evaluations, and whether a
+//! view showed bytes inline or by digest.
 
 use crate::digest::Digest;
 
@@ -20,6 +20,10 @@ use super::{ConfigurationState, Plan, RecordState};
 #[must_use]
 pub fn canonical(plan: &Plan) -> String {
     let mut lines: Vec<String> = Vec::new();
+    // The target is an input: two checkouts holding the same bytes are
+    // still two targets, and a plan approved against one is not approval
+    // to write into the other.
+    lines.push(format!("target\t{}", plan.observed_state.repository.target));
     lines.push(format!(
         "candidate\t{}\t{}",
         plan.release.candidate.payload_sha256, plan.release.candidate.payload_schema
@@ -46,13 +50,15 @@ pub fn canonical(plan: &Plan) -> String {
             ConfigurationState { .. } => "absent".to_owned(),
         }
     ));
-    let mut operations: Vec<String> = plan
-        .operations
-        .iter()
-        .map(|operation| format!("operation\t{}", operation.canonical()))
-        .collect();
-    operations.sort();
-    lines.extend(operations);
+    // Execution order is an input, unsorted: apply stages in this order
+    // and the transaction commits in staging order, so a reordering that
+    // moves the record ahead of the payload it describes is a different
+    // plan and must read as one.
+    lines.extend(
+        plan.operations
+            .iter()
+            .map(|operation| format!("operation\t{}", operation.canonical())),
+    );
     let mut required: Vec<String> = plan
         .preconditions
         .iter()

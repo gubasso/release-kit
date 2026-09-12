@@ -150,7 +150,8 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
             nix: Some(params.nix()),
         },
         decisions: std::collections::BTreeMap::new(),
-    };
+    }
+    .canonicalized()?;
     let planned = reconcile::compute(&request, &manifest::now())?;
     let config = planned
         .config

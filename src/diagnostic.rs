@@ -72,11 +72,13 @@ pub enum Reason {
     /// An apply's writes landed and a postcondition then found the target
     /// short of what the plan promised.
     PostconditionFailed,
+    /// Another run holds the target, and this one wrote nothing.
+    TargetBusy,
 }
 
 /// Every reason, in declaration order; a test asserts against this so an
 /// addition is deliberate and a rename impossible.
-pub const REASONS: [Reason; 23] = [
+pub const REASONS: [Reason; 24] = [
     Reason::Usage,
     Reason::TargetNotFound,
     Reason::ForgeUndetected,
@@ -100,6 +102,7 @@ pub const REASONS: [Reason; 23] = [
     Reason::BundleUnverified,
     Reason::PlanNotReady,
     Reason::PostconditionFailed,
+    Reason::TargetBusy,
 ];
 
 impl Reason {
@@ -130,6 +133,7 @@ impl Reason {
             Self::BundleUnverified => "bundle-unverified",
             Self::PlanNotReady => "plan-not-ready",
             Self::PostconditionFailed => "postcondition-failed",
+            Self::TargetBusy => "target-busy",
         }
     }
 }
@@ -285,6 +289,7 @@ mod tests {
                 "bundle-unverified",
                 "plan-not-ready",
                 "postcondition-failed",
+                "target-busy",
             ]
         );
     }

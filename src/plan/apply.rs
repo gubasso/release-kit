@@ -187,6 +187,129 @@ pub fn gate(plan: &Plan) -> Result<(), RkError> {
     }
 }
 
+/// Refuse where the world the apply runs against is no longer ready,
+/// even though the approved plan was.
+///
+/// # Errors
+///
+/// A refusal with [`Reason::PlanNotReady`] naming what the freshly
+/// computed plan now waits on.
+pub fn gate_fresh(fresh: &Plan) -> Result<(), RkError> {
+    if fresh.readiness == Readiness::Ready {
+        return Ok(());
+    }
+    let ids: Vec<String> = fresh
+        .preconditions
+        .iter()
+        .filter(|p| !p.evaluation.holds())
+        .map(|p| p.id.clone())
+        .collect();
+    Err(RkError::refusal(
+        Diagnostic::new(
+            Reason::PlanNotReady,
+            format!(
+                "the target is no longer ready for plan {}, and nothing was written: {}",
+                fresh.identity.plan_id,
+                ids.join(", ")
+            ),
+        )
+        .expected("the target as ready as it was when the plan was approved")
+        .action("rk reconcile plan computes a fresh plan over what is there now")
+        .target_state("unchanged"),
+    ))
+}
+
+/// Refuse a plan whose operations do not end with exactly one record
+/// write.
+///
+/// Apply stages in the plan's own order and the transaction commits in
+/// staging order, so the record landing before the payload it describes
+/// would leave a target claiming files it does not hold. The planner
+/// emits the record last; this refuses a stored plan that says otherwise.
+///
+/// # Errors
+///
+/// A refusal with [`Reason::StateDrift`] where a record write is not the
+/// final operation, or where more than one record write is present.
+pub fn verify_record_last(plan: &Plan) -> Result<(), RkError> {
+    let records = plan
+        .operations
+        .iter()
+        .filter(|operation| matches!(operation, Operation::WriteRecord { .. }))
+        .count();
+    let last_is_record = plan
+        .operations
+        .last()
+        .is_some_and(|operation| matches!(operation, Operation::WriteRecord { .. }));
+    if records == 0 || (records == 1 && last_is_record) {
+        return Ok(());
+    }
+    let detail = if records > 1 {
+        format!("{records} record writes")
+    } else {
+        "the record write is not the last operation".to_owned()
+    };
+    Err(RkError::refusal(
+        Diagnostic::new(
+            Reason::StateDrift,
+            format!(
+                "plan {} does not write the record last, and nothing was written: {detail}",
+                plan.identity.plan_id
+            ),
+        )
+        .expected("one record write, last, after every file it describes")
+        .action("rk reconcile plan computes a fresh plan")
+        .target_state("unchanged"),
+    ))
+}
+
+/// Refuse where a blob the plan names is missing from the store or no
+/// longer digests to the name it is filed under.
+///
+/// The store files a blob by its digest and reads it back by filename
+/// alone, so this is what turns that filename into a claim the bytes
+/// have to keep. It runs before any staging, so a corrupted store costs
+/// the target nothing.
+///
+/// # Errors
+///
+/// A refusal with [`Reason::StateDrift`] naming every digest whose bytes
+/// are missing or altered, collected in one pass.
+pub fn verify_blobs(plan: &Plan, blobs: &BTreeMap<Digest, Vec<u8>>) -> Result<(), RkError> {
+    let mut bad: Vec<String> = Vec::new();
+    for operation in &plan.operations {
+        let (subject, digest) = match operation {
+            Operation::WriteFile { path, after, .. }
+            | Operation::SpliceBlock { path, after, .. } => (path.clone(), after),
+            Operation::WriteRecord { after, .. } => (manifest::MANIFEST_PATH.to_owned(), after),
+            Operation::RemoveOwnedFile { .. } | Operation::UpdatePin { .. } => continue,
+        };
+        let Some(held) = blobs.get(digest) else {
+            bad.push(format!("{subject} (no blob for {digest})"));
+            continue;
+        };
+        if &Digest::of(held) != digest {
+            bad.push(format!("{subject} (the blob for {digest} was altered)"));
+        }
+    }
+    if bad.is_empty() {
+        return Ok(());
+    }
+    Err(RkError::refusal(
+        Diagnostic::new(
+            Reason::StateDrift,
+            format!(
+                "plan {} names bytes its store no longer holds, and nothing was written: {}",
+                plan.identity.plan_id,
+                bad.join(", ")
+            ),
+        )
+        .expected("every blob digesting to the name the plan filed it under")
+        .action("rk reconcile plan computes a fresh plan and stores its bytes again")
+        .target_state("unchanged"),
+    ))
+}
+
 /// Refuse a stored plan whose semantic inputs no longer match a fresh
 /// computation over the same request.
 ///
@@ -243,6 +366,7 @@ pub fn revalidate(stored: &Plan, fresh: &Plan) -> Result<(), RkError> {
 fn label(line: &str) -> String {
     let mut parts = line.split('\t');
     match parts.next().unwrap_or_default() {
+        "target" => "the target".to_owned(),
         "candidate" => "the candidate bundle".to_owned(),
         "record" => "the record".to_owned(),
         "configuration" => "the configuration".to_owned(),
@@ -335,6 +459,26 @@ pub fn run(
     stored: &Plan,
     blobs: &BTreeMap<Digest, Vec<u8>>,
     fresh: &Plan,
+    journal: Option<Journal>,
+) -> Result<Applied, RkError> {
+    let _lock = super::lock::acquire(target)?;
+    run_locked(target, stored, blobs, fresh, journal)
+}
+
+/// The apply whose caller already holds the target.
+///
+/// `rk reconcile apply` observes the world to recompute `fresh` before
+/// it calls this, and that observation belongs inside the lock too, so
+/// it takes the target itself and comes here.
+///
+/// # Errors
+///
+/// As [`run`], without the acquisition's own refusal.
+pub fn run_locked(
+    target: &Utf8Path,
+    stored: &Plan,
+    blobs: &BTreeMap<Digest, Vec<u8>>,
+    fresh: &Plan,
     mut journal: Option<Journal>,
 ) -> Result<Applied, RkError> {
     let outcome = execute(target, stored, blobs, fresh, journal.as_mut());
@@ -368,7 +512,15 @@ fn execute(
     mut journal: Option<&mut Journal>,
 ) -> Result<Applied, RkError> {
     gate(stored)?;
+    // Revalidation first, because it names what moved. The fresh gate
+    // then catches what the fingerprint cannot see: a precondition that
+    // turned decision-required since the plan was stored leaves every
+    // canonical line identical, because canonicalization excludes
+    // decision-required evaluations, so only the fresh readiness sees it.
     revalidate(stored, fresh)?;
+    gate_fresh(fresh)?;
+    verify_record_last(stored)?;
+    verify_blobs(stored, blobs)?;
     verify_before_digests(target, stored)?;
     if let Some(journal) = journal.as_deref_mut() {
         journal.event_line(&format!(

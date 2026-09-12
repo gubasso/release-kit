@@ -117,7 +117,8 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
             nix: Some(params.nix()),
         },
         decisions: reconcile::parse_decisions(&args.decide)?,
-    };
+    }
+    .canonicalized()?;
     refuse_non_regular(
         &args.target,
         &landing::projection(&EmbeddedReleaseSource, &params)?,

@@ -44,7 +44,7 @@ Verify: `cargo nextest run -E 'test(the_crate_source_verifies_against_the_index_
 
 ### `release-bundle:the-release-cache-is-content-addressed-and-bounded` — The release cache is content-addressed and bounded
 
-The crate source MUST cache each verified bundle under the state root by the registry checksum, MUST serve a cached checksum and the exact version that named it with no network touch, and MUST keep at most the four newest fetched bundles, pruned after every fetch that adds one, because a content-addressed cache never serves a wrong byte and a cache nobody bounded grows forever.
+The crate source MUST cache each verified bundle under the state root by the registry checksum, MUST serve a cached checksum and the exact version that named it with no network touch, and MUST keep at most the four newest fetched bundles, pruned after every fetch that adds one, because a content-addressed cache never serves a wrong byte and a cache nobody bounded grows forever. The checksum names the archive rather than the tree it unpacks to, so a verified fetch MUST seal the extracted bundle with that checksum and the digest of the tree, and a cache hit MUST be read back against that seal and refused with `bundle-unverified` where the seal is absent or the tree no longer matches it, because the manifest recomputes its digests from whatever the directory holds and would otherwise report altered bytes as a release the registry verified. A pruned bundle MUST take its seal with it.
 
 #### Scenario: The same release is asked for twice
 
@@ -52,4 +52,4 @@ The crate source MUST cache each verified bundle under the state root by the reg
 - WHEN `rk payload --release <version>` runs again with the network gone
 - THEN it answers the same manifest, and the fetch log shows no new request
 
-Verify: `cargo nextest run -E 'test(a_cached_digest_is_served_offline) or test(the_cache_keeps_the_newest_bundles)'`
+Verify: `cargo nextest run -E 'test(a_cached_digest_is_served_offline) or test(the_cache_keeps_the_newest_bundles) or test(an_altered_cache_entry_refuses_rather_than_serving_altered_bytes)'`
