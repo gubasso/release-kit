@@ -27,38 +27,29 @@ use crate::self_depend::discover::{self, Discovery};
 use crate::self_depend::fragments::{self, Fragment};
 use crate::self_depend::guard::{self, Acquired};
 use crate::self_depend::leftovers::{self, Action, Leftover};
+use crate::self_depend::manager::{Entry, Manager};
 use crate::self_depend::txn::{self, AbortFailure, Recovery, StepFailure};
 use crate::self_depend::{self, Observed, Presence, pin};
 
-/// The `rk.devshell-status/1` document.
+/// The `rk.self-depend-status/2` document.
 #[derive(Debug, Serialize)]
 struct StatusReport<'a> {
     /// The shape version of this document.
     schema: &'static str,
     /// The target, canonical.
     target: &'a str,
-    /// The rollup: `ready`, `superseded`, `no-flake`, `not-wired`,
-    /// `unpinned`, `ambiguous-pin`, or `pending-recovery`.
+    /// The rollup: `ready`, `superseded`, `no-manager`, `not-wired`,
+    /// `unpinned`, `ambiguous-pin`, or `pending-recovery`. It describes
+    /// and never judges: every state exits 0.
     state: &'static str,
-    /// Whether `flake.nix` exists.
-    flake: Presence,
-    /// Whether `flake.lock` exists.
-    lock: Presence,
-    /// `pinned`, `unpinned`, `absent`, or `ambiguous`.
-    input: &'static str,
-    /// The pinned tag, where exactly one pin was found.
+    /// The one manager whose file names release-kit, where exactly one does.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pin_tag: Option<&'a str>,
-    /// How many lines name the input, where any does.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pin_lines: Option<usize>,
-    /// The locked ref of the input, where the lock names one.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    locked_ref: Option<&'a str>,
-    /// The locked commit of the input, where the lock names one.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    locked_rev: Option<&'a str>,
-    /// Whether `.envrc` exists.
+    wired: Option<Manager>,
+    /// One entry per manager in the closed order, absent ones included;
+    /// one entry under `--manager`.
+    managers: &'a [Entry],
+    /// Whether `.envrc` exists. Direnv is not a manager: it loads a
+    /// shell and pins nothing, so it sits outside the list.
     envrc: Presence,
     /// Whether `.envrc` carries the sync line.
     envrc_sync: bool,
@@ -75,7 +66,7 @@ struct StatusReport<'a> {
     next: &'a [String],
 }
 
-/// The `rk.devshell-add/1` document.
+/// The `rk.self-depend-add/1` document.
 #[derive(Debug, Serialize)]
 struct AddReport<'a> {
     /// The shape version of this document.
@@ -104,7 +95,7 @@ struct AddReport<'a> {
     next: &'a [String],
 }
 
-/// The `rk.devshell-clean/1` document.
+/// The `rk.self-depend-clean/1` document.
 #[derive(Debug, Serialize)]
 struct CleanReport<'a> {
     /// The shape version of this document.
@@ -144,7 +135,7 @@ struct Manual {
     reason: &'static str,
 }
 
-/// The `rk.devshell-sync/1` document.
+/// The `rk.self-depend-sync/1` document.
 #[derive(Debug, Serialize)]
 struct SyncReport<'a> {
     /// The shape version of this document.
@@ -227,7 +218,7 @@ struct Host {
     direnv: &'static str,
 }
 
-/// Dispatch the devshell action.
+/// Dispatch the self-depend action.
 ///
 /// # Errors
 ///
@@ -243,7 +234,9 @@ pub fn run(args: &SelfDependArgs) -> Result<(), RkError> {
     }
 }
 
-/// Report the wiring, offline.
+/// Report the wiring, offline: it describes every state and exits 0 on
+/// each, because the verb has no `--check` mode and a report is not a
+/// verdict.
 fn status(args: &StatusArgs) -> Result<(), RkError> {
     let out = Output::new(args.json);
     let observed = self_depend::observe(&args.target)?;
@@ -252,13 +245,19 @@ fn status(args: &StatusArgs) -> Result<(), RkError> {
         direnv: probe_word(&probes::direnv()),
     };
     let state = observed.state();
+    let managers: Vec<Entry> = observed
+        .managers
+        .iter()
+        .filter(|entry| args.manager.is_none_or(|wanted| entry.manager == wanted))
+        .cloned()
+        .collect();
     out.result_line(format!("state {state}"));
-    out.result_line(format!(
-        "flake {}, lock {}",
-        word(observed.flake),
-        word(observed.lock)
-    ));
-    out.result_line(input_line(&observed));
+    if let Some(wired) = observed.wired {
+        out.result_line(format!("wired through {}", wired.as_str()));
+    }
+    for entry in &managers {
+        out.result_line(manager_line(entry));
+    }
     out.result_line(format!(
         ".envrc {}, sync line {}",
         word(observed.envrc),
@@ -277,16 +276,11 @@ fn status(args: &StatusArgs) -> Result<(), RkError> {
     let next = status_next(&observed);
     out.next(&next);
     out.emit(&StatusReport {
-        schema: "rk.devshell-status/1",
+        schema: "rk.self-depend-status/2",
         target: observed.target.as_str(),
         state,
-        flake: observed.flake,
-        lock: observed.lock,
-        input: input_word(&observed.scan),
-        pin_tag: observed.pin_tag(),
-        pin_lines: pin_lines(&observed.scan),
-        locked_ref: observed.locked_ref.as_deref(),
-        locked_rev: observed.locked_rev.as_deref(),
+        wired: observed.wired,
+        managers: &managers,
         envrc: observed.envrc,
         envrc_sync: observed.envrc_sync,
         stamp: observed.stamp.as_deref(),
@@ -378,7 +372,7 @@ fn add(args: &AddArgs) -> Result<(), RkError> {
     let next = add_next(&observed, args.apply, &written);
     out.next(&next);
     out.emit(&AddReport {
-        schema: "rk.devshell-add/1",
+        schema: "rk.self-depend-add/1",
         mode,
         target: observed.target.as_str(),
         tag: &tag,
@@ -771,7 +765,7 @@ fn render_sync(
     };
     out.next(&next);
     out.emit(&SyncReport {
-        schema: "rk.devshell-sync/1",
+        schema: "rk.self-depend-sync/1",
         mode: if args.apply { "apply" } else { "preview" },
         caller: match args.caller {
             Caller::Envrc => "envrc",
@@ -987,7 +981,7 @@ fn clean(args: &CleanArgs) -> Result<(), RkError> {
     let next = clean_next(&observed, args.apply, &leftovers, &manual);
     out.next(&next);
     out.emit(&CleanReport {
-        schema: "rk.devshell-clean/1",
+        schema: "rk.self-depend-clean/1",
         mode,
         target: target.as_str(),
         leftovers: &leftovers,
@@ -1129,40 +1123,46 @@ fn add_next(observed: &Observed, apply: bool, written: &[String]) -> Vec<String>
     next
 }
 
-/// The human line for the input.
-fn input_line(observed: &Observed) -> String {
+/// The human line for one manager's entry.
+fn manager_line(entry: &Entry) -> String {
     use std::fmt::Write as _;
-    match &observed.scan {
-        pin::Scan::None => "input absent".to_owned(),
-        pin::Scan::Unpinned(line) => format!("input unpinned at line {line}"),
-        pin::Scan::Many(count) => format!("input ambiguous: {count} lines name it"),
-        pin::Scan::One(pin) => {
-            let mut line = format!("input pinned {}", pin.tag);
-            if let Some(rev) = &observed.locked_rev {
-                let _ = write!(line, ", locked at {rev}");
+    let mut line = format!("manager {} {}", entry.manager.as_str(), word(entry.present));
+    let Some(file) = &entry.file else {
+        return line;
+    };
+    let _ = write!(line, " ({file})");
+    match (entry.pin, entry.pin_lines) {
+        ("absent", _) => line.push_str(", not named"),
+        ("unpinned", _) => line.push_str(", named with no version"),
+        ("ambiguous", Some(count)) => {
+            let _ = write!(line, ", ambiguous: {count} lines name it");
+        }
+        _ => {
+            let _ = write!(
+                line,
+                ", pinned {}",
+                entry.version.as_deref().unwrap_or_default()
+            );
+            if let Some(freshness) = entry.freshness {
+                let _ = write!(
+                    line,
+                    " ({} this binary)",
+                    match freshness {
+                        crate::self_depend::manager::Freshness::Behind => "behind",
+                        crate::self_depend::manager::Freshness::Current => "same as",
+                        crate::self_depend::manager::Freshness::Ahead => "ahead of",
+                    }
+                );
             }
-            line
         }
     }
-}
-
-/// The closed `input` vocabulary.
-const fn input_word(scan: &pin::Scan) -> &'static str {
-    match scan {
-        pin::Scan::None => "absent",
-        pin::Scan::Unpinned(_) => "unpinned",
-        pin::Scan::One(_) => "pinned",
-        pin::Scan::Many(_) => "ambiguous",
+    if let Some(lock) = entry.lock {
+        let _ = write!(line, ", lock {}", word(lock));
     }
-}
-
-/// How many lines name the input, where any does.
-const fn pin_lines(scan: &pin::Scan) -> Option<usize> {
-    match scan {
-        pin::Scan::None => None,
-        pin::Scan::Unpinned(_) | pin::Scan::One(_) => Some(1),
-        pin::Scan::Many(count) => Some(*count),
+    if let Some(rev) = &entry.locked_rev {
+        let _ = write!(line, ", locked at {rev}");
     }
+    line
 }
 
 /// The human word for a presence.
@@ -1188,11 +1188,11 @@ fn status_next(observed: &Observed) -> Vec<String> {
         "pending-recovery" => vec![format!(
             "rk self-depend sync --caller operator --target {target} recovers the interrupted run"
         )],
-        "no-flake" | "not-wired" | "unpinned" => vec![format!(
+        "no-manager" | "not-wired" | "unpinned" => vec![format!(
             "rk self-depend add --target {target} prints the fragments; --apply seeds the files a target lacks"
         )],
         "ambiguous-pin" => vec![format!(
-            "leave exactly one release-kit input line in {target}/flake.nix, then rerun"
+            "leave exactly one line naming release-kit, in one manager file under {target}, then rerun"
         )],
         "superseded" => vec![format!(
             "rk self-depend clean --target {target} previews the removal of the predecessor mechanism; --apply removes it"
@@ -1207,9 +1207,9 @@ fn status_next(observed: &Observed) -> Vec<String> {
 mod tests {
     use super::{AddReport, CleanReport, Host, Manual, StatusReport, Step, SyncReport};
 
-    /// The complete `rk.devshell-sync/1` shape, held by snapshot.
+    /// The complete `rk.self-depend-sync/1` shape, held by snapshot.
     #[test]
-    fn the_devshell_sync_schema_snapshot_holds() {
+    fn the_self_depend_sync_schema_snapshot_holds() {
         let steps = vec![
             Step {
                 step: "rewrite-pin",
@@ -1226,7 +1226,7 @@ mod tests {
         let recovered = vec!["flake.nix".to_owned()];
         let next = vec!["both files are as they were".to_owned()];
         let report = SyncReport {
-            schema: "rk.devshell-sync/1",
+            schema: "rk.self-depend-sync/1",
             mode: "apply",
             caller: "operator",
             target: "/srv/widget",
@@ -1242,10 +1242,10 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.devshell-sync/1","mode":"apply","caller":"operator","target":"/srv/widget","outcome":"build-failed","from":"v0.2.15","to":"v0.2.16","detail":"build failed: error: builder failed","steps":[{"step":"rewrite-pin","status":"ok"},{"step":"build","status":"failed","detail":"error: builder failed"}],"restored":["flake.nix","flake.lock"],"recovered":["flake.nix"],"stamp":"2026-09-04","next":["both files are as they were"]}"#
+            r#"{"schema":"rk.self-depend-sync/1","mode":"apply","caller":"operator","target":"/srv/widget","outcome":"build-failed","from":"v0.2.15","to":"v0.2.16","detail":"build failed: error: builder failed","steps":[{"step":"rewrite-pin","status":"ok"},{"step":"build","status":"failed","detail":"error: builder failed"}],"restored":["flake.nix","flake.lock"],"recovered":["flake.nix"],"stamp":"2026-09-04","next":["both files are as they were"]}"#
         );
         let bare = SyncReport {
-            schema: "rk.devshell-sync/1",
+            schema: "rk.self-depend-sync/1",
             mode: "preview",
             caller: "envrc",
             target: "/srv/widget",
@@ -1261,14 +1261,14 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&bare).expect("a report serializes"),
-            r#"{"schema":"rk.devshell-sync/1","mode":"preview","caller":"envrc","target":"/srv/widget","outcome":"no-flake","next":[]}"#,
+            r#"{"schema":"rk.self-depend-sync/1","mode":"preview","caller":"envrc","target":"/srv/widget","outcome":"no-flake","next":[]}"#,
             "an unknown value is omitted, never null"
         );
     }
 
-    /// The complete `rk.devshell-clean/1` shape, held by snapshot.
+    /// The complete `rk.self-depend-clean/1` shape, held by snapshot.
     #[test]
-    fn the_devshell_clean_schema_snapshot_holds() {
+    fn the_self_depend_clean_schema_snapshot_holds() {
         let leftovers = vec![Leftover {
             id: "bump-script",
             file: "scripts/rk-bump.sh".to_owned(),
@@ -1288,7 +1288,7 @@ mod tests {
         }];
         let next = vec!["rk self-depend status".to_owned()];
         let report = CleanReport {
-            schema: "rk.devshell-clean/1",
+            schema: "rk.self-depend-clean/1",
             mode: "apply",
             target: "/srv/widget",
             leftovers: &leftovers,
@@ -1299,7 +1299,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.devshell-clean/1","mode":"apply","target":"/srv/widget","leftovers":[{"id":"bump-script","file":"scripts/rk-bump.sh","action":"remove-file","reason":"the file exists only for the predecessor bump mechanism"}],"removed":["scripts/rk-bump.sh"],"rewritten":[".envrc"],"manual":[{"id":"just-recipe","file":"justfile","line":42,"text":"rk-bump:","reason":"a recipe body carries structure a line scan cannot judge"}],"next":["rk self-depend status"]}"#
+            r#"{"schema":"rk.self-depend-clean/1","mode":"apply","target":"/srv/widget","leftovers":[{"id":"bump-script","file":"scripts/rk-bump.sh","action":"remove-file","reason":"the file exists only for the predecessor bump mechanism"}],"removed":["scripts/rk-bump.sh"],"rewritten":[".envrc"],"manual":[{"id":"just-recipe","file":"justfile","line":42,"text":"rk-bump:","reason":"a recipe body carries structure a line scan cannot judge"}],"next":["rk self-depend status"]}"#
         );
         let bare = Manual {
             id: "also",
@@ -1317,11 +1317,12 @@ mod tests {
     use crate::self_depend::Presence;
     use crate::self_depend::fragments::{Anchor, Fragment};
     use crate::self_depend::leftovers::{Action, Leftover};
+    use crate::self_depend::manager::{Entry, Freshness, Manager, PinRead};
 
-    /// The complete `rk.devshell-add/1` shape, held by snapshot, the
+    /// The complete `rk.self-depend-add/1` shape, held by snapshot, the
     /// fragment carrying every field the agent contract names.
     #[test]
-    fn the_devshell_add_schema_snapshot_holds() {
+    fn the_self_depend_add_schema_snapshot_holds() {
         let fragments = vec![Fragment {
             id: "flake-input",
             file: "flake.nix",
@@ -1338,7 +1339,7 @@ mod tests {
         let written = vec![".envrc".to_owned()];
         let next = vec!["direnv allow".to_owned()];
         let report = AddReport {
-            schema: "rk.devshell-add/1",
+            schema: "rk.self-depend-add/1",
             mode: "apply",
             target: "/srv/widget",
             tag: "v0.2.16",
@@ -1352,7 +1353,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.devshell-add/1","mode":"apply","target":"/srv/widget","tag":"v0.2.16","tag_source":"binary","flake":"present","envrc":"absent","written":[".envrc"],"refusal":"the target already carries flake.nix","fragments":[{"id":"flake-input","file":"flake.nix","role":"the pinned release-kit input","placement":"insert-into-attrset","anchor":{"kind":"attrset","path":"inputs","needle":"inputs = {"},"text":"release-kit = {};","present":false}],"next":["direnv allow"]}"#
+            r#"{"schema":"rk.self-depend-add/1","mode":"apply","target":"/srv/widget","tag":"v0.2.16","tag_source":"binary","flake":"present","envrc":"absent","written":[".envrc"],"refusal":"the target already carries flake.nix","fragments":[{"id":"flake-input","file":"flake.nix","role":"the pinned release-kit input","placement":"insert-into-attrset","anchor":{"kind":"attrset","path":"inputs","needle":"inputs = {"},"text":"release-kit = {};","present":false}],"next":["direnv allow"]}"#
         );
         let bare = Fragment {
             id: "envrc-sync",
@@ -1374,9 +1375,10 @@ mod tests {
         );
     }
 
-    /// The complete `rk.devshell-status/1` shape, held by snapshot.
+    /// The complete `rk.self-depend-status/2` shape, held by snapshot,
+    /// per `distribution:machine-output-declares-its-schema`.
     #[test]
-    fn the_devshell_status_schema_snapshot_holds() {
+    fn the_status_schema_is_versioned_and_snapshot_tested() {
         let leftovers = vec![
             Leftover {
                 id: "just-recipe",
@@ -1395,18 +1397,32 @@ mod tests {
                 reason: "the file exists only for the predecessor bump mechanism",
             },
         ];
+        let managers = vec![
+            Entry {
+                manager: Manager::Flake,
+                present: Presence::Present,
+                file: Some("flake.nix".to_owned()),
+                pin: "pinned",
+                version: Some("v0.2.16".to_owned()),
+                pin_lines: Some(1),
+                freshness: Some(Freshness::Behind),
+                lock: Some(Presence::Present),
+                locked_ref: Some("refs/tags/v0.2.16".to_owned()),
+                locked_rev: Some("9f3c".to_owned()),
+                read: PinRead::One {
+                    line: 4,
+                    version: "v0.2.16".to_owned(),
+                },
+            },
+            Entry::absent(Manager::Mise),
+        ];
         let next = vec!["rk self-depend sync --caller operator --target /srv/widget reports whether the pin is current".to_owned()];
         let report = StatusReport {
-            schema: "rk.devshell-status/1",
+            schema: "rk.self-depend-status/2",
             target: "/srv/widget",
             state: "ready",
-            flake: Presence::Present,
-            lock: Presence::Present,
-            input: "pinned",
-            pin_tag: Some("v0.2.16"),
-            pin_lines: Some(1),
-            locked_ref: Some("refs/tags/v0.2.16"),
-            locked_rev: Some("9f3c"),
+            wired: Some(Manager::Flake),
+            managers: &managers,
             envrc: Presence::Present,
             envrc_sync: true,
             stamp: Some("2026-09-04"),
@@ -1420,19 +1436,14 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.devshell-status/1","target":"/srv/widget","state":"ready","flake":"present","lock":"present","input":"pinned","pin_tag":"v0.2.16","pin_lines":1,"locked_ref":"refs/tags/v0.2.16","locked_rev":"9f3c","envrc":"present","envrc_sync":true,"stamp":"2026-09-04","pending":false,"host":{"nix":"ok","direnv":"failed"},"leftovers":[{"id":"just-recipe","file":"justfile","line":42,"text":"rk-bump:","action":"manual","reason":"a recipe body carries structure a line scan cannot judge"},{"id":"bump-script","file":"scripts/rk-bump.sh","action":"remove-file","reason":"the file exists only for the predecessor bump mechanism"}],"next":["rk self-depend sync --caller operator --target /srv/widget reports whether the pin is current"]}"#
+            r#"{"schema":"rk.self-depend-status/2","target":"/srv/widget","state":"ready","wired":"flake","managers":[{"manager":"flake","present":"present","file":"flake.nix","pin":"pinned","version":"v0.2.16","pin_lines":1,"freshness":"behind","lock":"present","locked_ref":"refs/tags/v0.2.16","locked_rev":"9f3c"},{"manager":"mise","present":"absent","pin":"absent"}],"envrc":"present","envrc_sync":true,"stamp":"2026-09-04","pending":false,"host":{"nix":"ok","direnv":"failed"},"leftovers":[{"id":"just-recipe","file":"justfile","line":42,"text":"rk-bump:","action":"manual","reason":"a recipe body carries structure a line scan cannot judge"},{"id":"bump-script","file":"scripts/rk-bump.sh","action":"remove-file","reason":"the file exists only for the predecessor bump mechanism"}],"next":["rk self-depend sync --caller operator --target /srv/widget reports whether the pin is current"]}"#
         );
         let bare = StatusReport {
-            schema: "rk.devshell-status/1",
+            schema: "rk.self-depend-status/2",
             target: "/srv/widget",
-            state: "no-flake",
-            flake: Presence::Absent,
-            lock: Presence::Absent,
-            input: "absent",
-            pin_tag: None,
-            pin_lines: None,
-            locked_ref: None,
-            locked_rev: None,
+            state: "no-manager",
+            wired: None,
+            managers: &[],
             envrc: Presence::Absent,
             envrc_sync: false,
             stamp: None,
@@ -1446,7 +1457,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&bare).expect("a report serializes"),
-            r#"{"schema":"rk.devshell-status/1","target":"/srv/widget","state":"no-flake","flake":"absent","lock":"absent","input":"absent","envrc":"absent","envrc_sync":false,"pending":false,"host":{"nix":"failed","direnv":"failed"},"leftovers":[],"next":[]}"#,
+            r#"{"schema":"rk.self-depend-status/2","target":"/srv/widget","state":"no-manager","managers":[],"envrc":"absent","envrc_sync":false,"pending":false,"host":{"nix":"failed","direnv":"failed"},"leftovers":[],"next":[]}"#,
             "an unknown value must be omitted, not serialized as null"
         );
     }

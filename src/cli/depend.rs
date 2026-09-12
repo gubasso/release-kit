@@ -4,6 +4,10 @@ use camino::Utf8PathBuf;
 use clap::{Args, Subcommand, ValueEnum};
 use serde::Serialize;
 
+/// The target's tool manager: one enum, owned by the self-depend axis,
+/// so `rk depend` and `rk self-depend` read the same list.
+pub use crate::self_depend::manager::Manager;
+
 /// Add another project as a dependency of a target, from how the source distributes itself.
 #[derive(Debug, Args)]
 pub struct DependArgs {
@@ -93,37 +97,6 @@ impl Kind {
             Self::Prod => "prod",
         }
     }
-}
-
-/// The target's tool manager.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ValueEnum)]
-#[serde(rename_all = "kebab-case")]
-#[value(rename_all = "kebab-case")]
-pub enum Manager {
-    /// A Nix flake: an input pinned at a tag and its package in the devshell.
-    Flake,
-    /// mise: one `[tools]` entry in its configuration file.
-    Mise,
-    /// asdf: one line in `.tool-versions`.
-    Asdf,
-    /// devbox: one entry in the `packages` array of `devbox.json`.
-    Devbox,
-}
-
-impl Manager {
-    /// The wire form.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Flake => "flake",
-            Self::Mise => "mise",
-            Self::Asdf => "asdf",
-            Self::Devbox => "devbox",
-        }
-    }
-
-    /// Every manager, in the order the reports list them.
-    pub const ALL: [Self; 4] = [Self::Flake, Self::Mise, Self::Asdf, Self::Devbox];
 }
 
 /// Where the source is fetched from.

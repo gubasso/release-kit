@@ -1,43 +1,17 @@
 //! What the target manages its development tools with.
 //!
-//! Four managers are recognized by their files: a flake, a mise
-//! configuration in the precedence mise documents, asdf's
-//! `.tool-versions`, and `devbox.json`. The observation reads the files
-//! and reports where the dependency's name already appears; it judges
-//! nothing else.
+//! The managers and their detection live on the self-depend manager
+//! axis, so `rk depend` and `rk self-depend` read one list through one
+//! sweep. This observation adds what `rk depend` alone needs: the
+//! technology, the `.envrc` load, and where the dependency's name already
+//! appears. It judges nothing else.
 
 use camino::{Utf8Path, Utf8PathBuf};
 use serde::Serialize;
 
 use super::{Manager, canonical_dir};
 use crate::error::RkError;
-
-/// The mise configuration paths, in mise's precedence order, the
-/// highest first: a file, or a `conf.d` directory whose `*.toml` entries
-/// all load. A local override file is left out: it is not committed.
-pub const MISE_FILES: [&str; 9] = [
-    "mise.toml",
-    ".mise.toml",
-    "mise/config.toml",
-    "mise/conf.d",
-    ".mise/config.toml",
-    ".mise/conf.d",
-    ".config/mise.toml",
-    ".config/mise/config.toml",
-    ".config/mise/conf.d",
-];
-
-/// One manager and the file that declares it.
-#[derive(Debug, Clone, Serialize)]
-pub struct ManagerFile {
-    /// The manager.
-    pub manager: Manager,
-    /// The file, relative to the target.
-    pub file: String,
-    /// Its text.
-    #[serde(skip)]
-    pub text: String,
-}
+pub use crate::self_depend::manager::{MISE_FILES, ManagerFile, first_mention, manager_files};
 
 /// Where a manager file already names the dependency.
 #[derive(Debug, Clone, Serialize)]
@@ -75,12 +49,7 @@ impl Target {
     /// The default file a manager is seeded into when absent.
     #[must_use]
     pub const fn default_file(manager: Manager) -> &'static str {
-        match manager {
-            Manager::Flake => "flake.nix",
-            Manager::Mise => "mise.toml",
-            Manager::Asdf => ".tool-versions",
-            Manager::Devbox => "devbox.json",
-        }
+        manager.default_file()
     }
 }
 
@@ -124,87 +93,6 @@ pub fn observe(path: &Utf8Path, dep_name: Option<&str>) -> Result<Target, RkErro
     })
 }
 
-/// The manager files present, one per manager, in the closed order.
-///
-/// For mise, the first path in precedence wins, and inside a `conf.d`
-/// directory the file that already names the dependency wins over the
-/// first in name order.
-///
-/// # Errors
-///
-/// Returns [`RkError::Io`] where a present file does not read.
-pub fn manager_files(dir: &Utf8Path, dep_name: Option<&str>) -> Result<Vec<ManagerFile>, RkError> {
-    let mut out = Vec::new();
-    for manager in Manager::ALL {
-        let candidates: &[&str] = match manager {
-            Manager::Flake => &["flake.nix"],
-            Manager::Mise => &MISE_FILES,
-            Manager::Asdf => &[".tool-versions"],
-            Manager::Devbox => &["devbox.json"],
-        };
-        for candidate in candidates {
-            let Some(file) = first_config(dir, candidate, dep_name)? else {
-                continue;
-            };
-            out.push(ManagerFile {
-                manager,
-                text: std::fs::read_to_string(dir.join(&file))?,
-                file,
-            });
-            break;
-        }
-    }
-    Ok(out)
-}
-
-/// The configuration file a candidate path resolves to: the file
-/// itself, or, under a `conf.d` directory, the first `*.toml` in name
-/// order that already names the dependency, else the first in name order.
-fn first_config(
-    dir: &Utf8Path,
-    candidate: &str,
-    dep_name: Option<&str>,
-) -> Result<Option<String>, RkError> {
-    let path = dir.join(candidate);
-    if path.is_file() {
-        return Ok(Some(candidate.to_owned()));
-    }
-    if !candidate.ends_with("conf.d") || !path.is_dir() {
-        return Ok(None);
-    }
-    let mut names: Vec<String> = std::fs::read_dir(&path)?
-        .filter_map(Result::ok)
-        .filter(|entry| entry.path().is_file())
-        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "toml"))
-        .filter_map(|entry| entry.file_name().into_string().ok())
-        .collect();
-    names.sort();
-    if let Some(name) = dep_name {
-        for file in &names {
-            if first_mention(&std::fs::read_to_string(path.join(file))?, name).is_some() {
-                return Ok(Some(format!("{candidate}/{file}")));
-            }
-        }
-    }
-    Ok(names.first().map(|name| format!("{candidate}/{name}")))
-}
-
-/// The first line naming `name` as a word, 1-based.
-#[must_use]
-pub fn first_mention(text: &str, name: &str) -> Option<usize> {
-    let boundary = |c: Option<char>| {
-        c.is_none_or(|c| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')))
-    };
-    text.lines()
-        .position(|line| {
-            line.match_indices(name).any(|(index, _)| {
-                boundary(line[..index].chars().next_back())
-                    && boundary(line[index + name.len()..].chars().next())
-            })
-        })
-        .map(|index| index + 1)
-}
-
 /// The technology, with `node` read from `package.json` after the
 /// version files the bindings define.
 #[must_use]
@@ -215,60 +103,13 @@ pub fn tech_or_node(dir: &Utf8Path) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{MISE_FILES, Manager, first_mention, manager_files, tech_or_node};
+    use super::{Manager, Target, tech_or_node};
 
     #[test]
-    fn the_first_mise_file_in_precedence_wins() {
-        let dir = tempfile::tempdir().expect("a scratch dir");
-        let root = camino::Utf8Path::from_path(dir.path()).expect("utf-8");
-        std::fs::create_dir_all(root.join(".config/mise")).expect("mkdir");
-        std::fs::write(root.join(".config/mise/config.toml"), "[tools]\n").expect("writes");
-        std::fs::write(root.join(".mise.toml"), "[tools]\nnode = '24'\n").expect("writes");
-        std::fs::write(root.join("devbox.json"), "{}\n").expect("writes");
-        let files = manager_files(root, None).expect("reads");
-        let names: Vec<(Manager, &str)> =
-            files.iter().map(|m| (m.manager, m.file.as_str())).collect();
-        assert_eq!(
-            names,
-            [
-                (Manager::Mise, ".mise.toml"),
-                (Manager::Devbox, "devbox.json")
-            ]
-        );
-        assert_eq!(MISE_FILES[0], "mise.toml");
-        std::fs::remove_file(root.join(".mise.toml")).expect("removes");
-        std::fs::remove_file(root.join(".config/mise/config.toml")).expect("removes");
-        std::fs::create_dir_all(root.join(".mise/conf.d")).expect("mkdir");
-        std::fs::write(root.join(".mise/conf.d/tools.toml"), "[tools]\n").expect("writes");
-        std::fs::write(root.join(".mise/conf.d/env.toml"), "[env]\n").expect("writes");
-        std::fs::write(root.join(".mise/conf.d/README"), "").expect("writes");
-        let files = manager_files(root, None).expect("reads");
-        assert_eq!(
-            files[0].file, ".mise/conf.d/env.toml",
-            "a conf.d directory is mise ownership, its first toml in name order"
-        );
-        std::fs::write(
-            root.join(".mise/conf.d/tools.toml"),
-            "[tools]\n\"cargo:sample-tool\" = \"1.0.0\"\n",
-        )
-        .expect("writes");
-        let files = manager_files(root, Some("sample-tool")).expect("reads");
-        assert_eq!(
-            files[0].file, ".mise/conf.d/tools.toml",
-            "the file that already names the dependency is the destination"
-        );
-    }
-
-    #[test]
-    fn a_mention_is_found_by_line() {
-        let text = "[tools]\nnode = '24'\n\"cargo:sample-tool\" = \"1.4.0\"\n";
-        assert_eq!(first_mention(text, "sample-tool"), Some(3));
-        assert_eq!(
-            first_mention(text, "sample"),
-            None,
-            "a prefix is not a name"
-        );
-        assert_eq!(first_mention("", "sample-tool"), None);
+    fn the_default_file_is_the_managers_own() {
+        for manager in Manager::ALL {
+            assert_eq!(Target::default_file(manager), manager.default_file());
+        }
     }
 
     #[test]

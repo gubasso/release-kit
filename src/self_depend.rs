@@ -1,20 +1,22 @@
 //! `rk self-depend`: release-kit as a consumer project's development
 //! dependency, kept fresh.
 //!
-//! A consumer pins release-kit as a flake input at a release tag and
-//! takes `rk` from its devshell. Two files carry the fact: the tag in
-//! `flake.nix` is the version, and the `release-kit` node in
+//! A consumer obtains `rk` through whatever tool manager it already
+//! runs, and `manager` owns that axis: the closed list, the detection,
+//! and the per-manager pin reader. The flake manager carries two facts:
+//! the tag in `flake.nix` is the version, and the `release-kit` node in
 //! `flake.lock` is the content. This module owns the offline observation
-//! of that wiring and the per-checkout state key; `pin` owns the line
-//! grammar, `fragments` the authored texts `add` serves, `leftovers` the
-//! predecessor catalog `clean` removes, `discover` the one network call,
-//! `txn` the fenced two-file transaction, and `guard` the gates around
-//! it.
+//! across every manager and the per-checkout state key; `pin` owns the
+//! flake line grammar, `fragments` the authored texts `add` serves,
+//! `leftovers` the predecessor catalog `clean` removes, `discover` the
+//! one network call, `txn` the fenced two-file transaction, and `guard`
+//! the gates around it.
 
 pub mod discover;
 pub mod fragments;
 pub mod guard;
 pub mod leftovers;
+pub mod manager;
 pub mod pin;
 pub mod txn;
 
@@ -74,7 +76,12 @@ pub struct Observed {
     pub locked_rev: Option<String>,
     /// The locked ref of the `release-kit` node, where the lock names one.
     pub locked_ref: Option<String>,
-    /// Whether `.envrc` exists.
+    /// One entry per manager, in the closed order, absent ones included.
+    pub managers: Vec<manager::Entry>,
+    /// The one manager whose file names release-kit, where exactly one does.
+    pub wired: Option<manager::Manager>,
+    /// Whether `.envrc` exists. Direnv is not a manager: it loads a
+    /// shell and pins nothing, so the file is reported outside the list.
     pub envrc: Presence,
     /// Whether `.envrc` carries the sync line.
     pub envrc_sync: bool,
@@ -102,20 +109,35 @@ impl Observed {
         }
     }
 
-    /// The rollup state, first match wins.
+    /// The rollup state, first match wins. It describes and never
+    /// judges: every state exits 0, and the verbs that act read the
+    /// entries rather than this word.
     #[must_use]
     pub fn state(&self) -> &'static str {
         if self.pending {
             return "pending-recovery";
         }
-        if !self.flake.is_present() {
-            return "no-flake";
+        if self
+            .managers
+            .iter()
+            .all(|entry| !entry.present.is_present())
+        {
+            return "no-manager";
         }
-        match self.scan {
-            pin::Scan::Many(_) => return "ambiguous-pin",
-            pin::Scan::None => return "not-wired",
-            pin::Scan::Unpinned(_) => return "unpinned",
-            pin::Scan::One(_) => {}
+        let named: Vec<&manager::Entry> = self
+            .managers
+            .iter()
+            .filter(|entry| entry.read.names())
+            .collect();
+        let entry = match named.as_slice() {
+            [] => return "not-wired",
+            [one] => *one,
+            _ => return "ambiguous-pin",
+        };
+        match entry.read {
+            manager::PinRead::Many { .. } => return "ambiguous-pin",
+            manager::PinRead::Unpinned { .. } => return "unpinned",
+            manager::PinRead::Absent | manager::PinRead::One { .. } => {}
         }
         if self.leftovers.is_empty() {
             "ready"
@@ -123,9 +145,17 @@ impl Observed {
             "superseded"
         }
     }
+
+    /// The flake manager's entry: always present in the list.
+    #[must_use]
+    pub fn flake_entry(&self) -> Option<&manager::Entry> {
+        self.managers
+            .iter()
+            .find(|entry| entry.manager == manager::Manager::Flake)
+    }
 }
 
-/// Read a target's devshell wiring, offline.
+/// Read a target's pin wiring across every manager, offline.
 ///
 /// # Errors
 ///
@@ -133,13 +163,15 @@ impl Observed {
 /// [`RkError::Io`] where a present file does not read.
 pub fn observe(target: &Utf8Path) -> Result<Observed, RkError> {
     let target = canonical_target(target)?;
-    let flake_path = target.join("flake.nix");
-    let flake = Presence::of(&flake_path);
-    let flake_text = if flake.is_present() {
-        Some(std::fs::read_to_string(&flake_path)?)
-    } else {
-        None
-    };
+    let files = manager::manager_files(&target, Some(manager::DEP_NAME))?;
+    let mut managers = manager::entries(&files);
+    let flake_text = files
+        .iter()
+        .find(|file| file.manager == manager::Manager::Flake)
+        .map(|file| file.text.clone());
+    // Judged by symlink metadata, so a dangling symlink still counts as
+    // present: the verbs would refuse to write over it.
+    let flake = Presence::of(&target.join("flake.nix"));
     let scan = flake_text.as_deref().map_or(pin::Scan::None, pin::scan);
     let lock_path = target.join("flake.lock");
     let lock = Presence::of(&lock_path);
@@ -147,6 +179,23 @@ pub fn observe(target: &Utf8Path) -> Result<Observed, RkError> {
         locked_node(&std::fs::read(&lock_path)?)
     } else {
         (None, None)
+    };
+    if let Some(entry) = managers
+        .iter_mut()
+        .find(|entry| entry.manager == manager::Manager::Flake)
+    {
+        entry.lock = Some(lock);
+        entry.locked_ref.clone_from(&locked_ref_name);
+        entry.locked_rev.clone_from(&locked_rev);
+    }
+    let named: Vec<manager::Manager> = managers
+        .iter()
+        .filter(|entry| entry.read.names())
+        .map(|entry| entry.manager)
+        .collect();
+    let wired = match named.as_slice() {
+        [one] => Some(*one),
+        _ => None,
     };
     let envrc_path = target.join(".envrc");
     let envrc = Presence::of(&envrc_path);
@@ -163,6 +212,8 @@ pub fn observe(target: &Utf8Path) -> Result<Observed, RkError> {
         flake_text,
         locked_rev,
         locked_ref: locked_ref_name,
+        managers,
+        wired,
         envrc,
         envrc_sync,
         pending,

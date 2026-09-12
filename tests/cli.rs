@@ -13224,7 +13224,7 @@ fn the_self_verb_answers_under_its_new_name() {
         .rk(&["self-depend", "status"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("state no-flake"));
+        .stdout(predicate::str::contains("state no-manager"));
     fixture
         .rk(&["devshell", "status"])
         .assert()
@@ -13299,6 +13299,230 @@ fn the_nix_concept_survives_the_rename() {
     }
 }
 
+/// One manager's entry in a status report, by its wire name.
+fn manager_entry<'a>(report: &'a serde_json::Value, manager: &str) -> &'a serde_json::Value {
+    report["managers"]
+        .as_array()
+        .expect("managers")
+        .iter()
+        .find(|entry| entry["manager"] == manager)
+        .unwrap_or_else(|| panic!("the report lists {manager}: {report}"))
+}
+
+/// A target carrying all four manager files reports four entries, in
+/// the closed order, each once.
+#[test]
+fn every_manager_in_the_enum_is_detected_once() {
+    let fixture = SelfDependFixture::new();
+    fixture.write_flake("v0.2.16");
+    std::fs::write(
+        fixture.target().join("mise.toml"),
+        "[tools]\nnode = \"24\"\n",
+    )
+    .expect("writes");
+    std::fs::write(fixture.target().join(".tool-versions"), "nodejs 24.0.0\n").expect("writes");
+    std::fs::write(fixture.target().join("devbox.json"), "{\"packages\": []}\n").expect("writes");
+    let report = fixture.json(&["self-depend", "status"]);
+    let entries: Vec<(&str, &str)> = report["managers"]
+        .as_array()
+        .expect("managers")
+        .iter()
+        .map(|e| {
+            (
+                e["manager"].as_str().expect("manager"),
+                e["present"].as_str().expect("present"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        entries,
+        [
+            ("flake", "present"),
+            ("mise", "present"),
+            ("asdf", "present"),
+            ("devbox", "present")
+        ]
+    );
+    assert_eq!(report["wired"], "flake", "one file names release-kit");
+    assert_eq!(report["state"], "ready");
+    let one = fixture.json(&["self-depend", "status", "--manager", "mise"]);
+    assert_eq!(one["managers"].as_array().expect("managers").len(), 1);
+    assert_eq!(one["managers"][0]["manager"], "mise");
+}
+
+/// A target with one manager file naming release-kit is wired through
+/// it, the way `rk depend` picks a lone manager without a flag.
+#[test]
+fn a_target_with_one_manager_chooses_it() {
+    let fixture = SelfDependFixture::new();
+    std::fs::write(
+        fixture.target().join("mise.toml"),
+        "[tools]\n\"cargo:release-kit\" = \"0.3.0\"\n",
+    )
+    .expect("writes");
+    let report = fixture.json(&["self-depend", "status"]);
+    assert_eq!(report["wired"], "mise");
+    assert_eq!(report["state"], "ready");
+    assert_eq!(
+        manager_entry(&report, "flake")["present"],
+        "absent",
+        "an absent flake is a fact, never a fault"
+    );
+    fixture
+        .rk(&["self-depend", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("wired through mise"));
+}
+
+#[test]
+fn a_target_with_no_manager_file_reports_none_and_exits_zero() {
+    let fixture = SelfDependFixture::new();
+    let report = fixture.json(&["self-depend", "status"]);
+    assert_eq!(report["state"], "no-manager");
+    assert_eq!(report["managers"].as_array().expect("managers").len(), 4);
+    assert!(
+        report["managers"]
+            .as_array()
+            .expect("managers")
+            .iter()
+            .all(|e| e["present"] == "absent" && e["pin"] == "absent")
+    );
+    fixture.rk(&["self-depend", "status"]).assert().success();
+}
+
+/// The two-facts rule, scoped to the flake manager's entry.
+#[test]
+fn the_flake_entry_carries_the_tag_and_the_lock_node() {
+    let fixture = SelfDependFixture::new();
+    fixture.write_flake("v0.2.16");
+    let report = fixture.json(&["self-depend", "status"]);
+    let flake = manager_entry(&report, "flake");
+    assert_eq!(flake["file"], "flake.nix");
+    assert_eq!(flake["version"], "v0.2.16");
+    assert_eq!(flake["lock"], "present");
+    assert_eq!(flake["locked_ref"], "refs/tags/v0.2.16");
+    assert_eq!(flake["locked_rev"], "rev-of-v0.2.16");
+    assert_eq!(flake["freshness"], "behind");
+    for other in ["mise", "asdf", "devbox"] {
+        assert!(
+            manager_entry(&report, other).get("lock").is_none(),
+            "{other} carries no lock field"
+        );
+    }
+}
+
+#[test]
+fn a_mise_target_reports_its_pinned_version() {
+    let fixture = SelfDependFixture::new();
+    std::fs::write(
+        fixture.target().join(".mise.toml"),
+        "[tools]\nnode = \"24\"\n\"ubi:gubasso/release-kit\" = { version = \"0.3.1\", exe = \"rk\" }\n",
+    )
+    .expect("writes");
+    let report = fixture.json(&["self-depend", "status"]);
+    let mise = manager_entry(&report, "mise");
+    assert_eq!(mise["file"], ".mise.toml");
+    assert_eq!(mise["pin"], "pinned");
+    assert_eq!(mise["version"], "0.3.1");
+    assert_eq!(mise["pin_lines"], 1);
+    assert_eq!(mise["freshness"], "behind");
+    fixture
+        .rk(&["self-depend", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "manager mise present (.mise.toml), pinned 0.3.1",
+        ));
+}
+
+#[test]
+fn an_asdf_target_reports_its_tool_versions_line() {
+    let fixture = SelfDependFixture::new();
+    std::fs::write(
+        fixture.target().join(".tool-versions"),
+        "nodejs 24.0.0\nrelease-kit 0.3.2\n",
+    )
+    .expect("writes");
+    let report = fixture.json(&["self-depend", "status"]);
+    let asdf = manager_entry(&report, "asdf");
+    assert_eq!(asdf["pin"], "pinned");
+    assert_eq!(asdf["version"], "0.3.2");
+    assert_eq!(report["wired"], "asdf");
+    std::fs::write(fixture.target().join(".tool-versions"), "release-kit\n").expect("writes");
+    let report = fixture.json(&["self-depend", "status"]);
+    assert_eq!(manager_entry(&report, "asdf")["pin"], "unpinned");
+    assert_eq!(report["state"], "unpinned");
+}
+
+/// Direnv loads a shell and pins nothing: `.envrc` is a field beside the
+/// list, never an entry in it.
+#[test]
+fn the_envrc_is_reported_outside_the_manager_list() {
+    let fixture = SelfDependFixture::new();
+    std::fs::write(
+        fixture.target().join(".envrc"),
+        "use flake\nrk self-depend sync --apply || true\n",
+    )
+    .expect("writes");
+    let report = fixture.json(&["self-depend", "status"]);
+    assert_eq!(report["envrc"], "present");
+    assert_eq!(report["envrc_sync"], true);
+    let names: Vec<&str> = report["managers"]
+        .as_array()
+        .expect("managers")
+        .iter()
+        .map(|e| e["manager"].as_str().expect("manager"))
+        .collect();
+    assert!(
+        !names.contains(&"direnv") && !names.contains(&"envrc"),
+        "{names:?}"
+    );
+    assert_eq!(report["state"], "no-manager", "a shell load is not a pin");
+}
+
+/// A predecessor bump recipe kept as a mise task is named, not touched.
+#[test]
+fn the_leftovers_sweep_names_a_non_nix_predecessor() {
+    let fixture = SelfDependFixture::new();
+    std::fs::write(
+        fixture.target().join("mise.toml"),
+        "[tools]\n\"cargo:release-kit\" = \"0.3.0\"\n\n[tasks.rk-bump]\nrun = \"cargo install release-kit\"\n",
+    )
+    .expect("writes");
+    let report = fixture.json(&["self-depend", "status"]);
+    assert_eq!(report["state"], "superseded");
+    let rows: Vec<(String, String)> = report["leftovers"]
+        .as_array()
+        .expect("leftovers")
+        .iter()
+        .map(|l| {
+            (
+                l["id"].as_str().expect("id").to_owned(),
+                l["action"].as_str().expect("action").to_owned(),
+            )
+        })
+        .collect();
+    assert!(
+        rows.contains(&("mise-task".to_owned(), "manual".to_owned())),
+        "{rows:?}"
+    );
+    assert!(
+        rows.contains(&("host-install".to_owned(), "manual".to_owned())),
+        "{rows:?}"
+    );
+    let before = fixture.read("mise.toml");
+    fixture
+        .rk(&["self-depend", "clean", "--apply"])
+        .assert()
+        .success();
+    assert_eq!(
+        fixture.read("mise.toml"),
+        before,
+        "a task body is never edited"
+    );
+}
+
 #[test]
 fn self_depend_status_reports_a_target_with_no_flake() {
     let fixture = SelfDependFixture::new();
@@ -13307,18 +13531,21 @@ fn self_depend_status_reports_a_target_with_no_flake() {
         .assert()
         .success()
         .stdout(
-            predicate::str::contains("state no-flake")
-                .and(predicate::str::contains("flake absent, lock absent"))
+            predicate::str::contains("state no-manager")
+                .and(predicate::str::contains("manager flake absent"))
                 .and(predicate::str::contains("rk self-depend add")),
         );
     let report = fixture.json(&["self-depend", "status"]);
-    assert_eq!(report["schema"], "rk.devshell-status/1");
-    assert_eq!(report["state"], "no-flake");
-    assert_eq!(report["input"], "absent");
+    assert_eq!(report["schema"], "rk.self-depend-status/2");
+    assert_eq!(report["state"], "no-manager");
+    let flake = manager_entry(&report, "flake");
+    assert_eq!(flake["present"], "absent");
+    assert_eq!(flake["pin"], "absent");
     assert!(
-        report.get("pin_tag").is_none(),
+        flake.get("version").is_none(),
         "an unknown value is omitted"
     );
+    assert!(report.get("wired").is_none());
     assert_eq!(report["pending"], false);
 }
 
@@ -13333,11 +13560,13 @@ fn self_depend_status_reports_a_wired_target_offline() {
     .expect(".envrc writes");
     let report = fixture.json(&["self-depend", "status"]);
     assert_eq!(report["state"], "ready");
-    assert_eq!(report["input"], "pinned");
-    assert_eq!(report["pin_tag"], "v0.2.16");
-    assert_eq!(report["pin_lines"], 1);
-    assert_eq!(report["locked_rev"], "rev-of-v0.2.16");
-    assert_eq!(report["locked_ref"], "refs/tags/v0.2.16");
+    assert_eq!(report["wired"], "flake");
+    let flake = manager_entry(&report, "flake");
+    assert_eq!(flake["pin"], "pinned");
+    assert_eq!(flake["version"], "v0.2.16");
+    assert_eq!(flake["pin_lines"], 1);
+    assert_eq!(flake["locked_rev"], "rev-of-v0.2.16");
+    assert_eq!(flake["locked_ref"], "refs/tags/v0.2.16");
     assert_eq!(report["envrc"], "present");
     assert_eq!(report["envrc_sync"], true);
     assert_eq!(report["host"]["nix"], "ok");
@@ -13369,9 +13598,10 @@ fn self_depend_status_names_an_ambiguous_pin_with_its_count() {
                 .and(predicate::str::contains("2 lines name it")),
         );
     let report = fixture.json(&["self-depend", "status"]);
-    assert_eq!(report["input"], "ambiguous");
-    assert_eq!(report["pin_lines"], 2);
-    assert!(report.get("pin_tag").is_none());
+    let flake = manager_entry(&report, "flake");
+    assert_eq!(flake["pin"], "ambiguous");
+    assert_eq!(flake["pin_lines"], 2);
+    assert!(flake.get("version").is_none());
 }
 
 #[test]
@@ -13484,7 +13714,7 @@ fn self_depend_add_previews_four_fragments_and_writes_nothing() {
 fn self_depend_add_json_carries_each_fragment_with_its_anchor_and_placement() {
     let fixture = SelfDependFixture::new();
     let report = fixture.json(&["self-depend", "add", "--tag", "0.2.15"]);
-    assert_eq!(report["schema"], "rk.devshell-add/1");
+    assert_eq!(report["schema"], "rk.self-depend-add/1");
     assert_eq!(report["mode"], "preview");
     assert_eq!(report["tag"], "v0.2.15");
     assert_eq!(report["tag_source"], "argument");
@@ -13602,10 +13832,11 @@ fn self_depend_add_apply_seeds_a_flake_and_envrc_where_there_is_none() {
     );
     let status = fixture.json(&["self-depend", "status"]);
     assert_eq!(status["state"], "ready");
-    assert_eq!(status["pin_tag"], "v0.2.15");
+    assert_eq!(manager_entry(&status, "flake")["version"], "v0.2.15");
     assert_eq!(status["envrc_sync"], true);
     assert_eq!(
-        status["lock"], "absent",
+        manager_entry(&status, "flake")["lock"],
+        "absent",
         "the seed carries no lock; sync writes it"
     );
 }
@@ -13716,7 +13947,7 @@ fn self_depend_status_names_a_predecessor_mechanism_beside_a_wired_pin() {
         );
     let report = fixture.json(&["self-depend", "status"]);
     assert_eq!(report["state"], "superseded");
-    assert_eq!(report["pin_tag"], "v0.2.16");
+    assert_eq!(manager_entry(&report, "flake")["version"], "v0.2.16");
     let leftovers = report["leftovers"].as_array().expect("leftovers");
     let rows: Vec<(String, String, String)> = leftovers
         .iter()
@@ -13812,7 +14043,7 @@ fn self_depend_clean_previews_every_leftover_and_removes_nothing() {
                 .and(predicate::str::contains("--apply")),
         );
     let report = fixture.json(&["self-depend", "clean"]);
-    assert_eq!(report["schema"], "rk.devshell-clean/1");
+    assert_eq!(report["schema"], "rk.self-depend-clean/1");
     assert_eq!(report["mode"], "preview");
     assert_eq!(report["removed"], serde_json::json!([]));
     assert_eq!(report["rewritten"], serde_json::json!([]));
@@ -14057,7 +14288,7 @@ fn self_depend_sync_preview_reports_the_bump_and_spawns_no_nix() {
         .stdout(predicate::str::contains("would-bump v0.2.15 -> v0.2.16"));
     let (code, report) = fixture.sync_json(&["self-depend", "sync"]);
     assert_eq!(code, Some(0));
-    assert_eq!(report["schema"], "rk.devshell-sync/1");
+    assert_eq!(report["schema"], "rk.self-depend-sync/1");
     assert_eq!(report["mode"], "preview");
     assert_eq!(report["caller"], "envrc");
     assert_eq!(report["outcome"], "would-bump");
@@ -14120,8 +14351,9 @@ fn self_depend_sync_apply_rewrites_the_pin_updates_the_lock_and_builds() {
         "a committed transaction leaves no backup"
     );
     let status = fixture.json(&["self-depend", "status"]);
-    assert_eq!(status["pin_tag"], "v0.2.16");
-    assert_eq!(status["locked_rev"], "rev-of-v0.2.16");
+    let flake = manager_entry(&status, "flake");
+    assert_eq!(flake["version"], "v0.2.16");
+    assert_eq!(flake["locked_rev"], "rev-of-v0.2.16");
 }
 
 #[test]
@@ -14957,7 +15189,7 @@ fn rk_self_depend_sync_is_disabled_by_its_env_switch() {
     );
 }
 
-/// Every devshell action answers `--json` with exactly one object on
+/// Every self-depend action answers `--json` with exactly one object on
 /// stdout, in every mode.
 #[test]
 fn every_self_depend_action_emits_one_json_object() {
@@ -14981,7 +15213,7 @@ fn every_self_depend_action_emits_one_json_object() {
         assert!(
             value["schema"]
                 .as_str()
-                .is_some_and(|schema| schema.starts_with("rk.devshell-")),
+                .is_some_and(|schema| schema.starts_with("rk.self-depend-")),
             "{args:?}: {value}"
         );
     }
@@ -15571,6 +15803,59 @@ fn depend_assess_reads_a_cargo_dist_flake_source_and_a_flake_target() {
     assert_eq!(report["prod"]["command"], "cargo add sample-tool@1.4.0");
     let flake = std::fs::read_to_string(fixture.target().join("flake.nix")).expect("reads");
     assert!(flake.starts_with("{ inputs"), "assess writes nothing");
+}
+
+/// The same target read by both verbs reports the same manager set,
+/// because one detection serves them.
+#[test]
+fn one_detection_serves_both_verbs() {
+    let fixture = DependFixture::new();
+    fixture.seed_target("mise.toml", "[tools]\nnode = \"24\"\n");
+    fixture.seed_target("devbox.json", "{\"packages\": []}\n");
+    std::fs::create_dir_all(fixture.target().join(".mise/conf.d")).expect("mkdir");
+    let assess = fixture.json(&["depend", "assess"]);
+    let from_depend: Vec<(String, String)> = assess["target"]["managers"]
+        .as_array()
+        .expect("managers")
+        .iter()
+        .map(|m| {
+            (
+                m["manager"].as_str().expect("manager").to_owned(),
+                m["file"].as_str().expect("file").to_owned(),
+            )
+        })
+        .collect();
+    let out = rk_scrubbed()
+        .args(["self-depend", "status", "--json", "--target"])
+        .arg(fixture.target())
+        .output()
+        .expect("rk runs");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let status: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one JSON object");
+    let from_self: Vec<(String, String)> = status["managers"]
+        .as_array()
+        .expect("managers")
+        .iter()
+        .filter(|e| e["present"] == "present")
+        .map(|e| {
+            (
+                e["manager"].as_str().expect("manager").to_owned(),
+                e["file"].as_str().expect("file").to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(from_depend, from_self);
+    assert_eq!(
+        from_self,
+        [
+            ("mise".to_owned(), "mise.toml".to_owned()),
+            ("devbox".to_owned(), "devbox.json".to_owned())
+        ]
+    );
 }
 
 #[test]
