@@ -1,19 +1,19 @@
-//! Arguments for `rk devshell`.
+//! Arguments for `rk self-depend`.
 
 use camino::Utf8PathBuf;
 use clap::{Args, Subcommand, ValueEnum};
 
-/// Wire release-kit as a consumer's devshell dependency and keep its pin fresh.
+/// Wire release-kit as a consumer's dependency and keep its pin fresh.
 #[derive(Debug, Args)]
-pub struct DevshellArgs {
-    /// What to do with the devshell wiring.
+pub struct SelfDependArgs {
+    /// What to do with the pin wiring.
     #[command(subcommand)]
-    pub action: DevshellAction,
+    pub action: SelfDependAction,
 }
 
-/// The devshell operations.
+/// The self-depend operations.
 #[derive(Debug, Subcommand)]
-pub enum DevshellAction {
+pub enum SelfDependAction {
     /// Report what a target carries, offline: the pin, the lock, the .envrc line, and any leftover.
     Status(StatusArgs),
     /// Serve the flake fragments and the .envrc line; seed both files where the target has none.
@@ -24,7 +24,7 @@ pub enum DevshellAction {
     Sync(SyncArgs),
 }
 
-/// Arguments for `rk devshell status`.
+/// Arguments for `rk self-depend status`.
 #[derive(Debug, Args)]
 pub struct StatusArgs {
     /// The project to read.
@@ -36,7 +36,7 @@ pub struct StatusArgs {
     pub json: bool,
 }
 
-/// Arguments for `rk devshell add`.
+/// Arguments for `rk self-depend add`.
 #[derive(Debug, Args)]
 pub struct AddArgs {
     /// The project to wire.
@@ -56,7 +56,7 @@ pub struct AddArgs {
     pub json: bool,
 }
 
-/// Arguments for `rk devshell clean`.
+/// Arguments for `rk self-depend clean`.
 #[derive(Debug, Args)]
 pub struct CleanArgs {
     /// The project to clean.
@@ -76,7 +76,7 @@ pub struct CleanArgs {
     pub json: bool,
 }
 
-/// Arguments for `rk devshell sync`.
+/// Arguments for `rk self-depend sync`.
 #[derive(Debug, Args)]
 pub struct SyncArgs {
     /// The project to sync.

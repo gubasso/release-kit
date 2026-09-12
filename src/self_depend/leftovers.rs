@@ -1,6 +1,6 @@
 //! What a predecessor bump mechanism left in a target.
 //!
-//! The wiring `rk devshell` lands is a replacement, never an addition: two
+//! The wiring `rk self-depend` lands is a replacement, never an addition: two
 //! mechanisms over the same two files fight or silently undo each other.
 //! This catalog is the hand-rolled recipe this repository itself
 //! published, plus the host install it supersedes. A file entry matches
@@ -324,7 +324,7 @@ mod tests {
     use camino::Utf8PathBuf;
 
     use super::{Action, is_recipe_head, list_members_named, scan, swap_envrc};
-    use crate::devshell::pin::PIN_PREFIX;
+    use crate::self_depend::pin::PIN_PREFIX;
 
     #[test]
     fn a_catalog_file_matches_on_its_content_and_not_on_its_name_alone() {
@@ -361,15 +361,15 @@ mod tests {
     #[test]
     fn the_envrc_swap_keeps_every_other_line() {
         let text = "use flake\r\n# keep\r\n# The bump runs rk-autobump on entry\r\nscripts/rk-autobump.sh || true\r\nexport FOO=1\r\n";
-        let swapped = swap_envrc(text, "rk devshell sync --apply || true").expect("a swap");
+        let swapped = swap_envrc(text, "rk self-depend sync --apply || true").expect("a swap");
         assert_eq!(
             swapped,
-            "use flake\r\n# keep\r\nrk devshell sync --apply || true\r\nexport FOO=1\r\n"
+            "use flake\r\n# keep\r\nrk self-depend sync --apply || true\r\nexport FOO=1\r\n"
         );
-        let already = "rk devshell sync --apply || true\nscripts/rk-bump.sh\n";
+        let already = "rk self-depend sync --apply || true\nscripts/rk-bump.sh\n";
         assert_eq!(
-            swap_envrc(already, "rk devshell sync --apply || true").expect("a swap"),
-            "rk devshell sync --apply || true\n",
+            swap_envrc(already, "rk self-depend sync --apply || true").expect("a swap"),
+            "rk self-depend sync --apply || true\n",
             "an existing sync line is not doubled"
         );
         assert_eq!(swap_envrc("use flake\n", "x"), None);

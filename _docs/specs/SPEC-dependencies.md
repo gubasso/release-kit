@@ -17,7 +17,7 @@
 
 ## Purpose
 
-Rules governing how the binary takes another project as a dependency of a target through `rk depend`: what it reads from the source and the target, what it serves for each manager and channel pair, and what it writes. The boundary against `SPEC-packaging.md` is the dependency: that spec binds how a consumer pins release-kit itself through `rk devshell`, and this one binds every other project a target takes. The files `rk init` lands are bound by `SPEC-landing.md`. External sources are recorded in `../reference/REFERENCE-dependencies-sources.md`.
+Rules governing how the binary takes another project as a dependency of a target through `rk depend`: what it reads from the source and the target, what it serves for each manager and channel pair, and what it writes. The boundary against `SPEC-packaging.md` is the dependency: that spec binds how a consumer pins release-kit itself through `rk self-depend`, and this one binds every other project a target takes. The files `rk init` lands are bound by `SPEC-landing.md`. External sources are recorded in `../reference/REFERENCE-dependencies-sources.md`.
 
 ## Requirements
 

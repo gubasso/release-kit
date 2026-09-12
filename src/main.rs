@@ -65,7 +65,7 @@ fn run(cli: &Cli) -> Result<(), RkError> {
         Commands::Issue(args) => commands::issue::run(args),
         Commands::Runs(args) => commands::runs::run(args),
         Commands::Skill(args) => commands::skill::run(args),
-        Commands::Devshell(args) => commands::devshell::run(args),
+        Commands::SelfDepend(args) => commands::self_depend::run(args),
         Commands::Depend(args) => commands::depend::run(args),
         Commands::Doctor(args) => commands::doctor::run(args),
         Commands::Usage => commands::usage::run(),
@@ -128,7 +128,7 @@ const fn name(command: &Commands) -> &'static str {
         Commands::Issue(_) => "issue",
         Commands::Runs(_) => "runs",
         Commands::Skill(_) => "skill",
-        Commands::Devshell(_) => "devshell",
+        Commands::SelfDepend(_) => "self-depend",
         Commands::Depend(_) => "depend",
         Commands::Doctor(_) => "doctor",
         Commands::Usage => "usage",
@@ -142,10 +142,10 @@ const fn name(command: &Commands) -> &'static str {
 const fn wants_json(command: &Commands) -> bool {
     use release_kit::cli::branches::BranchesAction;
     use release_kit::cli::depend::DependAction;
-    use release_kit::cli::devshell::DevshellAction;
     use release_kit::cli::issue::IssueAction;
     use release_kit::cli::lines::LinesAction;
     use release_kit::cli::runs::RunsAction;
+    use release_kit::cli::self_depend::SelfDependAction;
     use release_kit::cli::setup::SetupAction;
     use release_kit::cli::skill::SkillAction;
     use release_kit::cli::worktree::WorktreeAction;
@@ -195,11 +195,11 @@ const fn wants_json(command: &Commands) -> bool {
         },
         // Every action named: a `_ => false` arm would render a JSON
         // caller's failure as human prose the moment a new one lands.
-        Commands::Devshell(args) => match &args.action {
-            DevshellAction::Status(args) => args.json,
-            DevshellAction::Add(args) => args.json,
-            DevshellAction::Clean(args) => args.json,
-            DevshellAction::Sync(args) => args.json,
+        Commands::SelfDepend(args) => match &args.action {
+            SelfDependAction::Status(args) => args.json,
+            SelfDependAction::Add(args) => args.json,
+            SelfDependAction::Clean(args) => args.json,
+            SelfDependAction::Sync(args) => args.json,
         },
         Commands::Depend(args) => match &args.action {
             DependAction::Assess(args) => args.json,

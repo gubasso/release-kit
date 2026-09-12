@@ -17,7 +17,7 @@ rk setup check --target .
 # check: what the forge enforces today, step by step
 rk versions --check
 # check: each pin against its source; an update is a review item, never an incident
-rk devshell status --target .
+rk self-depend status --target .
 # check: how the project obtains rk, and every leftover of a predecessor bump mechanism by file and line
 ```
 
@@ -189,13 +189,13 @@ rk branches prune --target .
 
 ### 6a. Replace the predecessor bump mechanism
 
-Only where `rk devshell status` reported a predecessor, and gated: what the cleanup removes is committed first.
+Only where `rk self-depend status` reported a predecessor, and gated: what the cleanup removes is committed first.
 
 ```bash
 git status --porcelain
 # check: empty; the cleanup removes committed files, so nothing it touches is uncommitted
-rk devshell clean --target .
-rk devshell clean --target . --apply
+rk self-depend clean --target .
+rk self-depend clean --target . --apply
 # check: the scripts and suites are removed; every manual entry is edited by hand, and the rerun reports an empty leftovers list
 ```
 
@@ -204,7 +204,7 @@ rk devshell clean --target . --apply
 [The setup runbook](./setup.md)'s prerequisites carry the pin's whole order: add, apply the fragments, commit the pair, sync, allow.
 
 ```bash
-rk devshell status --target . --json
+rk self-depend status --target . --json
 # check: ready, with an empty leftovers list; nothing else in the tree names an rk version
 ```
 
@@ -222,7 +222,7 @@ rk skill install --apply
 rk status --check --target .
 rk setup check --target .
 rk versions --check
-rk devshell status --target .
+rk self-depend status --target .
 # check: each exits 0 with nothing left to name; the inventory's every entry is satisfied by an observation, not by a word
 pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push
 # check: the three hook types are installed in this clone

@@ -28,7 +28,7 @@ When the request carries `--no-plan`, skip the plan gate's approval turn only. S
 | The procedure, as commands                  | `rk guide dependencies`                         |
 | Both sides read, every option laid out      | `rk depend assess --source <source> --json`     |
 | One landing previewed                       | `rk depend add --source <source> --kind <kind>` |
-| How this project obtains `rk` itself        | `rk devshell status`                            |
+| How this project obtains `rk` itself        | `rk self-depend status`                         |
 
 ## Take the source
 

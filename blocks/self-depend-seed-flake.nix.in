@@ -1,9 +1,9 @@
-# Seeded by rk devshell add, and written only where the project had no
+# Seeded by rk self-depend add, and written only where the project had no
 # flake: an existing flake is never edited, and this project owns and
 # tunes this one from the first write.
 #
 # The release-kit tag below is the rk version this project develops
-# against, and flake.lock is its content pin. rk devshell sync moves the
+# against, and flake.lock is its content pin. rk self-depend sync moves the
 # two together, from the .envrc line, and never edits anything else here.
 {
   inputs = {

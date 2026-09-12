@@ -208,7 +208,7 @@ mod tests {
             "WORKTREE_GUARD_ENTRY",
             "HOOK_BODY",
             "use flake",
-            "rk devshell sync --apply",
+            "rk self-depend sync --apply",
             "release-kit.packages.",
             "inputs.nixpkgs.follows",
         ];

@@ -1,4 +1,4 @@
-//! `rk devshell`: release-kit as a consumer project's development
+//! `rk self-depend`: release-kit as a consumer project's development
 //! dependency, kept fresh.
 //!
 //! A consumer pins release-kit as a flake input at a release tag and
@@ -176,7 +176,7 @@ pub fn observe(target: &Utf8Path) -> Result<Observed, RkError> {
 #[must_use]
 pub fn has_sync_line(text: &str) -> bool {
     text.lines()
-        .any(|line| line.trim_start().starts_with("rk devshell sync"))
+        .any(|line| line.trim_start().starts_with("rk self-depend sync"))
 }
 
 /// The `release-kit` node's locked commit and ref, from a `flake.lock`.
@@ -310,10 +310,10 @@ mod tests {
     #[test]
     fn the_sync_line_is_found_by_its_verb() {
         assert!(has_sync_line(
-            "use flake\nrk devshell sync --apply || true\n"
+            "use flake\nrk self-depend sync --apply || true\n"
         ));
-        assert!(has_sync_line("  rk devshell sync\n"));
-        assert!(!has_sync_line("# rk devshell sync\nuse flake\n"));
+        assert!(has_sync_line("  rk self-depend sync\n"));
+        assert!(!has_sync_line("# rk self-depend sync\nuse flake\n"));
         assert!(!has_sync_line(""));
     }
 

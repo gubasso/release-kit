@@ -11,7 +11,7 @@ Verified against the listed sources on 2026-09-04, and the packaging-tool sectio
 - <https://nix.dev/manual/nix/latest/command-ref/new-cli/nix3-flake-update>
 - <https://nix.dev/manual/nix/latest/command-ref/new-cli/nix3-build>
 
-Bearing: `packaging:the-consumer-pin-has-two-facts-and-one-mover` — the sync refreshes the one node by name, and a lock a seed did not write is created by the same call — and `packaging:a-devshell-bump-is-all-or-nothing`, whose fence builds with `--no-link` so a directory entry drops no `result` symlink into the tree.
+Bearing: `packaging:the-consumer-pin-has-two-facts-and-one-mover` — the sync refreshes the one node by name, and a lock a seed did not write is created by the same call — and `packaging:a-pin-bump-is-all-or-nothing`, whose fence builds with `--no-link` so a directory entry drops no `result` symlink into the tree.
 
 ## direnv, on `use flake` and the watched files
 

@@ -123,7 +123,7 @@ pub fn direnv_bin() -> std::ffi::OsString {
     std::env::var_os("RK_DIRENV_BIN").unwrap_or_else(|| "direnv".into())
 }
 
-/// Nix answers; `rk devshell sync` updates and builds the pinned devshell
+/// Nix answers; `rk self-depend sync` updates and builds the pinned devshell
 /// with it. Soft, and deliberately outside the wrapper: wrapping nix
 /// would put it inside the package's own closure on every host.
 #[must_use]
@@ -132,7 +132,7 @@ pub fn nix() -> ProbeResult {
         "nix",
         "RK_NIX_BIN",
         "nix",
-        "Nix; rk devshell sync updates and builds the pinned devshell with it",
+        "Nix; rk self-depend sync updates and builds the pinned devshell with it",
         &["--version"],
     )
 }
@@ -202,7 +202,7 @@ pub fn run_all() -> Vec<ProbeResult> {
             "curl",
             "RK_CURL_BIN",
             "curl",
-            "curl; install-bot reads the installation, and rk versions --check and rk devshell sync fetch with it",
+            "curl; install-bot reads the installation, and rk versions --check and rk self-depend sync fetch with it",
             &["--version"],
         ),
         nix(),

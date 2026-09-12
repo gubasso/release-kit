@@ -28,7 +28,7 @@ pub struct Resolved {
 /// for a source that declares none while no argument was given.
 pub fn resolve(source: &Source, argument: Option<&str>) -> Result<Resolved, RkError> {
     if let Some(raw) = argument {
-        let Some(tag) = crate::devshell::normalize_tag(raw) else {
+        let Some(tag) = crate::self_depend::normalize_tag(raw) else {
             return Err(RkError::Usage(format!(
                 "--pin {raw} is not a version: pass 1.2.3, v1.2.3, or the release URL"
             )));
