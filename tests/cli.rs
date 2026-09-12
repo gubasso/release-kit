@@ -17,7 +17,7 @@ use release_kit::skills::Digest;
 use release_kit::skills::record::{RECORD_PATH, Record};
 
 /// Every skill the payload carries, and the roots an install writes them to.
-const SKILLS: [&str; 4] = ["rk-depend", "rk-migrate", "rk-release", "rk-setup"];
+const SKILLS: [&str; 3] = ["rk-depend", "rk-release", "rk-setup"];
 const ROOTS: [&str; 2] = [".claude/skills", ".agents/skills"];
 
 /// What every skill shares, installed once outside the agent roots, in the
@@ -1994,6 +1994,268 @@ fn the_payload_carries_the_shared_plan_gate() {
         pre_flight.contains("plan-gate.md"),
         "the pre-flight gate does not hand the task to the plan gate"
     );
+}
+
+fn setup_skill() -> String {
+    std::fs::read_to_string(repo_path("skills/rk-setup/SKILL.md")).expect("the setup skill reads")
+}
+
+fn pre_flight_gate() -> String {
+    std::fs::read_to_string(repo_path("skill-shared/pre-flight-gate.md"))
+        .expect("the pre-flight gate reads")
+}
+
+/// One router serves every arrival: the migration skill is absorbed, so
+/// the payload carries three skills and `rk skill list` names exactly them.
+#[test]
+fn the_payload_carries_three_skills() {
+    assert_eq!(SKILLS.len(), 3);
+    let mut listed: Vec<String> = std::fs::read_dir(repo_path("skills"))
+        .expect("the skills root reads")
+        .map(|entry| {
+            entry
+                .expect("an entry reads")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    listed.sort();
+    assert_eq!(
+        listed, SKILLS,
+        "the authored skills are the three the router leaves"
+    );
+    let out = rk()
+        .args(["skill", "list"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8_lossy(&out);
+    for name in SKILLS {
+        assert!(text.contains(name), "{name} is listed: {text}");
+    }
+    assert!(
+        !text.contains("rk-migrate"),
+        "the absorbed skill is not listed: {text}"
+    );
+}
+
+/// A home installed by the release that carried `rk-migrate` still holds
+/// it. The install that supersedes it sweeps the recorded file and takes
+/// the emptied directory with it, and keeps a directory the user filled.
+#[test]
+fn the_skill_installer_reports_a_skill_the_payload_no_longer_carries() {
+    let home = Home::new();
+    home.rk()
+        .args(["skill", "install", "--apply"])
+        .assert()
+        .success();
+
+    let swept = home.destination(".claude/skills", "rk-migrate");
+    let kept = home.destination(".agents/skills", "rk-migrate");
+    for dropped in [&swept, &kept] {
+        std::fs::create_dir_all(dropped.parent().unwrap()).expect("the retired dir creates");
+        std::fs::write(dropped, "the migrate skill an older release wrote\n")
+            .expect("the leftover writes");
+    }
+    std::fs::write(
+        kept.parent().unwrap().join("notes.md"),
+        "the user's own file\n",
+    )
+    .expect("the user's file writes");
+    let mut record = home.load_record();
+    for dropped in [&swept, &kept] {
+        record.written.insert(
+            utf8(dropped),
+            Digest::of(b"the migrate skill an older release wrote\n"),
+        );
+    }
+    home.write_record(&record);
+
+    let out = home
+        .rk()
+        .args(["skill", "install", "--apply", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("the report parses");
+    let actions = report["actions"].as_array().expect("actions");
+    let sweeps = actions
+        .iter()
+        .filter(|action| action["action"] == "sweep")
+        .count();
+    assert_eq!(sweeps, 2, "both recorded copies are swept: {report}");
+    assert!(
+        actions
+            .iter()
+            .any(|action| action["action"] == "kept-directory"
+                && action["directory"]
+                    .as_str()
+                    .unwrap()
+                    .ends_with("rk-migrate")),
+        "the directory holding the user's file is reported kept: {report}"
+    );
+    assert!(!swept.exists() && !swept.parent().unwrap().exists());
+    assert!(!kept.exists() && kept.parent().unwrap().join("notes.md").exists());
+}
+
+/// The router is five steps, asserted by its headings, so a sixth step or
+/// a restated procedure shows up as a changed shape.
+#[test]
+fn the_setup_skill_names_the_five_steps() {
+    let text = setup_skill();
+    let start = text
+        .find("## The five steps")
+        .expect("the five-steps section");
+    let end = text[start + 1..]
+        .find("\n## ")
+        .map_or(text.len(), |i| start + 1 + i);
+    let steps: Vec<&str> = text[start..end]
+        .lines()
+        .filter(|line| line.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        .collect();
+    assert_eq!(steps.len(), 5, "five numbered steps: {steps:?}");
+    for (step, opening) in steps.iter().zip([
+        "1. Run the gates",
+        "2. Request the plan",
+        "3. Present it",
+        "4. Route approved work to `rk reconcile apply",
+        "5. Read the result",
+    ]) {
+        assert!(step.starts_with(opening), "{step}");
+    }
+}
+
+/// Every classification the plan can carry has one line in the router
+/// naming the chapter it loads, so a new word in the engine is a missing
+/// line here.
+#[test]
+fn the_setup_skill_routes_each_classification_to_its_chapter() {
+    let text = setup_skill();
+    let start = text
+        .find("## Which chapter the classification loads")
+        .expect("the classification section");
+    let section = &text[start..];
+    for (word, chapter) in [
+        ("setup", "`rk method setup`"),
+        ("migration", "`rk method migration`"),
+        ("upgrade", "`rk method reconcile`"),
+        ("drift", "`rk method reconcile`"),
+        ("invalid", "stop"),
+    ] {
+        let line = section
+            .lines()
+            .find(|line| line.starts_with(&format!("- `{word}`:")))
+            .unwrap_or_else(|| panic!("no line for the {word} classification"));
+        assert!(line.contains(chapter), "{word} routes to {chapter}: {line}");
+    }
+}
+
+/// The pre-flight gate hands every classification to the one skill that
+/// read it; it names no other skill and loads none.
+#[test]
+fn the_pre_flight_gate_dispatches_to_no_skill() {
+    let text = pre_flight_gate();
+    for phrase in [
+        "rk-migrate",
+        "migration skill",
+        "loads the migration",
+        "rk assess",
+    ] {
+        assert!(!text.contains(phrase), "the gate dispatches: {phrase}");
+    }
+    assert!(text.contains("No field routes to another skill"));
+}
+
+/// Step 6 of the pre-flight requests a plan and reads the three fields
+/// the router acts on.
+#[test]
+fn the_pre_flight_gate_requests_a_plan() {
+    let text = pre_flight_gate();
+    let step = text
+        .lines()
+        .find(|line| line.starts_with("6. "))
+        .expect("the gate has a sixth step");
+    assert!(
+        step.contains("`rk reconcile plan --target . --json`"),
+        "{step}"
+    );
+    for field in ["`classification`", "`readiness`", "`decisions`"] {
+        assert!(step.contains(field), "step 6 reads {field}: {step}");
+    }
+    for word in [
+        "`setup`",
+        "`migration`",
+        "`upgrade`",
+        "`drift`",
+        "`invalid`",
+    ] {
+        assert!(step.contains(word), "step 6 names {word}");
+    }
+}
+
+/// The migration classification declares, before approval, the three
+/// destructive steps a migration may need, each gated outside the plan.
+#[test]
+fn the_setup_skill_declares_its_destructive_steps() {
+    let text = setup_skill();
+    let start = text
+        .find("## What waits for the operator, under the migration classification")
+        .expect("the gated section");
+    let section = &text[start..];
+    for phrase in [
+        "Removing a protection from a live branch",
+        "`rk setup step single-trunk --apply`",
+        "The predecessor's removal itself",
+    ] {
+        assert!(section.contains(phrase), "the gated list carries: {phrase}");
+    }
+    let route = text
+        .lines()
+        .find(|line| line.starts_with("- `migration`:"))
+        .expect("the migration route");
+    assert!(
+        route.contains("Before approval") && route.contains("`rk setup step`"),
+        "the migration route declares the gated steps before approval: {route}"
+    );
+}
+
+/// `distribution:a-skill-routes-and-never-restates`, asserted: every
+/// section cites a served document or verb, no section carries a command
+/// block or a runbook's check line, and no route line restates a step
+/// beyond its number.
+#[test]
+fn the_setup_skill_restates_no_procedure() {
+    let text = setup_skill();
+    assert!(!text.contains("```"), "a command block is a restated step");
+    assert!(
+        !text.contains("# check:"),
+        "a check line belongs to a runbook"
+    );
+    let body = &text[text.find("\n## ").expect("sections")..];
+    for section in body.split("\n## ").skip(1) {
+        let (heading, rest) = section.split_once('\n').unwrap_or((section, ""));
+        assert!(
+            rest.contains("`rk ") || rest.contains("`rk\n"),
+            "section '{heading}' names no served document or verb"
+        );
+    }
+    // A step is cited by number: every "step N" is beside the guide that
+    // serves it, and the numbered procedure of a served runbook is never
+    // spelled out here.
+    for line in text.lines().filter(|line| line.contains(" step ")) {
+        assert!(
+            line.contains("`rk guide ")
+                || line.contains("runbook")
+                || line.contains("the plan's first step")
+                || line.contains("gated step"),
+            "a step named outside its guide: {line}"
+        );
+    }
 }
 
 /// The landed block says who acts, per
