@@ -9,16 +9,19 @@
 //! across every manager and the per-checkout state key; `pin` owns the
 //! flake line grammar, `fragments` the authored texts `add` serves,
 //! `leftovers` the predecessor catalog `clean` removes, `discover` the
-//! one network call, `txn` the fenced two-file transaction, and `guard`
-//! the gates around it.
+//! one network call, `txn` the fenced two-file transaction, `guard` the
+//! gates around it, `venue` where a release is published, and `matrix`
+//! which manager and venue pairs render.
 
 pub mod discover;
 pub mod fragments;
 pub mod guard;
 pub mod leftovers;
 pub mod manager;
+pub mod matrix;
 pub mod pin;
 pub mod txn;
+pub mod venue;
 
 use std::path::PathBuf;
 
@@ -149,9 +152,13 @@ impl Observed {
     /// The flake manager's entry: always present in the list.
     #[must_use]
     pub fn flake_entry(&self) -> Option<&manager::Entry> {
-        self.managers
-            .iter()
-            .find(|entry| entry.manager == manager::Manager::Flake)
+        self.entry(manager::Manager::Flake)
+    }
+
+    /// One manager's entry: every manager in the enum has one.
+    #[must_use]
+    pub fn entry(&self, manager: manager::Manager) -> Option<&manager::Entry> {
+        self.managers.iter().find(|entry| entry.manager == manager)
     }
 }
 

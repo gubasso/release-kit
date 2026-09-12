@@ -4,6 +4,7 @@ use camino::Utf8PathBuf;
 use clap::{Args, Subcommand, ValueEnum};
 
 use crate::self_depend::manager::Manager;
+use crate::self_depend::venue::Venue;
 
 /// Wire release-kit as a consumer's dependency and keep its pin fresh.
 #[derive(Debug, Args)]
@@ -18,11 +19,11 @@ pub struct SelfDependArgs {
 pub enum SelfDependAction {
     /// Report what a target carries, offline: each manager's pin, the .envrc line, and any leftover.
     Status(StatusArgs),
-    /// Serve the flake fragments and the .envrc line; seed both files where the target has none.
+    /// Serve the fragments for one manager and venue pair and the .envrc line; seed the manager file where the target has none.
     Add(AddArgs),
     /// Remove what a predecessor bump mechanism left, and name what a line scan must not touch.
     Clean(CleanArgs),
-    /// Move the pin to the latest release, lock it, and prove it builds; both files or neither.
+    /// Move the pin to the latest release through the wired manager; the flake pair locks and builds, both files or neither.
     Sync(SyncArgs),
 }
 
@@ -52,6 +53,14 @@ pub struct AddArgs {
     /// The release tag to pin: v0.2.16, 0.2.16, or the release URL; this binary's version by default.
     #[arg(long)]
     pub tag: Option<String>,
+
+    /// The target's tool manager; required when the target carries several, the flake when it carries none.
+    #[arg(long, value_enum)]
+    pub manager: Option<Manager>,
+
+    /// Where rk is fetched from; the first venue the manager renders a fragment for by default.
+    #[arg(long, value_enum)]
+    pub venue: Option<Venue>,
 
     /// Write the seed files; without it the fragments are printed and nothing is written.
     #[arg(long)]
@@ -92,6 +101,10 @@ pub struct SyncArgs {
     /// The release tag to pin, in either direction, making no network request; the latest release by default, forward only.
     #[arg(long)]
     pub tag: Option<String>,
+
+    /// The manager whose pin moves; the one manager naming release-kit by default.
+    #[arg(long, value_enum)]
+    pub manager: Option<Manager>,
 
     /// Who is calling: envrc stays silent and exits 0 on every outcome, operator reports and fails loudly.
     #[arg(long, value_enum, default_value_t = Caller::Envrc)]

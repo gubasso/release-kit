@@ -442,6 +442,9 @@ pub struct Entry {
     /// What the file says, kept for the verbs that act on it.
     #[serde(skip)]
     pub read: PinRead,
+    /// The file's text, kept for the fragments judged against it.
+    #[serde(skip)]
+    pub text: Option<String>,
 }
 
 impl Entry {
@@ -460,6 +463,7 @@ impl Entry {
             locked_ref: None,
             locked_rev: None,
             read: PinRead::Absent,
+            text: None,
         }
     }
 
@@ -479,8 +483,56 @@ impl Entry {
             locked_ref: None,
             locked_rev: None,
             read,
+            text: Some(file.text.clone()),
         }
     }
+}
+
+impl Manager {
+    /// Whether the manager records the `v` tag rather than the bare
+    /// version: the flake and devbox pin a flake reference at a tag, mise
+    /// and asdf record the version a registry names.
+    #[must_use]
+    pub const fn records_tag(self) -> bool {
+        matches!(self, Self::Flake | Self::Devbox)
+    }
+
+    /// The version as this manager records it, from a tag with or
+    /// without its `v`.
+    #[must_use]
+    pub fn recorded(self, tag: &str) -> String {
+        let bare = tag.strip_prefix('v').unwrap_or(tag);
+        if self.records_tag() {
+            format!("v{bare}")
+        } else {
+            bare.to_owned()
+        }
+    }
+}
+
+/// The same text with one line's pinned version replaced: the first
+/// occurrence of `from` after the release-kit mention on that line. Only
+/// those bytes change; every other byte of the file survives.
+#[must_use]
+pub fn rewrite_line(text: &str, line: usize, from: &str, to: &str) -> String {
+    let mut out = String::with_capacity(text.len() + to.len());
+    for (index, raw) in text.split_inclusive('\n').enumerate() {
+        if index + 1 != line {
+            out.push_str(raw);
+            continue;
+        }
+        let mention = raw.find(DEP_NAME).map_or(0, |at| at + DEP_NAME.len());
+        match raw[mention..].find(from) {
+            Some(at) => {
+                let start = mention + at;
+                out.push_str(&raw[..start]);
+                out.push_str(to);
+                out.push_str(&raw[start + from.len()..]);
+            }
+            None => out.push_str(raw),
+        }
+    }
+    out
 }
 
 /// One entry per manager, in `ALL` order, absent ones included: an
@@ -667,6 +719,31 @@ mod tests {
                 version: "v0.2.16".to_owned()
             }
         );
+    }
+
+    #[test]
+    fn a_one_fact_line_is_rewritten_in_place() {
+        let mise = "[tools]\nnode = \"24\"\n\"cargo:release-kit\" = \"0.2.15\" # 0.2.15 was fine\n";
+        assert_eq!(
+            super::rewrite_line(mise, 3, "0.2.15", "0.2.16"),
+            "[tools]\nnode = \"24\"\n\"cargo:release-kit\" = \"0.2.16\" # 0.2.15 was fine\n",
+            "only the first occurrence after the name moves"
+        );
+        let devbox =
+            "{\r\n  \"packages\": [\"github:gubasso/release-kit/v0.2.15#default\"]\r\n}\r\n";
+        assert_eq!(
+            super::rewrite_line(devbox, 2, "v0.2.15", "v0.2.16"),
+            devbox.replace("v0.2.15", "v0.2.16")
+        );
+        assert_eq!(
+            super::rewrite_line(mise, 9, "0.2.15", "0.2.16"),
+            mise,
+            "a line the file lacks changes nothing"
+        );
+        assert_eq!(Manager::Mise.recorded("v0.2.16"), "0.2.16");
+        assert_eq!(Manager::Devbox.recorded("0.2.16"), "v0.2.16");
+        assert!(Manager::Flake.records_tag());
+        assert!(!Manager::Asdf.records_tag());
     }
 
     #[test]

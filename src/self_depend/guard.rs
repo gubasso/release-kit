@@ -149,13 +149,14 @@ fn take(path: &std::path::Path) -> std::io::Result<Lock> {
     Ok(Lock(path.to_path_buf()))
 }
 
-/// Whether `flake.nix` or `flake.lock` carries uncommitted edits.
+/// Whether any of the named files carries uncommitted edits: the flake
+/// pair for the flake manager, the one manager file otherwise.
 ///
 /// Judged by the target repository with the hook variables scrubbed, so
 /// a run from inside a git hook judges the target and not the hook's own
 /// repository. Fails closed: a git that did not run counts as dirty.
 #[must_use]
-pub fn two_files_dirty(target: &Utf8Path) -> bool {
+pub fn files_dirty(target: &Utf8Path, files: &[&str]) -> bool {
     let mut command = std::process::Command::new(git_bin());
     for var in GIT_HOOK_VARS {
         command.env_remove(var);
@@ -163,7 +164,8 @@ pub fn two_files_dirty(target: &Utf8Path) -> bool {
     command
         .arg("-C")
         .arg(target.as_std_path())
-        .args(["status", "--porcelain", "--", "flake.nix", "flake.lock"])
+        .args(["status", "--porcelain", "--"])
+        .args(files)
         .output()
         .map_or(true, |probed| {
             !probed.status.success() || !probed.stdout.is_empty()

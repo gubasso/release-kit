@@ -15,9 +15,10 @@
   - [`packaging:the-landable-capability-promises-a-buildable-flake` — The landable capability promises a buildable flake](#packagingthe-landable-capability-promises-a-buildable-flake--the-landable-capability-promises-a-buildable-flake)
   - [`packaging:the-consumer-pin-has-two-facts-and-one-mover` — The consumer pin has two facts and one mover](#packagingthe-consumer-pin-has-two-facts-and-one-mover--the-consumer-pin-has-two-facts-and-one-mover)
   - [`packaging:the-pin-is-read-through-a-manager-axis` — The pin is read through a manager axis](#packagingthe-pin-is-read-through-a-manager-axis--the-pin-is-read-through-a-manager-axis)
+  - [`packaging:the-venue-and-the-manager-cross-in-one-matrix` — The venue and the manager cross in one matrix](#packagingthe-venue-and-the-manager-cross-in-one-matrix--the-venue-and-the-manager-cross-in-one-matrix)
   - [`packaging:a-pin-bump-is-all-or-nothing` — A pin bump is all or nothing](#packaginga-pin-bump-is-all-or-nothing--a-pin-bump-is-all-or-nothing)
   - [`packaging:the-unattended-caller-never-fails-the-shell` — The unattended caller never fails the shell](#packagingthe-unattended-caller-never-fails-the-shell--the-unattended-caller-never-fails-the-shell)
-  - [`packaging:add-serves-a-template-and-edits-no-owned-flake` — Add serves a template and edits no owned flake](#packagingadd-serves-a-template-and-edits-no-owned-flake--add-serves-a-template-and-edits-no-owned-flake)
+  - [`packaging:add-serves-a-fragment-and-edits-no-owned-file` — Add serves a fragment and edits no owned file](#packagingadd-serves-a-fragment-and-edits-no-owned-file--add-serves-a-fragment-and-edits-no-owned-file)
   - [`packaging:a-wired-target-runs-one-bump-mechanism` — A wired target runs one bump mechanism](#packaginga-wired-target-runs-one-bump-mechanism--a-wired-target-runs-one-bump-mechanism)
   - [`packaging:the-cleanup-removes-only-what-it-can-judge` — The cleanup removes only what it can judge](#packagingthe-cleanup-removes-only-what-it-can-judge--the-cleanup-removes-only-what-it-can-judge)
 
@@ -25,7 +26,7 @@
 
 ## Purpose
 
-Rules governing the Nix packaging surface of this repository: the flake outputs, the package expression under `nix/`, the CI proof behind the support claim, and the consumer half — how a project obtains `rk` through the tool manager it already runs, read and moved by `rk self-depend`, with the flake as the first wired manager. The boundary against `SPEC-distribution.md` is the artifact: that spec binds what the installed `rk` binary carries and writes, and this one binds how a consumer obtains that binary through the flake. The files `rk init` lands into a target are bound by `SPEC-landing.md`.
+Rules governing the Nix packaging surface of this repository: the flake outputs, the package expression under `nix/`, the CI proof behind the support claim, and the consumer half — how a project obtains `rk` through the tool manager it already runs, from the venue that manager can consume, read and moved by `rk self-depend`. The boundary against `SPEC-distribution.md` is the artifact: that spec binds what the installed `rk` binary carries and writes, and this one binds how a consumer obtains that binary. The files `rk init` lands into a target are bound by `SPEC-landing.md`.
 
 ## Requirements
 
@@ -139,7 +140,7 @@ Verify: `cargo nextest run -E 'test(nix)'`
 
 ### `packaging:the-consumer-pin-has-two-facts-and-one-mover` — The consumer pin has two facts and one mover
 
-Where a consumer pins release-kit as a flake input, the binary MUST treat the tag in `flake.nix` as the version and the `release-kit` node in `flake.lock` as the content, and `rk self-depend sync` MUST move both in one run, because a tag without its lock is a promise the shell has not kept and nothing else in the tree may name an rk version.
+Where a consumer pins release-kit as a flake input, the binary MUST treat the tag in `flake.nix` as the version and the `release-kit` node in `flake.lock` as the content, and `rk self-depend sync` MUST move both in one run, because a tag without its lock is a promise the shell has not kept and nothing else in the tree may name an rk version. Where the wired manager records one fact, the sync MUST move that one fact in place and name the same `from` and `to` in the form the manager records, because the manager's own install takes the version from there and a second file would be a second pin.
 
 #### Scenario: A sync moves the pin
 
@@ -147,7 +148,7 @@ Where a consumer pins release-kit as a flake input, the binary MUST treat the ta
 - WHEN `rk self-depend sync --apply` runs
 - THEN the tag in `flake.nix` and the locked node in `flake.lock` both name the new release, and the report names the same `from` and `to`
 
-Verify: `cargo nextest run -E 'test(self_depend_sync_apply_rewrites_the_pin_updates_the_lock_and_builds)'`
+Verify: `cargo nextest run -E 'test(self_depend_sync_apply_rewrites_the_pin_updates_the_lock_and_builds) or test(self_depend_sync_moves_a_mise_pin)'`
 
 ### `packaging:the-pin-is-read-through-a-manager-axis` — The pin is read through a manager axis
 
@@ -160,6 +161,18 @@ The binary MUST read how a target obtains `rk` through one manager enum shared w
 - THEN the mise entry reports `pinned` with its version, the flake entry reports `absent` rather than a fault, `wired` names mise, and the run exits 0
 
 Verify: `cargo nextest run -E 'test(every_manager_in_the_enum_is_detected_once) or test(a_target_with_one_manager_chooses_it) or test(the_envrc_is_reported_outside_the_manager_list) or test(one_detection_serves_both_verbs)'`
+
+### `packaging:the-venue-and-the-manager-cross-in-one-matrix` — The venue and the manager cross in one matrix
+
+The binary MUST hold the venues `rk` publishes to as one enum, crossed with the manager enum in one matrix that classifies every pair as a rendered fragment or as manual with a reason from a closed set, because the venue and the manager are two axes and a venue no manager can consume is an honest row rather than a missing feature. A venue MUST enter the enum only where this repository's own release publishes to it under CI, the same claim `packaging:an-advertised-system-is-a-proven-system` makes for a system, and a venue that no per-project manager can pin, such as a system package built by a distribution service, MUST be recorded by its reason alone and take no variant. Every venue in the enum MUST carry a dated citation from that venue's own documentation in `_docs/reference/REFERENCE-packaging-sources.md`. A new venue is one variant plus its rows, and no fragment is a source literal: every text a pair renders is a file under `blocks/`.
+
+#### Scenario: A pair the matrix cannot wire
+
+- GIVEN a target on asdf, for which no published plugin installs release-kit
+- WHEN `rk self-depend add --manager asdf` runs
+- THEN the report names the pair `manual` with the reason `asdf-plugin-unknown`, nothing is written, and no plugin name is invented
+
+Verify: `cargo nextest run -E 'test(every_pair_in_the_matrix_is_classified_once) or test(every_manual_pair_names_a_closed_reason) or test(the_asdf_rows_are_manual_with_their_reason) or test(every_venue_names_a_dated_citation) or test(no_fragment_is_a_source_literal)'`
 
 ### `packaging:a-pin-bump-is-all-or-nothing` — A pin bump is all or nothing
 
@@ -185,21 +198,21 @@ Under `--caller envrc`, every reported outcome of `rk self-depend sync` MUST exi
 
 Verify: `cargo nextest run -E 'test(every_envrc_path_exits_zero)'`
 
-### `packaging:add-serves-a-template-and-edits-no-owned-flake` — Add serves a template and edits no owned flake
+### `packaging:add-serves-a-fragment-and-edits-no-owned-file` — Add serves a fragment and edits no owned file
 
-`rk self-depend add` MUST print the fragments with their anchors and placements and MUST NOT edit a `flake.nix` or `.envrc` the target owns, seeding a file only where the target has none, because a lexical observation does not justify a write into another project's Nix file and the splice into Nix attrsets was rejected by decision.
+`rk self-depend add` MUST print the fragments for one manager and venue pair with their anchors and placements and MUST NOT edit a manager file or an `.envrc` the target owns, seeding a file only where the target has none, because a lexical observation does not justify a write into another project's manager file and the splice into Nix attrsets was rejected by decision. The `.envrc` MUST be seeded for the flake pair alone, because `use flake` is what puts `rk` on the path there and no other manager loads through direnv by default; every other pair prints the sync line for the operator to place.
 
-#### Scenario: A target owns its flake
+#### Scenario: A target owns its manager file
 
-- GIVEN a target with a `flake.nix` of its own
-- WHEN `rk self-depend add --apply` runs
-- THEN the flake is byte-identical, the run exits 73 naming the reason, and the fragments still print for the operator or the agent to apply
+- GIVEN a target with a `flake.nix`, a `mise.toml`, or a `devbox.json` of its own
+- WHEN `rk self-depend add --apply` runs for that manager
+- THEN the file is byte-identical, the run exits 73 naming the reason, and the fragments still print for the operator or the agent to apply
 
-Verify: `cargo nextest run -E 'test(self_depend_add_apply_refuses_a_flake_the_target_owns)'`
+Verify: `cargo nextest run -E 'test(self_depend_add_apply_refuses_a_manager_file_the_target_owns) or test(self_depend_add_apply_refuses_every_owned_manager_file) or test(self_depend_add_apply_seeds_a_manager_file_the_target_lacks)'`
 
 ### `packaging:a-wired-target-runs-one-bump-mechanism` — A wired target runs one bump mechanism
 
-The binary MUST report a target as `ready` only where the pin is wired and no artifact of a predecessor bump mechanism remains, because two mechanisms over the same two files fight or silently undo each other and the wiring is a replacement, never an addition.
+The binary MUST report a target as `ready` only where the pin is wired and no artifact of a predecessor bump mechanism remains, because two mechanisms over the same two files fight or silently undo each other and the wiring is a replacement, never an addition. `rk self-depend add` MUST refuse a manager other than the one already naming release-kit, because two managers naming one tool are two pins.
 
 #### Scenario: A hand-rolled bump sits beside a wired pin
 
@@ -207,7 +220,7 @@ The binary MUST report a target as `ready` only where the pin is wired and no ar
 - WHEN `rk self-depend status` runs
 - THEN the state is `superseded` and the leftovers list names the script, and `ready` follows only once the list is empty
 
-Verify: `cargo nextest run -E 'test(self_depend_status_names_a_predecessor_mechanism_beside_a_wired_pin) or test(a_clean_target_reports_ready_and_an_empty_manual_list)'`
+Verify: `cargo nextest run -E 'test(self_depend_status_names_a_predecessor_mechanism_beside_a_wired_pin) or test(a_clean_target_reports_ready_and_an_empty_manual_list) or test(self_depend_add_refuses_a_second_bump_mechanism)'`
 
 ### `packaging:the-cleanup-removes-only-what-it-can-judge` — The cleanup removes only what it can judge
 
