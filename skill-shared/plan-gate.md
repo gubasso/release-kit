@@ -47,3 +47,4 @@ The plan is a claim about what will happen. Check it against something that know
 3. Gate every step the boundary above leaves to the operator, and every other step they must run by hand: print the exact command, say what it changes and why, wait, then re-observe before continuing.
 4. Close on the verification command the plan named. `rk status --check --target .` is the judging mode and exits nonzero while anything is unresolved.
 5. Where execution shows the plan was wrong, stop and re-plan. Do not expand the scope of an approved plan.
+6. For a landing, the check that fails a run is apply's own revalidation, not this instruction: `rk reconcile apply <plan-id>` recomputes the plan over the stored request and refuses, naming what moved, when the target, the bundle, or a decision changed since the plan was stored. That refusal returns the task to phase 1 with the fresh plan as the thing to approve. Nothing was written, and no flag turns the refusal into a pass.
