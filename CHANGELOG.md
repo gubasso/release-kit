@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.26](https://github.com/gubasso/release-kit/compare/v0.3.25...v0.3.26) - 2026-09-12
+
+### Added
+
+- *(reconcile/compatibility)* ship compatibility and guidance in the bundle ([#179](https://github.com/gubasso/release-kit/pull/179))
+
 ## [0.3.25](https://github.com/gubasso/release-kit/compare/v0.3.24...v0.3.25) - 2026-09-12
 
 ### Added
