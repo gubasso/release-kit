@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.23](https://github.com/gubasso/release-kit/compare/v0.3.22...v0.3.23) - 2026-09-12
+
+### Other
+
+- *(payload/source)* read every release through one seam ([#173](https://github.com/gubasso/release-kit/pull/173))
+
 ## [0.3.22](https://github.com/gubasso/release-kit/compare/v0.3.21...v0.3.22) - 2026-09-12
 
 ### Added
