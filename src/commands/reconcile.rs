@@ -1,36 +1,51 @@
-//! `rk reconcile`: the plan, computed and printed.
+//! `rk reconcile`: the plan computed, stored, shown, and applied.
 //!
-//! `plan` is read-only and offline by default: it observes the target,
-//! reads the embedded bundle, computes the plan, and prints it. `--to`
-//! with a version this binary does not carry reads the crates venue and
-//! says so. `--observe forge` opts into the one forge read. Nothing is
-//! persisted and nothing is written into the target.
+//! `plan` observes the target, reads the embedded bundle, computes the
+//! plan, stores it under the state root, and prints it; it writes
+//! nothing into the target. `--to` with a version this binary does not
+//! carry reads the crates venue and says so. `--observe forge` opts into
+//! the one forge read. `show` renders a stored plan. `apply` executes
+//! one: it computes the same plan again over the same request, refuses
+//! on any difference in the fingerprint, writes through one staged
+//! transaction, runs the postconditions, and journals the run.
 
 use std::collections::BTreeMap;
 
 use camino::Utf8Path;
+use serde::Serialize;
 
-use crate::cli::reconcile::{Observe, PlanArgs, ReconcileAction, ReconcileArgs};
+use crate::cli::reconcile::{
+    ApplyArgs, ListArgs, Observe, PlanArgs, ReconcileAction, ReconcileArgs, ShowArgs,
+};
+use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
 use crate::landing::manifest;
 use crate::output::Output;
+use crate::plan::apply::{self, Applied};
 use crate::plan::gather::{self, Flags, RecordRead, Request};
 use crate::plan::planner::{self, Baseline, Candidate};
-use crate::plan::{Classification, Operation, Plan, Planned, Readiness, Verification};
+use crate::plan::store;
+use crate::plan::{
+    Classification, Intent, Operation, Plan, PlanRequest, Planned, Readiness, Verification,
+};
 use crate::release::{CrateReleaseSource, EmbeddedReleaseSource, ReleaseSource};
+use crate::setup::journal::Journal;
 
 /// Dispatch one reconcile action.
 ///
 /// # Errors
 ///
-/// The planner's and the gathering's own failures.
+/// The planner's, the store's, and the apply's own failures.
 pub fn run(args: &ReconcileArgs) -> Result<(), RkError> {
     match &args.action {
         ReconcileAction::Plan(plan_args) => plan(plan_args),
+        ReconcileAction::Show(show_args) => show(show_args),
+        ReconcileAction::Apply(apply_args) => apply_stored(apply_args),
+        ReconcileAction::List(list_args) => list(list_args),
     }
 }
 
-/// Compute and print one plan.
+/// Compute, store, and print one plan.
 fn plan(args: &PlanArgs) -> Result<(), RkError> {
     let out = Output::new(args.json);
     let decisions = parse_decisions(&args.decide)?;
@@ -44,44 +59,212 @@ fn plan(args: &PlanArgs) -> Result<(), RkError> {
             )));
         }
     };
-    let flags = Flags {
-        tech: args.tech.clone(),
-        forge: args.forge.clone(),
-        repo: args.repo.clone(),
-        workflow: args.workflow.clone(),
-        style: args.style.clone(),
-        nix,
+    let request = PlanRequest {
+        target: args.target.clone(),
+        intent: Intent::Reconcile,
+        selector: args.to.clone(),
+        fetch: args.fetch,
+        observe_forge: args.observe.contains(&Observe::Forge),
+        flags: Flags {
+            tech: args.tech.clone(),
+            forge: args.forge.clone(),
+            repo: args.repo.clone(),
+            workflow: args.workflow.clone(),
+            style: args.style.clone(),
+            nix,
+        },
+        decisions,
     };
-    let clock = manifest::now();
-    let planned = compute(
-        &args.target,
-        &args.to,
-        args.fetch,
-        args.observe.contains(&Observe::Forge),
-        &flags,
-        &decisions,
-        &clock,
-    )?;
-    render(out, &planned.plan);
+    let planned = compute(&request, &manifest::now())?;
+    store::persist(&planned, &request)?;
+    render(out, &planned.plan, true);
     out.emit(&planned.plan)
 }
 
-/// The whole computation, shared with the fronts that print a plan's
-/// classification and readiness beside their own report.
+/// Render a stored plan.
+fn show(args: &ShowArgs) -> Result<(), RkError> {
+    let out = Output::new(args.json);
+    let stored = store::load(&args.plan_id)?;
+    render(out, &stored.plan, false);
+    out.emit(&stored.plan)
+}
+
+/// Execute a stored plan.
+fn apply_stored(args: &ApplyArgs) -> Result<(), RkError> {
+    let out = Output::new(args.json);
+    let stored = store::load(&args.plan_id)?;
+    // The same request at the same instant: a fresh landing's record
+    // carries the plan's instant, so recomputing at another one would
+    // read as the record moving when nothing did.
+    let fresh = compute(&stored.request, &stored.plan.identity.created_at)?;
+    let journal = open_journal("reconcile apply", &stored.plan).map_err(|error| {
+        RkError::refusal(
+            Diagnostic::new(
+                Reason::JournalUnavailable,
+                format!("the run journal could not be created, and nothing was written: {error}"),
+            )
+            .expected("a writable state root for the journal")
+            .target_state("unchanged"),
+        )
+    })?;
+    let applied = apply::run(
+        &stored.request.target,
+        &stored.plan,
+        &stored.blobs,
+        &fresh.plan,
+        Some(journal),
+    )?;
+    render_applied(out, &applied);
+    out.emit(&applied)?;
+    applied.failure().map_or(Ok(()), Err)
+}
+
+/// The listing of stored plans.
+#[derive(Debug, Serialize)]
+struct ListReport {
+    /// The shape version of this document.
+    schema: &'static str,
+    /// Every stored plan, oldest first.
+    plans: Vec<ListRow>,
+}
+
+/// One stored plan's row.
+#[derive(Debug, Serialize)]
+struct ListRow {
+    /// The plan id.
+    plan_id: String,
+    /// The instant it was computed.
+    created_at: String,
+}
+
+fn list(args: &ListArgs) -> Result<(), RkError> {
+    let out = Output::new(args.json);
+    let rows: Vec<ListRow> = store::list()
+        .into_iter()
+        .map(|(created_at, plan_id)| ListRow {
+            plan_id,
+            created_at,
+        })
+        .collect();
+    for row in &rows {
+        out.result_line(format!("{}  {}", row.plan_id, row.created_at));
+    }
+    if rows.is_empty() {
+        out.result_line("no plans are stored");
+    }
+    out.emit(&ListReport {
+        schema: "rk.reconcile-list/1",
+        plans: rows,
+    })
+}
+
+/// The trace a front's report carries of the plan it applied.
+#[derive(Debug, Serialize)]
+pub struct Trace {
+    /// The plan that was applied.
+    pub plan_id: String,
+    /// The fingerprint the apply revalidated against.
+    pub input_fingerprint: crate::digest::Digest,
+    /// Whether the store took the plan.
+    pub stored: bool,
+    /// The journal entry, where the journal took one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+}
+
+impl FrontApplied {
+    /// The trace for a front's report.
+    #[must_use]
+    pub fn trace(&self) -> Trace {
+        Trace {
+            plan_id: self.applied.plan_id.clone(),
+            input_fingerprint: self.applied.input_fingerprint.clone(),
+            stored: self.stored,
+            run_id: self.applied.run_id.clone(),
+        }
+    }
+
+    /// The human line a front prints for the plan it applied.
+    #[must_use]
+    pub fn line(&self) -> String {
+        self.applied.run_id.as_ref().map_or_else(
+            || format!("applied plan {}", self.applied.plan_id),
+            |run_id| format!("applied plan {} (run {run_id})", self.applied.plan_id),
+        )
+    }
+
+    /// The bytes an operation wrote at `path`, where one did.
+    #[must_use]
+    pub fn written<'a>(planned: &'a Planned, path: &str) -> Option<&'a [u8]> {
+        planned
+            .plan
+            .operations
+            .iter()
+            .find_map(|operation| match operation {
+                Operation::WriteFile { path: p, after, .. }
+                | Operation::SpliceBlock { path: p, after, .. }
+                    if p == path =>
+                {
+                    planned.blobs.get(after).map(Vec::as_slice)
+                }
+                _ => None,
+            })
+    }
+}
+
+/// What a front's apply came back with: the engine's report and whether
+/// the store took the plan.
+#[derive(Debug)]
+pub struct FrontApplied {
+    /// The engine's report.
+    pub applied: Applied,
+    /// Whether the plan was stored; a front is one process with no review
+    /// window, so a store that cannot be written costs the record alone.
+    pub stored: bool,
+}
+
+/// One computed plan applied in the same process, which is what the
+/// fronts do on `--apply`: the store and the journal are best effort,
+/// and the execution path is the one `rk reconcile apply` takes.
+///
+/// # Errors
+///
+/// The apply's own refusals and failures.
+pub fn apply_in_process(
+    planned: &Planned,
+    request: &PlanRequest,
+    command: &str,
+) -> Result<FrontApplied, RkError> {
+    let stored = store::persist(planned, request).is_ok();
+    let journal = open_journal(command, &planned.plan).ok();
+    let applied = apply::run(
+        &request.target,
+        &planned.plan,
+        &planned.blobs,
+        &planned.plan,
+        journal,
+    )?;
+    Ok(FrontApplied { applied, stored })
+}
+
+fn open_journal(command: &str, plan: &Plan) -> std::io::Result<Journal> {
+    let (forge, repo) = plan
+        .desired_state
+        .configuration
+        .as_ref()
+        .map_or(("", ""), |c| (c.forge.as_str(), c.repo.as_str()));
+    Journal::create(command, &plan.observed_state.repository.target, forge, repo)
+}
+
+/// The whole computation, shared with the fronts.
 ///
 /// # Errors
 ///
 /// A selector the crates venue cannot resolve, a bundle the engine
 /// cannot read, and the gathering's own failures.
-pub fn compute(
-    target: &Utf8Path,
-    selector: &str,
-    fetch: bool,
-    observe_forge: bool,
-    flags: &Flags,
-    decisions: &BTreeMap<String, String>,
-    clock: &str,
-) -> Result<Planned, RkError> {
+pub fn compute(request: &PlanRequest, clock: &str) -> Result<Planned, RkError> {
+    let target: &Utf8Path = &request.target;
+    let selector = request.selector.as_str();
     let embedded = EmbeddedReleaseSource;
     let crate_source = if selector == "embedded" {
         None
@@ -103,16 +286,16 @@ pub fn compute(
             }
         };
     let candidate_manifest = candidate_source.manifest()?;
-    let request = Request {
+    let gather_request = Request {
         target,
-        flags,
-        decisions,
-        observe_forge,
+        flags: &request.flags,
+        decisions: &request.decisions,
+        observe_forge: request.observe_forge,
         clock,
         source: candidate_source,
     };
-    let observation = gather::observe(&request)?;
-    let resolution = gather::resolve(&request, &observation)?;
+    let observation = gather::observe(&gather_request)?;
+    let resolution = gather::resolve(&gather_request, &observation)?;
 
     // The recorded release's bundle: the embedded one where the record
     // names its payload, the cache where it holds the recorded version,
@@ -129,7 +312,7 @@ pub fn compute(
                 && *digest != candidate_manifest.payload_sha256 =>
         {
             let source = CrateReleaseSource::new(version)?;
-            if fetch || source.is_cached() {
+            if request.fetch || source.is_cached() {
                 Some(source)
             } else {
                 None
@@ -164,6 +347,7 @@ pub fn compute(
         },
     };
     planner::plan(planner::Inputs {
+        intent: request.intent,
         clock,
         engine_version: env!("CARGO_PKG_VERSION"),
         selector,
@@ -176,7 +360,7 @@ pub fn compute(
         baseline,
         observation,
         resolution,
-        selected: decisions,
+        selected: &request.decisions,
     })
 }
 
@@ -202,13 +386,14 @@ fn parse_decisions(raw: &[String]) -> Result<BTreeMap<String, String>, RkError> 
 /// The human lines: the routing word, the readiness, the operations by
 /// kind, every precondition that does not hold, every decision that
 /// waits, and the fingerprint.
-fn render(out: Output, plan: &Plan) {
+fn render(out: Output, plan: &Plan, fresh: bool) {
     out.result_line(format!(
-        "plan {} for {} toward release-kit {} ({})",
+        "plan {} for {} toward release-kit {} ({}){}",
         plan.identity.plan_id,
         plan.observed_state.repository.target,
         plan.desired_state.release.version,
-        plan.desired_state.release.venue
+        plan.desired_state.release.venue,
+        if fresh { ", stored" } else { "" }
     ));
     out.result_line(format!("classification: {}", plan.classification.as_str()));
     for finding in &plan.findings {
@@ -257,8 +442,38 @@ fn render(out: Output, plan: &Plan) {
     out.next(&next_lines(plan));
 }
 
+/// The human lines of an apply.
+fn render_applied(out: Output, applied: &Applied) {
+    out.result_line(format!(
+        "applied plan {} to {}",
+        applied.plan_id, applied.target
+    ));
+    for result in &applied.operations {
+        out.result_line(format!(
+            "  {} {}",
+            result.op,
+            result.path.as_deref().unwrap_or_default()
+        ));
+    }
+    for result in &applied.postconditions {
+        out.result_line(result.detail.as_ref().map_or_else(
+            || format!("postcondition {}: {}", result.check, result.status),
+            |detail| {
+                format!(
+                    "postcondition {}: {} ({detail})",
+                    result.check, result.status
+                )
+            },
+        ));
+    }
+    if let Some(run_id) = &applied.run_id {
+        out.result_line(format!("journal: run {run_id}"));
+    }
+    out.next(&applied.next);
+}
+
 /// One operation as a human line.
-fn describe(operation: &Operation) -> String {
+pub(crate) fn describe(operation: &Operation) -> String {
     match operation {
         Operation::WriteFile { path, kind, .. } => format!("write-file {path} ({})", kind.as_str()),
         Operation::SpliceBlock { path, .. } => format!("splice-block {path}"),
@@ -296,15 +511,15 @@ fn next_lines(plan: &Plan) -> Vec<String> {
             })
             .collect(),
         Readiness::Ready => match plan.classification {
-            Classification::Setup | Classification::Migration => vec![format!(
-                "rk init --target {target} --apply lands what this plan names"
-            )],
             Classification::Upgrade if plan.operations.is_empty() => {
                 vec!["nothing to take: the target is at this release".to_owned()]
             }
-            Classification::Upgrade => vec![format!(
-                "rk upgrade --target {target} --apply takes what this plan names"
-            )],
+            Classification::Setup | Classification::Migration | Classification::Upgrade => {
+                vec![format!(
+                    "rk reconcile apply {} executes exactly these operations",
+                    plan.identity.plan_id
+                )]
+            }
             Classification::Drift | Classification::Invalid => {
                 vec!["resolve the findings above, then plan again".to_owned()]
             }

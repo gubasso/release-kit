@@ -37,7 +37,30 @@ fn rk() -> Command {
     for var in GIT_HOOK_VARS {
         command.env_remove(var);
     }
+    // Every landing verb stores its plan and journals its run under the
+    // state root, so each invocation gets a scratch one: the operator's
+    // own store and journal are never written or pruned by the suite. A
+    // test that needs one root across two invocations sets its own.
+    command.env("XDG_STATE_HOME", scratch_state_root());
     command
+}
+
+/// A fresh state root per invocation, under one directory per test
+/// process.
+fn scratch_state_root() -> PathBuf {
+    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let root = ROOT.get_or_init(|| {
+        tempfile::tempdir()
+            .expect("a scratch state root exists")
+            .keep()
+    });
+    let dir = root.join(
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            .to_string(),
+    );
+    std::fs::create_dir_all(&dir).expect("the scratch state root creates");
+    dir
 }
 
 /// A scratch home the skill commands run against, so no test touches the
@@ -663,7 +686,7 @@ fn init_json_emits_one_object_and_nothing_else() {
             .stdout
             .clone();
         let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-        assert_eq!(report["schema"], "rk.init/5");
+        assert_eq!(report["schema"], "rk.init/6");
         assert_eq!(report["mode"], mode);
         assert!(
             report["files"].as_array().is_some_and(|f| !f.is_empty()),
@@ -21243,12 +21266,15 @@ fn plan_with_clock(
         .map(|(id, answer)| ((*id).to_owned(), (*answer).to_owned()))
         .collect();
     release_kit::commands::reconcile::compute(
-        &utf8(target),
-        "embedded",
-        false,
-        false,
-        &flags,
-        &decisions,
+        &release_kit::plan::PlanRequest {
+            target: utf8(target),
+            intent: release_kit::plan::Intent::Reconcile,
+            selector: "embedded".into(),
+            fetch: false,
+            observe_forge: false,
+            flags,
+            decisions,
+        },
         clock,
     )
     .expect("the plan computes")
@@ -21771,24 +21797,671 @@ fn reconcile_plan_is_offline_by_default() {
     );
 }
 
-/// The plan verb writes nothing: the target and the state root are
-/// byte-identical afterwards.
+/// `rk reconcile plan` writes nothing into the target and stores the
+/// plan under the state root, printing its id.
 #[test]
-fn reconcile_plan_persists_nothing_in_this_phase() {
+fn reconcile_plan_persists_and_prints_an_id() {
     let home = tempfile::tempdir().expect("a scratch home exists");
     let target = plan_target();
     land_rust(target.path()).success();
     let before_target = tree_digests(target.path());
-    let before_home = tree_digests(home.path());
-    rk().args(["reconcile", "plan", "--target"])
+    let (id, plan) = plan_stored(home.path(), target.path(), &[]);
+    assert_eq!(plan["identity"]["plan_id"], id);
+    assert_eq!(tree_digests(target.path()), before_target);
+    let dir = stored_dir(home.path(), &id);
+    assert!(dir.join("plan.json").is_file(), "{}", dir.display());
+    assert!(dir.join("request.json").is_file());
+    let human = rk_home(home.path())
+        .args(["reconcile", "plan", "--target"])
         .arg(target.path())
-        .env("HOME", home.path())
-        .env("XDG_STATE_HOME", home.path())
-        .env("RUST_LOG", "off")
+        .args(["--forge", "github", "--repo", "acme/widget"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    // The second run is its own plan: its id folds in `created_at`, so it
+    // matches the first id only when both runs share a second. The human
+    // line names the id it stored, and that id has a directory.
+    let human = String::from_utf8_lossy(&human);
+    let line = human
+        .lines()
+        .find(|line| line.starts_with("plan ") && line.contains(" for "))
+        .unwrap_or_else(|| panic!("the human report names its plan:\n{human}"));
+    let printed = line["plan ".len()..].split(' ').next().expect("an id");
+    assert_eq!(printed.len(), id.len(), "{line}");
+    assert!(
+        stored_dir(home.path(), printed).join("plan.json").is_file(),
+        "{line}"
+    );
+}
+
+/// A scratch state root, so no test touches the operator's own store.
+fn rk_home(home: &Path) -> Command {
+    let mut command = rk();
+    command
+        .env("HOME", home)
+        .env("XDG_STATE_HOME", home)
+        .env("RUST_LOG", "off");
+    command
+}
+
+fn stored_dir(home: &Path, id: &str) -> PathBuf {
+    home.join("release-kit").join("plans").join(id)
+}
+
+/// One plan computed and stored, with the identity flags an empty target
+/// needs; the id and the document.
+fn plan_stored(home: &Path, target: &Path, extra: &[&str]) -> (String, serde_json::Value) {
+    let out = rk_home(home)
+        .args(["reconcile", "plan", "--json", "--target"])
+        .arg(target)
+        .args(["--forge", "github", "--repo", "acme/widget"])
+        .args(extra)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let plan: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    let id = plan["identity"]["plan_id"]
+        .as_str()
+        .expect("a plan id")
+        .to_owned();
+    (id, plan)
+}
+
+fn apply_stored(home: &Path, id: &str) -> assert_cmd::assert::Assert {
+    rk_home(home)
+        .args(["reconcile", "apply", "--json", id])
+        .assert()
+}
+
+/// The diagnostic an apply refusal prints on stderr under `--json`.
+fn refusal_of(assert: &assert_cmd::assert::Assert) -> serde_json::Value {
+    serde_json::from_slice(&assert.get_output().stderr).expect("a JSON diagnostic on stderr")
+}
+
+/// A landed target one release behind: the record names an older engine
+/// and holds an older rendered policy, so the plan carries writes.
+fn landed_old_target() -> tempfile::TempDir {
+    let target = plan_target();
+    land_rust(target.path()).success();
+    let mut manifest = read_manifest(target.path());
+    manifest["rk_version"] = serde_json::json!("0.1.0");
+    let policy = target.path().join("SECURITY.md");
+    let older = b"# Security policy\n\nOlder wording.\n";
+    std::fs::write(&policy, older).expect("the older file writes");
+    for file in manifest["files"].as_array_mut().expect("files") {
+        if file["destination"] == "SECURITY.md" {
+            file["sha256"] = serde_json::json!(Digest::of(older).to_string());
+        }
+    }
+    write_manifest(target.path(), &manifest);
+    target
+}
+
+/// The store is owner-only: 0700 on every directory, 0600 on every file.
+#[cfg(unix)]
+#[test]
+fn the_store_is_owner_only() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let home = tempfile::tempdir().expect("a scratch home exists");
+    let target = plan_target();
+    land_rust(target.path()).success();
+    let (id, _) = plan_stored(home.path(), target.path(), &[]);
+    let dir = stored_dir(home.path(), &id);
+    for path in [
+        dir.parent().expect("the store root").to_path_buf(),
+        dir.clone(),
+        dir.join("blobs"),
+    ] {
+        let mode = std::fs::metadata(&path)
+            .expect("reads")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o700, "{}", path.display());
+    }
+    for name in ["plan.json", "request.json"] {
+        let mode = std::fs::metadata(dir.join(name))
+            .expect("reads")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "{name}");
+    }
+}
+
+/// `show` renders what was stored; an id the store no longer holds is a
+/// refusal naming the retention rule, never an empty result.
+#[test]
+fn show_renders_a_stored_plan_and_refuses_a_pruned_one() {
+    let home = tempfile::tempdir().expect("a scratch home exists");
+    let target = plan_target();
+    land_rust(target.path()).success();
+    let (id, plan) = plan_stored(home.path(), target.path(), &[]);
+    let shown = rk_home(home.path())
+        .args(["reconcile", "show", "--json", &id])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let shown: serde_json::Value = serde_json::from_slice(&shown).expect("one JSON object");
+    assert_eq!(shown["input_fingerprint"], plan["input_fingerprint"]);
+    assert_eq!(shown["schema"], "rk.plan/2");
+    std::fs::remove_dir_all(stored_dir(home.path(), &id)).expect("the plan prunes");
+    rk_home(home.path())
+        .args(["reconcile", "show", &id])
+        .assert()
+        .code(66)
+        .stderr(predicate::str::contains("newest 20 plans"));
+}
+
+/// Apply refuses after the record changed, naming it, with the target
+/// byte-identical.
+#[test]
+fn apply_refuses_after_the_record_changes() {
+    let home = tempfile::tempdir().expect("a scratch home exists");
+    let target = landed_old_target();
+    let (id, _) = plan_stored(home.path(), target.path(), &[]);
+    let mut manifest = read_manifest(target.path());
+    manifest["rk_version"] = serde_json::json!("0.1.1");
+    write_manifest(target.path(), &manifest);
+    let before = tree_digests(target.path());
+    let assert = apply_stored(home.path(), &id).code(73);
+    let diagnostic = refusal_of(&assert);
+    assert_eq!(diagnostic["reason"], "state-drift");
+    assert!(
+        diagnostic["message"]
+            .as_str()
+            .expect("a message")
+            .contains("the record"),
+        "{diagnostic}"
+    );
+    assert_eq!(tree_digests(target.path()), before);
+}
+
+/// Apply refuses after the configuration changed, naming it.
+#[test]
+fn apply_refuses_after_the_configuration_changes() {
+    let home = tempfile::tempdir().expect("a scratch home exists");
+    let target = landed_old_target();
+    let (id, _) = plan_stored(home.path(), target.path(), &[]);
+    let config = target.path().join(".release-kit/config.toml");
+    let mut text = std::fs::read_to_string(&config).expect("reads");
+    text.push_str("\n# edited after the plan\n");
+    std::fs::write(&config, text).expect("writes");
+    let before = tree_digests(target.path());
+    let assert = apply_stored(home.path(), &id).code(73);
+    let diagnostic = refusal_of(&assert);
+    assert!(
+        diagnostic["message"]
+            .as_str()
+            .expect("a message")
+            .contains("the configuration"),
+        "{diagnostic}"
+    );
+    assert_eq!(tree_digests(target.path()), before);
+}
+
+/// Apply refuses after a destination changed, naming that destination.
+#[test]
+fn apply_refuses_after_a_destination_changes_naming_it() {
+    let home = tempfile::tempdir().expect("a scratch home exists");
+    let target = landed_old_target();
+    let (id, _) = plan_stored(home.path(), target.path(), &[]);
+    let policy = target.path().join("SECURITY.md");
+    std::fs::write(&policy, b"# Security policy\n\nEdited after the plan.\n").expect("writes");
+    let before = tree_digests(target.path());
+    let assert = apply_stored(home.path(), &id).code(73);
+    let diagnostic = refusal_of(&assert);
+    assert!(
+        diagnostic["message"]
+            .as_str()
+            .expect("a message")
+            .contains("SECURITY.md"),
+        "{diagnostic}"
+    );
+    assert_eq!(tree_digests(target.path()), before);
+}
+
+/// Apply refuses when the stored plan names another candidate bundle
+/// than the one it is recomputed against: the store is recomputed too,
+/// so a plan edited after approval reads as moved.
+#[test]
+fn apply_refuses_after_the_bundle_changes() {
+    let home = tempfile::tempdir().expect("a scratch home exists");
+    let target = landed_old_target();
+    let (id, _) = plan_stored(home.path(), target.path(), &[]);
+    let path = stored_dir(home.path(), &id).join("plan.json");
+    let mut plan: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).expect("reads")).expect("parses");
+    plan["release"]["candidate"]["payload_sha256"] =
+        serde_json::json!(Digest::of(b"other").to_string());
+    std::fs::write(&path, serde_json::to_vec(&plan).expect("serializes")).expect("writes");
+    let before = tree_digests(target.path());
+    let assert = apply_stored(home.path(), &id).code(73);
+    let diagnostic = refusal_of(&assert);
+    let message = diagnostic["message"].as_str().expect("a message");
+    assert!(
+        message.contains("the candidate bundle") && message.contains("the stored plan"),
+        "{diagnostic}"
+    );
+    assert_eq!(tree_digests(target.path()), before);
+}
+
+/// Apply refuses when a selected decision changed between plan and
+/// apply, naming the decision.
+#[test]
+fn apply_refuses_after_a_selected_decision_changes() {
+    let home = tempfile::tempdir().expect("a scratch home exists");
+    let target = plan_target();
+    let (id, plan) = plan_stored(
+        home.path(),
+        target.path(),
+        &["--tech", "rust", "--decide", "workflow-mode=worktree"],
+    );
+    assert_eq!(plan["readiness"], "ready", "{plan}");
+    let path = stored_dir(home.path(), &id).join("request.json");
+    let mut request: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).expect("reads")).expect("parses");
+    request["decisions"]["workflow-mode"] = serde_json::json!("branches");
+    std::fs::write(&path, serde_json::to_vec(&request).expect("serializes")).expect("writes");
+    let before = tree_digests(target.path());
+    let assert = apply_stored(home.path(), &id).code(73);
+    let diagnostic = refusal_of(&assert);
+    assert!(
+        diagnostic["message"]
+            .as_str()
+            .expect("a message")
+            .contains("decision workflow-mode"),
+        "{diagnostic}"
+    );
+    assert_eq!(tree_digests(target.path()), before);
+}
+
+/// A plan that waits on a decision is refused naming the decision ids.
+#[test]
+fn apply_refuses_needs_decision_naming_the_ids() {
+    let home = tempfile::tempdir().expect("a scratch home exists");
+    let target = plan_target();
+    let (id, plan) = plan_stored(home.path(), target.path(), &["--tech", "rust"]);
+    assert_eq!(plan["readiness"], "needs-decision", "{plan}");
+    let before = tree_digests(target.path());
+    let assert = apply_stored(home.path(), &id).code(73);
+    let diagnostic = refusal_of(&assert);
+    assert_eq!(diagnostic["reason"], "plan-not-ready");
+    assert!(
+        diagnostic["message"]
+            .as_str()
+            .expect("a message")
+            .contains("workflow-mode"),
+        "{diagnostic}"
+    );
+    assert_eq!(tree_digests(target.path()), before);
+}
+
+/// A blocked plan is refused naming the failed required preconditions,
+/// and no flag makes it proceed.
+#[test]
+fn apply_refuses_blocked_naming_the_preconditions() {
+    let home = tempfile::tempdir().expect("a scratch home exists");
+    let target = plan_target();
+    land_rust(target.path()).success();
+    let path = target.path().join("SECURITY.md");
+    let mut bytes = std::fs::read(&path).expect("reads");
+    bytes.extend_from_slice(b"\n# edited\n");
+    std::fs::write(&path, bytes).expect("writes");
+    let (id, plan) = plan_stored(home.path(), target.path(), &[]);
+    assert_eq!(plan["readiness"], "blocked", "{plan}");
+    let before = tree_digests(target.path());
+    let assert = apply_stored(home.path(), &id).code(73);
+    let diagnostic = refusal_of(&assert);
+    assert_eq!(diagnostic["reason"], "plan-not-ready");
+    assert!(
+        diagnostic["message"]
+            .as_str()
+            .expect("a message")
+            .contains("owned-file-unedited:SECURITY.md"),
+        "{diagnostic}"
+    );
+    assert_eq!(tree_digests(target.path()), before);
+}
+
+/// Every refusal above happens before the first write: the target is
+/// byte-identical after a refused apply, whatever refused it.
+#[test]
+fn no_write_happens_before_revalidation_passes() {
+    let home = tempfile::tempdir().expect("a scratch home exists");
+    let target = landed_old_target();
+    let (id, _) = plan_stored(home.path(), target.path(), &[]);
+    // A destination and the record moved at once: one refusal, no write.
+    std::fs::write(target.path().join("SECURITY.md"), b"moved\n").expect("writes");
+    let mut manifest = read_manifest(target.path());
+    manifest["rk_version"] = serde_json::json!("0.1.1");
+    write_manifest(target.path(), &manifest);
+    let before = tree_digests(target.path());
+    apply_stored(home.path(), &id).code(73);
+    assert_eq!(tree_digests(target.path()), before);
+    let stored = stored_dir(home.path(), &id);
+    assert!(
+        stored.join("plan.json").is_file(),
+        "a refusal keeps the plan"
+    );
+}
+
+/// A commit stopped part way leaves every destination holding either
+/// its previous bytes or its new ones, names what landed, and journals
+/// the run with the stop.
+#[test]
+fn an_interrupted_apply_leaves_each_destination_whole_and_journals_it() {
+    let home = tempfile::tempdir().expect("a scratch home exists");
+    let target = plan_target();
+    let (id, plan) = plan_stored(
+        home.path(),
+        target.path(),
+        &[
+            "--tech",
+            "rust",
+            "--workflow",
+            "worktree",
+            "--style",
+            "trunk",
+        ],
+    );
+    assert_eq!(plan["readiness"], "ready", "{plan}");
+    let ops = operations_of(&plan);
+    assert!(ops.len() > 2);
+    let stop = ops[1]["path"].as_str().expect("a path").to_owned();
+    let first = ops[0]["path"].as_str().expect("a path").to_owned();
+    let before = tree_digests(target.path());
+    let assert = rk_home(home.path())
+        .env("RK_APPLY_INTERRUPT_AT", &stop)
+        .args(["reconcile", "apply", &id])
+        .assert()
+        .code(74)
+        .stderr(predicate::str::contains(&stop).and(predicate::str::contains(&first)));
+    let _ = assert;
+    let after = tree_digests(target.path());
+    assert!(
+        target.path().join(&first).is_file(),
+        "the first rename landed"
+    );
+    assert!(
+        !target.path().join(&stop).exists(),
+        "the stopped rename did not land"
+    );
+    assert!(
+        !target.path().join(".release-kit/manifest.json").exists(),
+        "the record, last, never landed"
+    );
+    // Every other path is as it was: nothing half-written, no temp file.
+    for (path, digest) in &after {
+        if path != &first {
+            assert!(
+                before.contains(&(path.clone(), digest.clone())),
+                "{path} changed"
+            );
+        }
+        assert!(!path.contains(".rk-txn-"), "temp file left: {path}");
+    }
+    let runs = rk_home(home.path())
+        .args(["runs", "list", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let runs: serde_json::Value = serde_json::from_slice(&runs).expect("one JSON object");
+    let run = &runs["runs"].as_array().expect("runs")[0];
+    assert_eq!(run["command"], "reconcile apply");
+    assert_eq!(run["exit_code"], 74);
+    let events = std::fs::read_to_string(
+        home.path()
+            .join("release-kit/runs")
+            .join(run["id"].as_str().expect("an id"))
+            .join("events.jsonl"),
+    )
+    .expect("the events read");
+    assert!(
+        events.contains(&format!(
+            "\"path\":\"{}\",\"status\":\"failed\"",
+            target.path().join(&stop).display()
+        )),
+        "{events}"
+    );
+}
+
+/// The record is the last operation in every plan that carries one, and
+/// the last rename an apply makes.
+#[test]
+fn the_record_is_written_last() {
+    let home = tempfile::tempdir().expect("a scratch home exists");
+    for target in [plan_target(), landed_old_target()] {
+        let (id, plan) = plan_stored(
+            home.path(),
+            target.path(),
+            &[
+                "--tech",
+                "rust",
+                "--workflow",
+                "worktree",
+                "--style",
+                "trunk",
+            ],
+        );
+        let ops = operations_of(&plan);
+        assert_eq!(
+            ops.last().expect("an operation")["op"],
+            "write-record",
+            "{plan}"
+        );
+        let applied = apply_stored(home.path(), &id)
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let applied: serde_json::Value = serde_json::from_slice(&applied).expect("one JSON object");
+        assert_eq!(applied["schema"], "rk.reconcile-apply/1");
+        let results = applied["operations"].as_array().expect("operations");
+        assert_eq!(results.last().expect("a result")["op"], "write-record");
+        assert!(results.iter().all(|r| r["status"] == "ok"), "{applied}");
+    }
+}
+
+/// An apply lands in the runs journal the way a setup step does, with
+/// the plan id and its fingerprint in the events.
+#[test]
+fn an_apply_lands_in_the_runs_journal() {
+    let home = tempfile::tempdir().expect("a scratch home exists");
+    let target = landed_old_target();
+    let (id, plan) = plan_stored(home.path(), target.path(), &[]);
+    let applied = apply_stored(home.path(), &id)
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let applied: serde_json::Value = serde_json::from_slice(&applied).expect("one JSON object");
+    let run_id = applied["run_id"].as_str().expect("a run id").to_owned();
+    let runs = rk_home(home.path())
+        .args(["runs", "list", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let runs: serde_json::Value = serde_json::from_slice(&runs).expect("one JSON object");
+    let run = runs["runs"]
+        .as_array()
+        .expect("runs")
+        .iter()
+        .find(|run| run["id"] == run_id)
+        .expect("the apply's run");
+    assert_eq!(run["command"], "reconcile apply");
+    assert_eq!(run["exit_code"], 0);
+    let events = std::fs::read_to_string(
+        home.path()
+            .join("release-kit/runs")
+            .join(&run_id)
+            .join("events.jsonl"),
+    )
+    .expect("the events read");
+    assert!(events.contains(&id), "{events}");
+    assert!(
+        events.contains(plan["input_fingerprint"].as_str().expect("a fingerprint")),
+        "{events}"
+    );
+}
+
+/// Every apply refusal carries a reason from the closed vocabulary.
+#[test]
+fn every_apply_refusal_names_a_reason_from_the_closed_set() {
+    let wire: Vec<&str> = release_kit::diagnostic::REASONS
+        .iter()
+        .map(|reason| reason.as_str())
+        .collect();
+    let home = tempfile::tempdir().expect("a scratch home exists");
+    let mut reasons: Vec<String> = Vec::new();
+    // Not ready.
+    let target = plan_target();
+    let (id, _) = plan_stored(home.path(), target.path(), &["--tech", "rust"]);
+    reasons.push(
+        refusal_of(&apply_stored(home.path(), &id).code(73))["reason"]
+            .as_str()
+            .expect("a reason")
+            .to_owned(),
+    );
+    // Moved.
+    let target = landed_old_target();
+    let (id, _) = plan_stored(home.path(), target.path(), &[]);
+    std::fs::write(target.path().join("SECURITY.md"), b"moved\n").expect("writes");
+    reasons.push(
+        refusal_of(&apply_stored(home.path(), &id).code(73))["reason"]
+            .as_str()
+            .expect("a reason")
+            .to_owned(),
+    );
+    // Unknown.
+    reasons.push(
+        refusal_of(&apply_stored(home.path(), "0000000000000000").code(66))["reason"]
+            .as_str()
+            .expect("a reason")
+            .to_owned(),
+    );
+    for reason in &reasons {
+        assert!(
+            wire.contains(&reason.as_str()),
+            "{reason} is not in the closed set"
+        );
+    }
+    assert_eq!(reasons, ["plan-not-ready", "state-drift", "usage"]);
+}
+
+/// The apply's exit codes sit in the matrix: 73 for a refusal before
+/// any write, 66 for an id the store does not hold, 74 for a commit
+/// stopped by I/O, and 1 for a postcondition that failed after the
+/// writes landed, which `exit_code_matrix` holds at the unit level.
+#[test]
+fn the_apply_exit_codes_match_the_matrix() {
+    let home = tempfile::tempdir().expect("a scratch home exists");
+    let target = plan_target();
+    let (id, _) = plan_stored(home.path(), target.path(), &["--tech", "rust"]);
+    apply_stored(home.path(), &id).code(73);
+    apply_stored(home.path(), "0000000000000000").code(66);
+    let target = landed_old_target();
+    let (id, _) = plan_stored(home.path(), target.path(), &[]);
+    rk_home(home.path())
+        .env("RK_APPLY_INTERRUPT_AT", ".release-kit/manifest.json")
+        .args(["reconcile", "apply", &id])
+        .assert()
+        .code(74);
+}
+
+fn copy_tree(from: &Path, to: &Path) {
+    for entry in std::fs::read_dir(from).expect("the tree reads") {
+        let entry = entry.expect("an entry");
+        let dest = to.join(entry.file_name());
+        if entry.path().is_dir() {
+            std::fs::create_dir_all(&dest).expect("creates");
+            copy_tree(&entry.path(), &dest);
+        } else {
+            std::fs::copy(entry.path(), &dest).expect("copies");
+        }
+    }
+}
+
+/// The landing a front produces is the landing the engine produces
+/// under the same request: file by file, and the record apart from its
+/// instant and its origin word.
+fn assert_same_landing(front: &Path, engine: &Path) {
+    let strip = |tree: Vec<(String, String)>| -> Vec<(String, String)> {
+        tree.into_iter()
+            .filter(|(path, _)| path != ".release-kit/manifest.json")
+            .collect()
+    };
+    assert_eq!(strip(tree_digests(front)), strip(tree_digests(engine)));
+    let mut a = read_manifest(front);
+    let mut b = read_manifest(engine);
+    for manifest in [&mut a, &mut b] {
+        manifest["landed_at"] = serde_json::json!("");
+        manifest["origin"] = serde_json::json!("");
+    }
+    assert_eq!(a, b);
+}
+
+/// `rk init --apply`, `rk upgrade --apply`, and `rk adopt --apply` land
+/// through the engine what `rk reconcile plan` and `rk reconcile apply`
+/// land under the same request.
+#[test]
+fn init_upgrade_and_adopt_produce_the_same_landing_through_the_engine() {
+    let home = tempfile::tempdir().expect("a scratch home exists");
+    let flags = [
+        "--tech",
+        "rust",
+        "--workflow",
+        "worktree",
+        "--style",
+        "trunk",
+    ];
+    // init
+    let front = plan_target();
+    land_rust(front.path()).success();
+    let engine = plan_target();
+    let (id, _) = plan_stored(home.path(), engine.path(), &flags);
+    apply_stored(home.path(), &id).success();
+    assert_same_landing(front.path(), engine.path());
+    // upgrade
+    let front = landed_old_target();
+    let engine = landed_old_target();
+    rk().args(["upgrade", "--target"])
+        .arg(front.path())
+        .arg("--apply")
         .assert()
         .success();
-    assert_eq!(tree_digests(target.path()), before_target);
-    assert_eq!(tree_digests(home.path()), before_home);
+    let (id, _) = plan_stored(home.path(), engine.path(), &[]);
+    apply_stored(home.path(), &id).success();
+    assert_same_landing(front.path(), engine.path());
+    // adopt
+    let landed = plan_target();
+    land_rust(landed.path()).success();
+    std::fs::remove_dir_all(landed.path().join(".release-kit")).expect("the record goes");
+    let front = plan_target();
+    let engine = plan_target();
+    copy_tree(landed.path(), front.path());
+    copy_tree(landed.path(), engine.path());
+    rk().args(["adopt", "--forge", "github", "--repo", "acme/widget"])
+        .args(flags)
+        .args(["--target"])
+        .arg(front.path())
+        .arg("--apply")
+        .assert()
+        .success();
+    let (id, plan) = plan_stored(home.path(), engine.path(), &flags);
+    assert_eq!(plan["readiness"], "ready", "{plan}");
+    apply_stored(home.path(), &id).success();
+    assert_same_landing(front.path(), engine.path());
 }
 
 /// `rk assess` is a front: beside its verdict it prints the plan's

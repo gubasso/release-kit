@@ -66,12 +66,15 @@ pub fn run(args: &AssessArgs) -> Result<(), RkError> {
     let evidence = assess::gather(&args.target)?;
     let classification = assess::classify(&evidence);
     let planned = crate::commands::reconcile::compute(
-        &args.target,
-        "embedded",
-        false,
-        false,
-        &crate::plan::gather::Flags::default(),
-        &std::collections::BTreeMap::new(),
+        &crate::plan::PlanRequest {
+            target: args.target.clone(),
+            intent: crate::plan::Intent::Reconcile,
+            selector: "embedded".into(),
+            fetch: false,
+            observe_forge: false,
+            flags: crate::plan::gather::Flags::default(),
+            decisions: std::collections::BTreeMap::new(),
+        },
         &crate::landing::manifest::now(),
     )?;
     let plan = PlanSummary {

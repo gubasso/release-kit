@@ -21,9 +21,9 @@ use super::operation::Operation;
 use super::readiness::{self, Evaluation, Precondition, Requirement};
 use super::{
     BaselineState, BundleIdentity, Choice, Compatibility, Configuration, ConfigurationState,
-    Decision, DesiredState, Destination, ForgeState, Guidance, Host, Identity, Installation,
-    ObservedState, PLAN_SCHEMA, Plan, Planned, Postcondition, RecordState, Release, Repository,
-    ResolvedRelease, Verification, fingerprint,
+    Decision, DesiredState, Destination, DestinationOutcome, Disposition, ForgeState, Guidance,
+    Host, Identity, Installation, Intent, ObservedState, PLAN_SCHEMA, Plan, Planned, Postcondition,
+    RecordState, Release, Repository, ResolvedRelease, Verification, fingerprint,
 };
 
 /// The candidate bundle, as the planner receives it.
@@ -60,6 +60,8 @@ pub enum Baseline<'a> {
 
 /// Everything the planner reads.
 pub struct Inputs<'a> {
+    /// What the caller asked the plan to be.
+    pub intent: Intent,
     /// The instant the plan is computed, RFC 3339.
     pub clock: &'a str,
     /// The engine computing it.
@@ -105,6 +107,7 @@ struct Compared<'a> {
 )]
 pub fn plan(inputs: Inputs<'_>) -> Result<Planned, RkError> {
     let Inputs {
+        intent,
         clock,
         engine_version,
         selector,
@@ -171,19 +174,19 @@ pub fn plan(inputs: Inputs<'_>) -> Result<Planned, RkError> {
     if recorded.is_none() {
         for marker in &observation.facts.release_markers {
             findings.push(Finding {
-                code: "release-marker",
+                code: "release-marker".into(),
                 detail: marker.clone(),
             });
         }
         for collision in &observation.facts.collisions {
             findings.push(Finding {
-                code: "payload-collision",
+                code: "payload-collision".into(),
                 detail: collision.clone(),
             });
         }
         if observation.facts.tags > 0 {
             findings.push(Finding {
-                code: "tag",
+                code: "tag".into(),
                 detail: format!(
                     "{} tags with no mechanism behind them",
                     observation.facts.tags
@@ -192,14 +195,14 @@ pub fn plan(inputs: Inputs<'_>) -> Result<Planned, RkError> {
         }
         for branch in &observation.facts.long_lived_branches {
             findings.push(Finding {
-                code: "long-lived-branch",
+                code: "long-lived-branch".into(),
                 detail: branch.clone(),
             });
         }
     }
     if let RecordRead::Invalid { reason } = &observation.record {
         findings.push(Finding {
-            code: "record-invalid",
+            code: "record-invalid".into(),
             detail: reason.clone(),
         });
     }
@@ -253,25 +256,51 @@ pub fn plan(inputs: Inputs<'_>) -> Result<Planned, RkError> {
     for c in compared.iter().filter(|c| c.conflict) {
         findings.push(Finding {
             code: if c.missing {
-                "owned-missing"
+                "owned-missing".into()
             } else {
-                "owned-drift"
+                "owned-drift".into()
             },
             detail: c.entry.destination.clone(),
         });
     }
     if let Some(defect) = &observation.hooks_defect {
         findings.push(Finding {
-            code: "owned-drift",
+            code: "owned-drift".into(),
             detail: defect.clone(),
         });
     }
     let classification = classify::classify(record_state, verdict, owned_drift);
+    let outcomes: Vec<DestinationOutcome> = compared
+        .iter()
+        .map(|c| DestinationOutcome {
+            path: c.entry.destination.clone(),
+            kind: c.entry.kind,
+            recorded: recorded.is_some_and(|record| record.file(&c.entry.destination).is_some()),
+            disposition: disposition(c, recorded, observation.files.get(&c.entry.destination)),
+        })
+        .collect();
 
-    // The operations, in apply order: files, then the pin, then the
-    // record, last.
+    // The fronts fix what the plan may contain: a first landing refuses
+    // a record, an upgrade needs one, and an adoption verifies every
+    // destination and writes none.
+    let intent_holds = !matches!(
+        (intent, record_state),
+        (Intent::Setup | Intent::Adopt, ClassifyRecord::Present)
+            | (Intent::Upgrade, ClassifyRecord::Absent)
+    );
+    let adopt_missing: Vec<&Compared<'_>> = if intent == Intent::Adopt {
+        compared.iter().filter(|c| c.write).collect()
+    } else {
+        Vec::new()
+    };
+
+    // The operations, in apply order: files, then the configuration,
+    // then the pin, then the record, last.
     let mut operations: Vec<Operation> = Vec::new();
-    for c in compared.iter().filter(|c| c.write && !c.conflict) {
+    for c in compared
+        .iter()
+        .filter(|c| c.write && !c.conflict && intent != Intent::Adopt)
+    {
         let after = Digest::of(&c.entry.rendered);
         operations.push(match c.entry.placement {
             Placement::Whole => Operation::WriteFile {
@@ -291,21 +320,82 @@ pub fn plan(inputs: Inputs<'_>) -> Result<Planned, RkError> {
         });
     }
     let candidate_version = candidate.manifest.release_kit_version.clone();
-    if let Some(pin) = &observation.pin {
-        if trim_v(&pin.version) != trim_v(&candidate_version) {
-            operations.push(Operation::UpdatePin {
-                manager: pin.manager.clone(),
-                before: pin.version.clone(),
-                after: candidate_version.clone(),
+    let landing_planned = matches!(
+        (&resolution.params, record_state),
+        (Some(_), ClassifyRecord::Absent | ClassifyRecord::Present)
+    ) && !owned_drift
+        && intent_holds
+        && adopt_missing.is_empty();
+    let config = match (&resolution.params, &observation.config) {
+        (Some(params), ConfigRead::Absent) => {
+            Some(crate::config::Plan::compose(None, params, None, recorded)?)
+        }
+        (Some(params), ConfigRead::Present { config, bytes }) => {
+            Some(crate::config::Plan::compose(
+                Some(&String::from_utf8_lossy(bytes)),
+                params,
+                Some(config),
+                recorded,
+            )?)
+        }
+        _ => None,
+    };
+    if let Some(config) = config.as_ref().filter(|_| landing_planned) {
+        let after_bytes = config.content.as_bytes().to_vec();
+        let before = match &observation.config {
+            ConfigRead::Present { bytes, .. } | ConfigRead::Invalid { bytes, .. } => {
+                Some(Digest::of(bytes))
+            }
+            ConfigRead::Absent => None,
+        };
+        let after = Digest::of(&after_bytes);
+        if before.as_ref() != Some(&after) {
+            blobs.insert(after.clone(), after_bytes);
+            if let ConfigRead::Present { bytes, .. } = &observation.config {
+                blobs.insert(Digest::of(bytes), bytes.clone());
+            }
+            operations.push(Operation::WriteFile {
+                path: crate::config::CONFIG_PATH.to_owned(),
+                kind: Kind::State,
+                before,
+                after,
             });
         }
     }
+    let mut flake_pin_behind: Option<String> = None;
+    if let Some(pin) = &observation.pin {
+        if trim_v(&pin.version) != trim_v(&candidate_version) {
+            // A one-fact manager moves by one rewrite the apply can stage.
+            // The flake pair needs nix and the network, which an offline
+            // apply never has, so that move stays the sync verb's.
+            if pin.manager == "flake" {
+                flake_pin_behind = Some(format!(
+                    "the flake pin records {} and the candidate is {candidate_version}; the self-depend sync verb moves it under --apply, with nix and the network",
+                    pin.version
+                ));
+            } else if landing_planned {
+                let recorded_form = crate::self_depend::manager::Manager::ALL
+                    .into_iter()
+                    .find(|m| m.as_str() == pin.manager)
+                    .map_or_else(
+                        || candidate_version.clone(),
+                        |m| m.recorded(&candidate_version),
+                    );
+                operations.push(Operation::UpdatePin {
+                    manager: pin.manager.clone(),
+                    before: pin.version.clone(),
+                    after: recorded_form,
+                });
+            }
+        }
+    }
     let planned_record = match (&resolution.params, record_state) {
-        (Some(params), ClassifyRecord::Absent | ClassifyRecord::Present) if !owned_drift => {
+        (Some(params), ClassifyRecord::Absent | ClassifyRecord::Present) if landing_planned => {
             let record = planned_manifest(
                 &candidate,
                 params,
                 recorded,
+                intent,
                 clock,
                 compared.iter().map(|c| &c.record),
             );
@@ -352,6 +442,55 @@ pub fn plan(inputs: Inputs<'_>) -> Result<Planned, RkError> {
         decision: None,
         evidence_refs: resolution_refs.clone(),
     });
+    match (intent, record_state) {
+        (Intent::Setup | Intent::Adopt, ClassifyRecord::Present) => {
+            preconditions.push(Precondition {
+                id: "record-absent".into(),
+                requirement: Requirement::Required,
+                evaluation: Evaluation::Unsatisfied {
+                    reason: format!(
+                        "the target already carries {}; rk upgrade takes it to a newer payload",
+                        manifest::MANIFEST_PATH
+                    ),
+                },
+                decision: None,
+                evidence_refs: record_ref.iter().cloned().collect(),
+            });
+        }
+        (Intent::Upgrade, ClassifyRecord::Absent) => {
+            preconditions.push(Precondition {
+                id: "record-present".into(),
+                requirement: Requirement::Required,
+                evaluation: Evaluation::Unsatisfied {
+                    reason: format!(
+                        "no {} at the target: there is no baseline to upgrade against",
+                        manifest::MANIFEST_PATH
+                    ),
+                },
+                decision: None,
+                evidence_refs: record_ref.iter().cloned().collect(),
+            });
+        }
+        _ => {}
+    }
+    for c in &adopt_missing {
+        let path = &c.entry.destination;
+        preconditions.push(Precondition {
+            id: format!("destination-present:{path}"),
+            requirement: Requirement::Required,
+            evaluation: Evaluation::Unsatisfied {
+                reason: "expected and missing".to_owned(),
+            },
+            decision: None,
+            evidence_refs: observation
+                .refs
+                .destinations
+                .get(path)
+                .cloned()
+                .into_iter()
+                .collect(),
+        });
+    }
     if let RecordRead::Invalid { reason } = &observation.record {
         preconditions.push(Precondition {
             id: "record-readable".into(),
@@ -387,7 +526,7 @@ pub fn plan(inputs: Inputs<'_>) -> Result<Planned, RkError> {
             manifest::alignment(&record.rk_version, engine_version) == Alignment::TargetNewer;
         if newer {
             findings.push(Finding {
-                code: "record-newer",
+                code: "record-newer".into(),
                 detail: record.rk_version.clone(),
             });
         }
@@ -644,6 +783,15 @@ pub fn plan(inputs: Inputs<'_>) -> Result<Planned, RkError> {
         decision: None,
         evidence_refs: observation.refs.forge.clone(),
     });
+    if let Some(reason) = flake_pin_behind {
+        preconditions.push(Precondition {
+            id: "pin-current".into(),
+            requirement: Requirement::Advisory,
+            evaluation: Evaluation::Unsatisfied { reason },
+            decision: None,
+            evidence_refs: observation.refs.pin.iter().cloned().collect(),
+        });
+    }
     preconditions.push(Precondition {
         id: "pin-wired".into(),
         requirement: Requirement::Advisory,
@@ -684,6 +832,9 @@ pub fn plan(inputs: Inputs<'_>) -> Result<Planned, RkError> {
             Operation::RemoveOwnedFile { .. } => {}
         }
     }
+    // The standing verifier runs last and its answer is reported: it
+    // judges the whole target, sentinels the operator still owes included,
+    // so it names what is short rather than failing the apply.
     if !operations.is_empty() {
         postconditions.push(Postcondition::StatusCheckClean);
     }
@@ -779,7 +930,7 @@ pub fn plan(inputs: Inputs<'_>) -> Result<Planned, RkError> {
         },
     };
     let mut plan = Plan {
-        schema: PLAN_SCHEMA,
+        schema: PLAN_SCHEMA.into(),
         identity: Identity {
             plan_id: String::new(),
             created_at: clock.to_owned(),
@@ -788,6 +939,7 @@ pub fn plan(inputs: Inputs<'_>) -> Result<Planned, RkError> {
         classification,
         findings,
         desired_state: DesiredState {
+            intent,
             selector: selector.to_owned(),
             release: ResolvedRelease {
                 version: candidate_version.clone(),
@@ -847,7 +999,7 @@ pub fn plan(inputs: Inputs<'_>) -> Result<Planned, RkError> {
                 readable: bundle_schema <= PAYLOAD_SCHEMA,
             },
             guidance: Guidance {
-                coverage: "not-shipped",
+                coverage: "not-shipped".into(),
             },
         },
         operations,
@@ -860,7 +1012,65 @@ pub fn plan(inputs: Inputs<'_>) -> Result<Planned, RkError> {
     };
     plan.input_fingerprint = fingerprint::compute(&plan);
     plan.identity.plan_id = fingerprint::plan_id(&plan.input_fingerprint, clock);
-    Ok(Planned { plan, blobs })
+    let withheld = resolution
+        .nix_withheld
+        .as_ref()
+        .map(|(set, reason)| {
+            set.iter()
+                .map(|path| landing::Withheld {
+                    path: path.clone(),
+                    reason: reason.clone(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(Planned {
+        plan,
+        blobs,
+        outcomes,
+        config,
+        withheld,
+    })
+}
+
+/// The word the fronts print for one compared destination.
+fn disposition(
+    c: &Compared<'_>,
+    recorded: Option<&Manifest>,
+    disk: Option<&Vec<u8>>,
+) -> Disposition {
+    if c.conflict {
+        return if c.missing {
+            Disposition::Missing
+        } else {
+            Disposition::Conflict
+        };
+    }
+    if c.write {
+        return Disposition::Write;
+    }
+    let named = recorded.and_then(|record| record.file(&c.entry.destination));
+    match (named, c.entry.kind) {
+        (Some(_), Kind::Rendered) => Disposition::Unchanged,
+        (Some(_), Kind::Seeded) => {
+            let at_baseline = disk
+                .map(|bytes| Digest::of(bytes))
+                .is_some_and(|digest| Some(&digest) == c.record.baseline_sha256.as_ref());
+            if at_baseline {
+                Disposition::Unchanged
+            } else {
+                Disposition::Drift
+            }
+        }
+        (Some(_), Kind::State) => Disposition::State,
+        (None, _) => {
+            if disk.is_some_and(|bytes| *bytes == c.entry.rendered) {
+                Disposition::Unchanged
+            } else {
+                Disposition::Kept
+            }
+        }
+    }
 }
 
 /// The comparison's outcome for one destination.
@@ -997,6 +1207,7 @@ fn planned_manifest<'a>(
     candidate: &Candidate<'_>,
     params: &landing::Params,
     recorded: Option<&Manifest>,
+    intent: Intent,
     clock: &str,
     files: impl Iterator<Item = &'a FileRecord>,
 ) -> Manifest {
@@ -1011,7 +1222,16 @@ fn planned_manifest<'a>(
         schema_version: manifest::SCHEMA_VERSION,
         rk_version: candidate.manifest.release_kit_version.clone(),
         payload_sha256: candidate.manifest.payload_sha256.clone(),
-        origin: recorded.map_or_else(|| "init".to_owned(), |record| record.origin.clone()),
+        origin: recorded.map_or_else(
+            || {
+                if intent == Intent::Adopt {
+                    "adopt".to_owned()
+                } else {
+                    "init".to_owned()
+                }
+            },
+            |record| record.origin.clone(),
+        ),
         tech: params.tech().to_owned(),
         forge: params.forge().to_owned(),
         landed_at: recorded.map_or_else(|| clock.to_owned(), |record| record.landed_at.clone()),

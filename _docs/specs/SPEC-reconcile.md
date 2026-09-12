@@ -1,14 +1,33 @@
 # Reconcile Specification
 
+<!--TOC-->
+
+- [Purpose](#purpose)
+- [Requirements](#requirements)
+  - [`reconcile:every-landing-write-comes-from-one-plan` — Every landing write comes from one plan](#reconcileevery-landing-write-comes-from-one-plan--every-landing-write-comes-from-one-plan)
+  - [`reconcile:a-plan-carries-one-classification-and-its-findings` — A plan carries one classification and its findings](#reconcilea-plan-carries-one-classification-and-its-findings--a-plan-carries-one-classification-and-its-findings)
+  - [`reconcile:an-operation-names-digests-and-never-bytes` — An operation names digests and never bytes](#reconcilean-operation-names-digests-and-never-bytes--an-operation-names-digests-and-never-bytes)
+  - [`reconcile:readiness-is-the-worst-precondition` — Readiness is the worst precondition](#reconcilereadiness-is-the-worst-precondition--readiness-is-the-worst-precondition)
+  - [`reconcile:every-observed-field-cites-evidence` — Every observed field cites evidence](#reconcileevery-observed-field-cites-evidence--every-observed-field-cites-evidence)
+  - [`reconcile:the-fingerprint-binds-the-semantic-inputs` — The fingerprint binds the semantic inputs](#reconcilethe-fingerprint-binds-the-semantic-inputs--the-fingerprint-binds-the-semantic-inputs)
+  - [`reconcile:plan-is-read-only-and-offline-by-default` — Plan is read-only and offline by default](#reconcileplan-is-read-only-and-offline-by-default--plan-is-read-only-and-offline-by-default)
+  - [`reconcile:a-stored-plan-is-owner-only-and-pruned` — A stored plan is owner-only and pruned](#reconcilea-stored-plan-is-owner-only-and-pruned--a-stored-plan-is-owner-only-and-pruned)
+  - [`reconcile:apply-revalidates-before-the-first-write` — Apply revalidates before the first write](#reconcileapply-revalidates-before-the-first-write--apply-revalidates-before-the-first-write)
+  - [`reconcile:apply-proceeds-on-ready-alone` — Apply proceeds on ready alone](#reconcileapply-proceeds-on-ready-alone--apply-proceeds-on-ready-alone)
+  - [`reconcile:an-apply-is-one-transaction-with-the-record-last` — An apply is one transaction with the record last](#reconcilean-apply-is-one-transaction-with-the-record-last--an-apply-is-one-transaction-with-the-record-last)
+  - [`reconcile:every-front-lands-through-the-engine` — Every front lands through the engine](#reconcileevery-front-lands-through-the-engine--every-front-lands-through-the-engine)
+
+<!--TOC-->
+
 ## Purpose
 
-Rules governing the plan: the one typed document every landing write comes from. `rk reconcile plan` observes a target, resolves one release through the seam `SPEC-release-bundle.md` binds, computes the plan, and prints it. Setup, migration, upgrade, and drift are classifications of that plan, not separate implementations. This domain binds the plan's shape, its classification, its operations, its readiness policy, its provenance, its fingerprint, and what the planning verb may read. `SPEC-landing.md` binds what a landing owes a target, and the comparisons it names are what the planner computes. `SPEC-target-config.md` binds the configuration the planner resolves against. Applying a plan is a later rule set in this domain.
+Rules governing the plan: the one typed document every landing write comes from. `rk reconcile plan` observes a target, resolves one release through the seam `SPEC-release-bundle.md` binds, computes the plan, and prints it. Setup, migration, upgrade, and drift are classifications of that plan, not separate implementations. This domain binds the plan's shape, its classification, its operations, its readiness policy, its provenance, its fingerprint, and what the planning verb may read. `SPEC-landing.md` binds what a landing owes a target, and the comparisons it names are what the planner computes. `SPEC-target-config.md` binds the configuration the planner resolves against. Applying a plan is bound here too: the store, the revalidation, the transaction, and the fronts that land through the engine.
 
 ## Requirements
 
 ### `reconcile:every-landing-write-comes-from-one-plan` — Every landing write comes from one plan
 
-The engine MUST compute one typed document, `rk.plan/1`, that keeps five kinds apart: the evidence it observed, the analysis it derived, the policy each precondition carries, the decisions the operator owns, and the postconditions that prove completion. The planner MUST be a pure function of its inputs, with the clock as an input, so the same observation, the same bundles, and the same selected decisions produce the same plan and the same fingerprint.
+The engine MUST compute one typed document, `rk.plan/2`, that keeps five kinds apart: the evidence it observed, the analysis it derived, the policy each precondition carries, the decisions the operator owns, and the postconditions that prove completion. The planner MUST be a pure function of its inputs, with the clock as an input, so the same observation, the same bundles, and the same selected decisions produce the same plan and the same fingerprint.
 
 #### Scenario: The same target is planned twice
 
@@ -80,12 +99,72 @@ Verify: `cargo nextest run -E 'test(plans_differing_only_in_excluded_fields_shar
 
 ### `reconcile:plan-is-read-only-and-offline-by-default` — Plan is read-only and offline by default
 
-`rk reconcile plan` MUST write nothing into the target and nothing under the state root, MUST read the embedded bundle unless `--to` names another release, and MUST reach the network in exactly two cases: a `--to` selector the binary does not carry, and `--fetch` for a recorded release the cache does not hold. The baseline MUST be the embedded bundle where the record names its payload, the release cache where it holds the recorded version, the crates venue under `--fetch`, and not observed otherwise.
+`rk reconcile plan` MUST write nothing into the target, MUST write under the state root the stored plan alone, MUST read the embedded bundle unless `--to` names another release, and MUST reach the network in exactly two cases: a `--to` selector the binary does not carry, and `--fetch` for a recorded release the cache does not hold. The baseline MUST be the embedded bundle where the record names its payload, the release cache where it holds the recorded version, the crates venue under `--fetch`, and not observed otherwise.
 
 #### Scenario: The network is gone
 
 - GIVEN a landed target and a curl that fails every call
 - WHEN `rk reconcile plan --json` runs with no `--to` and no `--fetch`
-- THEN it exits 0 with a plan, the fetch log is empty, and the target and the state root are byte-identical afterwards
+- THEN it exits 0 with a plan, the fetch log is empty, the target is byte-identical afterwards, and the state root holds the plan and nothing else new
 
-Verify: `cargo nextest run -E 'test(reconcile_plan_is_offline_by_default) or test(reconcile_plan_persists_nothing_in_this_phase)'`
+Verify: `cargo nextest run -E 'test(reconcile_plan_is_offline_by_default) or test(reconcile_plan_persists_and_prints_an_id)'`
+
+### `reconcile:a-stored-plan-is-owner-only-and-pruned` — A stored plan is owner-only and pruned
+
+The engine MUST store every plan it computes under `<state root>/plans/<plan-id>/` with the plan, the request that computed it, and every blob it names by digest, MUST create that directory owner-only, MUST keep the newest 20 plans and prune the rest after every persist, and MUST answer `show` or `apply` on an id the store no longer holds with a refusal naming the retention rule, because a plan carries bytes from the target and a store nobody bounded grows forever. A plan is ephemeral: it is never committed and never posted to a forge.
+
+#### Scenario: A plan is shown after the store pruned it
+
+- GIVEN a stored plan whose directory the store no longer holds
+- WHEN `rk reconcile show <plan-id>` runs
+- THEN it exits 66 naming the id and the retention rule, and prints no empty plan
+
+Verify: `cargo nextest run -E 'test(the_store_is_owner_only) or test(show_renders_a_stored_plan_and_refuses_a_pruned_one)'`
+
+### `reconcile:apply-revalidates-before-the-first-write` — Apply revalidates before the first write
+
+`rk reconcile apply` MUST compute the same plan again over the stored request, MUST compare the stored fingerprint, the stored document recomputed, and the fresh fingerprint, MUST refuse on any difference naming every field or destination that moved in one pass, and MUST verify that every destination still holds the digest its operation's `before` names, all before the first write, because the stored plan is what the operator reviewed and an apply that acted on anything else would execute what nobody read.
+
+#### Scenario: The record moved between plan and apply
+
+- GIVEN a stored plan over a landed target and a record edited after the plan was computed
+- WHEN `rk reconcile apply <plan-id>` runs
+- THEN it exits 73 with the reason `state-drift` naming the record, and the target is byte-identical afterwards
+
+Verify: `cargo nextest run -E 'test(/^apply_refuses_after_/) or test(no_write_happens_before_revalidation_passes)'`
+
+### `reconcile:apply-proceeds-on-ready-alone` — Apply proceeds on ready alone
+
+`rk reconcile apply` MUST proceed on a plan whose readiness is `ready` and on no other, MUST name the unresolved decision ids for a plan that needs a decision and the failed required preconditions for a blocked one, and MUST offer no flag that makes a gap into a pass, because a gap is honest and is not permission.
+
+#### Scenario: A first landing with no mode answered is applied
+
+- GIVEN a stored plan over an empty target whose readiness is `needs-decision`
+- WHEN `rk reconcile apply <plan-id>` runs
+- THEN it exits 73 with the reason `plan-not-ready` naming `workflow-mode`, and the target is byte-identical afterwards
+
+Verify: `cargo nextest run -E 'test(apply_refuses_needs_decision_naming_the_ids) or test(apply_refuses_blocked_naming_the_preconditions) or test(every_apply_refusal_names_a_reason_from_the_closed_set)'`
+
+### `reconcile:an-apply-is-one-transaction-with-the-record-last` — An apply is one transaction with the record last
+
+`rk reconcile apply` MUST stage every write beside its destination before the first rename, MUST rename in operation order with the record last, MUST leave each destination holding either its previous bytes or its new ones when a rename fails and name every destination that landed before it, MUST run every postcondition the plan carries and report each outcome, and MUST journal the run under `rk runs` with the plan id, the fingerprint, and every operation's outcome. A postcondition that fails after the writes landed MUST exit 1 with the reason `postcondition-failed`; the standing `rk status --check` MUST be reported beside the checks and never fail the apply, because it judges the whole target, sentinels the operator still owes included.
+
+#### Scenario: A rename stops part way
+
+- GIVEN a stored plan over an empty target and a commit stopped at its second rename
+- WHEN `rk reconcile apply <plan-id>` runs
+- THEN it exits 74 naming the destination that stopped it and the one that landed, no record exists, no destination is half-written, and the journal carries the stop
+
+Verify: `cargo nextest run -E 'test(an_interrupted_apply_leaves_each_destination_whole_and_journals_it) or test(the_record_is_written_last) or test(postconditions_run_and_a_failure_is_reported) or test(an_apply_lands_in_the_runs_journal) or test(the_apply_exit_codes_match_the_matrix)'`
+
+### `reconcile:every-front-lands-through-the-engine` — Every front lands through the engine
+
+`rk init`, `rk upgrade`, and `rk adopt` MUST compute their plan with a fixed intent, `setup`, `upgrade`, or `adopt`, and MUST land on `--apply` through the one execution path `rk reconcile apply` takes, with the store and the journal best effort because a front is one process with no review window. The landing a front produces MUST be the landing the engine produces under the same request, file for file, and the adopt intent MUST plan the configuration and the record and no other write. A pin a one-fact manager records MUST move as an `update-pin` operation of the plan, and the flake pin MUST stay the sync verb's, because that move needs nix and the network an offline apply never has.
+
+#### Scenario: The three fronts and the engine land the same target
+
+- GIVEN an empty target, a landed target one release behind, and a pre-record target matching the payload
+- WHEN each front lands with `--apply` beside `rk reconcile plan` and `rk reconcile apply` under the same request
+- THEN every file digests the same, and the records differ in their instant and their origin word alone
+
+Verify: `cargo nextest run -E 'test(init_upgrade_and_adopt_produce_the_same_landing_through_the_engine)'`

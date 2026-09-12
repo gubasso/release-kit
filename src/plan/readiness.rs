@@ -8,10 +8,10 @@
 //! answered asks, and an advisory one never counts. Apply proceeds on
 //! `ready` alone, and there is no flag that makes a gap into a pass.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// What a precondition demands of the plan.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Requirement {
     /// Reported, never blocking: a fact the operator wants in front of
@@ -37,7 +37,7 @@ impl Requirement {
 }
 
 /// What one precondition was found to be.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "kebab-case")]
 pub enum Evaluation {
     /// The condition holds.
@@ -74,7 +74,7 @@ impl Evaluation {
 
 /// One precondition of a plan: a stable id, what it requires, what it
 /// was found to be, and the decision that resolves it where one does.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Precondition {
     /// A stable id, the same across re-plans of the same target.
     pub id: String,
@@ -91,7 +91,7 @@ pub struct Precondition {
 }
 
 /// Whether the plan may be applied.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Readiness {
     /// Every required precondition holds and every decision is answered.

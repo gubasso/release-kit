@@ -161,6 +161,9 @@ const fn wants_json(command: &Commands) -> bool {
         Commands::Assess(args) => args.json,
         Commands::Reconcile(args) => match &args.action {
             ReconcileAction::Plan(plan) => plan.json,
+            ReconcileAction::Show(show) => show.json,
+            ReconcileAction::Apply(apply) => apply.json,
+            ReconcileAction::List(list) => list.json,
         },
         Commands::Versions(args) => args.json,
         Commands::Doctor(args) => args.json,

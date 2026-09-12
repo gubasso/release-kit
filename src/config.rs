@@ -743,7 +743,7 @@ fn rewrite_text(text: &str, key: &str, mut value: toml_edit::Value) -> Result<St
 }
 
 /// Resolved landing input, including every key a preview would write.
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct Plan {
     /// Added or updated configuration.
     pub action: &'static str,
@@ -764,6 +764,24 @@ impl Plan {
         existing: Option<&Config>,
         record: Option<&crate::landing::manifest::Manifest>,
     ) -> Result<Self, RkError> {
+        let text = existing
+            .map(|_| std::fs::read_to_string(target.join(CONFIG_PATH)))
+            .transpose()?;
+        Self::compose(text.as_deref(), params, existing, record)
+    }
+
+    /// Resolve the output from the existing text already read, so a
+    /// planner that owns no filesystem can compose it from its
+    /// observation; existing comments survive.
+    ///
+    /// # Errors
+    /// Propagates invalid configuration.
+    pub fn compose(
+        text: Option<&str>,
+        params: &crate::landing::Params,
+        existing: Option<&Config>,
+        record: Option<&crate::landing::manifest::Manifest>,
+    ) -> Result<Self, RkError> {
         let mut resolved = existing.cloned().unwrap_or_default();
         resolved.project.tech = params.tech().into();
         resolved.project.forge = params.forge().into();
@@ -777,8 +795,8 @@ impl Plan {
         resolved.setup.line_prefix = Some(params.line_prefix().to_owned());
         resolved.security.contact = Some(params.security_contact().to_owned());
         resolved.security.response = Some(params.security_response().to_owned());
-        let content = if existing.is_some() {
-            let mut text = std::fs::read_to_string(target.join(CONFIG_PATH))?;
+        let content = if let Some(text) = text.filter(|_| existing.is_some()) {
+            let mut text = text.to_owned();
             for (key, value) in parameter_values(&resolved) {
                 text = rewrite_text(&text, key, value)?;
             }

@@ -3,7 +3,7 @@
 use camino::Utf8PathBuf;
 use clap::{Args, Subcommand, ValueEnum};
 
-/// Compute the plan that converges a target toward one release.
+/// Compute, show, and apply the plan that converges a target toward one release.
 #[derive(Debug, Args)]
 pub struct ReconcileArgs {
     /// What to do with a plan.
@@ -13,9 +13,19 @@ pub struct ReconcileArgs {
 
 /// The reconcile operations.
 #[derive(Debug, Subcommand)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "the plan arguments carry every landing flag and the other actions carry an id; one enum per verb is the clap shape every subcommand here follows"
+)]
 pub enum ReconcileAction {
-    /// Observe the target, resolve the release, compute the plan, and print it; nothing is written.
+    /// Observe the target, resolve the release, compute the plan, store it, and print it; nothing is written into the target.
     Plan(PlanArgs),
+    /// Render a stored plan, human or --json.
+    Show(ShowArgs),
+    /// Execute a stored plan: recompute its fingerprint, refuse on any difference, write, and journal.
+    Apply(ApplyArgs),
+    /// List the stored plans, oldest first.
+    List(ListArgs),
 }
 
 /// What a plan may read beyond the target and the bundle.
@@ -79,6 +89,36 @@ pub struct PlanArgs {
     pub nix: Option<String>,
 
     /// Emit the plan as one JSON object on stdout instead of the human report.
+    #[arg(long)]
+    pub json: bool,
+}
+
+/// Arguments for `rk reconcile show`.
+#[derive(Debug, Args)]
+pub struct ShowArgs {
+    /// The plan id `rk reconcile plan` printed.
+    pub plan_id: String,
+
+    /// Emit the stored plan as one JSON object on stdout instead of the human report.
+    #[arg(long)]
+    pub json: bool,
+}
+
+/// Arguments for `rk reconcile apply`.
+#[derive(Debug, Args)]
+pub struct ApplyArgs {
+    /// The plan id `rk reconcile plan` printed.
+    pub plan_id: String,
+
+    /// Emit the apply report as one JSON object on stdout instead of the human report.
+    #[arg(long)]
+    pub json: bool,
+}
+
+/// Arguments for `rk reconcile list`.
+#[derive(Debug, Args)]
+pub struct ListArgs {
+    /// Emit the listing as one JSON object on stdout instead of the human report.
     #[arg(long)]
     pub json: bool,
 }

@@ -9,6 +9,7 @@
 //! what proves completion. `rk reconcile plan` computes one and prints
 //! it; nothing here writes into a target.
 
+pub mod apply;
 pub mod classify;
 pub mod evidence;
 pub mod fingerprint;
@@ -16,10 +17,11 @@ pub mod gather;
 pub mod operation;
 pub mod planner;
 pub mod readiness;
+pub mod store;
 
 use std::collections::BTreeMap;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 pub use classify::{Classification, Finding, Verdict};
 pub use evidence::{EvidenceItem, EvidenceKind};
@@ -30,13 +32,43 @@ use crate::digest::Digest;
 use crate::landing::Kind;
 
 /// The version of the plan's shape.
-pub const PLAN_SCHEMA: &str = "rk.plan/1";
+pub const PLAN_SCHEMA: &str = "rk.plan/2";
+
+/// What the caller asked the plan to be: the open reconciliation, or one
+/// of the three fronts, each of which fixes what the plan may contain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Intent {
+    /// `rk reconcile plan`: the classification decides.
+    Reconcile,
+    /// `rk init`: a first landing, refused over a record.
+    Setup,
+    /// `rk upgrade`: a recorded target takes the candidate, refused
+    /// without a record.
+    Upgrade,
+    /// `rk adopt`: the record and the configuration alone, every
+    /// destination verified and none written.
+    Adopt,
+}
+
+impl Intent {
+    /// The wire form, identical to the serde rendering.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Reconcile => "reconcile",
+            Self::Setup => "setup",
+            Self::Upgrade => "upgrade",
+            Self::Adopt => "adopt",
+        }
+    }
+}
 
 /// The plan, whole.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Plan {
     /// The shape version of this document.
-    pub schema: &'static str,
+    pub schema: std::borrow::Cow<'static, str>,
     /// Who computed it, when, under which id.
     pub identity: Identity,
     /// Which procedure this plan is.
@@ -66,7 +98,7 @@ pub struct Plan {
 }
 
 /// Who computed the plan, when, and under which id.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Identity {
     /// Derived from the fingerprint and the creation instant, so two
     /// plans over the same inputs are distinguishable and one plan is
@@ -79,8 +111,10 @@ pub struct Identity {
 }
 
 /// What the target is asked to converge toward.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DesiredState {
+    /// What the caller asked the plan to be.
+    pub intent: Intent,
     /// The selector as the operator gave it: `embedded`, `latest`, or an
     /// exact version.
     pub selector: String,
@@ -96,7 +130,7 @@ pub struct DesiredState {
 }
 
 /// One exact release, resolved at plan time and never again.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResolvedRelease {
     /// The exact version.
     pub version: String,
@@ -109,7 +143,7 @@ pub struct ResolvedRelease {
 }
 
 /// The landing parameters, resolved, with the layer each one came from.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Configuration {
     /// The payload binding.
     pub tech: String,
@@ -140,7 +174,7 @@ pub struct Configuration {
 }
 
 /// What the target was found to be.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ObservedState {
     /// The repository's own state.
     pub repository: Repository,
@@ -153,7 +187,7 @@ pub struct ObservedState {
 }
 
 /// The repository's own state, read off the disk and git.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Repository {
     /// The target directory.
     pub target: String,
@@ -183,7 +217,7 @@ pub struct Repository {
 }
 
 /// What release-kit landed at the target.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Installation {
     /// The landing record.
     pub record: RecordState,
@@ -196,7 +230,7 @@ pub struct Installation {
 }
 
 /// The landing record, as found.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "kebab-case")]
 pub enum RecordState {
     /// No record at the target.
@@ -222,7 +256,7 @@ pub enum RecordState {
 }
 
 /// The committed configuration, as found.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfigurationState {
     /// Whether `.release-kit/config.toml` exists.
     pub present: bool,
@@ -237,7 +271,7 @@ pub struct ConfigurationState {
 }
 
 /// One destination, as found.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Destination {
     /// The destination, relative to the target.
     pub path: String,
@@ -252,7 +286,7 @@ pub struct Destination {
 }
 
 /// The engine and the host.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Host {
     /// This engine's version.
     pub engine_version: String,
@@ -264,7 +298,7 @@ pub struct Host {
 }
 
 /// The `rk` pin a tool manager records.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PinState {
     /// The manager.
     pub manager: String,
@@ -275,7 +309,7 @@ pub struct PinState {
 }
 
 /// What the forge said, where it was asked.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "kebab-case")]
 pub enum ForgeState {
     /// The forge was not asked, and the reason says why.
@@ -296,7 +330,7 @@ pub enum ForgeState {
 }
 
 /// The candidate bundle and what is known about it.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Release {
     /// The candidate's identity.
     pub candidate: BundleIdentity,
@@ -311,7 +345,7 @@ pub struct Release {
 }
 
 /// One bundle's identity.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BundleIdentity {
     /// The release's version.
     pub version: String,
@@ -326,7 +360,7 @@ pub struct BundleIdentity {
 }
 
 /// How a bundle was verified.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "method", rename_all = "kebab-case")]
 pub enum Verification {
     /// The bundle is the one compiled into this engine.
@@ -341,7 +375,7 @@ pub enum Verification {
 }
 
 /// The recorded release's bundle, as read for the baseline.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "kebab-case")]
 pub enum BaselineState {
     /// No record, so no baseline is needed.
@@ -362,7 +396,7 @@ pub enum BaselineState {
 }
 
 /// What the engine can say about reading this bundle.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Compatibility {
     /// The engine's protocol version.
     pub engine_schema: u32,
@@ -373,15 +407,15 @@ pub struct Compatibility {
 }
 
 /// The guidance the bundle carries for this target.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Guidance {
     /// `not-shipped` until a bundle carries guidance; the coverage words
     /// grow when one does.
-    pub coverage: &'static str,
+    pub coverage: std::borrow::Cow<'static, str>,
 }
 
 /// One question the operator owns.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Decision {
     /// A stable id that survives re-planning.
     pub id: String,
@@ -395,7 +429,7 @@ pub struct Decision {
 }
 
 /// One answer to a decision.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Choice {
     /// The answer word.
     pub answer: String,
@@ -404,7 +438,7 @@ pub struct Choice {
 }
 
 /// One typed check an apply runs at the end and reports.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "check", rename_all = "kebab-case")]
 pub enum Postcondition {
     /// The record reads back at the planned digest.
@@ -430,7 +464,29 @@ pub enum Postcondition {
     },
 }
 
-/// A computed plan with the bytes its operations name.
+/// One request to compute a plan, as the store keeps it beside the plan
+/// so an apply can compute the same plan again and compare.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanRequest {
+    /// The target, as given.
+    pub target: camino::Utf8PathBuf,
+    /// What the caller asked the plan to be.
+    pub intent: Intent,
+    /// The selector as given: `embedded`, `latest`, or an exact version.
+    pub selector: String,
+    /// Whether a recorded release the cache does not hold is fetched.
+    pub fetch: bool,
+    /// Whether the forge is read.
+    pub observe_forge: bool,
+    /// The explicit answers.
+    pub flags: gather::Flags,
+    /// The decisions selected, by id.
+    pub decisions: BTreeMap<String, String>,
+}
+
+/// A computed plan with the bytes its operations name, and what the
+/// three-way comparison decided per destination, for the fronts that
+/// render a per-file report.
 #[derive(Debug)]
 pub struct Planned {
     /// The plan.
@@ -438,6 +494,62 @@ pub struct Planned {
     /// Every byte the plan names, by digest: what an operation writes,
     /// what a destination holds now, and the baseline where it was read.
     pub blobs: BTreeMap<Digest, Vec<u8>>,
+    /// What the comparison decided for each projected destination, in
+    /// projection order.
+    pub outcomes: Vec<DestinationOutcome>,
+    /// The configuration an apply writes, where the parameters resolved.
+    pub config: Option<crate::config::Plan>,
+    /// The Nix destinations withheld at this target, each with why.
+    pub withheld: Vec<crate::landing::Withheld>,
+}
+
+/// What the three-way comparison decided for one projected destination.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DestinationOutcome {
+    /// The destination, relative to the target.
+    pub path: String,
+    /// The kind the candidate declares.
+    pub kind: Kind,
+    /// Whether the record names it.
+    pub recorded: bool,
+    /// What happens to it.
+    pub disposition: Disposition,
+}
+
+/// The closed set of things the comparison decides for a destination.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Disposition {
+    /// The candidate's bytes are written.
+    Write,
+    /// The destination already holds what the candidate would write, or
+    /// what the record left there.
+    Unchanged,
+    /// The target's own bytes stay: a seeded or state file it tuned.
+    Kept,
+    /// A recorded seeded file moved away from its baseline and stays.
+    Drift,
+    /// A recorded state file, never compared.
+    State,
+    /// The target edited a file release-kit owns.
+    Conflict,
+    /// The record names a file the disk does not hold.
+    Missing,
+}
+
+impl Disposition {
+    /// The word a report prints.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Write => "write",
+            Self::Unchanged => "unchanged",
+            Self::Kept => "kept",
+            Self::Drift => "drift",
+            Self::State => "state",
+            Self::Conflict => "conflict",
+            Self::Missing => "missing",
+        }
+    }
 }
 
 #[cfg(test)]
@@ -447,9 +559,9 @@ mod tests {
     use super::{
         BaselineState, BundleIdentity, Choice, Classification, Compatibility, Configuration,
         ConfigurationState, Decision, DesiredState, Destination, Evaluation, ForgeState, Guidance,
-        Host, Identity, Installation, Operation, PLAN_SCHEMA, PinState, Plan, Postcondition,
-        Precondition, Readiness, RecordState, Release, Repository, Requirement, ResolvedRelease,
-        Verdict, Verification,
+        Host, Identity, Installation, Intent, Operation, PLAN_SCHEMA, PinState, Plan,
+        Postcondition, Precondition, Readiness, RecordState, Release, Repository, Requirement,
+        ResolvedRelease, Verdict, Verification,
     };
     use crate::digest::Digest;
     use crate::landing::Kind;
@@ -468,7 +580,7 @@ mod tests {
         let a = Digest::of(b"a");
         let b = Digest::of(b"b");
         let plan = Plan {
-            schema: PLAN_SCHEMA,
+            schema: PLAN_SCHEMA.into(),
             identity: Identity {
                 plan_id: "0123456789abcdef".into(),
                 created_at: "2026-01-01T00:00:00Z".into(),
@@ -476,10 +588,11 @@ mod tests {
             },
             classification: Classification::Upgrade,
             findings: vec![Finding {
-                code: "payload-collision",
+                code: "payload-collision".into(),
                 detail: "SECURITY.md".into(),
             }],
             desired_state: DesiredState {
+                intent: Intent::Reconcile,
                 selector: "embedded".into(),
                 release: ResolvedRelease {
                     version: "0.0.0".into(),
@@ -568,7 +681,7 @@ mod tests {
                     readable: true,
                 },
                 guidance: Guidance {
-                    coverage: "not-shipped",
+                    coverage: "not-shipped".into(),
                 },
             },
             operations: vec![Operation::WriteRecord {
@@ -605,7 +718,7 @@ mod tests {
         };
         let json = serde_json::to_string(&plan).expect("a plan serializes");
         let expected = format!(
-            r#"{{"schema":"rk.plan/1","identity":{{"plan_id":"0123456789abcdef","created_at":"2026-01-01T00:00:00Z","engine_version":"0.0.0"}},"classification":"upgrade","findings":[{{"code":"payload-collision","detail":"SECURITY.md"}}],"desired_state":{{"selector":"embedded","release":{{"version":"0.0.0","venue":"embedded","payload_sha256":"{a}","payload_schema":1}},"configuration":{{"tech":"rust","forge":"github","repo":"acme/widget","workflow":"worktree","style":"trunk","nix":false,"trunk":"master","line_prefix":"release/","security_contact":"","security_response":"best-effort","sources":{{"tech":"record"}},"evidence_refs":["record"]}}}},"observed_state":{{"repository":{{"target":"/tmp/t","git":true,"tags":0,"long_lived_branches":[],"release_markers":[],"collisions":["SECURITY.md"],"tech":"rust","forge":"github","repo":"acme/widget","verdict":"brownfield","evidence_refs":["repository"]}},"installation":{{"record":{{"state":"present","rk_version":"0.0.0","payload_sha256":"{a}","schema_version":6,"origin":"init","sha256":"{b}"}},"configuration":{{"present":true,"sha256":"{b}","pending":[]}},"destinations":[{{"path":"SECURITY.md","present":true,"sha256":"{a}","recorded_kind":"rendered"}}],"evidence_refs":["record","configuration"]}},"host":{{"engine_version":"0.0.0","pin":{{"manager":"mise","file":"mise.toml","version":"0.0.0"}},"evidence_refs":["host"]}},"forge":{{"state":"not-observed","reason":"not requested"}}}},"release":{{"candidate":{{"version":"0.0.0","payload_sha256":"{a}","payload_schema":1,"artifacts":1,"evidence_refs":["candidate-bundle"]}},"verification":{{"method":"embedded"}},"baseline":{{"state":"embedded"}},"compatibility":{{"engine_schema":1,"bundle_schema":1,"readable":true}},"guidance":{{"coverage":"not-shipped"}}}},"operations":[{{"op":"write-record","before":"{b}","after":"{a}"}}],"preconditions":[{{"id":"record-readable","requirement":"required","evaluation":{{"state":"satisfied"}},"evidence_refs":["record"]}}],"decisions":[{{"id":"workflow-mode","question":"which working-copy mode","choices":[{{"answer":"worktree","consequence":"every branch in a linked worktree"}}],"selected":"worktree"}}],"postconditions":[{{"check":"record-reads-back","sha256":"{a}"}}],"evidence":[{{"id":"record","kind":"record","producer":"rk","observed_at":"2026-01-01T00:00:00Z","sha256":"{b}","method":"read"}}],"readiness":"ready","input_fingerprint":"{a}"}}"#
+            r#"{{"schema":"rk.plan/2","identity":{{"plan_id":"0123456789abcdef","created_at":"2026-01-01T00:00:00Z","engine_version":"0.0.0"}},"classification":"upgrade","findings":[{{"code":"payload-collision","detail":"SECURITY.md"}}],"desired_state":{{"intent":"reconcile","selector":"embedded","release":{{"version":"0.0.0","venue":"embedded","payload_sha256":"{a}","payload_schema":1}},"configuration":{{"tech":"rust","forge":"github","repo":"acme/widget","workflow":"worktree","style":"trunk","nix":false,"trunk":"master","line_prefix":"release/","security_contact":"","security_response":"best-effort","sources":{{"tech":"record"}},"evidence_refs":["record"]}}}},"observed_state":{{"repository":{{"target":"/tmp/t","git":true,"tags":0,"long_lived_branches":[],"release_markers":[],"collisions":["SECURITY.md"],"tech":"rust","forge":"github","repo":"acme/widget","verdict":"brownfield","evidence_refs":["repository"]}},"installation":{{"record":{{"state":"present","rk_version":"0.0.0","payload_sha256":"{a}","schema_version":6,"origin":"init","sha256":"{b}"}},"configuration":{{"present":true,"sha256":"{b}","pending":[]}},"destinations":[{{"path":"SECURITY.md","present":true,"sha256":"{a}","recorded_kind":"rendered"}}],"evidence_refs":["record","configuration"]}},"host":{{"engine_version":"0.0.0","pin":{{"manager":"mise","file":"mise.toml","version":"0.0.0"}},"evidence_refs":["host"]}},"forge":{{"state":"not-observed","reason":"not requested"}}}},"release":{{"candidate":{{"version":"0.0.0","payload_sha256":"{a}","payload_schema":1,"artifacts":1,"evidence_refs":["candidate-bundle"]}},"verification":{{"method":"embedded"}},"baseline":{{"state":"embedded"}},"compatibility":{{"engine_schema":1,"bundle_schema":1,"readable":true}},"guidance":{{"coverage":"not-shipped"}}}},"operations":[{{"op":"write-record","before":"{b}","after":"{a}"}}],"preconditions":[{{"id":"record-readable","requirement":"required","evaluation":{{"state":"satisfied"}},"evidence_refs":["record"]}}],"decisions":[{{"id":"workflow-mode","question":"which working-copy mode","choices":[{{"answer":"worktree","consequence":"every branch in a linked worktree"}}],"selected":"worktree"}}],"postconditions":[{{"check":"record-reads-back","sha256":"{a}"}}],"evidence":[{{"id":"record","kind":"record","producer":"rk","observed_at":"2026-01-01T00:00:00Z","sha256":"{b}","method":"read"}}],"readiness":"ready","input_fingerprint":"{a}"}}"#
         );
         assert_eq!(json, expected);
     }
