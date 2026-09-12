@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.22](https://github.com/gubasso/release-kit/compare/v0.3.21...v0.3.22) - 2026-09-12
+
+### Added
+
+- *(self-depend/venues)* cross the venue and the manager in one matrix ([#171](https://github.com/gubasso/release-kit/pull/171))
+
 ## [0.3.21](https://github.com/gubasso/release-kit/compare/v0.3.20...v0.3.21) - 2026-09-12
 
 ### Added
