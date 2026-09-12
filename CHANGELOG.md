@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.20](https://github.com/gubasso/release-kit/compare/v0.3.19...v0.3.20) - 2026-09-12
+
+### Other
+
+- *(forges/github)* state what a Scorecard run scores under this convention ([#167](https://github.com/gubasso/release-kit/pull/167))
+
 ## [0.3.19](https://github.com/gubasso/release-kit/compare/v0.3.18...v0.3.19) - 2026-09-12
 
 ### Other
