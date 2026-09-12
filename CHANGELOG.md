@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.29](https://github.com/gubasso/release-kit/compare/v0.3.28...v0.3.29) - 2026-09-12
+
+### Fixed
+
+- *(reconcile/apply)* revalidate against the frozen release and never the selector ([#185](https://github.com/gubasso/release-kit/pull/185))
+
 ## [0.3.28](https://github.com/gubasso/release-kit/compare/v0.3.27...v0.3.28) - 2026-09-12
 
 ### Added
