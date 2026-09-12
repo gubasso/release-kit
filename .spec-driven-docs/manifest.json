@@ -1,6 +1,6 @@
 {
   "schema_version": 3,
-  "canon_version": "0.6.6",
+  "canon_version": "0.8.1",
   "canon_source": "https://github.com/gubasso/spec-driven-docs",
   "profile": "knowledge-base",
   "docs_root": "_docs",
@@ -30,37 +30,49 @@
       "source": "instance/seeds/config.yaml",
       "destination": ".spec-driven-docs/config.yaml",
       "sha256": "6ed6163824597452b3fa5e7095ce53f0e6abe8f50321b5eff6936d36009a5ec2",
-      "baseline_sha256": "6ed6163824597452b3fa5e7095ce53f0e6abe8f50321b5eff6936d36009a5ec2"
+      "baseline_sha256": "e3c7b6a3da71a246d42957658ded8838d76a9b477749e61b4bf856a1538f987e"
+    },
+    {
+      "source": "_docs/specs/SPEC-budget-debt.md",
+      "destination": "_docs/specs/SPEC-budget-debt.md",
+      "sha256": "1b652c9984683d4732b748ad363d56232095dd5fe9c2d048fd4dab59a468d684",
+      "baseline_sha256": "1b652c9984683d4732b748ad363d56232095dd5fe9c2d048fd4dab59a468d684"
+    },
+    {
+      "source": "_docs/specs/SPEC-writing-policy.md",
+      "destination": "_docs/specs/SPEC-writing-policy.md",
+      "sha256": "e48af91d103a6a680191f30c6e0e43c7d3610edb4d4ba4ee6a783509670865bf",
+      "baseline_sha256": "e48af91d103a6a680191f30c6e0e43c7d3610edb4d4ba4ee6a783509670865bf"
     },
     {
       "source": "_docs/specs/SPEC-decision-records.md",
       "destination": "_docs/specs/SPEC-decision-records.md",
       "sha256": "8e9c9c9c0f59ebf596df2b19b225653fa85ff5358eaa12a69a7d51119e7a8635",
-      "baseline_sha256": "c39e7d7f3559493ae5293c24b52f49364c657f7840c4d5002012254932aef8f3"
+      "baseline_sha256": "78153cfd7ce576a44496c8682cfcf53541a61626af80dfa9fee18958becd46f6"
     },
     {
       "source": "_docs/specs/SPEC-instance.md",
       "destination": "_docs/specs/SPEC-instance.md",
       "sha256": "645cbd1a532d133da11277c4e56e8b1287cd89d0e8185d9d2dc0130a5920958c",
-      "baseline_sha256": "90db9197f6bedee5a31c02885aa9eefc197f5e375da116a034cc40618193a298"
+      "baseline_sha256": "f86aa3d3d48dc2028b5baf18bb45f1a7bf5ce0300bbfef39b4d0431919b6aeb9"
     },
     {
       "source": "_docs/specs/SPEC-docs-format.md",
       "destination": "_docs/specs/SPEC-docs-format.md",
       "sha256": "a69a019fe377b596ab14c7c1cf601626163ef10ad539a67f778e0261c39728bd",
-      "baseline_sha256": "8aa97f98f069e4208ee77b362a2fb0b70baa29a7ddb704e02f960b923609e22f"
+      "baseline_sha256": "d90c7751f1f6e75fa44bbb78a1ae6a85827a7e7513928dcd06141ac1dafc9ebe"
     },
     {
       "source": "_docs/specs/SPEC-docs-foundations.md",
       "destination": "_docs/specs/SPEC-docs-foundations.md",
       "sha256": "8454b4a097bf9ed11d7141dbaa6779947c4d7074b13fba1b15e378d326008520",
-      "baseline_sha256": "58b9db7faf8e7d6176f3e1f4a074efca1c6a156dfcac38881f4d7c757cfabcc1"
+      "baseline_sha256": "632106cc4e4c2a3e6b728407738fa609859f66ae47da175c39e3f7a59761f874"
     },
     {
       "source": "_docs/specs/SPEC-docs-specs.md",
       "destination": "_docs/specs/SPEC-docs-specs.md",
       "sha256": "d0cfbd0f42177b7aff2977b57ab668cb70e9af84d6950ab63f7f658df670c933",
-      "baseline_sha256": "c62e033081d5427e6aa2eb0a33fb0d8e9821d620fa91782ff3a1df1de05f92bb"
+      "baseline_sha256": "69185324c489c2f9230b06520417ef6786fbdb1abaf35a2da2ddfb5efae11413"
     },
     {
       "source": "_docs/specs/SPEC-comparison-docs.md",
@@ -78,7 +90,7 @@
       "source": "_docs/specs/SPEC-spec-to-code.md",
       "destination": "_docs/specs/SPEC-spec-to-code.md",
       "sha256": "078a8bde85b0894763c49081dcb505b3646b93327e792b857a078a61df1b9f93",
-      "baseline_sha256": "d65421dbb7ad96237efa69dec877a3b24481016b252c162a76ffcde17b5857ba"
+      "baseline_sha256": "9c5c30de7f7ecd78e4d5acd089d1a8bc5e0d5db8fc8215414a0a4a093a1a8928"
     },
     {
       "source": "_docs/specs/SPEC-guides.md",
@@ -90,7 +102,7 @@
       "source": "_docs/specs/SPEC-writing-style.md",
       "destination": "_docs/specs/SPEC-writing-style.md",
       "sha256": "72f36ffb29d6df4d798e73f075d54e4ca9ef9f950b77fbc4a74691f3d25564d8",
-      "baseline_sha256": "72f36ffb29d6df4d798e73f075d54e4ca9ef9f950b77fbc4a74691f3d25564d8"
+      "baseline_sha256": "1d5555c5ba405294e2e7bac79f7b5796520e11a63a25ef15975abe14faa4e4a1"
     },
     {
       "source": "_docs/specs/SPEC-tracking.md",
@@ -148,7 +160,7 @@
     },
     {
       "path": "AGENTS.md",
-      "marker_hash": "595212e3d5eb3caaf204c27d297b1f1226fac06fbe78602067b47b2cceb3fa3b"
+      "marker_hash": "c7bc9e8ed63a49844a07ec9e2fabef525d80492f4635877fac85d0b2802154aa"
     }
   ]
 }

@@ -93,6 +93,7 @@ This repository is the canonical knowledge product for the release-kit workflow.
 - Treat decision records as immutable rationale and load them only when asked why.
 - Read the writing style before you author or edit prose: `sdd method writing-style`.
 - Write and edit step-by-step guides to the adopted guides spec, `_docs/specs/SPEC-guides.md`.
+- Name a document by a slug drawn from its subject, never by a number. Where its directory holds documents with no kind prefix, give that directory a `README.md` saying what it holds and what each document covers.
 - Run `sdd verify` before handoff.
 - Keep adopted specs, the tracking registry, and local integration instance-owned.
 <!-- END spec-driven-docs docs -->
