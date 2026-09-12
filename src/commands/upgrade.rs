@@ -116,7 +116,7 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
             style: Some(style.as_str().to_owned()),
             nix: Some(params.nix()),
         },
-        decisions: std::collections::BTreeMap::new(),
+        decisions: reconcile::parse_decisions(&args.decide)?,
     };
     refuse_non_regular(
         &args.target,

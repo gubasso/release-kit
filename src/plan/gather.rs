@@ -79,7 +79,20 @@ pub enum ForgeRead {
         trunk: String,
         /// The trunk's tip at the remote, where it has one.
         remote_tip: Option<String>,
+        /// The forge's version, where the forge reports one and the read
+        /// asked for it.
+        version: Option<String>,
     },
+}
+
+/// The generator the binding's committed artifact needs, as found on the
+/// host.
+#[derive(Debug, Clone)]
+pub struct GeneratorRead {
+    /// The tool, as `versions.toml` names it.
+    pub name: String,
+    /// The version the host reports, where the tool answers.
+    pub host: Option<String>,
 }
 
 /// The evidence ids each section of the observation cites.
@@ -127,6 +140,11 @@ pub struct Observation {
     pub hooks_defect: Option<String>,
     /// The pin the wired manager records.
     pub pin: Option<PinState>,
+    /// The managers whose file is present and names no release-kit.
+    pub unwired_managers: Vec<String>,
+    /// The generator on the host, where the technology has one and the
+    /// host was asked.
+    pub generator: Option<GeneratorRead>,
     /// The forge.
     pub forge: ForgeRead,
     /// The ledger, stamped as each fact was read.
@@ -180,6 +198,9 @@ pub struct Request<'a> {
     pub clock: &'a str,
     /// The candidate source, for the reads that validate against it.
     pub source: &'a dyn ReleaseSource,
+    /// Paths beyond the landing's destinations whose presence the plan
+    /// reads: the ones the candidate's guidance names.
+    pub extra_paths: &'a [String],
 }
 
 /// Read the target.
@@ -216,7 +237,14 @@ pub fn observe(request: &Request<'_>) -> Result<Observation, RkError> {
         None,
         "marker scan, payload destinations, git tag --list, git for-each-ref, version file",
     ));
-    let files = read_destinations(target, &record, clock, &mut ledger, &mut refs)?;
+    let files = read_destinations(
+        target,
+        &record,
+        request.extra_paths,
+        clock,
+        &mut ledger,
+        &mut refs,
+    )?;
     let hooks_defect = landing::hooks_file_defect(request.source, target)?;
     refs.host.push(ledger.observe(
         "host",
@@ -226,7 +254,7 @@ pub fn observe(request: &Request<'_>) -> Result<Observation, RkError> {
         None,
         "the engine's own version",
     ));
-    let pin = read_pin(target, clock, &mut ledger, &mut refs);
+    let (pin, unwired_managers) = read_pin(target, clock, &mut ledger, &mut refs);
     let forge = if request.observe_forge {
         let trunk = crate::config::trunk_of(target.as_std_path())?;
         let remote_tip = remote_tip(target, &trunk)?;
@@ -238,7 +266,11 @@ pub fn observe(request: &Request<'_>) -> Result<Observation, RkError> {
             None,
             format!("git ls-remote --heads origin {trunk}"),
         ));
-        ForgeRead::Observed { trunk, remote_tip }
+        ForgeRead::Observed {
+            trunk,
+            remote_tip,
+            version: None,
+        }
     } else {
         ForgeRead::NotObserved {
             reason: "the forge read was not requested; --observe forge opts in".into(),
@@ -261,10 +293,91 @@ pub fn observe(request: &Request<'_>) -> Result<Observation, RkError> {
         files,
         hooks_defect,
         pin,
+        unwired_managers,
+        generator: None,
         forge,
         ledger,
         refs,
     })
+}
+
+/// Read the host tools the resolved parameters make relevant.
+///
+/// Each read is stamped: the binding's generator, and the forge's version
+/// where the forge was already asked and is one that reports a floor.
+/// This runs after the resolution, because which tool matters depends on
+/// it.
+pub fn observe_host_tools(
+    observation: &mut Observation,
+    tech: Option<&str>,
+    forge: Option<&str>,
+    clock: &str,
+) {
+    if let Some((name, _)) = tech.and_then(super::compatibility::generator_for) {
+        let host = generator_version(name);
+        observation.refs.host.push(observation.ledger.observe(
+            format!("host:{name}"),
+            EvidenceKind::Host,
+            name,
+            clock,
+            None,
+            format!("{} --version", generator_bin(name)),
+        ));
+        observation.generator = Some(GeneratorRead {
+            name: name.to_owned(),
+            host,
+        });
+    }
+    if let (Some("gitlab"), ForgeRead::Observed { version, .. }) = (forge, &mut observation.forge) {
+        *version = gitlab_version();
+        observation.refs.forge.push(observation.ledger.observe(
+            "forge:version",
+            EvidenceKind::Forge,
+            "glab",
+            clock,
+            None,
+            "glab api version",
+        ));
+    }
+}
+
+/// The binary a generator runs as, honoring the override that keeps the
+/// tests hermetic: `RK_DIST_BIN` for cargo-dist.
+fn generator_bin(name: &str) -> String {
+    match name {
+        "cargo-dist" => std::env::var("RK_DIST_BIN").unwrap_or_else(|_| "dist".to_owned()),
+        other => other.to_owned(),
+    }
+}
+
+/// The generator's version as the host reports it, or `None` where the
+/// tool is absent or answers nothing readable.
+fn generator_version(name: &str) -> Option<String> {
+    let out = Command::new(generator_bin(name))
+        .arg("--version")
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    text.split_whitespace()
+        .find(|word| crate::release::declared::version_key(word).is_some())
+        .map(|word| word.trim_start_matches('v').to_owned())
+}
+
+/// The GitLab instance's version through the forge CLI's read-only
+/// `GET /version`, or `None` where nothing readable comes back.
+fn gitlab_version() -> Option<String> {
+    let out = Command::new(crate::probes::forge_bin(crate::detect::Forge::Gitlab))
+        .args(["api", "version"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let body: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+    body["version"].as_str().map(str::to_owned)
 }
 
 /// The record, as bytes and as a document, stamped.
@@ -338,6 +451,7 @@ fn read_config(
 fn read_destinations(
     target: &Utf8Path,
     record: &RecordRead,
+    extra_paths: &[String],
     clock: &str,
     ledger: &mut Ledger,
     refs: &mut Refs,
@@ -346,6 +460,7 @@ fn read_destinations(
     if let RecordRead::Present { manifest, .. } = record {
         paths.extend(manifest.files.iter().map(|file| file.destination.clone()));
     }
+    paths.extend(extra_paths.iter().cloned());
     paths.sort();
     paths.dedup();
     let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
@@ -372,33 +487,44 @@ fn read_destinations(
 }
 
 /// The pin the wired manager records, where exactly one names
-/// release-kit, stamped.
+/// release-kit, stamped, beside the managers whose file is present and
+/// names none.
 fn read_pin(
     target: &Utf8Path,
     clock: &str,
     ledger: &mut Ledger,
     refs: &mut Refs,
-) -> Option<PinState> {
-    let pin = crate::self_depend::observe(target)
-        .ok()
-        .and_then(|observed| {
-            let manager = observed.wired?;
-            let entry = observed.entry(manager)?;
-            Some(PinState {
-                manager: manager.as_str().to_owned(),
-                file: entry.file.clone()?,
-                version: entry.version.clone()?,
-            })
-        })?;
-    refs.pin = Some(ledger.observe(
-        "pin",
-        EvidenceKind::Pin,
-        "rk self-depend",
-        clock,
-        files_digest(target, &pin.file),
-        format!("read {}", pin.file),
-    ));
-    Some(pin)
+) -> (Option<PinState>, Vec<String>) {
+    let Ok(observed) = crate::self_depend::observe(target) else {
+        return (None, Vec::new());
+    };
+    let unwired: Vec<String> = observed
+        .managers
+        .iter()
+        .filter(|entry| {
+            entry.present == crate::self_depend::Presence::Present && entry.pin == "unpinned"
+        })
+        .map(|entry| entry.manager.as_str().to_owned())
+        .collect();
+    let pin = observed.wired.and_then(|manager| {
+        let entry = observed.entry(manager)?;
+        Some(PinState {
+            manager: manager.as_str().to_owned(),
+            file: entry.file.clone()?,
+            version: entry.version.clone()?,
+        })
+    });
+    if let Some(pin) = &pin {
+        refs.pin = Some(ledger.observe(
+            "pin",
+            EvidenceKind::Pin,
+            "rk self-depend",
+            clock,
+            files_digest(target, &pin.file),
+            format!("read {}", pin.file),
+        ));
+    }
+    (pin, unwired)
 }
 
 /// Resolve the landing parameters over the flags, the decisions, the

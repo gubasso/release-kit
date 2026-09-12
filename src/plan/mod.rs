@@ -11,9 +11,11 @@
 
 pub mod apply;
 pub mod classify;
+pub mod compatibility;
 pub mod evidence;
 pub mod fingerprint;
 pub mod gather;
+pub mod guidance;
 pub mod operation;
 pub mod planner;
 pub mod readiness;
@@ -32,7 +34,7 @@ use crate::digest::Digest;
 use crate::landing::Kind;
 
 /// The version of the plan's shape.
-pub const PLAN_SCHEMA: &str = "rk.plan/2";
+pub const PLAN_SCHEMA: &str = "rk.plan/3";
 
 /// What the caller asked the plan to be: the open reconciliation, or one
 /// of the three fronts, each of which fixes what the plan may contain.
@@ -395,7 +397,11 @@ pub enum BaselineState {
     },
 }
 
-/// What the engine can say about reading this bundle.
+/// What the engine can say about landing this bundle here.
+///
+/// The protocol axis, and the four axes the bundle declares beyond it.
+/// The facts live here; the preconditions carry each axis's requirement
+/// and evaluation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Compatibility {
     /// The engine's protocol version.
@@ -404,14 +410,117 @@ pub struct Compatibility {
     pub bundle_schema: u32,
     /// Whether the engine reads the bundle.
     pub readable: bool,
+    /// The oldest engine the bundle names, where it names one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub engine_minimum: Option<String>,
+    /// The generator the binding's committed artifact needs, where the
+    /// technology has one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generator: Option<GeneratorFact>,
+    /// The forge floor the landed files rest on, where the bundle declares
+    /// one for the configured forge.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forge_floor: Option<ForgeFloor>,
+    /// The releases between the record and the candidate that a landing
+    /// must pass through.
+    pub intermediate: Vec<IntermediateFact>,
+    /// The evidence the axes rest on.
+    pub evidence_refs: Vec<String>,
+}
+
+/// The generator axis, as observed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeneratorFact {
+    /// The tool, as `versions.toml` names it.
+    pub name: String,
+    /// The version the candidate bundle pins.
+    pub pin: String,
+    /// The committed artifact it regenerates.
+    pub artifact: String,
+    /// The version found on the host, where one was.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+}
+
+/// The forge axis, as declared and observed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForgeFloor {
+    /// The forge.
+    pub forge: String,
+    /// The floor the bundle declares.
+    pub minimum: String,
+    /// The version the forge reported, where it was asked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub observed: Option<String>,
+}
+
+/// One release the landing must pass through.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IntermediateFact {
+    /// The version.
+    pub version: String,
+    /// Why it cannot be skipped.
+    pub reason: String,
 }
 
 /// The guidance the bundle carries for this target.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Guidance {
-    /// `not-shipped` until a bundle carries guidance; the coverage words
-    /// grow when one does.
-    pub coverage: std::borrow::Cow<'static, str>,
+    /// How much of the interval the bundle describes.
+    pub coverage: Coverage,
+    /// The releases the selection spans, where a record bounds it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interval: Option<Interval>,
+    /// The steps that concern a destination this target has, in version
+    /// order.
+    pub steps: Vec<GuidanceStep>,
+    /// How many steps in the interval concern no destination here.
+    pub excluded: usize,
+    /// The evidence the selection rests on.
+    pub evidence_refs: Vec<String>,
+}
+
+/// How much of the interval the bundle describes. `covered` with no step
+/// is "no applicable steps", and it is not `unavailable`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "kebab-case")]
+pub enum Coverage {
+    /// No record bounds an interval, so there is nothing to describe.
+    NotNeeded,
+    /// Every release in the interval is described.
+    Covered,
+    /// The interval reaches below the release the bundle describes from.
+    Partial {
+        /// The release above which the bundle describes every release.
+        since: String,
+    },
+    /// The bundle carries no guidance at all.
+    Unavailable,
+}
+
+/// The releases a selection spans: above `from`, up to and including
+/// `to`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Interval {
+    /// The recorded release.
+    pub from: String,
+    /// The candidate release.
+    pub to: String,
+}
+
+/// One release's step, as the target needs it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GuidanceStep {
+    /// The release that introduced the change.
+    pub version: String,
+    /// The file's heading.
+    pub title: String,
+    /// The landed paths it concerns, all of them, as authored.
+    pub destinations: Vec<String>,
+    /// `operator-step` or `plan-operation`.
+    pub action: String,
+    /// The authored text below the fields.
+    pub body: String,
 }
 
 /// One question the operator owns.
@@ -558,17 +667,18 @@ mod tests {
 
     use super::{
         BaselineState, BundleIdentity, Choice, Classification, Compatibility, Configuration,
-        ConfigurationState, Decision, DesiredState, Destination, Evaluation, ForgeState, Guidance,
-        Host, Identity, Installation, Intent, Operation, PLAN_SCHEMA, PinState, Plan,
-        Postcondition, Precondition, Readiness, RecordState, Release, Repository, Requirement,
-        ResolvedRelease, Verdict, Verification,
+        ConfigurationState, Coverage, Decision, DesiredState, Destination, Evaluation, ForgeFloor,
+        ForgeState, GeneratorFact, Guidance, GuidanceStep, Host, Identity, Installation, Intent,
+        IntermediateFact, Interval, Operation, PLAN_SCHEMA, PinState, Plan, Postcondition,
+        Precondition, Readiness, RecordState, Release, Repository, Requirement, ResolvedRelease,
+        Verdict, Verification,
     };
     use crate::digest::Digest;
     use crate::landing::Kind;
     use crate::plan::classify::Finding;
     use crate::plan::evidence::{EvidenceItem, EvidenceKind};
 
-    /// The complete `rk.plan/1` shape, every section present, held by
+    /// The complete `rk.plan/3` shape, every section present, held by
     /// snapshot: a field rename or removal fails here and becomes a
     /// deliberate schema bump.
     #[test]
@@ -679,9 +789,41 @@ mod tests {
                     engine_schema: 1,
                     bundle_schema: 1,
                     readable: true,
+                    engine_minimum: Some("0.0.0".into()),
+                    generator: Some(GeneratorFact {
+                        name: "cargo-dist".into(),
+                        pin: "0.32.0".into(),
+                        artifact: "dist-workspace.toml".into(),
+                        host: Some("0.32.0".into()),
+                    }),
+                    forge_floor: Some(ForgeFloor {
+                        forge: "gitlab".into(),
+                        minimum: "18.2".into(),
+                        observed: Some("18.2.0".into()),
+                    }),
+                    intermediate: vec![IntermediateFact {
+                        version: "0.0.0".into(),
+                        reason: "the record changed shape".into(),
+                    }],
+                    evidence_refs: vec!["candidate-bundle".into()],
                 },
                 guidance: Guidance {
-                    coverage: "not-shipped".into(),
+                    coverage: Coverage::Partial {
+                        since: "0.0.0".into(),
+                    },
+                    interval: Some(Interval {
+                        from: "0.0.0".into(),
+                        to: "0.0.0".into(),
+                    }),
+                    steps: vec![GuidanceStep {
+                        version: "0.0.0".into(),
+                        title: "release-kit 0.0.0".into(),
+                        destinations: vec![".envrc".into()],
+                        action: "operator-step".into(),
+                        body: "## What to do".into(),
+                    }],
+                    excluded: 1,
+                    evidence_refs: vec!["candidate-bundle".into()],
                 },
             },
             operations: vec![Operation::WriteRecord {
@@ -718,7 +860,7 @@ mod tests {
         };
         let json = serde_json::to_string(&plan).expect("a plan serializes");
         let expected = format!(
-            r#"{{"schema":"rk.plan/2","identity":{{"plan_id":"0123456789abcdef","created_at":"2026-01-01T00:00:00Z","engine_version":"0.0.0"}},"classification":"upgrade","findings":[{{"code":"payload-collision","detail":"SECURITY.md"}}],"desired_state":{{"intent":"reconcile","selector":"embedded","release":{{"version":"0.0.0","venue":"embedded","payload_sha256":"{a}","payload_schema":1}},"configuration":{{"tech":"rust","forge":"github","repo":"acme/widget","workflow":"worktree","style":"trunk","nix":false,"trunk":"master","line_prefix":"release/","security_contact":"","security_response":"best-effort","sources":{{"tech":"record"}},"evidence_refs":["record"]}}}},"observed_state":{{"repository":{{"target":"/tmp/t","git":true,"tags":0,"long_lived_branches":[],"release_markers":[],"collisions":["SECURITY.md"],"tech":"rust","forge":"github","repo":"acme/widget","verdict":"brownfield","evidence_refs":["repository"]}},"installation":{{"record":{{"state":"present","rk_version":"0.0.0","payload_sha256":"{a}","schema_version":6,"origin":"init","sha256":"{b}"}},"configuration":{{"present":true,"sha256":"{b}","pending":[]}},"destinations":[{{"path":"SECURITY.md","present":true,"sha256":"{a}","recorded_kind":"rendered"}}],"evidence_refs":["record","configuration"]}},"host":{{"engine_version":"0.0.0","pin":{{"manager":"mise","file":"mise.toml","version":"0.0.0"}},"evidence_refs":["host"]}},"forge":{{"state":"not-observed","reason":"not requested"}}}},"release":{{"candidate":{{"version":"0.0.0","payload_sha256":"{a}","payload_schema":1,"artifacts":1,"evidence_refs":["candidate-bundle"]}},"verification":{{"method":"embedded"}},"baseline":{{"state":"embedded"}},"compatibility":{{"engine_schema":1,"bundle_schema":1,"readable":true}},"guidance":{{"coverage":"not-shipped"}}}},"operations":[{{"op":"write-record","before":"{b}","after":"{a}"}}],"preconditions":[{{"id":"record-readable","requirement":"required","evaluation":{{"state":"satisfied"}},"evidence_refs":["record"]}}],"decisions":[{{"id":"workflow-mode","question":"which working-copy mode","choices":[{{"answer":"worktree","consequence":"every branch in a linked worktree"}}],"selected":"worktree"}}],"postconditions":[{{"check":"record-reads-back","sha256":"{a}"}}],"evidence":[{{"id":"record","kind":"record","producer":"rk","observed_at":"2026-01-01T00:00:00Z","sha256":"{b}","method":"read"}}],"readiness":"ready","input_fingerprint":"{a}"}}"#
+            r###"{{"schema":"rk.plan/3","identity":{{"plan_id":"0123456789abcdef","created_at":"2026-01-01T00:00:00Z","engine_version":"0.0.0"}},"classification":"upgrade","findings":[{{"code":"payload-collision","detail":"SECURITY.md"}}],"desired_state":{{"intent":"reconcile","selector":"embedded","release":{{"version":"0.0.0","venue":"embedded","payload_sha256":"{a}","payload_schema":1}},"configuration":{{"tech":"rust","forge":"github","repo":"acme/widget","workflow":"worktree","style":"trunk","nix":false,"trunk":"master","line_prefix":"release/","security_contact":"","security_response":"best-effort","sources":{{"tech":"record"}},"evidence_refs":["record"]}}}},"observed_state":{{"repository":{{"target":"/tmp/t","git":true,"tags":0,"long_lived_branches":[],"release_markers":[],"collisions":["SECURITY.md"],"tech":"rust","forge":"github","repo":"acme/widget","verdict":"brownfield","evidence_refs":["repository"]}},"installation":{{"record":{{"state":"present","rk_version":"0.0.0","payload_sha256":"{a}","schema_version":6,"origin":"init","sha256":"{b}"}},"configuration":{{"present":true,"sha256":"{b}","pending":[]}},"destinations":[{{"path":"SECURITY.md","present":true,"sha256":"{a}","recorded_kind":"rendered"}}],"evidence_refs":["record","configuration"]}},"host":{{"engine_version":"0.0.0","pin":{{"manager":"mise","file":"mise.toml","version":"0.0.0"}},"evidence_refs":["host"]}},"forge":{{"state":"not-observed","reason":"not requested"}}}},"release":{{"candidate":{{"version":"0.0.0","payload_sha256":"{a}","payload_schema":1,"artifacts":1,"evidence_refs":["candidate-bundle"]}},"verification":{{"method":"embedded"}},"baseline":{{"state":"embedded"}},"compatibility":{{"engine_schema":1,"bundle_schema":1,"readable":true,"engine_minimum":"0.0.0","generator":{{"name":"cargo-dist","pin":"0.32.0","artifact":"dist-workspace.toml","host":"0.32.0"}},"forge_floor":{{"forge":"gitlab","minimum":"18.2","observed":"18.2.0"}},"intermediate":[{{"version":"0.0.0","reason":"the record changed shape"}}],"evidence_refs":["candidate-bundle"]}},"guidance":{{"coverage":{{"state":"partial","since":"0.0.0"}},"interval":{{"from":"0.0.0","to":"0.0.0"}},"steps":[{{"version":"0.0.0","title":"release-kit 0.0.0","destinations":[".envrc"],"action":"operator-step","body":"## What to do"}}],"excluded":1,"evidence_refs":["candidate-bundle"]}}}},"operations":[{{"op":"write-record","before":"{b}","after":"{a}"}}],"preconditions":[{{"id":"record-readable","requirement":"required","evaluation":{{"state":"satisfied"}},"evidence_refs":["record"]}}],"decisions":[{{"id":"workflow-mode","question":"which working-copy mode","choices":[{{"answer":"worktree","consequence":"every branch in a linked worktree"}}],"selected":"worktree"}}],"postconditions":[{{"check":"record-reads-back","sha256":"{a}"}}],"evidence":[{{"id":"record","kind":"record","producer":"rk","observed_at":"2026-01-01T00:00:00Z","sha256":"{b}","method":"read"}}],"readiness":"ready","input_fingerprint":"{a}"}}"###
         );
         assert_eq!(json, expected);
     }
