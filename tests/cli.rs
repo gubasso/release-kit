@@ -21084,12 +21084,61 @@ impl RegistryFixture {
             std::fs::create_dir_all(file.parent().expect("a parent")).expect("dirs exist");
             std::fs::write(file, body).expect("the file writes");
         }
+        self.pack(build.path(), version, tamper)
+    }
+
+    /// Publish a release whose payload is this checkout's own, under
+    /// another version: the bundle a landed target can be planned
+    /// against in full, where `publish` carries the smallest bundle the
+    /// seam reads.
+    fn publish_full(&self, version: &str) -> Digest {
+        fn copy_tree(from: &Path, to: &Path) {
+            if from.is_dir() {
+                std::fs::create_dir_all(to).expect("dirs exist");
+                for entry in std::fs::read_dir(from).expect("the dir reads").flatten() {
+                    copy_tree(&entry.path(), &to.join(entry.file_name()));
+                }
+            } else {
+                std::fs::copy(from, to).expect("the file copies");
+            }
+        }
+        let build = tempfile::tempdir().expect("a scratch build dir");
+        let root = build.path().join(format!("release-kit-{version}"));
+        let checkout = Path::new(env!("CARGO_MANIFEST_DIR"));
+        for payload_root in [
+            "snippets",
+            "blocks",
+            "guidance",
+            "versions.toml",
+            "compatibility.toml",
+        ] {
+            copy_tree(&checkout.join(payload_root), &root.join(payload_root));
+        }
+        for (path, body) in [
+            (
+                "Cargo.toml".to_owned(),
+                format!("[package]\nname = \"release-kit\"\nversion = \"{version}\"\n"),
+            ),
+            (
+                "src/commands/payload.rs".to_owned(),
+                "const PAYLOAD_SCHEMA: u32 = 1;\n".to_owned(),
+            ),
+        ] {
+            let file = root.join(&path);
+            std::fs::create_dir_all(file.parent().expect("a parent")).expect("dirs exist");
+            std::fs::write(file, body).expect("the file writes");
+        }
+        self.pack(build.path(), version, false)
+    }
+
+    /// Pack a laid-out crate into the registry and write its index line.
+    fn pack(&self, build: &Path, version: &str, tamper: bool) -> Digest {
         let archive = self.registry().join(format!("release-kit-{version}.crate"));
         let status = std::process::Command::new("tar")
             .arg("-czf")
             .arg(&archive)
             .arg("-C")
-            .arg(build.path())
+            .arg(build)
             .arg(format!("release-kit-{version}"))
             .status()
             .expect("tar runs");
@@ -22068,6 +22117,76 @@ fn reconcile_plan_is_offline_by_default() {
     assert!(
         fixture.curl_log().lines().count() > 0,
         "--to reaches the venue"
+    );
+}
+
+/// A plan freezes one exact release. Apply reads that release from the
+/// cache and never resolves the selector again, so an apply is offline
+/// once its plan exists; a cache that lost the frozen bundle is a
+/// refusal naming the release, never a fetch.
+#[test]
+fn apply_never_resolves_the_selector_again() {
+    let fixture = RegistryFixture::new();
+    let _ = fixture.publish_full("0.9.5");
+    let target = plan_target();
+    land_rust(target.path()).success();
+    let out = rk_home(fixture.home.path())
+        .args(["reconcile", "plan", "--json", "--target"])
+        .arg(target.path())
+        .args([
+            "--forge",
+            "github",
+            "--repo",
+            "acme/widget",
+            "--to",
+            "0.9.5",
+        ])
+        .env("RK_CURL_BIN", fixture.mock.path().join("curl"))
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let plan: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(plan["desired_state"]["release"]["version"], "0.9.5");
+    assert_eq!(plan["desired_state"]["release"]["venue"], "crates");
+    let id = plan["identity"]["plan_id"]
+        .as_str()
+        .expect("a plan id")
+        .to_owned();
+    let fetched = fixture.curl_log().lines().count();
+    assert!(fetched > 0, "the plan resolved at the venue once");
+    // The network is gone: apply serves the frozen release from the cache.
+    let applied = rk_home(fixture.home.path())
+        .args(["reconcile", "apply", "--json", &id])
+        .env("RK_CURL_BIN", "/nonexistent/curl")
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&applied.get_output().stdout).into_owned();
+    assert!(
+        stdout.contains(&id),
+        "the apply report names the plan:\n{stdout}"
+    );
+    assert_eq!(
+        fixture.curl_log().lines().count(),
+        fetched,
+        "apply touched the network"
+    );
+    // The cache lost the bundle: the refusal names the frozen release.
+    std::fs::remove_dir_all(fixture.cache()).expect("the cache goes away");
+    let refused = rk_home(fixture.home.path())
+        .args(["reconcile", "apply", "--json", &id])
+        .env("RK_CURL_BIN", "/nonexistent/curl")
+        .assert()
+        .code(73);
+    let diagnostic = refusal_of(&refused);
+    assert_eq!(diagnostic["reason"], "bundle-unverified", "{diagnostic}");
+    let message = diagnostic["message"].as_str().expect("a message");
+    assert!(message.contains("0.9.5"), "{message}");
+    assert_eq!(
+        fixture.curl_log().lines().count(),
+        fetched,
+        "the refusal touched the network"
     );
 }
 

@@ -26,7 +26,8 @@ use crate::plan::gather::{self, Flags, RecordRead, Request};
 use crate::plan::planner::{self, Baseline, Candidate};
 use crate::plan::store;
 use crate::plan::{
-    Classification, Intent, Operation, Plan, PlanRequest, Planned, Readiness, Verification,
+    Classification, Intent, Operation, Plan, PlanRequest, Planned, Readiness, ResolvedRelease,
+    Verification,
 };
 use crate::release::declared;
 use crate::release::{CrateReleaseSource, EmbeddedReleaseSource, ReleaseSource};
@@ -97,7 +98,14 @@ fn apply_stored(args: &ApplyArgs) -> Result<(), RkError> {
     // The same request at the same instant: a fresh landing's record
     // carries the plan's instant, so recomputing at another one would
     // read as the record moving when nothing did.
-    let fresh = compute(&stored.request, &stored.plan.identity.created_at)?;
+    // The candidate is the release the plan froze, served from the cache:
+    // the selector was resolved once at plan time and is never resolved
+    // again.
+    let fresh = compute_frozen(
+        &stored.request,
+        &stored.plan.identity.created_at,
+        Some(&stored.plan.desired_state.release),
+    )?;
     let journal = open_journal("reconcile apply", &stored.plan).map_err(|error| {
         RkError::refusal(
             Diagnostic::new(
@@ -263,18 +271,51 @@ fn open_journal(command: &str, plan: &Plan) -> std::io::Result<Journal> {
 ///
 /// A selector the crates venue cannot resolve, a bundle the engine
 /// cannot read, and the gathering's own failures.
+pub fn compute(request: &PlanRequest, clock: &str) -> Result<Planned, RkError> {
+    compute_frozen(request, clock, None)
+}
+
+/// The same computation over a release a stored plan froze: the exact
+/// version is served from the release cache and the selector is never
+/// resolved again, so an apply is offline once its plan exists.
+///
+/// # Errors
+///
+/// [`compute`]'s failures, and a `bundle-unverified` refusal when the
+/// cache no longer holds the frozen release.
 #[allow(
     clippy::too_many_lines,
     reason = "one computation is one linear sequence from the selector to the planner's inputs, and cutting it would separate a bundle from the observation it is read against"
 )]
-pub fn compute(request: &PlanRequest, clock: &str) -> Result<Planned, RkError> {
+pub fn compute_frozen(
+    request: &PlanRequest,
+    clock: &str,
+    frozen: Option<&ResolvedRelease>,
+) -> Result<Planned, RkError> {
     let target: &Utf8Path = &request.target;
     let selector = request.selector.as_str();
     let embedded = EmbeddedReleaseSource;
-    let crate_source = if selector == "embedded" {
-        None
-    } else {
-        Some(CrateReleaseSource::new(selector)?)
+    let crate_source = match frozen {
+        _ if selector == "embedded" => None,
+        Some(release) => {
+            let source = CrateReleaseSource::new(&release.version)?;
+            if !source.is_cached() {
+                return Err(RkError::refusal(
+                    Diagnostic::new(
+                        Reason::BundleUnverified,
+                        format!(
+                            "the plan froze release-kit {} ({}), and the release cache no longer holds that bundle; nothing was written",
+                            release.version, release.payload_sha256
+                        ),
+                    )
+                    .expected("the frozen release's verified bundle in the release cache")
+                    .action("rk reconcile plan --to <version> resolves and caches it again")
+                    .target_state("unchanged"),
+                ));
+            }
+            Some(source)
+        }
+        None => Some(CrateReleaseSource::new(selector)?),
     };
     let (candidate_source, venue, verification): (&dyn ReleaseSource, &str, Verification) =
         match &crate_source {
