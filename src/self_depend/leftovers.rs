@@ -34,7 +34,7 @@ pub enum Action {
 pub struct Leftover {
     /// The catalog entry: `bump-script`, `autobump-script`, `bump-suite`,
     /// `autobump-suite`, `envrc-invocation`, `envrc-switch`,
-    /// `just-recipe`, `devshell-tooling`, or `host-install`.
+    /// `just-recipe`, `mise-task`, `devshell-tooling`, or `host-install`.
     pub id: &'static str,
     /// The file, relative to the target.
     pub file: String,
@@ -59,8 +59,22 @@ const HOST_INSTALL_NEEDLES: [&str; 2] = ["cargo install release-kit", "cargo bin
 /// The switch the predecessor read from `.envrc.local`.
 const SWITCH_NEEDLE: &str = "RK_SKIP_AUTOBUMP";
 
-/// The files a host install line is looked for in, beside the workflows.
-const HOST_INSTALL_FILES: [&str; 4] = ["README.md", "justfile", ".envrc", ".gitlab-ci.yml"];
+/// The files a host install line is looked for in, beside the workflows:
+/// the prose and recipe files, and the manager files whose hooks and
+/// tasks can run an install.
+const HOST_INSTALL_FILES: [&str; 8] = [
+    "README.md",
+    "justfile",
+    "Makefile",
+    ".envrc",
+    ".gitlab-ci.yml",
+    "mise.toml",
+    ".mise.toml",
+    "devbox.json",
+];
+
+/// The mise task names a predecessor bump recipe takes.
+const MISE_TASK_NEEDLES: [&str; 2] = ["rk-bump", "rk-autobump"];
 
 /// Scan a target for every leftover the catalog knows, in catalog order.
 ///
@@ -128,6 +142,7 @@ pub fn scan(target: &Utf8Path) -> Result<Vec<Leftover>, RkError> {
             }
         }
     }
+    found.extend(mise_tasks(target));
     if let Some(text) = read("flake.nix") {
         for (number, line) in list_members_named(&text, &["flock", "bats"]) {
             found.push(Leftover {
@@ -203,6 +218,43 @@ fn is_recipe_head(line: &str, name: &str) -> bool {
         return false;
     };
     rest.contains(':') && (head.is_empty() || head.starts_with(' ') || head.starts_with('\t'))
+}
+
+/// Every predecessor task table in the mise files: named, never edited.
+fn mise_tasks(target: &Utf8Path) -> Vec<Leftover> {
+    let mut found = Vec::new();
+    for rel in super::manager::MISE_FILES {
+        let Ok(text) = std::fs::read_to_string(target.join(rel)) else {
+            continue;
+        };
+        for (index, line) in text.lines().enumerate() {
+            if is_mise_task_head(line) {
+                found.push(Leftover {
+                    id: "mise-task",
+                    file: rel.to_owned(),
+                    line: Some(index + 1),
+                    text: Some(line.trim().to_owned()),
+                    action: Action::Manual,
+                    reason: "a task body carries structure a line scan cannot judge",
+                });
+            }
+        }
+    }
+    found
+}
+
+/// Whether a mise line opens a task table named for the predecessor:
+/// `[tasks.rk-bump]`, `[tasks."rk-bump"]`, or the autobump twin.
+fn is_mise_task_head(line: &str) -> bool {
+    let Some(inner) = line
+        .trim()
+        .strip_prefix("[tasks.")
+        .and_then(|rest| rest.strip_suffix(']'))
+    else {
+        return false;
+    };
+    let name = inner.trim_matches(|c| c == QUOTE || c == '\'');
+    MISE_TASK_NEEDLES.contains(&name)
 }
 
 /// Every `(line number, trimmed line)` of a Nix text that names one of
@@ -323,7 +375,7 @@ fn workflow_files(target: &Utf8Path) -> Result<Vec<String>, RkError> {
 mod tests {
     use camino::Utf8PathBuf;
 
-    use super::{Action, is_recipe_head, list_members_named, scan, swap_envrc};
+    use super::{Action, is_mise_task_head, is_recipe_head, list_members_named, scan, swap_envrc};
     use crate::self_depend::pin::PIN_PREFIX;
 
     #[test]
@@ -377,6 +429,11 @@ mod tests {
 
     #[test]
     fn the_line_matchers_are_bounded() {
+        assert!(is_mise_task_head("[tasks.rk-bump]"));
+        assert!(is_mise_task_head("  [tasks.\"rk-autobump\"]"));
+        assert!(!is_mise_task_head("[tasks.rk-bump-all]"));
+        assert!(!is_mise_task_head("[tools]"));
+        assert!(!is_mise_task_head("rk-bump = \"x\""));
         assert!(is_recipe_head("rk-bump:", "rk-bump"));
         assert!(is_recipe_head("rk-bump tag='':", "rk-bump"));
         assert!(!is_recipe_head("rk-bump-all:", "rk-bump"));

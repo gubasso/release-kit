@@ -14,6 +14,7 @@
   - [`packaging:a-launcher-resolves-through-one-owner` — A launcher resolves through one owner](#packaginga-launcher-resolves-through-one-owner--a-launcher-resolves-through-one-owner)
   - [`packaging:the-landable-capability-promises-a-buildable-flake` — The landable capability promises a buildable flake](#packagingthe-landable-capability-promises-a-buildable-flake--the-landable-capability-promises-a-buildable-flake)
   - [`packaging:the-consumer-pin-has-two-facts-and-one-mover` — The consumer pin has two facts and one mover](#packagingthe-consumer-pin-has-two-facts-and-one-mover--the-consumer-pin-has-two-facts-and-one-mover)
+  - [`packaging:the-pin-is-read-through-a-manager-axis` — The pin is read through a manager axis](#packagingthe-pin-is-read-through-a-manager-axis--the-pin-is-read-through-a-manager-axis)
   - [`packaging:a-pin-bump-is-all-or-nothing` — A pin bump is all or nothing](#packaginga-pin-bump-is-all-or-nothing--a-pin-bump-is-all-or-nothing)
   - [`packaging:the-unattended-caller-never-fails-the-shell` — The unattended caller never fails the shell](#packagingthe-unattended-caller-never-fails-the-shell--the-unattended-caller-never-fails-the-shell)
   - [`packaging:add-serves-a-template-and-edits-no-owned-flake` — Add serves a template and edits no owned flake](#packagingadd-serves-a-template-and-edits-no-owned-flake--add-serves-a-template-and-edits-no-owned-flake)
@@ -24,7 +25,7 @@
 
 ## Purpose
 
-Rules governing the Nix packaging surface of this repository: the flake outputs, the package expression under `nix/`, the CI proof behind the support claim, and the consumer half — how a project pins that flake as its devshell dependency through `rk self-depend` and keeps the pin fresh. The boundary against `SPEC-distribution.md` is the artifact: that spec binds what the installed `rk` binary carries and writes, and this one binds how a consumer obtains that binary through the flake. The files `rk init` lands into a target are bound by `SPEC-landing.md`.
+Rules governing the Nix packaging surface of this repository: the flake outputs, the package expression under `nix/`, the CI proof behind the support claim, and the consumer half — how a project obtains `rk` through the tool manager it already runs, read and moved by `rk self-depend`, with the flake as the first wired manager. The boundary against `SPEC-distribution.md` is the artifact: that spec binds what the installed `rk` binary carries and writes, and this one binds how a consumer obtains that binary through the flake. The files `rk init` lands into a target are bound by `SPEC-landing.md`.
 
 ## Requirements
 
@@ -147,6 +148,18 @@ Where a consumer pins release-kit as a flake input, the binary MUST treat the ta
 - THEN the tag in `flake.nix` and the locked node in `flake.lock` both name the new release, and the report names the same `from` and `to`
 
 Verify: `cargo nextest run -E 'test(self_depend_sync_apply_rewrites_the_pin_updates_the_lock_and_builds)'`
+
+### `packaging:the-pin-is-read-through-a-manager-axis` — The pin is read through a manager axis
+
+The binary MUST read how a target obtains `rk` through one manager enum shared with `rk depend`, and `rk self-depend status` MUST report one entry per manager in the enum's order, absent ones included, each naming whether its file mentions release-kit and the version it records, because `rk` offers every other project through a four-manager matrix and a manager list restated in prose drifts at the first new manager. The binary MUST report `.envrc` outside the list, because direnv loads a shell and pins nothing: a host install under an `.envrc` is a reported state with no version to move, never a manager. The status MUST exit 0 for every state it reports, because the verb has no `--check` mode and a report is not a verdict, the same split `landing:status-judges-only-under-check` draws. A new manager is one variant plus its rows in each matrix, and no skill or chapter restates the list.
+
+#### Scenario: A mise target carries no flake
+
+- GIVEN a target whose `mise.toml` pins release-kit and which carries no `flake.nix`
+- WHEN `rk self-depend status --json` runs
+- THEN the mise entry reports `pinned` with its version, the flake entry reports `absent` rather than a fault, `wired` names mise, and the run exits 0
+
+Verify: `cargo nextest run -E 'test(every_manager_in_the_enum_is_detected_once) or test(a_target_with_one_manager_chooses_it) or test(the_envrc_is_reported_outside_the_manager_list) or test(one_detection_serves_both_verbs)'`
 
 ### `packaging:a-pin-bump-is-all-or-nothing` — A pin bump is all or nothing
 

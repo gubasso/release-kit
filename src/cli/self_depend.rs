@@ -3,6 +3,8 @@
 use camino::Utf8PathBuf;
 use clap::{Args, Subcommand, ValueEnum};
 
+use crate::self_depend::manager::Manager;
+
 /// Wire release-kit as a consumer's dependency and keep its pin fresh.
 #[derive(Debug, Args)]
 pub struct SelfDependArgs {
@@ -14,7 +16,7 @@ pub struct SelfDependArgs {
 /// The self-depend operations.
 #[derive(Debug, Subcommand)]
 pub enum SelfDependAction {
-    /// Report what a target carries, offline: the pin, the lock, the .envrc line, and any leftover.
+    /// Report what a target carries, offline: each manager's pin, the .envrc line, and any leftover.
     Status(StatusArgs),
     /// Serve the flake fragments and the .envrc line; seed both files where the target has none.
     Add(AddArgs),
@@ -30,6 +32,10 @@ pub struct StatusArgs {
     /// The project to read.
     #[arg(long, default_value = ".")]
     pub target: Utf8PathBuf,
+
+    /// Report one manager's entry alone; every manager by default, absent ones included.
+    #[arg(long, value_enum)]
+    pub manager: Option<Manager>,
 
     /// Emit one JSON object on stdout instead of the human report.
     #[arg(long)]
