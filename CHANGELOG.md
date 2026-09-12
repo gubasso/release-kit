@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.30](https://github.com/gubasso/release-kit/compare/v0.3.29...v0.3.30) - 2026-09-12
+
+### Fixed
+
+- *(reconcile)* bind the target, verify every byte, and hold the target alone ([#188](https://github.com/gubasso/release-kit/pull/188))
+
 ## [0.3.29](https://github.com/gubasso/release-kit/compare/v0.3.28...v0.3.29) - 2026-09-12
 
 ### Fixed
