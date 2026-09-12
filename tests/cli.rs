@@ -6412,13 +6412,19 @@ fn an_upgrade_keeps_a_seeded_edit_and_moves_the_record() {
         "a preview must not rewrite the record"
     );
 
-    rk().args(["upgrade", "--apply", "--target"])
-        .arg(target.path())
-        .assert()
-        .success()
-        .stdout(predicate::str::contains(
-            "rewrote .release-kit/manifest.json",
-        ));
+    rk().args([
+        "upgrade",
+        "--apply",
+        "--decide",
+        "partial-guidance=accept",
+        "--target",
+    ])
+    .arg(target.path())
+    .assert()
+    .success()
+    .stdout(predicate::str::contains(
+        "rewrote .release-kit/manifest.json",
+    ));
     assert_eq!(
         std::fs::read_to_string(&seeded).expect("the seeded file survives"),
         "semver_check = true\n",
@@ -13299,6 +13305,9 @@ fn the_seed_envrc_names_the_new_verb() {
 fn no_payload_file_names_the_old_verb() {
     let offenders: Vec<String> = release_kit::embedded::artifacts()
         .into_iter()
+        // The guidance root is the one place the old verb belongs: it
+        // tells a target what to edit.
+        .filter(|(path, _)| !path.starts_with("guidance/"))
         .filter(|(_, bytes)| String::from_utf8_lossy(bytes).contains("rk devshell"))
         .map(|(path, _)| path)
         .collect();
@@ -21950,7 +21959,7 @@ fn show_renders_a_stored_plan_and_refuses_a_pruned_one() {
         .clone();
     let shown: serde_json::Value = serde_json::from_slice(&shown).expect("one JSON object");
     assert_eq!(shown["input_fingerprint"], plan["input_fingerprint"]);
-    assert_eq!(shown["schema"], "rk.plan/2");
+    assert_eq!(shown["schema"], "rk.plan/3");
     std::fs::remove_dir_all(stored_dir(home.path(), &id)).expect("the plan prunes");
     rk_home(home.path())
         .args(["reconcile", "show", &id])
@@ -21965,7 +21974,11 @@ fn show_renders_a_stored_plan_and_refuses_a_pruned_one() {
 fn apply_refuses_after_the_record_changes() {
     let home = tempfile::tempdir().expect("a scratch home exists");
     let target = landed_old_target();
-    let (id, _) = plan_stored(home.path(), target.path(), &[]);
+    let (id, _) = plan_stored(
+        home.path(),
+        target.path(),
+        &["--decide", "partial-guidance=accept"],
+    );
     let mut manifest = read_manifest(target.path());
     manifest["rk_version"] = serde_json::json!("0.1.1");
     write_manifest(target.path(), &manifest);
@@ -21988,7 +22001,11 @@ fn apply_refuses_after_the_record_changes() {
 fn apply_refuses_after_the_configuration_changes() {
     let home = tempfile::tempdir().expect("a scratch home exists");
     let target = landed_old_target();
-    let (id, _) = plan_stored(home.path(), target.path(), &[]);
+    let (id, _) = plan_stored(
+        home.path(),
+        target.path(),
+        &["--decide", "partial-guidance=accept"],
+    );
     let config = target.path().join(".release-kit/config.toml");
     let mut text = std::fs::read_to_string(&config).expect("reads");
     text.push_str("\n# edited after the plan\n");
@@ -22011,7 +22028,11 @@ fn apply_refuses_after_the_configuration_changes() {
 fn apply_refuses_after_a_destination_changes_naming_it() {
     let home = tempfile::tempdir().expect("a scratch home exists");
     let target = landed_old_target();
-    let (id, _) = plan_stored(home.path(), target.path(), &[]);
+    let (id, _) = plan_stored(
+        home.path(),
+        target.path(),
+        &["--decide", "partial-guidance=accept"],
+    );
     let policy = target.path().join("SECURITY.md");
     std::fs::write(&policy, b"# Security policy\n\nEdited after the plan.\n").expect("writes");
     let before = tree_digests(target.path());
@@ -22034,7 +22055,11 @@ fn apply_refuses_after_a_destination_changes_naming_it() {
 fn apply_refuses_after_the_bundle_changes() {
     let home = tempfile::tempdir().expect("a scratch home exists");
     let target = landed_old_target();
-    let (id, _) = plan_stored(home.path(), target.path(), &[]);
+    let (id, _) = plan_stored(
+        home.path(),
+        target.path(),
+        &["--decide", "partial-guidance=accept"],
+    );
     let path = stored_dir(home.path(), &id).join("plan.json");
     let mut plan: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&path).expect("reads")).expect("parses");
@@ -22250,6 +22275,8 @@ fn the_record_is_written_last() {
                 "worktree",
                 "--style",
                 "trunk",
+                "--decide",
+                "partial-guidance=accept",
             ],
         );
         let ops = operations_of(&plan);
@@ -22277,7 +22304,11 @@ fn the_record_is_written_last() {
 fn an_apply_lands_in_the_runs_journal() {
     let home = tempfile::tempdir().expect("a scratch home exists");
     let target = landed_old_target();
-    let (id, plan) = plan_stored(home.path(), target.path(), &[]);
+    let (id, plan) = plan_stored(
+        home.path(),
+        target.path(),
+        &["--decide", "partial-guidance=accept"],
+    );
     let applied = apply_stored(home.path(), &id)
         .success()
         .get_output()
@@ -22335,7 +22366,11 @@ fn every_apply_refusal_names_a_reason_from_the_closed_set() {
     );
     // Moved.
     let target = landed_old_target();
-    let (id, _) = plan_stored(home.path(), target.path(), &[]);
+    let (id, _) = plan_stored(
+        home.path(),
+        target.path(),
+        &["--decide", "partial-guidance=accept"],
+    );
     std::fs::write(target.path().join("SECURITY.md"), b"moved\n").expect("writes");
     reasons.push(
         refusal_of(&apply_stored(home.path(), &id).code(73))["reason"]
@@ -22371,7 +22406,11 @@ fn the_apply_exit_codes_match_the_matrix() {
     apply_stored(home.path(), &id).code(73);
     apply_stored(home.path(), "0000000000000000").code(66);
     let target = landed_old_target();
-    let (id, _) = plan_stored(home.path(), target.path(), &[]);
+    let (id, _) = plan_stored(
+        home.path(),
+        target.path(),
+        &["--decide", "partial-guidance=accept"],
+    );
     rk_home(home.path())
         .env("RK_APPLY_INTERRUPT_AT", ".release-kit/manifest.json")
         .args(["reconcile", "apply", &id])
@@ -22437,10 +22476,14 @@ fn init_upgrade_and_adopt_produce_the_same_landing_through_the_engine() {
     let engine = landed_old_target();
     rk().args(["upgrade", "--target"])
         .arg(front.path())
-        .arg("--apply")
+        .args(["--apply", "--decide", "partial-guidance=accept"])
         .assert()
         .success();
-    let (id, _) = plan_stored(home.path(), engine.path(), &[]);
+    let (id, _) = plan_stored(
+        home.path(),
+        engine.path(),
+        &["--decide", "partial-guidance=accept"],
+    );
     apply_stored(home.path(), &id).success();
     assert_same_landing(front.path(), engine.path());
     // adopt
@@ -22507,4 +22550,300 @@ fn assess_prints_the_plans_classification_and_readiness() {
         .assert()
         .success()
         .stdout(predicate::str::contains("plan: setup, needs-decision"));
+}
+
+// ---- compatibility and guidance in the bundle ----
+
+/// The inventory grew by the compatibility file and the guidance root,
+/// and `rk payload` names both.
+#[test]
+fn the_payload_carries_twelve_roots() {
+    assert_eq!(release_kit::payload_roots::PAYLOAD_ROOTS.len(), 12);
+    assert!(release_kit::payload_roots::PAYLOAD_ROOTS.contains(&"compatibility.toml"));
+    assert!(release_kit::payload_roots::PAYLOAD_ROOTS.contains(&"guidance"));
+    let out = rk()
+        .args(["payload", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    let paths: Vec<&str> = report["artifacts"]
+        .as_array()
+        .expect("artifacts")
+        .iter()
+        .filter_map(|a| a["path"].as_str())
+        .collect();
+    assert!(paths.contains(&"compatibility.toml"), "{paths:?}");
+    assert!(paths.contains(&"guidance/README.md"), "{paths:?}");
+    assert!(paths.contains(&"guidance/0.3.19.md"), "{paths:?}");
+}
+
+/// The two new roots ride in the published crate, so a bundle read from
+/// the crates venue declares its compatibility and carries its guidance.
+#[test]
+#[ignore = "packages the crate; run through the just build gate"]
+fn the_published_crate_carries_the_two_new_roots() {
+    let out = std::process::Command::new(env!("CARGO"))
+        .args(["package", "--list", "--allow-dirty"])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("cargo package --list runs");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let listed = String::from_utf8_lossy(&out.stdout);
+    for path in [
+        "compatibility.toml",
+        "guidance/README.md",
+        "guidance/0.3.19.md",
+    ] {
+        assert!(
+            listed.lines().any(|line| line == path),
+            "{path}: the published crate drops it"
+        );
+    }
+}
+
+/// Every guidance file the payload carries names at least one landed
+/// destination, so it can be filtered against a target, and an action
+/// from the closed set.
+#[test]
+fn every_guidance_file_names_its_destinations() {
+    let source = release_kit::release::EmbeddedReleaseSource;
+    let manifest = release_kit::release::ReleaseSource::manifest(&source).expect("the manifest");
+    let files = release_kit::release::declared::guidance(&source, &manifest)
+        .expect("every guidance file parses");
+    assert!(
+        !files.is_empty(),
+        "the payload ships at least one guidance file"
+    );
+    for file in &files {
+        assert!(
+            !file.destinations.is_empty(),
+            "{}: names no destination",
+            file.version
+        );
+        assert!(
+            release_kit::release::declared::GUIDANCE_ACTIONS.contains(&file.action.as_str()),
+            "{}: action {} is outside the closed set",
+            file.version,
+            file.action
+        );
+        assert!(
+            file.body.contains("## What to do"),
+            "{}: no step",
+            file.version
+        );
+    }
+    assert!(release_kit::release::declared::carries_guidance(&manifest));
+    let declared = release_kit::release::declared::compatibility(&source, &manifest)
+        .expect("the declaration parses");
+    let since = declared
+        .guidance
+        .since
+        .expect("this bundle declares where its coverage starts");
+    for file in &files {
+        assert!(
+            release_kit::release::declared::version_below(&since, &file.version),
+            "{}: a guidance file below since {since} describes a release the bundle claims not to cover",
+            file.version
+        );
+    }
+}
+
+/// The changelog interval comes from the record and the candidate bundle
+/// alone: a landed target far behind plans with a partial coverage and
+/// the steps the bundle has, and the network is never touched.
+#[test]
+fn the_changelog_interval_is_derived_offline() {
+    let fixture = RegistryFixture::new();
+    std::fs::write(fixture.mock.path().join("curl_fail"), "").expect("the network is gone");
+    let target = landed_old_target();
+    std::fs::write(
+        target.path().join(".envrc"),
+        "use flake\nrk devshell sync --apply || true\n",
+    )
+    .expect("the old sync line writes");
+    let run = |args: &[&str]| {
+        let mut command = rk();
+        command
+            .args(["reconcile", "plan", "--json", "--target"])
+            .arg(target.path())
+            .args(args)
+            .env("HOME", fixture.home.path())
+            .env("XDG_STATE_HOME", fixture.home.path())
+            .env("RK_CURL_BIN", fixture.mock.path().join("curl"));
+        command
+    };
+    let out = run(&[]).assert().success().get_output().stdout.clone();
+    let plan: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(
+        fixture.curl_log().lines().count(),
+        0,
+        "the interval reached the network"
+    );
+    let guidance = &plan["release"]["guidance"];
+    assert_eq!(guidance["interval"]["from"], "0.1.0", "{guidance}");
+    assert_eq!(
+        guidance["interval"]["to"],
+        env!("CARGO_PKG_VERSION"),
+        "{guidance}"
+    );
+    assert_eq!(guidance["coverage"]["state"], "partial", "{guidance}");
+    assert_eq!(guidance["coverage"]["since"], "0.3.18", "{guidance}");
+    // The rename step rides once the engine is at or above the release
+    // that introduced it; below it the interval ends before the step.
+    let step_expected =
+        !release_kit::release::declared::version_below(env!("CARGO_PKG_VERSION"), "0.3.19");
+    let steps = guidance["steps"].as_array().expect("steps");
+    assert_eq!(
+        steps
+            .iter()
+            .any(|s| s["version"] == "0.3.19" && s["destinations"][0] == ".envrc"),
+        step_expected,
+        "the rename step concerns the .envrc this target has: {guidance}"
+    );
+    assert_eq!(plan["readiness"], "needs-decision", "{plan}");
+    assert!(
+        plan["decisions"]
+            .as_array()
+            .expect("decisions")
+            .iter()
+            .any(|d| d["id"] == "partial-guidance"),
+        "{plan}"
+    );
+    let out = run(&["--decide", "partial-guidance=accept"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let accepted: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(accepted["readiness"], "ready", "{accepted}");
+    assert_ne!(
+        accepted["input_fingerprint"], plan["input_fingerprint"],
+        "the selected decision is a fingerprint input"
+    );
+    // Without the .envrc the step is excluded, and counted.
+    std::fs::remove_file(target.path().join(".envrc")).expect("the .envrc goes");
+    let out = run(&[]).assert().success().get_output().stdout.clone();
+    let bare: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    let guidance = &bare["release"]["guidance"];
+    assert!(
+        guidance["steps"].as_array().expect("steps").is_empty(),
+        "{guidance}"
+    );
+    assert_eq!(guidance["excluded"], u64::from(step_expected), "{guidance}");
+}
+
+/// A target at the release has nothing to describe, and that is covered
+/// rather than unavailable, with the compatibility facts riding beside it.
+#[test]
+fn a_current_target_reports_covered_guidance_and_its_compatibility_facts() {
+    // A target at the release has nothing to describe, and that is
+    // covered rather than unavailable.
+    let current = plan_target();
+    land_rust(current.path()).success();
+    let plan = plan_json(current.path(), &[]);
+    assert_eq!(
+        plan["release"]["guidance"]["coverage"]["state"], "covered",
+        "{plan}"
+    );
+    assert_eq!(plan["release"]["guidance"]["excluded"], 0);
+    assert_eq!(plan["readiness"], "ready", "{plan}");
+    // The compatibility facts ride beside the guidance.
+    let compatibility = &plan["release"]["compatibility"];
+    assert_eq!(
+        compatibility["generator"]["name"], "cargo-dist",
+        "{compatibility}"
+    );
+    assert_eq!(
+        compatibility["generator"]["artifact"],
+        "dist-workspace.toml"
+    );
+    assert!(
+        compatibility["forge_floor"].is_null(),
+        "no floor is declared for github"
+    );
+    assert!(
+        plan["preconditions"]
+            .as_array()
+            .expect("preconditions")
+            .iter()
+            .any(|p| p["id"] == "generator-at-pin" && p["requirement"] == "advisory"),
+        "{plan}"
+    );
+}
+
+/// The authoring gate: a release that changes a landed destination and
+/// ships no guidance file is named, unless the silence is recorded in
+/// `compatibility.toml`. It reads the last release tag, so it runs
+/// through the just build gate where the history is present, and passes
+/// with a note where no tag is reachable.
+#[test]
+#[ignore = "reads the release tags; run through the just build gate"]
+fn a_release_changing_a_destination_without_guidance_is_named() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .expect("git runs")
+    };
+    let describe = git(&["describe", "--tags", "--abbrev=0", "--match", "v*"]);
+    if !describe.status.success() {
+        eprintln!(
+            "no release tag is reachable from this checkout; the authoring gate has nothing to compare against"
+        );
+        return;
+    }
+    let tag = String::from_utf8_lossy(&describe.stdout).trim().to_owned();
+    let tag_version = tag.trim_start_matches('v').to_owned();
+    // What lands in a target: the snippets, and the blocks the landing
+    // splices. A fragment a verb prints and a skill root land nowhere.
+    let diff = git(&[
+        "diff",
+        "--name-only",
+        &format!("{tag}..HEAD"),
+        "--",
+        "snippets",
+        "blocks/agents-block.md.in",
+        "blocks/agents-line-worktree.md.in",
+        "blocks/agents-line-branches.md.in",
+        "blocks/pre-commit-block.yaml.in",
+        "blocks/pre-commit-worktree-guard.yaml.in",
+        "blocks/target-config.toml.in",
+    ]);
+    assert!(
+        diff.status.success(),
+        "{}",
+        String::from_utf8_lossy(&diff.stderr)
+    );
+    let changed: Vec<String> = String::from_utf8_lossy(&diff.stdout)
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    if changed.is_empty() {
+        return;
+    }
+    let source = release_kit::release::EmbeddedReleaseSource;
+    let manifest = release_kit::release::ReleaseSource::manifest(&source).expect("the manifest");
+    let files = release_kit::release::declared::guidance(&source, &manifest).expect("parses");
+    let declared =
+        release_kit::release::declared::compatibility(&source, &manifest).expect("parses");
+    let described = files
+        .iter()
+        .map(|f| f.version.as_str())
+        .chain(declared.guidance.no_steps.iter().map(String::as_str))
+        .any(|version| release_kit::release::declared::version_below(&tag_version, version));
+    assert!(
+        described,
+        "a landed destination changed since {tag} ({changed:?}) and no guidance file names a release above it; add guidance/<next version>.md, or record the release under guidance.no_steps in compatibility.toml"
+    );
 }

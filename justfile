@@ -40,7 +40,7 @@ build:
     printf '# tuned by the target\n' >> "$n/nix/package.nix"; \
     cargo run -q -- upgrade --target "$n" --apply >/dev/null; \
     grep -q '# tuned by the target' "$n/nix/package.nix"
-    cargo nextest run --run-ignored ignored-only -E 'test(the_published_crate_carries_every_root) or test(the_landed_nix_capability_builds_end_to_end)'
+    cargo nextest run --run-ignored ignored-only -E 'test(the_published_crate_carries_every_root) or test(the_published_crate_carries_the_two_new_roots) or test(the_landed_nix_capability_builds_end_to_end) or test(a_release_changing_a_destination_without_guidance_is_named)'
 
 check: lint test build
 

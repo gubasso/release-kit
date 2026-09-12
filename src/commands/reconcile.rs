@@ -28,6 +28,7 @@ use crate::plan::store;
 use crate::plan::{
     Classification, Intent, Operation, Plan, PlanRequest, Planned, Readiness, Verification,
 };
+use crate::release::declared;
 use crate::release::{CrateReleaseSource, EmbeddedReleaseSource, ReleaseSource};
 use crate::setup::journal::Journal;
 
@@ -262,6 +263,10 @@ fn open_journal(command: &str, plan: &Plan) -> std::io::Result<Journal> {
 ///
 /// A selector the crates venue cannot resolve, a bundle the engine
 /// cannot read, and the gathering's own failures.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one computation is one linear sequence from the selector to the planner's inputs, and cutting it would separate a bundle from the observation it is read against"
+)]
 pub fn compute(request: &PlanRequest, clock: &str) -> Result<Planned, RkError> {
     let target: &Utf8Path = &request.target;
     let selector = request.selector.as_str();
@@ -286,6 +291,13 @@ pub fn compute(request: &PlanRequest, clock: &str) -> Result<Planned, RkError> {
             }
         };
     let candidate_manifest = candidate_source.manifest()?;
+    let declared = declared::compatibility(candidate_source, &candidate_manifest)?;
+    let guidance_files = declared::guidance(candidate_source, &candidate_manifest)?;
+    let carries_guidance = declared::carries_guidance(&candidate_manifest);
+    let extra_paths: Vec<String> = guidance_files
+        .iter()
+        .flat_map(|file| file.destinations.iter().cloned())
+        .collect();
     let gather_request = Request {
         target,
         flags: &request.flags,
@@ -293,9 +305,19 @@ pub fn compute(request: &PlanRequest, clock: &str) -> Result<Planned, RkError> {
         observe_forge: request.observe_forge,
         clock,
         source: candidate_source,
+        extra_paths: &extra_paths,
     };
-    let observation = gather::observe(&gather_request)?;
+    let mut observation = gather::observe(&gather_request)?;
     let resolution = gather::resolve(&gather_request, &observation)?;
+    gather::observe_host_tools(
+        &mut observation,
+        resolution.params.as_ref().map(crate::landing::Params::tech),
+        resolution
+            .params
+            .as_ref()
+            .map(crate::landing::Params::forge),
+        clock,
+    );
 
     // The recorded release's bundle: the embedded one where the record
     // names its payload, the cache where it holds the recorded version,
@@ -361,11 +383,19 @@ pub fn compute(request: &PlanRequest, clock: &str) -> Result<Planned, RkError> {
         observation,
         resolution,
         selected: &request.decisions,
+        declared: &declared,
+        guidance_files: &guidance_files,
+        carries_guidance,
     })
 }
 
 /// `<id>=<answer>` pairs into a map, refusing a malformed one.
-fn parse_decisions(raw: &[String]) -> Result<BTreeMap<String, String>, RkError> {
+///
+/// # Errors
+///
+/// Returns [`RkError::Usage`] for an item without `=` or with an empty
+/// side.
+pub fn parse_decisions(raw: &[String]) -> Result<BTreeMap<String, String>, RkError> {
     let mut decisions = BTreeMap::new();
     for item in raw {
         let Some((id, answer)) = item.split_once('=') else {
@@ -436,6 +466,31 @@ fn render(out: Output, plan: &Plan, fresh: bool) {
         out.result_line(format!("decision {}: {}", decision.id, decision.question));
         for choice in &decision.choices {
             out.result_line(format!("  {}: {}", choice.answer, choice.consequence));
+        }
+    }
+    match &plan.release.guidance.coverage {
+        crate::plan::Coverage::NotNeeded => {}
+        coverage => {
+            let word = match coverage {
+                crate::plan::Coverage::Covered => "covered".to_owned(),
+                crate::plan::Coverage::Partial { since } => format!("partial above {since}"),
+                crate::plan::Coverage::Unavailable => "unavailable".to_owned(),
+                crate::plan::Coverage::NotNeeded => String::new(),
+            };
+            out.result_line(format!(
+                "guidance: {word}, {} step(s) for this target, {} excluded",
+                plan.release.guidance.steps.len(),
+                plan.release.guidance.excluded
+            ));
+            for step in &plan.release.guidance.steps {
+                out.result_line(format!(
+                    "  {} ({}): {} [{}]",
+                    step.version,
+                    step.action,
+                    step.title,
+                    step.destinations.join(", ")
+                ));
+            }
         }
     }
     out.result_line(format!("fingerprint: {}", plan.input_fingerprint));

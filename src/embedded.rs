@@ -47,6 +47,13 @@ pub static SKILL_SHARED: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/skill-
 /// The pinned-tool registry.
 pub static VERSIONS: &str = include_str!("../versions.toml");
 
+/// What this release's bundle needs beyond the payload schema.
+pub static COMPATIBILITY: &str = include_str!("../compatibility.toml");
+
+/// One file per release that needs an operator step, filtered to a
+/// target by the planner.
+pub static GUIDANCE: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/guidance");
+
 /// The root license statement naming both halves.
 pub static LICENSE: &str = include_str!("../LICENSE");
 
@@ -89,7 +96,9 @@ pub fn root_files(root: &str) -> Option<Vec<(String, &'static [u8])>> {
         "setup" => &SETUP,
         "skills" => &SKILLS,
         "skill-shared" => &SKILL_SHARED,
+        "guidance" => &GUIDANCE,
         "versions.toml" => return Some(vec![(root.to_owned(), VERSIONS.as_bytes())]),
+        "compatibility.toml" => return Some(vec![(root.to_owned(), COMPATIBILITY.as_bytes())]),
         _ => return None,
     };
     Some(

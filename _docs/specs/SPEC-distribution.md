@@ -36,7 +36,7 @@ Rules governing what the `rk` binary carries and what it writes outside a target
 
 ### `distribution:the-payload-roots-are-declared-once` — The payload roots are declared once
 
-Every authored root the binary carries MUST be named in one inventory that the embed, the build script's change tracking, and the package-contents check all read.
+Every authored root the binary carries, the bundle's `compatibility.toml` and `guidance/` included, MUST be named in one inventory that the embed, the build script's change tracking, and the package-contents check all read.
 
 #### Scenario: A payload root is embedded without entering the inventory
 

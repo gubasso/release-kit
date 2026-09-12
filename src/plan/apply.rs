@@ -719,7 +719,7 @@ mod tests {
                 "host": {"engine_version": "0.0.0", "evidence_refs": []},
                 "forge": {"state": "not-observed", "reason": "not requested"}
             },
-            "release": {"candidate": {"version": "0.0.0", "payload_sha256": Digest::of(b"a").to_string(), "payload_schema": 1, "artifacts": 0, "evidence_refs": []}, "verification": {"method": "embedded"}, "baseline": {"state": "not-needed"}, "compatibility": {"engine_schema": 1, "bundle_schema": 1, "readable": true}, "guidance": {"coverage": "not-shipped"}},
+            "release": {"candidate": {"version": "0.0.0", "payload_sha256": Digest::of(b"a").to_string(), "payload_schema": 1, "artifacts": 0, "evidence_refs": []}, "verification": {"method": "embedded"}, "baseline": {"state": "not-needed"}, "compatibility": {"engine_schema": 1, "bundle_schema": 1, "readable": true, "intermediate": [], "evidence_refs": []}, "guidance": {"coverage": {"state": "not-needed"}, "steps": [], "excluded": 0, "evidence_refs": []}},
             "operations": [],
             "preconditions": [],
             "decisions": [],

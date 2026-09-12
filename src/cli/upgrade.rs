@@ -42,6 +42,12 @@ pub struct UpgradeArgs {
     #[arg(long)]
     pub nix: Option<String>,
 
+    /// Select an answer to a decision the plan asks, as `<id>=<answer>`,
+    /// such as `partial-guidance=accept` for a record the bundle's
+    /// guidance does not reach back to. Repeatable.
+    #[arg(long, value_name = "ID=ANSWER")]
+    pub decide: Vec<String>,
+
     /// Write the upgrade; without it every file's action is listed and
     /// nothing is touched.
     #[arg(long)]

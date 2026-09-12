@@ -16,12 +16,14 @@
   - [`reconcile:apply-proceeds-on-ready-alone` — Apply proceeds on ready alone](#reconcileapply-proceeds-on-ready-alone--apply-proceeds-on-ready-alone)
   - [`reconcile:an-apply-is-one-transaction-with-the-record-last` — An apply is one transaction with the record last](#reconcilean-apply-is-one-transaction-with-the-record-last--an-apply-is-one-transaction-with-the-record-last)
   - [`reconcile:every-front-lands-through-the-engine` — Every front lands through the engine](#reconcileevery-front-lands-through-the-engine--every-front-lands-through-the-engine)
+  - [`reconcile:compatibility-is-declared-in-the-bundle-and-evaluated-per-axis` — Compatibility is declared in the bundle and evaluated per axis](#reconcilecompatibility-is-declared-in-the-bundle-and-evaluated-per-axis--compatibility-is-declared-in-the-bundle-and-evaluated-per-axis)
+  - [`reconcile:guidance-ships-in-the-bundle-filtered-and-covered` — Guidance ships in the bundle, filtered and covered](#reconcileguidance-ships-in-the-bundle-filtered-and-covered--guidance-ships-in-the-bundle-filtered-and-covered)
 
 <!--TOC-->
 
 ## Purpose
 
-Rules governing the plan: the one typed document every landing write comes from. `rk reconcile plan` observes a target, resolves one release through the seam `SPEC-release-bundle.md` binds, computes the plan, and prints it. Setup, migration, upgrade, and drift are classifications of that plan, not separate implementations. This domain binds the plan's shape, its classification, its operations, its readiness policy, its provenance, its fingerprint, and what the planning verb may read. `SPEC-landing.md` binds what a landing owes a target, and the comparisons it names are what the planner computes. `SPEC-target-config.md` binds the configuration the planner resolves against. Applying a plan is bound here too: the store, the revalidation, the transaction, and the fronts that land through the engine.
+Rules governing the plan: the one typed document every landing write comes from. `rk reconcile plan` observes a target, resolves one release through the seam `SPEC-release-bundle.md` binds, computes the plan, and prints it. Setup, migration, upgrade, and drift are classifications of that plan, not separate implementations. This domain binds the plan's shape, its classification, its operations, its readiness policy, its provenance, its fingerprint, and what the planning verb may read. `SPEC-landing.md` binds what a landing owes a target, and the comparisons it names are what the planner computes. `SPEC-target-config.md` binds the configuration the planner resolves against. Applying a plan is bound here too: the store, the revalidation, the transaction, and the fronts that land through the engine. The two declarations a bundle carries beyond its bytes, `compatibility.toml` and `guidance/`, are read through the seam and bound here as the preconditions and the section they become.
 
 ## Requirements
 
@@ -168,3 +170,27 @@ Verify: `cargo nextest run -E 'test(an_interrupted_apply_leaves_each_destination
 - THEN every file digests the same, and the records differ in their instant and their origin word alone
 
 Verify: `cargo nextest run -E 'test(init_upgrade_and_adopt_produce_the_same_landing_through_the_engine)'`
+
+### `reconcile:compatibility-is-declared-in-the-bundle-and-evaluated-per-axis` — Compatibility is declared in the bundle and evaluated per axis
+
+A bundle MUST declare in `compatibility.toml` what a landing needs beyond the payload schema, and a bundle that carries no file MUST read as no requirement beyond the schema. The planner MUST evaluate each axis into a precondition with a requirement, because every axis has stranded a target that discovered it at setup time. An engine below the declared minimum is `required` and blocks naming the engine to install. The binding's generator absent or below its `versions.toml` pin is `required` where the plan rewrites an artifact the target already holds, because that artifact's generated output must be regenerated, and `advisory` otherwise, because a first landing writes the artifact and generates nothing yet. A manager file present that names no release-kit is `decision-required` under `pin-manager` where a recorded target is behind the candidate, because a pin move through a manager the target does not wire is a decision and not an operation. A forge reported below its declared floor is `required` where the plan writes that forge's pipeline and `advisory` otherwise, and a forge not asked is `advisory`. A declared intermediate release between the record and the candidate is `required` and blocks naming the version to pass through.
+
+#### Scenario: A bundle names an intermediate release the upgrade would skip
+
+- GIVEN a landed target two releases behind and a candidate bundle whose `compatibility.toml` names the release between them as intermediate
+- WHEN `rk reconcile plan --json` runs
+- THEN the plan is `blocked` on `intermediate-release:<version>` naming that version and `--to <version>`, and the same target one release behind plans with no such precondition
+
+Verify: `cargo nextest run -E 'test(a_bundle_without_compatibility_requires_only_its_schema) or test(an_engine_below_requirement_is_blocked_naming_the_engine) or test(a_missing_generator_blocks_only_when_a_generated_artifact_is_planned) or test(an_unwired_manager_is_a_decision) or test(a_forge_below_floor_blocks_only_when_a_forge_fact_affects_an_operation) or test(a_skipped_intermediate_version_is_blocked_naming_it) or test(the_payload_carries_twelve_roots)'`
+
+### `reconcile:guidance-ships-in-the-bundle-filtered-and-covered` — Guidance ships in the bundle, filtered and covered
+
+A bundle MUST carry under `guidance/` one file per release that needs an operator step, named by the version that introduces the change and naming the destinations it concerns and whether the action is an operator step or a plan operation, and MUST embed every such file whole, because the files are small text and a window nobody declared is a silent gap. The planner MUST select the files above the recorded release up to the candidate, MUST keep the ones naming a destination the target has and count the rest as excluded, and MUST report the coverage as one of `not-needed`, `covered`, `partial` naming the release above which the bundle describes every release, and `unavailable`, where `covered` with no step means no applicable steps and is never `unavailable`. Partial coverage MUST be `decision-required` under `partial-guidance`, and unavailable guidance MUST be `required` where the plan writes a rendered file and `advisory` otherwise. A release that changes a landed destination and ships no guidance file MUST be named by the authoring gate, unless `compatibility.toml` records it under `guidance.no_steps`. The interval MUST be derived from the record and the bundle alone, offline.
+
+#### Scenario: A landed target far behind plans an upgrade
+
+- GIVEN a landed target whose record predates the release the bundle describes from, carrying an `.envrc` a guidance file names
+- WHEN `rk reconcile plan --json` runs with a curl that fails every call
+- THEN the fetch log is empty, the guidance reads `partial` naming that release with the `.envrc` step selected, the readiness is `needs-decision` naming `partial-guidance`, and `--decide partial-guidance=accept` yields `ready` with a different fingerprint
+
+Verify: `cargo nextest run -E 'test(a_release_with_no_steps_reports_no_applicable_steps) or test(guidance_is_filtered_against_the_targets_destinations_with_a_count) or test(partial_guidance_is_a_decision_and_a_selected_decision_resolves_it) or test(unavailable_guidance_for_a_planned_rendered_file_blocks) or test(the_changelog_interval_is_derived_offline) or test(every_guidance_file_names_its_destinations)'`

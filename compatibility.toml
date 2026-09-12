@@ -1,0 +1,32 @@
+# The compatibility declarations of this release's bundle: what a target
+# needs beyond the payload schema before this release lands there. The
+# engine reads this file through the release seam and turns each section
+# into a precondition of the plan. Most releases need nothing beyond the
+# schema, and a bundle that carries no file at all declares exactly that.
+#
+# engine.minimum names the oldest engine that may land this bundle where
+# the payload schema alone is too coarse to say so. guidance.since names
+# the release above which every release either ships a guidance file or
+# needs no operator step, so a record below it reads as partial coverage.
+# guidance.no_steps records the releases that changed a landed
+# destination and needed no step, so the authoring gate can tell a
+# deliberate silence from a forgotten file. forge.<name>.minimum is the
+# forge version floor the landed files rest on. An intermediate entry
+# names a release a landing must pass through, so an upgrade that would
+# skip it is refused naming the version.
+
+schema = 1
+
+[engine]
+# minimum = "0.4.0"
+
+[guidance]
+since = "0.3.18"
+no_steps = []
+
+[forge.gitlab]
+minimum = "18.2"
+
+# [[intermediate]]
+# version = "0.5.0"
+# reason = "the record schema changed shape"

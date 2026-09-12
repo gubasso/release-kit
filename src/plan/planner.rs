@@ -12,6 +12,7 @@ use crate::digest::Digest;
 use crate::error::RkError;
 use crate::landing::manifest::{self, Alignment, FileRecord, Manifest, Parameters};
 use crate::landing::{self, Entry, Kind, Placement};
+use crate::release::declared::{self, GuidanceFile};
 use crate::release::{PAYLOAD_SCHEMA, ReleaseManifest, ReleaseSource};
 
 use super::classify::{self, Finding, RecordState as ClassifyRecord, Verdict};
@@ -20,10 +21,10 @@ use super::gather::{ConfigRead, ForgeRead, Observation, RecordRead, Resolution};
 use super::operation::Operation;
 use super::readiness::{self, Evaluation, Precondition, Requirement};
 use super::{
-    BaselineState, BundleIdentity, Choice, Compatibility, Configuration, ConfigurationState,
-    Decision, DesiredState, Destination, DestinationOutcome, Disposition, ForgeState, Guidance,
-    Host, Identity, Installation, Intent, ObservedState, PLAN_SCHEMA, Plan, Planned, Postcondition,
-    RecordState, Release, Repository, ResolvedRelease, Verification, fingerprint,
+    BaselineState, BundleIdentity, Choice, Configuration, ConfigurationState, Decision,
+    DesiredState, Destination, DestinationOutcome, Disposition, ForgeState, Host, Identity,
+    Installation, Intent, ObservedState, PLAN_SCHEMA, Plan, Planned, Postcondition, RecordState,
+    Release, Repository, ResolvedRelease, Verification, compatibility, fingerprint, guidance,
 };
 
 /// The candidate bundle, as the planner receives it.
@@ -78,6 +79,12 @@ pub struct Inputs<'a> {
     pub resolution: Resolution,
     /// The decisions the operator selected, by id.
     pub selected: &'a BTreeMap<String, String>,
+    /// What the candidate bundle declares beyond its schema.
+    pub declared: &'a declared::Compatibility,
+    /// Every guidance file the candidate bundle carries.
+    pub guidance_files: &'a [GuidanceFile],
+    /// Whether the candidate bundle carries a guidance root at all.
+    pub carries_guidance: bool,
 }
 
 /// What the three-way comparison decided for one destination.
@@ -116,6 +123,9 @@ pub fn plan(inputs: Inputs<'_>) -> Result<Planned, RkError> {
         mut observation,
         resolution,
         selected,
+        declared,
+        guidance_files,
+        carries_guidance,
     } = inputs;
     let mut blobs: BTreeMap<Digest, Vec<u8>> = BTreeMap::new();
     let mut findings: Vec<Finding> = Vec::new();
@@ -805,6 +815,89 @@ pub fn plan(inputs: Inputs<'_>) -> Result<Planned, RkError> {
         decision: None,
         evidence_refs: observation.refs.pin.iter().cloned().collect(),
     });
+
+    // The compatibility axes beyond the schema, and the guidance the
+    // bundle carries for this target, each into its preconditions.
+    let writes: Vec<String> = operations
+        .iter()
+        .filter_map(|operation| operation.path().map(str::to_owned))
+        .collect();
+    let rewrites: Vec<String> = operations
+        .iter()
+        .filter_map(|operation| match operation {
+            Operation::WriteFile {
+                path,
+                before: Some(_),
+                ..
+            }
+            | Operation::SpliceBlock {
+                path,
+                before: Some(_),
+                ..
+            } => Some(path.clone()),
+            _ => None,
+        })
+        .collect();
+    let pins: BTreeMap<String, String> =
+        crate::release::read(candidate.source, &candidate.manifest, "versions.toml")
+            .map(|bytes| crate::registry::pins_in(&String::from_utf8_lossy(&bytes)))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|pin| (pin.name, pin.version))
+            .collect();
+    let recorded_version = recorded.map(|record| record.rk_version.as_str());
+    let forge_version = match &observation.forge {
+        ForgeRead::Observed { version, .. } => version.as_deref(),
+        ForgeRead::NotObserved { .. } => None,
+    };
+    let mut axis_refs: Vec<String> = vec![candidate_ref.clone()];
+    axis_refs.extend(record_ref.iter().cloned());
+    axis_refs.extend(observation.refs.host.iter().cloned());
+    axis_refs.extend(observation.refs.forge.iter().cloned());
+    axis_refs.extend(observation.refs.pin.iter().cloned());
+    let evaluated = compatibility::evaluate(&compatibility::Inputs {
+        declared,
+        engine_version,
+        engine_schema: PAYLOAD_SCHEMA,
+        bundle_schema,
+        candidate_version: &candidate_version,
+        recorded_version,
+        tech: resolution.params.as_ref().map(landing::Params::tech),
+        forge: resolution.params.as_ref().map(landing::Params::forge),
+        pins: &pins,
+        host_generator: observation
+            .generator
+            .as_ref()
+            .and_then(|generator| generator.host.as_deref()),
+        writes: &writes,
+        rewrites: &rewrites,
+        pin_wired: observation.pin.is_some(),
+        unwired_managers: &observation.unwired_managers,
+        forge_version,
+        selected,
+        evidence_refs: axis_refs,
+    });
+    preconditions.extend(evaluated.preconditions);
+    decisions.extend(evaluated.decisions);
+    let present: std::collections::BTreeSet<String> = observation.files.keys().cloned().collect();
+    let rendered_write = compared
+        .iter()
+        .any(|c| c.write && !c.conflict && c.entry.kind == Kind::Rendered);
+    let mut guidance_refs: Vec<String> = vec![candidate_ref.clone()];
+    guidance_refs.extend(record_ref.iter().cloned());
+    let selected_guidance = guidance::select(&guidance::Inputs {
+        recorded_version,
+        candidate_version: &candidate_version,
+        carries_root: carries_guidance,
+        since: declared.guidance.since.as_deref(),
+        files: guidance_files,
+        present: &present,
+        rendered_write,
+        selected,
+        evidence_refs: guidance_refs,
+    });
+    preconditions.extend(selected_guidance.precondition);
+    decisions.extend(selected_guidance.decision);
     let readiness = readiness::derive(&preconditions);
 
     // The postconditions, one per operation kind that leaves a check.
@@ -923,7 +1016,9 @@ pub fn plan(inputs: Inputs<'_>) -> Result<Planned, RkError> {
         ForgeRead::NotObserved { reason } => ForgeState::NotObserved {
             reason: reason.clone(),
         },
-        ForgeRead::Observed { trunk, remote_tip } => ForgeState::Observed {
+        ForgeRead::Observed {
+            trunk, remote_tip, ..
+        } => ForgeState::Observed {
             trunk: trunk.clone(),
             remote_tip: remote_tip.clone(),
             evidence_refs: observation.refs.forge.clone(),
@@ -993,14 +1088,8 @@ pub fn plan(inputs: Inputs<'_>) -> Result<Planned, RkError> {
             },
             verification: candidate.verification,
             baseline: baseline_state,
-            compatibility: Compatibility {
-                engine_schema: PAYLOAD_SCHEMA,
-                bundle_schema,
-                readable: bundle_schema <= PAYLOAD_SCHEMA,
-            },
-            guidance: Guidance {
-                coverage: "not-shipped".into(),
-            },
+            compatibility: evaluated.facts,
+            guidance: selected_guidance.guidance,
         },
         operations,
         preconditions,

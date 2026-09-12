@@ -15,6 +15,7 @@
 //! binary must be obtained.
 
 pub mod crate_source;
+pub mod declared;
 pub mod dir;
 pub mod embedded;
 
