@@ -7,7 +7,6 @@ pub mod assess;
 pub mod branches;
 pub mod completions;
 pub mod depend;
-pub mod devshell;
 pub mod doctor;
 pub mod guide;
 pub mod init;
@@ -17,6 +16,7 @@ pub mod message;
 pub mod payload;
 pub mod read;
 pub mod runs;
+pub mod self_depend;
 pub mod setup;
 pub mod skill;
 pub mod status;
@@ -78,8 +78,8 @@ pub enum Commands {
     Runs(runs::RunsArgs),
     /// Manage the agent skills at user scope.
     Skill(skill::SkillArgs),
-    /// Wire release-kit as a consumer's devshell dependency and keep its pin fresh.
-    Devshell(devshell::DevshellArgs),
+    /// Wire release-kit as a consumer's dependency and keep its pin fresh.
+    SelfDepend(self_depend::SelfDependArgs),
     /// Add another project as a dependency of a target, from how the source distributes itself.
     Depend(depend::DependArgs),
     /// Run every environment probe and report by class.

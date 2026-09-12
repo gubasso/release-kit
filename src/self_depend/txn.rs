@@ -1,4 +1,4 @@
-//! The fenced two-file transaction behind `rk devshell sync`.
+//! The fenced two-file transaction behind `rk self-depend sync`.
 //!
 //! The tag in `flake.nix` and the `release-kit` node in `flake.lock`
 //! move together or not at all. Before the first write both files are

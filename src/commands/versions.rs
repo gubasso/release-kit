@@ -1,7 +1,7 @@
 //! `rk versions`: the pinned-tool registry, and its freshness check.
 //!
 //! Plain `rk versions` prints the registry exactly as authored, offline.
-//! `--check` is the canon-side freshness answer and, beside `rk devshell
+//! `--check` is the canon-side freshness answer and, beside `rk self-depend
 //! sync`, one of the two verbs that fetch: it consults each pin's check
 //! URL and reports per pin, where
 //! an unreachable or unparsable source is a reported result at exit 0,

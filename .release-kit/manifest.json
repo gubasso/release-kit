@@ -1,7 +1,7 @@
 {
-  "schema_version": 5,
-  "rk_version": "0.3.14",
-  "payload_sha256": "a9a352afcf7a327033fe0d4c2ef6b8180536f51e1c8286ff8a5d0b98e84ad3fe",
+  "schema_version": 6,
+  "rk_version": "0.3.18",
+  "payload_sha256": "687db31c65dba1cf45724d3808967f8108752a7e71842e93b103ee523e9718aa",
   "origin": "adopt",
   "tech": "rust",
   "forge": "github",
@@ -12,7 +12,9 @@
     "style": "trunk",
     "nix": false,
     "trunk": "master",
-    "line_prefix": "release/"
+    "line_prefix": "release/",
+    "security_contact": "",
+    "security_response": "best-effort"
   },
   "files": [
     {
@@ -43,7 +45,7 @@
       "destination": "SECURITY.md",
       "kind": "rendered",
       "sha256": "88ceadde64b7d4b36b79a103cdfdf009f18b9c24900cbbabb1409e32dd7541f6",
-      "baseline_sha256": "411de0f136536b653e603325aa32498352a563d21f5b8dad7bd83d02bd6c1a63"
+      "baseline_sha256": "c7effad58bca6f1325f7c7123ccf48fe61420b83da7234b74f37215ec0a2b16e"
     },
     {
       "destination": "dist-workspace.toml",

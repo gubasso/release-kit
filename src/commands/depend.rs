@@ -18,10 +18,10 @@ use crate::depend::source::{ChannelEvidence, Source, TagStyle};
 use crate::depend::target::{Already, Target};
 use crate::depend::version::{self, Resolved};
 use crate::depend::{self, Channel, Kind, Manager, source, target};
-use crate::devshell::Presence;
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
 use crate::output::Output;
+use crate::self_depend::Presence;
 
 /// The `rk.depend-assess/1` document.
 #[derive(Debug, Serialize)]
@@ -568,7 +568,7 @@ mod tests {
     use crate::depend::target::Already;
     use crate::depend::version::Resolved;
     use crate::depend::{Channel, Kind, Manager};
-    use crate::devshell::Presence;
+    use crate::self_depend::Presence;
 
     fn fragment() -> Fragment {
         Fragment {

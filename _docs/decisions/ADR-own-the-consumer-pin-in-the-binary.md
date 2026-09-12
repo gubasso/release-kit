@@ -6,7 +6,7 @@ A host install serves one `rk` to the whole machine and nothing keeps it fresh. 
 
 ## Considered Options
 
-- The transaction in the `rk` binary, as `rk devshell`, with the wiring a replacement — chosen.
+- The transaction in the `rk` binary, as `rk self-depend`, with the wiring a replacement — chosen.
 - A script landed into each consumer — rejected: tested nowhere, and copied everywhere.
 - Splicing the fragments into a flake the target owns — rejected: a lexical scan does not justify a write into another project's Nix file; the printed fragments serve an agent as well.
 - Trapping the signal to restore on interrupt — rejected: the crate forbids `unsafe`, so no handler exists; a durable marker and the next run's recovery cover the case.
@@ -18,7 +18,7 @@ Chosen option: the binary owns the transaction and the cleanup — one implement
 
 The verb records nothing in `.release-kit/manifest.json`: it is not a landing verb and `.envrc` is not a landable kind, so `rk devshell status` is the reporter instead.
 
-Enforced by `packaging:the-consumer-pin-has-two-facts-and-one-mover`, `packaging:a-devshell-bump-is-all-or-nothing`, `packaging:the-unattended-caller-never-fails-the-shell`, `packaging:add-serves-a-template-and-edits-no-owned-flake`, `packaging:a-wired-target-runs-one-bump-mechanism`, and `packaging:the-cleanup-removes-only-what-it-can-judge`.
+Enforced by `packaging:the-consumer-pin-has-two-facts-and-one-mover`, `packaging:a-pin-bump-is-all-or-nothing`, `packaging:the-unattended-caller-never-fails-the-shell`, `packaging:add-serves-a-template-and-edits-no-owned-flake`, `packaging:a-wired-target-runs-one-bump-mechanism`, and `packaging:the-cleanup-removes-only-what-it-can-judge`.
 
 ## Consequences
 
@@ -27,4 +27,4 @@ Enforced by `packaging:the-consumer-pin-has-two-facts-and-one-mover`, `packaging
 
 ## Status
 
-Implemented: `src/devshell.rs`, `src/commands/devshell.rs`, `blocks/devshell-*`, `runbooks/setup.md`, `skills/rk-setup/SKILL.md`, `skills/rk-migrate/SKILL.md`.
+Implemented: `src/self_depend.rs`, `src/commands/self_depend.rs`, `blocks/self-depend-*`, `runbooks/setup.md`, `skills/rk-setup/SKILL.md`, `skills/rk-migrate/SKILL.md`.

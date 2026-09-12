@@ -1,4 +1,4 @@
-//! The texts `rk devshell add` serves: three flake fragments, the
+//! The texts `rk self-depend add` serves: three flake fragments, the
 //! `.envrc` line, and the seed pair for a target that has neither file.
 //!
 //! Every text is an authored file under `blocks/`, per
@@ -70,7 +70,7 @@ pub fn fragments(tag: &str, observed: &Observed) -> Vec<Fragment> {
                 path: "inputs",
                 needle: flake.and_then(|text| first_found(text, &["inputs = {", "inputs ="])),
             },
-            text: fragment("devshell-input.nix.in", tag),
+            text: fragment("self-depend-input.nix.in", tag),
             present: Some(flake.is_some() && !matches!(observed.scan, pin::Scan::None)),
         },
         Fragment {
@@ -83,7 +83,7 @@ pub fn fragments(tag: &str, observed: &Observed) -> Vec<Fragment> {
                 path: "outputs",
                 needle: flake.and_then(|text| first_found(text, &["outputs =", "outputs"])),
             },
-            text: fragment("devshell-outputs-arg.nix.in", tag),
+            text: fragment("self-depend-outputs-arg.nix.in", tag),
             present: flake.map_or(Some(false), outputs_argument_present),
         },
         Fragment {
@@ -96,7 +96,7 @@ pub fn fragments(tag: &str, observed: &Observed) -> Vec<Fragment> {
                 path: "devShells.<system>.default.packages",
                 needle: flake.and_then(|text| first_found(text, &["packages = [", "devShells"])),
             },
-            text: fragment("devshell-package.nix.in", tag),
+            text: fragment("self-depend-package.nix.in", tag),
             present: flake.map_or(Some(false), devshell_package_present),
         },
         Fragment {
@@ -118,19 +118,19 @@ pub fn fragments(tag: &str, observed: &Observed) -> Vec<Fragment> {
 /// The whole seed flake, pinned at `tag`.
 #[must_use]
 pub fn seed_flake(tag: &str) -> String {
-    render(block("devshell-seed-flake.nix.in"), tag)
+    render(block("self-depend-seed-flake.nix.in"), tag)
 }
 
 /// The whole seed `.envrc`.
 #[must_use]
 pub fn seed_envrc() -> String {
-    block("devshell-seed-envrc.in").to_owned()
+    block("self-depend-seed-envrc.in").to_owned()
 }
 
 /// The one `.envrc` line, without its newline.
 #[must_use]
 pub fn envrc_line() -> String {
-    block("devshell-envrc-line.in")
+    block("self-depend-envrc-line.in")
         .trim_end_matches('\n')
         .to_owned()
 }
@@ -187,7 +187,7 @@ fn outputs_argument_present(text: &str) -> Option<bool> {
 /// package reference appears, `Some(false)` where a devshell exists
 /// without it, and `None` where no devshell was found to judge.
 fn devshell_package_present(text: &str) -> Option<bool> {
-    let package = block("devshell-package.nix.in").trim_end_matches('\n');
+    let package = block("self-depend-package.nix.in").trim_end_matches('\n');
     let prefix = package.split("${").next().unwrap_or(package);
     if text.contains(prefix) {
         return Some(true);
@@ -201,13 +201,13 @@ mod tests {
         PIN_TOKEN, block, devshell_package_present, envrc_line, fragment, outputs_argument_present,
         render, seed_envrc, seed_flake,
     };
-    use crate::devshell::pin::{PIN_PREFIX, Scan, scan};
+    use crate::self_depend::pin::{PIN_PREFIX, Scan, scan};
 
     /// The authored input fragment and the source grammar agree: the
     /// rendered block is exactly what the matcher reads back.
     #[test]
     fn the_pin_matcher_matches_the_authored_input_fragment() {
-        let text = fragment("devshell-input.nix.in", "v0.2.16");
+        let text = fragment("self-depend-input.nix.in", "v0.2.16");
         match scan(&text) {
             Scan::One(pin) => assert_eq!(pin.tag, "v0.2.16"),
             other => panic!("the fragment must scan as one pin: {other:?}"),
@@ -221,18 +221,18 @@ mod tests {
     #[test]
     fn every_fragment_renders_its_tag_and_keeps_the_system_interpolation() {
         for name in [
-            "devshell-input.nix.in",
-            "devshell-outputs-arg.nix.in",
-            "devshell-package.nix.in",
-            "devshell-envrc-line.in",
-            "devshell-seed-flake.nix.in",
-            "devshell-seed-envrc.in",
+            "self-depend-input.nix.in",
+            "self-depend-outputs-arg.nix.in",
+            "self-depend-package.nix.in",
+            "self-depend-envrc-line.in",
+            "self-depend-seed-flake.nix.in",
+            "self-depend-seed-envrc.in",
         ] {
             let rendered = render(block(name), "v9.9.9");
             assert!(!rendered.contains(PIN_TOKEN), "{name}: the token renders");
             assert!(!rendered.is_empty(), "{name}: the block is authored");
         }
-        let package = fragment("devshell-package.nix.in", "v9.9.9");
+        let package = fragment("self-depend-package.nix.in", "v9.9.9");
         assert_eq!(package, "release-kit.packages.${system}.default");
         let seed = seed_flake("v9.9.9");
         assert!(seed.contains("${system}"), "the interpolation survives");
