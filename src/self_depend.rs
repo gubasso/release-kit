@@ -105,7 +105,7 @@ impl Observed {
 
     /// The pinned tag, where the scan found exactly one pin.
     #[must_use]
-    pub fn pin_tag(&self) -> Option<&str> {
+    pub const fn pin_tag(&self) -> Option<&str> {
         match &self.scan {
             pin::Scan::One(pin) => Some(pin.tag.as_str()),
             _ => None,

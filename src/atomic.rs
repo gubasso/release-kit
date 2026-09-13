@@ -99,13 +99,13 @@ impl Transaction {
 
     /// How many writes are staged.
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.staged.len()
     }
 
     /// Whether nothing is staged.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.staged.is_empty()
     }
 

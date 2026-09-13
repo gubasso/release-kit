@@ -114,26 +114,26 @@ fn numbered(
 /// A reference whose project path or host disagrees with the detected
 /// remote.
 pub fn agrees(reference: &Reference, detected: &Detection) -> Result<(), String> {
-    if let (Some(named), Some(found)) = (reference.host.as_deref(), detected.host.as_deref()) {
-        if !named.eq_ignore_ascii_case(found) {
-            // The two hosts are compared as they are written. An
-            // instance served under a separate SSH endpoint writes them
-            // differently for one project, and resolving that mapping
-            // means asking the forge CLI — a network call this check
-            // deliberately does not make, because it runs before the
-            // CLI gate so that a wrong clone costs one local read. The
-            // issue number names the same issue and skips the question.
-            return Err(format!(
-                "the reference names {named} and this clone's origin is {found}; pass the issue number instead where one instance serves both names"
-            ));
-        }
+    if let (Some(named), Some(found)) = (reference.host.as_deref(), detected.host.as_deref())
+        && !named.eq_ignore_ascii_case(found)
+    {
+        // The two hosts are compared as they are written. An
+        // instance served under a separate SSH endpoint writes them
+        // differently for one project, and resolving that mapping
+        // means asking the forge CLI — a network call this check
+        // deliberately does not make, because it runs before the
+        // CLI gate so that a wrong clone costs one local read. The
+        // issue number names the same issue and skips the question.
+        return Err(format!(
+            "the reference names {named} and this clone's origin is {found}; pass the issue number instead where one instance serves both names"
+        ));
     }
-    if let (Some(named), Some(found)) = (reference.repo.as_deref(), detected.repo.as_deref()) {
-        if named != found {
-            return Err(format!(
-                "the reference names {named} and this clone's origin is {found}"
-            ));
-        }
+    if let (Some(named), Some(found)) = (reference.repo.as_deref(), detected.repo.as_deref())
+        && named != found
+    {
+        return Err(format!(
+            "the reference names {named} and this clone's origin is {found}"
+        ));
     }
     Ok(())
 }

@@ -56,7 +56,7 @@ pub struct RepositoryFacts {
 /// Compute the verdict from the facts. Pure, so the rule is testable
 /// without a repository.
 #[must_use]
-pub fn verdict(facts: &RepositoryFacts) -> Verdict {
+pub const fn verdict(facts: &RepositoryFacts) -> Verdict {
     if !facts.release_markers.is_empty() || !facts.collisions.is_empty() {
         return Verdict::Brownfield;
     }

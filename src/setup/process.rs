@@ -119,10 +119,10 @@ pub fn run(exec: &Exec, mut on_chunk: impl FnMut(ChildStream, &[u8])) -> std::io
     // The drains are already running, so this write cannot deadlock against
     // a full output pipe; a child that exits early surfaces as a broken
     // pipe, which only means it stopped reading.
-    if let Some(bytes) = &exec.stdin {
-        if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(bytes);
-        }
+    if let Some(bytes) = &exec.stdin
+        && let Some(mut stdin) = child.stdin.take()
+    {
+        let _ = stdin.write_all(bytes);
     }
 
     let mut stdout = Vec::new();

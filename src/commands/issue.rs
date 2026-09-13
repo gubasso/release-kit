@@ -376,10 +376,8 @@ fn seat_worktree(
             // that refresh failed. A remote-tracking ref left over from
             // an older fetch is not the tip the forge holds now, so it
             // is not something to seat from and call success.
-            if apply {
-                if let Some(why) = detail {
-                    return Err(stale_refs(branch, resolved, &why));
-                }
+            if apply && let Some(why) = detail {
+                return Err(stale_refs(branch, resolved, &why));
             }
             // The forge holds this branch, so the seat comes from its
             // real tip — an adopted local branch, or the remote-tracking

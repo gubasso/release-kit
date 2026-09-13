@@ -2,7 +2,7 @@
 name = "release-kit"
 version = "0.3.31"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.89"
 description = "A canonical release workflow: a technology-agnostic method, per-technology bindings, and the rk CLI that lands and serves them."
 license = "MIT AND CC-BY-4.0"
 homepage = "https://github.com/gubasso/release-kit"

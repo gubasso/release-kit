@@ -181,26 +181,26 @@ pub fn parse_guidance(version: &str, text: &str) -> Result<GuidanceFile, RkError
             if line.trim().is_empty() {
                 continue;
             }
-            if let Some(field) = line.strip_prefix("- ") {
-                if let Some((key, value)) = field.split_once(':') {
-                    match key.trim() {
-                        "destinations" => {
-                            destinations = Some(
-                                value
-                                    .split(',')
-                                    .map(str::trim)
-                                    .filter(|s| !s.is_empty())
-                                    .map(str::to_owned)
-                                    .collect(),
-                            );
-                            continue;
-                        }
-                        "action" => {
-                            action = Some(value.trim().to_owned());
-                            continue;
-                        }
-                        _ => {}
+            if let Some(field) = line.strip_prefix("- ")
+                && let Some((key, value)) = field.split_once(':')
+            {
+                match key.trim() {
+                    "destinations" => {
+                        destinations = Some(
+                            value
+                                .split(',')
+                                .map(str::trim)
+                                .filter(|s| !s.is_empty())
+                                .map(str::to_owned)
+                                .collect(),
+                        );
+                        continue;
                     }
+                    "action" => {
+                        action = Some(value.trim().to_owned());
+                        continue;
+                    }
+                    _ => {}
                 }
             }
             in_fields = false;

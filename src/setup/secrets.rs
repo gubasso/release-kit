@@ -237,13 +237,13 @@ fn resolve_path(raw: &OsString, target: &Utf8Path) -> Result<Utf8PathBuf, RkErro
     };
 
     // A key inside the repository is one `git add .` from being published.
-    if let Ok(inside) = std::fs::canonicalize(target) {
-        if path.as_std_path().starts_with(&inside) {
-            return Err(refuse(
-                format!("{path} is inside the repository being set up"),
-                "keep the .pem outside the working tree",
-            ));
-        }
+    if let Ok(inside) = std::fs::canonicalize(target)
+        && path.as_std_path().starts_with(&inside)
+    {
+        return Err(refuse(
+            format!("{path} is inside the repository being set up"),
+            "keep the .pem outside the working tree",
+        ));
     }
 
     Ok(path)
@@ -285,7 +285,7 @@ fn is_private_key_pem(bytes: &[u8]) -> bool {
 /// gives: a multiple of four characters, padding only at the end, and at
 /// most two padding characters.
 fn is_base64(text: &str) -> bool {
-    if text.is_empty() || text.len() % 4 != 0 {
+    if text.is_empty() || !text.len().is_multiple_of(4) {
         return false;
     }
     let payload = text.trim_end_matches('=');

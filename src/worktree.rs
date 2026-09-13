@@ -30,23 +30,21 @@ const BRANCH_TYPES: [&str; 11] = [
 #[must_use]
 pub fn matches_grammar(branch: &str) -> bool {
     // release[-/].+ — any non-empty remainder, as the regex dot admits.
-    if let Some(rest) = branch.strip_prefix("release") {
-        if let Some(line) = rest.strip_prefix(['-', '/']) {
-            if !line.is_empty() {
-                return true;
-            }
-        }
+    if let Some(rest) = branch.strip_prefix("release")
+        && let Some(line) = rest.strip_prefix(['-', '/'])
+        && !line.is_empty()
+    {
+        return true;
     }
     // <type>/<slug> with the slug over [A-Za-z0-9._/-]+.
-    if let Some((kind, slug)) = branch.split_once('/') {
-        if BRANCH_TYPES.contains(&kind)
-            && !slug.is_empty()
-            && slug
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '-'))
-        {
-            return true;
-        }
+    if let Some((kind, slug)) = branch.split_once('/')
+        && BRANCH_TYPES.contains(&kind)
+        && !slug.is_empty()
+        && slug
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '-'))
+    {
+        return true;
     }
     issue_form(branch)
 }
@@ -66,12 +64,11 @@ fn issue_form(branch: &str) -> bool {
     let digits = branch
         .find(|c: char| !c.is_ascii_digit())
         .unwrap_or(branch.len());
-    if digits >= 1 {
-        if let Some(slug) = branch[digits..].strip_prefix('-') {
-            if slug_ok(slug) {
-                return true;
-            }
-        }
+    if digits >= 1
+        && let Some(slug) = branch[digits..].strip_prefix('-')
+        && slug_ok(slug)
+    {
+        return true;
     }
     // [A-Z][A-Z0-9]+-[0-9]+-<slug>.
     if !branch.starts_with(|c: char| c.is_ascii_uppercase()) {

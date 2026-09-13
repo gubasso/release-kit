@@ -484,10 +484,10 @@ pub(crate) fn request_trigger(workflow: &str, trunk: &str) -> Option<Trigger> {
             continue;
         }
         // A block-list item under the last filter key.
-        if let Some(item) = line.trim_start().strip_prefix("- ") {
-            if let Some((_, items)) = filters.last_mut() {
-                items.push(unquote(before_comment(item).trim()).to_owned());
-            }
+        if let Some(item) = line.trim_start().strip_prefix("- ")
+            && let Some((_, items)) = filters.last_mut()
+        {
+            items.push(unquote(before_comment(item).trim()).to_owned());
         }
     }
     if in_request_event {
@@ -547,13 +547,14 @@ fn jobs(workflow: &str) -> Vec<Job> {
             continue;
         };
         let property_depth = *property_indent.get_or_insert(depth);
-        if reading_needs_list && depth > property_depth {
-            if let Some(item) = line.trim_start().strip_prefix("- ") {
-                if let Needs::Listed(ids) = &mut job.needs {
-                    ids.push(unquote(before_comment(item).trim()).to_owned());
-                }
-                continue;
+        if reading_needs_list
+            && depth > property_depth
+            && let Some(item) = line.trim_start().strip_prefix("- ")
+        {
+            if let Needs::Listed(ids) = &mut job.needs {
+                ids.push(unquote(before_comment(item).trim()).to_owned());
             }
+            continue;
         }
         reading_needs_list = false;
         if depth != property_depth {
