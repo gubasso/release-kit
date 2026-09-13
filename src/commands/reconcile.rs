@@ -242,21 +242,42 @@ pub struct FrontApplied {
 /// fronts do on `--apply`: the store and the journal are best effort,
 /// and the execution path is the one `rk reconcile apply` takes.
 ///
+/// A front computes its plan before it renders anything, so the target
+/// is taken here and observed again under the lock, exactly as
+/// [`apply_stored`] does. Passing the front's own plan as the fresh one
+/// would make the revalidation compare a plan against itself: the
+/// destination digests would still catch a file that moved, and nothing
+/// would catch a planning input outside the destinations — the
+/// repository the target resolves to, a technology's version file, the
+/// committed configuration — that moved between the observation and the
+/// first rename.
+///
 /// # Errors
 ///
-/// The apply's own refusals and failures.
+/// The acquisition's refusal, the recomputation's failures, and the
+/// apply's own refusals and failures.
 pub fn apply_in_process(
     planned: &Planned,
     request: &PlanRequest,
     command: &str,
 ) -> Result<FrontApplied, RkError> {
+    let _lock = crate::plan::lock::acquire(&request.target)?;
+    // The same request at the same instant over the release the plan
+    // resolved, so the recomputation reads the world rather than the
+    // registry, and a record's instant does not move for a plan that
+    // did not.
+    let fresh = compute_frozen(
+        request,
+        &planned.plan.identity.created_at,
+        Some(&planned.plan.desired_state.release),
+    )?;
     let stored = store::persist(planned, request).is_ok();
     let journal = open_journal(command, &planned.plan).ok();
-    let applied = apply::run(
+    let applied = apply::run_locked(
         &request.target,
         &planned.plan,
         &planned.blobs,
-        &planned.plan,
+        &fresh.plan,
         journal,
     )?;
     Ok(FrontApplied { applied, stored })
