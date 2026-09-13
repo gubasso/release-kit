@@ -644,6 +644,7 @@ fn init_preview_human_lines_are_snapshot_held() {
          .github/workflows/release-plz.yml\n\
          .pre-commit-config.yaml\n\
          AGENTS.md\n\
+         GLOSSARY.md\n\
          SECURITY.md\n\
          dist-workspace.toml\n\
          release-plz.toml\n\
@@ -6091,6 +6092,229 @@ fn the_routing_block_splices_and_is_recorded() {
         manifest_file(&read_manifest(target.path()), "AGENTS.md")["kind"],
         "rendered"
     );
+}
+
+/// A bundle from before the glossary shipped still projects: the
+/// destination joins a projection only where the selected bundle declares
+/// its template, so an older release stays a valid destination for
+/// `rk reconcile plan --to`.
+#[test]
+fn a_bundle_without_the_glossary_still_projects() {
+    use release_kit::release::DirReleaseSource;
+
+    fn copy_into(from: &Path, to: &Path) {
+        if from.is_dir() {
+            std::fs::create_dir_all(to).expect("dirs exist");
+            for entry in std::fs::read_dir(from).expect("the dir reads").flatten() {
+                copy_into(&entry.path(), &to.join(entry.file_name()));
+            }
+        } else {
+            std::fs::create_dir_all(to.parent().expect("a parent")).expect("dirs exist");
+            std::fs::copy(from, to).expect("the file copies");
+        }
+    }
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let bundle = tempfile::tempdir().expect("a scratch bundle exists");
+    for path in ["Cargo.toml", "src"]
+        .into_iter()
+        .chain(release_kit::payload_roots::PAYLOAD_ROOTS)
+    {
+        copy_into(&root.join(path), &bundle.path().join(path));
+    }
+    let glossary = bundle.path().join("blocks/glossary.md.in");
+    assert!(glossary.exists(), "the fixture copied the current payload");
+    std::fs::remove_file(&glossary).expect("the older bundle drops the template");
+
+    let source = DirReleaseSource::new(bundle.path());
+    let params = render_params_for("rust", "github", release_kit::landing::Workflow::Worktree);
+    let entries = release_kit::landing::projection(&source, &params).expect("the pair projects");
+    assert!(
+        !entries
+            .iter()
+            .any(|entry| entry.destination == "GLOSSARY.md"),
+        "a bundle that declares no glossary template must project none"
+    );
+    assert!(
+        entries.iter().any(|entry| entry.destination == "AGENTS.md"),
+        "the routing block still projects"
+    );
+}
+
+/// A fresh landing writes the glossary at the target root and records
+/// it, and the block carries the three terms the routing block names.
+#[test]
+fn init_lands_the_glossary() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+
+    let glossary =
+        std::fs::read_to_string(target.path().join("GLOSSARY.md")).expect("GLOSSARY.md landed");
+    assert!(glossary.starts_with("<!-- BEGIN release-kit -->"));
+    assert!(glossary.trim_end().ends_with("<!-- END release-kit -->"));
+    for term in [
+        "implement-and-request",
+        "implement-and-merge",
+        "full-implement",
+    ] {
+        assert!(glossary.contains(term), "{term} is missing: {glossary}");
+    }
+    assert_eq!(
+        manifest_file(&read_manifest(target.path()), "GLOSSARY.md")["kind"],
+        "rendered"
+    );
+
+    // The block is reachable from a loaded session, which is the whole
+    // reason a separate file can carry the expansion at all.
+    let agents = std::fs::read_to_string(target.path().join("AGENTS.md")).expect("AGENTS.md reads");
+    assert!(agents.contains("GLOSSARY.md"), "{agents}");
+    assert!(agents.contains("full-implement"), "{agents}");
+}
+
+/// A target recorded before the destination existed reports it as a
+/// pending payload, takes it on upgrade, and keeps every line the
+/// operator wrote below the end marker through a later upgrade.
+#[test]
+fn upgrade_takes_the_glossary_and_keeps_the_operators_terms() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+
+    // Stand in for an older payload that shipped no glossary: the file
+    // is gone and the record never named it.
+    std::fs::remove_file(target.path().join("GLOSSARY.md")).expect("the glossary removes");
+    let mut manifest = read_manifest(target.path());
+    manifest["files"]
+        .as_array_mut()
+        .expect("files")
+        .retain(|file| file["destination"] != "GLOSSARY.md");
+    write_manifest(target.path(), &manifest);
+
+    rk().args(["status", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("PENDING GLOSSARY.md")
+                .and(predicate::str::contains("rk upgrade")),
+        );
+
+    rk().args(["upgrade", "--target"])
+        .arg(target.path())
+        .arg("--apply")
+        .assert()
+        .success();
+    let glossary =
+        std::fs::read_to_string(target.path().join("GLOSSARY.md")).expect("the upgrade wrote it");
+    assert!(glossary.contains("full-implement"), "{glossary}");
+
+    // An older block, recorded as landed, with the operator's own terms
+    // below it: the next upgrade must replace the block and rewrite no
+    // byte the operator wrote.
+    let own = "\n## Our own terms\n\n- `spike` — a throwaway branch, never merged.\n";
+    let stale_block = glossary
+        .trim_end()
+        .replace("full-implement", "do-everything");
+    std::fs::write(
+        target.path().join("GLOSSARY.md"),
+        format!("{stale_block}{own}"),
+    )
+    .expect("the older landing writes");
+    let mut manifest = read_manifest(target.path());
+    let digest = serde_json::Value::from(Digest::of(stale_block.as_bytes()).to_string());
+    for file in manifest["files"].as_array_mut().expect("files") {
+        if file["destination"] == "GLOSSARY.md" {
+            file["sha256"] = digest.clone();
+            file["baseline_sha256"] = digest.clone();
+        }
+    }
+    write_manifest(target.path(), &manifest);
+
+    // Nobody edited the block, so this is the payload's story and not drift.
+    let out = rk()
+        .args(["status", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["drift"]["rendered"], 0, "{report}");
+    assert!(
+        report["pending"].as_u64().unwrap_or_default() >= 1,
+        "the older block is pending: {report}"
+    );
+
+    rk().args(["upgrade", "--target"])
+        .arg(target.path())
+        .arg("--apply")
+        .assert()
+        .success();
+    let after =
+        std::fs::read_to_string(target.path().join("GLOSSARY.md")).expect("GLOSSARY.md reads");
+    assert!(
+        after.contains("full-implement") && !after.contains("do-everything"),
+        "the upgrade must replace the older block: {after}"
+    );
+    assert!(
+        after.ends_with(own),
+        "the operator's own region changed: {after}"
+    );
+    assert_eq!(
+        after.matches("BEGIN release-kit").count(),
+        1,
+        "a re-splice must replace, not accumulate: {after}"
+    );
+}
+
+/// The judgment stops at the markers: an edit inside them is drift on a
+/// rendered destination, and an edit below them is the target's own
+/// writing and no defect at all.
+#[test]
+fn status_check_judges_the_glossary_block() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+    let path = target.path().join("GLOSSARY.md");
+
+    // The seeded file's sentinel is the target's own judgment to make,
+    // and an unresolved one is a violation of its own.
+    let seeded = target.path().join("release-plz.toml");
+    let filled = std::fs::read_to_string(&seeded)
+        .expect("the seeded file reads")
+        .lines()
+        .filter(|line| !line.contains("TODO(release-kit)"))
+        .fold(String::new(), |mut text, line| {
+            text.push_str(line);
+            text.push('\n');
+            text
+        });
+    std::fs::write(&seeded, filled).expect("the fill writes");
+
+    // Below the markers: the target's own vocabulary.
+    let landed = std::fs::read_to_string(&path).expect("GLOSSARY.md reads");
+    std::fs::write(
+        &path,
+        format!(
+            "{}\n\n## Our own terms\n\n- `spike` — throwaway.\n",
+            landed.trim_end()
+        ),
+    )
+    .expect("the operator's terms write");
+    rk().args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+
+    // Inside the markers: drift release-kit owns.
+    let text = std::fs::read_to_string(&path).expect("GLOSSARY.md reads");
+    std::fs::write(&path, text.replace("full-implement", "do-everything"))
+        .expect("the edited block writes");
+    rk().args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(predicate::str::contains("GLOSSARY.md"));
 }
 
 /// The hook block splices into a target's own `.pre-commit-config.yaml`
@@ -21225,6 +21449,7 @@ fn projection_through_the_embedded_source_is_byte_identical() {
                             .replacen("RK_WORKFLOW_LINE", &line, 1)
                             .into_bytes()
                     }
+                    (Placement::Block, "GLOSSARY.md") => authored("glossary.md.in").into_bytes(),
                     (Placement::Block, ".pre-commit-config.yaml") => {
                         let (guard, skip) = match workflow {
                             Workflow::Worktree => (
@@ -21755,7 +21980,7 @@ fn an_empty_target_plans_a_setup_with_every_destination_written() {
             "{path} has no before on an empty target"
         );
         assert!(op["after"].is_string());
-        let expected = if path == "AGENTS.md" || path == ".pre-commit-config.yaml" {
+        let expected = if release_kit::landing::BLOCK_DESTINATIONS.contains(&path) {
             "splice-block"
         } else {
             "write-file"

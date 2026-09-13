@@ -364,7 +364,10 @@ pub const NIX_WITHHOLDABLE: [&str; 2] = ["flake.nix", "flake.lock"];
 /// does not classify.
 #[must_use]
 pub fn kind_of(destination: &str) -> Option<Kind> {
-    if destination == AGENTS_DESTINATION || destination == HOOKS_DESTINATION {
+    if destination == AGENTS_DESTINATION
+        || destination == GLOSSARY_DESTINATION
+        || destination == HOOKS_DESTINATION
+    {
         return Some(Kind::Rendered);
     }
     KINDS
@@ -373,14 +376,15 @@ pub fn kind_of(destination: &str) -> Option<Kind> {
         .map(|(_, kind)| *kind)
 }
 
-/// Every destination the payload can land — the whole files and the two
-/// block destinations — in declaration order. The classification reads
-/// it to ask whether a destination is already present at a target.
+/// Every destination the payload can land, in declaration order.
+///
+/// The whole files and the three block destinations. The classification
+/// reads it to ask whether a destination is already present at a target.
 pub fn destinations() -> impl Iterator<Item = &'static str> {
     KINDS
         .iter()
         .map(|(name, _)| *name)
-        .chain([AGENTS_DESTINATION, HOOKS_DESTINATION])
+        .chain(BLOCK_DESTINATIONS)
 }
 
 /// The mechanical substitution sites in `rendered` files.
@@ -557,8 +561,22 @@ pub const BLOCK_BEGIN: &str = "<!-- BEGIN release-kit -->";
 /// The block's closing marker.
 pub const BLOCK_END: &str = "<!-- END release-kit -->";
 
+/// The destination the glossary block splices into.
+///
+/// The document is the target's own vocabulary, so the block shares
+/// `AGENTS.md`'s marker pair and owns nothing outside it.
+pub const GLOSSARY_DESTINATION: &str = "GLOSSARY.md";
+
 /// The destination the hook block splices into.
 pub const HOOKS_DESTINATION: &str = ".pre-commit-config.yaml";
+
+/// Every block destination, in the order a landing writes them.
+///
+/// A block destination owns the lines between its markers and nothing
+/// else, so every verb that asks whether a destination is block-placed
+/// reads this one list.
+pub const BLOCK_DESTINATIONS: [&str; 3] =
+    [AGENTS_DESTINATION, GLOSSARY_DESTINATION, HOOKS_DESTINATION];
 
 /// The hook block's opening marker, a YAML comment at column zero.
 pub const HOOKS_BEGIN: &str = "# BEGIN release-kit";
@@ -573,6 +591,9 @@ pub const HOOK_TYPES_LINE: &str = "default_install_hook_types: [pre-commit, comm
 
 /// The authored routing-block template, `blocks/agents-block.md.in`.
 const AGENTS_BLOCK: &str = "blocks/agents-block.md.in";
+
+/// The authored glossary template, `blocks/glossary.md.in`.
+const GLOSSARY_BLOCK: &str = "blocks/glossary.md.in";
 
 /// The routing block's mode line, worktree form.
 const AGENTS_LINE_WORKTREE: &str = "blocks/agents-line-worktree.md.in";
@@ -664,6 +685,21 @@ pub fn routing_block(source: &dyn ReleaseSource, workflow: Workflow) -> Result<S
     Ok(authored(&template).replacen("RK_WORKFLOW_LINE", authored(&line), 1))
 }
 
+/// The glossary block, read from the bundle `source` carries.
+///
+/// Markers included and without a trailing newline, like the routing
+/// block. It carries no token and no mode: every term it names expands
+/// to steps of the one workflow, so the same bytes land in every target.
+///
+/// # Errors
+///
+/// Returns the source's failures for a bundle that does not carry the
+/// block.
+pub fn glossary_block(source: &dyn ReleaseSource) -> Result<String, RkError> {
+    let manifest = source.manifest()?;
+    Ok(authored(&block(source, &manifest, GLOSSARY_BLOCK)?).to_owned())
+}
+
 /// The hook block for one workflow mode, read from the bundle `source`
 /// carries.
 ///
@@ -704,7 +740,7 @@ pub fn hooks_block(source: &dyn ReleaseSource, workflow: Workflow) -> Result<Str
 #[must_use]
 pub fn block_markers(destination: &str) -> Option<(&'static str, &'static str)> {
     match destination {
-        AGENTS_DESTINATION => Some((BLOCK_BEGIN, BLOCK_END)),
+        AGENTS_DESTINATION | GLOSSARY_DESTINATION => Some((BLOCK_BEGIN, BLOCK_END)),
         HOOKS_DESTINATION => Some((HOOKS_BEGIN, HOOKS_END)),
         _ => None,
     }
@@ -719,22 +755,36 @@ pub fn extract_block<'a>(text: &'a str, begin: &str, end: &str) -> Option<&'a st
     Some(&text[start..stop])
 }
 
-/// The whole `AGENTS.md` content after splicing the rendered block.
+/// The whole document's bytes after splicing a marked block into it.
 ///
 /// A fresh file where none exists, the block replaced in place where one
 /// is marked, appended after the target's own content otherwise —
-/// release-kit owns the lines inside the markers, not the document.
+/// release-kit owns the lines inside the markers, not the document. Both
+/// markdown destinations take this shape, `AGENTS.md` and the glossary.
 #[must_use]
-pub fn splice_agents_block(existing: Option<&str>, block: &str) -> String {
-    existing.map_or_else(
-        || format!("{block}\n"),
-        |text| {
-            extract_block(text, BLOCK_BEGIN, BLOCK_END).map_or_else(
-                || format!("{}\n\n{block}\n", text.trim_end()),
-                |found| text.replacen(found, block, 1),
-            )
-        },
-    )
+pub fn splice_marked_block(existing: Option<&[u8]>, block: &str) -> Vec<u8> {
+    let block = block.as_bytes();
+    let Some(text) = existing else {
+        return [block, b"\n"].concat();
+    };
+    // Bytes, never text: the document belongs to the target and a decode
+    // that replaces one invalid sequence rewrites a byte outside the
+    // markers, which is the one thing a block destination never does.
+    if let Some(start) = find(text, BLOCK_BEGIN.as_bytes())
+        && let Some(offset) = find(&text[start..], BLOCK_END.as_bytes())
+    {
+        let stop = start + offset + BLOCK_END.len();
+        return [&text[..start], block, &text[stop..]].concat();
+    }
+    // Appending keeps every byte the target wrote, trailing blank lines
+    // and an absent final newline included. The only addition is the
+    // separator that opens the block's own line.
+    let separator: &[u8] = if text.ends_with(b"\n") {
+        b"\n"
+    } else {
+        b"\n\n"
+    };
+    [text, separator, block, b"\n"].concat()
 }
 
 /// The whole `.pre-commit-config.yaml` content after splicing the
@@ -931,10 +981,15 @@ pub fn projection(source: &dyn ReleaseSource, params: &Params) -> Result<Vec<Ent
             rendered,
         });
     }
-    for (destination, template) in [
-        (AGENTS_DESTINATION, routing_block(source, params.workflow)?),
-        (HOOKS_DESTINATION, hooks_block(source, params.workflow)?),
-    ] {
+    // A bundle from before the glossary shipped declares no template for
+    // it, and an older release stays selectable: the destination joins the
+    // projection only where the selected bundle carries it.
+    let mut blocks = vec![(AGENTS_DESTINATION, routing_block(source, params.workflow)?)];
+    if source.manifest()?.artifact(GLOSSARY_BLOCK).is_some() {
+        blocks.push((GLOSSARY_DESTINATION, glossary_block(source)?));
+    }
+    blocks.push((HOOKS_DESTINATION, hooks_block(source, params.workflow)?));
+    for (destination, template) in blocks {
         entries.push(Entry {
             destination: destination.to_owned(),
             kind: Kind::Rendered,
@@ -1326,17 +1381,22 @@ pub fn write_destination(target: &Utf8Path, entry: &Entry) -> std::io::Result<()
         Placement::Whole => atomic::write(path.as_std_path(), &entry.rendered),
         Placement::Block => {
             let existing = match std::fs::read(&path) {
-                Ok(bytes) => Some(String::from_utf8_lossy(&bytes).into_owned()),
+                Ok(bytes) => Some(bytes),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
                 Err(e) => return Err(e),
             };
+            // The block is release-kit's own text; the document is the
+            // target's bytes and is never decoded.
             let block = String::from_utf8_lossy(&entry.rendered).into_owned();
-            let spliced = if entry.destination == HOOKS_DESTINATION {
-                splice_hooks_block(existing.as_deref(), &block).map_err(std::io::Error::other)?
+            if entry.destination == HOOKS_DESTINATION {
+                let text = existing.map(|bytes| String::from_utf8_lossy(&bytes).into_owned());
+                let spliced =
+                    splice_hooks_block(text.as_deref(), &block).map_err(std::io::Error::other)?;
+                atomic::write(path.as_std_path(), spliced.as_bytes())
             } else {
-                splice_agents_block(existing.as_deref(), &block)
-            };
-            atomic::write(path.as_std_path(), spliced.as_bytes())
+                let spliced = splice_marked_block(existing.as_deref(), &block);
+                atomic::write(path.as_std_path(), &spliced)
+            }
         }
     }
 }
@@ -1399,9 +1459,10 @@ pub fn hooks_splice_refusal(source: &dyn ReleaseSource, target: &Utf8Path) -> Re
 #[cfg(test)]
 mod tests {
     use super::{
-        AGENTS_DESTINATION, BLOCK_BEGIN, BLOCK_END, BRANCH_GRAMMAR, HOOK_TYPES_LINE, HOOKS_BEGIN,
-        HOOKS_DESTINATION, HOOKS_END, Kind, SCOPE_SHAPE, Style, Workflow, extract_block, kind_of,
-        render, splice_agents_block, splice_hooks_block,
+        AGENTS_DESTINATION, BLOCK_BEGIN, BLOCK_DESTINATIONS, BLOCK_END, BRANCH_GRAMMAR,
+        GLOSSARY_DESTINATION, HOOK_TYPES_LINE, HOOKS_BEGIN, HOOKS_DESTINATION, HOOKS_END, Kind,
+        SCOPE_SHAPE, Style, Workflow, extract_block, kind_of, render, splice_hooks_block,
+        splice_marked_block,
     };
     use crate::embedded;
     use crate::release::EmbeddedReleaseSource;
@@ -1426,6 +1487,17 @@ mod tests {
 
     fn hooks_block(workflow: Workflow) -> String {
         super::hooks_block(&SOURCE, workflow).expect("the embedded bundle carries the block")
+    }
+
+    fn glossary_block() -> String {
+        super::glossary_block(&SOURCE).expect("the embedded bundle carries the block")
+    }
+
+    /// The splice returns the document's bytes; every assertion below
+    /// reads them back as text, which every fixture here is.
+    fn spliced(existing: Option<&str>, block: &str) -> String {
+        String::from_utf8(splice_marked_block(existing.map(str::as_bytes), block))
+            .expect("the fixtures are text")
     }
 
     #[test]
@@ -1570,8 +1642,9 @@ mod tests {
                 }
             }
         }
-        assert_eq!(kind_of(AGENTS_DESTINATION), Some(Kind::Rendered));
-        assert_eq!(kind_of(HOOKS_DESTINATION), Some(Kind::Rendered));
+        for block in BLOCK_DESTINATIONS {
+            assert_eq!(kind_of(block), Some(Kind::Rendered), "{block}");
+        }
         assert_eq!(kind_of("something-else.txt"), None);
     }
 
@@ -1724,7 +1797,9 @@ mod tests {
                                 .collect();
                             let routing = routing_block(workflow);
                             let hooks = hooks_block(workflow);
+                            let glossary = glossary_block();
                             expected.push((AGENTS_DESTINATION.to_owned(), routing.into_bytes()));
+                            expected.push((GLOSSARY_DESTINATION.to_owned(), glossary.into_bytes()));
                             expected.push((HOOKS_DESTINATION.to_owned(), hooks.into_bytes()));
                             expected.sort_by(|a, b| a.0.cmp(&b.0));
                             assert_eq!(entries.len(), expected.len());
@@ -1816,11 +1891,11 @@ mod tests {
         assert_eq!(seeded.kind, Kind::Seeded);
         assert_eq!(seeded.rendered, seeded.baseline);
         assert!(String::from_utf8_lossy(&seeded.rendered).contains("TODO(release-kit)"));
-        for block in [AGENTS_DESTINATION, HOOKS_DESTINATION] {
+        for block in BLOCK_DESTINATIONS {
             let entry = entries
                 .iter()
                 .find(|entry| entry.destination == block)
-                .expect("both blocks are part of the projection");
+                .expect("every block is part of the projection");
             let text = String::from_utf8_lossy(&entry.rendered);
             assert!(
                 !text.contains("RK_SCOPE_SHAPE"),
@@ -1982,15 +2057,150 @@ mod tests {
         assert!(withheld.is_empty());
     }
 
+    /// The glossary takes the same three shapes the routing block does,
+    /// and the marker pair it shares with `AGENTS.md` is what makes one
+    /// splice serve both.
+    #[test]
+    fn the_glossary_splices_into_every_shape() {
+        let owned = glossary_block();
+        let block = owned.as_str();
+
+        let fresh = spliced(None, block);
+        assert_eq!(fresh, format!("{block}\n"));
+        assert_eq!(extract_block(&fresh, BLOCK_BEGIN, BLOCK_END), Some(block));
+
+        let own = "# Glossary\n\n- `spike` — a throwaway branch.\n";
+        let appended = spliced(Some(own), block);
+        assert!(appended.starts_with(own));
+        assert_eq!(
+            extract_block(&appended, BLOCK_BEGIN, BLOCK_END),
+            Some(block)
+        );
+
+        let stale = appended.replace("full-implement", "do-everything");
+        let refreshed = spliced(Some(&stale), block);
+        assert_eq!(
+            extract_block(&refreshed, BLOCK_BEGIN, BLOCK_END),
+            Some(block)
+        );
+        assert_eq!(
+            refreshed.matches("BEGIN release-kit").count(),
+            1,
+            "a re-splice must replace, not accumulate"
+        );
+    }
+
+    /// Every line the target wrote below the end marker survives a
+    /// re-splice byte for byte: the block owns its marked lines and the
+    /// document belongs to the target.
+    #[test]
+    fn the_glossary_leaves_the_targets_region_alone() {
+        let owned = glossary_block();
+        let block = owned.as_str();
+        let below = "\n## Our own terms\n\n- `spike` — a throwaway branch, never merged.\n";
+        let landed = format!("{block}\n{below}");
+
+        let refreshed = spliced(Some(&landed), block);
+        assert!(
+            refreshed.ends_with(below),
+            "the target's own region changed: {refreshed}"
+        );
+        assert_eq!(
+            extract_block(&refreshed, BLOCK_BEGIN, BLOCK_END),
+            Some(block)
+        );
+    }
+
+    /// Appending keeps the document whole: trailing spaces, blank lines,
+    /// and a missing final newline are the target's bytes, and a block
+    /// that owns its marked lines alone rewrites none of them.
+    #[test]
+    fn an_append_rewrites_no_byte_the_target_wrote() {
+        let owned = glossary_block();
+        let block = owned.as_str();
+        for own in [
+            "# Glossary\n\n- `spike` — throwaway.   \n\n\n",
+            "# Glossary\n\n- `spike` — throwaway.",
+            "# Glossary\r\n\r\n- `spike` — throwaway.\r\n",
+        ] {
+            let appended = spliced(Some(own), block);
+            assert!(
+                appended.starts_with(own),
+                "the target's bytes changed: {appended:?}"
+            );
+            assert_eq!(
+                extract_block(&appended, BLOCK_BEGIN, BLOCK_END),
+                Some(block),
+                "{appended:?}"
+            );
+            let marker = appended.find(BLOCK_BEGIN).expect("the block landed");
+            assert!(
+                appended[..marker].ends_with('\n'),
+                "the block must open its own line: {appended:?}"
+            );
+        }
+    }
+
+    /// A document the target wrote is bytes, not text. A splice that
+    /// decoded it would replace an invalid sequence with U+FFFD and
+    /// rewrite a byte outside the markers, which the rule forbids.
+    #[test]
+    fn a_splice_decodes_no_byte_the_target_wrote() {
+        let owned = glossary_block();
+        let block = owned.as_str();
+
+        // Appending: the invalid byte sits in the target's own document.
+        let own = b"# Glossary\n\ncaf\xe9\n";
+        let appended = splice_marked_block(Some(own), block);
+        assert!(
+            appended.starts_with(own),
+            "the target's bytes changed: {appended:?}"
+        );
+        assert!(!appended.contains(&0xEF), "a replacement character landed");
+
+        // Replacing: the invalid byte sits below the end marker.
+        let mut landed = Vec::new();
+        landed.extend_from_slice(block.replace("full-implement", "do-everything").as_bytes());
+        landed.extend_from_slice(b"\n\ncaf\xe9\n");
+        let refreshed = splice_marked_block(Some(&landed), block);
+        assert!(
+            refreshed.ends_with(b"\n\ncaf\xe9\n"),
+            "the target's region below the markers changed: {refreshed:?}"
+        );
+        assert!(refreshed.starts_with(block.as_bytes()), "{refreshed:?}");
+    }
+
+    /// The glossary carries no parameter, so the same bytes land in
+    /// every target: no token survives it and no mode changes it.
+    #[test]
+    fn the_glossary_block_carries_no_parameter() {
+        let block = glossary_block();
+        assert!(block.starts_with(BLOCK_BEGIN), "{block}");
+        assert!(block.ends_with(BLOCK_END), "{block}");
+        assert!(!block.contains("RK_"), "a token survived: {block}");
+        assert!(!block.contains("OWNER"), "an owner token survived: {block}");
+        for term in [
+            "implement-and-request",
+            "implement-and-merge",
+            "full-implement",
+        ] {
+            assert!(block.contains(term), "{term} is missing from {block}");
+        }
+        assert!(
+            routing_block(Workflow::Worktree).contains(GLOSSARY_DESTINATION),
+            "the routing block must name the destination it indexes"
+        );
+    }
+
     #[test]
     fn the_block_splices_into_every_agents_shape() {
         let owned = routing_block(Workflow::Branches);
         let block = owned.as_str();
-        let fresh = splice_agents_block(None, block);
+        let fresh = spliced(None, block);
         assert_eq!(fresh, format!("{block}\n"));
         assert_eq!(extract_block(&fresh, BLOCK_BEGIN, BLOCK_END), Some(block));
 
-        let appended = splice_agents_block(Some("# My project\n\nOwn rules.\n"), block);
+        let appended = spliced(Some("# My project\n\nOwn rules.\n"), block);
         assert!(appended.starts_with("# My project\n\nOwn rules.\n\n<!-- BEGIN release-kit -->"));
         assert_eq!(
             extract_block(&appended, BLOCK_BEGIN, BLOCK_END),
@@ -1998,7 +2208,7 @@ mod tests {
         );
 
         let stale = appended.replace("Never author a tag", "Do author a tag");
-        let refreshed = splice_agents_block(Some(&stale), block);
+        let refreshed = spliced(Some(&stale), block);
         assert_eq!(
             extract_block(&refreshed, BLOCK_BEGIN, BLOCK_END),
             Some(block)
