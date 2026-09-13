@@ -161,7 +161,7 @@ Verify: `cargo nextest run -E 'test(an_interrupted_apply_leaves_each_destination
 
 ### `reconcile:every-front-lands-through-the-engine` — Every front lands through the engine
 
-`rk init`, `rk upgrade`, and `rk adopt` MUST compute their plan with a fixed intent, `setup`, `upgrade`, or `adopt`, and MUST land on `--apply` through the one execution path `rk reconcile apply` takes, with the store and the journal best effort because a front is one process with no review window. The landing a front produces MUST be the landing the engine produces under the same request, file for file, and the adopt intent MUST plan the configuration and the record and no other write. A pin a one-fact manager records MUST move as an `update-pin` operation of the plan, and the flake pin MUST stay the sync verb's, because that move needs nix and the network an offline apply never has. The adopt intent MUST plan no `update-pin` and MUST report a stale pin as an advisory precondition instead, because a manager file sits outside `.release-kit/` and an adoption writes the record alone.
+`rk init`, `rk upgrade`, and `rk adopt` MUST compute their plan with a fixed intent, `setup`, `upgrade`, or `adopt`, and MUST land on `--apply` through the one execution path `rk reconcile apply` takes, with the store and the journal best effort because a front is one process with no review window. A front MUST take the target before it writes the store or the journal, and MUST observe the world again under that lock to derive the plan it revalidates against, rather than revalidating the plan it rendered against itself, because a front renders before it applies and a planning input outside the destinations, the repository the target resolves to or a technology's version file, moving in that window is exactly what no destination digest would show. The landing a front produces MUST be the landing the engine produces under the same request, file for file, and the adopt intent MUST plan the configuration and the record and no other write. A pin a one-fact manager records MUST move as an `update-pin` operation of the plan, and the flake pin MUST stay the sync verb's, because that move needs nix and the network an offline apply never has. The adopt intent MUST plan no `update-pin` and MUST report a stale pin as an advisory precondition instead, because a manager file sits outside `.release-kit/` and an adoption writes the record alone.
 
 #### Scenario: The three fronts and the engine land the same target
 
@@ -169,7 +169,7 @@ Verify: `cargo nextest run -E 'test(an_interrupted_apply_leaves_each_destination
 - WHEN each front lands with `--apply` beside `rk reconcile plan` and `rk reconcile apply` under the same request
 - THEN every file digests the same, and the records differ in their instant and their origin word alone
 
-Verify: `cargo nextest run -E 'test(init_upgrade_and_adopt_produce_the_same_landing_through_the_engine) or test(adoption_writes_no_pin)'`
+Verify: `cargo nextest run -E 'test(init_upgrade_and_adopt_produce_the_same_landing_through_the_engine) or test(adoption_writes_no_pin) or test(a_front_apply_takes_the_target_before_it_observes_it)'`
 
 ### `reconcile:compatibility-is-declared-in-the-bundle-and-evaluated-per-axis` — Compatibility is declared in the bundle and evaluated per axis
 

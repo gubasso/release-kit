@@ -23748,6 +23748,71 @@ fn an_apply_refuses_when_it_cannot_take_the_target() {
     );
 }
 
+/// A front takes the target before it observes it again, so a held
+/// target refuses before the store or the journal is written.
+///
+/// A front computes its plan, renders it, and only then applies, so the
+/// window between its observation and its first rename is the widest one
+/// the engine has. The lock closing that window is what this proves: the
+/// refusal names the holder, the store took no plan, and the freed
+/// target still takes the same landing, which is what shows the
+/// recomputation under the lock agrees with the plan the front rendered.
+#[test]
+fn a_front_apply_takes_the_target_before_it_observes_it() {
+    let home = tempfile::tempdir().expect("a scratch home exists");
+    let target = plan_target();
+    let canonical = std::fs::canonicalize(target.path()).expect("the target canonicalizes");
+    let locks = home.path().join("release-kit").join("locks");
+    std::fs::create_dir_all(&locks).expect("the locks directory exists");
+    let held = locks.join(format!(
+        "{}.lock",
+        Digest::of(canonical.to_string_lossy().as_bytes())
+    ));
+    std::fs::write(&held, "4242\n").expect("the lock writes");
+
+    let front = |home: &Path| {
+        rk_home(home)
+            .args(["init", "--tech", "rust", "--forge", "github"])
+            .args(["--repo", "acme/widget", "--json", "--target"])
+            .arg(target.path())
+            .arg("--apply")
+            .assert()
+    };
+
+    let before = tree_digests(target.path());
+    let refused = front(home.path()).failure();
+    let diagnostic = refusal_of(&refused);
+    assert_eq!(diagnostic["reason"], "target-busy", "{diagnostic}");
+    assert_eq!(diagnostic["target_state"], "unchanged", "{diagnostic}");
+    assert!(
+        diagnostic["message"]
+            .as_str()
+            .expect("a message")
+            .contains("4242"),
+        "the refusal names what holds the target: {diagnostic}"
+    );
+    assert_eq!(
+        tree_digests(target.path()),
+        before,
+        "a refused front apply writes nothing"
+    );
+    assert!(
+        !home.path().join("release-kit").join("plans").is_dir(),
+        "the target is taken before the store is written"
+    );
+
+    std::fs::remove_file(&held).expect("the lock clears");
+    front(home.path()).success();
+    assert!(
+        target.path().join(".release-kit/manifest.json").is_file(),
+        "the freed target takes the landing"
+    );
+    assert!(
+        !held.exists(),
+        "the lock is released when the front's apply ends"
+    );
+}
+
 /// A manager file the target carries that names no release-kit raises the
 /// pin decision, because that is exactly the case it exists to ask about.
 ///
