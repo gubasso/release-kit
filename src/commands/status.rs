@@ -407,14 +407,14 @@ fn observe(args: &StatusArgs, manifest: &Manifest) -> Result<Observed, RkError> 
     // can carry pins ahead of this binary's registry, and that is the
     // alignment line's story, not a freshness complaint.
     for (tool, landed) in &manifest.pins {
-        if let Some(available) = registry::version_of(tool) {
-            if manifest::version_is_newer(&available, landed) {
-                observed.stale.push(StalePin {
-                    tool: tool.clone(),
-                    landed: landed.clone(),
-                    available,
-                });
-            }
+        if let Some(available) = registry::version_of(tool)
+            && manifest::version_is_newer(&available, landed)
+        {
+            observed.stale.push(StalePin {
+                tool: tool.clone(),
+                landed: landed.clone(),
+                available,
+            });
         }
     }
     Ok(observed)

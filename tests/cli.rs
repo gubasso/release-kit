@@ -23649,6 +23649,35 @@ fn the_reconcile_runbook_states_the_plan_handling_rule() {
     );
 }
 
+/// Hold `target`'s lock the way a live run holds it, and return the lock
+/// file's path beside the open file that holds it.
+///
+/// Dropping the returned file releases the target. The process id in the
+/// body is what a refusal names, so it is written before the lock is
+/// taken and is this test's own choice.
+fn hold_target_lock(home: &Path, target: &Path) -> (PathBuf, std::fs::File) {
+    use std::io::Write as _;
+
+    let canonical = std::fs::canonicalize(target).expect("the target canonicalizes");
+    let locks = home.join("release-kit").join("locks");
+    std::fs::create_dir_all(&locks).expect("the locks directory exists");
+    let path = locks.join(format!(
+        "{}.lock",
+        Digest::of(canonical.to_string_lossy().as_bytes())
+    ));
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&path)
+        .expect("the lock file opens");
+    writeln!(file, "4242").expect("the holder's line writes");
+    file.flush().expect("the holder's line reaches the file");
+    file.try_lock().expect("this process takes the target");
+    (path, file)
+}
+
 /// One apply holds its target, so a second against the same target
 /// refuses rather than interleaving its staging with the first's.
 ///
@@ -23665,17 +23694,10 @@ fn a_second_apply_against_one_target_refuses_while_the_first_holds_it() {
         target.path(),
         &["--decide", "workflow-mode=worktree"],
     );
-    // The lock the first run would hold, taken by hand: a second process
-    // cannot be paused mid-apply from here, and the file is the whole of
-    // what the first run holds.
-    let canonical = std::fs::canonicalize(target.path()).expect("the target canonicalizes");
-    let locks = home.path().join("release-kit").join("locks");
-    std::fs::create_dir_all(&locks).expect("the locks directory exists");
-    let held = locks.join(format!(
-        "{}.lock",
-        Digest::of(canonical.to_string_lossy().as_bytes())
-    ));
-    std::fs::write(&held, "4242\n").expect("the lock writes");
+    // The lock the first run would hold, taken by this process: a second
+    // process cannot be paused mid-apply from here, and an operating
+    // system lock is what holding the target means.
+    let (held, holder) = hold_target_lock(home.path(), target.path());
 
     let before = tree_digests(target.path());
     let refused = apply_stored(home.path(), &id).failure();
@@ -23696,8 +23718,10 @@ fn a_second_apply_against_one_target_refuses_while_the_first_holds_it() {
     );
 
     // The holder gone, the same plan applies: the lock gates the run and
-    // does not spoil the plan.
-    std::fs::remove_file(&held).expect("the lock clears");
+    // does not spoil the plan. The file stays where it is, because the
+    // lock and not the file is what held the target.
+    drop(holder);
+    assert!(held.exists(), "the lock file outlives the run that took it");
     apply_stored(home.path(), &id).success();
     assert!(
         target.path().join(".release-kit/manifest.json").is_file(),
@@ -23761,14 +23785,7 @@ fn an_apply_refuses_when_it_cannot_take_the_target() {
 fn a_front_apply_takes_the_target_before_it_observes_it() {
     let home = tempfile::tempdir().expect("a scratch home exists");
     let target = plan_target();
-    let canonical = std::fs::canonicalize(target.path()).expect("the target canonicalizes");
-    let locks = home.path().join("release-kit").join("locks");
-    std::fs::create_dir_all(&locks).expect("the locks directory exists");
-    let held = locks.join(format!(
-        "{}.lock",
-        Digest::of(canonical.to_string_lossy().as_bytes())
-    ));
-    std::fs::write(&held, "4242\n").expect("the lock writes");
+    let (held, holder) = hold_target_lock(home.path(), target.path());
 
     let front = |home: &Path| {
         rk_home(home)
@@ -23801,15 +23818,47 @@ fn a_front_apply_takes_the_target_before_it_observes_it() {
         "the target is taken before the store is written"
     );
 
-    std::fs::remove_file(&held).expect("the lock clears");
+    drop(holder);
     front(home.path()).success();
     assert!(
         target.path().join(".release-kit/manifest.json").is_file(),
         "the freed target takes the landing"
     );
+    assert!(held.exists(), "the lock file outlives the run that took it");
+}
+
+/// A lock file a killed run left behind blocks nothing, so the next
+/// apply takes the target instead of refusing until somebody removes the
+/// file by hand.
+///
+/// What holds a target is the operating system's lock on the open file,
+/// which the kernel releases however the holder exits. The file is only
+/// where that lock lives, so a file with no live holder is a target
+/// nobody holds.
+#[test]
+fn a_lock_file_a_killed_run_left_behind_blocks_no_apply() {
+    let home = tempfile::tempdir().expect("a scratch home exists");
+    let target = plan_target();
+    let (id, _) = plan_stored(
+        home.path(),
+        target.path(),
+        &["--decide", "workflow-mode=worktree"],
+    );
+    // Exactly what a kill leaves: the bytes of the dead run's lock file,
+    // and no lock on it.
+    let (held, holder) = hold_target_lock(home.path(), target.path());
+    drop(holder);
+    assert!(held.exists(), "the killed run's lock file is there");
+
+    apply_stored(home.path(), &id).success();
     assert!(
-        !held.exists(),
-        "the lock is released when the front's apply ends"
+        target.path().join(".release-kit/manifest.json").is_file(),
+        "the target nobody holds takes the landing"
+    );
+    let body = std::fs::read_to_string(&held).expect("the lock file reads");
+    assert!(
+        !body.starts_with("4242"),
+        "the run that took the target names itself: {body:?}"
     );
 }
 

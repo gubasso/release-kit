@@ -96,10 +96,10 @@ impl ReleaseManifest {
     pub fn dirs_under(&self, prefix: &str) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
         for (rest, _) in self.under(prefix) {
-            if let Some((dir, _)) = rest.split_once('/') {
-                if !out.iter().any(|known| known == dir) {
-                    out.push(dir.to_owned());
-                }
+            if let Some((dir, _)) = rest.split_once('/')
+                && !out.iter().any(|known| known == dir)
+            {
+                out.push(dir.to_owned());
             }
         }
         out

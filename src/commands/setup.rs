@@ -347,10 +347,10 @@ impl Engine {
 
     fn emit(&mut self, event: &Event) {
         self.out.event(event);
-        if let Some(journal) = &mut self.journal {
-            if let Ok(line) = serde_json::to_string(event) {
-                journal.event_line(&line);
-            }
+        if let Some(journal) = &mut self.journal
+            && let Ok(line) = serde_json::to_string(event)
+        {
+            journal.event_line(&line);
         }
     }
 

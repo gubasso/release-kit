@@ -931,12 +931,11 @@ fn github_trunk_ruleset(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkErro
         &rules,
         &ctx.protection().owned_trunk_rules,
     ));
-    if let Some(request) = rules.iter().find(|rule| rule["type"] == "pull_request") {
-        if request["parameters"]["allowed_merge_methods"]
+    if let Some(request) = rules.iter().find(|rule| rule["type"] == "pull_request")
+        && request["parameters"]["allowed_merge_methods"]
             != serde_json::json!(ctx.protection().allowed_merge_methods)
-        {
-            faults.push("the merge method is not exactly a squash merge".to_owned());
-        }
+    {
+        faults.push("the merge method is not exactly a squash merge".to_owned());
     }
     if let Some(checks) = rules
         .iter()

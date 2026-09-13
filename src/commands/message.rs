@@ -87,17 +87,18 @@ pub fn run(args: &MessageArgs) -> Result<(), RkError> {
     // The subject is line 1 of a commit message and of a title; a body's
     // title is context passed beside it, and its findings would carry no
     // line the reader can open.
-    if matches!(args.kind, MessageKind::Commit | MessageKind::Title) && !exempt {
-        if let Some(scope) = misshapen_scope(title) {
-            findings.push(Finding {
-                class: "scope-shape",
-                line: 1,
-                detail: format!(
-                    "the scope '{scope}' is outside {}: lowercase letters, digits, and _ . / -",
-                    landing::SCOPE_SHAPE
-                ),
-            });
-        }
+    if matches!(args.kind, MessageKind::Commit | MessageKind::Title)
+        && !exempt
+        && let Some(scope) = misshapen_scope(title)
+    {
+        findings.push(Finding {
+            class: "scope-shape",
+            line: 1,
+            detail: format!(
+                "the scope '{scope}' is outside {}: lowercase letters, digits, and _ . / -",
+                landing::SCOPE_SHAPE
+            ),
+        });
     }
     let mut seen: std::collections::BTreeSet<(usize, String)> = std::collections::BTreeSet::new();
     match ignored_paths(&args.target, &text) {

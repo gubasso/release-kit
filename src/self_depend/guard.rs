@@ -104,10 +104,10 @@ pub fn acquire(key: &str) -> Acquired {
             "neither XDG_STATE_HOME nor HOME is set, so the lock has no root",
         ));
     };
-    if let Some(parent) = path.parent() {
-        if let Err(source) = fs::create_dir_all(parent) {
-            return Acquired::Unavailable(source);
-        }
+    if let Some(parent) = path.parent()
+        && let Err(source) = fs::create_dir_all(parent)
+    {
+        return Acquired::Unavailable(source);
     }
     match take(&path) {
         Ok(lock) => Acquired::Held(lock),

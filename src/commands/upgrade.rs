@@ -168,10 +168,11 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
     };
     let mut sentinels: Vec<String> = Vec::new();
     for decision in &decisions {
-        if args.apply && matches!(decision.action, "updated" | "added") {
-            if let Some(bytes) = FrontApplied::written(&planned, &decision.path) {
-                collect_sentinels(&decision.path, bytes, &mut sentinels);
-            }
+        if args.apply
+            && matches!(decision.action, "updated" | "added")
+            && let Some(bytes) = FrontApplied::written(&planned, &decision.path)
+        {
+            collect_sentinels(&decision.path, bytes, &mut sentinels);
         }
         out.result_line(describe(decision));
     }
@@ -418,17 +419,17 @@ fn refuse_non_regular(
             continue;
         }
         let path = target.join(&entry.destination);
-        if let Ok(meta) = std::fs::symlink_metadata(&path) {
-            if !meta.is_file() {
-                return Err(RkError::refusal(
-                    Diagnostic::new(
-                        Reason::StateDrift,
-                        format!("{path} exists and is not a regular file; nothing was written"),
-                    )
-                    .expected("every rendered destination a regular file")
-                    .target_state("unchanged"),
-                ));
-            }
+        if let Ok(meta) = std::fs::symlink_metadata(&path)
+            && !meta.is_file()
+        {
+            return Err(RkError::refusal(
+                Diagnostic::new(
+                    Reason::StateDrift,
+                    format!("{path} exists and is not a regular file; nothing was written"),
+                )
+                .expected("every rendered destination a regular file")
+                .target_state("unchanged"),
+            ));
         }
     }
     Ok(())

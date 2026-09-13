@@ -534,10 +534,10 @@ fn prune(cache: &Path, retain: usize) -> Result<(), RkError> {
         // The seal goes with the bundle it vouches for, so a later fetch
         // of the same checksum writes a fresh one rather than reading a
         // seal left by the tree it replaced.
-        if let Some(gone) = &gone {
-            if let Some(cksum) = Digest::parse(gone) {
-                let _ = std::fs::remove_file(seal_path(cache, &cksum));
-            }
+        if let Some(gone) = &gone
+            && let Some(cksum) = Digest::parse(gone)
+        {
+            let _ = std::fs::remove_file(seal_path(cache, &cksum));
         }
         let index = cache.join("index");
         if let (Some(gone), Ok(entries)) = (gone, std::fs::read_dir(&index)) {

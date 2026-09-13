@@ -158,10 +158,10 @@ impl Output {
     /// human mode: the long-running commands' machine stream, one complete
     /// object per line.
     pub fn event<T: Serialize>(&self, event: &T) {
-        if self.is_json() {
-            if let Ok(line) = serde_json::to_string(event) {
-                to_stdout(&format!("{line}\n"));
-            }
+        if self.is_json()
+            && let Ok(line) = serde_json::to_string(event)
+        {
+            to_stdout(&format!("{line}\n"));
         }
     }
 

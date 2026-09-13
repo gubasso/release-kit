@@ -286,13 +286,13 @@ fn prunable(dir: &std::path::Path) -> bool {
     // is gone, `Ok(true)` proves it may be alive, and an error — a hardened
     // mount, a permission failure — falls through to the grace period
     // rather than reading as an exited owner.
-    if let Some(pid) = meta.as_ref().and_then(|meta| meta["pid"].as_u64()) {
-        if std::path::Path::new("/proc/self").is_dir() {
-            match std::path::Path::new(&format!("/proc/{pid}")).try_exists() {
-                Ok(true) => return false,
-                Ok(false) => return true,
-                Err(_) => {}
-            }
+    if let Some(pid) = meta.as_ref().and_then(|meta| meta["pid"].as_u64())
+        && std::path::Path::new("/proc/self").is_dir()
+    {
+        match std::path::Path::new(&format!("/proc/{pid}")).try_exists() {
+            Ok(true) => return false,
+            Ok(false) => return true,
+            Err(_) => {}
         }
     }
     fs::metadata(dir)

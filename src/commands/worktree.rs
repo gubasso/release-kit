@@ -173,10 +173,9 @@ fn seats(target: &Utf8Path) -> Vec<Utf8PathBuf> {
             .arg(target.as_std_path())
             .args(["rev-parse", "--show-toplevel"])
             .output(),
-    ) {
-        if !seats.contains(&seat) {
-            seats.push(seat);
-        }
+    ) && !seats.contains(&seat)
+    {
+        seats.push(seat);
     }
     seats
 }
@@ -304,16 +303,16 @@ fn list(target: &Utf8Path, out: Output) -> Result<(), RkError> {
             row.branch.as_deref().unwrap_or("(detached)"),
             row.state
         );
-        if !row.canonical {
-            if let Some(branch) = &row.branch {
-                use std::fmt::Write as _;
-                let expected = derived_path(&layout, branch);
-                let _ = write!(
-                    line,
-                    "  off-path: expected ../{}",
-                    expected.file_name().unwrap_or_default()
-                );
-            }
+        if !row.canonical
+            && let Some(branch) = &row.branch
+        {
+            use std::fmt::Write as _;
+            let expected = derived_path(&layout, branch);
+            let _ = write!(
+                line,
+                "  off-path: expected ../{}",
+                expected.file_name().unwrap_or_default()
+            );
         }
         out.result_line(line);
     }
@@ -437,12 +436,12 @@ pub(crate) fn plan_seat(
             .target_state("unchanged"),
         ));
     }
-    if let Some(base) = base {
-        if base.starts_with('-') {
-            return Err(RkError::Usage(format!(
-                "--base '{base}' is option-shaped; pass a commit-ish"
-            )));
-        }
+    if let Some(base) = base
+        && base.starts_with('-')
+    {
+        return Err(RkError::Usage(format!(
+            "--base '{base}' is option-shaped; pass a commit-ish"
+        )));
     }
     let path = derived_path(&layout, branch);
 

@@ -9,9 +9,15 @@
 //!
 //! So an apply takes the target first and holds it until its
 //! postconditions have run. The lock is one file under the state root,
-//! named for the canonical target path, created with `create_new` so the
-//! creation is the acquisition, and removed when the guard drops. It
-//! lives outside the target because a target's cleanliness is judged
+//! named for the canonical target path, and what holds the target is the
+//! advisory lock the operating system puts on the open file, not the
+//! file's existence. The kernel owns that lock: it releases when the
+//! holder exits, however it exits, so a run killed outright frees the
+//! target rather than stranding it. The file itself is left in place,
+//! because removing one another run has already opened would leave two
+//! runs holding locks on two different inodes under one name.
+//!
+//! It lives outside the target because a target's cleanliness is judged
 //! byte by byte, and a lock file inside it would be drift.
 //!
 //! Where the lock cannot be taken, the apply refuses. A guard that
@@ -22,6 +28,7 @@
 //! every writer: a hand edit during an apply is what the before-digests
 //! and the postconditions are for.
 
+use std::fs::{File, TryLockError};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -37,15 +44,17 @@ pub const LOCKS_DIR: &str = "locks";
 
 /// One target held for the life of this value.
 ///
-/// The file is removed on drop, on every path out: a refusal, an error,
-/// or a clean apply. A process killed outright leaves the file behind,
-/// and the refusal it causes names the file so the operator can remove
-/// it.
-/// A held lock always names its file: the only two constructors either
-/// create one or refuse, so there is no such thing as a lock that holds
-/// nothing.
+/// The held file stays open for as long as this value lives, and the
+/// operating system releases its lock when the file closes: on a drop,
+/// on a refusal, on an error, and on a process that dies without
+/// unwinding. A held lock always names its file, and the only
+/// constructors either take the lock or refuse, so there is no such
+/// thing as a lock that holds nothing.
 #[derive(Debug)]
 pub struct TargetLock {
+    /// Held open, because closing it is what releases the lock. Dropped
+    /// with this value.
+    _file: File,
     path: PathBuf,
 }
 
@@ -54,12 +63,6 @@ impl TargetLock {
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
-    }
-}
-
-impl Drop for TargetLock {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
     }
 }
 
@@ -75,9 +78,9 @@ impl Drop for TargetLock {
 ///
 /// # Errors
 ///
-/// Returns a `target-busy` refusal where another run holds the target, a
-/// `prerequisite-unmet` refusal where no state root resolves, and
-/// [`RkError::Io`] where the lock cannot be written.
+/// Returns a `target-busy` refusal where another live run holds the
+/// target, a `prerequisite-unmet` refusal where no state root resolves,
+/// and [`RkError::Io`] where the lock file cannot be opened.
 pub fn acquire(target: &Utf8Path) -> Result<TargetLock, RkError> {
     let Some(root) = applog::state_root() else {
         return Err(rootless());
@@ -112,22 +115,29 @@ pub fn acquire_in(dir: &Path, target: &Utf8Path) -> Result<TargetLock, RkError> 
         .map_or_else(|_| target.to_string(), |path| path.display().to_string());
     std::fs::create_dir_all(dir)?;
     let path = dir.join(format!("{}.lock", Digest::of(canonical.as_bytes())));
-    match std::fs::OpenOptions::new()
+    // Opened rather than created exclusively: the file outlives every
+    // run that took it, so its existence says a target was locked once,
+    // never that it is locked now. Only the lock below says that.
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
         .write(true)
-        .create_new(true)
-        .open(&path)
-    {
-        Ok(mut file) => {
+        .create(true)
+        .truncate(false)
+        .open(&path)?;
+    match file.try_lock() {
+        Ok(()) => {
             // Best effort: the body is for the operator reading a
             // refusal, and a lock that cannot be described still holds.
+            // Truncated first, because the previous holder's line is
+            // still there and a short write would leave its tail.
+            let _ = file.set_len(0);
             let _ = writeln!(file, "{}", std::process::id());
             let _ = writeln!(file, "{canonical}");
-            Ok(TargetLock { path })
+            let _ = file.flush();
+            Ok(TargetLock { _file: file, path })
         }
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            Err(busy(&canonical, &path))
-        }
-        Err(error) => Err(RkError::Io(error)),
+        Err(TryLockError::WouldBlock) => Err(busy(&canonical, &path)),
+        Err(TryLockError::Error(error)) => Err(RkError::Io(error)),
     }
 }
 
@@ -136,6 +146,7 @@ fn busy(target: &str, path: &Path) -> RkError {
     let holder = std::fs::read_to_string(path)
         .ok()
         .and_then(|text| text.lines().next().map(str::to_owned))
+        .filter(|line| !line.is_empty())
         .map_or_else(
             || "another run".to_owned(),
             |pid| format!("the run at process {pid}"),
@@ -146,10 +157,7 @@ fn busy(target: &str, path: &Path) -> RkError {
             format!("{holder} holds {target}, and nothing was written"),
         )
         .expected("one apply against a target at a time")
-        .action(format!(
-            "wait for that run to finish; where it is gone, remove {}",
-            path.display()
-        ))
+        .action("wait for that run to finish, then run it again")
         .target_state("unchanged"),
     )
 }
@@ -190,6 +198,37 @@ mod tests {
         acquire_in(locks.path(), &utf8(&b)).expect("the second target is free");
     }
 
+    /// A lock file a dead run left behind holds nothing, so the next
+    /// apply takes the target rather than refusing until somebody
+    /// removes the file by hand.
+    ///
+    /// The file is what a killed process leaves: the operating system
+    /// released its lock when the process died, and the bytes stayed.
+    #[test]
+    fn a_lock_file_without_a_live_holder_is_taken_over() {
+        let locks = tempfile::tempdir().expect("a scratch locks directory exists");
+        let target = tempfile::tempdir().expect("a scratch target exists");
+        let path = utf8(&target);
+        let held = acquire_in(locks.path(), &path)
+            .expect("the first run takes the target")
+            .path()
+            .to_path_buf();
+
+        // The holder gone the way a kill leaves it: the file and its
+        // line survive, the lock does not.
+        drop(acquire_in(locks.path(), &path));
+        std::fs::write(&held, "4242\n/some/target\n").expect("the corpse's line writes");
+        assert!(held.exists(), "a killed run leaves its lock file");
+
+        let taken = acquire_in(locks.path(), &path).expect("the next run takes the target");
+        assert_eq!(taken.path(), held, "it is the same lock file");
+        let body = std::fs::read_to_string(&held).expect("the lock file reads");
+        assert!(
+            body.starts_with(&format!("{}\n", std::process::id())),
+            "the taking run names itself, and no tail of the corpse survives: {body:?}"
+        );
+    }
+
     /// A host where no state root resolves refuses rather than applying
     /// unguarded, and names what the operator can set.
     #[test]
@@ -208,16 +247,18 @@ mod tests {
         assert_eq!(diagnostic.target_state.as_deref(), Some("unchanged"));
     }
 
-    /// The refusal names the holder and the lock file, so an operator
-    /// whose run died can clear it.
+    /// The refusal names the holder, so an operator meeting it knows
+    /// which run to wait for.
     #[test]
-    fn the_refusal_names_the_lock_file() {
+    fn the_refusal_names_the_holder() {
         let dir = tempfile::tempdir().expect("a scratch directory exists");
         let path = dir.path().join("held.lock");
         std::fs::write(&path, "4242\n/some/target\n").expect("the lock file is written");
         let diagnostic = busy("/some/target", &path).diagnostic();
         assert!(diagnostic.message.contains("4242"), "{diagnostic:?}");
-        let action = diagnostic.action.unwrap_or_default();
-        assert!(action.contains("held.lock"), "{action}");
+        assert!(
+            diagnostic.message.contains("/some/target"),
+            "{diagnostic:?}"
+        );
     }
 }

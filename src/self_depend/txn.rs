@@ -372,13 +372,13 @@ pub(crate) fn owner_gone_after(
     marker: &Path,
     grace: std::time::Duration,
 ) -> bool {
-    if let Some(pid) = pid {
-        if Path::new("/proc/self").is_dir() {
-            match Path::new(&format!("/proc/{pid}")).try_exists() {
-                Ok(true) => return false,
-                Ok(false) => return true,
-                Err(_) => {}
-            }
+    if let Some(pid) = pid
+        && Path::new("/proc/self").is_dir()
+    {
+        match Path::new(&format!("/proc/{pid}")).try_exists() {
+            Ok(true) => return false,
+            Ok(false) => return true,
+            Err(_) => {}
         }
     }
     fs::metadata(marker)

@@ -364,15 +364,14 @@ fn parse(text: &str) -> Result<Config, RkError> {
         let mut message = error.to_string();
         if let Some(rest) = error.message().strip_prefix("unknown field `") {
             let names: Vec<_> = rest.split('`').collect();
-            if let Some(unknown) = names.first() {
-                if let Some(nearest) = names
+            if let Some(unknown) = names.first()
+                && let Some(nearest) = names
                     .iter()
                     .skip(2)
                     .step_by(2)
                     .min_by_key(|name| distance(unknown, name))
-                {
-                    let _ = write!(message, "; nearest known key: {nearest}");
-                }
+            {
+                let _ = write!(message, "; nearest known key: {nearest}");
             }
         }
         invalid(message)

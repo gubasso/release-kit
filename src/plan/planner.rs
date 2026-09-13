@@ -247,10 +247,10 @@ pub fn plan(inputs: Inputs<'_>) -> Result<Planned, RkError> {
                 blobs.insert(Digest::of(bytes), bytes.to_vec());
             }
             blobs.insert(Digest::of(&entry.rendered), entry.rendered.clone());
-            if let (Some(source), Some(record)) = (baseline_source, recorded) {
-                if let Some(baseline_bytes) = baseline_bytes(source, record, entry) {
-                    blobs.insert(Digest::of(&baseline_bytes), baseline_bytes);
-                }
+            if let (Some(source), Some(record)) = (baseline_source, recorded)
+                && let Some(baseline_bytes) = baseline_bytes(source, record, entry)
+            {
+                blobs.insert(Digest::of(&baseline_bytes), baseline_bytes);
             }
         }
         compared.push(Compared {
@@ -373,37 +373,37 @@ pub fn plan(inputs: Inputs<'_>) -> Result<Planned, RkError> {
         }
     }
     let mut pin_behind: Option<String> = None;
-    if let Some(pin) = &observation.pin {
-        if trim_v(&pin.version) != trim_v(&candidate_version) {
-            // A one-fact manager moves by one rewrite the apply can stage.
-            // The flake pair needs nix and the network, which an offline
-            // apply never has, so that move stays the sync verb's.
-            if pin.manager == "flake" {
-                pin_behind = Some(format!(
-                    "the flake pin records {} and the candidate is {candidate_version}; the self-depend sync verb moves it under --apply, with nix and the network",
-                    pin.version
-                ));
-            } else if intent == Intent::Adopt {
-                // An adoption writes the record and nothing else, so a
-                // stale pin is reported and never moved.
-                pin_behind = Some(format!(
-                    "the {} pin records {} and the candidate is {candidate_version}; an adoption writes the record alone, so rk self-depend sync moves it",
-                    pin.manager, pin.version
-                ));
-            } else if landing_planned {
-                let recorded_form = crate::self_depend::manager::Manager::ALL
-                    .into_iter()
-                    .find(|m| m.as_str() == pin.manager)
-                    .map_or_else(
-                        || candidate_version.clone(),
-                        |m| m.recorded(&candidate_version),
-                    );
-                operations.push(Operation::UpdatePin {
-                    manager: pin.manager.clone(),
-                    before: pin.version.clone(),
-                    after: recorded_form,
-                });
-            }
+    if let Some(pin) = &observation.pin
+        && trim_v(&pin.version) != trim_v(&candidate_version)
+    {
+        // A one-fact manager moves by one rewrite the apply can stage.
+        // The flake pair needs nix and the network, which an offline
+        // apply never has, so that move stays the sync verb's.
+        if pin.manager == "flake" {
+            pin_behind = Some(format!(
+                "the flake pin records {} and the candidate is {candidate_version}; the self-depend sync verb moves it under --apply, with nix and the network",
+                pin.version
+            ));
+        } else if intent == Intent::Adopt {
+            // An adoption writes the record and nothing else, so a
+            // stale pin is reported and never moved.
+            pin_behind = Some(format!(
+                "the {} pin records {} and the candidate is {candidate_version}; an adoption writes the record alone, so rk self-depend sync moves it",
+                pin.manager, pin.version
+            ));
+        } else if landing_planned {
+            let recorded_form = crate::self_depend::manager::Manager::ALL
+                .into_iter()
+                .find(|m| m.as_str() == pin.manager)
+                .map_or_else(
+                    || candidate_version.clone(),
+                    |m| m.recorded(&candidate_version),
+                );
+            operations.push(Operation::UpdatePin {
+                manager: pin.manager.clone(),
+                before: pin.version.clone(),
+                after: recorded_form,
+            });
         }
     }
     let planned_record = match (&resolution.params, record_state) {
@@ -733,48 +733,51 @@ pub fn plan(inputs: Inputs<'_>) -> Result<Planned, RkError> {
             evidence_refs: resolution_refs.clone(),
         });
     }
-    if let Some(record) = recorded {
-        if record.parameters.style.is_none() {
-            let source = resolution
-                .sources
-                .get("style")
-                .map_or("default", String::as_str);
-            let answered = (source != "default").then(|| {
-                resolution
-                    .params
-                    .as_ref()
-                    .and_then(landing::Params::style)
-                    .map_or_else(|| "trunk".to_owned(), |s| s.as_str().to_owned())
-            });
-            decisions.push(Decision {
-                id: "release-style".into(),
-                question: "the record predates the release style; which one does this project run?".into(),
-                choices: vec![
-                    Choice {
-                        answer: "trunk".into(),
-                        consequence: "the bot's release request is armed to merge itself".into(),
-                    },
-                    Choice {
-                        answer: "lines".into(),
-                        consequence: "every merge is a human's, and release lines carry the maintained versions".into(),
-                    },
-                ],
-                selected: answered.clone(),
-            });
-            preconditions.push(Precondition {
-                id: "release-style-answered".into(),
-                requirement: Requirement::DecisionRequired,
-                evaluation: if answered.is_some() {
-                    Evaluation::Satisfied
-                } else {
-                    Evaluation::NotObserved {
-                        reason: "neither the configuration nor a decision names the style".into(),
-                    }
+    if let Some(record) = recorded
+        && record.parameters.style.is_none()
+    {
+        let source = resolution
+            .sources
+            .get("style")
+            .map_or("default", String::as_str);
+        let answered = (source != "default").then(|| {
+            resolution
+                .params
+                .as_ref()
+                .and_then(landing::Params::style)
+                .map_or_else(|| "trunk".to_owned(), |s| s.as_str().to_owned())
+        });
+        decisions.push(Decision {
+            id: "release-style".into(),
+            question: "the record predates the release style; which one does this project run?"
+                .into(),
+            choices: vec![
+                Choice {
+                    answer: "trunk".into(),
+                    consequence: "the bot's release request is armed to merge itself".into(),
                 },
-                decision: Some("release-style".into()),
-                evidence_refs: resolution_refs.clone(),
-            });
-        }
+                Choice {
+                    answer: "lines".into(),
+                    consequence:
+                        "every merge is a human's, and release lines carry the maintained versions"
+                            .into(),
+                },
+            ],
+            selected: answered.clone(),
+        });
+        preconditions.push(Precondition {
+            id: "release-style-answered".into(),
+            requirement: Requirement::DecisionRequired,
+            evaluation: if answered.is_some() {
+                Evaluation::Satisfied
+            } else {
+                Evaluation::NotObserved {
+                    reason: "neither the configuration nor a decision names the style".into(),
+                }
+            },
+            decision: Some("release-style".into()),
+            evidence_refs: resolution_refs.clone(),
+        });
     }
     if recorded.is_none() && verdict == Verdict::NeedsDecision {
         let answered = selected.get("release-activity").cloned();

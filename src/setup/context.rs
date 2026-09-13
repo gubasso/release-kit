@@ -422,11 +422,11 @@ impl Ctx {
             ("GH_PAGER".into(), "".into()),
             ("GLAB_PAGER".into(), "".into()),
         ];
-        if let Some(check) = &self.required_check {
-            if self.forge == Forge::Github && matches!(step, "protect-trunk" | "protections-check")
-            {
-                env.push(("RK_REQUIRED_CHECK".into(), check.clone().into()));
-            }
+        if let Some(check) = &self.required_check
+            && self.forge == Forge::Github
+            && matches!(step, "protect-trunk" | "protections-check")
+        {
+            env.push(("RK_REQUIRED_CHECK".into(), check.clone().into()));
         }
         for name in PASSTHROUGH {
             if let Some(value) = std::env::var_os(name) {
