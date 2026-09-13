@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.32](https://github.com/gubasso/release-kit/compare/v0.3.31...v0.3.32) - 2026-09-13
+
+### Fixed
+
+- *(reconcile)* let the kernel hold the target, so a killed apply frees it ([#193](https://github.com/gubasso/release-kit/pull/193))
+
 ## [0.3.31](https://github.com/gubasso/release-kit/compare/v0.3.30...v0.3.31) - 2026-09-13
 
 ### Fixed
