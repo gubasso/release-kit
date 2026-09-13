@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.31](https://github.com/gubasso/release-kit/compare/v0.3.30...v0.3.31) - 2026-09-13
+
+### Fixed
+
+- *(reconcile)* let a front take its target before it observes it ([#190](https://github.com/gubasso/release-kit/pull/190))
+
 ## [0.3.30](https://github.com/gubasso/release-kit/compare/v0.3.29...v0.3.30) - 2026-09-12
 
 ### Fixed
