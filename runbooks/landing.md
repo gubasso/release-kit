@@ -90,11 +90,11 @@ State the evidence class the chapter names: receipt and history, receipt alone, 
 
 ### 2c. Read the release's knowledge
 
-The changelog opens each release with a `## [<version>]` heading, newest first. `rk --version` prints `rk <version>`, so the bare version is cut from it, and the recorded version comes from the receipt.
+The changelog opens each release with a `## [<version>]` heading, newest first. `rk --version` prints `rk <version>`, so the bare version is cut from it, and the recorded version is read from the receipt's one `rk_version` line. Nothing here needs more than `sh`, `sed`, `awk`, and `rk`.
 
 ```bash
 installed="$(rk --version | sed 's/^rk //')"
-recorded="$(jq -r .rk_version .release-kit/manifest.json)"
+recorded="$(sed -n 's/.*"rk_version": *"\([^"]*\)".*/\1/p' .release-kit/manifest.json)"
 awk -v from="## [$installed]" -v to="## [$recorded]" 'index($0, from) == 1 {p = 1} index($0, to) == 1 {exit} p' <stage>/reference/CHANGELOG.md
 # check: prints the entries from the installed version down to the recorded one, and excludes the recorded release itself
 cat <stage>/reference/CHANGELOG.md
@@ -183,26 +183,35 @@ rk stage clean <stage>
 
 ### 5b. Remove inactive legacy state
 
-Only where 1b recorded paths, only under explicit cleanup authorization, and only after 1b confirmed that no active old operation remains. No `rk` verb removes this state and no verb takes a directory as a recursive target, so each path is removed by hand and by name. `<path>` is one path 1b recorded, and the function below removes it only after the class guard accepted it twice.
+Only where 1b recorded paths, only under explicit cleanup authorization, and only after 1b confirmed that no active old operation remains. No `rk` verb removes this state and no verb takes a directory as a recursive target, so each path is reviewed and then removed by hand and by name. `<path>` is one path 1b recorded. Define both functions once, then take the two actions below for each path, in order: the listing, the operator's review, and only then the removal.
 
 ```bash
-remove_legacy_path() {
+legacy_path_ok() {
   root="${XDG_STATE_HOME:-$HOME/.local/state}/release-kit"
-  legacy_path_ok() {
-    case "$1" in
-      "$root"/plans/?*|"$root"/runs/?*|"$root"/release) [ -d "$1" ] ;;
-      *) echo "outside the legacy classes, nothing removed: $1" >&2; return 1 ;;
-    esac
-  }
-  resolved="$(realpath -e -- "$1")" && legacy_path_ok "$resolved" || return 1
-  # check: no refusal printed. A path that resolves outside the three classes under the state root is not legacy state, and the function returns before it lists or removes anything
-  legacy_path_ok "$resolved" && find "$resolved" -mindepth 1 -xdev -print || return 1
-  # check: the complete list of entries the removal will delete, with no link followed. Review every line with the operator, and stop where one is not the stored plan, run journal, or cached release 1b recorded
-  legacy_path_ok "$resolved" && find "$resolved" -mindepth 1 -xdev -depth -delete && rmdir -- "$resolved"
-  # check: the same list is gone and the directory with it. The guard runs again before the -delete, the -delete consumes exactly the entries the review printed, and the directory goes last
+  case "$1" in
+    "$root"/plans/?*|"$root"/runs/?*|"$root"/release) [ -d "$1" ] ;;
+    *) echo "outside the legacy classes, nothing listed or removed: $1" >&2; return 1 ;;
+  esac
 }
+list_legacy_path() {
+  resolved="$(realpath -e -- "$1")" && legacy_path_ok "$resolved" || return 1
+  find "$resolved" -mindepth 1 -xdev -print
+}
+remove_legacy_path() {
+  resolved="$(realpath -e -- "$1")" && legacy_path_ok "$resolved" || return 1
+  find "$resolved" -mindepth 1 -xdev -depth -delete && rmdir -- "$resolved"
+}
+list_legacy_path "<path>"
+# check: every line is one of the plan, run, or cache entries the inventory named, with no link followed, and nothing was removed. Stop on anything else, and remove nothing for this path
+# exit 1 naming the path: it resolves outside the three classes under the state root and is not legacy state. Nothing was listed or removed
+```
+
+The operator reviews that list before the next command runs. The removal is a separate action, taken only after the review accepted every line.
+
+```bash
 remove_legacy_path "<path>"
-# check: exits 0 with the path gone, or exits 1 naming the refused path with nothing removed
+# check: exits 0 and the path is gone with the entries the review listed, the directory last. The guard ran again before the -delete
+# exit 1 naming the path: refused by the same guard, and nothing was removed
 ```
 
 Repeat for each recorded path, one at a time. Then commit the landed files, the receipt included, through the trunk's one path. The stage and the legacy state are not among them.
