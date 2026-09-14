@@ -19,7 +19,7 @@ pub enum RkError {
     #[error("usage: {0}")]
     Usage(String),
 
-    /// A named payload entry does not exist; the caller can list the
+    /// A named embedded entry does not exist; the caller can list the
     /// valid names with `--list`.
     #[error("no {kind} named '{name}'; run with --list to see the valid names")]
     NotFound {

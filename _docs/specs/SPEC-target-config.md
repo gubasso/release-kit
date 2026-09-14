@@ -133,7 +133,7 @@ Verify: `cargo nextest run -E 'test(required_check) or test(the_release_lines_st
 
 ### `target-config:an-exclusion-narrows-scope-and-not-policy` — An exclusion narrows scope and not policy
 
-A target states the setup steps it does not run in `setup.excluded_steps`, as a step id against the reason a report prints. The reader MUST refuse an id that names no setup step, naming it and its nearest known step, MUST refuse an exclusion that states no reason, and MUST judge every floor unchanged, because an exclusion says which steps this target runs and says nothing about what the method requires of the steps it does run. Nothing in this file needs a landing to be read: the setup verbs load it wherever it is, so the target class that lands no payload can still declare its model. [The setup specification](./SPEC-forge-setup.md) binds what a run does with the declaration.
+A target states the setup steps it does not run in `setup.excluded_steps`, as a step id against the reason a report prints. The reader MUST refuse an id that names no setup step, naming it and its nearest known step, MUST refuse an exclusion that states no reason, and MUST judge every floor unchanged, because an exclusion says which steps this target runs and says nothing about what the method requires of the steps it does run. Nothing in this file needs a landing to be read: the setup verbs load it wherever it is, so the target class that lands no file can still declare its model. [The setup specification](./SPEC-forge-setup.md) binds what a run does with the declaration.
 
 #### Scenario: A target excludes a step and weakens a policy
 

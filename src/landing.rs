@@ -1,22 +1,20 @@
-//! The target-side landing model on the release seam: parameter
-//! resolution, the seam-based projection, and the target writes.
+//! The target-side landing model: parameter resolution, what a target
+//! currently holds, and the direct writes.
 //!
 //! Every landable file has a declared kind, `rendered` files release-kit
 //! owns and may rewrite, `seeded` files the target tunes, `state` files
 //! the release automation maintains, and a `rendered` file's bytes are a
-//! deterministic function of the payload plus the landing parameters, so
-//! a later command can compare what is on disk against what would be
-//! written.
+//! deterministic function of the embedded sources plus the landing
+//! parameters, so a later command can compare what is on disk against
+//! what would be written.
 //!
 //! The pure pieces of that model, the kind table, the token rendering,
 //! the block templating, the splice and marker judgments, the pair
 //! selection, and the Nix crate-shape judgment, have one implementation
 //! in [`crate::projection`] and are re-exported here under their old
-//! names. What stays in this file is the path that reads a release bundle
-//! through the seam ([`projection`] over a [`ReleaseSource`]), which the
-//! planner and `--to` still need until a later phase deletes it, and the
-//! functions that read or write a target.
-
+//! names. What lives in this file is [`Params`], the resolved input every
+//! projection takes, the readers of a target's recorded destinations, and
+//! the submodules that lock, write, and record.
 pub mod apply;
 pub mod invariants;
 pub mod lock;
@@ -36,14 +34,11 @@ pub use crate::projection::{
 pub use manifest::{Style, Workflow};
 use serde::Serialize;
 
-use crate::atomic;
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
-use crate::projection::{self as pure, evidence};
-use crate::release::{self, ReleaseManifest, ReleaseSource};
 
-/// The complete input to a payload projection. Comparisons reconstruct it
-/// from the landing record; landing verbs resolve their candidate inputs.
+/// The complete input to a projection. Comparisons reconstruct it from
+/// the landing record; landing verbs resolve their candidate inputs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Params {
     tech: String,
@@ -113,7 +108,6 @@ impl Params {
     /// # Errors
     /// Refuses unresolved identity or a style an existing target has not answered.
     pub fn resolve(
-        source: &dyn ReleaseSource,
         target: &Utf8Path,
         flags: &Inputs<'_>,
         config: Option<&crate::config::Config>,
@@ -151,7 +145,7 @@ impl Params {
                 .action("pass --tech <rust|python|bash>"),
             )
         })?;
-        pair_files(source, &tech, &resolved.forge)?;
+        crate::projection::check_pair(&tech, &resolved.forge)?;
         let workflow = flags
             .workflow
             .or_else(|| config.and_then(|c| c.landing.workflow))
@@ -312,200 +306,6 @@ impl Params {
     }
 }
 
-/// One authored block, read through the seam as text.
-fn block(
-    source: &dyn ReleaseSource,
-    manifest: &ReleaseManifest,
-    path: &str,
-) -> Result<String, RkError> {
-    let bytes = release::read(source, manifest, path)?;
-    String::from_utf8(bytes).map_err(|_| anyhow::anyhow!("{path}: a block is UTF-8").into())
-}
-
-/// The routing block for one workflow mode, read from the bundle `source`
-/// carries and composed by [`pure::compose_routing`].
-///
-/// # Errors
-///
-/// Returns the source's failures for a bundle that does not carry the
-/// block.
-pub fn routing_block(source: &dyn ReleaseSource, workflow: Workflow) -> Result<String, RkError> {
-    let manifest = source.manifest()?;
-    let line = block(source, &manifest, pure::routing_line(workflow))?;
-    let template = block(source, &manifest, pure::AGENTS_BLOCK)?;
-    Ok(pure::compose_routing(&template, &line))
-}
-
-/// The glossary block, read from the bundle `source` carries.
-///
-/// # Errors
-///
-/// Returns the source's failures for a bundle that does not carry the
-/// block.
-pub fn glossary_block(source: &dyn ReleaseSource) -> Result<String, RkError> {
-    let manifest = source.manifest()?;
-    Ok(pure::compose_glossary(&block(
-        source,
-        &manifest,
-        pure::GLOSSARY_BLOCK,
-    )?))
-}
-
-/// The hook block for one workflow mode, read from the bundle `source`
-/// carries and composed by [`pure::compose_hooks`].
-///
-/// # Errors
-///
-/// Returns the source's failures for a bundle that does not carry the
-/// block.
-pub fn hooks_block(source: &dyn ReleaseSource, workflow: Workflow) -> Result<String, RkError> {
-    let manifest = source.manifest()?;
-    let guard = match workflow {
-        Workflow::Worktree => Some(block(source, &manifest, pure::PRE_COMMIT_WORKTREE_GUARD)?),
-        Workflow::Branches => None,
-    };
-    let template = block(source, &manifest, pure::PRE_COMMIT_BLOCK)?;
-    Ok(pure::compose_hooks(&template, guard.as_deref()))
-}
-
-/// How a projected artifact occupies its destination.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Placement {
-    /// The artifact is the whole file.
-    Whole,
-    /// The artifact is the marked block inside the target's `AGENTS.md`.
-    Block,
-}
-
-/// One artifact of the payload projection: what would land at one
-/// destination, with the payload bytes it was rendered from.
-#[derive(Debug)]
-pub struct Entry {
-    /// The destination, relative to the target root.
-    pub destination: String,
-    /// The declared kind.
-    pub kind: Kind,
-    /// Whole file, or the marked block.
-    pub placement: Placement,
-    /// The payload bytes before substitution — what `baseline_sha256`
-    /// digests.
-    pub baseline: Vec<u8>,
-    /// The bytes a landing writes: substituted for `rendered` files,
-    /// identical to the baseline otherwise.
-    pub rendered: Vec<u8>,
-}
-
-/// The landable files of one `(technology, forge)` pair, as
-/// `(destination, payload bytes)`, read from the bundle `source` carries
-/// and selected by [`pure::select_pair`].
-///
-/// # Errors
-///
-/// Returns [`RkError::Usage`] naming the known bindings for an unknown
-/// technology, and the supported pairs for a pair with no files.
-pub fn pair_files(
-    source: &dyn ReleaseSource,
-    tech: &str,
-    forge: &str,
-) -> Result<Vec<(String, Vec<u8>)>, RkError> {
-    let manifest = source.manifest()?;
-    let files: Vec<(String, crate::digest::Digest)> = manifest
-        .under("snippets")
-        .map(|(rel, artifact)| (format!("snippets/{rel}"), artifact.sha256.clone()))
-        .collect();
-    let mut out = Vec::new();
-    for selected in pure::select_pair(&files, tech, forge)? {
-        out.push((selected.destination, source.blob(selected.payload)?));
-    }
-    Ok(out)
-}
-
-/// The whole payload projection for one pair, from the bundle `source`
-/// carries.
-///
-/// Under the `repo`, `workflow`,
-/// `style`, and `nix` parameters: every snippet with its kind and
-/// rendered bytes, plus the routing block and the hook block — each a
-/// pure function of the recorded mode — sorted by destination. The Nix
-/// destinations project only where `nix` is on; a pair that ships none of
-/// them honestly projects the smaller product.
-///
-/// # Errors
-///
-/// Returns the [`pair_files`] errors, and [`RkError::Other`] for a
-/// snippet destination the kind table does not classify, which is a
-/// defect in this binary.
-pub fn projection(source: &dyn ReleaseSource, params: &Params) -> Result<Vec<Entry>, RkError> {
-    let mut entries = Vec::new();
-    for (destination, baseline) in pair_files(source, &params.tech, &params.forge)? {
-        if !params.nix && NIX_DESTINATIONS.contains(&destination.as_str()) {
-            continue;
-        }
-        let kind = kind_of(&destination).ok_or_else(|| {
-            anyhow::anyhow!("the payload does not classify {destination}; the kind table is stale")
-        })?;
-        let rendered = match kind {
-            Kind::Rendered => render(&baseline, params),
-            Kind::Seeded | Kind::State => baseline.clone(),
-        };
-        entries.push(Entry {
-            destination,
-            kind,
-            placement: Placement::Whole,
-            baseline,
-            rendered,
-        });
-    }
-    // A bundle from before the glossary shipped declares no template for
-    // it, and an older release stays selectable: the destination joins the
-    // projection only where the selected bundle carries it.
-    let mut blocks = vec![(AGENTS_DESTINATION, routing_block(source, params.workflow)?)];
-    if source.manifest()?.artifact(pure::GLOSSARY_BLOCK).is_some() {
-        blocks.push((GLOSSARY_DESTINATION, glossary_block(source)?));
-    }
-    blocks.push((HOOKS_DESTINATION, hooks_block(source, params.workflow)?));
-    for (destination, template) in blocks {
-        entries.push(Entry {
-            destination: destination.to_owned(),
-            kind: Kind::Rendered,
-            placement: Placement::Block,
-            baseline: template.as_bytes().to_vec(),
-            rendered: render(template.as_bytes(), params),
-        });
-    }
-    entries.sort_by(|a, b| a.destination.cmp(&b.destination));
-    Ok(entries)
-}
-
-/// Why the whole Nix capability stays out of a landing, or `None` where
-/// the target's crate shape supports the seed: the crate shape read from
-/// `target`, judged by [`pure::nix_unsupported_shape`].
-#[must_use]
-pub fn nix_unsupported_shape(target: &Utf8Path) -> Option<String> {
-    pure::nix_unsupported_shape(&evidence::crate_shape(target))
-}
-
-/// Why the flake half of the Nix capability stays out of this landing, or
-/// `None` where the pair lands whole.
-///
-/// The flake pair's presence is read from `target` and judged by
-/// [`pure::flake_pair_withheld`]. A pair the record names is never
-/// withheld, and its presence is then not even read.
-///
-/// # Errors
-///
-/// Any read failure other than the files being absent.
-pub fn nix_withheld(
-    target: &Utf8Path,
-    recorded: Option<&manifest::Manifest>,
-) -> std::io::Result<Option<String>> {
-    if evidence::flake_recorded(recorded) {
-        return Ok(None);
-    }
-    let (flake_nix, flake_lock) = evidence::flake_presence(target)?;
-    Ok(pure::flake_pair_withheld(false, flake_nix, flake_lock))
-}
-
 /// One destination a landing withholds, with why.
 #[derive(Debug, Clone, Serialize)]
 pub struct Withheld {
@@ -514,80 +314,6 @@ pub struct Withheld {
     /// The reason, stated once per destination so a machine reader needs
     /// no join.
     pub reason: String,
-}
-
-/// The Nix destinations an opted-in landing withholds at this target, with
-/// the one reason, or `None` where the capability lands whole.
-///
-/// The judgment [`withhold_nix`] applies, exposed as a value so a planner
-/// can read it without an entry list: an unsupported crate shape names
-/// the whole capability, and a flake pair of the target's own names the
-/// pair.
-///
-/// # Errors
-///
-/// Any read failure from the pair check other than absence.
-pub fn nix_withholding(
-    target: &Utf8Path,
-    recorded: Option<&manifest::Manifest>,
-) -> Result<Option<(&'static [&'static str], String)>, RkError> {
-    if let Some(reason) = nix_unsupported_shape(target) {
-        return Ok(Some((&NIX_DESTINATIONS[..], reason)));
-    }
-    if let Some(reason) = nix_withheld(target, recorded)? {
-        return Ok(Some((&NIX_WITHHOLDABLE[..], reason)));
-    }
-    Ok(None)
-}
-
-/// Drop the Nix destinations this target cannot take from a projection,
-/// naming each with its reason.
-///
-/// The one judgment every landing verb shares, so a preview, an apply, an
-/// upgrade, and an adoption all withhold identically: an unsupported
-/// crate shape withholds the whole capability, and a flake pair of the
-/// target's own withholds the pair and the workflow while the seeded
-/// package expression still lands.
-///
-/// # Errors
-///
-/// Any read failure from the pair check other than absence.
-pub fn withhold_nix(
-    target: &Utf8Path,
-    nix: bool,
-    recorded: Option<&manifest::Manifest>,
-    entries: &mut Vec<Entry>,
-) -> Result<Vec<Withheld>, RkError> {
-    if !nix {
-        return Ok(Vec::new());
-    }
-    let Some((set, reason)) = nix_withholding(target, recorded)? else {
-        return Ok(Vec::new());
-    };
-    let mut withheld = Vec::new();
-    entries.retain(|entry| {
-        if set.contains(&entry.destination.as_str()) {
-            withheld.push(Withheld {
-                path: entry.destination.clone(),
-                reason: reason.clone(),
-            });
-            false
-        } else {
-            true
-        }
-    });
-    Ok(withheld)
-}
-
-/// The bytes an entry's destination currently holds: the whole file, or
-/// the marked block extracted from the target's `AGENTS.md`. `None` means
-/// the file — or the block — is absent.
-///
-/// # Errors
-///
-/// Any read failure other than the file being absent.
-pub fn read_destination(target: &Utf8Path, entry: &Entry) -> std::io::Result<Option<Vec<u8>>> {
-    read_recorded(target, &entry.destination)
 }
 
 /// The bytes a recorded destination currently holds, by the placement
@@ -619,7 +345,7 @@ pub fn read_recorded(target: &Utf8Path, destination: &str) -> std::io::Result<Op
 /// override flags applied.
 #[derive(Debug)]
 pub struct Resolved {
-    /// The forge whose payload applies.
+    /// The forge whose files apply.
     pub forge: String,
     /// The project path, where a flag or the remote names one.
     pub repo: Option<String>,
@@ -685,96 +411,6 @@ pub fn repo_unresolved() -> RkError {
     )
 }
 
-/// Land one entry: the whole file through the temp-plus-rename writer, or
-/// the block spliced into its document and the whole document rewritten
-/// the same way.
-///
-/// # Errors
-///
-/// Any write failure; the destination then holds what it held. An
-/// unspliceable hook file surfaces as an error here only as a backstop —
-/// [`hooks_splice_refusal`] is the check a verb runs before any write.
-pub fn write_destination(target: &Utf8Path, entry: &Entry) -> std::io::Result<()> {
-    let path = target.join(&entry.destination);
-    match entry.placement {
-        Placement::Whole => atomic::write(path.as_std_path(), &entry.rendered),
-        Placement::Block => {
-            let existing = match std::fs::read(&path) {
-                Ok(bytes) => Some(bytes),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-                Err(e) => return Err(e),
-            };
-            // The block is release-kit's own text; the document is the
-            // target's bytes and is never decoded.
-            let block = String::from_utf8_lossy(&entry.rendered).into_owned();
-            if entry.destination == HOOKS_DESTINATION {
-                let text = existing.map(|bytes| String::from_utf8_lossy(&bytes).into_owned());
-                let spliced =
-                    splice_hooks_block(text.as_deref(), &block).map_err(std::io::Error::other)?;
-                atomic::write(path.as_std_path(), spliced.as_bytes())
-            } else {
-                let spliced = splice_marked_block(existing.as_deref(), &block);
-                atomic::write(path.as_std_path(), &spliced)
-            }
-        }
-    }
-}
-
-/// The hook file's defect, read from the target: `None` for a missing
-/// file or one the block can land in.
-///
-/// The one judgment every verb shares, covering every splice refusal —
-/// ill-formed markers, and an unmarked file offering the block no
-/// `repos:` line. Status reports it as rendered drift, upgrade collects
-/// it as a conflict in preview and apply alike so no landing dies
-/// half-written, and adopt lists it with its mismatches.
-///
-/// # Errors
-///
-/// Any read failure other than the file being absent.
-pub fn hooks_file_defect(
-    source: &dyn ReleaseSource,
-    target: &Utf8Path,
-) -> Result<Option<String>, RkError> {
-    let path = target.join(HOOKS_DESTINATION);
-    match std::fs::read(&path) {
-        Ok(bytes) => {
-            let text = String::from_utf8_lossy(&bytes);
-            let manifest = source.manifest()?;
-            let template = block(source, &manifest, pure::PRE_COMMIT_BLOCK)?;
-            Ok(splice_hooks_block(Some(&text), authored(&template)).err())
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e.into()),
-    }
-}
-
-/// The refusal a landing verb answers before writing anything, where
-/// the target's hook file offers the block no place.
-///
-/// Checked ahead of every write so the all-or-nothing property holds and
-/// no landing dies half-written into `.pre-commit-config.yaml`.
-///
-/// # Errors
-///
-/// [`RkError::Refusal`] naming the file, and any read failure.
-pub fn hooks_splice_refusal(source: &dyn ReleaseSource, target: &Utf8Path) -> Result<(), RkError> {
-    hooks_file_defect(source, target)?.map_or(Ok(()), |reason| {
-        Err(RkError::refusal(
-            Diagnostic::new(
-                Reason::StateDrift,
-                format!("{reason}, and nothing was written"),
-            )
-            .expected("a .pre-commit-config.yaml the block can land in, or none")
-            .action(format!(
-                "resolve it in {}, then re-run",
-                target.join(HOOKS_DESTINATION)
-            ))
-            .target_state("unchanged"),
-        ))
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
@@ -784,32 +420,41 @@ mod tests {
         splice_marked_block,
     };
     use crate::embedded;
-    use crate::release::EmbeddedReleaseSource;
+    use crate::projection::{self, Projection, ProjectionInput, TargetEvidence};
 
-    /// The embedded bundle, which every test here reads through the seam.
-    const SOURCE: EmbeddedReleaseSource = EmbeddedReleaseSource;
-
-    fn pair_files(
-        tech: &str,
-        forge: &str,
-    ) -> Result<Vec<(String, Vec<u8>)>, crate::error::RkError> {
-        super::pair_files(&SOURCE, tech, forge)
-    }
-
-    fn projection(params: &super::Params) -> Result<Vec<super::Entry>, crate::error::RkError> {
-        super::projection(&SOURCE, params)
+    /// The candidate destinations for `params` over a target that holds
+    /// nothing, in destination order.
+    fn destinations(params: &super::Params) -> Vec<String> {
+        Projection::compute(&ProjectionInput {
+            params: params.clone(),
+            evidence: TargetEvidence {
+                crate_shape: projection::CrateShape {
+                    cargo_toml: Some(
+                        "[package]\nname = \"widget\"\nversion = \"0.1.0\"\n".to_owned(),
+                    ),
+                    cargo_lock: true,
+                    main_rs: true,
+                },
+                ..TargetEvidence::default()
+            },
+        })
+        .expect("the pair projects")
+        .candidates
+        .into_iter()
+        .map(|candidate| candidate.destination)
+        .collect()
     }
 
     fn routing_block(workflow: Workflow) -> String {
-        super::routing_block(&SOURCE, workflow).expect("the embedded bundle carries the block")
+        projection::routing_block(workflow).expect("the binary embeds the block")
     }
 
     fn hooks_block(workflow: Workflow) -> String {
-        super::hooks_block(&SOURCE, workflow).expect("the embedded bundle carries the block")
+        projection::hooks_block(workflow).expect("the binary embeds the block")
     }
 
     fn glossary_block() -> String {
-        super::glossary_block(&SOURCE).expect("the embedded bundle carries the block")
+        projection::glossary_block().expect("the binary embeds the block")
     }
 
     /// The splice returns the document's bytes; every assertion below
@@ -839,7 +484,7 @@ mod tests {
 
     /// Both forge policies carry exactly one ordered pair of every
     /// security marker. The span renderer treats anything else as a
-    /// payload defect and leaves the bytes alone, so this test is what
+    /// source defect and leaves the bytes alone, so this test is what
     /// keeps a defect out of a release rather than out of one landing.
     #[test]
     fn each_forge_policy_carries_one_ordered_pair_of_every_span() {
@@ -923,7 +568,7 @@ mod tests {
     }
 
     /// A defective span leaves the bytes alone rather than producing a
-    /// half-written sentence: the payload test above is what catches one.
+    /// half-written sentence: the source test above is what catches one.
     #[test]
     fn a_defective_span_renders_unchanged() {
         let (begin, end) = super::SECURITY_SPANS[0];
@@ -1039,21 +684,24 @@ mod tests {
     /// absent from the technology listing an unknown tech names.
     #[test]
     fn the_shared_zone_composes_into_the_pair() {
-        let files = pair_files("rust", "github").expect("the pair lists");
+        let github = destinations(&super::Params {
+            forge: "github".to_owned(),
+            ..super::Params::for_test("acme/widget", Some(Style::Trunk))
+        });
         assert!(
-            files
-                .iter()
-                .any(|(dest, _)| dest == ".github/workflows/pr-title.yml"),
+            github.contains(&".github/workflows/pr-title.yml".to_owned()),
             "the shared title check lands with the pair"
         );
-        let files = pair_files("rust", "gitlab").expect("the pair lists");
+        let gitlab = destinations(&super::Params {
+            forge: "gitlab".to_owned(),
+            ..super::Params::for_test("acme/widget", Some(Style::Trunk))
+        });
         assert!(
-            files
-                .iter()
-                .any(|(dest, _)| dest == ".gitlab/ci/mr-title.yml"),
+            gitlab.contains(&".gitlab/ci/mr-title.yml".to_owned()),
             "the shared title job lands with the pair"
         );
-        let err = pair_files("_shared", "github").expect_err("the shared zone is no tech");
+        let err =
+            projection::check_pair("_shared", "github").expect_err("the shared zone is no tech");
         let listing = err.to_string();
         let bindings = listing
             .split("the bindings are:")
@@ -1105,33 +753,26 @@ mod tests {
                             assert_eq!(params.workflow(), workflow);
                             assert_eq!(params.style(), style);
                             assert_eq!(params.nix, nix);
-                            let entries = projection(&params).expect("the record projects");
-                            let mut expected: Vec<_> = pair_files(tech, forge)
-                                .expect("the pair lists")
-                                .into_iter()
-                                .filter(|(path, _)| {
-                                    nix || !super::NIX_DESTINATIONS.contains(&path.as_str())
-                                })
-                                .collect();
-                            let routing = routing_block(workflow);
-                            let hooks = hooks_block(workflow);
-                            let glossary = glossary_block();
-                            expected.push((AGENTS_DESTINATION.to_owned(), routing.into_bytes()));
-                            expected.push((GLOSSARY_DESTINATION.to_owned(), glossary.into_bytes()));
-                            expected.push((HOOKS_DESTINATION.to_owned(), hooks.into_bytes()));
-                            expected.sort_by(|a, b| a.0.cmp(&b.0));
-                            assert_eq!(entries.len(), expected.len());
-                            for (entry, (destination, baseline)) in entries.iter().zip(expected) {
-                                assert_eq!(entry.destination, destination);
-                                assert_eq!(entry.baseline, baseline);
-                                let rendered = match entry.kind {
-                                    Kind::Rendered => super::render(
-                                        &baseline,
-                                        &super::Params::for_test("acme/team/widget", style),
-                                    ),
-                                    Kind::Seeded | Kind::State => baseline.clone(),
-                                };
-                                assert_eq!(entry.rendered, rendered, "{destination}");
+                            // The loaded record and the same answers given
+                            // directly project the same candidate tree.
+                            let mut direct = super::Params::for_test("acme/team/widget", style);
+                            direct.tech = tech.to_owned();
+                            direct.forge = forge.to_owned();
+                            direct.workflow = workflow;
+                            direct.nix = nix;
+                            assert_eq!(params, direct);
+                            let projected = destinations(&params);
+                            for block in
+                                [AGENTS_DESTINATION, GLOSSARY_DESTINATION, HOOKS_DESTINATION]
+                            {
+                                assert!(projected.contains(&block.to_owned()), "{block}");
+                            }
+                            for destination in super::NIX_DESTINATIONS {
+                                assert_eq!(
+                                    projected.contains(&destination.to_owned()),
+                                    nix && tech == "rust",
+                                    "{tech} {forge} nix={nix}: {destination}"
+                                );
                             }
                         }
                     }
@@ -1148,7 +789,6 @@ mod tests {
         nix: bool,
     ) -> Result<super::Params, crate::error::RkError> {
         super::Params::resolve(
-            &SOURCE,
             camino::Utf8Path::new("."),
             &super::Inputs {
                 tech: Some(tech),
@@ -1169,26 +809,29 @@ mod tests {
     /// file.
     #[test]
     fn a_projection_renders_owned_files_and_keeps_seeded_judgment() {
-        let entries = projection(
-            &resolved_test_params(
-                "rust",
-                &super::Resolved {
-                    forge: "github".to_owned(),
-                    repo: Some("acme/widget".to_owned()),
-                },
-                Workflow::Branches,
-                Some(Style::Trunk),
-                false,
-            )
-            .expect("the parameters resolve"),
+        let params = resolved_test_params(
+            "rust",
+            &super::Resolved {
+                forge: "github".to_owned(),
+                repo: Some("acme/widget".to_owned()),
+            },
+            Workflow::Branches,
+            Some(Style::Trunk),
+            false,
         )
-        .expect("the pair projects");
+        .expect("the parameters resolve");
+        let entries = Projection::compute(&ProjectionInput {
+            params,
+            evidence: TargetEvidence::default(),
+        })
+        .expect("the pair projects")
+        .candidates;
         let workflow = entries
             .iter()
             .find(|entry| entry.destination.ends_with("release-plz.yml"))
             .expect("the workflow projects");
         assert_eq!(workflow.kind, Kind::Rendered);
-        let text = String::from_utf8_lossy(&workflow.rendered);
+        let text = String::from_utf8_lossy(&workflow.bytes);
         assert!(!text.contains("OWNER"), "an owner token survived rendering");
         assert!(text.contains("'acme'"));
         assert!(!text.contains("TODO(release-kit)"));
@@ -1196,7 +839,7 @@ mod tests {
             .iter()
             .find(|entry| entry.destination.ends_with("pr-title.yml"))
             .expect("the title check projects");
-        let text = String::from_utf8_lossy(&title.rendered);
+        let text = String::from_utf8_lossy(&title.bytes);
         assert!(text.contains(SCOPE_SHAPE), "{text}");
         assert!(
             !text.contains("RK_SCOPE_SHAPE"),
@@ -1207,14 +850,18 @@ mod tests {
             .find(|entry| entry.destination == "release-plz.toml")
             .expect("the seeded file projects");
         assert_eq!(seeded.kind, Kind::Seeded);
-        assert_eq!(seeded.rendered, seeded.baseline);
-        assert!(String::from_utf8_lossy(&seeded.rendered).contains("TODO(release-kit)"));
+        let authored = embedded::SNIPPETS
+            .get_file("rust/github/release-plz.toml")
+            .expect("the seed ships")
+            .contents();
+        assert_eq!(seeded.bytes, authored, "a seeded file lands as authored");
+        assert!(String::from_utf8_lossy(&seeded.bytes).contains("TODO(release-kit)"));
         for block in BLOCK_DESTINATIONS {
             let entry = entries
                 .iter()
                 .find(|entry| entry.destination == block)
                 .expect("every block is part of the projection");
-            let text = String::from_utf8_lossy(&entry.rendered);
+            let text = String::from_utf8_lossy(&entry.bytes);
             assert!(
                 !text.contains("RK_SCOPE_SHAPE"),
                 "{block} kept a token: {text}"
@@ -1224,13 +871,13 @@ mod tests {
 
     /// The Nix destinations project only under the opt-in: off, none of
     /// them appears; on, the rust pairs carry them — the gitlab pair too,
-    /// minus the workflow, which is a forge file the gitlab payload does
+    /// minus the workflow, which is a forge file the gitlab pair does
     /// not ship — and a pair without them projects the smaller product.
     #[test]
     fn the_nix_destinations_project_only_under_the_opt_in() {
         use super::NIX_DESTINATIONS;
         let paths = |nix: bool, forge: &str| -> Vec<String> {
-            projection(
+            destinations(
                 &resolved_test_params(
                     "rust",
                     &super::Resolved {
@@ -1243,10 +890,6 @@ mod tests {
                 )
                 .expect("the parameters resolve"),
             )
-            .expect("the pair projects")
-            .into_iter()
-            .map(|entry| entry.destination)
-            .collect()
         };
         let off = paths(false, "github");
         for destination in NIX_DESTINATIONS {
@@ -1267,7 +910,7 @@ mod tests {
                 .chain(gitlab.iter())
                 .any(|destination| destination.contains("nix.yml"))
         );
-        let bash = projection(
+        let bash = destinations(
             &resolved_test_params(
                 "bash",
                 &super::Resolved {
@@ -1279,15 +922,14 @@ mod tests {
                 true,
             )
             .expect("the parameters resolve"),
-        )
-        .expect("an out-of-matrix pair projects the smaller product");
+        );
         assert!(
             bash.iter()
-                .all(|entry| !NIX_DESTINATIONS.contains(&entry.destination.as_str()))
+                .all(|destination| !NIX_DESTINATIONS.contains(&destination.as_str()))
         );
     }
 
-    /// The github and gitlab copies of the forge-independent Nix payload
+    /// The github and gitlab copies of the forge-independent Nix seeds
     /// stay byte-identical: the loader composes exactly two layers and has
     /// no technology-wide zone, so the duplication is deliberate and this
     /// parity test is what keeps it honest.
@@ -1312,33 +954,47 @@ mod tests {
     /// clean single-crate target withholds nothing.
     #[test]
     fn the_nix_withhold_judgment_covers_the_three_shapes() {
-        use super::{NIX_DESTINATIONS, withhold_nix};
+        use super::NIX_DESTINATIONS;
         let dir = tempfile::tempdir().expect("a scratch target exists");
         let target = camino::Utf8Path::from_path(dir.path()).expect("utf-8 path");
-        let entries = || {
-            projection(
-                &resolved_test_params(
-                    "rust",
-                    &super::Resolved {
-                        forge: "github".to_owned(),
-                        repo: Some("acme/widget".to_owned()),
-                    },
-                    Workflow::Worktree,
-                    Some(Style::Trunk),
-                    true,
-                )
-                .expect("the parameters resolve"),
+        let project = |nix: bool| {
+            let params = resolved_test_params(
+                "rust",
+                &super::Resolved {
+                    forge: "github".to_owned(),
+                    repo: Some("acme/widget".to_owned()),
+                },
+                Workflow::Worktree,
+                Some(Style::Trunk),
+                nix,
             )
-            .expect("the pair projects")
+            .expect("the parameters resolve");
+            let evidence = TargetEvidence::gather(target, None).expect("the evidence reads");
+            Projection::compute(&ProjectionInput { params, evidence }).expect("the pair projects")
+        };
+        let withheld = |projection: &Projection| -> Vec<String> {
+            projection
+                .omissions
+                .iter()
+                .map(|omission| omission.destination.clone())
+                .collect()
+        };
+        let landed = |projection: &Projection, destination: &str| {
+            projection
+                .candidates
+                .iter()
+                .any(|candidate| candidate.destination == destination)
         };
 
         // No Cargo.toml: the whole capability is withheld by name.
-        let mut all = entries();
-        let withheld = withhold_nix(target, true, None, &mut all).expect("the judgment runs");
-        let paths: Vec<&str> = withheld.iter().map(|w| w.path.as_str()).collect();
-        assert_eq!(paths, ["flake.lock", "flake.nix", "nix/package.nix"]);
+        let all = project(true);
+        assert_eq!(
+            withheld(&all),
+            ["flake.lock", "flake.nix", "nix/package.nix"]
+        );
         assert!(
-            all.iter()
+            all.candidates
+                .iter()
                 .all(|entry| !NIX_DESTINATIONS.contains(&entry.destination.as_str()))
         );
 
@@ -1353,26 +1009,20 @@ mod tests {
         std::fs::create_dir_all(target.join("src")).expect("the src dir exists");
         std::fs::write(target.join("src/main.rs"), "fn main() {}\n").expect("the main writes");
         std::fs::write(target.join("flake.nix"), "{ }\n").expect("the flake writes");
-        let mut all = entries();
-        let withheld = withhold_nix(target, true, None, &mut all).expect("the judgment runs");
-        let paths: Vec<&str> = withheld.iter().map(|w| w.path.as_str()).collect();
-        assert_eq!(paths, ["flake.lock", "flake.nix"]);
-        assert!(
-            all.iter()
-                .any(|entry| entry.destination == "nix/package.nix")
-        );
+        let all = project(true);
+        assert_eq!(withheld(&all), ["flake.lock", "flake.nix"]);
+        assert!(landed(&all, "nix/package.nix"));
 
         // A clean single crate: nothing is withheld.
         std::fs::remove_file(target.join("flake.nix")).expect("the flake removes");
-        let mut all = entries();
-        let withheld = withhold_nix(target, true, None, &mut all).expect("the judgment runs");
-        assert!(withheld.is_empty());
-        assert!(all.iter().any(|entry| entry.destination == "flake.nix"));
+        let all = project(true);
+        assert!(all.omissions.is_empty());
+        assert!(landed(&all, "flake.nix"));
 
         // Off, the judgment does not even look.
-        let mut all = entries();
-        let withheld = withhold_nix(target, false, None, &mut all).expect("the judgment runs");
-        assert!(withheld.is_empty());
+        let all = project(false);
+        assert!(all.omissions.is_empty());
+        assert!(!landed(&all, "flake.nix"));
     }
 
     /// The glossary takes the same three shapes the routing block does,

@@ -6,10 +6,10 @@ One file per release that needs an operator step or an explanation a target must
 
 - Name the file by the version that introduces the change: `0.3.19.md` for a change that ships in release 0.3.19. On a `0.x` line a feature or a fix mints the next patch version, so name the file for the version release-plz will mint.
 - Open with one `#` heading naming the release.
-- Follow the heading with a list of exactly two fields, in this order, each on one line. `destinations` names every landed path the step concerns, comma separated. `action` is `operator-step` for a step the operator takes or `plan-operation` for a change the plan carries as an operation.
+- Follow the heading with a list of exactly two fields, in this order, each on one line. `destinations` names every landed path the step concerns, comma separated. `action` is `operator-step` for a step the operator takes or `landing-write` for a change the landing writes on its own.
 - Write the body under two headings, `## What changed` and `## What to do`. State the step as a command or an edit the reader can take.
 - Name every destination the step concerns. A file that names no destination cannot be filtered against a target and is refused by test.
-- A release that changes a landed destination and needs no step is recorded in `compatibility.toml` under `guidance.no_steps`, so the silence is deliberate.
+- A release that changes a landed destination and needs no step is recorded in `index.toml` under `no_steps`, so the silence is deliberate. `index.toml` also carries `since`, the release above which every release either ships a file here or is recorded there; an agent reading a target recorded below it treats the guidance as partial and investigates the gap itself.
 
 ## Example
 

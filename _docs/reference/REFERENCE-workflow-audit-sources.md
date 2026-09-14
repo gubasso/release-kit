@@ -1,6 +1,6 @@
 # Workflow Audit Sources
 
-External sources behind the workflow audit this repository runs over its own `.github/workflows/` and over the payload in `snippets/`: where each tool reads its configuration, what a suppression means to it, and how comparable projects record the findings they accept. Each entry states what the source says and what this repository does with it.
+External sources behind the workflow audit this repository runs over its own `.github/workflows/` and over the snippets in `snippets/`: where each tool reads its configuration, what a suppression means to it, and how comparable projects record the findings they accept. Each entry states what the source says and what this repository does with it.
 
 Verified against the listed sources on 2026-09-08; the cargo-dist entries re-checked on 2026-09-09.
 
@@ -19,7 +19,7 @@ Each member of `rules.<audit>.ignore` is a workflow rule written as `filename.ym
 
 - <https://docs.zizmor.sh/configuration/>
 
-Bearing: this repository ships a `release.yml` of its own in `snippets/bash/github/`, so an ignore for the generated `release.yml` would reach the payload too. The payload hook runs `--no-config` for that reason.
+Bearing: this repository ships a `release.yml` of its own in `snippets/bash/github/`, so an ignore for the generated `release.yml` would reach the snippets too. The snippets hook runs `--no-config` for that reason.
 
 ## zizmor, on inline suppression
 
@@ -29,7 +29,7 @@ A finding is suppressed inline with `# zizmor: ignore[rulename]`, several audits
 
 Bearing: every accepted finding in `snippets/` is an inline comment in the snippet, so it renders into each target, carries its reasoning to the reader who meets it there, and drifts no rendered file.
 
-A payload comment states its reason and names no case, which is the permanent-exception half of `spec-to-code:a-suppression-names-its-case`. `pull_request_target` is the trigger that makes the title gate unforgeable, and the bash release request's checkout persists the credential its own push uses; both are constructs this project chose and keeps, so no record could carry a retirement condition anyone can meet. The suppression over `.github/workflows/release.yml` is the other half, a mask over an external defect, and it names its record.
+A snippet comment states its reason and names no case, which is the permanent-exception half of `spec-to-code:a-suppression-names-its-case`. `pull_request_target` is the trigger that makes the title gate unforgeable, and the bash release request's checkout persists the credential its own push uses; both are constructs this project chose and keeps, so no record could carry a retirement condition anyone can meet. The suppression over `.github/workflows/release.yml` is the other half, a mask over an external defect, and it names its record.
 
 ## Comparable projects, on recording an accepted finding
 
@@ -50,7 +50,7 @@ release-plz's own release workflow mints its App token with `permission-contents
 - <https://github.com/release-plz/release-plz/blob/main/.github/workflows/release-plz.yml>
 - <https://release-plz.dev/docs/github/token>
 
-Bearing: the payload's rust binding mints the same two scopes on the same two jobs.
+Bearing: the rust binding's snippets mint the same two scopes on the same two jobs.
 
 ## actions/create-github-app-token, on the default scope
 
@@ -58,7 +58,7 @@ The action takes a `permission-<permission name>` input per permission. Without 
 
 - <https://github.com/actions/create-github-app-token>
 
-Bearing: every mint in the payload names its scope, in all three technology bindings.
+Bearing: every mint in the snippets names its scope, in all three technology bindings.
 
 ## cargo-dist, on the workflow it generates
 

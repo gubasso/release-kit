@@ -1,0 +1,11 @@
+# The coverage record of the guidance files beside this one.
+#
+# since names the release above which every release either ships a
+# guidance file or needs no operator step, so a target recorded below it
+# reads the guidance as partial coverage and investigates the gap itself.
+# no_steps records the releases that changed a landed destination and
+# needed no step, so the authoring gate can tell a deliberate silence from
+# a forgotten file.
+
+since = "0.3.18"
+no_steps = []

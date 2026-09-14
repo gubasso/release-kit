@@ -24,13 +24,7 @@ use crate::landing::manifest::{self, Alignment, Manifest};
 use crate::landing::{self, Kind};
 use crate::output::Output;
 use crate::projection::{Candidate, Projection, ProjectionInput, TargetEvidence};
-use crate::release::EmbeddedReleaseSource;
 use crate::{embedded, registry};
-
-/// The one seam name every front carries until the seam path goes: the
-/// status verb reads the target and this binary's projection alone.
-#[allow(dead_code, reason = "the seam path is deleted in a later phase")]
-const SOURCE: EmbeddedReleaseSource = EmbeddedReleaseSource;
 
 /// Drift counts by owned kind; `state` files are never compared.
 #[derive(Debug, Serialize)]
@@ -125,10 +119,10 @@ struct Report {
     #[serde(skip_serializing_if = "Option::is_none")]
     invariant_failures: Option<Vec<InvariantFailure>>,
     /// How many destinations an upgrade would change: the count this
-    /// binary's payload projects under the recorded parameters against
+    /// binary's sources project under the recorded parameters against
     /// what the record names. Zero means nothing to take, whatever the two
     /// versions say. Absent on a landed target means this binary carries
-    /// no payload for the recorded pair and cannot answer.
+    /// no files for the recorded pair and cannot answer.
     #[serde(skip_serializing_if = "Option::is_none")]
     pending: Option<usize>,
     /// Present only under `--check`: what the judgment failed on.
@@ -402,7 +396,7 @@ fn observe(args: &StatusArgs, manifest: &Manifest) -> Result<Observed, RkError> 
         }
     }
     // The cross-file step: a landed file can generate the artifact the
-    // forge actually executes, and the payload ships no copy of it, so no
+    // forge actually executes, and the seeds ship no copy of it, so no
     // recorded digest sees the two disagree. The pair's own rule reads
     // both off the target's disk.
     observed.invariants.extend(invariants::target_failures(
@@ -494,7 +488,7 @@ fn recorded_form(candidate: &Candidate) -> &[u8] {
 /// recorded digest is rewritten. A `seeded` or `state` destination the
 /// record already names is never rewritten, so only a change of kind
 /// counts for it. Disk drift is a separate story, told by its own lines:
-/// an edited file is the target's doing, not a newer payload's.
+/// an edited file is the target's doing, not a newer binary's.
 fn pending_of(manifest: &Manifest, projected: &[Candidate]) -> Vec<String> {
     let mut pending = Vec::new();
     for entry in projected {

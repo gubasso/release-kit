@@ -29,7 +29,7 @@ pub type Runner<'a> = dyn FnMut(&Exec) -> Result<Outcome, RkError> + 'a;
 // The landed title check's context is the job in `pr-title.yml` that
 // holds the squash title to the commit convention. The target names it in
 // `protection.title_check`, read through `Ctx::title_check`; the landed
-// job keeps its own name as a payload constant, so a target that renames
+// job keeps its own name as a source constant, so a target that renames
 // the key without renaming the job breaks its own trunk protection and
 // this observer reports it.
 

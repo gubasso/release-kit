@@ -287,7 +287,7 @@ fn fragment(name: &str, tag: &str) -> String {
     render(block(name), tag).trim_end_matches('\n').to_owned()
 }
 
-/// One authored block, by name; the payload is compiled in, so a missing
+/// One authored block, by name; the blocks are compiled in, so a missing
 /// name is a build defect the tests catch, never a runtime path.
 fn block(name: &str) -> &'static str {
     BLOCKS

@@ -114,7 +114,7 @@ fn planned_line(action: &Action) -> String {
     match action {
         Action::Write { destination } | Action::Remove { destination } => destination.to_string(),
         Action::Sweep { destination } => {
-            format!("sweep (no longer in the payload) {destination}")
+            format!("sweep (no longer carried by this binary) {destination}")
         }
         Action::KeptEdited { destination } => format!("keep (edited by you) {destination}"),
         other => format!("{other:?}"),

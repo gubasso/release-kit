@@ -8,7 +8,7 @@ schema_version = 1
 [project]
 repo = "gubasso/release-kit" # P: project path on the forge, nested groups included
 forge = "github" # P: github or gitlab; empty means detect
-tech = "rust" # P: payload binding; empty means detect
+tech = "rust" # P: the binding; empty means detect
 trunk = "master" # N: the one permanent branch
 
 [landing]

@@ -129,9 +129,9 @@ rk upgrade --target .                             # a recorded target
 rk init --tech <tech> --target . --apply          # or rk upgrade --target . --apply
 # check: the same words, then added or updated .release-kit/config.toml, then wrote or rewrote .release-kit/manifest.json last. Every sentinel left to fill is listed
 rk adopt --target . --workflow <mode> --style <style>   # a target already at the candidate, with no record
-# check: matches for each rendered and seeded destination that holds the candidate's bytes, differs for a seeded file the target tuned, and state for a state file. No sentinel is listed, because adoption writes no payload file
+# check: matches for each rendered and seeded destination that holds the candidate's bytes, differs for a seeded file the target tuned, and state for a state file. No sentinel is listed, because adoption writes no candidate file
 rk adopt --target . --workflow <mode> --style <style> --apply
-# check: wrote .release-kit/manifest.json and added .release-kit/config.toml, and nothing else. Every payload destination is unchanged
+# check: wrote .release-kit/manifest.json and added .release-kit/config.toml, and nothing else. Every landed destination is unchanged
 ```
 
 - exit 73 naming collisions: nothing was written. Return to step 2d with the named files.

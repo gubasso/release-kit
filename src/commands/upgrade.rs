@@ -28,7 +28,6 @@ use crate::landing::apply::{self, Action, Collision, Prepared};
 use crate::landing::manifest::{self, Alignment, Manifest, Style, Workflow};
 use crate::landing::{self, lock};
 use crate::output::Output;
-use crate::release::EmbeddedReleaseSource;
 
 /// One destination and what the upgrade decided for it.
 #[derive(Debug, Serialize)]
@@ -229,7 +228,6 @@ fn resolve_params(
         }
     };
     landing::Params::resolve(
-        &EmbeddedReleaseSource,
         held.base(),
         &landing::Inputs {
             tech: args.tech.as_deref(),

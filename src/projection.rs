@@ -20,14 +20,11 @@
 //! Every pure piece of the landing model has one implementation here: the
 //! kind table, the token substitution, the block templating, the splice
 //! and marker judgments, the pair selection, and the Nix crate-shape
-//! judgment. `src/landing.rs` re-exports them and keeps the release-seam
-//! path (`landing::projection` over a release source) for the planner and
-//! `--to` until a later phase deletes that path.
+//! judgment. `src/landing.rs` re-exports them under their old names.
 //!
 //! The project-profile work extends [`ProjectionInput`] and the capability
-//! catalog this module selects from. It creates no second projection and
-//! no stored plan: one input type, one compute function, one candidate
-//! shape.
+//! catalog this module selects from. It creates no second projection: one
+//! input type, one compute function, one candidate shape.
 
 pub mod evidence;
 
@@ -90,10 +87,9 @@ pub struct CrateShape {
 
 /// The complete candidate artifact tree for one target.
 ///
-/// Not a stored plan: it carries no operation, readiness, decision,
-/// fingerprint, release selector, baseline bundle, or apply state, and it
-/// is not serializable. A consumer renders it again from scratch rather
-/// than reading a saved copy.
+/// A value, never a record: it carries no operation, no decision, and no
+/// apply state, and it is not serializable. A consumer renders it again
+/// from scratch rather than reading a saved copy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Projection {
     /// Every candidate, sorted by destination.
@@ -124,7 +120,7 @@ pub struct Candidate {
     /// receipt digests. `None` for a whole file.
     pub region: Option<Vec<u8>>,
     /// The embedded source paths the candidate was rendered from, each
-    /// carrying its payload root as the first segment.
+    /// carrying its distribution root as the first segment.
     pub sources: Vec<String>,
 }
 
@@ -167,7 +163,7 @@ impl Projection {
     ///
     /// # Errors
     ///
-    /// A payload defect in this binary: an unknown technology or an
+    /// A source defect in this binary: an unknown technology or an
     /// unsupported pair as [`RkError::Usage`], and as [`RkError::Other`] a
     /// destination two sources ship, a snippet the kind table does not
     /// classify, or a block this binary does not embed.
@@ -188,13 +184,13 @@ impl Projection {
             }
             let kind = kind_of(&selected.destination).ok_or_else(|| {
                 anyhow::anyhow!(
-                    "the payload does not classify {}; the kind table is stale",
+                    "the embedded sources do not classify {}; the kind table is stale",
                     selected.destination
                 )
             })?;
             let bytes = match kind {
-                Kind::Rendered => render(selected.payload, params),
-                Kind::Seeded | Kind::State => selected.payload.to_vec(),
+                Kind::Rendered => render(selected.bytes, params),
+                Kind::Seeded | Kind::State => selected.bytes.to_vec(),
             };
             candidates.push(Candidate {
                 destination: selected.destination,
@@ -213,7 +209,7 @@ impl Projection {
                 .find(|candidate| candidate.destination == destination)
             {
                 return Err(anyhow::anyhow!(
-                    "{destination} is both a whole file from {} and a marked region from {}; the payload is defective",
+                    "{destination} is both a whole file from {} and a marked region from {}; the embedded sources are defective",
                     whole.sources.join(", "),
                     sources.join(", ")
                 )
@@ -271,6 +267,17 @@ fn embedded_snippets() -> Vec<(String, &'static [u8])> {
         .collect()
 }
 
+/// Whether the embedded snippets ship the `(tech, forge)` pair, with the
+/// same refusals [`select_pair`] answers.
+///
+/// # Errors
+///
+/// Returns [`RkError::Usage`] naming the known bindings for an unknown
+/// technology and the supported pairs for a pair with no files.
+pub fn check_pair(tech: &str, forge: &str) -> Result<(), RkError> {
+    select_pair(&embedded_snippets(), tech, forge).map(|_| ())
+}
+
 /// Every `(technology, forge)` pair the embedded snippets ship, in path
 /// order.
 #[must_use]
@@ -298,15 +305,15 @@ pub fn supported_pairs() -> Vec<(String, String)> {
 }
 
 /// One file selected for a pair: where it lands, which source it is, and
-/// the payload the source carries.
+/// what the source carries.
 #[derive(Debug)]
 pub struct Selected<'a, T> {
     /// The destination, relative to the target root.
     pub destination: String,
-    /// The source path, carrying its payload root.
+    /// The source path, carrying its distribution root.
     pub source: &'a str,
-    /// What the source carries: bytes here, a digest on the seam path.
-    pub payload: &'a T,
+    /// What the source carries.
+    pub bytes: &'a T,
 }
 
 /// The files one `(technology, forge)` pair lands, selected from `files`,
@@ -320,7 +327,7 @@ pub struct Selected<'a, T> {
 /// Returns [`RkError::Usage`] naming the known bindings for an unknown
 /// technology and the supported pairs for a pair with no files, and
 /// [`RkError::Other`] naming both source paths for a destination two
-/// sources ship, which is a payload defect and never one source silently
+/// sources ship, which is a source defect and never one source silently
 /// winning.
 pub fn select_pair<'a, T>(
     files: &'a [(String, T)],
@@ -367,13 +374,13 @@ pub fn select_pair<'a, T>(
     let shared = format!("snippets/_shared/{forge}/");
     let mut out: Vec<Selected<'a, T>> = Vec::new();
     for zone in [&shared, &pair] {
-        for (path, payload) in files {
+        for (path, bytes) in files {
             let Some(rel) = path.strip_prefix(zone.as_str()) else {
                 continue;
             };
             if let Some(existing) = out.iter().find(|selected| selected.destination == rel) {
                 return Err(anyhow::anyhow!(
-                    "the shared zone and the pair ({tech}, {forge}) both ship {rel}: {} and {path}; the payload is defective",
+                    "the shared zone and the pair ({tech}, {forge}) both ship {rel}: {} and {path}; the embedded sources are defective",
                     existing.source
                 )
                 .into());
@@ -381,7 +388,7 @@ pub fn select_pair<'a, T>(
             out.push(Selected {
                 destination: rel.to_owned(),
                 source: path,
-                payload,
+                bytes,
             });
         }
     }
@@ -392,7 +399,7 @@ pub fn select_pair<'a, T>(
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Kind {
-    /// release-kit owns it: a newer payload re-renders it, and a target
+    /// release-kit owns it: a newer binary re-renders it, and a target
     /// edit is a conflict.
     Rendered,
     /// The target owns it: a starting point the project tunes, reported
@@ -461,7 +468,7 @@ pub const NIX_DESTINATIONS: [&str; 3] = ["nix/package.nix", "flake.nix", "flake.
 /// the starting point the target integrates by hand.
 pub const NIX_WITHHOLDABLE: [&str; 2] = ["flake.nix", "flake.lock"];
 
-/// The declared kind of a destination, or `None` for a file the payload
+/// The declared kind of a destination, or `None` for a file the sources
 /// does not classify.
 #[must_use]
 pub fn kind_of(destination: &str) -> Option<Kind> {
@@ -474,7 +481,7 @@ pub fn kind_of(destination: &str) -> Option<Kind> {
         .map(|(_, kind)| *kind)
 }
 
-/// Every destination the payload can land, in declaration order.
+/// Every destination the embedded sources can land, in declaration order.
 ///
 /// The whole files and the three block destinations. The classification
 /// reads it to ask whether a destination is already present at a target.
@@ -490,7 +497,7 @@ pub fn destinations() -> impl Iterator<Item = &'static str> {
 /// Known values, substituted identically everywhere each appears. The
 /// owner is derived from the landing's `repo` parameter and the scope
 /// shape from [`SCOPE_SHAPE`], so the landed bytes stay a deterministic
-/// function of payload plus parameters.
+/// function of the embedded sources plus parameters.
 pub const OWNER_TOKEN: &[u8] = b"OWNER";
 
 /// The repository a preview stands in for where nothing answered.
@@ -577,7 +584,7 @@ fn security_replacements(params: &Params) -> [Option<Vec<u8>>; 3] {
 /// One marked span replaced, or the markers alone removed.
 ///
 /// Exactly one ordered begin and end pair is a span; anything else is a
-/// payload defect a test holds, so this leaves such bytes untouched rather
+/// source defect a test holds, so this leaves such bytes untouched rather
 /// than growing a runtime failure mode into every rendered file.
 fn replace_span(baseline: &[u8], begin: &[u8], end: &[u8], value: Option<&[u8]>) -> Vec<u8> {
     let ordered = find(baseline, begin)
@@ -715,7 +722,7 @@ pub const fn routing_line(workflow: Workflow) -> &'static str {
     }
 }
 
-/// One authored block this binary embeds, as text, by its payload path.
+/// One authored block this binary embeds, as text, by its embedded path.
 ///
 /// # Errors
 ///
@@ -1357,8 +1364,6 @@ mod tests {
             "registry::",
             "curl",
             "reqwest",
-            "ReleaseSource",
-            "ReleaseManifest",
             "blob(",
         ];
         let mut hits = Vec::new();
@@ -1590,7 +1595,7 @@ mod tests {
     }
 
     /// A snippet that ships a block destination as a whole file is a
-    /// payload defect named by both sides: the snippet's source path and
+    /// source defect named by both sides: the snippet's source path and
     /// the block's template paths.
     #[test]
     fn a_whole_file_colliding_with_a_marked_region_names_both_source_paths() {
@@ -1604,7 +1609,7 @@ mod tests {
         assert!(text.contains("snippets/rust/github/AGENTS.md"), "{text}");
         assert!(text.contains(super::AGENTS_BLOCK), "{text}");
         assert!(text.contains(super::AGENTS_LINE_WORKTREE), "{text}");
-        assert!(text.contains("payload is defective"), "{text}");
+        assert!(text.contains("embedded sources are defective"), "{text}");
     }
 
     #[test]
@@ -1622,7 +1627,7 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("snippets/rust/github/SECURITY.md"), "{text}");
-        assert!(text.contains("payload is defective"), "{text}");
+        assert!(text.contains("embedded sources are defective"), "{text}");
 
         let clean: Vec<(String, &[u8])> = vec![
             ("snippets/_shared/github/SECURITY.md".to_owned(), b"shared"),

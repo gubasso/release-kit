@@ -1,15 +1,14 @@
 //! release-kit: a canonical release workflow, carried whole by one binary.
 //!
 //! The library exists so the crate's own tests can link the modules; the
-//! `rk` binary in `main.rs` is the product. `embedded` holds the payload
-//! and `payload_roots` its one inventory, `cli` the argument surface,
-//! `commands` the handlers, `projection` the one pure candidate tree over
-//! the embedded sources, `release` the seam the older landing path reads a
-//! release bundle through, `plan` the typed document every landing write
-//! comes from, `stage` the disposable candidate stage over the projection,
-//! `self_depend` the consumer pin, `depend` the
-//! dependency matrix, `skills` the user-scope skill install,
-//! `digest` the one hash type, and `error` the one exit-code matrix.
+//! `rk` binary in `main.rs` is the product. `embedded` holds the embedded
+//! sources and `distribution_roots` their one inventory, `cli` the
+//! argument surface, `commands` the handlers, `projection` the one pure
+//! candidate tree over the embedded sources, `landing` the parameters and
+//! the direct writes into a target, `stage` the disposable candidate
+//! stage over the projection, `self_depend` the consumer pin, `depend`
+//! the dependency matrix, `skills` the user-scope skill install, `digest`
+//! the one hash type, and `error` the one exit-code matrix.
 
 pub mod applog;
 pub mod assess;
@@ -22,6 +21,7 @@ pub mod depend;
 pub mod detect;
 pub mod diagnostic;
 pub mod digest;
+pub mod distribution_roots;
 pub mod embedded;
 pub mod error;
 pub mod events;
@@ -30,12 +30,9 @@ pub mod issue;
 pub mod landing;
 pub mod maintenance;
 pub mod output;
-pub mod payload_roots;
-pub mod plan;
 pub mod probes;
 pub mod projection;
 pub mod registry;
-pub mod release;
 pub mod self_depend;
 pub mod setup;
 pub mod skills;

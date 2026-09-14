@@ -15,7 +15,7 @@ A release that is authentic and intact may still need a newer engine, a generato
 
 Chosen option: both declarations ride in the bundle, read offline through the seam every root is read through. Each compatibility axis becomes a precondition with a requirement, and the facts land in the plan's release section. Guidance is selected by the interval from the record to the candidate, filtered to the destinations the target has, and reported with an explicit coverage. Partial coverage is a decision the operator takes knowingly. Unavailable guidance blocks a rendered write, because the operator cannot reconcile what nobody described. An authoring gate names a release that changed a landed destination and shipped no file, and `guidance.no_steps` records a deliberate silence.
 
-Enforced by `reconcile:compatibility-is-declared-in-the-bundle-and-evaluated-per-axis` and `reconcile:guidance-ships-in-the-bundle-filtered-and-covered`.
+Enforced by nothing; see [its successor](./ADR-let-the-installed-binary-render-its-own-release.md).
 
 ## Consequences
 
@@ -24,4 +24,4 @@ Enforced by `reconcile:compatibility-is-declared-in-the-bundle-and-evaluated-per
 
 ## Status
 
-Implemented: `compatibility.toml`, `guidance/`, `src/release/declared.rs`, `src/plan/compatibility.rs`, `src/plan/guidance.rs`.
+Superseded by [its successor](./ADR-let-the-installed-binary-render-its-own-release.md).

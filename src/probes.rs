@@ -87,7 +87,7 @@ impl ProbeResult {
 /// gate's pre-flight phase must name each of these, and the test holding it to
 /// that must not have to spawn a forge CLI or write into the operator's home
 /// to learn what they are.
-pub const SKILL_PROBES: [&str; 3] = ["skill-roots", "skill-gate", "skill-payload"];
+pub const SKILL_PROBES: [&str; 3] = ["skill-roots", "skill-gate", "skill-sources"];
 
 /// Every executable a Hard probe requires, paired with the nixpkgs package
 /// whose `bin/` supplies it in the installed package's wrapper.
@@ -167,7 +167,7 @@ pub fn run_all() -> Vec<ProbeResult> {
         state_root(),
         skill_roots(),
         skill_gate(),
-        skill_payload(),
+        skill_sources(),
         git_remote(),
         forge_cli(
             "gh-auth",
@@ -255,9 +255,9 @@ fn tool(
     }
 }
 
-/// The crates.io index answers, so another release's bundle can be
-/// fetched through the seam. Soft: a host that cannot fetch is a
-/// constraint on a plan that names a release this binary does not carry,
+/// The crates.io index answers, so `rk versions --check` and
+/// `rk self-depend sync` can compare a pin against the registry. Soft: a
+/// host that cannot reach it is a constraint on the two verbs that fetch,
 /// never a broken install, and every offline verb runs without it.
 fn registry() -> ProbeResult {
     let id = "registry";
@@ -280,7 +280,7 @@ fn registry() -> ProbeResult {
             id,
             ProbeClass::Soft,
             "the crates.io index does not answer",
-            "reach the network before rk payload --release or a plan naming a release this binary does not carry; every offline verb runs without it",
+            "reach the network before rk versions --check or rk self-depend sync; every offline verb runs without it",
         )
     }
 }
@@ -453,7 +453,7 @@ fn skill_gate() -> ProbeResult {
 /// shared with a container, a sandbox, or another machine can hold skills
 /// some other build installed. The probe names that drift rather than
 /// leaving an agent to follow instructions the binary no longer answers.
-fn skill_payload() -> ProbeResult {
+fn skill_sources() -> ProbeResult {
     let id = SKILL_PROBES[2];
     let Ok(home) = crate::skills::home() else {
         return ProbeResult::failed(
@@ -468,7 +468,7 @@ fn skill_payload() -> ProbeResult {
             id,
             ProbeClass::Soft,
             "this binary's embedded skills do not read",
-            "reinstall rk; the payload it was built from is defective",
+            "reinstall rk; the sources it was built from are defective",
         );
     };
     let record = Record::load(&home.join(RECORD_PATH));
@@ -529,9 +529,9 @@ fn skill_payload() -> ProbeResult {
     )
 }
 
-/// What sits at each destination the payload names.
+/// What sits at each destination the embedded skills name.
 struct Installed {
-    /// Destinations the payload names that hold no readable file.
+    /// Destinations the embedded skills name that hold no readable file.
     missing: Vec<Utf8PathBuf>,
     /// Destinations holding bytes that are not this binary's.
     differing: Vec<Utf8PathBuf>,
@@ -543,7 +543,7 @@ struct Installed {
     all_recorded: bool,
 }
 
-/// Judge each destination the payload names against what sits on disk.
+/// Judge each destination the embedded skills name against what sits on disk.
 fn judge(planned: Vec<(Utf8PathBuf, &'static [u8])>, record: &Record) -> Installed {
     let mut found = Installed {
         missing: Vec::new(),

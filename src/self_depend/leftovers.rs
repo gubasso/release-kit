@@ -7,7 +7,7 @@
 //! on its content and never on its name alone, so an unrelated file of
 //! the same name is never removed; a line entry names the file, the line,
 //! and the matched text. The needles are grammars, in the same class as
-//! the pin prefix: source constants, never payload text.
+//! the pin prefix: source constants, never authored text.
 
 use camino::Utf8Path;
 use serde::Serialize;

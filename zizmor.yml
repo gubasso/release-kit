@@ -1,11 +1,11 @@
-# What this repository's own workflows are audited against. The payload is
+# What this repository's own workflows are audited against. The snippets are
 # audited separately, with --no-config, so nothing here can reach it: zizmor
 # keys an ignore by base filename alone, and snippets/bash/github ships a
-# release.yml of its own. A payload suppression is an inline comment in the
+# release.yml of its own. A snippet suppression is an inline comment in the
 # snippet, where it renders into every target.
 rules:
   # ci.yml runs actions by moving tag on purpose. The references this project
-  # holds immutable are the ones it ships, and the payload audit judges those
+  # holds immutable are the ones it ships, and the snippets audit judges those
   # for themselves, with no policy relaxing them.
   unpinned-uses:
     config:

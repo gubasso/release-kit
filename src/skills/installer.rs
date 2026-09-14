@@ -1,6 +1,6 @@
 //! Install the embedded skills into the agent skill directories.
 //!
-//! Two references decide what a destination holds: the payload this binary
+//! Two references decide what a destination holds: the skills this binary
 //! carries, and the record of what a previous apply wrote there. Bytes
 //! matching either are the tool's own and may be replaced; anything else is
 //! the user's and refuses.
@@ -28,17 +28,17 @@ use crate::skills::{Digest, Skill};
 #[derive(Debug, Serialize, PartialEq, Eq)]
 #[serde(tag = "action", rename_all = "kebab-case")]
 pub enum Action {
-    /// The payload's bytes land at this destination.
+    /// The embedded bytes land at this destination.
     Write {
         /// The `SKILL.md` path written.
         destination: Utf8PathBuf,
     },
-    /// The destination already holds the payload's bytes.
+    /// The destination already holds the embedded bytes.
     Unchanged {
         /// The `SKILL.md` path left alone.
         destination: Utf8PathBuf,
     },
-    /// A recorded leftover the payload no longer names is removed.
+    /// A recorded leftover the embedded skills no longer name is removed.
     Sweep {
         /// The leftover taken back.
         destination: Utf8PathBuf,
@@ -55,7 +55,7 @@ pub enum Action {
         /// The `SKILL.md` path removed.
         destination: Utf8PathBuf,
     },
-    /// A destination holding bytes neither the payload nor the record
+    /// A destination holding bytes neither the embedded skills nor the record
     /// accounts for is the user's now, and an uninstall leaves it.
     KeptEdited {
         /// The edited `SKILL.md` path left in place.
@@ -78,7 +78,7 @@ pub enum Action {
 struct Planned {
     /// The path this run writes.
     destination: Utf8PathBuf,
-    /// The payload bytes that belong there.
+    /// The embedded bytes that belong there.
     bytes: &'static [u8],
 }
 
@@ -155,7 +155,7 @@ fn check_shared_root(shared: &Utf8Path, record: &Utf8Path) -> Result<(), RkError
 
 /// Refuse a destination this installer must not write through or replace.
 ///
-/// A symlink is never followed: the payload would land wherever it points,
+/// A symlink is never followed: the skill would land wherever it points,
 /// which is outside the home this command was asked to touch.
 fn check_destination(destination: &Utf8Path) -> Result<(), RkError> {
     if destination.is_symlink() {
@@ -171,7 +171,7 @@ fn check_destination(destination: &Utf8Path) -> Result<(), RkError> {
     Ok(())
 }
 
-/// Destinations holding bytes neither the payload nor the record accounts for.
+/// Destinations holding bytes neither the embedded skills nor the record account for.
 ///
 /// A destination the record vouches for carries a copy this tool wrote and a
 /// later release has since changed. That is an upgrade, not a conflict, and
@@ -405,7 +405,7 @@ pub fn install(layout: &Layout, apply: bool, force: bool) -> Result<Vec<Action>,
 
 /// Remove every installed skill under each root, previewing by default.
 ///
-/// Only bytes this tool can vouch for go: a destination holding the payload's
+/// Only bytes this tool can vouch for go: a destination holding the embedded
 /// bytes or bytes the record says it wrote, plus the recorded leftovers, and a
 /// directory only once nothing else lives in it. A destination the user has
 /// edited is theirs now and stays, reported rather than removed. An absent
@@ -433,7 +433,7 @@ pub fn uninstall(layout: &Layout, apply: bool) -> Result<Vec<Action>, RkError> {
             return Ok(());
         }
         // The same two references an install trusts decide what goes: the
-        // payload's bytes, or bytes the record vouches this tool wrote.
+        // bytes, or bytes the record vouches this tool wrote.
         // Anything else is the user's edit, and removing it would destroy
         // work an install refuses to even overwrite.
         let found = fs::read(&entry.destination)?;
@@ -467,9 +467,9 @@ pub fn uninstall(layout: &Layout, apply: bool) -> Result<Vec<Action>, RkError> {
     }
 
     let mut record = record_found;
-    // A skill the payload has since dropped is still ours to take back, and an
+    // A skill this binary has since dropped is still ours to take back, and an
     // uninstall leaving it behind is the leftover an agent keeps offering. The
-    // record is what names it; the payload no longer can.
+    // record is what names it; the embedded skills no longer can.
     let stale = leftovers(&scanned, &record, &removable);
 
     if !apply {
@@ -744,7 +744,7 @@ mod tests {
     }
 
     #[test]
-    fn an_install_sweeps_a_destination_the_payload_dropped() {
+    fn an_install_sweeps_a_destination_the_binary_dropped() {
         let home = Home::new();
         install(&home.layout(), true, false).unwrap();
         let dropped = home.destination(".claude/skills", "rk-retired");

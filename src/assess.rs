@@ -3,7 +3,7 @@
 //! The assessment is read-only evidence plus one classification computed
 //! from it by an explicit rule: `greenfield` when the target carries no
 //! release mechanism and no release history, `brownfield` when a release
-//! mechanism is already in place — a tool's configuration, a payload
+//! mechanism is already in place — a tool's configuration, a landed
 //! destination, a landed block — and `needs-decision` when the target
 //! shows release activity that no recognized mechanism explains: tags
 //! with no tool behind them, or a second long-lived branch. The rule
@@ -26,7 +26,7 @@ use crate::landing::{self, manifest};
 
 /// Files that mark a release mechanism, whichever tool owns it.
 ///
-/// The payload's own destinations are judged separately, as collisions;
+/// release-kit's own destinations are judged separately, as collisions;
 /// this list is what other tools leave behind: every configuration name
 /// semantic-release and `GoReleaser` document, release-plz's dotted form,
 /// the workflow names a hand-rolled publish commonly takes, and a
@@ -78,10 +78,30 @@ pub const LONG_LIVED_BRANCHES: [&str; 11] = [
     "prod",
 ];
 
-/// What the target is, for routing: the corpus verdict, owned by the
-/// planner's classification module and served here under the name the
-/// assessment has always used.
-pub use crate::plan::classify::Verdict as Classification;
+/// What the target is, for routing: the corpus verdict, computed from the
+/// repository's evidence alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Classification {
+    /// No release mechanism and no release history: land the workflow.
+    Greenfield,
+    /// A release mechanism is in place: migrate, never land beside it.
+    Brownfield,
+    /// Release activity no mechanism explains: the operator decides.
+    NeedsDecision,
+}
+
+impl Classification {
+    /// The kebab-case verdict word, as the JSON serializes it.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Greenfield => "greenfield",
+            Self::Brownfield => "brownfield",
+            Self::NeedsDecision => "needs-decision",
+        }
+    }
+}
 
 /// The landing record's presence, the one fact `rk status` owns that the
 /// routing needs before it reads the full report.
@@ -110,7 +130,7 @@ pub struct Evidence {
     pub repo: Option<String>,
     /// Release-mechanism files of other tools found at the target.
     pub release_markers: Vec<String>,
-    /// Payload destinations already present: a whole file that exists, or
+    /// Landable destinations already present: a whole file that exists, or
     /// a block destination whose marked block is present.
     pub collisions: Vec<String>,
     /// Whether the target is a git repository the evidence below reads.
@@ -124,13 +144,14 @@ pub struct Evidence {
 /// Compute the verdict from the evidence. Pure, so the rule is testable
 /// without a repository.
 #[must_use]
-pub fn classify(evidence: &Evidence) -> Classification {
-    crate::plan::classify::verdict(&crate::plan::classify::RepositoryFacts {
-        release_markers: evidence.release_markers.clone(),
-        collisions: evidence.collisions.clone(),
-        tags: evidence.tags,
-        long_lived_branches: evidence.long_lived_branches.clone(),
-    })
+pub const fn classify(evidence: &Evidence) -> Classification {
+    if !evidence.release_markers.is_empty() || !evidence.collisions.is_empty() {
+        return Classification::Brownfield;
+    }
+    if evidence.tags > 0 || !evidence.long_lived_branches.is_empty() {
+        return Classification::NeedsDecision;
+    }
+    Classification::Greenfield
 }
 
 /// The repository's facts alone, with no record read: what the planner
@@ -145,7 +166,7 @@ pub struct Facts {
     pub repo: Option<String>,
     /// Release-mechanism files of other tools found at the target.
     pub release_markers: Vec<String>,
-    /// Payload destinations already present.
+    /// Landable destinations already present.
     pub collisions: Vec<String>,
     /// Whether the target is a git repository.
     pub git: bool,
@@ -385,7 +406,7 @@ fn git_lines(target: &Utf8Path, args: &[&str]) -> Result<Vec<String>, GitFailure
 
 #[cfg(test)]
 mod tests {
-    use super::{Classification, long_lived_among};
+    use super::{Classification, Evidence, Landing, classify, long_lived_among};
 
     /// The trunk is never evidence against itself; only the remote
     /// segment is stripped, so a topic branch whose last segment is a
@@ -427,8 +448,79 @@ mod tests {
 
     #[test]
     fn the_verdict_words_are_the_wire_form() {
-        assert_eq!(Classification::Greenfield.as_str(), "greenfield");
-        assert_eq!(Classification::Brownfield.as_str(), "brownfield");
-        assert_eq!(Classification::NeedsDecision.as_str(), "needs-decision");
+        for (classification, word) in [
+            (Classification::Greenfield, "greenfield"),
+            (Classification::Brownfield, "brownfield"),
+            (Classification::NeedsDecision, "needs-decision"),
+        ] {
+            assert_eq!(classification.as_str(), word);
+            assert_eq!(
+                serde_json::to_string(&classification).expect("serializes"),
+                format!("\"{word}\"")
+            );
+        }
+    }
+
+    fn evidence() -> Evidence {
+        Evidence {
+            landing: Landing {
+                recorded: false,
+                rk_version: None,
+            },
+            tech: None,
+            forge: None,
+            repo: None,
+            release_markers: Vec::new(),
+            collisions: Vec::new(),
+            git: true,
+            tags: 0,
+            long_lived_branches: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn nothing_is_greenfield() {
+        assert_eq!(classify(&evidence()), Classification::Greenfield);
+    }
+
+    #[test]
+    fn a_release_marker_or_a_collision_is_brownfield() {
+        let with_marker = Evidence {
+            release_markers: vec!["CHANGELOG.md".into()],
+            ..evidence()
+        };
+        assert_eq!(classify(&with_marker), Classification::Brownfield);
+        let with_collision = Evidence {
+            collisions: vec!["release-plz.toml".into()],
+            ..evidence()
+        };
+        assert_eq!(classify(&with_collision), Classification::Brownfield);
+    }
+
+    /// A mechanism outranks unexplained activity: tags beside a marker
+    /// are a history the mechanism made, not a question.
+    #[test]
+    fn a_mechanism_beside_activity_is_still_brownfield() {
+        let both = Evidence {
+            release_markers: vec!["CHANGELOG.md".into()],
+            tags: 7,
+            long_lived_branches: vec!["develop".into()],
+            ..evidence()
+        };
+        assert_eq!(classify(&both), Classification::Brownfield);
+    }
+
+    #[test]
+    fn activity_with_no_mechanism_needs_a_decision() {
+        let tagged = Evidence {
+            tags: 1,
+            ..evidence()
+        };
+        assert_eq!(classify(&tagged), Classification::NeedsDecision);
+        let branched = Evidence {
+            long_lived_branches: vec!["develop".into()],
+            ..evidence()
+        };
+        assert_eq!(classify(&branched), Classification::NeedsDecision);
     }
 }

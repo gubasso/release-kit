@@ -123,7 +123,7 @@ impl Output {
     }
 
     /// A human result without a trailing newline, for byte-identical
-    /// payload prints; silent under `--json`.
+    /// result prints; silent under `--json`.
     pub fn result_raw(&self, text: &str) {
         if !self.is_json() {
             to_stdout(text);

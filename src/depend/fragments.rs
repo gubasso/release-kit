@@ -173,7 +173,7 @@ pub fn seed(name: &str, tokens: &Tokens) -> String {
     render(block(name), tokens)
 }
 
-/// One authored block, by name; the payload is compiled in, so a missing
+/// One authored block, by name; the blocks are compiled in, so a missing
 /// name is a build defect the tests catch, never a runtime path.
 #[must_use]
 pub fn block(name: &str) -> &'static str {

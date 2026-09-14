@@ -10,18 +10,18 @@ This repository is the canonical knowledge product for the release-kit workflow.
 
 ## Ownership boundaries
 
-- `method/` and `bindings/` are the canon prose; `snippets/` and `versions.toml` are the landable payload.
-- `runbooks/`, `forges/`, and `setup/<forge>/` are host-side payload: served by `rk guide` and `rk forge`, executed by `rk setup`, and landed into no target. `SPEC-forge-setup.md` binds how the setup acts on a forge.
+- `method/` and `bindings/` are the canon prose; `snippets/` and `versions.toml` are the embedded sources a landing renders from.
+- `runbooks/`, `forges/`, and `setup/<forge>/` are host-side embedded sources: served by `rk guide` and `rk forge`, executed by `rk setup`, and landed into no target. `SPEC-forge-setup.md` binds how the setup acts on a forge.
 - `snippets/` is scoped by `(technology, forge)` pair, and `rk init` selects the pair; a pair may honestly land fewer files than another.
-- `snippets/_shared/<forge>` holds a forge's technology-independent files, composed into every pair at landing; it is not a technology, and a destination it shares with a pair is a payload defect.
+- `snippets/_shared/<forge>` holds a forge's technology-independent files, composed into every pair at landing; it is not a technology, and a destination it shares with a pair is a projection defect.
 - `blocks/` holds the whole texts the binary writes outside `snippets/` — the spliced blocks and the host-side hook body — authored as files so no human-faced artifact lives as a source literal.
 - `src/issue.rs` owns starting work from an issue: the pure half renders and judges, the spawning half calls the forge CLI, and the seating comes from `src/commands/worktree.rs` so one derivation serves both verbs. `SPEC-issue-branch.md` binds it.
 - Every landable file has a declared kind in `src/landing.rs` — `rendered`, `seeded`, or `state` — and a landing writes `.release-kit/manifest.json` into the target, last. `SPEC-landing.md` binds the record and every verb that reads it.
-- `src/` is the distribution: the `rk` binary embeds every root in `src/payload_roots.rs` and the licenses at compile time, so canon and binary cannot drift.
+- `src/` is the distribution: the `rk` binary embeds every root in `src/distribution_roots.rs` through `src/embedded.rs`, with the licenses, at compile time, so canon and binary cannot drift; `src/projection.rs` is the pure projection every landing verb and `rk stage` render from.
 - `skills/` installs at user scope only — the only mode, not a default beside a system scope, because one scope is one owner per skill name and the vendors share no system layout — and `rk init` lands none: an agent resolves a skill by name across scopes, so a second copy is a second entry under one name. `SPEC-distribution.md` binds what the installer may write there.
 - Where anything lands for a third-party application is decided inside each project, case by case, against that application's own documentation with a dated citation in `_docs/reference/` — never inferred from a convention this repository follows, and never generalized from one application to another.
 - `skill-shared/` is what every skill shares, installed once to `~/.local/state/release-kit/skills/shared/` and named there by absolute path: the two agent roots make no relative path reach one file from both. The plan gate every skill routes to lives there.
-- Every pinned tool is declared once, in `versions.toml`; a snippet pin changes together with its registry entry. `compatibility.toml` and `guidance/` are what the bundle declares beyond its bytes, read through the release seam and landed nowhere; a release that changes a landed destination ships a guidance file or records its silence there, and `guidance/README.md` carries the authoring rules.
+- Every pinned tool is declared once, in `versions.toml`; a snippet pin changes together with its registry entry. `guidance/` is the versioned reference material the binary ships and `rk stage` copies into a stage's `reference/guidance`, landed into no target; a release that changes a landed destination ships a guidance file or records its silence in `guidance/index.toml`, and `guidance/README.md` carries the authoring rules.
 - `_docs/` is this repository's own spec-driven-docs instance plus its decisions, instance-owned and never shipped in the crate; `.spec-driven-docs/` belongs to the sdd canon.
 - Keep each durable fact in one owner and link to it elsewhere.
 - `LICENSE` splits terms on the product boundary: CC BY 4.0 for the method, MIT for the distribution.
@@ -61,11 +61,11 @@ This repository is the canonical knowledge product for the release-kit workflow.
 - A target that already releases somehow, and its verdict before anything lands: `rk assess`, with `rk guide migration` as the procedure and `rk method migration` as its why. The stage every landing write is studied from: `rk stage` writes this binary's candidate and its knowledge into a disposable directory, and `rk stage clean` removes exactly one stage that names itself, bound by `_docs/specs/SPEC-staging.md`. The write itself: `rk init`, `rk upgrade`, and `rk adopt` render afresh from the installed binary and the target, print one ownership word per destination, and refuse an unattributed collision before the first write, with `rk guide landing` as the procedure and `rk method landing` as its why, bound by `_docs/specs/SPEC-landing.md`.
 - The release-line lifecycle and the release style: `rk lines`, with `rk guide release-lines` as the procedure, bound by `_docs/specs/SPEC-maintenance.md` and `_docs/specs/SPEC-landing.md`.
 - What lands in a target: `snippets/`, served by `rk snippet --list`.
-- The committed target answers: `.release-kit/config.toml`, read by landing verbs and written before the manifest; `_docs/specs/SPEC-target-config.md` binds precedence, floors, and informational pending input. What a landed target reports about itself: `rk status`, with `--check` as the judging mode; `rk upgrade` takes it to a newer payload; `rk adopt` records a pre-record target.
+- The committed target answers: `.release-kit/config.toml`, read by landing verbs and written before the manifest; `_docs/specs/SPEC-target-config.md` binds precedence, floors, and informational pending input. What a landed target reports about itself: `rk status`, with `--check` as the judging mode; `rk upgrade` takes it to the installed binary's projection; `rk adopt` records a pre-record target.
 - Pinned tools and freshness: `versions.toml`, served by `rk versions`; `rk versions --check` and `rk self-depend sync` are the two verbs that fetch.
 - A consumer's `rk` from its own flake, pinned and kept fresh: `rk self-depend`, with `rk guide setup` carrying the procedure, bound by `_docs/specs/SPEC-packaging.md`.
 - Another project taken as a dev or prod dependency of a target: `rk depend`, with `rk guide dependencies` as the procedure and `rk method dependencies` as its why, bound by `_docs/specs/SPEC-dependencies.md`.
-- The payload's identity and digests: `rk payload`, with `--json` as the machine form and `--release <version>` for another release's bundle through the seam, bound by `_docs/specs/SPEC-release-bundle.md`. Host readiness and the whole command surface: `rk doctor` and `rk usage`.
+- The host's state and the whole command surface: `rk doctor` and `rk usage`.
 - What the binary carries and writes outside a target: `_docs/specs/SPEC-distribution.md`, served by `rk skill --help`.
 
 <!-- BEGIN release-kit -->
@@ -74,6 +74,7 @@ This repository is the canonical knowledge product for the release-kit workflow.
 
 - This repository runs the release-kit convention. `rk method invariants` states what must stay true.
 - An agent here guides and never drives. It reads this convention and tells the operator which step comes next. It takes no git or forge action unless the operator's request named that action. The bounded actions include the following. Create, switch, or delete a branch. Mint a branch at the forge from an issue. Create or remove a worktree. Commit, push, or tag. Open, update, or merge a pull request. A request to change code authorizes the file changes alone.
+- The workflow terms live in `GLOSSARY.md` at this repository's root. The terms release-kit owns there are `implement-and-request`, `implement-and-merge`, and `full-implement`. A request that carries one of them names every action that term lists.
 - Work reaches the trunk only through a squash-merged pull request from a short-lived branch. The branch name is `<type>/<slug>`, whose type matches the squash title's type, or the forge-minted `<issue-id>-<slug>`. Nothing is committed on `master`.
 - A request that names an issue starts from the forge's own branch: `rk issue start <issue>` mints it at the forge, seats it, and links it to the issue. Never invent a name for work an issue already names.
 - This project works in worktrees: every code-changing branch lives in its linked worktree (`rk worktree add <branch>` creates or adopts it beside the checkout), the main checkout commits nothing, and `rk worktree prune` retires a merged worktree. One branch, one writer.

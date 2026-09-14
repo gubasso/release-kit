@@ -40,7 +40,7 @@ The upgrade is the whole landing procedure: [the landing runbook](./landing.md) 
 
 - an edited generated file: the landing replaces it and prints `replaced`. Only an unattributed differing file refuses, and no flag forces past that refusal. The landing runbook's steps 2d and 3 carry both.
 - a record without the style parameter: answer `landing.style` in the config or pass `--style <style>`, asked of the operator only where the config is silent, because arming an existing project's release request changes what a green trunk does.
-- an absent config: the upgrade seeds it from the record. Where the payload is unchanged, only that file is added.
+- an absent config: the upgrade seeds it from the record. Where the projection is unchanged, only that file is added.
 - a hook block lacking the `rk-message` content guard: the upgrade re-renders the block. A hand-edited block is brought to the candidate first, per 2d.
 
 ### 2c. Change a landing parameter
@@ -51,9 +51,9 @@ On worktree:
 
 The transition for branches open across the change is [the worktree runbook](./worktree.md) step 1c, one adoption per open bare branch, after the change reaches the trunk.
 
-### 2d. Reconcile the hooks and answer the sentinels
+### 2d. Settle the hooks and answer the sentinels
 
-Before the block lands into an existing `.pre-commit-config.yaml`, [the setup runbook](./setup.md) step 4d owns the reconciliation: a hook already doing one of the block's jobs is the operator's choice, never a second hook on one job.
+Before the block lands into an existing `.pre-commit-config.yaml`, [the setup runbook](./setup.md) step 4d owns that choice: a hook already doing one of the block's jobs is the operator's choice, never a second hook on one job.
 
 ```bash
 grep -rn 'TODO(release-kit)' . --exclude-dir=.git

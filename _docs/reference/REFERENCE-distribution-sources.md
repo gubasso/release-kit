@@ -6,7 +6,7 @@ Verified against the listed sources on 2026-08-28 and re-checked on 2026-08-29, 
 
 ## Embedding assets in a Rust binary
 
-`include_dir` exposes embedded contents as `&'static [u8]` and embeds unconditionally. Its metadata feature carries only basic data such as modification time and never permissions, so no file mode survives embedding. The documented compile cost is real: a 64 MB payload takes seconds and hundreds of megabytes of build memory.
+`include_dir` exposes embedded contents as `&'static [u8]` and embeds unconditionally. Its metadata feature carries only basic data such as modification time and never permissions, so no file mode survives embedding. The documented compile cost is real: 64 MB of embedded files takes seconds and hundreds of megabytes of build memory.
 
 `rust-embed` is the better-known alternative and embeds only in release builds, reading from the filesystem in debug unless `debug-embed` is set.
 
@@ -14,7 +14,7 @@ Verified against the listed sources on 2026-08-28 and re-checked on 2026-08-29, 
 - <https://crates.io/crates/rust-embed>
 - <https://docs.rs/rust-embed/latest/rust_embed/trait.RustEmbed.html>
 
-Bearing: `distribution:the-payload-roots-are-declared-once` and `src/payload_roots.rs`. Unconditional embedding is the stronger guarantee for this use, because a debug build reading from disk would let an uncommitted edit run without a rebuild. Losing the file mode is why a materialized script is invoked as `sh <path>` rather than executed.
+Bearing: `distribution:the-distribution-roots-are-declared-once` and `src/distribution_roots.rs`. Unconditional embedding is the stronger guarantee for this use, because a debug build reading from disk would let an uncommitted edit run without a rebuild. Losing the file mode is why a materialized script is invoked as `sh <path>` rather than executed.
 
 ## XDG Base Directory Specification
 
@@ -46,7 +46,7 @@ krew installs plugins under `~/.krew`, with binaries in `~/.krew/bin` and conten
 
 Bearing: the argument against a `~/.release-kit/` tree of installed scripts. Every version problem krew has is one that shipping assets inside the binary avoids for free.
 
-## devcontainer features, and what a versioned executable payload costs
+## devcontainer features, and what a versioned executable distribution costs
 
 Every feature carries at minimum a `devcontainer-feature.json` and an `install.sh`, and the published artifact is the whole subdirectory, pushed to an OCI registry as `<registry>/<namespace>/<id>[:version]`. A feature is republished only when its declared version changes, with major and minor tags maintained per semver.
 

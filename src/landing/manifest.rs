@@ -29,7 +29,7 @@ pub const MANIFEST_PATH: &str = ".release-kit/manifest.json";
 /// `rk_version`, the origin, the resolved parameters, and per destination
 /// the path, the kind, the placement where the destination is a marked
 /// region, and the digest of the bytes or region now present. It carries
-/// no payload digest and no baseline digest, because the landing renders
+/// no bundle digest and no baseline digest, because the landing renders
 /// afresh from this binary and compares against no earlier release.
 ///
 /// Schemas 1 through 6 read through one bounded conversion in
@@ -140,9 +140,9 @@ pub struct Manifest {
     pub rk_version: String,
     /// `init` or `adopt` — how the record came to exist.
     pub origin: String,
-    /// The technology that selected the payload.
+    /// The technology that selected the files.
     pub tech: String,
-    /// The forge that selected the payload.
+    /// The forge that selected the files.
     pub forge: String,
     /// When the first landing happened; an upgrade preserves it.
     pub landed_at: String,
@@ -307,7 +307,7 @@ impl Placement {
 /// The one bounded conversion from a record at schemas 1 through 6 to the
 /// current shape.
 ///
-/// It reads no other release and interprets no payload: it drops the
+/// It reads no other release and interprets no other release's sources: it drops the
 /// fields the direct landing retired and lets the serde defaults on
 /// [`Parameters`] answer what an older record left unsaid.
 pub mod legacy {
@@ -676,7 +676,7 @@ mod tests {
         assert!(message.contains("999"), "{message}");
         assert!(message.contains(super::MANIFEST_PATH), "{message}");
         assert!(
-            !message.to_lowercase().contains("payload"),
+            !message.to_lowercase().contains("bundle"),
             "the record schema stands alone: {message}"
         );
     }

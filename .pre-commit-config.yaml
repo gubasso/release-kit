@@ -110,13 +110,13 @@ repos:
         language: system
         files: '^(src/|tests/|build\.rs$|Cargo\.(toml|lock)$|method/|bindings/|snippets/|blocks/|skills/|versions\.toml$|LICENSE)'
         pass_filenames: false
-      # The payload is audited against nothing: --no-config keeps zizmor.yml
+      # The snippets are audited against nothing: --no-config keeps zizmor.yml
       # out of reach, because an ignore there is keyed by base filename alone
       # and would silence the shipped release.yml along with the generated
       # one. Every accepted finding in a snippet is an inline comment in that
       # snippet, which renders into each target and drifts no rendered file.
-      - id: zizmor-payload
-        name: zizmor over the payload
+      - id: zizmor-snippets
+        name: zizmor over the snippets
         entry: zizmor --no-progress --offline --no-config --min-confidence medium
         language: system
         files: '^snippets/.*/\.github/workflows/.*\.ya?ml$'

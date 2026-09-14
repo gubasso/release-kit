@@ -2,7 +2,7 @@
 
 ## Purpose
 
-How a destination owned by a third-party application is chosen, anywhere this repository or its payload names one: an agent's skill root, an editor directory, a forge's workflow directory. The decision is made inside each project, case by case, against the owning application's current documentation — never inferred from a convention this repository follows, and never generalized from one application to another. The boundary against the neighbors: `SPEC-distribution.md` binds what the binary writes at user scope, and `SPEC-landing.md` binds how files land into a target; this spec binds how any such destination earns its name.
+How a destination owned by a third-party application is chosen, anywhere this repository or its embedded sources name one: an agent's skill root, an editor directory, a forge's workflow directory. The decision is made inside each project, case by case, against the owning application's current documentation — never inferred from a convention this repository follows, and never generalized from one application to another. The boundary against the neighbors: `SPEC-distribution.md` binds what the binary writes at user scope, and `SPEC-landing.md` binds how files land into a target; this spec binds how any such destination earns its name.
 
 ## Requirements
 
@@ -12,7 +12,7 @@ A rule or document naming a destination owned by a third-party application MUST 
 
 #### Scenario: A destination is named without its source
 
-- GIVEN a payload destination under a third-party application's directory
+- GIVEN a landed destination under a third-party application's directory
 - WHEN the test suite runs
 - THEN the test fails unless `_docs/reference/` records that destination with a dated citation
 

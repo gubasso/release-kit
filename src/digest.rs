@@ -1,7 +1,7 @@
 //! SHA-256 digests in their hex text form.
 //!
 //! One digest type serves every record and report in the binary: the
-//! user-scope skill record, and the payload identity `rk payload` prints.
+//! user-scope skill record, and the stage receipt.
 //! Computing at runtime over the embedded bytes keeps `build.rs` free of
 //! code generation and makes a digest necessarily equal to what the
 //! binary actually carries, which a build-time table would only claim.

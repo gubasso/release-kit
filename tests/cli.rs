@@ -1,5 +1,5 @@
 //! End-to-end tests over the built binary: every subcommand, the landing
-//! round-trip, and the payload's presence in the embedded form.
+//! round-trip, and the skills' presence in the embedded form.
 
 #![allow(
     clippy::unwrap_used,
@@ -16,12 +16,12 @@ use predicates::prelude::*;
 use release_kit::skills::Digest;
 use release_kit::skills::record::{RECORD_PATH, Record};
 
-/// Every skill the payload carries, and the roots an install writes them to.
+/// Every skill the binary carries, and the roots an install writes them to.
 const SKILLS: [&str; 3] = ["rk-depend", "rk-release", "rk-setup"];
 const ROOTS: [&str; 2] = [".claude/skills", ".agents/skills"];
 
 /// What every skill shares, installed once outside the agent roots, in the
-/// sorted order the payload walks them.
+/// sorted order the embed walks them.
 const SHARED: [&str; 2] = ["plan-gate.md", "pre-flight-gate.md"];
 const SHARED_ROOT: &str = ".local/state/release-kit/skills/shared";
 
@@ -193,21 +193,6 @@ impl NixShape {
             },
         }
     }
-
-    /// A scratch target carrying the same facts on disk.
-    fn target(self) -> tempfile::TempDir {
-        let dir = tempfile::tempdir().expect("a scratch target exists");
-        if self != Self::NoCrate {
-            std::fs::write(dir.path().join("Cargo.toml"), FIXTURE_CARGO_TOML).expect("writes");
-            std::fs::write(dir.path().join("Cargo.lock"), "version = 4\n").expect("writes");
-            std::fs::create_dir_all(dir.path().join("src")).expect("creates");
-            std::fs::write(dir.path().join("src/main.rs"), "fn main() {}\n").expect("writes");
-        }
-        if self == Self::OwnFlake {
-            std::fs::write(dir.path().join("flake.nix"), "{ }\n").expect("writes");
-        }
-        dir
-    }
 }
 
 /// The crate manifest every fixture combination's Nix evidence reads.
@@ -242,7 +227,7 @@ fn projection_fixture_combinations() -> Vec<(
     out
 }
 
-/// Land the rust payload into `target` under the standard test parameters
+/// Land the rust files into `target` under the standard test parameters
 /// and return the assertion to judge.
 fn land_rust(target: &Path) -> assert_cmd::assert::Assert {
     rk().args(["init", "--tech", "rust", "--forge", "github"])
@@ -318,7 +303,6 @@ fn method_lists_every_chapter() {
             .and(predicate::str::contains("operate"))
             .and(predicate::str::contains("recovery"))
             .and(predicate::str::contains("migration"))
-            .and(predicate::str::contains("reconcile"))
             .and(predicate::str::contains("landing"))
             .and(predicate::str::contains("diff-surface")),
     );
@@ -372,12 +356,12 @@ fn a_read_without_name_or_list_exits_64() {
 /// --json, one diagnostic line carrying its reason.
 #[test]
 fn an_argument_error_exits_64_and_answers_json_with_a_diagnostic() {
-    rk().args(["payload", "--bogus"])
+    rk().args(["versions", "--bogus"])
         .assert()
         .code(64)
         .stderr(predicate::str::contains("--bogus"));
     let output = rk()
-        .args(["payload", "--json", "--bogus"])
+        .args(["versions", "--json", "--bogus"])
         .assert()
         .code(64)
         .get_output()
@@ -398,7 +382,7 @@ fn a_non_unicode_argument_error_exits_64_without_panic() {
     use std::os::unix::ffi::OsStringExt as _;
     let bogus = std::ffi::OsString::from_vec(vec![b'-', b'-', 0xff, 0xfe]);
     let out = rk()
-        .arg("payload")
+        .arg("versions")
         .arg(bogus)
         .assert()
         .code(64)
@@ -492,7 +476,7 @@ fn a_failing_stdout_is_one_typed_io_failure() {
         .open("/dev/full")
         .expect("/dev/full opens");
     let out = std::process::Command::new(assert_cmd::cargo::cargo_bin("rk"))
-        .args(["payload", "--json"])
+        .args(["doctor", "--json"])
         .env("HOME", home.path())
         .env("XDG_STATE_HOME", home.path())
         .stdout(std::process::Stdio::from(sink))
@@ -511,7 +495,7 @@ fn a_failing_stdout_is_one_typed_io_failure() {
     let log = std::fs::read_to_string(home.path().join("release-kit/release-kit.log"))
         .expect("the log exists");
     assert!(
-        log.contains("op=payload status=io"),
+        log.contains("op=doctor status=io"),
         "the log must agree with the exit: {log}"
     );
 }
@@ -560,53 +544,6 @@ fn rust_release_plz_seeds_pin_the_protected_single_package_tag_shape() {
     }
 }
 
-#[test]
-fn payload_reports_the_version_and_every_root() {
-    let mut expected =
-        predicate::str::contains(format!("release-kit {}", env!("CARGO_PKG_VERSION")))
-            .and(predicate::str::contains("payload sha256 "))
-            .boxed();
-    for root in release_kit::payload_roots::PAYLOAD_ROOTS {
-        expected = expected
-            .and(predicate::str::contains(format!("{root}: ")))
-            .boxed();
-    }
-    rk().arg("payload").assert().success().stdout(expected);
-}
-
-#[test]
-fn payload_json_parses_and_its_digests_match_the_embedded_bytes() {
-    let out = rk()
-        .args(["payload", "--json"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let report: serde_json::Value = serde_json::from_slice(&out).expect("the report parses");
-    assert_eq!(
-        report["release_kit_version"],
-        serde_json::Value::from(env!("CARGO_PKG_VERSION"))
-    );
-    assert_eq!(
-        report["payload_schema"],
-        serde_json::Value::from(release_kit::release::PAYLOAD_SCHEMA)
-    );
-    let embedded: std::collections::BTreeMap<String, &[u8]> =
-        release_kit::embedded::artifacts().into_iter().collect();
-    let artifacts = report["artifacts"].as_array().expect("an artifact list");
-    assert_eq!(artifacts.len(), embedded.len());
-    for artifact in artifacts {
-        let path = artifact["path"].as_str().expect("a path");
-        let bytes = embedded[path];
-        assert_eq!(
-            artifact["sha256"].as_str().expect("a digest"),
-            Digest::of(bytes).to_string(),
-            "{path}: the reported digest differs from the embedded bytes"
-        );
-    }
-}
-
 /// Names a reader of this repository alone could not resolve: the sibling
 /// this canon was extracted from, its variable prefix, its bot identity,
 /// and the author's account. The forges, registries, and agents the method
@@ -626,7 +563,7 @@ fn personal_home(user: &str) -> String {
     format!("/home/{user}")
 }
 
-fn payload_lines() -> Vec<(String, usize, String)> {
+fn distribution_lines() -> Vec<(String, usize, String)> {
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
         for entry in std::fs::read_dir(dir).expect("a readable root").flatten() {
             let path = entry.path();
@@ -639,16 +576,16 @@ fn payload_lines() -> Vec<(String, usize, String)> {
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut paths = Vec::new();
-    for name in release_kit::payload_roots::PAYLOAD_ROOTS {
+    for name in release_kit::distribution_roots::DISTRIBUTION_ROOTS {
         let path = root.join(name);
-        assert!(path.exists(), "{name} is not on disk; the payload moved");
+        assert!(path.exists(), "{name} is not on disk; the root moved");
         if path.is_dir() {
             walk(&path, &mut paths);
         } else {
             paths.push(path);
         }
     }
-    assert!(!paths.is_empty(), "the payload scan matched no file");
+    assert!(!paths.is_empty(), "the root scan matched no file");
     let mut lines = Vec::new();
     for path in paths {
         let Ok(text) = std::fs::read_to_string(&path) else {
@@ -666,24 +603,24 @@ fn payload_lines() -> Vec<(String, usize, String)> {
     lines
 }
 
-/// SATISFIES distribution:the-payload-names-no-other-project
+/// SATISFIES distribution:the-distribution-names-no-other-project
 #[test]
-fn the_payload_names_no_other_project() {
-    for (file, number, line) in payload_lines() {
+fn the_distribution_names_no_other_project() {
+    for (file, number, line) in distribution_lines() {
         for name in FOREIGN_NAMES {
             assert!(
                 !line.contains(name),
-                "{file}:{number}: the payload names '{name}', which a reader of this repository alone cannot resolve"
+                "{file}:{number}: the embedded sources name '{name}', which a reader of this repository alone cannot resolve"
             );
         }
     }
 }
 
-/// SATISFIES distribution:the-payload-names-no-other-project
+/// SATISFIES distribution:the-distribution-names-no-other-project
 #[test]
-fn the_payload_carries_no_path_into_a_home_directory() {
+fn the_distribution_carries_no_path_into_a_home_directory() {
     let marker = personal_home("").to_lowercase();
-    for (file, number, line) in payload_lines() {
+    for (file, number, line) in distribution_lines() {
         for root in [marker.as_str(), "/users/"] {
             let Some(offset) = line.find(root) else {
                 continue;
@@ -693,15 +630,16 @@ fn the_payload_carries_no_path_into_a_home_directory() {
             let user = &rest[..end];
             assert!(
                 user.is_empty() || user.starts_with(['<', '$', '{']) || user == "user",
-                "{file}:{number}: the payload names the home directory of '{user}'"
+                "{file}:{number}: the embedded sources name the home directory of '{user}'"
             );
         }
     }
 }
 
-/// An `exclude` entry in `Cargo.toml` must never remove a payload root
-/// from the published crate; the failure would otherwise surface as a
-/// crate that does not compile at the consumer.
+/// An `exclude` entry in `Cargo.toml` must never remove a distribution
+/// root from the published crate; the failure would otherwise surface as
+/// a crate that does not compile at the consumer. The stage's reference
+/// corpus rides in the same package, and nothing retired or internal does.
 #[test]
 #[ignore = "packages the crate; run through the just build gate"]
 fn the_published_crate_carries_every_root() {
@@ -716,12 +654,12 @@ fn the_published_crate_carries_every_root() {
         String::from_utf8_lossy(&out.stderr)
     );
     let listed = String::from_utf8_lossy(&out.stdout);
-    for root in release_kit::payload_roots::PAYLOAD_ROOTS {
+    for root in release_kit::distribution_roots::DISTRIBUTION_ROOTS {
         assert!(
             listed
                 .lines()
                 .any(|line| line == root || line.starts_with(&format!("{root}/"))),
-            "{root}: the published crate drops this payload root"
+            "{root}: the published crate drops this distribution root"
         );
     }
     // The changelog is embedded beside the inventory, like the licenses,
@@ -731,6 +669,28 @@ fn the_published_crate_carries_every_root() {
         listed.lines().any(|line| line == "CHANGELOG.md"),
         "CHANGELOG.md: the published crate drops the embedded changelog"
     );
+    for path in [
+        "guidance/README.md",
+        "guidance/index.toml",
+        "guidance/0.3.19.md",
+        "method/13-landing.md",
+        "runbooks/landing.md",
+        "skills/rk-setup/SKILL.md",
+        "skill-shared/plan-gate.md",
+    ] {
+        assert!(
+            listed.lines().any(|line| line == path),
+            "{path}: the published crate drops it from the stage's reference corpus"
+        );
+    }
+    for retired in RETIRED_PACKAGE_PATHS {
+        assert!(
+            !listed
+                .lines()
+                .any(|line| line == retired || line.starts_with(retired)),
+            "{retired}: the published crate still carries it"
+        );
+    }
 }
 
 #[test]
@@ -1087,7 +1047,7 @@ fn skill_install_refuses_a_differing_destination_without_force() {
         .success();
     assert!(
         std::fs::read_to_string(&destination)
-            .expect("the forced install wrote the payload")
+            .expect("the forced install wrote the embedded bytes")
             .contains("name: rk-release")
     );
 }
@@ -1128,7 +1088,7 @@ fn skill_install_replaces_a_copy_a_previous_release_wrote() {
 /// A skill a later release renames or drops leaves a file an agent keeps
 /// offering, so the install that supersedes it takes it back.
 #[test]
-fn skill_install_sweeps_a_destination_the_payload_dropped() {
+fn skill_install_sweeps_a_destination_the_binary_dropped() {
     let home = Home::new();
     home.rk()
         .args(["skill", "install", "--apply"])
@@ -1325,7 +1285,7 @@ fn skill_install_preview_human_lines_are_snapshot_held() {
             expected.push('\n');
         }
     }
-    // The shared artifacts follow the skills, in the payload's sorted order.
+    // The shared artifacts follow the skills, in the embed's sorted order.
     for artifact in SHARED {
         expected.push_str(
             &home
@@ -1413,7 +1373,7 @@ fn doctor_reports_every_probe_and_exits_0() {
             "state-root",
             "skill-roots",
             "skill-gate",
-            "skill-payload",
+            "skill-sources",
             "git-remote",
             "gh-auth",
             "glab-auth",
@@ -1650,7 +1610,7 @@ fn the_gate_probe_names_a_home_whose_skills_cannot_read_their_gate() {
     );
     assert_eq!(gate["remediation"], "rk skill install --apply");
     assert_eq!(
-        probe(&report, "skill-payload")["status"],
+        probe(&report, "skill-sources")["status"],
         "ok",
         "the skills are installed; only their gate is missing"
     );
@@ -1661,20 +1621,20 @@ fn the_gate_probe_names_a_home_whose_skills_cannot_read_their_gate() {
 /// binary's, and asks for the `--force` only where the record cannot vouch
 /// for what it would overwrite.
 #[test]
-fn the_payload_probe_names_a_skill_that_is_not_this_binarys() {
+fn the_sources_probe_names_a_skill_that_is_not_this_binarys() {
     let home = Home::new();
     home.rk()
         .args(["skill", "install", "--apply"])
         .assert()
         .success();
-    assert_eq!(probe(&skill_probes(&home), "skill-payload")["status"], "ok");
+    assert_eq!(probe(&skill_probes(&home), "skill-sources")["status"], "ok");
 
     // Bytes the record cannot account for are the operator's own.
     let edited = home.destination(ROOTS[0], SKILLS[0]);
     std::fs::write(&edited, "mine now\n").expect("the skill rewrites");
-    let payload = probe(&skill_probes(&home), "skill-payload");
-    assert_eq!(payload["status"], "failed");
-    assert_eq!(payload["remediation"], "rk skill install --apply --force");
+    let sources = probe(&skill_probes(&home), "skill-sources");
+    assert_eq!(sources["status"], "failed");
+    assert_eq!(sources["remediation"], "rk skill install --apply --force");
 
     // Bytes the record vouches for are an older release's, and the plain
     // apply corrects them.
@@ -1683,15 +1643,15 @@ fn the_payload_probe_names_a_skill_that_is_not_this_binarys() {
         .written
         .insert(utf8(&edited), Digest::of(b"mine now\n"));
     home.write_record(&record);
-    let payload = probe(&skill_probes(&home), "skill-payload");
-    assert_eq!(payload["status"], "failed");
-    assert_eq!(payload["remediation"], "rk skill install --apply");
+    let sources = probe(&skill_probes(&home), "skill-sources");
+    assert_eq!(sources["status"], "failed");
+    assert_eq!(sources["remediation"], "rk skill install --apply");
 
     // A skill destination that is simply absent is neither.
     std::fs::remove_file(&edited).expect("the skill removes");
-    let payload = probe(&skill_probes(&home), "skill-payload");
-    assert_eq!(payload["status"], "failed");
-    assert_eq!(payload["remediation"], "rk skill install --apply");
+    let sources = probe(&skill_probes(&home), "skill-sources");
+    assert_eq!(sources["status"], "failed");
+    assert_eq!(sources["remediation"], "rk skill install --apply");
 }
 
 /// A home nobody has installed into fails both skill probes and neither
@@ -1700,7 +1660,7 @@ fn the_payload_probe_names_a_skill_that_is_not_this_binarys() {
 fn the_skill_probes_answer_on_a_home_with_no_install() {
     let home = Home::new();
     let report = skill_probes(&home);
-    for id in ["skill-gate", "skill-payload"] {
+    for id in ["skill-gate", "skill-sources"] {
         let found = probe(&report, id);
         assert_eq!(found["status"], "failed", "{id}");
         assert_eq!(found["remediation"], "rk skill install --apply", "{id}");
@@ -1857,7 +1817,6 @@ fn usage_dumps_every_verb_in_one_call() {
         "rk guide",
         "rk forge",
         "rk versions",
-        "rk payload",
         "rk init",
         "rk setup check",
         "rk setup step",
@@ -1884,7 +1843,6 @@ fn usage_dumps_every_verb_in_one_call() {
         "rk assess",
         "rk stage",
         "rk stage clean",
-        "rk reconcile plan",
         "rk versions",
         "rk doctor",
         "rk usage",
@@ -1967,7 +1925,10 @@ fn skill_show_is_byte_identical_to_the_authored_file() {
             .get_output()
             .stdout
             .clone();
-        assert_eq!(printed, authored, "{name}: the payload differs from source");
+        assert_eq!(
+            printed, authored,
+            "{name}: the embedded copy differs from source"
+        );
     }
 }
 
@@ -2088,11 +2049,11 @@ fn every_skill_routes_to_the_plan_gate_before_acting() {
     }
 }
 
-/// The shared artifacts are files, carried by the payload and installed once,
+/// The shared artifacts are files, carried by the binary and installed once,
 /// so correcting one corrects every skill under every agent root. Each has its
-/// own duty and the payload carries both.
+/// own duty and the binary carries both.
 #[test]
-fn the_payload_carries_the_shared_plan_gate() {
+fn the_binary_carries_the_shared_plan_gate() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("skill-shared");
     let read = |name: &str| {
         std::fs::read_to_string(root.join(name)).unwrap_or_else(|_| panic!("{name} reads"))
@@ -2151,9 +2112,9 @@ fn pre_flight_gate() -> String {
 }
 
 /// One router serves every arrival: the migration skill is absorbed, so
-/// the payload carries three skills and `rk skill list` names exactly them.
+/// the binary carries three skills and `rk skill list` names exactly them.
 #[test]
-fn the_payload_carries_three_skills() {
+fn the_binary_carries_three_skills() {
     assert_eq!(SKILLS.len(), 3);
     let mut listed: Vec<String> = std::fs::read_dir(repo_path("skills"))
         .expect("the skills root reads")
@@ -2191,7 +2152,7 @@ fn the_payload_carries_three_skills() {
 /// it. The install that supersedes it sweeps the recorded file and takes
 /// the emptied directory with it, and keeps a directory the user filled.
 #[test]
-fn the_skill_installer_reports_a_skill_the_payload_no_longer_carries() {
+fn the_skill_installer_reports_a_skill_the_binary_no_longer_carries() {
     let home = Home::new();
     home.rk()
         .args(["skill", "install", "--apply"])
@@ -2337,16 +2298,10 @@ fn the_pre_flight_gate_reads_the_installed_version_and_the_record() {
     ] {
         assert!(step.contains(phrase), "step 6 carries '{phrase}': {step}");
     }
-    for retired in [
-        "reconcile",
-        "plan id",
-        "readiness",
-        "--decide",
-        "fingerprint",
-    ] {
+    for retired in RETIRED_SURFACE {
         assert!(
-            !text.contains(retired),
-            "the pre-flight gate still names the stored-plan path: {retired}"
+            !text.to_lowercase().contains(&retired.to_lowercase()),
+            "the pre-flight gate still names the retired architecture: {retired}"
         );
     }
 }
@@ -2415,7 +2370,7 @@ fn the_setup_skill_restates_no_procedure() {
 // The rk-setup evaluation fixtures: one situation per file under
 // `tests/fixtures/rk-setup-evals/`, each stating the route through the
 // landing runbook's steps and the authority boundaries it holds. They live
-// under tests/ rather than beside the skill because `skills/` is a payload
+// under tests/ rather than beside the skill because `skills/` is a distribution
 // root the binary embeds whole, and a fixture is not a skill.
 // ---------------------------------------------------------------------------
 
@@ -2540,30 +2495,26 @@ fn every_setup_eval_has_the_declared_shape() {
 /// per `packaging:the-operator-selects-the-installed-version`.
 #[test]
 fn no_skill_shared_resource_or_eval_asks_rk_to_install_or_select_a_release() {
-    let mut texts = skill_and_shared_resources();
+    let mut texts: Vec<(String, String)> = skill_and_shared_resources()
+        .into_iter()
+        .map(|(name, text)| (name.to_owned(), text))
+        .collect();
     for (stem, text) in setup_evals() {
-        texts.push(("eval", text.clone()));
-        let _ = stem;
+        texts.push((format!("tests/fixtures/rk-setup-evals/{stem}.md"), text));
     }
     for (name, text) in &texts {
-        for retired in [
-            "rk self-depend sync",
-            "`--to ",
-            " --to ",
-            "--release",
-            "reconcile plan",
-            "reconcile apply",
-            "reconcile show",
-            "rk payload",
-            "--fetch",
-            "--decide",
-            "fingerprint",
-        ] {
+        for retired in ["rk self-depend sync", "--release"] {
             assert!(
                 !text.contains(retired),
-                "{name} asks rk to select or install a release, or names the stored-plan path: {retired}"
+                "{name} asks rk to select or install a release: {retired}"
             );
         }
+        let hits = retired_hits(name, text);
+        assert!(
+            hits.is_empty(),
+            "{name} names the retired architecture:\n{}",
+            hits.join("\n")
+        );
     }
     let skill = setup_skill();
     assert!(
@@ -2901,11 +2852,8 @@ fn the_routing_block_bounds_the_agents_initiative() {
         release_kit::landing::Workflow::Worktree,
         release_kit::landing::Workflow::Branches,
     ] {
-        let block = release_kit::landing::routing_block(
-            &release_kit::release::EmbeddedReleaseSource,
-            workflow,
-        )
-        .expect("the embedded bundle carries the block");
+        let block =
+            release_kit::projection::routing_block(workflow).expect("the binary embeds the block");
         for phrase in [
             "guides and never drives",
             "unless the operator's request named that action",
@@ -3164,12 +3112,9 @@ fn the_routing_block_reads_as_plain_prose() {
         release_kit::landing::Workflow::Branches,
     ] {
         let rendered = release_kit::landing::render(
-            release_kit::landing::routing_block(
-                &release_kit::release::EmbeddedReleaseSource,
-                workflow,
-            )
-            .expect("the embedded bundle carries the block")
-            .as_bytes(),
+            release_kit::projection::routing_block(workflow)
+                .expect("the binary embeds the block")
+                .as_bytes(),
             &render_params("acme/widget", None),
         );
         let text = String::from_utf8(rendered).expect("the block is text");
@@ -3468,7 +3413,6 @@ fn the_runbooks_match_their_method_chapters() {
         ("method/08-worktrees.md", "runbooks/worktree.md"),
         ("method/10-migration.md", "runbooks/migration.md"),
         ("method/11-dependencies.md", "runbooks/dependencies.md"),
-        ("method/12-reconcile.md", "runbooks/reconcile.md"),
         ("method/13-landing.md", "runbooks/landing.md"),
     ] {
         let rendered = std::fs::read_to_string(repo_path(runbook)).expect("reads");
@@ -3551,7 +3495,7 @@ fn guide_lists_and_serves_byte_identically_when_nothing_resolves() {
         predicate::str::contains("release")
             .and(predicate::str::contains("migration"))
             .and(predicate::str::contains("dependencies"))
-            .and(predicate::str::contains("reconcile"))
+            .and(predicate::str::contains("landing"))
             .and(predicate::str::contains("setup"))
             .and(predicate::str::contains("backport")),
     );
@@ -3802,7 +3746,7 @@ fn scan_for_tokens(path: &Path, deny: &[String], offenders: &mut Vec<String>) {
     }
 }
 
-/// The shipped payload carries no trace of the retired branch model: no
+/// The embedded sources carry no trace of the retired branch model: no
 /// second long-lived branch as a word, no back-merge, and no gate job — the
 /// mechanical half of the cleanup promise. Two exemptions: the single-trunk
 /// scripts, whose candidate list legitimately names the branches they
@@ -3810,7 +3754,7 @@ fn scan_for_tokens(path: &Path, deny: &[String], offenders: &mut Vec<String>) {
 /// whose name collides with the retired branch's without meaning it. The
 /// tokens are assembled at run time so this file cannot trip its own scan.
 #[test]
-fn the_payload_carries_no_retired_branch_model() {
+fn the_embedded_sources_carry_no_retired_branch_model() {
     let branch = format!("dev{}", "elop");
     let issue_subcommand = format!("issue dev{}", "elop");
     let substrings = [
@@ -3826,7 +3770,7 @@ fn the_payload_carries_no_retired_branch_model() {
         })
     };
     let mut offenders = Vec::new();
-    for root in release_kit::payload_roots::PAYLOAD_ROOTS {
+    for root in release_kit::distribution_roots::DISTRIBUTION_ROOTS {
         let mut stack = vec![repo_path(root)];
         while let Some(path) = stack.pop() {
             if path.is_dir() {
@@ -3852,7 +3796,7 @@ fn the_payload_carries_no_retired_branch_model() {
     }
     assert!(
         offenders.is_empty(),
-        "the retired branch model leaked into the payload: {offenders:?}"
+        "the retired branch model leaked into the embedded sources: {offenders:?}"
     );
 }
 
@@ -6428,7 +6372,7 @@ fn a_signalled_child_names_the_signal_and_closes_the_journal() {
 }
 
 /// Two runs at once keep their materialized scripts apart. The scripts
-/// are payload written to disk to be executed, so a shared path is a
+/// are bytes written to disk to be executed, so a shared path is a
 /// window in which one run rewrites the bytes another is about to run;
 /// each run materializes under its own journal directory instead.
 #[test]
@@ -6654,7 +6598,7 @@ fn a_landing_writes_the_record_with_its_identity() {
     );
 
     assert!(
-        manifest.get("payload_sha256").is_none(),
+        manifest.get(LEGACY_BUNDLE_DIGEST_FIELD).is_none(),
         "the receipt names no bundle digest"
     );
     assert_eq!(manifest_file(&manifest, "AGENTS.md")["kind"], "rendered");
@@ -6665,7 +6609,7 @@ fn a_landing_writes_the_record_with_its_identity() {
         seeded.get("placement").is_none(),
         "a whole file omits its placement"
     );
-    assert!(seeded.get("baseline_sha256").is_none());
+    assert!(seeded.get(LEGACY_BASELINE_FIELD).is_none());
     assert!(
         manifest["pins"]["release-plz"].is_string() && manifest["pins"]["cargo-dist"].is_string(),
         "the record copies the technology's pins: {manifest}"
@@ -6725,82 +6669,6 @@ fn the_routing_block_splices_and_is_recorded() {
     );
 }
 
-/// The destination and the protocol version move together. An engine
-/// that projects only the schema-1 destinations would land a routing
-/// block naming a file it never writes, and no declaration inside the
-/// bundle can stop it, because the projection is the engine's own code.
-/// The schema is the one number such an engine reads before it projects.
-#[test]
-fn the_glossary_destination_moved_the_payload_schema() {
-    use release_kit::release::ReleaseSource;
-
-    assert_eq!(
-        release_kit::release::EmbeddedReleaseSource
-            .manifest()
-            .expect("the embedded bundle describes itself")
-            .payload_schema,
-        2,
-        "the glossary destination landed in payload schema 2"
-    );
-    let params = render_params_for("rust", "github", release_kit::landing::Workflow::Worktree);
-    let entries =
-        release_kit::landing::projection(&release_kit::release::EmbeddedReleaseSource, &params)
-            .expect("the embedded pair projects");
-    assert!(
-        entries
-            .iter()
-            .any(|entry| entry.destination == "GLOSSARY.md"),
-        "the engine that declares this schema projects the destination"
-    );
-}
-
-/// A bundle from before the glossary shipped still projects: the
-/// destination joins a projection only where the selected bundle declares
-/// its template, so an older release stays a valid destination for
-/// `rk reconcile plan --to`.
-#[test]
-fn a_bundle_without_the_glossary_still_projects() {
-    use release_kit::release::DirReleaseSource;
-
-    fn copy_into(from: &Path, to: &Path) {
-        if from.is_dir() {
-            std::fs::create_dir_all(to).expect("dirs exist");
-            for entry in std::fs::read_dir(from).expect("the dir reads").flatten() {
-                copy_into(&entry.path(), &to.join(entry.file_name()));
-            }
-        } else {
-            std::fs::create_dir_all(to.parent().expect("a parent")).expect("dirs exist");
-            std::fs::copy(from, to).expect("the file copies");
-        }
-    }
-
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let bundle = tempfile::tempdir().expect("a scratch bundle exists");
-    for path in ["Cargo.toml", "src"]
-        .into_iter()
-        .chain(release_kit::payload_roots::PAYLOAD_ROOTS)
-    {
-        copy_into(&root.join(path), &bundle.path().join(path));
-    }
-    let glossary = bundle.path().join("blocks/glossary.md.in");
-    assert!(glossary.exists(), "the fixture copied the current payload");
-    std::fs::remove_file(&glossary).expect("the older bundle drops the template");
-
-    let source = DirReleaseSource::new(bundle.path());
-    let params = render_params_for("rust", "github", release_kit::landing::Workflow::Worktree);
-    let entries = release_kit::landing::projection(&source, &params).expect("the pair projects");
-    assert!(
-        !entries
-            .iter()
-            .any(|entry| entry.destination == "GLOSSARY.md"),
-        "a bundle that declares no glossary template must project none"
-    );
-    assert!(
-        entries.iter().any(|entry| entry.destination == "AGENTS.md"),
-        "the routing block still projects"
-    );
-}
-
 /// A fresh landing writes the glossary at the target root and records
 /// it, and the block carries the three terms the routing block names.
 #[test]
@@ -6832,14 +6700,14 @@ fn init_lands_the_glossary() {
 }
 
 /// A target recorded before the destination existed reports it as a
-/// pending payload, takes it on upgrade, and keeps every line the
+/// pending candidate, takes it on upgrade, and keeps every line the
 /// operator wrote below the end marker through a later upgrade.
 #[test]
 fn upgrade_takes_the_glossary_and_keeps_the_operators_terms() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
     land_rust(target.path()).success();
 
-    // Stand in for an older payload that shipped no glossary: the file
+    // Stand in for an older release that shipped no glossary: the file
     // is gone and the record never named it.
     std::fs::remove_file(target.path().join("GLOSSARY.md")).expect("the glossary removes");
     let mut manifest = read_manifest(target.path());
@@ -6884,7 +6752,7 @@ fn upgrade_takes_the_glossary_and_keeps_the_operators_terms() {
     for file in manifest["files"].as_array_mut().expect("files") {
         if file["destination"] == "GLOSSARY.md" {
             file["sha256"] = digest.clone();
-            file["baseline_sha256"] = digest.clone();
+            file[LEGACY_BASELINE_FIELD] = digest.clone();
         }
     }
     manifest["rk_version"] = serde_json::json!("0.1.0");
@@ -7339,10 +7207,10 @@ fn status_does_not_prompt_on_a_version_gap_alone() {
     land_rust(target.path()).success();
     let mut manifest = read_manifest(target.path());
     manifest["rk_version"] = serde_json::Value::from("0.0.1");
-    // A payload digest from another build, so the payload comparison
-    // cannot be what carries this case either.
-    manifest["payload_sha256"] =
-        serde_json::Value::from(Digest::of(b"another payload").to_string());
+    // A bundle digest from another build, so no digest comparison
+    // can be what carries this case either.
+    manifest[LEGACY_BUNDLE_DIGEST_FIELD] =
+        serde_json::Value::from(Digest::of(b"another build").to_string());
     write_manifest(target.path(), &manifest);
 
     let out = rk()
@@ -7374,14 +7242,14 @@ fn status_does_not_prompt_on_a_version_gap_alone() {
 }
 
 /// The prompt states what an upgrade would change: a record whose bytes
-/// this payload no longer renders is pending and routes to `rk upgrade`,
-/// and a destination this payload no longer projects is pending too.
+/// this binary no longer renders is pending and routes to `rk upgrade`,
+/// and a destination this binary no longer projects is pending too.
 #[test]
 fn status_prompts_on_what_an_upgrade_would_change() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
     land_rust(target.path()).success();
 
-    // Stand in for an older payload's rendering: the file and its record
+    // Stand in for an older release's rendering: the file and its record
     // agree with each other, so nothing drifted, and both differ from this
     // binary's candidate.
     let workflow = target.path().join(".github/workflows/release-plz.yml");
@@ -7392,11 +7260,11 @@ fn status_prompts_on_what_an_upgrade_would_change() {
     for file in manifest["files"].as_array_mut().expect("files") {
         if file["destination"] == ".github/workflows/release-plz.yml" {
             file["sha256"] = digest.clone();
-            file["baseline_sha256"] = digest.clone();
+            file[LEGACY_BASELINE_FIELD] = digest.clone();
         }
     }
     manifest["rk_version"] = serde_json::json!("0.1.0");
-    // A destination this payload does not ship: an upgrade drops it from
+    // A destination this binary does not ship: an upgrade drops it from
     // the record, which is a change the prompt must count.
     manifest["files"]
         .as_array_mut()
@@ -7404,8 +7272,8 @@ fn status_prompts_on_what_an_upgrade_would_change() {
         .push(serde_json::json!({
             "destination": "legacy.yml",
             "kind": "rendered",
-            "sha256": Digest::of(b"an older payload shipped this\n").to_string(),
-            "baseline_sha256": Digest::of(b"an older payload shipped this\n").to_string(),
+            "sha256": Digest::of(b"an older release shipped this\n").to_string(),
+            LEGACY_BASELINE_FIELD: Digest::of(b"an older release shipped this\n").to_string(),
         }));
     write_manifest(target.path(), &manifest);
 
@@ -7424,7 +7292,7 @@ fn status_prompts_on_what_an_upgrade_would_change() {
     );
     assert_eq!(
         report["drift"]["rendered"], 0,
-        "nobody edited a file, so this is the payload's story: {report}"
+        "nobody edited a file, so this is the binary's story: {report}"
     );
     rk().args(["status", "--target"])
         .arg(target.path())
@@ -7438,7 +7306,7 @@ fn status_prompts_on_what_an_upgrade_would_change() {
 }
 
 /// An available upgrade is not a defect: `--check` judges the closed
-/// violation set and a pending payload is not in it.
+/// violation set and a pending candidate is not in it.
 #[test]
 fn status_check_does_not_fail_on_a_pending_upgrade() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
@@ -7451,7 +7319,7 @@ fn status_check_does_not_fail_on_a_pending_upgrade() {
     for file in manifest["files"].as_array_mut().expect("files") {
         if file["destination"] == ".github/workflows/release-plz.yml" {
             file["sha256"] = digest.clone();
-            file["baseline_sha256"] = digest.clone();
+            file[LEGACY_BASELINE_FIELD] = digest.clone();
         }
     }
     manifest["rk_version"] = serde_json::json!("0.1.0");
@@ -7487,7 +7355,7 @@ fn status_check_does_not_fail_on_a_pending_upgrade() {
 fn a_rendered_to_seeded_reclassification_is_silent_when_untouched() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
     land_rust(target.path()).success();
-    // Stand in for an older payload that classified the seeded file as
+    // Stand in for an older release that classified the seeded file as
     // rendered: only the recorded kind differs from this binary's table.
     let mut manifest = read_manifest(target.path());
     for file in manifest["files"].as_array_mut().expect("files") {
@@ -7597,13 +7465,13 @@ fn an_upgrade_keeps_a_seeded_edit_and_moves_the_record() {
 
 /// The three-digest comparison at work: a rendered file whose disk bytes
 /// match what the record says was written is nobody's edit, and a newer
-/// payload rewrites it.
+/// binary rewrites it.
 #[test]
 fn an_upgrade_rewrites_an_untouched_stale_rendered_file() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
     land_rust(target.path()).success();
 
-    // Stand in for an older payload's rendering: the file and its record
+    // Stand in for an older release's rendering: the file and its record
     // agree with each other and differ from this binary's candidate.
     let workflow = target.path().join(".github/workflows/release-plz.yml");
     let old = b"# an older release's workflow\n";
@@ -7613,7 +7481,7 @@ fn an_upgrade_rewrites_an_untouched_stale_rendered_file() {
     for file in manifest["files"].as_array_mut().expect("files") {
         if file["destination"] == ".github/workflows/release-plz.yml" {
             file["sha256"] = digest.clone();
-            file["baseline_sha256"] = digest.clone();
+            file[LEGACY_BASELINE_FIELD] = digest.clone();
         }
     }
     write_manifest(target.path(), &manifest);
@@ -7754,14 +7622,14 @@ fn an_upgrade_refuses_without_a_record_and_never_downgrades() {
         .stderr(predicate::str::contains("downgrading"));
 }
 
-/// A file the payload stops shipping is the target's from that moment:
+/// A file the binary stops shipping is the target's from that moment:
 /// left in place, named, and gone from the record.
 #[test]
 fn a_destination_retired_by_the_installed_version_stays_on_disk_and_leaves_the_receipt() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
     land_rust(target.path()).success();
     let legacy = target.path().join("legacy.yml");
-    std::fs::write(&legacy, "an older payload shipped this\n").expect("the legacy file writes");
+    std::fs::write(&legacy, "an older release shipped this\n").expect("the legacy file writes");
     let mut manifest = read_manifest(target.path());
     manifest["files"]
         .as_array_mut()
@@ -7769,7 +7637,7 @@ fn a_destination_retired_by_the_installed_version_stays_on_disk_and_leaves_the_r
         .push(serde_json::json!({
             "destination": "legacy.yml",
             "kind": "rendered",
-            "sha256": Digest::of(b"an older payload shipped this\n").to_string(),
+            "sha256": Digest::of(b"an older release shipped this\n").to_string(),
         }));
     write_manifest(target.path(), &manifest);
 
@@ -7940,7 +7808,7 @@ fn a_differing_seeded_file_adopts_with_both_digests() {
         Digest::of(b"semver_check = true\n").to_string()
     );
     assert_ne!(
-        seeded["sha256"], seeded["baseline_sha256"],
+        seeded["sha256"], seeded[LEGACY_BASELINE_FIELD],
         "the candidate's baseline must be recorded beside the target's bytes"
     );
 }
@@ -8953,7 +8821,7 @@ fn branches_prune_apply_reports_a_surviving_branch_configuration() {
     assert!(!branch_names(repo.path()).contains("feat/merged"));
 }
 
-/// The rust/github seed attests the whole release payload. The flag alone
+/// The rust/github seed attests every release artifact. The flag alone
 /// uses cargo-dist's default phase, which attests only the per-platform
 /// archives; the installers a consumer actually curls are global artifacts
 /// built later, so the seed must pin the `host` phase, pair the release
@@ -8962,7 +8830,7 @@ fn branches_prune_apply_reports_a_surviving_branch_configuration() {
 /// minted after the release page exists, so accepting it would stop holding
 /// the mint-before-publishable rule.
 #[test]
-fn the_rust_github_seed_attests_the_release_payload_in_the_host_phase() {
+fn the_rust_github_seed_attests_the_release_artifacts_in_the_host_phase() {
     let text = std::fs::read_to_string(repo_path("snippets/rust/github/dist-workspace.toml"))
         .expect("the seed reads");
     let value: toml::Table = text.parse().expect("the seed parses as TOML");
@@ -9194,7 +9062,7 @@ fn the_bash_gitlab_downstream_jobs_guard_on_the_release_marker() {
 /// an existing release page gains its missing asset links rather than being
 /// left as found.
 #[test]
-fn the_bash_gitlab_attach_job_reconciles_a_partial_release() {
+fn the_bash_gitlab_attach_job_settles_a_partial_release() {
     let attach = bash_gitlab_job("attach");
     assert!(
         attach.contains("package_files"),
@@ -9212,7 +9080,7 @@ fn the_bash_gitlab_attach_job_reconciles_a_partial_release() {
     );
     assert!(
         !attach.contains("leaving it as it is"),
-        "an existing release is reconciled, never skipped"
+        "an existing release is settled, never skipped"
     );
 }
 
@@ -9454,7 +9322,7 @@ fn every_gitlab_stage_is_declared() {
     }
 }
 
-/// The file a GitLab target creates to declare jobs of its own. The payload
+/// The file a GitLab target creates to declare jobs of its own. The seeds
 /// lands no such file; the bridge names the path a target uses.
 const GITLAB_PROJECT_FILE: &str = ".gitlab/ci/project.yml";
 
@@ -9589,7 +9457,7 @@ fn the_target_file_is_reached_only_through_the_bridge() {
         }
         assert!(
             !target.path().join(GITLAB_PROJECT_FILE).exists(),
-            "{tech}/gitlab: the payload must land no {GITLAB_PROJECT_FILE}; the target creates it"
+            "{tech}/gitlab: the seeds must land no {GITLAB_PROJECT_FILE}; the target creates it"
         );
     }
     for path in GITLAB_PARENTS {
@@ -9901,7 +9769,7 @@ fn status_judges_a_seeded_file_that_dropped_the_invariants() {
         .success();
 }
 
-/// Every `(action, commit)` the payload's own seed pins, so a test
+/// Every `(action, commit)` the embedded seed pins, so a test
 /// workflow carries the pins the judgment expects and a pin bump moves
 /// the fixture with the seed.
 fn seed_action_commits() -> Vec<(String, String)> {
@@ -10413,7 +10281,7 @@ fn status_reports_a_missing_invariant_bearing_file_as_missing() {
     );
 }
 
-/// Every `uses:` line across the snippet payload, as `(file, owner/action,
+/// Every `uses:` line across the embedded snippets, as `(file, owner/action,
 /// ref, trailing comment)`.
 fn snippet_action_refs() -> Vec<(String, String, String, Option<String>)> {
     let mut refs = Vec::new();
@@ -10457,12 +10325,12 @@ fn snippet_action_refs() -> Vec<(String, String, String, Option<String>)> {
             ));
         }
     }
-    assert!(!refs.is_empty(), "the payload carries uses: references");
+    assert!(!refs.is_empty(), "the snippets carry uses: references");
     refs
 }
 
 /// SATISFIES: the signer runs no movable code. Every action reference in
-/// the payload is a full lowercase commit SHA with the readable discovery
+/// the snippets is a full lowercase commit SHA with the readable discovery
 /// ref kept as a trailing comment — the form that keeps a moved tag from
 /// changing what executes before someone reviews it.
 #[test]
@@ -10482,12 +10350,12 @@ fn every_snippet_action_is_pinned_by_full_commit() {
     }
 }
 
-/// Every action the payload executes maps to exactly one registry entry
+/// Every action the snippets execute maps to exactly one registry entry
 /// whose execution commit is the pinned SHA and whose discovery ref is the
 /// readable comment; every entry with an action carries a valid commit and
 /// a classified ref, and a non-action entry carries neither.
 #[test]
-fn every_payload_action_maps_to_one_registry_entry() {
+fn every_snippet_action_maps_to_one_registry_entry() {
     let registry = std::fs::read_to_string(repo_path("versions.toml")).expect("the registry reads");
     let registry: toml::Table = registry.parse().expect("the registry parses");
     let tools = registry
@@ -10654,12 +10522,12 @@ fn the_action_commit_table_covers_what_dist_emits() {
 }
 
 /// The boundary of the pillar, tested rather than implied: fetched CI
-/// code is pinned by commit, and the GitLab payload fetches none — no
+/// code is pinned by commit, and the GitLab snippets fetch none — no
 /// CI/CD catalog component is included, so there is nothing there to pin.
 /// Container images stay pinned by version tag, not digest; they are the
 /// execution environment, not fetched steps, and the ADR states it.
 #[test]
-fn the_gitlab_payload_includes_no_catalog_component() {
+fn the_gitlab_snippets_include_no_catalog_component() {
     for name in ["bash/gitlab/.gitlab-ci.yml", "rust/gitlab/.gitlab-ci.yml"] {
         let text = std::fs::read_to_string(repo_path("snippets").join(name)).expect("reads");
         assert!(
@@ -10701,7 +10569,7 @@ fn this_repos_own_record_carries_every_rust_pin() {
 // ---------------------------------------------------------------------------
 // The workflow mode: a landing parameter
 
-/// Land the rust payload under one explicit workflow mode.
+/// Land the rust files under one explicit workflow mode.
 fn land_rust_with_workflow(target: &Path, workflow: &str) -> assert_cmd::assert::Assert {
     rk().args(["init", "--tech", "rust", "--forge", "github"])
         .args(["--repo", "acme/widget", "--workflow"])
@@ -11118,7 +10986,7 @@ fn a_mode_change_upgrades_from_the_record() {
     }
 }
 
-/// A plain upgrade keeps the recorded mode across payload versions.
+/// A plain upgrade keeps the recorded mode across releases.
 #[test]
 fn upgrade_keeps_the_recorded_mode() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
@@ -12170,11 +12038,8 @@ fn worktree_json_failure_is_one_diagnostic_line() {
 fn guard_script() -> String {
     // The guard names the trunk, so the block carries a token and the
     // script under test is the rendered form a landing writes.
-    let template = release_kit::landing::hooks_block(
-        &release_kit::release::EmbeddedReleaseSource,
-        release_kit::landing::Workflow::Worktree,
-    )
-    .expect("the embedded bundle carries the block");
+    let template = release_kit::projection::hooks_block(release_kit::landing::Workflow::Worktree)
+        .expect("the binary embeds the block");
     let block = String::from_utf8(release_kit::landing::render(
         template.as_bytes(),
         &render_params("acme/widget", Some(release_kit::landing::Style::Trunk)),
@@ -13058,7 +12923,7 @@ fn every_arming_step_authenticates_as_the_bot() {
     }
 }
 
-/// Every App token the payload mints is scoped to the job that uses it.
+/// Every App token the snippets mint is scoped to the job that uses it.
 /// `actions/create-github-app-token` hands back a token carrying every
 /// permission the installation holds unless a `permission-*` input narrows it,
 /// so a mint without one ships the widest token release-kit's own setup guide
@@ -13069,7 +12934,7 @@ fn every_app_token_mint_scopes_its_permissions() {
     // The exact permission set each mint may carry, keyed by the workflow and
     // the job it sits in. Exact, not a floor: a mint that grows a permission
     // fails here until someone states which call needs it.
-    // In the walk's own order, which is the payload's path order.
+    // In the walk's own order, which is the embed's path order.
     let expected: Vec<(&str, &str, Vec<&str>)> = vec![
         (
             "bash/github/.github/workflows/release.yml",
@@ -13102,7 +12967,7 @@ fn every_app_token_mint_scopes_its_permissions() {
             vec!["contents: write", "pull-requests: write"],
         ),
     ];
-    // Discovered, never listed: a new payload workflow that mints a token
+    // Discovered, never listed: a new snippet workflow that mints a token
     // reaches this test on the day it lands.
     let observed = app_token_mints();
     let observed: Vec<(&str, &str, Vec<&str>)> = observed
@@ -13118,12 +12983,12 @@ fn every_app_token_mint_scopes_its_permissions() {
     assert_eq!(
         observed, expected,
         "every app token mint names the exact permissions its job's calls need; \
-         a mint the payload gained, lost, or rescoped is read against each job's \
+         a mint the snippets gained, lost, or rescoped is read against each job's \
          own API use before this list moves"
     );
 }
 
-/// Every `actions/create-github-app-token` step in the payload, as the
+/// Every `actions/create-github-app-token` step in the snippets, as the
 /// snippets-relative file, the job it sits in, and the sorted `permission-*`
 /// inputs it names. A mint naming none yields an empty set, which is the
 /// blanket-installation token the action hands back by default.
@@ -13181,7 +13046,7 @@ fn app_token_mints() -> Vec<(String, String, Vec<String>)> {
     }
     assert!(
         !mints.is_empty(),
-        "the payload mints app tokens; a walk finding none is a broken walk"
+        "the snippets mint app tokens; a walk finding none is a broken walk"
     );
     mints
 }
@@ -13509,7 +13374,7 @@ fn adopt_preview_replays_a_complete_apply_command() {
     );
 }
 
-/// Every third-party destination the payload names — the two agent skill
+/// Every third-party destination the binary writes — the two agent skill
 /// roots — is justified in `_docs/reference/` by a dated citation to the
 /// owning application's documentation, and the recorded matrix matches the
 /// roots the code declares, per
@@ -13561,7 +13426,7 @@ fn seed_crate(target: &Path) {
     std::fs::write(target.join("Cargo.lock"), "version = 4\n").expect("the lock writes");
 }
 
-/// Land the rust payload with the Nix capability opted in.
+/// Land the rust files with the Nix capability opted in.
 fn land_rust_nix(target: &Path) -> assert_cmd::assert::Assert {
     rk().args(["init", "--tech", "rust", "--forge", "github"])
         .args(["--repo", "acme/widget", "--nix"])
@@ -13892,7 +13757,7 @@ fn the_release_proof_asserts_the_workflow_is_tracked_before_it_diffs() {
 /// Every action the rust binding serves in a job body is pinned by a full
 /// commit that appears exactly once in `versions.toml`, with a discovery
 /// ref, a freshness URL, and a checked date beside it. The binding is
-/// where the payload now carries these jobs — an operator pastes them
+/// where the snippets now carry these jobs — an operator pastes them
 /// into a workflow release-kit does not own — so the pin doctrine reaches
 /// them here or nowhere.
 #[test]
@@ -14534,7 +14399,7 @@ fn the_seed_envrc_names_the_new_verb() {
 /// The test that stops a missed block, snippet, chapter, or skill: no
 /// embedded root names the old verb.
 #[test]
-fn no_payload_file_names_the_old_verb() {
+fn no_embedded_file_names_the_old_verb() {
     let offenders: Vec<String> = release_kit::embedded::artifacts()
         .into_iter()
         // The guidance root is the one place the old verb belongs: it
@@ -14545,7 +14410,7 @@ fn no_payload_file_names_the_old_verb() {
         .collect();
     assert!(
         offenders.is_empty(),
-        "payload files still name rk devshell: {offenders:?}"
+        "embedded files still name rk devshell: {offenders:?}"
     );
 }
 
@@ -16997,7 +16862,7 @@ fn assess_reads_tags_and_long_lived_branches_from_git() {
         );
 }
 
-/// A landed target reads as brownfield — every payload destination is a
+/// A landed target reads as brownfield — every landable destination is a
 /// collision, the block destinations included — and its next lines route
 /// by the status report rather than to a migration.
 #[test]
@@ -20425,7 +20290,7 @@ fn private_reporting_policy_lands_in_every_supported_pair() {
             )
         );
         assert_eq!(file["kind"], "rendered");
-        assert!(file.get("baseline_sha256").is_none());
+        assert!(file.get(LEGACY_BASELINE_FIELD).is_none());
         assert_eq!(file["sha256"], Digest::of(&bytes).to_string());
         assert_eq!(manifest["parameters"]["repo"], repo);
         assert_eq!(
@@ -20613,7 +20478,7 @@ fn private_reporting_policy_adoption_and_parameter_replay() {
 
 /// One forge's authored policy with the security markers removed and
 /// nothing else changed: exactly what a landing answering neither security
-/// parameter must write. Derived from the payload's own marker list, so a
+/// parameter must write. Derived from the renderer's own marker list, so a
 /// renamed marker cannot slip past this helper.
 fn authored_policy(forge: &str) -> String {
     let mut text =
@@ -21953,2133 +21818,6 @@ fn an_excluded_step_named_by_hand_refuses_to_apply() {
         .stdout(predicate::str::contains("would run:").not());
 }
 
-// --- The release seam: every landing verb reads a bundle through it ---
-
-/// The curl stand-in for the crates venue: serves the sparse index entry
-/// and the crate archive from a registry directory by URL basename, and
-/// honors `-o`. A missing file answers 404, so a URL the source was not
-/// told about is a failure rather than a silent empty body.
-const MOCK_REGISTRY_CURL: &str = r#"#!/usr/bin/env bash
-STATE="__STATE__"
-printf '%s\n' "$*" >> "$STATE/curl-log"
-if [[ -f "$STATE/curl_fail" ]]; then
-  echo "curl: (6) Could not resolve host: index.crates.io" >&2
-  exit 6
-fi
-out=""
-args=("$@")
-url="${args[-1]}"
-for ((i = 0; i < ${#args[@]}; i++)); do
-  if [[ "${args[$i]}" == "-o" ]]; then out="${args[$((i + 1))]}"; fi
-done
-file="$STATE/registry/$(basename "$url")"
-if [[ ! -f "$file" ]]; then
-  echo "curl: (22) The requested URL returned error: 404" >&2
-  exit 22
-fi
-if [[ -n "$out" ]]; then cp "$file" "$out"; else cat "$file"; fi
-"#;
-
-/// A scratch registry: a home that is also the state root, the mocked
-/// curl, and a registry directory the mock serves from.
-struct RegistryFixture {
-    home: tempfile::TempDir,
-    mock: tempfile::TempDir,
-}
-
-impl RegistryFixture {
-    fn new() -> Self {
-        let fixture = Self {
-            home: tempfile::tempdir().expect("a scratch home exists"),
-            mock: tempfile::tempdir().expect("a scratch mock dir exists"),
-        };
-        let path = fixture.mock.path().join("curl");
-        std::fs::write(
-            &path,
-            MOCK_REGISTRY_CURL.replace("__STATE__", &fixture.mock.path().to_string_lossy()),
-        )
-        .expect("the mock writes");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
-                .expect("the mock is executable");
-        }
-        std::fs::create_dir_all(fixture.registry()).expect("the registry dir exists");
-        fixture
-    }
-
-    fn registry(&self) -> PathBuf {
-        self.mock.path().join("registry")
-    }
-
-    fn curl_log(&self) -> String {
-        std::fs::read_to_string(self.mock.path().join("curl-log")).unwrap_or_default()
-    }
-
-    fn cache(&self) -> PathBuf {
-        self.home.path().join("release-kit/release")
-    }
-
-    /// Publish one release to the mock registry: a crate archive laid out
-    /// the way `cargo package` lays one out, and its index line. The
-    /// index names the archive's real digest, or a wrong one under
-    /// `tamper`, which is the mismatch the source must refuse.
-    fn publish(&self, version: &str, schema: u32, tamper: bool) -> Digest {
-        let build = tempfile::tempdir().expect("a scratch build dir");
-        let root = build.path().join(format!("release-kit-{version}"));
-        for (path, body) in [
-            (
-                "Cargo.toml".to_owned(),
-                format!("[package]\nname = \"release-kit\"\nversion = \"{version}\"\n"),
-            ),
-            (
-                "src/commands/payload.rs".to_owned(),
-                format!("const PAYLOAD_SCHEMA: u32 = {schema};\n"),
-            ),
-            ("versions.toml".to_owned(), "schema = 1\n".to_owned()),
-            (
-                "snippets/_shared/github/SECURITY.md".to_owned(),
-                format!("# Security policy for {version}\n"),
-            ),
-            (
-                "snippets/rust/github/release-plz.toml".to_owned(),
-                "[workspace]\n".to_owned(),
-            ),
-            (
-                "blocks/agents-block.md.in".to_owned(),
-                "<!-- BEGIN release-kit -->\nRK_WORKFLOW_LINE\n<!-- END release-kit -->\n"
-                    .to_owned(),
-            ),
-        ] {
-            let file = root.join(&path);
-            std::fs::create_dir_all(file.parent().expect("a parent")).expect("dirs exist");
-            std::fs::write(file, body).expect("the file writes");
-        }
-        self.pack(build.path(), version, tamper)
-    }
-
-    /// Publish a release whose payload is this checkout's own, under
-    /// another version: the bundle a landed target can be planned
-    /// against in full, where `publish` carries the smallest bundle the
-    /// seam reads.
-    fn publish_full(&self, version: &str) -> Digest {
-        fn copy_tree(from: &Path, to: &Path) {
-            if from.is_dir() {
-                std::fs::create_dir_all(to).expect("dirs exist");
-                for entry in std::fs::read_dir(from).expect("the dir reads").flatten() {
-                    copy_tree(&entry.path(), &to.join(entry.file_name()));
-                }
-            } else {
-                std::fs::copy(from, to).expect("the file copies");
-            }
-        }
-        let build = tempfile::tempdir().expect("a scratch build dir");
-        let root = build.path().join(format!("release-kit-{version}"));
-        let checkout = Path::new(env!("CARGO_MANIFEST_DIR"));
-        for payload_root in [
-            "snippets",
-            "blocks",
-            "guidance",
-            "versions.toml",
-            "compatibility.toml",
-        ] {
-            copy_tree(&checkout.join(payload_root), &root.join(payload_root));
-        }
-        for (path, body) in [
-            (
-                "Cargo.toml".to_owned(),
-                format!("[package]\nname = \"release-kit\"\nversion = \"{version}\"\n"),
-            ),
-            (
-                "src/commands/payload.rs".to_owned(),
-                "const PAYLOAD_SCHEMA: u32 = 1;\n".to_owned(),
-            ),
-        ] {
-            let file = root.join(&path);
-            std::fs::create_dir_all(file.parent().expect("a parent")).expect("dirs exist");
-            std::fs::write(file, body).expect("the file writes");
-        }
-        self.pack(build.path(), version, false)
-    }
-
-    /// Pack a laid-out crate into the registry and write its index line.
-    fn pack(&self, build: &Path, version: &str, tamper: bool) -> Digest {
-        let archive = self.registry().join(format!("release-kit-{version}.crate"));
-        let status = std::process::Command::new("tar")
-            .arg("-czf")
-            .arg(&archive)
-            .arg("-C")
-            .arg(build)
-            .arg(format!("release-kit-{version}"))
-            .status()
-            .expect("tar runs");
-        assert!(status.success(), "the fixture archive packs");
-        let real = Digest::of(&std::fs::read(&archive).expect("the archive reads"));
-        let named = if tamper {
-            Digest::of(b"tampered")
-        } else {
-            real.clone()
-        };
-        let index = self.registry().join("release-kit");
-        let lines = std::fs::read_to_string(&index).unwrap_or_default();
-        let line = format!(
-            "{{\"name\":\"release-kit\",\"vers\":\"{version}\",\"deps\":[],\"cksum\":\"{named}\",\"features\":{{}},\"yanked\":false}}\n"
-        );
-        std::fs::write(index, lines + &line).expect("the index writes");
-        real
-    }
-
-    fn payload(&self, selector: &str) -> Command {
-        let mut command = rk();
-        command
-            .args(["payload", "--release", selector, "--json"])
-            .env("HOME", self.home.path())
-            .env("XDG_STATE_HOME", self.home.path())
-            .env("RK_CURL_BIN", self.mock.path().join("curl"));
-        command
-    }
-}
-
-/// The embedded source answers the very document the payload verb prints:
-/// one manifest, two readers, no drift between them.
-#[test]
-fn the_embedded_source_answers_the_manifest_the_payload_verb_emits() {
-    use release_kit::release::{EmbeddedReleaseSource, ReleaseSource as _};
-    let out = rk()
-        .args(["payload", "--json"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let printed: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    let manifest = EmbeddedReleaseSource
-        .manifest()
-        .expect("the embedded bundle describes itself");
-    let through_seam = serde_json::to_value(&manifest).expect("a manifest serializes");
-    assert_eq!(printed, through_seam);
-    assert_eq!(
-        printed["payload_schema"],
-        serde_json::Value::from(release_kit::release::PAYLOAD_SCHEMA)
-    );
-}
-
-/// The refactor's proof: every destination the seam projects carries the
-/// bytes the embedded roots hold on disk, composed the way the projection
-/// composed them before the seam existed. A difference here is a defect
-/// in the seam, never a finding about the payload.
-#[test]
-fn projection_through_the_embedded_source_is_byte_identical() {
-    use release_kit::landing::{Placement, Workflow, projection};
-    use release_kit::release::EmbeddedReleaseSource;
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let authored = |name: &str| -> String {
-        let text = std::fs::read_to_string(root.join("blocks").join(name)).expect("a block reads");
-        text.strip_suffix('\n').unwrap_or(&text).to_owned()
-    };
-    for (tech, forge) in [
-        ("rust", "github"),
-        ("rust", "gitlab"),
-        ("python", "github"),
-        ("bash", "github"),
-        ("bash", "gitlab"),
-    ] {
-        for workflow in [Workflow::Worktree, Workflow::Branches] {
-            let params = render_params_for(tech, forge, workflow);
-            let entries = projection(&EmbeddedReleaseSource, &params).expect("the pair projects");
-            assert!(!entries.is_empty(), "{tech}/{forge}");
-            for entry in &entries {
-                let expected: Vec<u8> = match (entry.placement, entry.destination.as_str()) {
-                    (Placement::Block, "AGENTS.md") => {
-                        let line = authored(match workflow {
-                            Workflow::Worktree => "agents-line-worktree.md.in",
-                            Workflow::Branches => "agents-line-branches.md.in",
-                        });
-                        authored("agents-block.md.in")
-                            .replacen("RK_WORKFLOW_LINE", &line, 1)
-                            .into_bytes()
-                    }
-                    (Placement::Block, "GLOSSARY.md") => authored("glossary.md.in").into_bytes(),
-                    (Placement::Block, ".pre-commit-config.yaml") => {
-                        let (guard, skip) = match workflow {
-                            Workflow::Worktree => (
-                                format!("{}\n", authored("pre-commit-worktree-guard.yaml.in")),
-                                "no-commit-to-branch,rk-worktree-location",
-                            ),
-                            Workflow::Branches => (String::new(), "no-commit-to-branch"),
-                        };
-                        authored("pre-commit-block.yaml.in")
-                            .replacen("RK_BRANCH_GRAMMAR", release_kit::landing::BRANCH_GRAMMAR, 1)
-                            .replacen("RK_SWEEP_SKIP", skip, 1)
-                            .replacen("RK_WORKTREE_GUARD", &guard, 1)
-                            .into_bytes()
-                    }
-                    (Placement::Block, other) => panic!("{other}: an unexpected block"),
-                    (Placement::Whole, destination) => {
-                        let pair = root
-                            .join("snippets")
-                            .join(tech)
-                            .join(forge)
-                            .join(destination);
-                        let shared = root.join("snippets/_shared").join(forge).join(destination);
-                        std::fs::read(if pair.is_file() { &pair } else { &shared })
-                            .unwrap_or_else(|_| panic!("{tech}/{forge}/{destination} is on disk"))
-                    }
-                };
-                assert_eq!(
-                    entry.baseline, expected,
-                    "{tech}/{forge} {}: the seam changed the bytes",
-                    entry.destination
-                );
-                if entry.kind != release_kit::landing::Kind::Rendered {
-                    assert_eq!(entry.rendered, entry.baseline, "{}", entry.destination);
-                }
-            }
-        }
-    }
-}
-
-/// Projection parameters for one pair and mode, built from a record the
-/// way production builds them.
-fn render_params_for(
-    tech: &str,
-    forge: &str,
-    workflow: release_kit::landing::Workflow,
-) -> release_kit::landing::Params {
-    use release_kit::landing::manifest::{Manifest, Parameters};
-    release_kit::landing::Params::from_record(&Manifest {
-        schema_version: release_kit::landing::manifest::SCHEMA_VERSION,
-        rk_version: "0.0.0".to_owned(),
-        origin: "init".to_owned(),
-        tech: tech.to_owned(),
-        forge: forge.to_owned(),
-        landed_at: "2026-08-29T00:00:00Z".to_owned(),
-        parameters: Parameters {
-            repo: "acme/widget".to_owned(),
-            workflow,
-            style: Some(release_kit::landing::Style::Trunk),
-            nix: true,
-            trunk: release_kit::config::TRUNK_DEFAULT.to_owned(),
-            line_prefix: release_kit::config::LINE_PREFIX_DEFAULT.to_owned(),
-            security_contact: String::new(),
-            security_response: release_kit::config::RESPONSE_DEFAULT.to_owned(),
-        },
-        files: Vec::new(),
-        pins: std::collections::BTreeMap::new(),
-    })
-}
-
-/// No landing code reaches an embedded global: the projection, the block
-/// readers, and every front verb name the seam, asserted over the sources
-/// so a later shortcut fails here rather than in a planner that suddenly
-/// describes the wrong release.
-#[test]
-fn every_front_verb_passes_a_release_source() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let globals = [
-        "embedded::SNIPPETS",
-        "embedded::BLOCKS",
-        "embedded::walk",
-        "embedded::artifacts",
-        "embedded::root_files",
-        "include_str!(\"../blocks",
-        "include_str!(\"../snippets",
-    ];
-    for file in [
-        "landing.rs",
-        "commands/init.rs",
-        "commands/upgrade.rs",
-        "commands/adopt.rs",
-        "commands/status.rs",
-        "commands/payload.rs",
-    ] {
-        let text = std::fs::read_to_string(root.join(file)).expect("a source reads");
-        let production = text.split("#[cfg(test)]").next().unwrap_or("");
-        for global in globals {
-            assert!(
-                !production.contains(global),
-                "{file} reaches {global} instead of the seam"
-            );
-        }
-        assert!(
-            production.contains("ReleaseSource"),
-            "{file} names no release source"
-        );
-    }
-}
-
-/// The crate source resolves an exact version at the index, fetches the
-/// archive, verifies it against the index checksum, and answers the
-/// manifest of a release this binary does not carry.
-#[test]
-fn the_crate_source_verifies_against_the_index_checksum() {
-    let fixture = RegistryFixture::new();
-    let cksum = fixture.publish("0.9.0", 1, false);
-    let out = fixture
-        .payload("0.9.0")
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["release_kit_version"], "0.9.0");
-    // The fixture publishes schema 1, and this engine reads it: a bundle
-    // below the current schema stays readable.
-    assert_eq!(report["payload_schema"], serde_json::Value::from(1));
-    let paths: Vec<&str> = report["artifacts"]
-        .as_array()
-        .expect("an artifact list")
-        .iter()
-        .map(|a| a["path"].as_str().expect("a path"))
-        .collect();
-    assert_eq!(
-        paths,
-        [
-            "snippets/_shared/github/SECURITY.md",
-            "snippets/rust/github/release-plz.toml",
-            "blocks/agents-block.md.in",
-            "versions.toml",
-        ]
-    );
-    assert!(
-        fixture.cache().join(cksum.to_string()).is_dir(),
-        "the bundle is cached by the index checksum"
-    );
-    assert_eq!(
-        std::fs::read_to_string(fixture.cache().join("index/0.9.0"))
-            .expect("the version maps to its checksum")
-            .trim(),
-        cksum.to_string()
-    );
-    let log = fixture.curl_log();
-    assert!(log.contains("index.crates.io/re/le/release-kit"), "{log}");
-    assert!(log.contains("release-kit-0.9.0.crate"), "{log}");
-}
-
-#[test]
-fn the_crate_source_refuses_a_checksum_mismatch_and_caches_nothing() {
-    let fixture = RegistryFixture::new();
-    let _ = fixture.publish("0.9.1", 1, true);
-    let out = fixture
-        .payload("0.9.1")
-        .assert()
-        .code(73)
-        .get_output()
-        .stderr
-        .clone();
-    let diagnostic: serde_json::Value =
-        serde_json::from_slice(&out).expect("stderr is one JSON diagnostic");
-    assert_eq!(diagnostic["reason"], "bundle-unverified");
-    assert_eq!(diagnostic["target_state"], "nothing was cached");
-    let cache = fixture.cache();
-    let bundles: Vec<_> = std::fs::read_dir(&cache)
-        .map(|entries| entries.flatten().collect())
-        .unwrap_or_default();
-    assert!(
-        bundles.iter().all(|entry| entry.file_name() == "index"
-            && std::fs::read_dir(entry.path())
-                .expect("the index dir reads")
-                .next()
-                .is_none()),
-        "nothing is cached after a mismatch: {bundles:?}"
-    );
-}
-
-/// A verified bundle is served from the cache with no network touch, and
-/// so is the exact version that named it.
-#[test]
-fn a_cached_digest_is_served_offline() {
-    let fixture = RegistryFixture::new();
-    let _ = fixture.publish("0.9.2", 1, false);
-    fixture.payload("0.9.2").assert().success();
-    let first = fixture.curl_log().lines().count();
-    assert_eq!(first, 2, "the index and the archive, once each");
-    std::fs::write(fixture.mock.path().join("curl_fail"), "").expect("the network goes away");
-    let out = fixture
-        .payload("0.9.2")
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["release_kit_version"], "0.9.2");
-    assert_eq!(
-        fixture.curl_log().lines().count(),
-        first,
-        "the second call touched no network"
-    );
-}
-
-/// The fetch writes under the state directory and nowhere else: a landed
-/// scratch target is byte-identical after it, and the home carries the
-/// cache alone.
-#[test]
-fn the_crate_source_writes_under_the_state_directory_alone() {
-    let fixture = RegistryFixture::new();
-    let _ = fixture.publish("0.9.3", 1, false);
-    let target = tempfile::tempdir().expect("a scratch target exists");
-    std::fs::create_dir_all(target.path().join(".git")).expect("the target is a repository");
-    land_rust(target.path()).success();
-    let before = tree_digests(target.path());
-    fixture
-        .payload("0.9.3")
-        .current_dir(target.path())
-        .assert()
-        .success();
-    assert_eq!(
-        tree_digests(target.path()),
-        before,
-        "the target is untouched"
-    );
-    let mut top: Vec<String> = std::fs::read_dir(fixture.home.path().join("release-kit"))
-        .expect("the state root exists")
-        .flatten()
-        .map(|entry| entry.file_name().to_string_lossy().into_owned())
-        .filter(|name| !name.starts_with("release-kit.log"))
-        .collect();
-    top.sort();
-    assert_eq!(
-        top,
-        ["release"],
-        "the cache is the only state the fetch writes"
-    );
-}
-
-/// `--release latest` resolves at the index to the newest unyanked
-/// version and freezes it; the human report names the source.
-#[test]
-fn payload_release_returns_another_releases_manifest() {
-    let fixture = RegistryFixture::new();
-    let _ = fixture.publish("0.9.4", 1, false);
-    let _ = fixture.publish("0.9.10", 1, false);
-    let out = fixture
-        .payload("latest")
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(
-        report["release_kit_version"], "0.9.10",
-        "numeric order, not lexical"
-    );
-    let human = rk()
-        .args(["payload", "--release", "0.9.4"])
-        .env("HOME", fixture.home.path())
-        .env("XDG_STATE_HOME", fixture.home.path())
-        .env("RK_CURL_BIN", fixture.mock.path().join("curl"))
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("release-kit 0.9.4\n"))
-        .stdout(predicate::str::contains(
-            "source crates 0.9.4 (index fetched, archive fetched and verified)",
-        ))
-        .stdout(predicate::str::contains("versions.toml: 1 file"));
-    drop(human);
-    let unknown = fixture
-        .payload("7.7.7")
-        .assert()
-        .code(64)
-        .get_output()
-        .stderr
-        .clone();
-    let diagnostic: serde_json::Value =
-        serde_json::from_slice(&unknown).expect("stderr is one JSON diagnostic");
-    assert_eq!(diagnostic["reason"], "usage");
-}
-
-/// A bundle declaring a newer protocol than this engine's is refused by
-/// name, with the engine to install, before any of it is read.
-#[test]
-fn payload_release_refuses_a_newer_schema_naming_the_engine_to_install() {
-    let fixture = RegistryFixture::new();
-    let _ = fixture.publish("9.0.0", release_kit::release::PAYLOAD_SCHEMA + 1, false);
-    let out = fixture
-        .payload("9.0.0")
-        .assert()
-        .code(73)
-        .get_output()
-        .stderr
-        .clone();
-    let diagnostic: serde_json::Value =
-        serde_json::from_slice(&out).expect("stderr is one JSON diagnostic");
-    assert_eq!(diagnostic["reason"], "unsupported-schema");
-    assert!(
-        diagnostic["action"]
-            .as_str()
-            .expect("an action")
-            .contains("install release-kit 9.0.0"),
-        "{diagnostic}"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// rk reconcile plan: the typed plan, computed and printed, never persisted.
-// ---------------------------------------------------------------------------
-
-/// A scratch rust target with a version file and a git directory, so the
-/// projection resolves and the nix shape gate has something to read.
-fn plan_target() -> tempfile::TempDir {
-    let target = tempfile::tempdir().expect("a scratch target exists");
-    std::fs::create_dir_all(target.path().join(".git")).expect("the target is a repository");
-    std::fs::write(
-        target.path().join("Cargo.toml"),
-        "[package]\nname = \"widget\"\nversion = \"0.1.0\"\n",
-    )
-    .expect("the version file writes");
-    target
-}
-
-/// One plan as JSON, with the identity flags an empty target needs.
-fn plan_json(target: &Path, extra: &[&str]) -> serde_json::Value {
-    let out = rk()
-        .args(["reconcile", "plan", "--json", "--target"])
-        .arg(target)
-        .args(["--forge", "github", "--repo", "acme/widget"])
-        .args(extra)
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    serde_json::from_slice(&out).expect("one JSON object")
-}
-
-/// The same computation through the library, so a test can hold the
-/// instant and read the blob store.
-fn plan_with_clock(
-    target: &Path,
-    clock: &str,
-    decisions: &[(&str, &str)],
-) -> release_kit::plan::Planned {
-    let flags = release_kit::plan::gather::Flags {
-        forge: Some("github".into()),
-        repo: Some("acme/widget".into()),
-        ..release_kit::plan::gather::Flags::default()
-    };
-    let decisions: std::collections::BTreeMap<String, String> = decisions
-        .iter()
-        .map(|(id, answer)| ((*id).to_owned(), (*answer).to_owned()))
-        .collect();
-    release_kit::commands::reconcile::compute(
-        &release_kit::plan::PlanRequest {
-            target: utf8(target),
-            intent: release_kit::plan::Intent::Reconcile,
-            selector: "embedded".into(),
-            fetch: false,
-            observe_forge: false,
-            flags,
-            decisions,
-        },
-        clock,
-    )
-    .expect("the plan computes")
-}
-
-fn operations_of(plan: &serde_json::Value) -> Vec<&serde_json::Value> {
-    plan["operations"]
-        .as_array()
-        .expect("operations")
-        .iter()
-        .collect()
-}
-
-fn precondition<'a>(plan: &'a serde_json::Value, id: &str) -> &'a serde_json::Value {
-    plan["preconditions"]
-        .as_array()
-        .expect("preconditions")
-        .iter()
-        .find(|p| p["id"] == id)
-        .unwrap_or_else(|| panic!("no precondition {id}: {plan}"))
-}
-
-/// Same inputs, same instant: byte-identical plans through the library.
-#[test]
-fn the_planner_is_deterministic() {
-    let target = plan_target();
-    land_rust(target.path()).success();
-    let clock = "2026-01-01T00:00:00Z";
-    let first = serde_json::to_string(&plan_with_clock(target.path(), clock, &[]).plan)
-        .expect("serializes");
-    let second = serde_json::to_string(&plan_with_clock(target.path(), clock, &[]).plan)
-        .expect("serializes");
-    assert_eq!(first, second);
-}
-
-/// The six target states, each planned over a real scratch target: empty,
-/// brownfield, landed-current, landed-old, drifted, invalid.
-#[test]
-fn each_of_the_six_target_states_classifies_correctly() {
-    let empty = plan_target();
-    let plan = plan_json(empty.path(), &[]);
-    assert_eq!(plan["classification"], "setup", "{plan}");
-    assert_eq!(
-        plan["observed_state"]["repository"]["verdict"],
-        "greenfield"
-    );
-
-    let brown = plan_target();
-    std::fs::write(brown.path().join("CHANGELOG.md"), "# Changelog\n").expect("writes");
-    let plan = plan_json(brown.path(), &[]);
-    assert_eq!(plan["classification"], "migration", "{plan}");
-    assert!(
-        plan["findings"]
-            .as_array()
-            .expect("findings")
-            .iter()
-            .any(|f| f["code"] == "release-marker" && f["detail"] == "CHANGELOG.md"),
-        "{plan}"
-    );
-
-    let current = plan_target();
-    land_rust(current.path()).success();
-    let plan = plan_json(current.path(), &[]);
-    assert_eq!(plan["classification"], "upgrade", "{plan}");
-    assert!(operations_of(&plan).is_empty(), "{plan}");
-    assert_eq!(plan["readiness"], "ready");
-
-    let old = plan_target();
-    land_rust(old.path()).success();
-    let mut manifest = read_manifest(old.path());
-    manifest["rk_version"] = serde_json::json!("0.1.0");
-    // The record's own digest for one rendered file is what an older
-    // payload wrote: the candidate differs, so the file is rewritten.
-    let policy = old.path().join("SECURITY.md");
-    let older = b"# Security policy\n\nOlder wording.\n";
-    std::fs::write(&policy, older).expect("the older file writes");
-    for file in manifest["files"].as_array_mut().expect("files") {
-        if file["destination"] == "SECURITY.md" {
-            file["sha256"] = serde_json::json!(Digest::of(older).to_string());
-        }
-    }
-    write_manifest(old.path(), &manifest);
-    let plan = plan_json(old.path(), &[]);
-    assert_eq!(plan["classification"], "upgrade", "{plan}");
-    assert!(
-        operations_of(&plan)
-            .iter()
-            .any(|op| op["op"] == "write-file" && op["path"] == "SECURITY.md"),
-        "{plan}"
-    );
-
-    let drifted = plan_target();
-    land_rust(drifted.path()).success();
-    let mut edited = std::fs::read(drifted.path().join("SECURITY.md")).expect("reads");
-    edited.extend_from_slice(b"\n# edited by the target\n");
-    std::fs::write(drifted.path().join("SECURITY.md"), edited).expect("writes");
-    let plan = plan_json(drifted.path(), &[]);
-    assert_eq!(plan["classification"], "drift", "{plan}");
-    assert_eq!(plan["readiness"], "blocked");
-
-    let invalid = plan_target();
-    land_rust(invalid.path()).success();
-    let mut manifest = read_manifest(invalid.path());
-    manifest["schema_version"] = serde_json::json!(999);
-    write_manifest(invalid.path(), &manifest);
-    let plan = plan_json(invalid.path(), &[]);
-    assert_eq!(plan["classification"], "invalid", "{plan}");
-    assert_eq!(plan["readiness"], "blocked");
-    assert_eq!(
-        plan["observed_state"]["installation"]["record"]["state"],
-        "invalid"
-    );
-    assert_eq!(
-        precondition(&plan, "record-readable")["evaluation"]["state"],
-        "unsatisfied"
-    );
-}
-
-/// Every destination the projection names is one write, the record is
-/// written last, and nothing carries a byte.
-#[test]
-fn an_empty_target_plans_a_setup_with_every_destination_written() {
-    let target = plan_target();
-    let plan = plan_json(target.path(), &["--workflow", "worktree"]);
-    assert_eq!(plan["classification"], "setup");
-    assert_eq!(plan["readiness"], "ready", "{plan}");
-    let operations = operations_of(&plan);
-    let preview = rk()
-        .args([
-            "init",
-            "--tech",
-            "rust",
-            "--forge",
-            "github",
-            "--repo",
-            "acme/widget",
-            "--json",
-            "--target",
-        ])
-        .arg(target.path())
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let preview: serde_json::Value = serde_json::from_slice(&preview).expect("one JSON object");
-    for file in preview["files"].as_array().expect("files") {
-        let path = file["path"].as_str().expect("a path");
-        let op = operations
-            .iter()
-            .find(|op| op["path"] == path)
-            .unwrap_or_else(|| panic!("{path} is not planned: {plan}"));
-        assert!(
-            op["before"].is_null(),
-            "{path} has no before on an empty target"
-        );
-        assert!(op["after"].is_string());
-        let expected = if release_kit::landing::BLOCK_DESTINATIONS.contains(&path) {
-            "splice-block"
-        } else {
-            "write-file"
-        };
-        assert_eq!(op["op"], expected, "{path}");
-    }
-    assert_eq!(
-        operations.last().expect("an operation")["op"],
-        "write-record"
-    );
-    assert!(
-        plan["postconditions"]
-            .as_array()
-            .expect("postconditions")
-            .iter()
-            .any(|p| p["check"] == "status-check-clean"),
-        "{plan}"
-    );
-}
-
-/// A target at this release plans an upgrade with nothing to take.
-#[test]
-fn a_current_target_plans_an_upgrade_with_no_operations() {
-    let target = plan_target();
-    land_rust(target.path()).success();
-    let plan = plan_json(target.path(), &[]);
-    assert_eq!(plan["classification"], "upgrade");
-    assert_eq!(plan["readiness"], "ready");
-    assert!(operations_of(&plan).is_empty(), "{plan}");
-    assert_eq!(plan["release"]["baseline"]["state"], "embedded");
-    assert_eq!(plan["desired_state"]["release"]["venue"], "embedded");
-    rk().args(["reconcile", "plan", "--target"])
-        .arg(target.path())
-        .assert()
-        .success()
-        .stdout(
-            predicate::str::contains("classification: upgrade")
-                .and(predicate::str::contains("operations: none")),
-        );
-}
-
-/// An edited owned file is a required precondition that does not hold,
-/// collected beside every other one, and the plan is blocked.
-#[test]
-fn an_edited_rendered_file_is_a_blocked_conflict() {
-    let target = plan_target();
-    land_rust(target.path()).success();
-    for name in ["SECURITY.md", ".github/workflows/pr-title.yml"] {
-        let path = target.path().join(name);
-        let mut bytes = std::fs::read(&path).expect("reads");
-        bytes.extend_from_slice(b"\n# edited\n");
-        std::fs::write(&path, bytes).expect("writes");
-    }
-    let plan = plan_json(target.path(), &[]);
-    assert_eq!(plan["classification"], "drift");
-    assert_eq!(plan["readiness"], "blocked");
-    for name in ["SECURITY.md", ".github/workflows/pr-title.yml"] {
-        let p = precondition(&plan, &format!("owned-file-unedited:{name}"));
-        assert_eq!(p["requirement"], "required");
-        assert_eq!(p["evaluation"]["state"], "unsatisfied");
-        assert!(!p["evidence_refs"].as_array().expect("refs").is_empty());
-    }
-    assert!(
-        !operations_of(&plan)
-            .iter()
-            .any(|op| op["op"] == "write-record"),
-        "a blocked plan writes no record: {plan}"
-    );
-}
-
-/// A seeded file the target tuned is never written; the planned record
-/// follows the target's bytes and keeps the baseline it tunes away from.
-#[test]
-#[ignore = "its subject is the receipt's per-file baseline digest, which schema 7 retired with the three-way comparison; the clean-cut phase deletes the stored plan and this test"]
-fn a_tuned_seeded_file_is_kept_and_its_baseline_moves() {
-    let target = plan_target();
-    land_rust(target.path()).success();
-    let recorded = read_manifest(target.path());
-    let baseline = manifest_file(&recorded, "release-plz.toml")["baseline_sha256"]
-        .as_str()
-        .expect("a baseline")
-        .to_owned();
-    let tuned = b"[workspace]\nsemver_check = true\n";
-    std::fs::write(target.path().join("release-plz.toml"), tuned).expect("writes");
-    let planned = plan_with_clock(target.path(), "2026-01-01T00:00:00Z", &[]);
-    let plan = serde_json::to_value(&planned.plan).expect("serializes");
-    assert_eq!(plan["classification"], "upgrade");
-    assert_eq!(plan["readiness"], "ready", "{plan}");
-    assert!(
-        !operations_of(&plan)
-            .iter()
-            .any(|op| op["path"] == "release-plz.toml"),
-        "a seeded file is never written: {plan}"
-    );
-    let record_op = operations_of(&plan)
-        .into_iter()
-        .find(|op| op["op"] == "write-record")
-        .expect("the record moves");
-    let after = Digest::parse(record_op["after"].as_str().expect("a digest")).expect("a digest");
-    let bytes = planned
-        .blobs
-        .get(&after)
-        .expect("the planned record is in the blob store");
-    let record: serde_json::Value =
-        serde_json::from_slice(bytes).expect("the planned record parses");
-    let file = manifest_file(&record, "release-plz.toml");
-    assert_eq!(file["sha256"], Digest::of(tuned).to_string());
-    assert_eq!(file["baseline_sha256"], baseline);
-}
-
-/// A recorded release this engine does not carry and the cache does not
-/// hold reads as not observed, with the version named.
-#[test]
-fn a_missing_baseline_is_not_observed_with_its_reason() {
-    let home = tempfile::tempdir().expect("a scratch home exists");
-    let target = plan_target();
-    land_rust(target.path()).success();
-    let mut manifest = read_manifest(target.path());
-    manifest["rk_version"] = serde_json::json!("0.1.0");
-    manifest["payload_sha256"] = serde_json::json!(Digest::of(b"another payload").to_string());
-    write_manifest(target.path(), &manifest);
-    let out = rk()
-        .args(["reconcile", "plan", "--json", "--target"])
-        .arg(target.path())
-        .env("HOME", home.path())
-        .env("XDG_STATE_HOME", home.path())
-        .env("RK_CURL_BIN", "/bin/false")
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let plan: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(
-        plan["release"]["baseline"]["state"], "not-observed",
-        "{plan}"
-    );
-    let reason = plan["release"]["baseline"]["reason"]
-        .as_str()
-        .expect("a reason");
-    assert!(
-        reason.contains("0.1.0") && reason.contains("--fetch"),
-        "{reason}"
-    );
-    let p = precondition(&plan, "baseline-observed");
-    assert_eq!(p["evaluation"]["state"], "not-observed");
-    assert_eq!(p["evaluation"]["reason"], reason);
-    assert_eq!(p["decision"], "partial-baseline");
-}
-
-/// The wire form of every operation: digests under `before` and `after`,
-/// a manager and two versions for the pin, and never a byte or a command.
-#[test]
-fn every_operation_names_digests_and_no_bytes() {
-    let target = plan_target();
-    std::fs::write(
-        target.path().join("mise.toml"),
-        "[tools]\n\"cargo:release-kit\" = \"0.0.1\"\n",
-    )
-    .expect("writes");
-    let plan = plan_json(target.path(), &["--workflow", "worktree"]);
-    let operations = operations_of(&plan);
-    assert!(
-        operations.iter().any(|op| op["op"] == "update-pin"),
-        "{plan}"
-    );
-    let allowed = ["op", "path", "kind", "marker", "before", "after", "manager"];
-    for op in &operations {
-        let object = op.as_object().expect("an object");
-        for key in object.keys() {
-            assert!(
-                allowed.contains(&key.as_str()),
-                "{key} is not an operation field: {op}"
-            );
-        }
-        let kind = op["op"].as_str().expect("a kind");
-        assert!(
-            [
-                "write-file",
-                "splice-block",
-                "remove-owned-file",
-                "write-record",
-                "update-pin"
-            ]
-            .contains(&kind),
-            "{kind} is not in the closed set"
-        );
-        for field in ["before", "after"] {
-            if let Some(value) = op.get(field).and_then(serde_json::Value::as_str) {
-                if kind == "update-pin" {
-                    assert!(!value.is_empty());
-                } else {
-                    assert!(
-                        Digest::parse(value).is_some(),
-                        "{field} of {op} is not a digest"
-                    );
-                }
-            }
-        }
-    }
-    let text = serde_json::to_string(&plan["operations"]).expect("serializes");
-    assert!(
-        !text.contains("content") && !text.contains("command"),
-        "{text}"
-    );
-}
-
-/// The three requirements against the three evaluations, over the plan
-/// verb: an advisory gap leaves a plan ready, a decision waits, and a
-/// required gap blocks.
-#[test]
-fn a_decision_required_precondition_resolves_when_its_decision_is_selected() {
-    let target = plan_target();
-    let waiting = plan_json(target.path(), &[]);
-    assert_eq!(waiting["readiness"], "needs-decision", "{waiting}");
-    let p = precondition(&waiting, "workflow-mode-answered");
-    assert_eq!(p["requirement"], "decision-required");
-    assert_eq!(p["evaluation"]["state"], "not-observed");
-    assert_eq!(p["decision"], "workflow-mode");
-    let decision = waiting["decisions"]
-        .as_array()
-        .expect("decisions")
-        .iter()
-        .find(|d| d["id"] == "workflow-mode")
-        .expect("the decision");
-    assert!(decision["selected"].is_null());
-    assert_eq!(
-        precondition(&waiting, "forge-observed")["requirement"],
-        "advisory"
-    );
-
-    let answered = plan_json(target.path(), &["--decide", "workflow-mode=branches"]);
-    assert_eq!(answered["readiness"], "ready", "{answered}");
-    assert_eq!(
-        precondition(&answered, "workflow-mode-answered")["evaluation"]["state"],
-        "satisfied"
-    );
-    let decision = answered["decisions"]
-        .as_array()
-        .expect("decisions")
-        .iter()
-        .find(|d| d["id"] == "workflow-mode")
-        .expect("the decision");
-    assert_eq!(decision["selected"], "branches");
-    assert_eq!(
-        answered["desired_state"]["configuration"]["workflow"],
-        "branches"
-    );
-    assert_eq!(
-        answered["desired_state"]["configuration"]["sources"]["workflow"],
-        "decision"
-    );
-
-    rk().args(["reconcile", "plan", "--decide", "nonsense", "--target"])
-        .arg(target.path())
-        .assert()
-        .code(64);
-}
-
-/// Every section of the observed state and the release cites at least
-/// one evidence item, and every cited id is in the ledger.
-#[test]
-fn every_observed_field_cites_evidence() {
-    let target = plan_target();
-    land_rust(target.path()).success();
-    let plan = plan_json(target.path(), &[]);
-    let ids: Vec<&str> = plan["evidence"]
-        .as_array()
-        .expect("evidence")
-        .iter()
-        .map(|item| item["id"].as_str().expect("an id"))
-        .collect();
-    let cites = |value: &serde_json::Value, what: &str| {
-        let refs = value["evidence_refs"]
-            .as_array()
-            .unwrap_or_else(|| panic!("{what} carries no evidence_refs: {value}"));
-        assert!(!refs.is_empty(), "{what} cites nothing");
-        for id in refs {
-            assert!(
-                ids.contains(&id.as_str().expect("an id")),
-                "{what} cites {id}, which is not in the ledger"
-            );
-        }
-    };
-    cites(&plan["observed_state"]["repository"], "repository");
-    cites(&plan["observed_state"]["installation"], "installation");
-    cites(&plan["observed_state"]["host"], "host");
-    cites(&plan["release"]["candidate"], "candidate");
-    cites(&plan["desired_state"]["configuration"], "configuration");
-    for p in plan["preconditions"].as_array().expect("preconditions") {
-        if p["id"] != "pin-wired" && p["id"] != "forge-observed" {
-            cites(p, p["id"].as_str().expect("an id"));
-        }
-    }
-    for item in plan["evidence"].as_array().expect("evidence") {
-        for field in ["id", "kind", "producer", "observed_at", "method"] {
-            assert!(item[field].is_string(), "{field} missing on {item}");
-        }
-    }
-}
-
-/// The instant is not a fingerprint input: two plans at different
-/// instants share one, and differ in their identity.
-#[test]
-fn plans_differing_only_in_excluded_fields_share_a_fingerprint() {
-    let target = plan_target();
-    land_rust(target.path()).success();
-    let first = plan_with_clock(target.path(), "2026-01-01T00:00:00Z", &[]).plan;
-    let second = plan_with_clock(target.path(), "2026-06-01T00:00:00Z", &[]).plan;
-    assert_eq!(first.input_fingerprint, second.input_fingerprint);
-    assert_ne!(first.identity.plan_id, second.identity.plan_id);
-    assert_ne!(first.identity.created_at, second.identity.created_at);
-}
-
-/// A selected decision is a fingerprint input.
-#[test]
-fn changing_a_selected_decision_changes_the_fingerprint() {
-    let target = plan_target();
-    let clock = "2026-01-01T00:00:00Z";
-    let worktree = plan_with_clock(target.path(), clock, &[("workflow-mode", "worktree")]).plan;
-    let branches = plan_with_clock(target.path(), clock, &[("workflow-mode", "branches")]).plan;
-    assert_ne!(worktree.input_fingerprint, branches.input_fingerprint);
-    let again = plan_with_clock(target.path(), clock, &[("workflow-mode", "worktree")]).plan;
-    assert_eq!(worktree.input_fingerprint, again.input_fingerprint);
-}
-
-/// No `--to` and no `--fetch`: the network is never touched, and a
-/// selector this binary does not carry is the one read that reaches it.
-#[test]
-fn reconcile_plan_is_offline_by_default() {
-    let fixture = RegistryFixture::new();
-    std::fs::write(fixture.mock.path().join("curl_fail"), "").expect("the network is gone");
-    let target = plan_target();
-    land_rust(target.path()).success();
-    let run = |args: &[&str]| {
-        let mut command = rk();
-        command
-            .args(["reconcile", "plan", "--json", "--target"])
-            .arg(target.path())
-            .args(args)
-            .env("HOME", fixture.home.path())
-            .env("XDG_STATE_HOME", fixture.home.path())
-            .env("RK_CURL_BIN", fixture.mock.path().join("curl"));
-        command
-    };
-    run(&[]).assert().success();
-    assert_eq!(
-        fixture.curl_log().lines().count(),
-        0,
-        "the default plan touched the network"
-    );
-    let stderr = run(&["--to", "0.9.9"])
-        .assert()
-        .code(73)
-        .get_output()
-        .stderr
-        .clone();
-    let diagnostic: serde_json::Value = serde_json::from_slice(&stderr).expect("one diagnostic");
-    assert_eq!(diagnostic["reason"], "registry-unreachable", "{diagnostic}");
-    assert!(
-        fixture.curl_log().lines().count() > 0,
-        "--to reaches the venue"
-    );
-}
-
-/// A plan freezes one exact release. Apply reads that release from the
-/// cache and never resolves the selector again, so an apply is offline
-/// once its plan exists; a cache that lost the frozen bundle is a
-/// refusal naming the release, never a fetch.
-#[test]
-fn apply_never_resolves_the_selector_again() {
-    let fixture = RegistryFixture::new();
-    let _ = fixture.publish_full("0.9.5");
-    let target = plan_target();
-    land_rust(target.path()).success();
-    let out = rk_home(fixture.home.path())
-        .args(["reconcile", "plan", "--json", "--target"])
-        .arg(target.path())
-        .args([
-            "--forge",
-            "github",
-            "--repo",
-            "acme/widget",
-            "--to",
-            "0.9.5",
-        ])
-        .env("RK_CURL_BIN", fixture.mock.path().join("curl"))
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let plan: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(plan["desired_state"]["release"]["version"], "0.9.5");
-    assert_eq!(plan["desired_state"]["release"]["venue"], "crates");
-    let id = plan["identity"]["plan_id"]
-        .as_str()
-        .expect("a plan id")
-        .to_owned();
-    let fetched = fixture.curl_log().lines().count();
-    assert!(fetched > 0, "the plan resolved at the venue once");
-    // The network is gone: apply serves the frozen release from the cache.
-    let applied = rk_home(fixture.home.path())
-        .args(["reconcile", "apply", "--json", &id])
-        .env("RK_CURL_BIN", "/nonexistent/curl")
-        .assert()
-        .success();
-    let stdout = String::from_utf8_lossy(&applied.get_output().stdout).into_owned();
-    assert!(
-        stdout.contains(&id),
-        "the apply report names the plan:\n{stdout}"
-    );
-    assert_eq!(
-        fixture.curl_log().lines().count(),
-        fetched,
-        "apply touched the network"
-    );
-    // The cache lost the bundle: the refusal names the frozen release.
-    std::fs::remove_dir_all(fixture.cache()).expect("the cache goes away");
-    let refused = rk_home(fixture.home.path())
-        .args(["reconcile", "apply", "--json", &id])
-        .env("RK_CURL_BIN", "/nonexistent/curl")
-        .assert()
-        .code(73);
-    let diagnostic = refusal_of(&refused);
-    assert_eq!(diagnostic["reason"], "bundle-unverified", "{diagnostic}");
-    let message = diagnostic["message"].as_str().expect("a message");
-    assert!(message.contains("0.9.5"), "{message}");
-    assert_eq!(
-        fixture.curl_log().lines().count(),
-        fetched,
-        "the refusal touched the network"
-    );
-}
-
-/// `rk reconcile plan` writes nothing into the target and stores the
-/// plan under the state root, printing its id.
-#[test]
-fn reconcile_plan_persists_and_prints_an_id() {
-    let home = tempfile::tempdir().expect("a scratch home exists");
-    let target = plan_target();
-    land_rust(target.path()).success();
-    let before_target = tree_digests(target.path());
-    let (id, plan) = plan_stored(home.path(), target.path(), &[]);
-    assert_eq!(plan["identity"]["plan_id"], id);
-    assert_eq!(tree_digests(target.path()), before_target);
-    let dir = stored_dir(home.path(), &id);
-    assert!(dir.join("plan.json").is_file(), "{}", dir.display());
-    assert!(dir.join("request.json").is_file());
-    let human = rk_home(home.path())
-        .args(["reconcile", "plan", "--target"])
-        .arg(target.path())
-        .args(["--forge", "github", "--repo", "acme/widget"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    // The second run is its own plan: its id folds in `created_at`, so it
-    // matches the first id only when both runs share a second. The human
-    // line names the id it stored, and that id has a directory.
-    let human = String::from_utf8_lossy(&human);
-    let line = human
-        .lines()
-        .find(|line| line.starts_with("plan ") && line.contains(" for "))
-        .unwrap_or_else(|| panic!("the human report names its plan:\n{human}"));
-    let printed = line["plan ".len()..].split(' ').next().expect("an id");
-    assert_eq!(printed.len(), id.len(), "{line}");
-    assert!(
-        stored_dir(home.path(), printed).join("plan.json").is_file(),
-        "{line}"
-    );
-}
-
-/// A scratch state root, so no test touches the operator's own store.
-fn rk_home(home: &Path) -> Command {
-    let mut command = rk();
-    command
-        .env("HOME", home)
-        .env("XDG_STATE_HOME", home)
-        .env("RUST_LOG", "off");
-    command
-}
-
-fn stored_dir(home: &Path, id: &str) -> PathBuf {
-    home.join("release-kit").join("plans").join(id)
-}
-
-/// One plan computed and stored, with the identity flags an empty target
-/// needs; the id and the document.
-fn plan_stored(home: &Path, target: &Path, extra: &[&str]) -> (String, serde_json::Value) {
-    let out = rk_home(home)
-        .args(["reconcile", "plan", "--json", "--target"])
-        .arg(target)
-        .args(["--forge", "github", "--repo", "acme/widget"])
-        .args(extra)
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let plan: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    let id = plan["identity"]["plan_id"]
-        .as_str()
-        .expect("a plan id")
-        .to_owned();
-    (id, plan)
-}
-
-fn apply_stored(home: &Path, id: &str) -> assert_cmd::assert::Assert {
-    rk_home(home)
-        .args(["reconcile", "apply", "--json", id])
-        .assert()
-}
-
-/// The diagnostic an apply refusal prints on stderr under `--json`.
-fn refusal_of(assert: &assert_cmd::assert::Assert) -> serde_json::Value {
-    serde_json::from_slice(&assert.get_output().stderr).expect("a JSON diagnostic on stderr")
-}
-
-/// A landed target one release behind: the record names an older engine
-/// and holds an older rendered policy, so the plan carries writes.
-fn landed_old_target() -> tempfile::TempDir {
-    let target = plan_target();
-    land_rust(target.path()).success();
-    let mut manifest = read_manifest(target.path());
-    manifest["rk_version"] = serde_json::json!("0.1.0");
-    let policy = target.path().join("SECURITY.md");
-    let older = b"# Security policy\n\nOlder wording.\n";
-    std::fs::write(&policy, older).expect("the older file writes");
-    for file in manifest["files"].as_array_mut().expect("files") {
-        if file["destination"] == "SECURITY.md" {
-            file["sha256"] = serde_json::json!(Digest::of(older).to_string());
-        }
-    }
-    write_manifest(target.path(), &manifest);
-    target
-}
-
-/// The store is owner-only: 0700 on every directory, 0600 on every file.
-#[cfg(unix)]
-#[test]
-fn the_store_is_owner_only() {
-    use std::os::unix::fs::PermissionsExt as _;
-    let home = tempfile::tempdir().expect("a scratch home exists");
-    let target = plan_target();
-    land_rust(target.path()).success();
-    let (id, _) = plan_stored(home.path(), target.path(), &[]);
-    let dir = stored_dir(home.path(), &id);
-    for path in [
-        dir.parent().expect("the store root").to_path_buf(),
-        dir.clone(),
-        dir.join("blobs"),
-    ] {
-        let mode = std::fs::metadata(&path)
-            .expect("reads")
-            .permissions()
-            .mode()
-            & 0o777;
-        assert_eq!(mode, 0o700, "{}", path.display());
-    }
-    for name in ["plan.json", "request.json"] {
-        let mode = std::fs::metadata(dir.join(name))
-            .expect("reads")
-            .permissions()
-            .mode()
-            & 0o777;
-        assert_eq!(mode, 0o600, "{name}");
-    }
-}
-
-/// `show` renders what was stored; an id the store no longer holds is a
-/// refusal naming the retention rule, never an empty result.
-#[test]
-fn show_renders_a_stored_plan_and_refuses_a_pruned_one() {
-    let home = tempfile::tempdir().expect("a scratch home exists");
-    let target = plan_target();
-    land_rust(target.path()).success();
-    let (id, plan) = plan_stored(home.path(), target.path(), &[]);
-    let shown = rk_home(home.path())
-        .args(["reconcile", "show", "--json", &id])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let shown: serde_json::Value = serde_json::from_slice(&shown).expect("one JSON object");
-    assert_eq!(shown["input_fingerprint"], plan["input_fingerprint"]);
-    assert_eq!(shown["schema"], "rk.plan/3");
-    std::fs::remove_dir_all(stored_dir(home.path(), &id)).expect("the plan prunes");
-    rk_home(home.path())
-        .args(["reconcile", "show", &id])
-        .assert()
-        .code(66)
-        .stderr(predicate::str::contains("newest 20 plans"));
-}
-
-/// Apply refuses after the record changed, naming it, with the target
-/// byte-identical.
-#[test]
-fn apply_refuses_after_the_record_changes() {
-    let home = tempfile::tempdir().expect("a scratch home exists");
-    let target = landed_old_target();
-    let (id, _) = plan_stored(
-        home.path(),
-        target.path(),
-        &[
-            "--decide",
-            "partial-guidance=accept",
-            "--decide",
-            "partial-baseline=accept",
-        ],
-    );
-    let mut manifest = read_manifest(target.path());
-    manifest["rk_version"] = serde_json::json!("0.1.1");
-    write_manifest(target.path(), &manifest);
-    let before = tree_digests(target.path());
-    let assert = apply_stored(home.path(), &id).code(73);
-    let diagnostic = refusal_of(&assert);
-    assert_eq!(diagnostic["reason"], "state-drift");
-    assert!(
-        diagnostic["message"]
-            .as_str()
-            .expect("a message")
-            .contains("the record"),
-        "{diagnostic}"
-    );
-    assert_eq!(tree_digests(target.path()), before);
-}
-
-/// Apply refuses after the configuration changed, naming it.
-#[test]
-fn apply_refuses_after_the_configuration_changes() {
-    let home = tempfile::tempdir().expect("a scratch home exists");
-    let target = landed_old_target();
-    let (id, _) = plan_stored(
-        home.path(),
-        target.path(),
-        &[
-            "--decide",
-            "partial-guidance=accept",
-            "--decide",
-            "partial-baseline=accept",
-        ],
-    );
-    let config = target.path().join(".release-kit/config.toml");
-    let mut text = std::fs::read_to_string(&config).expect("reads");
-    text.push_str("\n# edited after the plan\n");
-    std::fs::write(&config, text).expect("writes");
-    let before = tree_digests(target.path());
-    let assert = apply_stored(home.path(), &id).code(73);
-    let diagnostic = refusal_of(&assert);
-    assert!(
-        diagnostic["message"]
-            .as_str()
-            .expect("a message")
-            .contains("the configuration"),
-        "{diagnostic}"
-    );
-    assert_eq!(tree_digests(target.path()), before);
-}
-
-/// Apply refuses after a destination changed, naming that destination.
-#[test]
-fn apply_refuses_after_a_destination_changes_naming_it() {
-    let home = tempfile::tempdir().expect("a scratch home exists");
-    let target = landed_old_target();
-    let (id, _) = plan_stored(
-        home.path(),
-        target.path(),
-        &[
-            "--decide",
-            "partial-guidance=accept",
-            "--decide",
-            "partial-baseline=accept",
-        ],
-    );
-    let policy = target.path().join("SECURITY.md");
-    std::fs::write(&policy, b"# Security policy\n\nEdited after the plan.\n").expect("writes");
-    let before = tree_digests(target.path());
-    let assert = apply_stored(home.path(), &id).code(73);
-    let diagnostic = refusal_of(&assert);
-    assert!(
-        diagnostic["message"]
-            .as_str()
-            .expect("a message")
-            .contains("SECURITY.md"),
-        "{diagnostic}"
-    );
-    assert_eq!(tree_digests(target.path()), before);
-}
-
-/// Apply refuses when the stored plan names another candidate bundle
-/// than the one it is recomputed against: the store is recomputed too,
-/// so a plan edited after approval reads as moved.
-#[test]
-fn apply_refuses_after_the_bundle_changes() {
-    let home = tempfile::tempdir().expect("a scratch home exists");
-    let target = landed_old_target();
-    let (id, _) = plan_stored(
-        home.path(),
-        target.path(),
-        &[
-            "--decide",
-            "partial-guidance=accept",
-            "--decide",
-            "partial-baseline=accept",
-        ],
-    );
-    let path = stored_dir(home.path(), &id).join("plan.json");
-    let mut plan: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&path).expect("reads")).expect("parses");
-    plan["release"]["candidate"]["payload_sha256"] =
-        serde_json::json!(Digest::of(b"other").to_string());
-    std::fs::write(&path, serde_json::to_vec(&plan).expect("serializes")).expect("writes");
-    let before = tree_digests(target.path());
-    let assert = apply_stored(home.path(), &id).code(73);
-    let diagnostic = refusal_of(&assert);
-    let message = diagnostic["message"].as_str().expect("a message");
-    assert!(
-        message.contains("the candidate bundle") && message.contains("the stored plan"),
-        "{diagnostic}"
-    );
-    assert_eq!(tree_digests(target.path()), before);
-}
-
-/// Apply refuses when a selected decision changed between plan and
-/// apply, naming the decision.
-#[test]
-fn apply_refuses_after_a_selected_decision_changes() {
-    let home = tempfile::tempdir().expect("a scratch home exists");
-    let target = plan_target();
-    let (id, plan) = plan_stored(
-        home.path(),
-        target.path(),
-        &["--tech", "rust", "--decide", "workflow-mode=worktree"],
-    );
-    assert_eq!(plan["readiness"], "ready", "{plan}");
-    let path = stored_dir(home.path(), &id).join("request.json");
-    let mut request: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&path).expect("reads")).expect("parses");
-    request["decisions"]["workflow-mode"] = serde_json::json!("branches");
-    std::fs::write(&path, serde_json::to_vec(&request).expect("serializes")).expect("writes");
-    let before = tree_digests(target.path());
-    let assert = apply_stored(home.path(), &id).code(73);
-    let diagnostic = refusal_of(&assert);
-    assert!(
-        diagnostic["message"]
-            .as_str()
-            .expect("a message")
-            .contains("decision workflow-mode"),
-        "{diagnostic}"
-    );
-    assert_eq!(tree_digests(target.path()), before);
-}
-
-/// A plan that waits on a decision is refused naming the decision ids.
-#[test]
-fn apply_refuses_needs_decision_naming_the_ids() {
-    let home = tempfile::tempdir().expect("a scratch home exists");
-    let target = plan_target();
-    let (id, plan) = plan_stored(home.path(), target.path(), &["--tech", "rust"]);
-    assert_eq!(plan["readiness"], "needs-decision", "{plan}");
-    let before = tree_digests(target.path());
-    let assert = apply_stored(home.path(), &id).code(73);
-    let diagnostic = refusal_of(&assert);
-    assert_eq!(diagnostic["reason"], "plan-not-ready");
-    assert!(
-        diagnostic["message"]
-            .as_str()
-            .expect("a message")
-            .contains("workflow-mode"),
-        "{diagnostic}"
-    );
-    assert_eq!(tree_digests(target.path()), before);
-}
-
-/// A blocked plan is refused naming the failed required preconditions,
-/// and no flag makes it proceed.
-#[test]
-fn apply_refuses_blocked_naming_the_preconditions() {
-    let home = tempfile::tempdir().expect("a scratch home exists");
-    let target = plan_target();
-    land_rust(target.path()).success();
-    let path = target.path().join("SECURITY.md");
-    let mut bytes = std::fs::read(&path).expect("reads");
-    bytes.extend_from_slice(b"\n# edited\n");
-    std::fs::write(&path, bytes).expect("writes");
-    let (id, plan) = plan_stored(home.path(), target.path(), &[]);
-    assert_eq!(plan["readiness"], "blocked", "{plan}");
-    let before = tree_digests(target.path());
-    let assert = apply_stored(home.path(), &id).code(73);
-    let diagnostic = refusal_of(&assert);
-    assert_eq!(diagnostic["reason"], "plan-not-ready");
-    assert!(
-        diagnostic["message"]
-            .as_str()
-            .expect("a message")
-            .contains("owned-file-unedited:SECURITY.md"),
-        "{diagnostic}"
-    );
-    assert_eq!(tree_digests(target.path()), before);
-}
-
-/// Every refusal above happens before the first write: the target is
-/// byte-identical after a refused apply, whatever refused it.
-#[test]
-fn no_write_happens_before_revalidation_passes() {
-    let home = tempfile::tempdir().expect("a scratch home exists");
-    let target = landed_old_target();
-    let (id, _) = plan_stored(home.path(), target.path(), &[]);
-    // A destination and the record moved at once: one refusal, no write.
-    std::fs::write(target.path().join("SECURITY.md"), b"moved\n").expect("writes");
-    let mut manifest = read_manifest(target.path());
-    manifest["rk_version"] = serde_json::json!("0.1.1");
-    write_manifest(target.path(), &manifest);
-    let before = tree_digests(target.path());
-    apply_stored(home.path(), &id).code(73);
-    assert_eq!(tree_digests(target.path()), before);
-    let stored = stored_dir(home.path(), &id);
-    assert!(
-        stored.join("plan.json").is_file(),
-        "a refusal keeps the plan"
-    );
-}
-
-/// A commit stopped part way leaves every destination holding either
-/// its previous bytes or its new ones, names what landed, and journals
-/// the run with the stop.
-#[test]
-fn an_interrupted_apply_leaves_each_destination_whole_and_journals_it() {
-    let home = tempfile::tempdir().expect("a scratch home exists");
-    let target = plan_target();
-    let (id, plan) = plan_stored(
-        home.path(),
-        target.path(),
-        &[
-            "--tech",
-            "rust",
-            "--workflow",
-            "worktree",
-            "--style",
-            "trunk",
-        ],
-    );
-    assert_eq!(plan["readiness"], "ready", "{plan}");
-    let ops = operations_of(&plan);
-    assert!(ops.len() > 2);
-    let stop = ops[1]["path"].as_str().expect("a path").to_owned();
-    let first = ops[0]["path"].as_str().expect("a path").to_owned();
-    let before = tree_digests(target.path());
-    let assert = rk_home(home.path())
-        .env("RK_APPLY_INTERRUPT_AT", &stop)
-        .args(["reconcile", "apply", &id])
-        .assert()
-        .code(74)
-        .stderr(predicate::str::contains(&stop).and(predicate::str::contains(&first)));
-    let _ = assert;
-    let after = tree_digests(target.path());
-    assert!(
-        target.path().join(&first).is_file(),
-        "the first rename landed"
-    );
-    assert!(
-        !target.path().join(&stop).exists(),
-        "the stopped rename did not land"
-    );
-    assert!(
-        !target.path().join(".release-kit/manifest.json").exists(),
-        "the record, last, never landed"
-    );
-    // Every other path is as it was: nothing half-written, no temp file.
-    for (path, digest) in &after {
-        if path != &first {
-            assert!(
-                before.contains(&(path.clone(), digest.clone())),
-                "{path} changed"
-            );
-        }
-        assert!(!path.contains(".rk-txn-"), "temp file left: {path}");
-    }
-    let runs = rk_home(home.path())
-        .args(["runs", "list", "--json"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let runs: serde_json::Value = serde_json::from_slice(&runs).expect("one JSON object");
-    let run = &runs["runs"].as_array().expect("runs")[0];
-    assert_eq!(run["command"], "reconcile apply");
-    assert_eq!(run["exit_code"], 74);
-    let events = std::fs::read_to_string(
-        home.path()
-            .join("release-kit/runs")
-            .join(run["id"].as_str().expect("an id"))
-            .join("events.jsonl"),
-    )
-    .expect("the events read");
-    assert!(
-        events.contains(&format!(
-            "\"path\":\"{}\",\"status\":\"failed\"",
-            target.path().join(&stop).display()
-        )),
-        "{events}"
-    );
-}
-
-/// The record is the last operation in every plan that carries one, and
-/// the last rename an apply makes.
-#[test]
-fn the_record_is_written_last() {
-    let home = tempfile::tempdir().expect("a scratch home exists");
-    for target in [plan_target(), landed_old_target()] {
-        let (id, plan) = plan_stored(
-            home.path(),
-            target.path(),
-            &[
-                "--tech",
-                "rust",
-                "--workflow",
-                "worktree",
-                "--style",
-                "trunk",
-                "--decide",
-                "partial-guidance=accept",
-                "--decide",
-                "partial-baseline=accept",
-            ],
-        );
-        let ops = operations_of(&plan);
-        assert_eq!(
-            ops.last().expect("an operation")["op"],
-            "write-record",
-            "{plan}"
-        );
-        let applied = apply_stored(home.path(), &id)
-            .success()
-            .get_output()
-            .stdout
-            .clone();
-        let applied: serde_json::Value = serde_json::from_slice(&applied).expect("one JSON object");
-        assert_eq!(applied["schema"], "rk.reconcile-apply/1");
-        let results = applied["operations"].as_array().expect("operations");
-        assert_eq!(results.last().expect("a result")["op"], "write-record");
-        assert!(results.iter().all(|r| r["status"] == "ok"), "{applied}");
-    }
-}
-
-/// An apply lands in the runs journal the way a setup step does, with
-/// the plan id and its fingerprint in the events.
-#[test]
-fn an_apply_lands_in_the_runs_journal() {
-    let home = tempfile::tempdir().expect("a scratch home exists");
-    let target = landed_old_target();
-    let (id, plan) = plan_stored(
-        home.path(),
-        target.path(),
-        &[
-            "--decide",
-            "partial-guidance=accept",
-            "--decide",
-            "partial-baseline=accept",
-        ],
-    );
-    let applied = apply_stored(home.path(), &id)
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let applied: serde_json::Value = serde_json::from_slice(&applied).expect("one JSON object");
-    let run_id = applied["run_id"].as_str().expect("a run id").to_owned();
-    let runs = rk_home(home.path())
-        .args(["runs", "list", "--json"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let runs: serde_json::Value = serde_json::from_slice(&runs).expect("one JSON object");
-    let run = runs["runs"]
-        .as_array()
-        .expect("runs")
-        .iter()
-        .find(|run| run["id"] == run_id)
-        .expect("the apply's run");
-    assert_eq!(run["command"], "reconcile apply");
-    assert_eq!(run["exit_code"], 0);
-    let events = std::fs::read_to_string(
-        home.path()
-            .join("release-kit/runs")
-            .join(&run_id)
-            .join("events.jsonl"),
-    )
-    .expect("the events read");
-    assert!(events.contains(&id), "{events}");
-    assert!(
-        events.contains(plan["input_fingerprint"].as_str().expect("a fingerprint")),
-        "{events}"
-    );
-}
-
-/// Every apply refusal carries a reason from the closed vocabulary.
-#[test]
-fn every_apply_refusal_names_a_reason_from_the_closed_set() {
-    let wire: Vec<&str> = release_kit::diagnostic::REASONS
-        .iter()
-        .map(|reason| reason.as_str())
-        .collect();
-    let home = tempfile::tempdir().expect("a scratch home exists");
-    let mut reasons: Vec<String> = Vec::new();
-    // Not ready.
-    let target = plan_target();
-    let (id, _) = plan_stored(home.path(), target.path(), &["--tech", "rust"]);
-    reasons.push(
-        refusal_of(&apply_stored(home.path(), &id).code(73))["reason"]
-            .as_str()
-            .expect("a reason")
-            .to_owned(),
-    );
-    // Moved.
-    let target = landed_old_target();
-    let (id, _) = plan_stored(
-        home.path(),
-        target.path(),
-        &[
-            "--decide",
-            "partial-guidance=accept",
-            "--decide",
-            "partial-baseline=accept",
-        ],
-    );
-    std::fs::write(target.path().join("SECURITY.md"), b"moved\n").expect("writes");
-    reasons.push(
-        refusal_of(&apply_stored(home.path(), &id).code(73))["reason"]
-            .as_str()
-            .expect("a reason")
-            .to_owned(),
-    );
-    // Unknown.
-    reasons.push(
-        refusal_of(&apply_stored(home.path(), "0000000000000000").code(66))["reason"]
-            .as_str()
-            .expect("a reason")
-            .to_owned(),
-    );
-    for reason in &reasons {
-        assert!(
-            wire.contains(&reason.as_str()),
-            "{reason} is not in the closed set"
-        );
-    }
-    assert_eq!(reasons, ["plan-not-ready", "state-drift", "usage"]);
-}
-
-/// The apply's exit codes sit in the matrix: 73 for a refusal before
-/// any write, 66 for an id the store does not hold, 74 for a commit
-/// stopped by I/O, and 1 for a postcondition that failed after the
-/// writes landed, which `exit_code_matrix` holds at the unit level.
-#[test]
-fn the_apply_exit_codes_match_the_matrix() {
-    let home = tempfile::tempdir().expect("a scratch home exists");
-    let target = plan_target();
-    let (id, _) = plan_stored(home.path(), target.path(), &["--tech", "rust"]);
-    apply_stored(home.path(), &id).code(73);
-    apply_stored(home.path(), "0000000000000000").code(66);
-    let target = landed_old_target();
-    let (id, _) = plan_stored(
-        home.path(),
-        target.path(),
-        &[
-            "--decide",
-            "partial-guidance=accept",
-            "--decide",
-            "partial-baseline=accept",
-        ],
-    );
-    rk_home(home.path())
-        .env("RK_APPLY_INTERRUPT_AT", ".release-kit/manifest.json")
-        .args(["reconcile", "apply", &id])
-        .assert()
-        .code(74);
-}
-
-/// A stored plan names one checkout. Two targets holding identical bytes
-/// under identical planning inputs are still two targets, so the plan
-/// approved against one refuses to write into the other.
-#[test]
-fn a_stored_plan_refuses_to_apply_to_another_checkout() {
-    let home = tempfile::tempdir().expect("a scratch home exists");
-    let a = plan_target();
-    let b = plan_target();
-    let flags = ["--tech", "rust", "--decide", "workflow-mode=worktree"];
-    let (id, plan) = plan_stored(home.path(), a.path(), &flags);
-    assert_eq!(plan["readiness"], "ready", "the stored plan is ready");
-    assert_eq!(
-        plan["observed_state"]["repository"]["target"]
-            .as_str()
-            .expect("a target"),
-        std::fs::canonicalize(a.path())
-            .expect("the target resolves")
-            .to_string_lossy(),
-        "the plan names the canonical target"
-    );
-    // The stored request carries the resolved path, not the relative one.
-    let request: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(stored_dir(home.path(), &id).join("request.json")).expect("the request"),
-    )
-    .expect("one JSON object");
-    assert!(
-        Path::new(request["target"].as_str().expect("a target")).is_absolute(),
-        "the stored request names an absolute target: {request}"
-    );
-
-    // B is byte-identical to A and takes the same planning inputs.
-    let before_b = tree_digests(b.path());
-    assert_eq!(before_b, tree_digests(a.path()));
-    let (id_b, _) = plan_stored(home.path(), b.path(), &flags);
-    assert_ne!(id_b, id, "two targets are two plans");
-
-    // Applying A's plan from inside B lands in A, the checkout the plan
-    // named. Before the target was bound, the relative target resolved
-    // against the working directory and B took A's approved writes.
-    rk_home(home.path())
-        .current_dir(b.path())
-        .args(["reconcile", "apply", "--json", &id])
-        .assert()
-        .success();
-    assert_eq!(
-        tree_digests(b.path()),
-        before_b,
-        "B is byte-identical: the plan never named it"
-    );
-    assert!(
-        a.path().join(".release-kit/manifest.json").is_file(),
-        "A took the writes its plan approved"
-    );
-}
-
-/// Execution order is a fingerprint input: the record is written last,
-/// and a stored plan that moves it earlier refuses before any write.
-#[test]
-fn a_reordered_stored_plan_refuses() {
-    let home = tempfile::tempdir().expect("a scratch home exists");
-    let target = plan_target();
-    let (id, _) = plan_stored(
-        home.path(),
-        target.path(),
-        &["--tech", "rust", "--decide", "workflow-mode=worktree"],
-    );
-    let before = tree_digests(target.path());
-    let path = stored_dir(home.path(), &id).join("plan.json");
-    let mut plan: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&path).expect("the plan")).expect("one JSON object");
-    let operations = plan["operations"].as_array_mut().expect("operations");
-    assert!(
-        operations.len() > 1,
-        "a setup plan carries more than one operation"
-    );
-    // Move the record write to the front, changing nothing else.
-    let record = operations.pop().expect("a last operation");
-    assert_eq!(record["op"], "write-record", "the record is planned last");
-    operations.insert(0, record);
-    std::fs::write(&path, serde_json::to_vec(&plan).expect("serializes")).expect("the plan writes");
-
-    let refusal = refusal_of(&apply_stored(home.path(), &id).code(73));
-    assert_eq!(refusal["reason"], "state-drift", "{refusal}");
-    assert_eq!(
-        tree_digests(target.path()),
-        before,
-        "the target is byte-identical"
-    );
-}
-
-/// The planner emits exactly one record write, last, after every file it
-/// describes.
-#[test]
-fn the_record_is_the_last_operation() {
-    let target = plan_target();
-    let plan = plan_json(
-        target.path(),
-        &["--tech", "rust", "--decide", "workflow-mode=worktree"],
-    );
-    let operations = plan["operations"].as_array().expect("operations");
-    let records = operations
-        .iter()
-        .filter(|operation| operation["op"] == "write-record")
-        .count();
-    assert_eq!(records, 1, "one record write: {operations:?}");
-    assert_eq!(
-        operations.last().expect("a last operation")["op"],
-        "write-record",
-        "the record write is last"
-    );
-}
-
-/// The store files a blob under its digest and reads it back by filename,
-/// so apply proves the bytes still digest to that name before it stages
-/// anything. A corrupted blob costs the target nothing.
-#[test]
-fn apply_refuses_a_corrupted_blob_with_the_target_unchanged() {
-    let home = tempfile::tempdir().expect("a scratch home exists");
-    let target = landed_old_target();
-    let (id, plan) = plan_stored(
-        home.path(),
-        target.path(),
-        &[
-            "--decide",
-            "partial-guidance=accept",
-            "--decide",
-            "partial-baseline=accept",
-        ],
-    );
-    let before = tree_digests(target.path());
-    // The bytes a write operation names, not just any blob the store
-    // kept: this is the claim the digest filename makes.
-    let written = plan["operations"]
-        .as_array()
-        .expect("operations")
-        .iter()
-        .find(|operation| operation["op"] == "write-file")
-        .expect("a file write")["after"]
-        .as_str()
-        .expect("an after digest")
-        .to_owned();
-    let blob = stored_dir(home.path(), &id).join("blobs").join(&written);
-    assert!(blob.is_file(), "the store holds {written}");
-    std::fs::write(&blob, b"altered\n").expect("the blob is altered");
-
-    let refusal = refusal_of(&apply_stored(home.path(), &id).code(73));
-    assert_eq!(refusal["reason"], "state-drift", "{refusal}");
-    assert!(
-        refusal["message"]
-            .as_str()
-            .expect("a message")
-            .contains("altered"),
-        "the refusal names the altered blob: {refusal}"
-    );
-    assert_eq!(
-        tree_digests(target.path()),
-        before,
-        "the target is byte-identical"
-    );
-}
-
-/// A precondition that turns decision-required between plan and apply
-/// leaves every canonical line identical, because canonicalization
-/// excludes decision-required evaluations and unselected decisions. Only
-/// the freshly derived readiness sees it, and apply proceeds on ready
-/// alone.
-#[test]
-fn apply_refuses_when_the_world_needs_a_new_decision() {
-    let home = tempfile::tempdir().expect("a scratch home exists");
-    let target = landed_old_target();
-    let (id, plan) = plan_stored(
-        home.path(),
-        target.path(),
-        &[
-            "--decide",
-            "partial-guidance=accept",
-            "--decide",
-            "partial-baseline=accept",
-        ],
-    );
-    assert_eq!(plan["readiness"], "ready", "the stored plan is ready");
-
-    // A manager file that could pin rk but records no version raises the
-    // pin-manager decision on a target behind the candidate. It is no
-    // payload destination, so no operation, record, or required
-    // precondition moves: the fingerprint cannot see it.
-    std::fs::write(
-        target.path().join("mise.toml"),
-        "[tools]\n\"cargo:release-kit\" = \"latest\"\n",
-    )
-    .expect("the manager file writes");
-    let before = tree_digests(target.path());
-
-    let fresh = plan_json(
-        target.path(),
-        &[
-            "--decide",
-            "partial-guidance=accept",
-            "--decide",
-            "partial-baseline=accept",
-        ],
-    );
-    assert_eq!(
-        fresh["input_fingerprint"], plan["input_fingerprint"],
-        "the fingerprint is blind to it"
-    );
-    assert_eq!(fresh["readiness"], "needs-decision", "{fresh}");
-
-    let refusal = refusal_of(&apply_stored(home.path(), &id).code(73));
-    assert_eq!(refusal["reason"], "plan-not-ready", "{refusal}");
-    assert_eq!(
-        tree_digests(target.path()),
-        before,
-        "the target is byte-identical"
-    );
-}
-
-/// The preview placeholder renders and never lands: a target with no
-/// origin remote and no answered repository plans as blocked, because a
-/// rendered file carrying `OWNER` names nobody's project.
-#[test]
-fn an_unresolved_repository_blocks_the_plan() {
-    let target = plan_target();
-    // No --repo, and the target has no origin remote.
-    let out = rk()
-        .args(["reconcile", "plan", "--json", "--target"])
-        .arg(target.path())
-        .args(["--tech", "rust", "--forge", "github"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let plan: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    // The preview still renders: the plan computed and carries its work.
-    assert!(
-        !plan["operations"]
-            .as_array()
-            .expect("operations")
-            .is_empty(),
-        "the preview renders its operations"
-    );
-    assert_eq!(plan["readiness"], "blocked", "{plan}");
-    let repository = plan["preconditions"]
-        .as_array()
-        .expect("preconditions")
-        .iter()
-        .find(|p| p["id"] == "repository-resolved")
-        .expect("the repository precondition");
-    assert_eq!(repository["requirement"], "required");
-    assert_eq!(repository["evaluation"]["state"], "unsatisfied");
-
-    // Answering it satisfies the precondition.
-    let answered = plan_json(target.path(), &["--tech", "rust"]);
-    let repository = answered["preconditions"]
-        .as_array()
-        .expect("preconditions")
-        .iter()
-        .find(|p| p["id"] == "repository-resolved")
-        .expect("the repository precondition");
-    assert_eq!(repository["evaluation"]["state"], "satisfied");
-}
-
 /// An adoption writes the record and nothing else, so a manager pin the
 /// target carries is reported and never moved.
 #[test]
@@ -24121,378 +21859,6 @@ fn adoption_writes_no_pin() {
         after, before,
         "every file outside .release-kit/ is untouched"
     );
-}
-
-// ---- compatibility and guidance in the bundle ----
-
-/// The inventory grew by the compatibility file and the guidance root,
-/// and `rk payload` names both.
-#[test]
-fn the_payload_carries_twelve_roots() {
-    assert_eq!(release_kit::payload_roots::PAYLOAD_ROOTS.len(), 12);
-    assert!(release_kit::payload_roots::PAYLOAD_ROOTS.contains(&"compatibility.toml"));
-    assert!(release_kit::payload_roots::PAYLOAD_ROOTS.contains(&"guidance"));
-    let out = rk()
-        .args(["payload", "--json"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    let paths: Vec<&str> = report["artifacts"]
-        .as_array()
-        .expect("artifacts")
-        .iter()
-        .filter_map(|a| a["path"].as_str())
-        .collect();
-    assert!(paths.contains(&"compatibility.toml"), "{paths:?}");
-    assert!(paths.contains(&"guidance/README.md"), "{paths:?}");
-    assert!(paths.contains(&"guidance/0.3.19.md"), "{paths:?}");
-}
-
-/// The two new roots ride in the published crate, so a bundle read from
-/// the crates venue declares its compatibility and carries its guidance.
-#[test]
-#[ignore = "packages the crate; run through the just build gate"]
-fn the_published_crate_carries_the_two_new_roots() {
-    let out = std::process::Command::new(env!("CARGO"))
-        .args(["package", "--list", "--allow-dirty"])
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("cargo package --list runs");
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let listed = String::from_utf8_lossy(&out.stdout);
-    for path in [
-        "compatibility.toml",
-        "guidance/README.md",
-        "guidance/0.3.19.md",
-    ] {
-        assert!(
-            listed.lines().any(|line| line == path),
-            "{path}: the published crate drops it"
-        );
-    }
-}
-
-/// Every guidance file the payload carries names at least one landed
-/// destination, so it can be filtered against a target, and an action
-/// from the closed set.
-#[test]
-fn every_guidance_file_names_its_destinations() {
-    let source = release_kit::release::EmbeddedReleaseSource;
-    let manifest = release_kit::release::ReleaseSource::manifest(&source).expect("the manifest");
-    let files = release_kit::release::declared::guidance(&source, &manifest)
-        .expect("every guidance file parses");
-    assert!(
-        !files.is_empty(),
-        "the payload ships at least one guidance file"
-    );
-    for file in &files {
-        assert!(
-            !file.destinations.is_empty(),
-            "{}: names no destination",
-            file.version
-        );
-        assert!(
-            release_kit::release::declared::GUIDANCE_ACTIONS.contains(&file.action.as_str()),
-            "{}: action {} is outside the closed set",
-            file.version,
-            file.action
-        );
-        assert!(
-            file.body.contains("## What to do"),
-            "{}: no step",
-            file.version
-        );
-    }
-    assert!(release_kit::release::declared::carries_guidance(&manifest));
-    let declared = release_kit::release::declared::compatibility(&source, &manifest)
-        .expect("the declaration parses");
-    let since = declared
-        .guidance
-        .since
-        .expect("this bundle declares where its coverage starts");
-    for file in &files {
-        assert!(
-            release_kit::release::declared::version_below(&since, &file.version),
-            "{}: a guidance file below since {since} describes a release the bundle claims not to cover",
-            file.version
-        );
-    }
-}
-
-/// The changelog interval comes from the record and the candidate bundle
-/// alone: a landed target far behind plans with a partial coverage and
-/// the steps the bundle has, and the network is never touched.
-#[test]
-fn the_changelog_interval_is_derived_offline() {
-    let fixture = RegistryFixture::new();
-    std::fs::write(fixture.mock.path().join("curl_fail"), "").expect("the network is gone");
-    let target = landed_old_target();
-    std::fs::write(
-        target.path().join(".envrc"),
-        "use flake\nrk devshell sync --apply || true\n",
-    )
-    .expect("the old sync line writes");
-    let run = |args: &[&str]| {
-        let mut command = rk();
-        command
-            .args(["reconcile", "plan", "--json", "--target"])
-            .arg(target.path())
-            .args(args)
-            .env("HOME", fixture.home.path())
-            .env("XDG_STATE_HOME", fixture.home.path())
-            .env("RK_CURL_BIN", fixture.mock.path().join("curl"));
-        command
-    };
-    let out = run(&[]).assert().success().get_output().stdout.clone();
-    let plan: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(
-        fixture.curl_log().lines().count(),
-        0,
-        "the interval reached the network"
-    );
-    let guidance = &plan["release"]["guidance"];
-    assert_eq!(guidance["interval"]["from"], "0.1.0", "{guidance}");
-    assert_eq!(
-        guidance["interval"]["to"],
-        env!("CARGO_PKG_VERSION"),
-        "{guidance}"
-    );
-    assert_eq!(guidance["coverage"]["state"], "partial", "{guidance}");
-    assert_eq!(guidance["coverage"]["since"], "0.3.18", "{guidance}");
-    // The rename step rides once the engine is at or above the release
-    // that introduced it; below it the interval ends before the step.
-    let step_expected =
-        !release_kit::release::declared::version_below(env!("CARGO_PKG_VERSION"), "0.3.19");
-    let steps = guidance["steps"].as_array().expect("steps");
-    assert_eq!(
-        steps
-            .iter()
-            .any(|s| s["version"] == "0.3.19" && s["destinations"][0] == ".envrc"),
-        step_expected,
-        "the rename step concerns the .envrc this target has: {guidance}"
-    );
-    assert_eq!(plan["readiness"], "needs-decision", "{plan}");
-    assert!(
-        plan["decisions"]
-            .as_array()
-            .expect("decisions")
-            .iter()
-            .any(|d| d["id"] == "partial-guidance"),
-        "{plan}"
-    );
-    let out = run(&[
-        "--decide",
-        "partial-guidance=accept",
-        "--decide",
-        "partial-baseline=accept",
-    ])
-    .assert()
-    .success()
-    .get_output()
-    .stdout
-    .clone();
-    let accepted: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(accepted["readiness"], "ready", "{accepted}");
-    assert_ne!(
-        accepted["input_fingerprint"], plan["input_fingerprint"],
-        "the selected decision is a fingerprint input"
-    );
-    // Without the .envrc the step is excluded, and counted. The other
-    // steps in the interval are judged by their own destinations, so the
-    // assertion names this one rather than emptying the list: a later
-    // release adding a guidance file must not read as a regression here.
-    std::fs::remove_file(target.path().join(".envrc")).expect("the .envrc goes");
-    let out = run(&[]).assert().success().get_output().stdout.clone();
-    let bare: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    let guidance = &bare["release"]["guidance"];
-    assert!(
-        !guidance["steps"]
-            .as_array()
-            .expect("steps")
-            .iter()
-            .any(|s| s["version"] == "0.3.19" && s["destinations"][0] == ".envrc"),
-        "the step whose only destination went is gone: {guidance}"
-    );
-    assert_eq!(guidance["excluded"], u64::from(step_expected), "{guidance}");
-}
-
-/// A target at the release has nothing to describe, and that is covered
-/// rather than unavailable, with the compatibility facts riding beside it.
-#[test]
-fn a_current_target_reports_covered_guidance_and_its_compatibility_facts() {
-    // A target at the release has nothing to describe, and that is
-    // covered rather than unavailable.
-    let current = plan_target();
-    land_rust(current.path()).success();
-    let plan = plan_json(current.path(), &[]);
-    assert_eq!(
-        plan["release"]["guidance"]["coverage"]["state"], "covered",
-        "{plan}"
-    );
-    assert_eq!(plan["release"]["guidance"]["excluded"], 0);
-    assert_eq!(plan["readiness"], "ready", "{plan}");
-    // The compatibility facts ride beside the guidance.
-    let compatibility = &plan["release"]["compatibility"];
-    assert_eq!(
-        compatibility["generator"]["name"], "cargo-dist",
-        "{compatibility}"
-    );
-    assert_eq!(
-        compatibility["generator"]["artifact"],
-        "dist-workspace.toml"
-    );
-    assert!(
-        compatibility["forge_floor"].is_null(),
-        "no floor is declared for github"
-    );
-    assert!(
-        plan["preconditions"]
-            .as_array()
-            .expect("preconditions")
-            .iter()
-            .any(|p| p["id"] == "generator-at-pin" && p["requirement"] == "advisory"),
-        "{plan}"
-    );
-}
-
-/// The authoring gate: a release that changes a landed destination and
-/// ships no guidance file is named, unless the silence is recorded in
-/// `compatibility.toml`. It reads the last release tag, so it runs
-/// through the just build gate where the history is present, and passes
-/// with a note where no tag is reachable.
-#[test]
-#[ignore = "reads the release tags; run through the just build gate"]
-fn a_release_changing_a_destination_without_guidance_is_named() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let git = |args: &[&str]| {
-        std::process::Command::new("git")
-            .arg("-C")
-            .arg(root)
-            .args(args)
-            .output()
-            .expect("git runs")
-    };
-    let describe = git(&["describe", "--tags", "--abbrev=0", "--match", "v*"]);
-    if !describe.status.success() {
-        eprintln!(
-            "no release tag is reachable from this checkout; the authoring gate has nothing to compare against"
-        );
-        return;
-    }
-    let tag = String::from_utf8_lossy(&describe.stdout).trim().to_owned();
-    let tag_version = tag.trim_start_matches('v').to_owned();
-    // What lands in a target: the snippets, and the blocks the landing
-    // splices. A fragment a verb prints and a skill root land nowhere.
-    let diff = git(&[
-        "diff",
-        "--name-only",
-        &format!("{tag}..HEAD"),
-        "--",
-        "snippets",
-        "blocks/agents-block.md.in",
-        "blocks/agents-line-worktree.md.in",
-        "blocks/agents-line-branches.md.in",
-        "blocks/pre-commit-block.yaml.in",
-        "blocks/pre-commit-worktree-guard.yaml.in",
-        "blocks/target-config.toml.in",
-    ]);
-    assert!(
-        diff.status.success(),
-        "{}",
-        String::from_utf8_lossy(&diff.stderr)
-    );
-    let changed: Vec<String> = String::from_utf8_lossy(&diff.stdout)
-        .lines()
-        .map(str::to_owned)
-        .collect();
-    if changed.is_empty() {
-        return;
-    }
-    let source = release_kit::release::EmbeddedReleaseSource;
-    let manifest = release_kit::release::ReleaseSource::manifest(&source).expect("the manifest");
-    let files = release_kit::release::declared::guidance(&source, &manifest).expect("parses");
-    let declared =
-        release_kit::release::declared::compatibility(&source, &manifest).expect("parses");
-    let described = files
-        .iter()
-        .map(|f| f.version.as_str())
-        .chain(declared.guidance.no_steps.iter().map(String::as_str))
-        .any(|version| release_kit::release::declared::version_below(&tag_version, version));
-    assert!(
-        described,
-        "a landed destination changed since {tag} ({changed:?}) and no guidance file names a release above it; add guidance/<next version>.md, or record the release under guidance.no_steps in compatibility.toml"
-    );
-}
-
-/// `rk guide reconcile` prints the runbook with detection filled in, the
-/// way every other runbook is served.
-#[test]
-fn the_reconcile_runbook_renders() {
-    let target = tempfile::tempdir().expect("a target exists");
-    land_rust(target.path()).success();
-    let out = rk()
-        .args(["guide", "reconcile", "--repo", "acme/widget"])
-        .current_dir(target.path())
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let text = String::from_utf8_lossy(&out);
-    assert!(text.starts_with("# Reconcile runbook"), "{text}");
-    assert!(
-        text.contains("rk snippet rust/<forge>/<path>"),
-        "detection fills <tech>: {text}"
-    );
-    assert!(text.contains("rk reconcile plan --target ."), "{text}");
-    assert!(text.contains("rk reconcile apply <plan-id>"), "{text}");
-}
-
-/// `rk method reconcile` prints the chapter, and the list names it.
-#[test]
-fn the_reconcile_chapter_renders() {
-    rk().args(["method", "reconcile"])
-        .assert()
-        .success()
-        .stdout(predicate::str::starts_with("# 12 — Reconcile"));
-    rk().args(["method", "--list"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("reconcile"));
-}
-
-/// SATISFIES distribution:a-runbook-renders-the-spine
-/// The reconcile pair shares one eight-step spine: the chapter's sequence
-/// and the runbook's `## N.` headings, in order.
-#[test]
-fn the_reconcile_runbook_renders_the_spine() {
-    let chapter = std::fs::read_to_string(repo_path("method/12-reconcile.md")).expect("reads");
-    let runbook = std::fs::read_to_string(repo_path("runbooks/reconcile.md")).expect("reads");
-    let sequence: Vec<&str> = chapter
-        .lines()
-        .filter(|line| {
-            line.split_once(". ")
-                .is_some_and(|(n, _)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
-        })
-        .collect();
-    let headings = numbered_headings(&runbook);
-    assert_eq!(sequence.len(), 8, "{sequence:?}");
-    assert_eq!(sequence.len(), headings.len(), "{headings:?}");
-    for (step, heading) in sequence.iter().zip(&headings) {
-        let (n, title) = step.split_once(". ").expect("a numbered line");
-        let word = title.split(['.', ',']).next().expect("a title").trim();
-        assert!(
-            heading.starts_with(&format!("## {n}. {word}")),
-            "step {n}: chapter says '{word}', runbook says '{heading}'"
-        );
-    }
 }
 
 /// SATISFIES distribution:a-runbook-renders-the-spine
@@ -24576,6 +21942,34 @@ fn the_landing_pair_renders() {
         .stdout(predicate::str::contains("landing"));
 }
 
+/// A scratch rust target with a version file and a git directory, so the
+/// projection resolves and the nix shape gate has something to read.
+fn plan_target() -> tempfile::TempDir {
+    let target = tempfile::tempdir().expect("a scratch target exists");
+    std::fs::create_dir_all(target.path().join(".git")).expect("the target is a repository");
+    std::fs::write(
+        target.path().join("Cargo.toml"),
+        "[package]\nname = \"widget\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("the version file writes");
+    target
+}
+
+/// A scratch state root, so no test touches the operator's own store.
+fn rk_home(home: &Path) -> Command {
+    let mut command = rk();
+    command
+        .env("HOME", home)
+        .env("XDG_STATE_HOME", home)
+        .env("RUST_LOG", "off");
+    command
+}
+
+/// The diagnostic an apply refusal prints on stderr under `--json`.
+fn refusal_of(assert: &assert_cmd::assert::Assert) -> serde_json::Value {
+    serde_json::from_slice(&assert.get_output().stderr).expect("a JSON diagnostic on stderr")
+}
+
 /// The body of one `### Na.` substep of a runbook, up to the next heading.
 fn runbook_substep<'a>(text: &'a str, label: &str) -> &'a str {
     let marker = format!("\n### {label}");
@@ -24600,17 +21994,16 @@ fn the_setup_and_migration_runbooks_route_their_landing_steps_to_landing() {
         ("runbooks/migration.md", &migration),
     ] {
         for retired in [
-            "rk reconcile",
-            "reconcile runbook",
-            "./reconcile.md",
             "rk snippet",
-            "rk payload",
             "force past",
             "conflict line",
             "hand edits conflict",
-        ] {
+        ]
+        .into_iter()
+        .chain(RETIRED_SURFACE)
+        {
             assert!(
-                !text.contains(retired),
+                !text.to_lowercase().contains(&retired.to_lowercase()),
                 "{path} still carries the retired path or semantics: {retired}"
             );
         }
@@ -24967,7 +22360,7 @@ fn the_landing_runbooks_legacy_removal_refuses_an_outside_path_and_removes_one_p
     assert!(intact(), "a refused removal touches nothing");
 
     let (ok, listed) = run_fragment(&list(&plan), &env, scratch.path());
-    assert!(ok, "a stored plan under the state root lists");
+    assert!(ok, "a legacy directory under the state root lists");
     assert!(
         listed.contains("plan.json") && listed.contains("deadbeef"),
         "{listed}"
@@ -25060,34 +22453,13 @@ fn the_migration_and_setup_chapters_send_the_landing_to_the_landing_chapter() {
         ("method/10-migration.md", text),
         ("method/02-setup.md", setup),
     ] {
-        assert!(
-            !chapter.contains("12-reconcile.md"),
-            "{path} still routes to the stored-plan chapter"
-        );
+        for retired in RETIRED_SURFACE {
+            assert!(
+                !chapter.to_lowercase().contains(&retired.to_lowercase()),
+                "{path} still routes to the retired chapter: {retired}"
+            );
+        }
     }
-}
-
-/// The runbook's header states once that a plan holds target bytes and is
-/// never committed or posted, because no gate sees a plan.
-#[test]
-fn the_reconcile_runbook_states_the_plan_handling_rule() {
-    let text = std::fs::read_to_string(repo_path("runbooks/reconcile.md")).expect("reads");
-    let header: String = text
-        .lines()
-        .take_while(|line| !line.starts_with("## "))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(
-        header.contains("A plan holds bytes from the target"),
-        "{header}"
-    );
-    assert!(header.contains("never committed"), "{header}");
-    assert!(header.contains("never pasted"), "{header}");
-    assert_eq!(
-        text.matches("never pasted").count(),
-        1,
-        "the rule is stated once"
-    );
 }
 
 /// Hold `target`'s lock the way a live run holds it, and return the lock
@@ -25119,54 +22491,10 @@ fn hold_target_lock(home: &Path, target: &Path) -> (PathBuf, std::fs::File) {
     (path, file)
 }
 
-/// One apply holds its target, so a second against the same target
-/// refuses rather than interleaving its staging with the first's.
-///
-/// Two runs that each pass their own validation and then commit over
-/// each other leave one plan's files beside another's record: a target
-/// describing a landing that never happened. The lock is what makes the
-/// second run wait rather than discover that afterwards.
-#[test]
-fn a_second_apply_against_one_target_refuses_while_the_first_holds_it() {
-    let home = tempfile::tempdir().expect("a scratch home exists");
-    let target = plan_target();
-    let (id, _) = plan_stored(
-        home.path(),
-        target.path(),
-        &["--decide", "workflow-mode=worktree"],
-    );
-    // The lock the first run would hold, taken by this process: a second
-    // process cannot be paused mid-apply from here, and an operating
-    // system lock is what holding the target means.
-    let (held, holder) = hold_target_lock(home.path(), target.path());
-
-    let before = tree_digests(target.path());
-    let refused = apply_stored(home.path(), &id).failure();
-    let diagnostic = refusal_of(&refused);
-    assert_eq!(diagnostic["reason"], "target-busy", "{diagnostic}");
-    assert_eq!(diagnostic["target_state"], "unchanged", "{diagnostic}");
-    assert_eq!(
-        tree_digests(target.path()),
-        before,
-        "a refused apply writes nothing"
-    );
-
-    // The holder gone, the same plan applies: the lock gates the run and
-    // does not spoil the plan. The file stays where it is, because the
-    // lock and not the file is what held the target.
-    drop(holder);
-    assert!(held.exists(), "the lock file outlives the run that took it");
-    apply_stored(home.path(), &id).success();
-    assert!(
-        target.path().join(".release-kit/manifest.json").is_file(),
-        "the freed target takes the landing"
-    );
-}
-
 /// A host where no state root resolves has nowhere to put the lock, so
 /// the apply refuses instead of running unguarded.
 ///
-/// The front tolerates a missing plan store and a missing journal, so
+/// The front tolerates a missing state root and a missing journal, so
 /// without this refusal two of these would each stage against one target
 /// and commit over each other. Both invocations here refuse, which is
 /// what proves neither can proceed: the guarantee is that no apply runs
@@ -25282,18 +22610,19 @@ fn two_concurrent_applies_serialize_on_one_target_lock() {
 fn a_lock_file_a_killed_run_left_behind_blocks_no_apply() {
     let home = tempfile::tempdir().expect("a scratch home exists");
     let target = plan_target();
-    let (id, _) = plan_stored(
-        home.path(),
-        target.path(),
-        &["--decide", "workflow-mode=worktree"],
-    );
     // Exactly what a kill leaves: the bytes of the dead run's lock file,
     // and no lock on it.
     let (held, holder) = hold_target_lock(home.path(), target.path());
     drop(holder);
     assert!(held.exists(), "the killed run's lock file is there");
 
-    apply_stored(home.path(), &id).success();
+    rk_home(home.path())
+        .args(["init", "--tech", "rust", "--forge", "github"])
+        .args(["--repo", "acme/widget", "--json", "--target"])
+        .arg(target.path())
+        .arg("--apply")
+        .assert()
+        .success();
     assert!(
         target.path().join(".release-kit/manifest.json").is_file(),
         "the target nobody holds takes the landing"
@@ -25302,188 +22631,6 @@ fn a_lock_file_a_killed_run_left_behind_blocks_no_apply() {
     assert!(
         !body.starts_with("4242"),
         "the run that took the target names itself: {body:?}"
-    );
-}
-
-/// A manager file the target carries that names no release-kit raises the
-/// pin decision, because that is exactly the case it exists to ask about.
-///
-/// A present file naming release-kit without a version reads as
-/// `unpinned` and a file naming it not at all reads as `absent`; both are
-/// a manager the target has and does not pin rk through.
-#[test]
-fn a_manager_file_naming_no_release_kit_asks_the_pin_decision() {
-    let target = landed_old_target();
-    std::fs::write(target.path().join("mise.toml"), "[tools]\nnode = \"24\"\n")
-        .expect("the manager file writes");
-    let plan = plan_json(target.path(), &["--decide", "partial-guidance=accept"]);
-    let ids: Vec<&str> = plan["decisions"]
-        .as_array()
-        .expect("decisions")
-        .iter()
-        .map(|decision| decision["id"].as_str().expect("an id"))
-        .collect();
-    assert!(
-        ids.contains(&"pin-manager"),
-        "a present manager file naming no release-kit asks the decision: {ids:?}"
-    );
-    assert_eq!(plan["readiness"], "needs-decision", "{plan}");
-}
-
-/// A decision takes the answers it declares and no others, refused where
-/// the operator typed it.
-///
-/// An unrecognized answer that satisfied its precondition would be
-/// fingerprinted and accepted again on recomputation, so the apply would
-/// write with no declared choice ever selected.
-#[test]
-fn an_unrecognized_decision_answer_refuses_naming_the_choices() {
-    let target = plan_target();
-    let refused = rk()
-        .args(["reconcile", "plan", "--json", "--target"])
-        .arg(target.path())
-        .args(["--forge", "github", "--repo", "acme/widget"])
-        .args(["--decide", "release-activity=typo"])
-        .assert()
-        .failure()
-        .code(64);
-    let rendered = String::from_utf8_lossy(&refused.get_output().stderr).into_owned();
-    assert!(rendered.contains("history"), "{rendered}");
-    assert!(rendered.contains("migrate"), "{rendered}");
-
-    // An id no decision carries is refused the same way.
-    let unknown = rk()
-        .args(["reconcile", "plan", "--json", "--target"])
-        .arg(target.path())
-        .args(["--forge", "github", "--repo", "acme/widget"])
-        .args(["--decide", "not-a-decision=history"])
-        .assert()
-        .failure()
-        .code(64);
-    let rendered = String::from_utf8_lossy(&unknown.get_output().stderr).into_owned();
-    assert!(rendered.contains("release-activity"), "{rendered}");
-
-    // The declared answer still works, so the gate refuses the wrong
-    // answer rather than every answer.
-    rk().args(["reconcile", "plan", "--json", "--target"])
-        .arg(target.path())
-        .args(["--forge", "github", "--repo", "acme/widget"])
-        .args(["--decide", "workflow-mode=worktree"])
-        .assert()
-        .success();
-}
-
-/// A cached bundle is served only where its bytes are the ones the
-/// verified archive unpacked to.
-///
-/// The registry vouches for the archive, and the manifest recomputes its
-/// digests from the directory, so without the seal an altered cache
-/// entry reads back as a release the registry verified.
-#[test]
-fn an_altered_cache_entry_refuses_rather_than_serving_altered_bytes() {
-    let fixture = RegistryFixture::new();
-    let cksum = fixture.publish_full("0.9.7");
-    // The first read fetches, verifies, and seals.
-    fixture.payload("0.9.7").assert().success();
-
-    let cached = fixture
-        .home
-        .path()
-        .join("release-kit")
-        .join("release")
-        .join(cksum.to_string());
-    let snippet = cached.join("versions.toml");
-    assert!(snippet.is_file(), "the cache holds the bundle");
-    std::fs::write(&snippet, "schema = 1\n# altered in the cache\n")
-        .expect("the cached file is altered");
-
-    let refused = fixture.payload("0.9.7").assert().failure();
-    let diagnostic: serde_json::Value =
-        serde_json::from_slice(&refused.get_output().stderr).expect("a JSON diagnostic");
-    assert_eq!(diagnostic["reason"], "bundle-unverified", "{diagnostic}");
-
-    // A seal removed is the same answer: an unsealed cache vouches for
-    // nothing.
-    std::fs::write(&snippet, "schema = 1\n").expect("the file is restored");
-    let seal = fixture
-        .home
-        .path()
-        .join("release-kit")
-        .join("release")
-        .join(format!("{cksum}.seal"));
-    std::fs::remove_file(&seal).expect("the seal clears");
-    let unsealed = fixture.payload("0.9.7").assert().failure();
-    let diagnostic: serde_json::Value =
-        serde_json::from_slice(&unsealed.get_output().stderr).expect("a JSON diagnostic");
-    assert_eq!(diagnostic["reason"], "bundle-unverified", "{diagnostic}");
-}
-
-/// A cached baseline that will not verify is an evidence gap, never a
-/// refusal.
-///
-/// The candidate is what an apply writes and it still refuses unverified;
-/// the recorded release only says what the target started from. A cache
-/// written before the seal existed is exactly this case, and a plan that
-/// cannot be computed at all leaves the operator no way to say so, not
-/// even `--decide partial-baseline=accept`.
-#[test]
-fn an_unsealed_cached_baseline_is_not_observed_with_its_reason() {
-    let fixture = RegistryFixture::new();
-    let cksum = fixture.publish_full("0.9.9");
-    // Fetched, verified, and sealed, so the recorded release is cached.
-    fixture.payload("0.9.9").assert().success();
-
-    let target = plan_target();
-    land_rust(target.path()).success();
-    let mut manifest = read_manifest(target.path());
-    manifest["rk_version"] = serde_json::json!("0.9.9");
-    manifest["payload_sha256"] = serde_json::json!(Digest::of(b"an older payload").to_string());
-    write_manifest(target.path(), &manifest);
-
-    let plan_offline = || {
-        let out = rk()
-            .args(["reconcile", "plan", "--json", "--target"])
-            .arg(target.path())
-            .env("HOME", fixture.home.path())
-            .env("XDG_STATE_HOME", fixture.home.path())
-            .env("RK_CURL_BIN", "/bin/false")
-            .assert()
-            .success()
-            .get_output()
-            .stdout
-            .clone();
-        serde_json::from_slice::<serde_json::Value>(&out).expect("one JSON object")
-    };
-
-    // Sealed: the baseline reads, so the gap is the seal's absence and
-    // nothing else.
-    let sealed = plan_offline();
-    assert_eq!(sealed["release"]["baseline"]["state"], "cached", "{sealed}");
-
-    let seal = fixture.cache().join(format!("{cksum}.seal"));
-    std::fs::remove_file(&seal).expect("the seal clears");
-    let unsealed = plan_offline();
-    assert_eq!(
-        unsealed["release"]["baseline"]["state"], "not-observed",
-        "{unsealed}"
-    );
-    let reason = unsealed["release"]["baseline"]["reason"]
-        .as_str()
-        .expect("a reason");
-    assert!(
-        reason.contains("0.9.9") && reason.contains("did not verify"),
-        "the gap names the release and why it is a gap: {reason}"
-    );
-    let p = precondition(&unsealed, "baseline-observed");
-    assert_eq!(p["evaluation"]["state"], "not-observed", "{p}");
-    assert_eq!(p["decision"], "partial-baseline", "{p}");
-
-    // A seal that vouches for other bytes is the same answer.
-    std::fs::write(&seal, format!("{cksum}\naltered\n")).expect("a wrong seal writes");
-    let mismatched = plan_offline();
-    assert_eq!(
-        mismatched["release"]["baseline"]["state"], "not-observed",
-        "{mismatched}"
     );
 }
 
@@ -25593,38 +22740,31 @@ fn a_fresh_rust_landing_advertises_only_x86_64_linux() {
     );
 }
 
-/// The new pure projection and the seam path agree on every current
-/// fixture: destination set, kinds, placement class, whole-file bytes,
-/// and the rendered block of every marked destination. The digest of
-/// every candidate's complete bytes is pinned in
-/// `tests/fixtures/projection-digests.txt`, regenerated only under
-/// `RK_UPDATE_FIXTURES=1`, so a later phase that changes landed bytes
-/// updates the fixture deliberately.
+/// Every current fixture combination projects, with no collision over an
+/// empty target, whole-file candidates carrying no region, region
+/// candidates carrying the markers their destination declares, and every
+/// candidate naming its source. The digest of every candidate's complete
+/// bytes is pinned in `tests/fixtures/projection-digests.txt`,
+/// regenerated only under `RK_UPDATE_FIXTURES=1`, so a change to landed
+/// bytes updates the fixture deliberately.
 #[test]
 fn every_current_landing_fixture_keeps_its_destinations_kinds_placement_and_digests() {
-    use release_kit::landing::{self, Placement as OldPlacement};
+    use release_kit::landing;
     use release_kit::projection::{Placement, Projection, ProjectionInput};
-    use release_kit::release::EmbeddedReleaseSource;
 
     let mut lines = Vec::new();
     for (tech, forge, workflow, style, nix) in projection_fixture_combinations() {
-        let params = projection_params(&tech, &forge, workflow, style, nix.is_some());
         let shape = nix.unwrap_or(NixShape::Supported);
-        let new = Projection::compute(&ProjectionInput {
+        let projection = Projection::compute(&ProjectionInput {
             params: projection_params(&tech, &forge, workflow, style, nix.is_some()),
             evidence: shape.evidence(),
         })
         .expect("the pair projects");
         assert!(
-            new.collisions.is_empty(),
+            projection.collisions.is_empty(),
             "{tech} {forge}: {:?}",
-            new.collisions
+            projection.collisions
         );
-
-        let target = shape.target();
-        let mut old = landing::projection(&EmbeddedReleaseSource, &params).expect("projects");
-        let withheld = landing::withhold_nix(&utf8(target.path()), nix.is_some(), None, &mut old)
-            .expect("the judgment runs");
 
         let label = format!(
             "{tech} {forge} {} {} {}",
@@ -25632,42 +22772,42 @@ fn every_current_landing_fixture_keeps_its_destinations_kinds_placement_and_dige
             style.as_str(),
             nix.map_or("false", NixShape::column)
         );
-        let old_destinations: Vec<&str> = old.iter().map(|e| e.destination.as_str()).collect();
-        let new_destinations: Vec<&str> = new
+        let destinations: Vec<&str> = projection
             .candidates
             .iter()
             .map(|c| c.destination.as_str())
             .collect();
+        let mut sorted = destinations.clone();
+        sorted.sort_unstable();
         assert_eq!(
-            new_destinations, old_destinations,
-            "{label}: destination set"
+            destinations, sorted,
+            "{label}: candidates sort by destination"
         );
-        let old_withheld: Vec<(&str, &str)> = withheld
-            .iter()
-            .map(|w| (w.path.as_str(), w.reason.as_str()))
-            .collect();
-        let new_omitted: Vec<(&str, &str)> = new
-            .omissions
-            .iter()
-            .map(|o| (o.destination.as_str(), o.reason.as_str()))
-            .collect();
-        assert_eq!(new_omitted, old_withheld, "{label}: omissions");
-        for (candidate, entry) in new.candidates.iter().zip(&old) {
+        for candidate in &projection.candidates {
             let at = format!("{label} {}", candidate.destination);
-            assert_eq!(candidate.kind, entry.kind, "{at}: kind");
-            match (candidate.placement, entry.placement) {
-                (Placement::Whole, OldPlacement::Whole) => {
-                    assert_eq!(candidate.bytes, entry.rendered, "{at}: whole bytes");
+            assert_eq!(
+                Some(candidate.kind),
+                landing::kind_of(&candidate.destination),
+                "{at}: kind"
+            );
+            match candidate.placement {
+                Placement::Whole => {
                     assert!(
                         candidate.region.is_none(),
                         "{at}: a whole file has no region"
                     );
+                    assert!(
+                        landing::block_markers(&candidate.destination).is_none(),
+                        "{at}: a whole file at a marked destination"
+                    );
                 }
-                (Placement::Region { begin, end }, OldPlacement::Block) => {
+                Placement::Region { begin, end } => {
+                    let region = candidate.region.as_deref().expect("a region renders");
+                    let text = String::from_utf8_lossy(&candidate.bytes);
                     assert_eq!(
-                        candidate.region.as_deref(),
-                        Some(&entry.rendered[..]),
-                        "{at}: region"
+                        landing::extract_block(&text, begin, end).map(str::as_bytes),
+                        Some(region),
+                        "{at}: the document carries the region"
                     );
                     assert_eq!(
                         landing::block_markers(&candidate.destination),
@@ -25675,7 +22815,6 @@ fn every_current_landing_fixture_keeps_its_destinations_kinds_placement_and_dige
                         "{at}: markers"
                     );
                 }
-                (new, old) => panic!("{at}: placement {new:?} against {old:?}"),
             }
             assert!(!candidate.sources.is_empty(), "{at}: no source");
             lines.push(format!(
@@ -25710,7 +22849,7 @@ fn every_current_landing_fixture_keeps_its_destinations_kinds_placement_and_dige
 /// inventory declares, and nothing outside it is ever selected.
 #[test]
 fn every_selected_embedded_source_belongs_to_the_one_distribution_root_inventory() {
-    use release_kit::payload_roots::PAYLOAD_ROOTS;
+    use release_kit::distribution_roots::DISTRIBUTION_ROOTS;
     use release_kit::projection::{Projection, ProjectionInput};
 
     let mut seen = 0;
@@ -25728,7 +22867,7 @@ fn every_selected_embedded_source_belongs_to_the_one_distribution_root_inventory
                     .next()
                     .expect("a source has a first segment");
                 assert!(
-                    PAYLOAD_ROOTS.contains(&root),
+                    DISTRIBUTION_ROOTS.contains(&root),
                     "{}: source {source} names a root outside the inventory",
                     candidate.destination
                 );
@@ -26553,7 +23692,7 @@ fn the_reference_tree_carries_no_docs_tests_or_source() {
             !path.starts_with("snippets/")
                 && !path.starts_with("blocks/")
                 && !path.starts_with("setup/"),
-            "{path}: a landable or executable payload root is not knowledge"
+            "{path}: a landable or executable distribution root is not knowledge"
         );
     }
     for root in release_kit::stage::REFERENCE_ROOTS {
@@ -27685,7 +24824,7 @@ fn fresh_init_preview_is_read_only_and_apply_writes_the_schema_7_receipt() {
     assert_eq!(receipt["rk_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(receipt["origin"], "init");
     for file in receipt["files"].as_array().expect("files") {
-        assert!(file.get("baseline_sha256").is_none(), "{file}");
+        assert!(file.get(LEGACY_BASELINE_FIELD).is_none(), "{file}");
         let destination = file["destination"].as_str().expect("a destination");
         let on_disk = std::fs::read(target.path().join(destination)).expect("the file landed");
         if release_kit::landing::block_markers(destination).is_some() {
@@ -27699,7 +24838,7 @@ fn fresh_init_preview_is_read_only_and_apply_writes_the_schema_7_receipt() {
             );
         }
     }
-    assert!(!text.contains("payload_sha256"));
+    assert!(!text.contains(LEGACY_BUNDLE_DIGEST_FIELD));
 }
 
 /// SATISFIES landing:ownership-is-elementary
@@ -27772,7 +24911,8 @@ fn receipt_schemas_1_through_6_load_without_a_release_source_and_rewrite_as_sche
         let mut manifest = read_manifest(target.path());
         manifest["schema_version"] = serde_json::json!(schema);
         manifest["rk_version"] = serde_json::json!("0.1.0");
-        manifest["payload_sha256"] = serde_json::json!(Digest::of(b"old bundle").to_string());
+        manifest[LEGACY_BUNDLE_DIGEST_FIELD] =
+            serde_json::json!(Digest::of(b"old bundle").to_string());
         let parameters = manifest["parameters"]
             .as_object_mut()
             .expect("a parameters table");
@@ -27783,7 +24923,7 @@ fn receipt_schemas_1_through_6_load_without_a_release_source_and_rewrite_as_sche
             parameters.insert("scopes".into(), serde_json::json!(["api"]));
         }
         for file in manifest["files"].as_array_mut().expect("files") {
-            file["baseline_sha256"] = serde_json::json!(Digest::of(b"baseline").to_string());
+            file[LEGACY_BASELINE_FIELD] = serde_json::json!(Digest::of(b"baseline").to_string());
             file.as_object_mut().expect("a file").remove("placement");
         }
         write_manifest(target.path(), &manifest);
@@ -27798,8 +24938,14 @@ fn receipt_schemas_1_through_6_load_without_a_release_source_and_rewrite_as_sche
         upgrade.assert().success();
         let text = std::fs::read_to_string(target.path().join(".release-kit/manifest.json"))
             .expect("the receipt reads");
-        assert!(!text.contains("payload_sha256"), "schema {schema}: {text}");
-        assert!(!text.contains("baseline_sha256"), "schema {schema}: {text}");
+        assert!(
+            !text.contains(LEGACY_BUNDLE_DIGEST_FIELD),
+            "schema {schema}: {text}"
+        );
+        assert!(
+            !text.contains(LEGACY_BASELINE_FIELD),
+            "schema {schema}: {text}"
+        );
         assert!(!text.contains("scopes"), "schema {schema}: {text}");
         let rewritten = read_manifest(target.path());
         assert_eq!(rewritten["schema_version"], 7, "schema {schema}");
@@ -27859,10 +25005,12 @@ fn a_receipt_newer_than_the_binary_refuses_by_record_schema() {
         assert!(message.contains("999"), "{message}");
         assert!(message.contains(".release-kit/manifest.json"), "{message}");
         let whole = serde_json::to_string(&diagnostic).expect("serializes");
-        assert!(
-            !whole.to_lowercase().contains("payload"),
-            "the record schema stands alone: {whole}"
-        );
+        for retired in RETIRED_SURFACE {
+            assert!(
+                !whole.to_lowercase().contains(&retired.to_lowercase()),
+                "the record schema stands alone: {retired} in {whole}"
+            );
+        }
         assert_eq!(
             tree_digests(target.path()),
             before,
@@ -27874,8 +25022,17 @@ fn a_receipt_newer_than_the_binary_refuses_by_record_schema() {
 /// Every retired flag is refused by each landing verb as an argument
 /// nobody declares, and no help text names one.
 fn assert_no_release_selection_flag(target: &Path) {
+    let flags: Vec<&str> = ["--release", "--from-release"]
+        .into_iter()
+        .chain(
+            RETIRED_SURFACE
+                .into_iter()
+                .filter(|needle| needle.starts_with("--"))
+                .map(|needle| needle.trim_end_matches(['`', ' '])),
+        )
+        .collect();
     for verb in ["init", "upgrade", "adopt", "status"] {
-        for flag in ["--to", "--decide", "--release", "--from-release"] {
+        for flag in &flags {
             rk().args([verb, flag, "x", "--target"])
                 .arg(target)
                 .assert()
@@ -27890,10 +25047,9 @@ fn assert_no_release_selection_flag(target: &Path) {
             .stdout
             .clone();
         let help = String::from_utf8_lossy(&help);
-        assert!(
-            !help.contains("--to ") && !help.contains("--decide"),
-            "{verb}: {help}"
-        );
+        for flag in &flags {
+            assert!(!help.contains(flag), "{verb} help names {flag}: {help}");
+        }
     }
 }
 
@@ -27902,25 +25058,28 @@ fn assert_no_release_selection_flag(target: &Path) {
 /// declares.
 #[test]
 fn production_outputs_carry_no_plan_bundle_or_release_selection_field() {
-    let forbidden = [
+    let forbidden: Vec<&str> = [
         "plan",
         "plan_id",
-        "input_fingerprint",
-        "fingerprint",
-        "readiness",
         "stored",
         "run_id",
         "compatibility",
         "bundle",
         "release",
         "selector",
-        "payload_sha256",
-        "payload_schema",
-        "baseline_sha256",
         "applied",
         "operations",
         "decisions",
-    ];
+        LEGACY_BUNDLE_DIGEST_FIELD,
+        LEGACY_BASELINE_FIELD,
+    ]
+    .into_iter()
+    .chain(RETIRED_SURFACE.into_iter().filter(|needle| {
+        needle
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+    }))
+    .collect();
     let target = plan_target();
     let mut documents: Vec<(String, serde_json::Value)> = Vec::new();
     let mut collect = |label: &str, args: &[&str], code: i32| {
@@ -27972,7 +25131,10 @@ fn production_outputs_carry_no_plan_bundle_or_release_selection_field() {
         let mut keys = std::collections::BTreeSet::new();
         all_keys(document, &mut keys);
         for key in &forbidden {
-            assert!(!keys.contains(*key), "{label} carries {key}: {document}");
+            assert!(
+                !keys.iter().any(|k| k.eq_ignore_ascii_case(key)),
+                "{label} carries {key}: {document}"
+            );
         }
     }
     let schemas: Vec<&str> = documents
@@ -29118,4 +26280,887 @@ fn an_absent_relative_target_refuses_before_the_lock_and_before_any_write() {
     // The directory appearing afterwards received nothing from that run.
     std::fs::create_dir_all(parent.path().join("widget/.git")).expect("the directory appears");
     assert!(tree_digests(&parent.path().join("widget")).is_empty());
+}
+
+// ---- the retired architecture ----
+
+// RETIRED VOCABULARY BEGIN
+//
+// The scan in `no_live_surface_names_the_retired_architecture` skips the
+// lines between these two markers, so this table is the one place in the
+// file the retired words are spelled out. Every negative assertion reads
+// it, and a fixture that builds a legacy receipt names the two retired
+// fields through the constants beside it.
+
+/// The vocabulary of the retired cross-release bundle and stored-plan
+/// architecture, matched case-insensitively as substrings.
+const RETIRED_SURFACE: [&str; 24] = [
+    "ReleaseSource",
+    "payload_schema",
+    "engine.minimum",
+    "rk payload",
+    "rk reconcile",
+    "reconcile",
+    "--decide",
+    "--fetch",
+    "--to ",
+    "--to`",
+    "stored plan",
+    "plan id",
+    "plan-id",
+    "fingerprint",
+    "readiness",
+    "plan store",
+    "revalidat",
+    "compatibility.toml",
+    "intermediate release",
+    "release cache",
+    "baseline_sha256",
+    "payload_sha256",
+    "payload",
+    "release seam",
+];
+
+/// The bundle digest a schema 6 receipt carried at its root.
+const LEGACY_BUNDLE_DIGEST_FIELD: &str = "payload_sha256";
+
+/// The per-file baseline digest a schema 6 receipt carried.
+const LEGACY_BASELINE_FIELD: &str = "baseline_sha256";
+
+/// What the published crate must not carry: the retired declaration, the
+/// two deleted module trees, and the instance-owned documentation.
+const RETIRED_PACKAGE_PATHS: [&str; 4] =
+    ["compatibility.toml", "src/release/", "src/plan/", "_docs/"];
+
+/// The ledger's `unrelated` and `historical` verdicts, as `(path, pattern,
+/// reason)`: a hit on `path` whose line carries `pattern` is allowed for
+/// the stated reason and for no other.
+const RETIRED_SURFACE_ALLOWLIST: &[(&str, &str, &str)] = &[
+    // historical: the guidance of the release that removed the design tells
+    // a target still on 0.5.0 what to finish with that binary first
+    (
+        "guidance/0.6.0.md",
+        "rk payload",
+        "the 0.6.0 guidance names what that release removed, for a target migrating from 0.5.0",
+    ),
+    (
+        "guidance/0.6.0.md",
+        "rk reconcile",
+        "the 0.6.0 guidance names what that release removed, for a target migrating from 0.5.0",
+    ),
+    (
+        "guidance/0.6.0.md",
+        "reconcile",
+        "the 0.6.0 guidance names what that release removed, for a target migrating from 0.5.0",
+    ),
+    (
+        "guidance/0.6.0.md",
+        "--fetch",
+        "the 0.6.0 guidance names what that release removed, for a target migrating from 0.5.0",
+    ),
+    (
+        "guidance/0.6.0.md",
+        "--to`",
+        "the 0.6.0 guidance names what that release removed, for a target migrating from 0.5.0",
+    ),
+    (
+        "guidance/0.6.0.md",
+        "compatibility.toml",
+        "the 0.6.0 guidance names what that release removed, for a target migrating from 0.5.0",
+    ),
+    (
+        "guidance/0.6.0.md",
+        "payload",
+        "the 0.6.0 guidance names what that release removed, for a target migrating from 0.5.0",
+    ),
+    (
+        "guidance/0.6.0.md",
+        "stored plan",
+        "the 0.6.0 guidance names what that release removed, for a target migrating from 0.5.0",
+    ),
+    (
+        "guidance/0.6.0.md",
+        "release cache",
+        "the 0.6.0 guidance names what that release removed, for a target migrating from 0.5.0",
+    ),
+    // historical: what a 0.4.x binary left under the state root, which the
+    // landing runbook has the agent inventory and remove by hand
+    (
+        "runbooks/landing.md",
+        "rk reconcile list",
+        "the old installed binary's own listing verb, run before the update",
+    ),
+    (
+        "runbooks/landing.md",
+        "stored plan",
+        "the 0.4.x state an agent inventories and removes",
+    ),
+    (
+        "runbooks/landing.md",
+        "plan-id",
+        "the 0.4.x state an agent inventories and removes",
+    ),
+    (
+        "runbooks/landing.md",
+        "release cache",
+        "the 0.4.x state an agent inventories and removes",
+    ),
+    (
+        "method/13-landing.md",
+        "stored plan",
+        "the 0.4.x state an agent inventories and removes",
+    ),
+    (
+        "method/13-landing.md",
+        "release cache",
+        "the 0.4.x state an agent inventories and removes",
+    ),
+    (
+        "skills/rk-setup/SKILL.md",
+        "release cache",
+        "the 0.4.x state an agent inventories and removes",
+    ),
+    (
+        "tests/fixtures/rk-setup-evals/active-legacy-operation-before-update.md",
+        "reconcile",
+        "an eval of the legacy-state route, naming the old binary's verb",
+    ),
+    (
+        "tests/fixtures/rk-setup-evals/active-legacy-operation-before-update.md",
+        "stored plan",
+        "an eval of the legacy-state route",
+    ),
+    (
+        "tests/fixtures/rk-setup-evals/active-legacy-operation-before-update.md",
+        "plan-id",
+        "an eval of the legacy-state route",
+    ),
+    (
+        "tests/fixtures/rk-setup-evals/active-legacy-operation-before-update.md",
+        "release cache",
+        "an eval of the legacy-state route",
+    ),
+    (
+        "tests/fixtures/rk-setup-evals/inactive-legacy-host-state-after-success.md",
+        "reconcile",
+        "an eval of the legacy-state route, naming the old binary's verb",
+    ),
+    (
+        "tests/fixtures/rk-setup-evals/inactive-legacy-host-state-after-success.md",
+        "stored plan",
+        "an eval of the legacy-state route",
+    ),
+    (
+        "tests/fixtures/rk-setup-evals/inactive-legacy-host-state-after-success.md",
+        "plan-id",
+        "an eval of the legacy-state route",
+    ),
+    (
+        "tests/fixtures/rk-setup-evals/inactive-legacy-host-state-after-success.md",
+        "release cache",
+        "an eval of the legacy-state route",
+    ),
+    // historical: the two fields of a receipt at schema 6 and below, which
+    // the loader drops and a fixture reproduces
+    (
+        "_docs/specs/SPEC-landing.md",
+        "payload_sha256",
+        "the field of a legacy receipt the loading rule names",
+    ),
+    (
+        "_docs/specs/SPEC-landing.md",
+        "baseline_sha256",
+        "the field of a legacy receipt the loading rule names",
+    ),
+    (
+        "src/landing/manifest.rs",
+        "payload_sha256",
+        "the field of a legacy receipt the loader drops",
+    ),
+    (
+        "src/landing/manifest.rs",
+        "baseline_sha256",
+        "the field of a legacy receipt the loader drops",
+    ),
+    (
+        "tests/fixtures/v0.4.0-target/.release-kit/manifest.json",
+        "payload_sha256",
+        "a receipt as public v0.4.0 wrote it",
+    ),
+    (
+        "tests/fixtures/v0.4.0-target/.release-kit/manifest.json",
+        "baseline_sha256",
+        "a receipt as public v0.4.0 wrote it",
+    ),
+    (
+        "tests/fixtures/v0.4.0-target/.release-kit/config.toml",
+        "payload binding",
+        "the answers file as public v0.4.0 wrote it",
+    ),
+    // historical: rule ids and a record name an immutable decision cites
+    (
+        "_docs/specs/SPEC-distribution.md",
+        "skills-are-part-of-the-payload",
+        "a rule id an immutable record cites",
+    ),
+    (
+        "_docs/specs/SPEC-distribution.md",
+        "an-install-sweeps-what-the-payload-dropped",
+        "a rule id an immutable record cites",
+    ),
+    (
+        "_docs/reference/REFERENCE-landing-sources.md",
+        "an-install-sweeps-what-the-payload-dropped",
+        "a rule id an immutable record cites",
+    ),
+    (
+        "src/setup/branch_reminder.rs",
+        "ADR-author-every-host-written-text-as-payload",
+        "the immutable record's file name",
+    ),
+    // unrelated: another meaning of the word, or another tool's record
+    (
+        ".spec-driven-docs/manifest.json",
+        "baseline_sha256",
+        "spec-driven-docs' own receipt, a third-party tool's record",
+    ),
+    (
+        "snippets/bash/gitlab/.gitlab-ci.yml",
+        "reconciles rather than skips",
+        "the attach job's rerun semantics, ordinary English in a landed snippet",
+    ),
+    (
+        "_docs/specs/SPEC-tracking.md",
+        "revalidat",
+        "the tracking registry's revalidation steps, an adopted spec",
+    ),
+    (
+        "_docs/specs/SPEC-tracking/tracking.schema.json",
+        "revalidat",
+        "the tracking registry's revalidation steps, an adopted spec",
+    ),
+    (
+        "_docs/reference/tracking.yaml",
+        "revalidat",
+        "the tracking registry's revalidation steps",
+    ),
+    (
+        "method/09-release-lines.md",
+        "revalidate",
+        "the rc cycle's verification",
+    ),
+    (
+        "_docs/specs/SPEC-forge-setup.md",
+        "fingerprint",
+        "a credential's fingerprint",
+    ),
+    (
+        "src/setup/journal.rs",
+        "fingerprint",
+        "a credential's fingerprint",
+    ),
+    (
+        "src/setup/secrets.rs",
+        "payload",
+        "the base64 body of a secret",
+    ),
+    (
+        "src/commands/message.rs",
+        "payload",
+        "the bytes piped to a hook's stdin",
+    ),
+    (
+        "src/events.rs",
+        "payload",
+        "the base64 body of an application-log record",
+    ),
+    (
+        "_docs/reference/REFERENCE-provenance-sources.md",
+        "payload",
+        "a malicious payload in the cited advisory",
+    ),
+    (
+        "_docs/reference/REFERENCE-forge-setup-sources.md",
+        "payload",
+        "embedded payloads in the cited threat text",
+    ),
+    (
+        "_docs/reference/REFERENCE-forge-setup-sources.md",
+        "Reconcile",
+        "reconciliation in the cited policy-as-code sense",
+    ),
+    (
+        "_docs/specs/SPEC-spec-to-code.md",
+        "the seam",
+        "the spec-to-code seam, an adopted spec's own term",
+    ),
+];
+// RETIRED VOCABULARY END
+
+/// Every line of `text` naming the retired architecture, as
+/// `label:line: needle: text`, less the lines the allowlist admits for
+/// `label`. In this file alone, the vocabulary table between its two
+/// markers is skipped.
+fn retired_hits(label: &str, text: &str) -> Vec<String> {
+    let mut hits = Vec::new();
+    let mut skipping = false;
+    for (index, line) in text.lines().enumerate() {
+        if label == "tests/cli.rs" {
+            if line.contains("RETIRED VOCABULARY BEGIN") {
+                skipping = true;
+            }
+            if line.contains("RETIRED VOCABULARY END") {
+                skipping = false;
+                continue;
+            }
+            if skipping {
+                continue;
+            }
+        }
+        let lower = line.to_lowercase();
+        for needle in RETIRED_SURFACE {
+            if !lower.contains(&needle.to_lowercase()) {
+                continue;
+            }
+            let allowed = RETIRED_SURFACE_ALLOWLIST.iter().any(|(path, pattern, _)| {
+                *path == label && lower.contains(&pattern.to_lowercase())
+            });
+            if !allowed {
+                hits.push(format!("{label}:{}: {needle}: {}", index + 1, line.trim()));
+            }
+        }
+    }
+    hits
+}
+
+/// Every help page the binary serves, as `(label, text)`: the root page
+/// and one page per subcommand at every depth, discovered from each
+/// page's own `Commands:` section rather than listed here.
+fn help_pages() -> Vec<(String, String)> {
+    fn walk(path: &[&str], out: &mut Vec<(String, String)>) {
+        let text = rk()
+            .args(path)
+            .arg("--help")
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let text = String::from_utf8_lossy(&text).into_owned();
+        let label = if path.is_empty() {
+            "rk --help".to_owned()
+        } else {
+            format!("rk {} --help", path.join(" "))
+        };
+        let mut children = Vec::new();
+        let mut in_commands = false;
+        for line in text.lines() {
+            if line.starts_with("Commands:") {
+                in_commands = true;
+                continue;
+            }
+            if in_commands {
+                if line.trim().is_empty() {
+                    break;
+                }
+                // A command line is indented by exactly two spaces; a
+                // wrapped description continues deeper.
+                if let Some(rest) = line.strip_prefix("  ")
+                    && !rest.starts_with(' ')
+                    && let Some(name) = rest.split_whitespace().next()
+                    && name != "help"
+                {
+                    children.push(name.to_owned());
+                }
+            }
+        }
+        out.push((label, text));
+        for child in children {
+            let mut next: Vec<&str> = path.to_vec();
+            next.push(&child);
+            walk(&next, out);
+        }
+    }
+    let mut out = Vec::new();
+    walk(&[], &mut out);
+    out
+}
+
+/// Every file under `root`, recursively, in path order.
+fn files_under(root: &Path, out: &mut Vec<PathBuf>) {
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(root)
+        .unwrap_or_else(|e| panic!("{}: {e}", root.display()))
+        .flatten()
+        .map(|entry| entry.path())
+        .collect();
+    entries.sort();
+    for path in entries {
+        if path.is_dir() {
+            files_under(&path, out);
+        } else {
+            out.push(path);
+        }
+    }
+}
+
+/// No live surface names the retired cross-release bundle or stored-plan
+/// architecture: every help page, `rk usage`, and every tracked or
+/// untracked-and-not-ignored text file of the repository, as `git
+/// ls-files` enumerates them. Immutable decision records and the
+/// changelog are history and are not scanned; the ledger's `historical`
+/// and `unrelated` verdicts are the allowlist above, and nothing else is.
+#[test]
+fn no_live_surface_names_the_retired_architecture() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut surfaces: Vec<(String, String)> = help_pages();
+    let usage = rk()
+        .arg("usage")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    surfaces.push((
+        "rk usage".to_owned(),
+        String::from_utf8_lossy(&usage).into_owned(),
+    ));
+    let listed = std::process::Command::new("git")
+        .args([
+            "-C",
+            &root.to_string_lossy(),
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+        ])
+        .output()
+        .expect("git ls-files runs");
+    assert!(listed.status.success(), "git ls-files failed");
+    let mut seen = 0;
+    for relative in String::from_utf8_lossy(&listed.stdout).split('\0') {
+        if relative.is_empty()
+            || relative == "CHANGELOG.md"
+            || relative.starts_with("_docs/decisions/")
+        {
+            continue;
+        }
+        let path = root.join(relative);
+        // A file git lists and the tree no longer holds is a deletion in
+        // flight; a file that is not UTF-8 is not a text surface.
+        let Ok(bytes) = std::fs::read(&path) else {
+            continue;
+        };
+        let Ok(text) = String::from_utf8(bytes) else {
+            continue;
+        };
+        seen += 1;
+        surfaces.push((relative.to_owned(), text));
+    }
+    assert!(seen > 100, "git ls-files enumerated {seen} text files");
+
+    let mut hits = Vec::new();
+    for (label, text) in &surfaces {
+        hits.extend(retired_hits(label, text));
+    }
+    assert!(
+        hits.is_empty(),
+        "the retired architecture is still named on a live surface:\n{}",
+        hits.join("\n")
+    );
+    // Every allowlist entry earns its place: an entry no line needs is a
+    // verdict the ledger no longer has a subject for.
+    for (path, pattern, reason) in RETIRED_SURFACE_ALLOWLIST {
+        let text = std::fs::read_to_string(root.join(path))
+            .unwrap_or_else(|e| panic!("{path}: {e} ({reason})"));
+        assert!(
+            text.to_lowercase().contains(&pattern.to_lowercase()),
+            "{path}: the allowlist names {pattern:?} ({reason}) and no line carries it"
+        );
+    }
+}
+
+/// The guidance files as the binary ships them: `(version, destinations,
+/// action, body)` per file, parsed from the two-field list every file
+/// opens with.
+fn guidance_files() -> Vec<(String, Vec<String>, String, String)> {
+    let mut out = Vec::new();
+    for (path, bytes) in release_kit::embedded::root_files("guidance").expect("the root resolves") {
+        let Some(name) = path.strip_prefix("guidance/") else {
+            continue;
+        };
+        let Some(version) = name.strip_suffix(".md") else {
+            continue;
+        };
+        if version == "README" {
+            continue;
+        }
+        let text = String::from_utf8_lossy(bytes).into_owned();
+        let field = |key: &str| -> String {
+            text.lines()
+                .find_map(|line| line.strip_prefix(&format!("- {key}: ")))
+                .unwrap_or_else(|| panic!("{path}: no `- {key}:` field"))
+                .trim()
+                .to_owned()
+        };
+        let destinations: Vec<String> = field("destinations")
+            .split(',')
+            .map(str::trim)
+            .filter(|d| !d.is_empty())
+            .map(str::to_owned)
+            .collect();
+        out.push((version.to_owned(), destinations, field("action"), text));
+    }
+    out
+}
+
+/// The coverage record beside the guidance files: `since` and
+/// `no_steps`, read from `guidance/index.toml` as the binary embeds it.
+fn guidance_index() -> (String, Vec<String>) {
+    let (_, bytes) = release_kit::embedded::root_files("guidance")
+        .expect("the root resolves")
+        .into_iter()
+        .find(|(path, _)| path == "guidance/index.toml")
+        .expect("guidance/index.toml ships");
+    let table: toml::Table =
+        toml::from_str(&String::from_utf8_lossy(bytes)).expect("index.toml parses");
+    let since = table["since"]
+        .as_str()
+        .expect("since is a string")
+        .to_owned();
+    let no_steps = table["no_steps"]
+        .as_array()
+        .expect("no_steps is an array")
+        .iter()
+        .map(|v| v.as_str().expect("a version").to_owned())
+        .collect();
+    (since, no_steps)
+}
+
+/// `a` is a lower version than `b`, both dotted digit triples.
+fn version_below(a: &str, b: &str) -> bool {
+    let parse = |v: &str| -> Vec<u64> {
+        v.split('.')
+            .map(|part| {
+                part.parse::<u64>()
+                    .unwrap_or_else(|_| panic!("{v}: not a version"))
+            })
+            .collect()
+    };
+    parse(a) < parse(b)
+}
+
+/// Every guidance file the binary ships names at least one landed
+/// destination, an action from the closed set, and a step, and describes
+/// a release above the coverage start the index declares.
+#[test]
+fn every_guidance_file_names_its_destinations() {
+    let files = guidance_files();
+    assert!(
+        !files.is_empty(),
+        "the binary ships at least one guidance file"
+    );
+    let (since, no_steps) = guidance_index();
+    for (version, destinations, action, body) in &files {
+        assert!(!destinations.is_empty(), "{version}: names no destination");
+        for destination in destinations {
+            assert!(
+                !destination.contains(' ') && !destination.starts_with('/'),
+                "{version}: {destination} is no relative destination"
+            );
+        }
+        assert!(
+            ["operator-step", "landing-write"].contains(&action.as_str()),
+            "{version}: action {action} is outside the closed set"
+        );
+        assert!(body.contains("## What changed"), "{version}: no change");
+        assert!(body.contains("## What to do"), "{version}: no step");
+        assert!(
+            body.starts_with(&format!("# release-kit {version}\n")),
+            "{version}: the heading names another release"
+        );
+        assert!(
+            version_below(&since, version),
+            "{version}: a guidance file below since {since} describes a release the index claims not to cover"
+        );
+        assert!(
+            !no_steps.contains(version),
+            "{version}: recorded under no_steps and shipped as a file"
+        );
+    }
+    for version in &no_steps {
+        assert!(
+            version_below(&since, version),
+            "{version}: no_steps names a release below since"
+        );
+    }
+}
+
+/// The authoring gate: a release that changes a landed destination and
+/// ships no guidance file is named, unless the silence is recorded in
+/// `guidance/index.toml`. It reads the last release tag, so it runs
+/// through the just build gate where the history is present, and passes
+/// with a note where no tag is reachable.
+#[test]
+#[ignore = "reads the release tags; run through the just build gate"]
+fn a_release_changing_a_destination_without_guidance_is_named() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .expect("git runs")
+    };
+    let describe = git(&["describe", "--tags", "--abbrev=0", "--match", "v*"]);
+    if !describe.status.success() {
+        eprintln!(
+            "no release tag is reachable from this checkout; the authoring gate has nothing to compare against"
+        );
+        return;
+    }
+    let tag = String::from_utf8_lossy(&describe.stdout).trim().to_owned();
+    let tag_version = tag.trim_start_matches('v').to_owned();
+    // What lands in a target: the snippets, and the blocks the landing
+    // splices or writes. A fragment a verb prints and a skill root land
+    // nowhere.
+    let diff = git(&[
+        "diff",
+        "--name-only",
+        &format!("{tag}..HEAD"),
+        "--",
+        "snippets",
+        "blocks/agents-block.md.in",
+        "blocks/agents-line-worktree.md.in",
+        "blocks/agents-line-branches.md.in",
+        "blocks/glossary.md.in",
+        "blocks/pre-commit-block.yaml.in",
+        "blocks/pre-commit-worktree-guard.yaml.in",
+        "blocks/target-config.toml.in",
+    ]);
+    assert!(
+        diff.status.success(),
+        "{}",
+        String::from_utf8_lossy(&diff.stderr)
+    );
+    let changed: Vec<String> = String::from_utf8_lossy(&diff.stdout)
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    if changed.is_empty() {
+        return;
+    }
+    let (_, no_steps) = guidance_index();
+    let described = guidance_files()
+        .iter()
+        .map(|(version, ..)| version.clone())
+        .chain(no_steps)
+        .any(|version| version_below(&tag_version, &version));
+    assert!(
+        described,
+        "a landed destination changed since {tag} ({changed:?}) and no guidance file names a release above it; add guidance/<next version>.md, or record the release under no_steps in guidance/index.toml"
+    );
+}
+
+/// The GitLab floor has one owner, the constant `rk setup step
+/// forge-version` judges by, and the forge document states the same
+/// number.
+#[test]
+fn the_gitlab_floor_is_declared_once() {
+    let (major, minor) = release_kit::setup::observe::GITLAB_VERSION_FLOOR;
+    let floor = format!("{major}.{minor}");
+    let forge = std::fs::read_to_string(repo_path("forges/gitlab.md")).expect("reads");
+    assert!(
+        forge.contains(&format!("GitLab {floor} is the supported minimum")),
+        "forges/gitlab.md states the floor {floor}"
+    );
+    let out = rk()
+        .args(["forge", "gitlab"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert!(String::from_utf8_lossy(&out).contains(&floor));
+}
+
+/// A target public v0.4.0 landed, kept whole under
+/// `tests/fixtures/v0.4.0-target/` exactly as that release's `rk init`
+/// wrote it, upgrades through `rk upgrade --apply` from its receipt and
+/// working tree alone: nothing is downloaded, no other release's sources
+/// are read, the receipt is rewritten as the one current shape, every
+/// seeded file keeps its bytes, and every rendered file is either
+/// untouched or replaced as the report says.
+#[test]
+fn a_public_v0_4_0_target_upgrades_from_its_receipt_alone() {
+    let fixture = repo_path("tests/fixtures/v0.4.0-target");
+    let recorded = v0_4_0_fixture_records(&fixture);
+
+    let scratch = committed_copy_of(&fixture);
+    let target = scratch.path();
+    let before: std::collections::BTreeMap<String, Vec<u8>> = recorded
+        .iter()
+        .map(|(destination, ..)| {
+            (
+                destination.clone(),
+                std::fs::read(target.join(destination)).expect("reads"),
+            )
+        })
+        .collect();
+
+    let curl = OfflineCurl::new();
+    let out = curl
+        .rk()
+        .args(["upgrade", "--json", "--apply", "--target"])
+        .arg(target)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["schema"], "rk.upgrade/7", "{report}");
+    assert_eq!(report["from_version"], "0.4.0", "{report}");
+    let action_of = |destination: &str| -> String {
+        report["files"]
+            .as_array()
+            .expect("files")
+            .iter()
+            .find(|file| file["path"] == destination)
+            .unwrap_or_else(|| panic!("{destination} is not in the report: {report}"))["action"]
+            .as_str()
+            .expect("an action")
+            .to_owned()
+    };
+    for (destination, kind, _) in &recorded {
+        let after = std::fs::read(target.join(destination)).expect("reads");
+        let action = action_of(destination);
+        match kind.as_str() {
+            "seeded" => {
+                assert_eq!(
+                    after, before[destination],
+                    "{destination}: a seeded file changed"
+                );
+                assert!(
+                    ["preserved", "drift"].contains(&action.as_str()),
+                    "{destination}: {action}"
+                );
+            }
+            "rendered" => {
+                if after == before[destination] {
+                    assert!(
+                        ["replaced", "matched"].contains(&action.as_str()),
+                        "{destination}: unchanged bytes reported as {action}"
+                    );
+                } else {
+                    assert_eq!(
+                        action, "replaced",
+                        "{destination}: changed bytes reported as {action}"
+                    );
+                }
+            }
+            other => panic!("{destination}: kind {other}"),
+        }
+    }
+
+    let manifest = read_manifest(target);
+    assert_eq!(manifest["schema_version"], 7);
+    assert_eq!(manifest["rk_version"], env!("CARGO_PKG_VERSION"));
+    let text = std::fs::read_to_string(target.join(".release-kit/manifest.json"))
+        .expect("the receipt reads");
+    assert!(!text.contains(LEGACY_BUNDLE_DIGEST_FIELD), "{text}");
+    assert!(!text.contains(LEGACY_BASELINE_FIELD), "{text}");
+    for destination in ["AGENTS.md", "GLOSSARY.md", ".pre-commit-config.yaml"] {
+        assert_eq!(manifest_file(&manifest, destination)["placement"], "region");
+    }
+    for (destination, kind, _) in &recorded {
+        assert_eq!(
+            &manifest_file(&manifest, destination)["kind"],
+            kind,
+            "{destination}"
+        );
+    }
+    let status = curl
+        .rk()
+        .args(["status", "--json", "--target"])
+        .arg(target)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let status: serde_json::Value = serde_json::from_slice(&status).expect("one JSON object");
+    assert_eq!(status["alignment"], "aligned", "{status}");
+    assert_eq!(status["pending"], 0, "{status}");
+    assert_eq!(curl.calls(), 0, "no release was resolved over the network");
+}
+
+/// The v0.4.0 fixture's receipt as `(destination, kind, sha256)` per
+/// recorded file, after asserting the receipt is the schema 6 shape that
+/// release wrote and that every recorded digest is the digest of the
+/// file, or of the marked region, on disk.
+fn v0_4_0_fixture_records(fixture: &Path) -> Vec<(String, String, String)> {
+    use release_kit::landing::read_recorded;
+
+    let legacy = read_manifest(fixture);
+
+    assert_eq!(legacy["schema_version"], 6);
+    assert_eq!(legacy["rk_version"], "0.4.0");
+    assert!(legacy.get(LEGACY_BUNDLE_DIGEST_FIELD).is_some());
+    let recorded: Vec<(String, String, String)> = legacy["files"]
+        .as_array()
+        .expect("files")
+        .iter()
+        .map(|file| {
+            assert!(file.get(LEGACY_BASELINE_FIELD).is_some());
+            assert!(file.get("placement").is_none());
+            (
+                file["destination"]
+                    .as_str()
+                    .expect("a destination")
+                    .to_owned(),
+                file["kind"].as_str().expect("a kind").to_owned(),
+                file["sha256"].as_str().expect("a digest").to_owned(),
+            )
+        })
+        .collect();
+    assert!(!recorded.is_empty());
+    // The fixture is the landing the receipt describes: every recorded
+    // digest is the digest of the file, or of the marked region, on disk.
+    for (destination, _, sha256) in &recorded {
+        let bytes = read_recorded(&utf8(fixture), destination)
+            .expect("reads")
+            .unwrap_or_else(|| panic!("{destination}: the fixture lacks it"));
+        assert_eq!(&Digest::of(&bytes).to_string(), sha256, "{destination}");
+    }
+
+    recorded
+}
+
+/// A scratch repository holding a copy of `fixture`, with one commit.
+fn committed_copy_of(fixture: &Path) -> tempfile::TempDir {
+    let scratch = tempfile::tempdir().expect("a scratch target exists");
+    let target = scratch.path();
+    copy_tree(fixture, target);
+    git_in(target, &["init", "-q", "-b", "master"]);
+    let identity = ["-c", "user.name=t", "-c", "user.email=t@example.invalid"];
+    git_in(target, &[&identity[..], &["add", "-A"]].concat());
+    git_in(
+        target,
+        &[&identity[..], &["commit", "-q", "-m", "chore: land 0.4.0"]].concat(),
+    );
+    scratch
+}
+
+/// Copy every file under `from` into `to`, directories created as needed.
+fn copy_tree(from: &Path, to: &Path) {
+    let mut files = Vec::new();
+    files_under(from, &mut files);
+    for path in files {
+        let relative = path.strip_prefix(from).expect("under the source");
+        let destination = to.join(relative);
+        std::fs::create_dir_all(destination.parent().expect("a parent")).expect("dirs exist");
+        std::fs::copy(&path, &destination).expect("the file copies");
+    }
 }

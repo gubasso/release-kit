@@ -8,7 +8,7 @@ schema_version = RK_CONFIG_SCHEMA_VERSION
 [project]
 repo = RK_CONFIG_PROJECT_REPO # P: project path on the forge, nested groups included
 forge = RK_CONFIG_PROJECT_FORGE # P: github or gitlab; empty means detect
-tech = RK_CONFIG_PROJECT_TECH # P: payload binding; empty means detect
+tech = RK_CONFIG_PROJECT_TECH # P: the binding; empty means detect
 trunk = RK_CONFIG_PROJECT_TRUNK # P: the one permanent branch, rendered into every artifact naming it
 
 [landing]

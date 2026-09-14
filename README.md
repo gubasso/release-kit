@@ -4,7 +4,7 @@ A canonical release workflow: one technology-agnostic method, per-technology bin
 
 ## What this is
 
-Two products in one repository. The method is what a reader loads: [method/](./method/README.md) states the five-stage spine, the invariants, and the recovery paths, and [bindings/](./bindings/README.md) states where rust, python, and bash differ. The distribution is what a project installs: the `rk` binary, built from `src/`, embeds the whole payload — the method, the bindings, the landable files under `snippets/`, the spliced block texts under `blocks/`, the agent skills, and the pinned-tool registry — and lands the deterministic files with `rk init`.
+Two products in one repository. The method is what a reader loads: [method/](./method/README.md) states the five-stage spine, the invariants, and the recovery paths, and [bindings/](./bindings/README.md) states where rust, python, and bash differ. The distribution is what a project installs: the `rk` binary, built from `src/`, embeds every distribution root — the method, the bindings, the landable files under `snippets/`, the spliced block texts under `blocks/`, the agent skills, and the pinned-tool registry — and lands the deterministic files with `rk init`.
 
 The design in one sentence: work integrates on one trunk, a bot maintains one release pull request that bumps the version and the changelog, and merging it is the release that tags, publishes, and builds the artifacts.
 
@@ -26,7 +26,6 @@ The binary is `rk`.
 - See the pinned tools and their freshness: `rk versions`, and `rk versions --check` to compare each pin upstream.
 - Take `rk` through the tool manager a project already runs and keep it fresh: `rk self-depend add` prints the fragments for one manager and venue pair and seeds the file the project lacks; `rk self-depend sync` moves the pin from `.envrc`; `rk self-depend clean` removes what a hand-rolled bump left.
 - Take another project as a dependency: `rk depend assess --source <path>` reads how it distributes itself and how this project manages its tools; `rk depend add --kind dev|prod` prints the fragment or the native command, and `--apply` seeds a manager file only where none exists.
-- Prove what the binary carries: `rk payload`, with `--json` for the machine form and `--release <version>` for another release's bundle, fetched once and verified against the registry.
 - Check the host and load the whole surface: `rk doctor` and `rk usage`.
 - Install the agent skills at user scope: `rk skill install` previews; `--apply` writes `~/.claude/skills/` and `~/.agents/skills/`, plus what they share at `~/.local/state/release-kit/skills/shared/`.
 - Follow the recipe: `rk guide setup` once per repository, `rk guide release` for every release, `rk guide backport` for a fix crossing to an older line, `rk guide release-lines` for the line's own life, `rk guide landing` for every landing write from stage to cleanup.

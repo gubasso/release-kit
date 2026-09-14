@@ -15,7 +15,7 @@
 
 Chosen option: one typed plan, because three verbs walking one projection on three paths is three places for a rule to drift, and one document every write comes from is one. The plan keeps five kinds apart: evidence, analysis, policy, decisions, and postconditions. Classification is one word from five, beside findings. Operations are a closed set that names digests and never bytes. Readiness is the worst precondition, and a gap is honest and is not permission. Provenance attaches to claims through an evidence ledger. The fingerprint binds the semantic inputs, so an apply can refuse on any difference. `rk reconcile plan` is read-only and offline by default.
 
-Enforced by `reconcile:every-landing-write-comes-from-one-plan`, `reconcile:a-plan-carries-one-classification-and-its-findings`, `reconcile:an-operation-names-digests-and-never-bytes`, `reconcile:readiness-is-the-worst-precondition`, `reconcile:every-observed-field-cites-evidence`, `reconcile:the-fingerprint-binds-the-semantic-inputs`, and `reconcile:plan-is-read-only-and-offline-by-default`.
+Enforced by no live rule; see [its successor](./ADR-let-the-installed-binary-render-its-own-release.md).
 
 ## Consequences
 
@@ -24,4 +24,4 @@ Enforced by `reconcile:every-landing-write-comes-from-one-plan`, `reconcile:a-pl
 
 ## Status
 
-Implemented: `src/plan/`, `src/commands/reconcile.rs`, `src/commands/assess.rs`.
+Superseded by [its successor](./ADR-let-the-installed-binary-render-its-own-release.md).

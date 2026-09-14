@@ -37,7 +37,7 @@ Pruning rests on the same proof as branch pruning: a merged request whose record
 
 ## Changing the mode
 
-The mode change is an upgrade with exactly one overridden parameter: `rk upgrade --workflow <mode> --apply` rewrites the two blocks and the record from what the record already states, and the committed diff is the visible change, reaching every clone through the trunk like any change. A plain `rk upgrade` keeps the recorded mode across payload versions.
+The mode change is an upgrade with exactly one overridden parameter: `rk upgrade --workflow <mode> --apply` rewrites the two blocks and the record from what the record already states, and the committed diff is the visible change, reaching every clone through the trunk like any change. A plain `rk upgrade` keeps the recorded mode across releases.
 
 The blocks are branch-versioned files, so a bare branch opened before a change to `worktree` mode does not carry the guard until it takes the trunk's tip; the change protects the future, not the past. The transition closes the gap in order: land the mode change on the trunk through its pull request; move the main checkout to the trunk and pull, so the main checkout itself is guarded from here on; adopt each open bare branch into its worktree with `rk worktree add <branch> --apply` — the main checkout is off it, so the adoption is clean. A branch that must keep committing before it merges is guarded either way, because hooks are installed per clone, not per branch; it rebases onto the trunk only where its own tree must show an agent the new blocks. Switching to `branches` while worktrees exist needs no procedure: the verbs are mode-free and every worktree keeps working.
 

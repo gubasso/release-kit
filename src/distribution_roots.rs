@@ -1,4 +1,4 @@
-// The payload inventory: every authored root the binary carries.
+// The distribution roots: every authored root the binary carries.
 //
 // One declaration, three readers. `embedded` must embed each root and a
 // unit test holds it to this list; `build.rs` `include!`s this file to
@@ -10,7 +10,7 @@
 // comments only — no `use`, no inner doc comments, no other modules.
 
 /// Every authored root the binary carries, in one place.
-pub const PAYLOAD_ROOTS: [&str; 12] = [
+pub const DISTRIBUTION_ROOTS: [&str; 11] = [
     "method",
     "bindings",
     "runbooks",
@@ -21,6 +21,5 @@ pub const PAYLOAD_ROOTS: [&str; 12] = [
     "skills",
     "skill-shared",
     "versions.toml",
-    "compatibility.toml",
     "guidance",
 ];

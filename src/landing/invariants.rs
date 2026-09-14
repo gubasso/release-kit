@@ -11,7 +11,7 @@
 //! otherwise silently inherit the wrong rule.
 //!
 //! A second, pair-keyed table judges target-wide relationships that need
-//! files read from the target's disk: generated files the payload ships no
+//! files read from the target's disk: generated files the seeds ship no
 //! copy of, and target-owned files landed configuration requires. No digest
 //! records a generated file, so nothing else sees it drift away from the
 //! configuration it was generated from. That judgment reads the generated
@@ -129,7 +129,7 @@ fn dist_workspace(destination: &str, bytes: &[u8]) -> Vec<InvariantFailure> {
         failures.push(InvariantFailure::new(
             "attestation-filters-narrowed",
             destination,
-            "github-attestations-filters narrows what is attested below the whole release payload",
+            "github-attestations-filters narrows what is attested below the whole set of release artifacts",
             "remove github-attestations-filters from [dist]; the default [\"*\"] attests every hosted file",
         ));
     }
@@ -165,13 +165,13 @@ fn dist_workspace(destination: &str, bytes: &[u8]) -> Vec<InvariantFailure> {
 /// the same effective table, or its signer runs code a moved tag can
 /// swap.
 fn action_commit_failures(destination: &str, found: Option<&toml::Table>) -> Vec<InvariantFailure> {
-    let remediation = "bring the [dist.github-action-commits] table to the payload seed's (rk snippet rust/github/dist-workspace.toml) and regenerate with dist generate --mode ci";
+    let remediation = "bring the [dist.github-action-commits] table to the embedded seed's (rk snippet rust/github/dist-workspace.toml) and regenerate with dist generate --mode ci";
     let mut failures = Vec::new();
     for (action, commit) in &seed_action_commits() {
         // Three distinct states, each with its own true reason: an
         // absent entry falls back to the movable tag, a non-string value
         // is invalid configuration, and a mismatched string executes an
-        // immutable commit that is just not the payload's.
+        // immutable commit that is just not the seed's.
         match found.and_then(|table| table.get(action)) {
             Some(value) => match value.as_str() {
                 Some(pinned) if pinned == commit.as_str() => {}
@@ -179,7 +179,7 @@ fn action_commit_failures(destination: &str, found: Option<&toml::Table>) -> Vec
                     "action-commit-stale",
                     destination,
                     format!(
-                        "[dist.github-action-commits] pins {action} at {pinned}, where the payload pins {commit}"
+                        "[dist.github-action-commits] pins {action} at {pinned}, where the seed pins {commit}"
                     ),
                     remediation,
                 )),
@@ -205,7 +205,7 @@ fn action_commit_failures(destination: &str, found: Option<&toml::Table>) -> Vec
     failures
 }
 
-/// The action commits the payload's own seed pins, read from the
+/// The action commits the embedded seed pins, read from the
 /// embedded snippet so the judgment and the seed cannot drift apart.
 fn seed_action_commits() -> Vec<(String, String)> {
     let Some(text) = embedded::SNIPPETS
@@ -236,7 +236,7 @@ fn seed_action_commits() -> Vec<(String, String)> {
 }
 
 /// The generated file the cross-file failures name: cargo-dist writes it
-/// from `dist-workspace.toml`, the payload ships no copy, and the forge
+/// from `dist-workspace.toml`, the seeds ship no copy, and the forge
 /// executes it.
 const GENERATED_WORKFLOW: &str = ".github/workflows/release.yml";
 
@@ -244,7 +244,7 @@ const GENERATED_WORKFLOW: &str = ".github/workflows/release.yml";
 ///
 /// A destination-keyed rule cannot reach a second file: the byte reader
 /// receives only one landed destination. The pair-keyed rules read files
-/// from the target's own disk, including generated files the payload ships
+/// from the target's own disk, including generated files the seeds ship
 /// no copy of and target-owned files landed configuration requires.
 #[must_use]
 pub fn target_failures(tech: &str, forge: &str, target: &Utf8Path) -> Vec<InvariantFailure> {
@@ -595,7 +595,7 @@ github-release = "host"
 "#;
 
     /// The correct configuration fails nothing, whatever the whitespace
-    /// and key order, and the payload's own seed is the exemplar: the
+    /// and key order, and the embedded seed is the exemplar: the
     /// judgment is over the effective TOML, and the seed must satisfy
     /// the rule it seeds.
     #[test]
@@ -607,7 +607,7 @@ github-release = "host"
             .expect("the seed is embedded");
         assert!(
             failures("rust", "github", "dist-workspace.toml", seed.as_bytes()).is_empty(),
-            "the payload's own seed satisfies the invariants it seeds"
+            "the embedded seed satisfies the invariants it seeds"
         );
     }
 

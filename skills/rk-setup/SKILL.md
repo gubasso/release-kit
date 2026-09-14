@@ -1,6 +1,6 @@
 ---
 name: rk-setup
-description: Lands the release-kit workflow in a project through the rk CLI, and keeps a landed project current from the version the operator installed. Use when asked to set up a release workflow, release automation, trusted publishing, release-plz, release-please, git-cliff, changelog automation, or trunk-based release automation, to migrate a project that already releases through another tool onto release-kit, to stage, upgrade, or adopt a landed payload, or to adapt the release-kit convention to a project's technology. Triggers include vulnerability reporting, SECURITY.md, release-kit, rk init, rk stage, rk upgrade, rk adopt, release setup, migrate to release-kit, adopt release-kit, upgrade release-kit, setup drift, and release workflow setup.
+description: Lands the release-kit workflow in a project through the rk CLI, and keeps a landed project current from the version the operator installed. Use when asked to set up a release workflow, release automation, trusted publishing, release-plz, release-please, git-cliff, changelog automation, or trunk-based release automation, to migrate a project that already releases through another tool onto release-kit, to stage, upgrade, or adopt a landing, or to adapt the release-kit convention to a project's technology. Triggers include vulnerability reporting, SECURITY.md, release-kit, rk init, rk stage, rk upgrade, rk adopt, release setup, migrate to release-kit, adopt release-kit, upgrade release-kit, setup drift, and release workflow setup.
 license: CC-BY-4.0
 compatibility: Requires the rk binary on PATH; install with cargo install release-kit or cargo binstall release-kit. Landing files into a target needs write access to that repository. Forge mutations need the forge CLI authenticated with administration rights; the operator supplies credentials and registry actions.
 ---
@@ -24,7 +24,7 @@ When the request carries `--no-plan`, skip the plan gate's approval turn only. S
 
 | Need                                                            | Command                                             |
 | --------------------------------------------------------------- | --------------------------------------------------- |
-| Judge this host's readiness                                     | `rk doctor`                                         |
+| Judge this host                                                 | `rk doctor`                                         |
 | List method chapters, read one                                  | `rk method --list`, `rk method <chapter>`           |
 | List bindings, read one                                         | `rk binding --list`, `rk binding <tech>`            |
 | Read a forge's specifics                                        | `rk forge <name>`                                   |

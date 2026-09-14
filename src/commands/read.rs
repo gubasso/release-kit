@@ -1,4 +1,4 @@
-//! The read-only payload commands: method, binding, snippet.
+//! The read-only commands over the embedded sources: method, binding, snippet.
 
 use include_dir::Dir;
 
@@ -95,7 +95,7 @@ fn flat(dir: &Dir<'static>, kind: &'static str, args: &ReadArgs) -> Result<(), R
     })
 }
 
-/// The listing key for a payload file: the stem, lowercased, with a
+/// The listing key for an embedded file: the stem, lowercased, with a
 /// leading `NN-` chapter prefix stripped.
 fn short_key(path: &str) -> String {
     let stem = path.trim_end_matches(".md");
@@ -106,7 +106,7 @@ fn short_key(path: &str) -> String {
     stem.to_ascii_lowercase()
 }
 
-/// Print payload bytes as-is; every authored payload file is UTF-8.
+/// Print embedded bytes as-is; every authored file is UTF-8.
 fn print_bytes(out: Output, contents: &[u8]) {
     out.result_raw(&String::from_utf8_lossy(contents));
 }

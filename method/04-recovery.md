@@ -30,7 +30,7 @@ Publish by hand, in three moves, and only for a version whose release request al
 
 A hand-published artifact carries no provenance. The signature is minted by the run that builds, so uploading a file by hand — even the exact file CI built — leaves the attestation lookup answering with nothing, and any consumer that verifies before installing refuses that one version while the releases on either side of it install fine. Treat the manual upload as temporary: once CI returns, re-run the artifact workflow on the same tag so the artifacts are rebuilt and attested through the normal path.
 
-The tag still comes from automation once CI returns; a hand-published version with no tag is reconciled by re-running the release workflow on `master`, never by tagging manually.
+The tag still comes from automation once CI returns; a hand-published version with no tag is repaired by re-running the release workflow on `master`, never by tagging manually.
 
 ## The artifact build failed
 

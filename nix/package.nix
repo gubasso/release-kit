@@ -14,7 +14,7 @@ rustPlatform.buildRustPackage {
   version = cargoToml.package.version;
 
   # cleanSource, not a fileset: include_dir! embeds every root
-  # src/payload_roots.rs declares, and a filter that omits one produces a
+  # src/distribution_roots.rs declares, and a filter that omits one produces a
   # binary that builds and lies. The preBuild assertion below is what makes
   # a narrowed source fail by path.
   src = lib.cleanSource ../.;
@@ -45,19 +45,19 @@ rustPlatform.buildRustPackage {
       }
   '';
 
-  # Every payload root, read from its one declaration rather than restated
+  # Every distribution root, read from its one declaration rather than restated
   # here, plus the license files and the changelog src/embedded.rs embeds
   # from outside that inventory. A root missing from the source closure fails by name, before
   # two smoke commands that would never notice.
   preBuild = ''
-    roots=$(sed -n 's/^ *"\(.*\)",$/\1/p' src/payload_roots.rs)
+    roots=$(sed -n 's/^ *"\(.*\)",$/\1/p' src/distribution_roots.rs)
     if [ -z "$roots" ]; then
-      echo "no payload roots parsed from src/payload_roots.rs" >&2
+      echo "no distribution roots parsed from src/distribution_roots.rs" >&2
       exit 1
     fi
     for path in $roots LICENSE LICENSE-MIT LICENSE-CC-BY-4.0 CHANGELOG.md; do
       if [ ! -e "$path" ]; then
-        echo "payload root missing from the package source: $path" >&2
+        echo "distribution root missing from the package source: $path" >&2
         exit 1
       fi
     done

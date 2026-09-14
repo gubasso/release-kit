@@ -2,7 +2,7 @@
 //!
 //! Skill destinations live under the invoking user's home, where no target
 //! repository reaches, so without a record the installer's only reference is
-//! the payload it currently carries. That makes a copy an older release wrote
+//! the skills it currently carries. That makes a copy an older release wrote
 //! indistinguishable from a file the user edited, and every release touching a
 //! skill then refuses on destinations nobody touched. The record closes that
 //! gap and nothing else: one digest per destination, written after a
