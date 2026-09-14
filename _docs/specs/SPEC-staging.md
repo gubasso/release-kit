@@ -44,7 +44,7 @@ When `rk stage` runs, it MUST materialize this binary's projection for the one t
 - WHEN `rk stage --target <path>` runs
 - THEN the target's tree digests the same before and after, and every written path sits below the resolved stage root
 
-Verify: `cargo nextest run -E 'test(stage_writes_only_below_the_resolved_stage_root)'`
+Verify: `cargo nextest run -E 'test(stage_writes_only_below_the_resolved_stage_root) or test(a_stage_holds_every_projected_artifact_byte_for_byte_and_every_reference_root)'`
 
 ### `staging:the-output-path-has-one-precedence` — The output path has one precedence
 

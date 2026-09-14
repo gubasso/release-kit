@@ -2,7 +2,7 @@
 
 ## Context and Problem Statement
 
-One `rk` binary fetches, verifies, caches, and interprets another release's content, stores a plan of every write, and revalidates it before applying. The workflow needs none of that, because the operator already owns the update of `rk` and the manager that does it. The question is which binary answers for a release, and what a landing does without a stored plan.
+One `rk` binary fetches, verifies, caches, and interprets another release, stores a plan of every write, and revalidates it before applying. The workflow needs none of that, because the operator already owns the update of `rk` and the manager that does it. The question is which binary answers for a release, and what a landing does without a stored plan.
 
 ## Considered Options
 
@@ -10,7 +10,7 @@ One `rk` binary fetches, verifies, caches, and interprets another release's cont
 - An old engine reading a newer release as data. Rejected: every release becomes a protocol the old engine must parse.
 - `rk` installing a second candidate binary. Rejected: acquisition belongs to the operator and the tool manager.
 - Applying staged bytes into production. Rejected: the stage would become state production depends on.
-- A stored plan with fingerprint and revalidation. Rejected: the agent reads a complete stage, and the receipt explains every write.
+- A stored plan with fingerprint and revalidation. Rejected: the stage shows the proposed bytes, and Git shows what landed.
 - Full automatic migration. Rejected: judgment belongs to the agent and the project's checks.
 - Inline per-file version watermarks. Rejected: the receipt is the one watermark, and markers mark a region alone.
 - Blind replacement of an unattributed file. Rejected: a file the receipt cannot vouch for is the target's own.

@@ -47,11 +47,11 @@ A successful `rk init --apply` MUST render every candidate afresh from this bina
 - WHEN `rk init --apply` runs
 - THEN it exits 73 naming the collision, no file lands, and no `.release-kit/` directory appears
 
-Verify: `cargo nextest run -E 'test(fresh_init_preview_is_read_only_and_apply_writes_the_schema_7_receipt)'`
+Verify: `cargo nextest run -E 'test(fresh_init_preview_is_read_only_and_apply_writes_the_schema_7_receipt) or test(every_unattributed_collision_and_malformed_marker_is_collected_before_the_first_write)'`
 
 ### `landing:a-record-states-its-schema` — A record states its schema
 
-The receipt MUST carry an integer `schema_version`, and a receipt at a version this binary does not know MUST refuse by that record schema alone, naming the record and independent of any other schema, never a best-effort read, because commands make decisions from it and must be able to say when they cannot. At schema 7 the receipt MUST name the producing `rk_version`, the origin, the resolved parameters, and per destination the path, the kind, the placement where the destination is a marked region, and the digest of the bytes or region now present, and this binary MUST read a receipt at schemas 1 through 6 through one bounded conversion that ignores the retired payload and baseline digests and write schema 7 at the next successful landing.
+The receipt MUST carry an integer `schema_version`, and a receipt at a version this binary does not know MUST refuse by that record schema alone, naming the record and independent of any other schema, never a best-effort read, because commands make decisions from it and must be able to say when they cannot, and at schema 7 the receipt MUST name the producing `rk_version`, the origin, the resolved parameters, and per destination the path, the kind, the placement where the destination is a marked region, and the digest of the bytes or region now present, and this binary MUST read a receipt at schemas 1 through 6 through one bounded conversion that ignores the retired payload and baseline digests and write schema 7 at the next successful landing.
 
 #### Scenario: A schema 3 receipt and a schema 999 receipt meet this binary
 
@@ -167,7 +167,7 @@ A destination this binary's projection stops producing MUST be left in place, na
 - WHEN `rk upgrade --apply` runs
 - THEN the file survives on disk, the output names it dropped, and the receipt no longer lists it
 
-Verify: `cargo nextest run -E 'test(a_destination_retired_by_the_installed_version_stays_on_disk_and_leaves_the_receipt)'`
+Verify: `cargo nextest run -E 'test(a_destination_retired_by_the_installed_version_stays_on_disk_and_leaves_the_receipt) or test(the_stage_receipt_and_human_output_snapshot_hold)'`
 
 ### `landing:a-target-is-never-downgraded` — A target is never downgraded
 
