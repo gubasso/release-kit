@@ -18,6 +18,7 @@ use serde::Serialize;
 use crate::cli::adopt::AdoptArgs;
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
+use crate::held;
 use crate::landing::apply::{self, Prepared};
 use crate::landing::manifest::{self, Style, Workflow};
 use crate::landing::{self, Kind, lock};
@@ -99,6 +100,8 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
     // every read and every write goes through it, so a root exchanged
     // under the pathname later receives nothing.
     let held = apply::Held::open(&args.target)?;
+    // The proof's pause: the target is held, and nothing has been read.
+    held::pause(apply::PAUSE_VAR, "held", "proceed-held");
     if landing::manifest::load(held.base())?.is_some() {
         return Err(RkError::refusal(
             Diagnostic::new(
@@ -120,7 +123,7 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
     let config = crate::config::load(held.base().as_std_path())?;
     let params = landing::Params::resolve(
         &EmbeddedReleaseSource,
-        &args.target,
+        held.base(),
         &landing::Inputs {
             tech: args.tech.as_deref(),
             forge: args.forge.as_deref(),

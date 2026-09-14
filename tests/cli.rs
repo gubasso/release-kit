@@ -27341,6 +27341,12 @@ impl PausedLanding {
     /// Start `args` against `target` in JSON mode and wait until the
     /// landing has validated and holds the target.
     fn start(target: &Path, args: &[&str]) -> Self {
+        Self::start_at(target, args, "validated")
+    }
+
+    /// Start `args` against `target` in JSON mode and wait until the
+    /// landing announces `tag` through the pause seam.
+    fn start_at(target: &Path, args: &[&str], tag: &str) -> Self {
         let pause = tempfile::tempdir().expect("a pause dir exists");
         let mut child = std::process::Command::new(assert_cmd::cargo::cargo_bin("rk"));
         for var in GIT_HOOK_VARS {
@@ -27357,21 +27363,35 @@ impl PausedLanding {
             .stderr(std::process::Stdio::piped())
             .spawn()
             .expect("the landing starts");
-        let validated = pause.path().join("validated");
+        // A run paused at a later tag passes the earlier pause at once.
+        if tag != "held" {
+            std::fs::write(pause.path().join("proceed-held"), b"").expect("the first pause opens");
+        }
+        let reached = pause.path().join(tag);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-        while !validated.exists() && std::time::Instant::now() < deadline {
+        while !reached.exists() && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        assert!(validated.exists(), "the landing paused after validation");
+        assert!(reached.exists(), "the landing paused at {tag}");
         Self { child, pause }
     }
 
     /// Let the landing proceed and return its exit code and diagnostic.
     fn proceed(self) -> (Option<i32>, serde_json::Value) {
-        std::fs::write(self.pause.path().join("proceed"), b"").expect("the landing proceeds");
+        let (code, _, diagnostic) = self.proceed_reporting();
+        (code, diagnostic)
+    }
+
+    /// Let the landing proceed past every pause and return its exit code,
+    /// its report, and its diagnostic.
+    fn proceed_reporting(self) -> (Option<i32>, serde_json::Value, serde_json::Value) {
+        for proceed in ["proceed-held", "proceed"] {
+            std::fs::write(self.pause.path().join(proceed), b"").expect("the landing proceeds");
+        }
         let output = self.child.wait_with_output().expect("the landing ends");
+        let report = serde_json::from_slice(&output.stdout).unwrap_or_default();
         let diagnostic = serde_json::from_slice(&output.stderr).unwrap_or_default();
-        (output.status.code(), diagnostic)
+        (output.status.code(), report, diagnostic)
     }
 }
 
@@ -27911,7 +27931,7 @@ fn a_target_root_exchanged_after_validation_receives_nothing() {
     std::fs::create_dir(&target).expect("the decoy stands at the path");
     std::fs::write(target.join("decoy.txt"), "untouched\n").expect("the decoy has a file");
     let decoy_before = tree_digests(&target);
-    let (code, diagnostic) = paused.proceed();
+    let (code, report, diagnostic) = paused.proceed_reporting();
     assert_eq!(
         tree_digests(&target),
         decoy_before,
@@ -27924,6 +27944,72 @@ fn a_target_root_exchanged_after_validation_receives_nothing() {
                 "the landing reached the held directory"
             );
             assert!(real.join("SECURITY.md").is_file());
+            // The sentinel report scanned the held target, where the seeded
+            // file carries its sentinel; the decoy has no such file.
+            let sentinels = report["sentinels"].as_array().expect("sentinels");
+            assert!(
+                sentinels.iter().any(|sentinel| sentinel["path"]
+                    .as_str()
+                    .is_some_and(|path| path.ends_with("release-plz.toml"))
+                    && sentinel["text"]
+                        .as_str()
+                        .is_some_and(|text| text.contains("TODO(release-kit)"))),
+                "{report}"
+            );
+        }
+        other => panic!("the landing neither landed nor refused cleanly: {other:?} {diagnostic}"),
+    }
+}
+
+/// A repository with an `origin` remote at `path`.
+fn repo_with_remote(path: &Path, remote: &str) {
+    std::fs::create_dir_all(path).expect("the repository directory exists");
+    // Through the scrubbing helper: under a running hook, git would
+    // otherwise act on the exported GIT_DIR rather than on this directory.
+    git_in(path, &["init", "-q"]);
+    git_in(path, &["remote", "add", "origin", remote]);
+    std::fs::write(
+        path.join("Cargo.toml"),
+        "[package]\nname = \"widget\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("the version file writes");
+}
+
+/// SATISFIES landing:a-partial-landing-is-visible-and-rerunnable
+#[test]
+fn a_decoy_remote_at_the_exchanged_pathname_does_not_change_the_held_projection() {
+    let parent = tempfile::tempdir().expect("a scratch parent exists");
+    let target = parent.path().join("widget");
+    repo_with_remote(&target, "https://github.com/acme/real.git");
+    // No --repo: the repository comes from the remote git reads.
+    let paused = PausedLanding::start_at(
+        &target,
+        &["init", "--tech", "rust", "--forge", "github"],
+        "held",
+    );
+    // The target is held and nothing has been read: a decoy repository
+    // with another remote takes the pathname.
+    let real = parent.path().join("real");
+    std::fs::rename(&target, &real).expect("the real target moves aside");
+    repo_with_remote(&target, "https://github.com/acme/decoy.git");
+    let decoy_before = tree_digests(&target);
+    let (code, report, diagnostic) = paused.proceed_reporting();
+    assert_eq!(tree_digests(&target), decoy_before, "{diagnostic}");
+    let text = format!("{report}{diagnostic}");
+    assert!(
+        !text.contains("acme/decoy"),
+        "the decoy remote reached the run: {text}"
+    );
+    match code {
+        Some(0) => {
+            let receipt: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(real.join(".release-kit/manifest.json")).expect("the receipt"),
+            )
+            .expect("parses");
+            assert_eq!(receipt["parameters"]["repo"], "acme/real", "{receipt}");
+            assert_eq!(report["repo"], "acme/real", "{report}");
+            let policy = std::fs::read_to_string(real.join("SECURITY.md")).expect("reads");
+            assert!(policy.contains("acme/real") && !policy.contains("acme/decoy"));
         }
         other => panic!("the landing neither landed nor refused cleanly: {other:?} {diagnostic}"),
     }

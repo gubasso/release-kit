@@ -21,6 +21,7 @@ use crate::cli::init::InitArgs;
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::embedded;
 use crate::error::RkError;
+use crate::held;
 use crate::landing::apply::{self, Action, Collision, Prepared};
 use crate::landing::manifest::{self, Style, Workflow};
 use crate::landing::{self, lock};
@@ -137,10 +138,12 @@ pub fn run(args: &InitArgs) -> Result<(), RkError> {
     // every read and every write goes through it, so a root exchanged
     // under the pathname later receives nothing.
     let held = apply::Held::open(&args.target)?;
+    // The proof's pause: the target is held, and nothing has been read.
+    held::pause(apply::PAUSE_VAR, "held", "proceed-held");
     let config = crate::config::load(held.base().as_std_path())?;
     let params = landing::Params::resolve(
         &EmbeddedReleaseSource,
-        &args.target,
+        held.base(),
         &landing::Inputs {
             tech: args.tech.as_deref(),
             forge: args.forge.as_deref(),
@@ -165,7 +168,7 @@ pub fn run(args: &InitArgs) -> Result<(), RkError> {
         let prepared = apply::prepare(&held, None, &params, config.as_ref())?;
         let landed = apply::land(&held, None, &prepared, apply::Origin::Init, &lock)?;
         drop(lock);
-        report_apply(out, args, &params, style, &prepared, &landed)
+        report_apply(out, args, &held, &params, style, &prepared, &landed)
     } else {
         let prepared = apply::prepare(&held, None, &params, config.as_ref())?;
         let repo = (params.repo() != landing::REPO_PLACEHOLDER).then(|| params.repo().to_owned());
@@ -270,9 +273,14 @@ fn preview(
 
 /// Report a landing the writer completed, with the judgment sentinels the
 /// operator still owes.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the report reads the landed files through the held target and names them by the path the operator gave, which are two arguments for one target"
+)]
 fn report_apply(
     out: Output,
     args: &InitArgs,
+    held: &apply::Held,
     params: &landing::Params,
     style: Style,
     prepared: &Prepared,
@@ -284,8 +292,13 @@ fn report_apply(
         out.result_line(describe(decision));
         if decision.action != Action::Released {
             let bytes =
-                landing::read_recorded(&args.target, &decision.destination)?.unwrap_or_default();
-            collect_sentinels(&args.target, &decision.destination, &bytes, &mut sentinels);
+                landing::read_recorded(held.base(), &decision.destination)?.unwrap_or_default();
+            collect_sentinels(
+                held.display(),
+                &decision.destination,
+                &bytes,
+                &mut sentinels,
+            );
         }
         file_entries.push(FileEntry {
             path: decision.destination.clone(),

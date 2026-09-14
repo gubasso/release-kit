@@ -23,6 +23,7 @@ use crate::cli::upgrade::UpgradeArgs;
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::embedded;
 use crate::error::RkError;
+use crate::held;
 use crate::landing::apply::{self, Action, Collision, Prepared};
 use crate::landing::manifest::{self, Alignment, Manifest, Style, Workflow};
 use crate::landing::{self, lock};
@@ -98,9 +99,11 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
     // every read and every write goes through it, so a root exchanged
     // under the pathname later receives nothing.
     let held = apply::Held::open(&args.target)?;
+    // The proof's pause: the target is held, and nothing has been read.
+    held::pause(apply::PAUSE_VAR, "held", "proceed-held");
     let recorded = load_upgradable(&held)?;
     let existing = crate::config::load(held.base().as_std_path())?;
-    let params = resolve_params(args, &recorded, existing.as_ref())?;
+    let params = resolve_params(args, &held, &recorded, existing.as_ref())?;
     let style = params
         .style()
         .ok_or_else(|| RkError::Usage("landing style is unresolved".into()))?;
@@ -135,7 +138,7 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
     for decision in &prepared.decisions {
         if landed.is_some() && matches!(decision.action, Action::Created | Action::Replaced) {
             let bytes =
-                landing::read_recorded(&args.target, &decision.destination)?.unwrap_or_default();
+                landing::read_recorded(held.base(), &decision.destination)?.unwrap_or_default();
             collect_sentinels(&decision.destination, &bytes, &mut sentinels);
         }
         out.result_line(crate::commands::init::describe(decision));
@@ -206,6 +209,7 @@ fn withheld_of(prepared: &Prepared) -> Option<Vec<landing::Withheld>> {
 
 fn resolve_params(
     args: &UpgradeArgs,
+    held: &apply::Held,
     recorded: &Manifest,
     existing: Option<&crate::config::Config>,
 ) -> Result<landing::Params, RkError> {
@@ -221,7 +225,7 @@ fn resolve_params(
     };
     landing::Params::resolve(
         &EmbeddedReleaseSource,
-        &args.target,
+        held.base(),
         &landing::Inputs {
             tech: args.tech.as_deref(),
             forge: args.forge.as_deref(),

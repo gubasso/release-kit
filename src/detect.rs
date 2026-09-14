@@ -107,7 +107,11 @@ pub struct Detection {
 ///
 /// The read answers for `dir` alone: the variables a running hook
 /// exports are scrubbed, so an inherited `GIT_DIR` cannot answer with
-/// another repository's remote.
+/// another repository's remote. The child runs with `dir` as its working
+/// directory rather than through `-C`: where `dir` is the kernel's link
+/// to a held directory, the change of directory happens in the child
+/// before the exec closes the descriptor, so the child stands in the held
+/// directory itself, whatever the pathname has since become.
 #[must_use]
 pub fn detect(dir: &Path) -> Detection {
     let mut command = Command::new(crate::probes::git_bin());
@@ -115,8 +119,7 @@ pub fn detect(dir: &Path) -> Detection {
         command.env_remove(var);
     }
     let out = command
-        .args(["-C"])
-        .arg(dir)
+        .current_dir(dir)
         .args(["remote", "get-url", "origin"])
         .output();
     let url = match out {
