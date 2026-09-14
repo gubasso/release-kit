@@ -149,7 +149,7 @@ impl Held {
     pub fn open_locked(target: &Utf8Path, lock: &lock::TargetLock) -> Result<Self, RkError> {
         let held = Self::open(target)?;
         let opened = held::Identity::of(&held.root.metadata()?);
-        if lock.identity().is_some_and(|locked| locked != opened) {
+        if lock.identity() != opened {
             return Err(RkError::refusal(
                 Diagnostic::new(
                     Reason::StateDrift,

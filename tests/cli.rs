@@ -28064,3 +28064,38 @@ fn a_target_exchanged_between_the_lock_and_the_hold_is_refused() {
         "the real target received a write"
     );
 }
+
+/// SATISFIES landing:a-partial-landing-is-visible-and-rerunnable
+#[test]
+fn an_absent_relative_target_refuses_before_the_lock_and_before_any_write() {
+    let parent = tempfile::tempdir().expect("a scratch parent exists");
+    let pause = tempfile::tempdir().expect("a pause dir exists");
+    // A relative path that does not exist yet, resolved against the
+    // parent as the working directory.
+    let refused = rk()
+        .current_dir(parent.path())
+        .env("RK_APPLY_PAUSE_DIR", pause.path())
+        .args(["upgrade", "--apply", "--json", "--target", "./widget"])
+        .assert()
+        .code(66);
+    let diagnostic = refusal_of(&refused);
+    assert_eq!(diagnostic["reason"], "target-not-found", "{diagnostic}");
+    assert!(
+        diagnostic["message"]
+            .as_str()
+            .expect("a message")
+            .contains("./widget"),
+        "{diagnostic}"
+    );
+    assert!(
+        !pause.path().join("locked").exists(),
+        "no lock was taken for a target that does not resolve"
+    );
+    assert!(
+        !parent.path().join("widget").exists(),
+        "nothing was created"
+    );
+    // The directory appearing afterwards received nothing from that run.
+    std::fs::create_dir_all(parent.path().join("widget/.git")).expect("the directory appears");
+    assert!(tree_digests(&parent.path().join("widget")).is_empty());
+}

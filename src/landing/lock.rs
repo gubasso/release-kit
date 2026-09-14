@@ -54,14 +54,13 @@ pub struct TargetLock {
     path: PathBuf,
     /// The identity of the directory the lock key was derived from, so
     /// the directory later held can be checked to be the same one.
-    identity: Option<crate::held::Identity>,
+    identity: crate::held::Identity,
 }
 
 impl TargetLock {
-    /// The identity of the directory this lock was taken for, or `None`
-    /// where the target did not resolve when the lock was taken.
+    /// The identity of the directory this lock was taken for.
     #[must_use]
-    pub const fn identity(&self) -> Option<crate::held::Identity> {
+    pub const fn identity(&self) -> crate::held::Identity {
         self.identity
     }
 
@@ -107,19 +106,44 @@ fn rootless() -> RkError {
 /// The acquisition against one locks directory, which is what the tests
 /// drive so no test has to move the state root out from under itself.
 ///
-/// The target path is digested rather than flattened, so a path carrying
-/// a separator cannot name another target's lock.
+/// The target must exist and resolve: the lock is keyed by the canonical
+/// path and carries the directory's identity, so a target that cannot be
+/// resolved has no lock to take and refuses, rather than being keyed by
+/// the text it was named with while another run keys the same directory
+/// by its canonical path. The canonical path is digested rather than
+/// flattened, so a path carrying a separator cannot name another target's
+/// lock.
 ///
 /// # Errors
 ///
-/// As [`acquire`].
+/// As [`acquire`], and [`RkError::Missing`] naming a target that does not
+/// resolve to a directory.
 pub fn acquire_in(dir: &Path, target: &Utf8Path) -> Result<TargetLock, RkError> {
-    let resolved = std::fs::canonicalize(target).ok();
-    let identity = resolved
-        .as_deref()
-        .and_then(|path| std::fs::metadata(path).ok())
-        .map(|metadata| crate::held::Identity::of(&metadata));
-    let canonical = resolved.map_or_else(|| target.to_string(), |path| path.display().to_string());
+    let resolved = std::fs::canonicalize(target)
+        .and_then(|path| std::fs::metadata(&path).map(|metadata| (path, metadata)))
+        .map_err(|error| {
+            RkError::missing(
+                Diagnostic::new(
+                    Reason::TargetNotFound,
+                    format!("target {target} does not resolve to a directory to lock: {error}"),
+                )
+                .expected("an existing directory to land into")
+                .target_state("unchanged"),
+            )
+        })?;
+    let (resolved, metadata) = resolved;
+    if !metadata.is_dir() {
+        return Err(RkError::missing(
+            Diagnostic::new(
+                Reason::TargetNotFound,
+                format!("target {target} is not a directory, and nothing was written"),
+            )
+            .expected("an existing directory to land into")
+            .target_state("unchanged"),
+        ));
+    }
+    let identity = crate::held::Identity::of(&metadata);
+    let canonical = resolved.display().to_string();
     std::fs::create_dir_all(dir)?;
     restrict_lock_dir(dir)?;
     let path = dir.join(format!("{}.lock", Digest::of(canonical.as_bytes())));
