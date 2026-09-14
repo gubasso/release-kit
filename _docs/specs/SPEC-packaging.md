@@ -76,7 +76,7 @@ Where the flake advertises a system, CI MUST natively build and run the flake's 
 - WHEN the change is reviewed
 - THEN either a native runner joins the matrix in the same change or the system stays out of the list
 
-Verify: `! grep -rEi 'aarch64|darwin|apple|windows-msvc|powershell' flake.nix dist-workspace.toml snippets/rust blocks .github/workflows/ci.yml`
+Verify: `cargo nextest run -E 'test(a_fresh_rust_landing_advertises_only_x86_64_linux)'`
 
 ### `packaging:the-checks-carry-the-nix-side-signal` — The checks carry the Nix-side signal
 
