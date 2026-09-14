@@ -1,6 +1,6 @@
 # The plan gate
 
-Standing instructions for the whole task, not one-time steps. Every release-kit skill drives operations that write files, mutate a forge, or publish a version, so each one plans, validates that plan against what actually knows, and only then executes.
+Standing instructions for the whole task, not one-time steps. Every release-kit skill drives operations that write files, mutate a forge, or publish a version, so each one plans, validates that plan against what actually knows, and only then executes. The agent's prose plan is the review surface: it names every file the run writes and every action it takes, and the operator approves that text.
 
 This gate opens after `~/.local/state/release-kit/skills/shared/pre-flight-gate.md` has run, and takes its findings as inputs: a failed hard probe is why there is no plan yet, and a failed soft probe is a gated step or a stated gap. That file runs whatever the request carries; this one has a flag.
 
@@ -22,7 +22,7 @@ Do this before the first change of any kind: a file landed in a target, a forge 
 2. Research read-only. Read the skill's routing table, the canon it names, and the target's own report — `rk status --target .` observes and never writes. Do not edit, and do not run any verb with `--apply`.
 3. Write the plan. It states, in this order:
    - The ordered `rk` verbs to run, each with its flags.
-   - The files the run writes, and the forge or registry state it changes.
+   - The files the run writes, one by one, and the forge or registry state it changes.
    - Every step gated for the operator, with the exact command they run and what it changes.
    - The verification command that closes the task.
    - The open risks and the assumptions the plan rests on.
@@ -35,12 +35,12 @@ When the request carries `--no-plan`, replace this phase's approval turn: do not
 
 The plan is a claim about what will happen. Check it against something that knows, never against your own confidence.
 
-1. Preview every verb that has one. `rk init`, `rk setup`, `rk upgrade`, `rk adopt`, `rk skill install`, `rk branches prune`, `rk worktree add`, and `rk worktree prune` write nothing without `--apply`; run each and read what it reports. For a landing, `rk reconcile plan --target .` is the preview every plan validates against: it stores the plan, prints its id, and names the operations, the preconditions that do not hold, and the decisions that wait.
-   - The check that fails a run is executable, not this instruction. `rk reconcile apply <plan-id>` recomputes the plan over the same request and refuses, naming what moved, when the target, the bundle, or a decision changed since the plan was stored; it refuses a plan that is blocked or waits on a decision, and no flag makes a gap into a pass. `rk init`, `rk upgrade`, and `rk adopt` land through that same check on `--apply`.
-   - What the gate guarantees: the operations an apply executes are the ones the stored plan names, over inputs that still hold, and a required condition that fails stops the run before the first write. What it does not guarantee: that an agent understood the prose, or that a decision the operator selected was the right one. Present the plan's decisions with their consequences before asking.
+1. Preview every verb that has one. `rk init`, `rk setup`, `rk upgrade`, `rk adopt`, `rk skill install`, `rk branches prune`, `rk worktree add`, and `rk worktree prune` write nothing without `--apply`; run each and read what it reports. For a landing, the stage is the surface the plan validates against: `rk stage --target .` writes this binary's complete candidate and its knowledge beside the target, and the preview of `rk init`, `rk upgrade`, or `rk adopt` prints one word per destination.
+   - The check that fails a run is executable, not this instruction. `rk init --apply`, `rk upgrade --apply`, and `rk adopt --apply` render again from the binary and the target at the moment they run. Each refuses before its first write on an unattributed collision, a missing or newer record, or an unanswered style, and names what it found. No flag turns that refusal into a pass, and no verb reads the stage.
+   - What the gate guarantees: the words a production run prints are the decisions it took, and a refused condition stops the run before the first write. What it does not guarantee: that an agent read the stage correctly, or that a choice the operator made was the right one. Present the plan's file inventory and its questions with their consequences before asking.
 2. Validate every action that has no preview — a merge, a tag, a publish, a forge or registry mutation — against what states it instead: `rk guide <topic>` for the commands, the owning method chapter for their order, and a read-only observation of the current state. `rk assess --target .`, `rk status --check --target .`, and `rk setup check --target .` observe and never write.
 3. Compare both against the plan: the destinations, their count, and the steps in their order.
-4. Where they disagree, stop. Say what differs, and return to phase 1. Never reconcile a surprise by widening the plan silently.
+4. Where they disagree, stop. Say what differs, and return to phase 1. Never absorb a surprise by widening the plan silently.
 
 ## 3. Execute
 
@@ -49,4 +49,4 @@ The plan is a claim about what will happen. Check it against something that know
 3. Gate every step the boundary above leaves to the operator, and every other step they must run by hand: print the exact command, say what it changes and why, wait, then re-observe before continuing.
 4. Close on the verification command the plan named. `rk status --check --target .` is the judging mode and exits nonzero while anything is unresolved.
 5. Where execution shows the plan was wrong, stop and re-plan. Do not expand the scope of an approved plan.
-6. For a landing, the check that fails a run is apply's own revalidation, not this instruction: `rk reconcile apply <plan-id>` recomputes the plan over the stored request and refuses, naming what moved, when the target, the bundle, or a decision changed since the plan was stored. That refusal returns the task to phase 1 with the fresh plan as the thing to approve. Nothing was written, and no flag turns the refusal into a pass.
+6. For a landing, the check that fails a run is the production verb's own refusal, not this instruction. `rk init --apply`, `rk upgrade --apply`, and `rk adopt --apply` refuse before the first write and name each file or condition they cannot land as it stands. That refusal returns the task to phase 1 with the named findings as the thing to plan. Nothing was written, and no flag turns the refusal into a pass. The stage stays in place through this phase, so the real diff can be compared with it, and `rk stage clean <path>` runs last, only where the request's authority includes cleanup.
