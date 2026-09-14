@@ -2,7 +2,7 @@
 
 External sources behind `SPEC-distribution.md`: what the binary carries, where it may write outside a target, and how it speaks to a machine. Each entry states what the source says and which rule or file it bears on. Decision records state what was chosen; this file states what the choice was checked against.
 
-Verified against the listed sources on 2026-08-28 and re-checked on 2026-08-29. A source marked corroborating was reported by a parallel review and not independently fetched.
+Verified against the listed sources on 2026-08-28 and re-checked on 2026-08-29, with the version-discovery section verified on 2026-09-14. A source marked corroborating was reported by a parallel review and not independently fetched.
 
 ## Embedding assets in a Rust binary
 
@@ -107,3 +107,12 @@ The GitHub CLI documents four exit codes: 0 success, 1 any failure, 2 cancelled,
 - <https://developer.hashicorp.com/terraform/cli/commands/plan>
 
 Bearing: the exit-code matrix in `src/error.rs` and the closed reason vocabulary in `src/output.rs` — the code is the category, the reason and message carry the instance. The judging-mode flag on `rk status --check` and `rk versions --check` follows the Terraform precedent, and `gh run view --exit-status` is the flag-not-verb form of the same idea.
+
+## Running one selected version, on mise exec and nix run
+
+`mise exec` executes a command with tools set, and its documentation states that it runs a command with mise's tools and environment without modifying the shell session, or runs ad hoc commands with tools that are not in the config. A `TOOL@VERSION` argument overrides the version `mise.toml` records for that one command. `nix run` takes an installable and passes the arguments after `--` to the program, tries `apps.<system>.default` and then `packages.<system>.default` where no attribute is named, and executes `<out>/bin/<name>` with the name taken from `meta.mainProgram` first.
+
+- <https://mise.jdx.dev/cli/exec.html>
+- <https://nix.dev/manual/nix/stable/command-ref/new-cli/nix3-run>
+
+Bearing: `staging:a-stage-is-one-target-specific-candidate` and `staging:the-reference-tree-is-the-installed-knowledge`. Both managers already run one exactly selected version without changing the project or the shell, so an agent that wants a candidate's stage and its version-matched reference material runs that candidate `rk` through the manager, and the binary needs no verb that selects or fetches another release.

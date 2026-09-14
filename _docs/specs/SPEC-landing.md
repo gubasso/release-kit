@@ -9,7 +9,9 @@
   - [`landing:a-rendered-file-is-reproducible` — A rendered file is reproducible](#landinga-rendered-file-is-reproducible--a-rendered-file-is-reproducible)
   - [`landing:the-release-style-is-a-landing-parameter` — The release style is a landing parameter](#landingthe-release-style-is-a-landing-parameter--the-release-style-is-a-landing-parameter)
   - [`landing:a-rendered-file-carries-no-judgment` — A rendered file carries no judgment](#landinga-rendered-file-carries-no-judgment--a-rendered-file-carries-no-judgment)
-  - [`landing:an-upgrade-refuses-on-owned-drift` — An upgrade refuses on owned drift](#landingan-upgrade-refuses-on-owned-drift--an-upgrade-refuses-on-owned-drift)
+  - [`landing:ownership-is-elementary` — Ownership is elementary](#landingownership-is-elementary--ownership-is-elementary)
+  - [`landing:a-partial-landing-is-visible-and-rerunnable` — A partial landing is visible and rerunnable](#landinga-partial-landing-is-visible-and-rerunnable--a-partial-landing-is-visible-and-rerunnable)
+  - [`landing:a-missing-receipt-is-a-classification` — A missing receipt is a classification](#landinga-missing-receipt-is-a-classification--a-missing-receipt-is-a-classification)
   - [`landing:a-seeded-file-is-never-rewritten` — A seeded file is never rewritten](#landinga-seeded-file-is-never-rewritten--a-seeded-file-is-never-rewritten)
   - [`landing:a-seeded-file-still-carries-the-invariants` — A seeded file still carries the invariants](#landinga-seeded-file-still-carries-the-invariants--a-seeded-file-still-carries-the-invariants)
   - [`landing:a-dropped-file-stays` — A dropped file stays](#landinga-dropped-file-stays--a-dropped-file-stays)
@@ -31,33 +33,33 @@
 
 ## Purpose
 
-Rules governing what `rk init`, `rk status`, `rk upgrade`, and `rk adopt` owe a target repository: the landing record at `.release-kit/manifest.json`, the ownership kinds `rendered`, `seeded`, and `state`, and the comparisons each verb may make from them. Its subject is writing into a target and staying truthful about what was written, which is neither carrying a payload — `SPEC-distribution.md` — nor acting on a remote forge — `SPEC-forge-setup.md`. No adopting project adopts this spec: a project cannot violate a rule about how `rk` behaves and cannot run the verification. The comparable tools these rules were checked against are in `../reference/REFERENCE-landing-sources.md`.
+Rules governing what `rk init`, `rk status`, `rk upgrade`, and `rk adopt` owe a target repository: the receipt at `.release-kit/manifest.json`, the ownership kinds, and the comparisons each verb may make from them. The kinds are `rendered`, a whole file or marked region this binary generates and owns, `seeded`, a starting point the target tunes, and `state`, a file the target's own tooling moves. `rendered` is the kind's name, and generated is the word for what the kind means. Every landing is rendered afresh by the installed binary from its embedded sources and the target as they stand at invocation. Its subject is writing into a target and staying truthful about what was written, which is neither carrying a payload, bound by `SPEC-distribution.md`, nor staging a candidate for study, bound by `SPEC-staging.md`, nor acting on a remote forge, bound by `SPEC-forge-setup.md`. No adopting project adopts this spec: a project cannot violate a rule about how `rk` behaves and cannot run the verification. The comparable tools these rules were checked against are in `../reference/REFERENCE-landing-sources.md`.
 
 ## Requirements
 
 ### `landing:a-landing-leaves-a-record` — A landing leaves a record
 
-A successful `rk init --apply` MUST write `.release-kit/config.toml` inside `.release-kit/` before `.release-kit/manifest.json`, with the record last, after every payload file has landed through the temp-plus-rename writer, and a refused landing MUST leave the target unchanged, the record included. Every landing write MUST be an operation of a stored plan, as `reconcile:every-front-lands-through-the-engine` binds. The record is committed with the landing: every reader it exists for — a clone, a CI job, an agent — sees only committed files, and it carries digests of committed files, nothing secret and nothing machine-specific.
+A successful `rk init --apply` MUST render every candidate afresh from this binary's embedded sources and the target as they stand at invocation, write `.release-kit/config.toml` before `.release-kit/manifest.json`, and write the receipt last, after every candidate file has landed through the temp-plus-rename writer, and a refused landing MUST leave the target unchanged, the receipt included. The receipt is committed with the landing: every reader it exists for, a clone, a CI job, an agent, sees only committed files, and it carries digests of committed files, nothing secret and nothing machine-specific.
 
-#### Scenario: A rendered destination conflicts on apply
+#### Scenario: A whole-file destination holds unattributed bytes on apply
 
-- GIVEN a target whose workflow destination already holds bytes that differ from the rendered candidate
+- GIVEN a target whose workflow destination already holds bytes and no receipt names it
 - WHEN `rk init --apply` runs
-- THEN it exits 73 naming the conflict, no file lands, and no `.release-kit/` directory appears
+- THEN it exits 73 naming the collision, no file lands, and no `.release-kit/` directory appears
 
-Verify: `cargo nextest run -E 'binary(cli)'`
+Verify: `cargo nextest run -E 'test(fresh_init_preview_is_read_only_and_apply_writes_the_schema_7_receipt)'`
 
 ### `landing:a-record-states-its-schema` — A record states its schema
 
-The record MUST carry an integer `schema_version`, and a record at a version this binary does not know MUST refuse naming the record, never a best-effort read, because commands make decisions from it and must be able to say when they cannot.
+The receipt MUST carry an integer `schema_version`, and a receipt at a version this binary does not know MUST refuse by that record schema alone, naming the record and independent of any other schema, never a best-effort read, because commands make decisions from it and must be able to say when they cannot. At schema 7 the receipt MUST name the producing `rk_version`, the origin, the resolved parameters, and per destination the path, the kind, the placement where the destination is a marked region, and the digest of the bytes or region now present, and this binary MUST read a receipt at schemas 1 through 6 through one bounded conversion that ignores the retired payload and baseline digests and write schema 7 at the next successful landing.
 
-#### Scenario: A record from a future release is read by an older binary
+#### Scenario: A schema 3 receipt and a schema 999 receipt meet this binary
 
-- GIVEN a `.release-kit/manifest.json` declaring `schema_version: 999`
-- WHEN `rk status` or `rk upgrade` runs
-- THEN each exits 73 naming the record and the version it found, and nothing is written
+- GIVEN one target whose receipt declares `schema_version: 3` with `payload_sha256` and per-file `baseline_sha256`, and another declaring `schema_version: 999`
+- WHEN `rk upgrade --apply` runs against each
+- THEN the first loads with no other release resolved and rewrites as schema 7 carrying neither retired field, and the second exits 73 naming the record and the version it found with nothing written
 
-Verify: `cargo nextest run -E 'binary(cli)'`
+Verify: `cargo nextest run -E 'test(receipt_schemas_1_through_6_load_without_a_release_source_and_rewrite_as_schema_7) or test(a_receipt_newer_than_the_binary_refuses_by_record_schema) or test(production_outputs_carry_no_plan_bundle_or_release_selection_field)'`
 
 ### `landing:a-rendered-file-is-reproducible` — A rendered file is reproducible
 
@@ -95,29 +97,53 @@ A sentinel needing operator judgment MUST NOT appear in a `rendered` file: a val
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 
-### `landing:an-upgrade-refuses-on-owned-drift` — An upgrade refuses on owned drift
+### `landing:ownership-is-elementary` — Ownership is elementary
 
-Where a `rendered` file's bytes on disk differ from the digest the record says was written, `rk upgrade` MUST collect every such conflict and refuse the whole run in one pass, leaving every file and the record as found, so an operator resolves everything and re-runs once rather than discovering conflicts one at a time.
+When `rk init --apply` or `rk upgrade --apply` lands, it MUST decide each destination by its recorded kind alone: an absent candidate destination is created, a destination the receipt records as a `rendered` whole file is replaced from this binary's projection even where its bytes changed, a recorded `seeded` or `state` file is preserved with its current digest entering the new receipt, a recorded marked region is replaced alone with every byte outside it preserved, and a whole-file destination present on disk and absent from the receipt refuses before any write. A recorded file is replaced because the operator and the agent authorized the migration and Git holds the recovery. A refusal collects every unattributed collision and every malformed, doubled, or unmatched marker in one pass and routes to `rk stage` and the `rk-setup` skill. The verbs offer no force flag: an unattributed file becomes landable through the agent's migration alone, which brings the target to the projection or records it through `rk adopt`.
 
-#### Scenario: Two owned files were edited
+#### Scenario: An edited owned file and an unattributed file meet an upgrade
 
-- GIVEN a landed target whose workflow and routing block were both edited
+- GIVEN a landed target whose recorded workflow was edited by hand and whose `SECURITY.md` exists with no receipt entry
 - WHEN `rk upgrade --apply` runs
-- THEN it exits 73 naming both files in one refusal, and neither the files nor the record change
+- THEN it exits 73 naming `SECURITY.md` before any write, and once the agent records or removes that file a rerun replaces the workflow from the projection and preserves the tuned seeded files
 
-Verify: `cargo nextest run -E 'binary(cli)'`
+Verify: `cargo nextest run -E 'test(an_upgrade_replaces_a_recorded_generated_file_whose_bytes_differ) or test(seeded_and_state_files_survive_and_their_current_digests_enter_the_receipt) or test(a_marked_region_upgrades_and_the_surrounding_bytes_survive) or test(every_unattributed_collision_and_malformed_marker_is_collected_before_the_first_write)'`
+
+### `landing:a-partial-landing-is-visible-and-rerunnable` — A partial landing is visible and rerunnable
+
+While it lands, the verb MUST hold one advisory target lock from its final evidence gathering through the receipt write, created owner-only in an owner-only namespace, opened without following a link, and verified through the opened descriptor to be a regular file before truncation, MUST open the target directory once after validation and perform every create, replace, and receipt write relative to that opened directory without following a substituted link, and MUST replace each destination through a same-directory temp-plus-rename on a supported local filesystem. The set is not transactional. A failure may leave some whole candidate files beside the previous receipt. The verb observes a reported rename failure again, because a remote filesystem may have completed it, names every completed path it observed, and leaves the diff to Git. A rerun is supported. The verb keeps no backup, rollback, or journal, and claims no atomicity across files. The opened directory is what keeps a symlink swapped in after validation from redirecting a write outside the target.
+
+#### Scenario: A rename stops part way after a component became a symlink
+
+- GIVEN a landing over a recorded target stopped at its third write, and a process that replaced `.github` with a symlink to a directory outside the target after validation
+- WHEN the verb exits
+- THEN it exits 74 naming every completed path, the previous receipt stands, each destination holds its previous or its new bytes whole, the linked directory keeps every byte, and a rerun lands the rest
+
+Verify: `cargo nextest run -E 'test(a_failpoint_at_every_write_boundary_leaves_whole_files_and_the_previous_receipt) or test(a_reported_rename_failure_is_observed_again_before_it_is_named) or test(two_concurrent_applies_serialize_on_one_target_lock) or test(a_non_regular_lock_entry_is_refused_and_the_lock_stays_owner_only) or test(a_component_swapped_to_a_symlink_after_validation_cannot_redirect_a_write)'`
+
+### `landing:a-missing-receipt-is-a-classification` — A missing receipt is a classification
+
+Where a target carries no receipt, `rk init` MUST create only absent candidates and refuse unattributed collisions, `rk adopt` MUST record only a target the agent already brought to the installed projection, `rk upgrade` MUST refuse naming the missing receipt, and each of them MUST read the receipt and the tree alone, routing the best-effort migration to `rk stage` and the `rk-setup` skill.
+
+#### Scenario: A target lost its receipt and its history
+
+- GIVEN a repository holding landed files, no `.release-kit/manifest.json`, and a shallow clone with no useful history
+- WHEN `rk upgrade --apply` and `rk init --apply` run
+- THEN the upgrade refuses naming the receipt, the init refuses naming every collision and fetches nothing, and both route to the stage and the skill
+
+Verify: `cargo nextest run -E 'test(a_missing_receipt_routes_init_adopt_and_upgrade_by_classification)'`
 
 ### `landing:a-seeded-file-is-never-rewritten` — A seeded file is never rewritten
 
-`rk upgrade` MUST NOT rewrite a `seeded` file: a difference from the recorded baseline is reported as drift, and the rewritten record follows the target's bytes while keeping the baseline the target tunes away from — the seeding payload, or the last rendered bytes where the payload reclassified the file from `rendered` — because a `seeded` file is a starting point the target is expected to tune.
+`rk upgrade` MUST NOT rewrite a `seeded` file: the run reports a difference from the receipt as drift, and the new receipt carries the file's current digest alone, because a `seeded` file is a starting point the target is expected to tune.
 
 #### Scenario: A tuned configuration survives an upgrade
 
 - GIVEN a landed target whose `release-plz.toml` the operator filled
 - WHEN `rk upgrade --apply` runs
-- THEN the tuned bytes survive, the run reports `drift`, and the new record's digest for that file matches the disk
+- THEN the tuned bytes survive, the run reports `drift`, and the new receipt's digest for that file matches the disk
 
-Verify: `cargo nextest run -E 'binary(cli)'`
+Verify: `cargo nextest run -E 'test(seeded_and_state_files_survive_and_their_current_digests_enter_the_receipt)'`
 
 ### `landing:a-seeded-file-still-carries-the-invariants` — A seeded file still carries the invariants
 
@@ -133,15 +159,15 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `landing:a-dropped-file-stays` — A dropped file stays
 
-A file the payload stops shipping MUST be left in place and named in the upgrade's output, and the rewritten record stops carrying it, because a file release-kit stops shipping is a file the target owns from that moment.
+A destination this binary's projection stops producing MUST be left in place, named in the upgrade's output and in the stage receipt, and left out of the rewritten receipt, because a file release-kit stops shipping is a file the target owns from that moment.
 
-#### Scenario: A newer payload drops a workflow
+#### Scenario: A newer binary drops a workflow
 
-- GIVEN a record naming a destination this binary's payload no longer ships
+- GIVEN a receipt naming a destination this binary's projection no longer produces
 - WHEN `rk upgrade --apply` runs
-- THEN the file survives on disk, the output names it dropped, and the record no longer lists it
+- THEN the file survives on disk, the output names it dropped, and the receipt no longer lists it
 
-Verify: `cargo nextest run -E 'binary(cli)'`
+Verify: `cargo nextest run -E 'test(a_destination_retired_by_the_installed_version_stays_on_disk_and_leaves_the_receipt)'`
 
 ### `landing:a-target-is-never-downgraded` — A target is never downgraded
 
@@ -177,17 +203,11 @@ Where a setup or migration task finds no landing record at a target, the skills 
 - WHEN `rk assess --target . --json` runs
 - THEN the report classifies `brownfield`, names the marker, and exits 0, so the routing skill loads the migration procedure instead of landing the payload beside the tool
 
-#### Scenario: A recorded target is assessed
-
-- GIVEN a repository carrying a landing record
-- WHEN `rk assess --target .` runs
-- THEN the report states the record and its version, and its next lines route to `rk status` rather than to a migration, whatever the verdict says
-
 Verify: `cargo nextest run -E 'test(/^assess_/)'`
 
 ### `landing:an-adoption-writes-the-record-and-nothing-else` — An adoption writes the record and nothing else
 
-`rk adopt` MUST verify every `rendered` destination byte for byte against the rendered candidate, refuse listing every mismatch and every missing expected file in one run, and end a successful pass by writing only inside `.release-kit/` — the config and then the record, last, with its origin stating the adoption — leaving every payload destination untouched.
+`rk adopt` MUST verify every `rendered` destination byte for byte against this binary's projection, refuse listing every mismatch and every missing expected file in one run, and end a successful pass by writing only inside `.release-kit/`, the config and then the receipt, last, with its origin stating the adoption, leaving every payload destination untouched.
 
 #### Scenario: A pre-record target is adopted
 
@@ -243,18 +263,6 @@ The landed commit-msg hook MUST refuse a message referencing a git-ignored path,
 - WHEN the landed rk-message hook judges each message
 - THEN each is refused, the first naming the line and the ignored path before it becomes the trunk's permanent record, the second naming the scope and the shape it must take
 
-#### Scenario: The release bot's request passes with its generated body
-
-- GIVEN release-plz's request titled `chore: release v0.3.0` whose body carries its own generated-with line and bot co-author trailer
-- WHEN the landed rk-message hook judges the message
-- THEN the attribution class is exempt by the title, the ignored-path class still runs, and a clean body passes
-
-#### Scenario: The forge gate refuses a leaking body before the merge
-
-- GIVEN a pull request on a forge whose squash message source is the request's body, its description naming a `.draft/` path or carrying attribution
-- WHEN the landed pr-title check runs its body step
-- THEN the check fails naming the finding's class, and the same body under the bot's title passes whole
-
 Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `landing:the-arming-identity-is-the-bot` — The arming identity is the bot
@@ -266,12 +274,6 @@ Where the recorded style arms the release request, the landed workflow MUST arm 
 - GIVEN a release request armed by a job authenticating as the forge's default CI token
 - WHEN every required check passes and the forge merges
 - THEN the bump lands, no workflow run starts, no tag and no publish follow, and nothing reports it — which arming under the bot identity is what prevents
-
-#### Scenario: The forge replaces the request instead of refreshing it
-
-- GIVEN a forge on which the bot closes an outdated request and opens a fresh one
-- WHEN new work lands on the trunk
-- THEN the same job arms the fresh request under the same bot identity, because the arming died with the request it was made on
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 
