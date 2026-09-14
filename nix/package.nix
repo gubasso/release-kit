@@ -46,8 +46,8 @@ rustPlatform.buildRustPackage {
   '';
 
   # Every payload root, read from its one declaration rather than restated
-  # here, plus the license files src/embedded.rs embeds from outside that
-  # inventory. A root missing from the source closure fails by name, before
+  # here, plus the license files and the changelog src/embedded.rs embeds
+  # from outside that inventory. A root missing from the source closure fails by name, before
   # two smoke commands that would never notice.
   preBuild = ''
     roots=$(sed -n 's/^ *"\(.*\)",$/\1/p' src/payload_roots.rs)
@@ -55,7 +55,7 @@ rustPlatform.buildRustPackage {
       echo "no payload roots parsed from src/payload_roots.rs" >&2
       exit 1
     fi
-    for path in $roots LICENSE LICENSE-MIT LICENSE-CC-BY-4.0; do
+    for path in $roots LICENSE LICENSE-MIT LICENSE-CC-BY-4.0 CHANGELOG.md; do
       if [ ! -e "$path" ]; then
         echo "payload root missing from the package source: $path" >&2
         exit 1

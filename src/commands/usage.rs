@@ -38,28 +38,26 @@ pub fn run() -> Result<(), RkError> {
 /// Print one command's block, then recurse into its subcommands.
 fn describe(out: Output, cmd: &clap::Command, prefix: &str) {
     let path = format!("{prefix} {}", cmd.get_name());
-    if cmd.has_subcommands() {
-        out.result_line(String::new());
-        out.result_line(format!(
-            "{path} — {}",
-            cmd.get_about().map(ToString::to_string).unwrap_or_default()
-        ));
-        for sub in cmd.get_subcommands() {
-            describe(out, sub, &path);
-        }
-        return;
-    }
     out.result_line(String::new());
     out.result_line(format!(
         "{path} — {}",
         cmd.get_about().map(ToString::to_string).unwrap_or_default()
     ));
-    out.result_line(format!("  example: {}", example(cmd, &path)));
-    for arg in cmd.get_arguments() {
-        if matches!(arg.get_id().as_str(), "help" | "version") {
-            continue;
+    let own: Vec<&clap::Arg> = cmd
+        .get_arguments()
+        .filter(|arg| !matches!(arg.get_id().as_str(), "help" | "version"))
+        .collect();
+    // A verb that is itself runnable beside its subcommands, like
+    // `rk stage` or `rk setup`, describes its own flags before them; a
+    // pure group describes nothing but its children.
+    if !cmd.has_subcommands() || !own.is_empty() {
+        out.result_line(format!("  example: {}", example(cmd, &path)));
+        for arg in own {
+            out.result_line(format!("  {}", describe_arg(arg)));
         }
-        out.result_line(format!("  {}", describe_arg(arg)));
+    }
+    for sub in cmd.get_subcommands() {
+        describe(out, sub, &path);
     }
 }
 

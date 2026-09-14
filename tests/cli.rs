@@ -725,6 +725,13 @@ fn the_published_crate_carries_every_root() {
             "{root}: the published crate drops this payload root"
         );
     }
+    // The changelog is embedded beside the inventory, like the licenses,
+    // and the stage's reference tree is built from it: a package without
+    // it would not compile, and this names the reason before cargo does.
+    assert!(
+        listed.lines().any(|line| line == "CHANGELOG.md"),
+        "CHANGELOG.md: the published crate drops the embedded changelog"
+    );
 }
 
 #[test]
@@ -1869,6 +1876,8 @@ fn usage_dumps_every_verb_in_one_call() {
         "rk upgrade",
         "rk adopt",
         "rk assess",
+        "rk stage",
+        "rk stage clean",
         "rk reconcile plan",
         "rk versions",
         "rk doctor",
@@ -24696,4 +24705,1110 @@ fn every_selected_embedded_source_belongs_to_the_one_distribution_root_inventory
         }
     }
     assert!(seen > 0, "the fixture combinations selected no source");
+}
+
+// ---- the candidate stage ----
+
+/// The flags every staging in this section runs under, so a target with
+/// no remote resolves the same parameters a landing does.
+const STAGE_FLAGS: [&str; 6] = [
+    "--tech",
+    "rust",
+    "--forge",
+    "github",
+    "--repo",
+    "acme/widget",
+];
+
+/// The operator's own document at the routing block's destination, whose
+/// bytes a splice must preserve around the block.
+const STAGE_AGENTS_PROSE: &str = "# Widget\n\nOperator prose the block must not disturb.\n";
+
+/// A target for staging: a repository with a Rust version file and an
+/// `AGENTS.md` carrying operator prose where the routing block lands.
+fn stage_target() -> tempfile::TempDir {
+    let target = tempfile::tempdir().expect("a scratch target exists");
+    std::fs::create_dir_all(target.path().join(".git")).expect("the target is a repository");
+    std::fs::write(
+        target.path().join("Cargo.toml"),
+        "[package]\nname = \"widget\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("the version file writes");
+    std::fs::write(target.path().join("AGENTS.md"), STAGE_AGENTS_PROSE).expect("the prose writes");
+    target
+}
+
+/// `rk stage` against `target` with the section's flags and no
+/// `RK_STAGE_ROOT` inherited from the test's own environment.
+fn stage_cmd(target: &Path) -> Command {
+    let mut command = rk();
+    command
+        .env_remove("RK_STAGE_ROOT")
+        .env_remove("RK_STAGE_INTERRUPT_AT")
+        .args(["stage", "--target"])
+        .arg(target)
+        .args(STAGE_FLAGS);
+    command
+}
+
+/// One stage written at `output`, and its `--json` report.
+fn stage_json(target: &Path, output: &Path) -> serde_json::Value {
+    let out = stage_cmd(target)
+        .arg("--output")
+        .arg(output)
+        .arg("--json")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    serde_json::from_slice(&out).expect("one JSON object")
+}
+
+/// Every file below `root`, as sorted stage-relative paths.
+fn stage_paths(root: &Path) -> Vec<String> {
+    tree_digests(root)
+        .into_iter()
+        .map(|(path, _)| path)
+        .collect()
+}
+
+/// The stage receipt at `stage`, parsed.
+fn stage_receipt(stage: &Path) -> serde_json::Value {
+    let bytes = std::fs::read(stage.join("stage.json")).expect("the receipt exists");
+    serde_json::from_slice(&bytes).expect("the receipt parses")
+}
+
+/// A tree snapshot that survives an unreadable entry: every path with its
+/// mode and, where the bytes read, their digest.
+fn tree_snapshot(root: &Path) -> Vec<(String, u32, Option<String>)> {
+    use std::os::unix::fs::PermissionsExt as _;
+    fn walk(dir: &Path, root: &Path, out: &mut Vec<(String, u32, Option<String>)>) {
+        for entry in std::fs::read_dir(dir).expect("the tree reads") {
+            let path = entry.expect("an entry").path();
+            let rel = path
+                .strip_prefix(root)
+                .expect("under the root")
+                .to_string_lossy()
+                .into_owned();
+            let mode = std::fs::symlink_metadata(&path)
+                .expect("metadata reads")
+                .permissions()
+                .mode()
+                & 0o777;
+            if path.is_dir() {
+                out.push((rel, mode, None));
+                walk(&path, root, out);
+            } else {
+                let digest = std::fs::read(&path)
+                    .ok()
+                    .map(|b| Digest::of(&b).to_string());
+                out.push((rel, mode, digest));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, root, &mut out);
+    out.sort();
+    out
+}
+
+/// The top-level keys of one pretty-printed JSON object, in document
+/// order: a parsed map sorts them, and the order is part of the shape.
+fn top_level_keys(text: &str) -> Vec<String> {
+    text.lines()
+        .filter_map(|line| {
+            let rest = line.strip_prefix("  \"")?;
+            if line.starts_with("   ") {
+                return None;
+            }
+            let (key, _) = rest.split_once('"')?;
+            Some(key.to_owned())
+        })
+        .collect()
+}
+
+/// The default stage path for `target` under the state root `state`.
+fn default_stage_path(state: &Path, target: &Path) -> PathBuf {
+    let canonical = std::fs::canonicalize(target).expect("the target canonicalizes");
+    state
+        .join("release-kit/stages")
+        .join(release_kit::stage::target_key(&canonical))
+        .join(env!("CARGO_PKG_VERSION"))
+}
+
+/// SATISFIES staging:production-never-reads-a-stage
+///
+/// A stage under the state root and one under `RK_STAGE_ROOT`, each
+/// holding a sentinel nobody can read, survive `rk init --apply` and
+/// `rk status` byte for byte, and neither output names them. No `strace`
+/// is available on the hosts this suite runs on, so the proof is the
+/// sentinel plus the two outputs: a production command that opened a
+/// stage file would either fail on the sentinel or leave a trace here.
+#[test]
+fn production_commands_neither_read_nor_remove_a_stage() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let state = tempfile::tempdir().expect("a scratch state root exists");
+    let custom = state.path().join("custom-stage-root");
+    let target = stage_target();
+    let with_state = |command: &mut Command| {
+        command
+            .env("XDG_STATE_HOME", state.path())
+            .env("HOME", state.path())
+            .env("RUST_LOG", "off");
+    };
+    let mut first = stage_cmd(target.path());
+    with_state(&mut first);
+    first.assert().success();
+    let mut second = stage_cmd(target.path());
+    with_state(&mut second);
+    second.env("RK_STAGE_ROOT", &custom).assert().success();
+    let default_stage = default_stage_path(state.path(), target.path());
+    let custom_stage = custom
+        .join(release_kit::stage::target_key(
+            &std::fs::canonicalize(target.path()).expect("canonical"),
+        ))
+        .join(env!("CARGO_PKG_VERSION"));
+    assert!(default_stage.join("stage.json").is_file());
+    assert!(custom_stage.join("stage.json").is_file());
+    for stage in [&default_stage, &custom_stage] {
+        let sentinel = stage.join("sentinel");
+        std::fs::write(&sentinel, b"nobody reads this").expect("the sentinel writes");
+        std::fs::set_permissions(&sentinel, std::fs::Permissions::from_mode(0o000))
+            .expect("the sentinel closes");
+    }
+    let before_default = tree_snapshot(&default_stage);
+    let before_custom = tree_snapshot(&custom_stage);
+
+    let mut init = rk();
+    with_state(&mut init);
+    let init = init
+        .args(["init", "--target"])
+        .arg(target.path())
+        .args(STAGE_FLAGS)
+        .args(["--workflow", "worktree", "--style", "trunk", "--apply"])
+        .env("RK_STAGE_ROOT", &custom)
+        .assert()
+        .success();
+    let mut status = rk();
+    with_state(&mut status);
+    let status = status
+        .args(["status", "--target"])
+        .arg(target.path())
+        .env("RK_STAGE_ROOT", &custom)
+        .assert()
+        .success();
+    for output in [init.get_output(), status.get_output()] {
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        for stage in [&default_stage, &custom_stage] {
+            assert!(
+                !text.contains(&stage.display().to_string()),
+                "a production command named the stage: {text}"
+            );
+        }
+        assert!(
+            !text.contains("stage"),
+            "a production command spoke of a stage: {text}"
+        );
+    }
+    assert_eq!(tree_snapshot(&default_stage), before_default);
+    assert_eq!(tree_snapshot(&custom_stage), before_custom);
+}
+
+/// SATISFIES staging:a-stage-is-one-target-specific-candidate
+#[test]
+fn stage_writes_only_below_the_resolved_stage_root() {
+    let parent = tempfile::tempdir().expect("a scratch parent exists");
+    let target = parent.path().join("widget");
+    std::fs::create_dir_all(target.join(".git")).expect("the target is a repository");
+    std::fs::write(
+        target.join("Cargo.toml"),
+        "[package]\nname = \"widget\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("the version file writes");
+    land_rust(&target).success();
+    let before = tree_digests(&target);
+    let state = tempfile::tempdir().expect("a scratch state root exists");
+    let output = parent.path().join("out");
+    let report_bytes = stage_cmd(&target)
+        .env("XDG_STATE_HOME", state.path())
+        .env("RUST_LOG", "off")
+        .arg("--output")
+        .arg(&output)
+        .arg("--json")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&report_bytes).expect("parses");
+    assert_eq!(tree_digests(&target), before, "the target changed");
+    let resolved = PathBuf::from(report["stage_root"].as_str().expect("a stage root"));
+    assert_eq!(
+        resolved,
+        std::fs::canonicalize(&output).expect("the stage canonicalizes")
+    );
+    for (path, _) in tree_digests(parent.path()) {
+        assert!(
+            path.starts_with("widget/") || path.starts_with("out/"),
+            "{path}: written outside the target and the stage"
+        );
+    }
+    assert!(
+        !state.path().join("release-kit/stages").exists(),
+        "an explicit --output leaves the state root without a stage"
+    );
+    assert!(resolved.join("stage.json").is_file());
+    assert_eq!(report["receipt_schema_version"], 6);
+}
+
+/// SATISFIES staging:the-output-path-has-one-precedence
+#[test]
+fn stage_output_precedence_is_flag_then_env_then_state_root() {
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let target = stage_target();
+    let env_root = scratch.path().join("env-root");
+    let flag_dir = scratch.path().join("flag-dir");
+    let state = scratch.path().join("state");
+    let key = release_kit::stage::target_key(
+        &std::fs::canonicalize(target.path()).expect("the target canonicalizes"),
+    );
+    let version = env!("CARGO_PKG_VERSION");
+
+    // Flag and variable both set: the flag wins, and nothing appears
+    // below the variable's root.
+    let human = stage_cmd(target.path())
+        .env("RK_STAGE_ROOT", &env_root)
+        .env("XDG_STATE_HOME", &state)
+        .arg("--output")
+        .arg(&flag_dir)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let human = String::from_utf8_lossy(&human);
+    let flag_canonical = std::fs::canonicalize(&flag_dir).expect("the stage exists");
+    assert!(
+        human.contains(&format!("stage: {}", flag_canonical.display())),
+        "{human}"
+    );
+    assert!(human.contains("output: from --output"), "{human}");
+    assert!(
+        !env_root.exists(),
+        "the variable's root was written under a flag"
+    );
+    let report = stage_json(target.path(), &scratch.path().join("flag-json"));
+    assert_eq!(report["output_source"], "--output");
+    assert_eq!(
+        report["stage_root"],
+        std::fs::canonicalize(scratch.path().join("flag-json"))
+            .expect("canonical")
+            .display()
+            .to_string()
+    );
+
+    // The variable alone: a target and version directory below it.
+    let out = stage_cmd(target.path())
+        .env("RK_STAGE_ROOT", &env_root)
+        .env("XDG_STATE_HOME", &state)
+        .arg("--json")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("parses");
+    let expected = std::fs::canonicalize(&env_root)
+        .expect("the root exists")
+        .join(&key)
+        .join(version);
+    assert_eq!(report["stage_root"], expected.display().to_string());
+    assert_eq!(report["output_source"], "RK_STAGE_ROOT");
+    assert!(expected.join("stage.json").is_file());
+    assert!(!state.join("release-kit/stages").exists());
+
+    // Neither: the private state root.
+    let out = stage_cmd(target.path())
+        .env("XDG_STATE_HOME", &state)
+        .arg("--json")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("parses");
+    let expected = std::fs::canonicalize(&state)
+        .expect("the state root exists")
+        .join("release-kit/stages")
+        .join(&key)
+        .join(version);
+    assert_eq!(report["stage_root"], expected.display().to_string());
+    assert_eq!(report["output_source"], "state root");
+    assert!(expected.join("stage.json").is_file());
+}
+
+/// SATISFIES staging:a-visible-stage-is-complete
+#[test]
+fn an_existing_nonempty_output_directory_refuses_byte_identically() {
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let target = stage_target();
+    let output = scratch.path().join("occupied");
+    std::fs::create_dir_all(output.join("nested")).expect("creates");
+    std::fs::write(output.join("nested/keep"), b"mine").expect("writes");
+    std::fs::write(output.join("also"), b"mine too").expect("writes");
+    let before = tree_digests(&output);
+    let target_before = tree_digests(target.path());
+    stage_cmd(target.path())
+        .arg("--output")
+        .arg(&output)
+        .assert()
+        .code(73)
+        .stderr(
+            predicate::str::contains("is not empty")
+                .and(predicate::str::contains("nothing was written")),
+        );
+    let json = stage_cmd(target.path())
+        .arg("--output")
+        .arg(&output)
+        .arg("--json")
+        .assert()
+        .code(73)
+        .get_output()
+        .stderr
+        .clone();
+    let diagnostic: serde_json::Value = serde_json::from_slice(&json).expect("one line");
+    assert_eq!(diagnostic["reason"], "state-drift");
+    assert_eq!(
+        tree_digests(&output),
+        before,
+        "the occupied directory changed"
+    );
+    assert_eq!(tree_digests(target.path()), target_before);
+    let siblings: Vec<String> = std::fs::read_dir(scratch.path())
+        .expect("reads")
+        .map(|entry| {
+            entry
+                .expect("an entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    assert_eq!(
+        siblings,
+        vec!["occupied".to_owned()],
+        "a temp sibling was left"
+    );
+}
+
+/// SATISFIES staging:a-visible-stage-is-complete
+#[test]
+fn a_visible_stage_is_complete() {
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let target = stage_target();
+    let output = scratch.path().join("stage");
+    stage_cmd(target.path())
+        .env(
+            "RK_STAGE_INTERRUPT_AT",
+            "artifacts/.github/workflows/pr-title.yml",
+        )
+        .arg("--output")
+        .arg(&output)
+        .assert()
+        .code(74)
+        .stderr(predicate::str::contains("stopped after"));
+    assert!(!output.exists(), "an interrupted stage stands at its path");
+    let leftovers: Vec<String> = std::fs::read_dir(scratch.path())
+        .expect("reads")
+        .map(|entry| {
+            entry
+                .expect("an entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "the sibling was left behind: {leftovers:?}"
+    );
+
+    let report = stage_json(target.path(), &output);
+    let candidates = report["candidates"].as_array().expect("a list");
+    assert!(candidates.len() > 2);
+    for candidate in candidates {
+        let destination = candidate["destination"].as_str().expect("a destination");
+        assert!(
+            output.join("artifacts").join(destination).is_file(),
+            "{destination}: missing from the second, whole stage"
+        );
+    }
+    assert!(output.join("stage.json").is_file());
+    assert!(output.join("reference/CHANGELOG.md").is_file());
+}
+
+/// SATISFIES staging:a-visible-stage-is-complete
+#[test]
+fn the_default_stage_root_is_owner_only() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let state = tempfile::tempdir().expect("a scratch state root exists");
+    let target = stage_target();
+    stage_cmd(target.path())
+        .env("XDG_STATE_HOME", state.path())
+        .assert()
+        .success();
+    let staged = default_stage_path(state.path(), target.path());
+    let mode = |path: &Path| {
+        std::fs::symlink_metadata(path)
+            .expect("metadata reads")
+            .permissions()
+            .mode()
+            & 0o777
+    };
+    assert_eq!(mode(&state.path().join("release-kit/stages")), 0o700);
+    assert_eq!(mode(staged.parent().expect("a key dir")), 0o700);
+    assert_eq!(mode(&staged), 0o700);
+    assert_eq!(mode(&staged.join("stage.json")), 0o600);
+}
+
+/// SATISFIES staging:a-stage-is-one-target-specific-candidate
+/// SATISFIES staging:the-artifacts-tree-holds-the-proposed-bytes
+/// SATISFIES staging:the-reference-tree-is-the-installed-knowledge
+#[test]
+fn a_stage_holds_every_projected_artifact_byte_for_byte_and_every_reference_root() {
+    use release_kit::projection::{Projection, ProjectionInput, TargetEvidence};
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let target = stage_target();
+    let output = scratch.path().join("stage");
+    let report = stage_json(target.path(), &output);
+
+    let params = render_params("acme/widget", Some(release_kit::landing::Style::Trunk));
+    let evidence = TargetEvidence::gather(&utf8(target.path()), None).expect("gathers");
+    let projection = Projection::compute(&ProjectionInput { params, evidence }).expect("projects");
+    assert!(!projection.candidates.is_empty());
+    let candidates = report["candidates"].as_array().expect("a list");
+    assert_eq!(candidates.len(), projection.candidates.len());
+    for (entry, candidate) in candidates.iter().zip(&projection.candidates) {
+        assert_eq!(entry["destination"], candidate.destination);
+        let staged = std::fs::read(output.join("artifacts").join(&candidate.destination))
+            .expect("the artifact exists");
+        assert_eq!(
+            staged, candidate.bytes,
+            "{}: the staged bytes differ from the projection",
+            candidate.destination
+        );
+        assert_eq!(entry["sha256"], Digest::of(&candidate.bytes).to_string());
+        assert_eq!(entry["kind"], candidate.kind.as_str());
+    }
+    let staged_artifacts: Vec<String> = stage_paths(&output.join("artifacts"));
+    let mut expected: Vec<String> = projection
+        .candidates
+        .iter()
+        .map(|candidate| candidate.destination.clone())
+        .collect();
+    expected.sort();
+    assert_eq!(
+        staged_artifacts, expected,
+        "an artifact outside the projection"
+    );
+
+    let reference: Vec<String> = report["reference"]
+        .as_array()
+        .expect("a list")
+        .iter()
+        .map(|root| root.as_str().expect("a root").to_owned())
+        .collect();
+    assert_eq!(
+        reference,
+        release_kit::stage::REFERENCE_ROOTS
+            .iter()
+            .map(|root| (*root).to_owned())
+            .collect::<Vec<_>>()
+    );
+    for root in &reference {
+        assert!(
+            output.join("reference").join(root).exists(),
+            "{root}: missing from the reference tree"
+        );
+    }
+    let mut expected_files: Vec<(String, &[u8])> = release_kit::stage::reference_files();
+    expected_files.sort_by(|a, b| a.0.cmp(&b.0));
+    let staged_reference = stage_paths(&output.join("reference"));
+    assert_eq!(
+        staged_reference,
+        expected_files
+            .iter()
+            .map(|(path, _)| path.clone())
+            .collect::<Vec<_>>()
+    );
+    for (path, bytes) in &expected_files {
+        let staged = std::fs::read(output.join("reference").join(path)).expect("reads");
+        assert_eq!(&staged[..], *bytes, "{path}: not the binary's bytes");
+    }
+    assert_eq!(
+        std::fs::read_to_string(output.join("reference/CHANGELOG.md")).expect("reads"),
+        release_kit::embedded::CHANGELOG
+    );
+    assert!(output.join("reference/skills/rk-setup/SKILL.md").is_file());
+    assert!(output.join("reference/skill-shared/plan-gate.md").is_file());
+    assert!(
+        output
+            .join("reference/skill-shared/pre-flight-gate.md")
+            .is_file()
+    );
+}
+
+/// SATISFIES staging:the-artifacts-tree-holds-the-proposed-bytes
+#[test]
+fn a_splice_artifact_is_a_complete_proposed_document() {
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let target = stage_target();
+    let output = scratch.path().join("stage");
+    let report = stage_json(target.path(), &output);
+    let agents = report["candidates"]
+        .as_array()
+        .expect("a list")
+        .iter()
+        .find(|entry| entry["destination"] == "AGENTS.md")
+        .expect("the routing block is a candidate");
+    assert_eq!(agents["placement"], "region");
+    assert!(agents["region_sha256"].is_string());
+
+    let staged = std::fs::read_to_string(output.join("artifacts/AGENTS.md")).expect("reads");
+    let begin = staged
+        .find(release_kit::landing::BLOCK_BEGIN)
+        .expect("the begin marker");
+    let end = staged
+        .find(release_kit::landing::BLOCK_END)
+        .expect("the end marker");
+    assert!(begin < end);
+    assert!(
+        staged.starts_with(STAGE_AGENTS_PROSE.trim_end()),
+        "the operator's prose does not open the proposed document:\n{staged}"
+    );
+    let outside = format!(
+        "{}{}",
+        &staged[..begin],
+        &staged[end + release_kit::landing::BLOCK_END.len()..]
+    );
+    assert_eq!(
+        outside.trim(),
+        STAGE_AGENTS_PROSE.trim(),
+        "bytes outside the markers differ from the target's"
+    );
+    let region_bytes = &staged[begin..end + release_kit::landing::BLOCK_END.len()];
+    assert_eq!(
+        agents["region_sha256"],
+        Digest::of(region_bytes.as_bytes()).to_string(),
+        "the region digest is the marked block, markers included"
+    );
+
+    // What production writes is what the stage proposed, for the splice
+    // and for every other candidate.
+    rk().args(["init", "--target"])
+        .arg(target.path())
+        .args(STAGE_FLAGS)
+        .args(["--workflow", "worktree", "--style", "trunk", "--apply"])
+        .assert()
+        .success();
+    assert_eq!(
+        std::fs::read_to_string(target.path().join("AGENTS.md")).expect("reads"),
+        staged
+    );
+    for entry in report["candidates"].as_array().expect("a list") {
+        let destination = entry["destination"].as_str().expect("a destination");
+        assert_eq!(
+            std::fs::read(target.path().join(destination)).expect("landed"),
+            std::fs::read(output.join("artifacts").join(destination)).expect("staged"),
+            "{destination}: the landing wrote other bytes than the stage proposed"
+        );
+    }
+}
+
+/// SATISFIES staging:the-reference-tree-is-the-installed-knowledge
+#[test]
+fn the_reference_tree_carries_no_docs_tests_or_source() {
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let target = stage_target();
+    let output = scratch.path().join("stage");
+    stage_json(target.path(), &output);
+    let paths = stage_paths(&output.join("reference"));
+    assert!(!paths.is_empty());
+    for path in &paths {
+        for part in path.split('/') {
+            assert!(
+                !matches!(part, "_docs" | "tests" | "src" | ".git" | "target"),
+                "{path}: an instance-owned, test, or source path in the reference tree"
+            );
+        }
+        assert!(
+            Path::new(path).extension().is_none_or(|ext| ext != "rs")
+                && !path.ends_with("Cargo.toml")
+                && !path.ends_with("Cargo.lock"),
+            "{path}: a source file in the reference tree"
+        );
+        assert!(
+            !path.starts_with("snippets/")
+                && !path.starts_with("blocks/")
+                && !path.starts_with("setup/"),
+            "{path}: a landable or executable payload root is not knowledge"
+        );
+    }
+    for root in release_kit::stage::REFERENCE_ROOTS {
+        assert!(
+            paths
+                .iter()
+                .any(|path| path == root || path.starts_with(&format!("{root}/"))),
+            "{root}: missing from the reference tree"
+        );
+    }
+    assert!(
+        !output.join("reference/skills/rk-release").exists()
+            && !output.join("reference/skills/rk-depend").exists(),
+        "only the setup skill is reference knowledge"
+    );
+}
+
+/// SATISFIES staging:the-stage-receipt-is-explanatory-metadata
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one test holds the human lines, the receipt keys, the report keys, and the landed-target fields against one snapshot, because a drift in any of them is one schema change"
+)]
+fn the_stage_receipt_and_human_output_snapshot_hold() {
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let target = stage_target();
+    let output = scratch.path().join("stage");
+    let human = stage_cmd(target.path())
+        .arg("--output")
+        .arg(&output)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let human = String::from_utf8_lossy(&human);
+    let stage = std::fs::canonicalize(&output).expect("the stage exists");
+    let canonical_target = std::fs::canonicalize(target.path()).expect("canonical");
+    for line in [
+        format!("stage: {}", stage.display()),
+        "output: from --output".to_owned(),
+        format!("target: {}", canonical_target.display()),
+        "parameters: tech rust, forge github, repo acme/widget, workflow worktree, style trunk, nix off".to_owned(),
+        "landing record: none".to_owned(),
+        "  artifacts/AGENTS.md (rendered, region)".to_owned(),
+        "  artifacts/release-plz.toml (seeded, whole)".to_owned(),
+        "reference: reference/CHANGELOG.md, reference/guidance, reference/method, reference/bindings, reference/runbooks, reference/forges, reference/skills/rk-setup, reference/skill-shared".to_owned(),
+        "Next:".to_owned(),
+        format!("  rk stage clean {} removes the stage", stage.display()),
+    ] {
+        assert!(human.contains(&line), "missing {line:?} in:\n{human}");
+    }
+    assert!(human.contains("candidates: "), "{human}");
+
+    let receipt_text = std::fs::read_to_string(stage.join("stage.json")).expect("reads");
+    let receipt_keys = [
+        "schema",
+        "rk_version",
+        "target",
+        "stage_root",
+        "parameters",
+        "receipt_schema_version",
+        "candidates",
+        "omissions",
+        "collisions",
+        "retired",
+        "seeded_present",
+        "state_present",
+        "reference",
+    ];
+    assert_eq!(top_level_keys(&receipt_text), receipt_keys);
+    let receipt = stage_receipt(&stage);
+    assert_eq!(receipt["schema"], "rk.stage/1");
+    assert_eq!(receipt["rk_version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(receipt["target"], canonical_target.display().to_string());
+    assert_eq!(receipt["stage_root"], stage.display().to_string());
+    assert!(receipt["receipt_schema_version"].is_null());
+    assert_eq!(receipt["parameters"]["tech"], "rust");
+    assert_eq!(receipt["parameters"]["style"], "trunk");
+    let first = &receipt["candidates"][0];
+    for key in ["destination", "kind", "placement", "sha256", "sources"] {
+        assert!(
+            !first[key].is_null(),
+            "{key}: absent from a candidate entry"
+        );
+    }
+
+    // The --json report is the receipt with the output source and the
+    // next lines beside it.
+    let report_text = stage_cmd(target.path())
+        .arg("--output")
+        .arg(scratch.path().join("json"))
+        .arg("--json")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report_text = String::from_utf8_lossy(&report_text);
+    let report_keys = top_level_keys(&report_text);
+    assert_eq!(&report_keys[..13], &receipt_keys[..]);
+    assert_eq!(&report_keys[13..], ["output_source", "next"]);
+
+    // A landed target explains its record: the schema version, the
+    // seeded files a landing keeps, and a recorded destination the
+    // projection no longer produces.
+    let landed = stage_target();
+    land_rust(landed.path()).success();
+    let mut manifest = read_manifest(landed.path());
+    manifest["files"]
+        .as_array_mut()
+        .expect("a file list")
+        .push(serde_json::json!({
+            "destination": "old-workflow.yml",
+            "kind": "rendered",
+            "sha256": Digest::of(b"old").to_string()
+        }));
+    write_manifest(landed.path(), &manifest);
+    let landed_out = scratch.path().join("landed");
+    let human = stage_cmd(landed.path())
+        .arg("--output")
+        .arg(&landed_out)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let human = String::from_utf8_lossy(&human);
+    assert!(
+        human.contains("landing record: schema_version 6"),
+        "{human}"
+    );
+    assert!(
+        human.contains("retired old-workflow.yml: recorded, no longer produced"),
+        "{human}"
+    );
+    assert!(
+        human.contains("seeded present release-plz.toml: a landing keeps it"),
+        "{human}"
+    );
+    let receipt = stage_receipt(&landed_out);
+    assert_eq!(receipt["receipt_schema_version"], 6);
+    assert_eq!(receipt["retired"], serde_json::json!(["old-workflow.yml"]));
+    assert!(
+        receipt["seeded_present"]
+            .as_array()
+            .expect("a list")
+            .contains(&serde_json::json!("release-plz.toml"))
+    );
+}
+
+/// SATISFIES staging:the-stage-receipt-is-explanatory-metadata
+#[test]
+fn a_stage_receipt_is_accepted_by_no_landing_command() {
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let target = stage_target();
+    let output = scratch.path().join("stage");
+    stage_json(target.path(), &output);
+    let receipt = output.join("stage.json");
+    let before = tree_digests(&output);
+    let target_before = tree_digests(target.path());
+    for verb in ["init", "upgrade", "adopt"] {
+        for flag in ["--stage", "--from-stage", "--receipt", "--from"] {
+            rk().args([verb, "--target"])
+                .arg(target.path())
+                .arg(flag)
+                .arg(&receipt)
+                .assert()
+                .code(64)
+                .stderr(predicate::str::contains("unexpected argument"));
+        }
+    }
+    // Offered as the target, the stage directory is just a directory: a
+    // preview renders afresh and writes nothing, an upgrade finds no
+    // record to upgrade.
+    rk().args(["init", "--target"])
+        .arg(&output)
+        .args(STAGE_FLAGS)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("DRY RUN"));
+    rk().args(["upgrade", "--target"])
+        .arg(&output)
+        .assert()
+        .code(73);
+    assert_eq!(
+        tree_digests(&output),
+        before,
+        "a landing verb touched the stage"
+    );
+    assert_eq!(tree_digests(target.path()), target_before);
+}
+
+/// SATISFIES staging:cleanup-removes-only-a-stage-that-names-itself
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "every refusal is proved against one tree, and the valid removal afterwards proves the refusals touched none of it"
+)]
+fn stage_clean_refuses_every_protected_or_ambiguous_path_and_deletes_one_valid_stage() {
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let canonical = std::fs::canonicalize(scratch.path()).expect("canonical");
+    let target_dir = canonical.join("widget");
+    std::fs::create_dir_all(target_dir.join(".git")).expect("the target is a repository");
+    std::fs::write(
+        target_dir.join("Cargo.toml"),
+        "[package]\nname = \"widget\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("writes");
+    let stage = canonical.join("stage");
+    stage_json(&target_dir, &stage);
+    let home = canonical.join("home");
+    std::fs::create_dir(&home).expect("creates");
+    let clean = |path: &Path| {
+        let mut command = rk();
+        command
+            .env("HOME", &home)
+            .env_remove("RK_STAGE_CLEAN_PAUSE_AFTER_VALIDATE")
+            .args(["stage", "clean"])
+            .arg(path);
+        command
+    };
+    // The filesystem root.
+    clean(Path::new("/"))
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("names no directory"));
+    // The home directory.
+    clean(&home)
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("home directory"));
+    // The target repository root.
+    clean(&target_dir)
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("repository root"));
+    // An ancestor of the target, even one forging a receipt for itself.
+    let ancestor = canonical.join("ancestor");
+    std::fs::create_dir_all(ancestor.join("inner/.git")).expect("creates");
+    std::fs::write(
+        ancestor.join("stage.json"),
+        format!(
+            r#"{{"schema":"rk.stage/1","stage_root":"{}","target":"{}"}}"#,
+            ancestor.display(),
+            ancestor.join("inner").display()
+        ),
+    )
+    .expect("writes");
+    clean(&ancestor)
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("ancestor"));
+    // A symlink to a real stage: refused naming the link.
+    let link = canonical.join("link");
+    std::os::unix::fs::symlink(&stage, &link).expect("the link creates");
+    clean(&link)
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("link").and(predicate::str::contains("is a symlink")));
+    assert!(
+        std::fs::symlink_metadata(&link)
+            .expect("the link")
+            .file_type()
+            .is_symlink()
+    );
+    // A directory without a receipt.
+    let bare = canonical.join("bare");
+    std::fs::create_dir(&bare).expect("creates");
+    std::fs::write(bare.join("file"), b"x").expect("writes");
+    clean(&bare)
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("carries no stage.json"));
+    // A receipt at another schema.
+    let other = canonical.join("other");
+    std::fs::create_dir(&other).expect("creates");
+    std::fs::write(other.join("stage.json"), r#"{"schema":"rk.stage/2"}"#).expect("writes");
+    let json = clean(&other)
+        .arg("--json")
+        .assert()
+        .code(73)
+        .get_output()
+        .stderr
+        .clone();
+    let diagnostic: serde_json::Value = serde_json::from_slice(&json).expect("one line");
+    assert_eq!(diagnostic["reason"], "unsupported-schema");
+    // A receipt whose stage_root is another directory: a copied stage.
+    let copied = canonical.join("copied");
+    std::fs::create_dir(&copied).expect("creates");
+    std::fs::copy(stage.join("stage.json"), copied.join("stage.json")).expect("copies");
+    clean(&copied)
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("as its stage root, not"));
+    // A glob is a name that does not exist, never a set.
+    clean(&canonical.join("sta*"))
+        .assert()
+        .code(66)
+        .stderr(predicate::str::contains("does not exist"));
+    // Nothing above was touched.
+    for path in [&target_dir, &ancestor, &bare, &other, &copied, &home] {
+        assert!(path.is_dir(), "{}: removed by a refusal", path.display());
+    }
+    assert!(stage.join("stage.json").is_file());
+
+    // The one valid stage, removed exactly, with its siblings standing.
+    clean(&stage).assert().success().stdout(
+        predicate::str::contains(format!("removed {}", stage.display()))
+            .and(predicate::str::contains("recovery: rk stage --target")),
+    );
+    assert!(!stage.exists(), "the stage stands after clean");
+    for path in [&target_dir, &ancestor, &bare, &other, &copied, &home] {
+        assert!(
+            path.is_dir(),
+            "{}: removed beside the stage",
+            path.display()
+        );
+    }
+    assert!(
+        std::fs::symlink_metadata(&link).is_ok(),
+        "the link was removed"
+    );
+
+    // The machine form of a removal.
+    let again = canonical.join("again");
+    stage_json(&target_dir, &again);
+    let out = clean(&again)
+        .arg("--json")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one object");
+    assert_eq!(report["schema"], "rk.stage-clean/1");
+    assert_eq!(report["stage_root"], again.display().to_string());
+    assert_eq!(report["target"], target_dir.display().to_string());
+    assert_eq!(report["removed"], true);
+    assert!(!again.exists());
+}
+
+/// SATISFIES staging:cleanup-removes-only-a-stage-that-names-itself
+#[test]
+fn stage_clean_after_a_production_landing_removes_the_stage_and_no_target_byte() {
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let target = stage_target();
+    let output = scratch.path().join("stage");
+    stage_json(target.path(), &output);
+    rk().args(["init", "--target"])
+        .arg(target.path())
+        .args(STAGE_FLAGS)
+        .args(["--workflow", "worktree", "--style", "trunk", "--apply"])
+        .assert()
+        .success();
+    assert!(
+        output.join("stage.json").is_file(),
+        "the production landing removed the stage"
+    );
+    let landed = tree_digests(target.path());
+    rk().args(["stage", "clean"])
+        .arg(&output)
+        .assert()
+        .success();
+    assert!(!output.exists());
+    assert_eq!(
+        tree_digests(target.path()),
+        landed,
+        "clean touched the target"
+    );
+    rk().args(["status", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+}
+
+/// SATISFIES staging:cleanup-holds-what-it-validated-open
+///
+/// The run pauses after validation through the proof seam; the test
+/// then moves the stage aside and puts a symlink to a decoy at its path.
+/// The removal follows the held descriptors: the moved directory is
+/// emptied, the decoy keeps every byte, the link is left alone, and the
+/// run reports the swap.
+#[test]
+fn stage_clean_stays_confined_after_an_adversarial_swap() {
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let canonical = std::fs::canonicalize(scratch.path()).expect("canonical");
+    let target = stage_target();
+    let stage = canonical.join("stage");
+    stage_json(target.path(), &stage);
+    let decoy = canonical.join("decoy");
+    std::fs::create_dir_all(decoy.join("deep")).expect("creates");
+    std::fs::write(decoy.join("canary"), b"still here").expect("writes");
+    std::fs::write(decoy.join("deep/canary"), b"still here too").expect("writes");
+    let decoy_before = tree_digests(&decoy);
+    let pause = canonical.join("pause");
+    std::fs::create_dir(&pause).expect("creates");
+
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_rk"));
+    for var in GIT_HOOK_VARS {
+        child.env_remove(var);
+    }
+    let child = child
+        .env("XDG_STATE_HOME", scratch_state_root())
+        .env("RK_STAGE_CLEAN_PAUSE_AFTER_VALIDATE", &pause)
+        .args(["stage", "clean"])
+        .arg(&stage)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("the clean spawns");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while !pause.join("validated").exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the run never reached the pause"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    // The swap: the validated directory moves aside, and a link to the
+    // decoy takes its path.
+    let moved = canonical.join("moved");
+    std::fs::rename(&stage, &moved).expect("the stage moves aside");
+    std::os::unix::fs::symlink(&decoy, &stage).expect("the link takes the path");
+    std::fs::write(pause.join("proceed"), b"").expect("the go-ahead writes");
+    let output = child.wait_with_output().expect("the run finishes");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        tree_digests(&decoy),
+        decoy_before,
+        "the decoy lost bytes: {stderr}"
+    );
+    assert!(
+        std::fs::symlink_metadata(&stage)
+            .expect("the link stands")
+            .file_type()
+            .is_symlink(),
+        "the link at the stage path was removed or replaced"
+    );
+    assert!(
+        moved.is_dir(),
+        "the validated directory's entry was not ours to remove"
+    );
+    assert!(
+        std::fs::read_dir(&moved).expect("reads").next().is_none(),
+        "the validated directory kept content: {:?}",
+        stage_paths(&moved)
+    );
+    assert_eq!(output.status.code(), Some(74), "{stderr}");
+    assert!(
+        stderr.contains("was replaced while the stage was being removed"),
+        "{stderr}"
+    );
 }

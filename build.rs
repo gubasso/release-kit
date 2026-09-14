@@ -4,7 +4,9 @@
 //! directory for new or deleted files on its own; naming each embedded
 //! root here makes any change under them rebuild the crate. The roots come
 //! from the one payload inventory in `src/payload_roots.rs`, so this list
-//! cannot drift from what `embedded` serves. No code generation happens.
+//! cannot drift from what `embedded` serves. The licenses and the changelog
+//! are embedded beside that inventory and tracked here by name. No code
+//! generation happens.
 
 include!("src/payload_roots.rs");
 
@@ -12,7 +14,12 @@ fn main() {
     for root in PAYLOAD_ROOTS {
         println!("cargo:rerun-if-changed={root}");
     }
-    for license in ["LICENSE", "LICENSE-MIT", "LICENSE-CC-BY-4.0"] {
-        println!("cargo:rerun-if-changed={license}");
+    for beside in [
+        "LICENSE",
+        "LICENSE-MIT",
+        "LICENSE-CC-BY-4.0",
+        "CHANGELOG.md",
+    ] {
+        println!("cargo:rerun-if-changed={beside}");
     }
 }
