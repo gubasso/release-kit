@@ -10,6 +10,8 @@ Hold all three phases for the rest of the task, and apply them to every further 
 
 The gate governs how a skill acts; it never widens what the operator asked for. A request authorizes the file writes and the `rk` verbs it names, and nothing else: creating, switching or deleting a branch, creating or removing a worktree, committing, pushing, tagging, and opening, updating or merging a pull request are the operator's moves. Plan each of those as a gated step, state its exact command, and run it only where the operator's request named that action or they answer the gate for it.
 
+A request may carry a term the target's glossary defines. Read `GLOSSARY.md` at the target and take that term's action list as actions the request named: the term is the operator's own shorthand for the list, so it widens nothing. Restate the list in the plan, action by action, never the term, because an operator reading the plan is where a misreading is caught or nowhere. Where the file is absent, or the word is not a term in it, ask rather than guess: a word that looks like a term is not one. A term authorizes actions and waives nothing else. All three phases still run, the way `--no-plan` waives no pre-flight, and a step outside the term's list stays gated with its exact command.
+
 An approved plan approves its shape, not a standing licence over the repository's git and forge state. A request to implement or change code authorizes the file changes alone: where the work then needs a branch or a commit, say which step comes next, name its command, and stop there. An agent authorized to author a commit, request, or issue writes no agent attribution into it and references no internal planning artifact — the message names the work, never the scaffolding behind it.
 
 ## 1. Plan
