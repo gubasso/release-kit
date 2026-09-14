@@ -47,7 +47,7 @@ On rust:
 
 The registry account is signed in at crates.io with a verified email, and `cargo info <crate>` 404s unless the account already owns the crate; [the binding](../bindings/rust.md) says why the email gates the first publish.
 
-A project that runs part of this convention declares that before its first apply. `setup.excluded_steps` in `.release-kit/config.toml` names each step the project does not run against the reason it does not, and `rk setup --list` names the steps it may hold. A full run then states each exclusion and runs nothing for it, `rk setup check --target .` reports each one with its reason and judges the rest, and `rk setup step <name> --apply` refuses a step named there until the entry goes. The file needs no landing to be read, so a project that lands no payload still declares its model.
+A project that runs part of this convention declares that before its first apply. `setup.excluded_steps` in `.release-kit/config.toml` names each step the project does not run against the reason it does not, and `rk setup --list` names the steps it may hold. A full run then states each exclusion and runs nothing for it, `rk setup check --target .` reports each one with its reason and judges the rest, and `rk setup step <name> --apply` refuses a step named there until the entry goes. The file needs no landing to be read, so a project that lands no file still declares its model.
 
 ## 0. Gate the package metadata
 
@@ -320,7 +320,7 @@ Where the forge enforces less than a step claims, the check names the weaker gua
 
 ## 4. Land the workflow files
 
-### 4a. Land the payload
+### 4a. Land the files
 
 The apply names no scope vocabulary. The title check holds a scope to lowercase letters, digits, and `_ . / -`, the commit hook requires that a scope is there, and the landed `AGENTS.md` block tells the author how to pick the word. `--workflow` chooses the working-copy mode and defaults to `worktree` — every code-changing branch in a linked worktree, the main checkout commits nothing; `--workflow branches` leaves branches workable in the main checkout, with worktrees optional beside them. `--style` chooses the release style and defaults to `trunk` — the bot's request carries auto-merge from creation, so a green trunk ships itself; `--style lines` leaves every request unarmed, for a project that keeps older lines and validates a candidate by hand (check: `rk status` prints the mode and the style).
 
@@ -330,7 +330,7 @@ The landing is staged, investigated, rendered, and verified: [the landing runboo
 rk init --tech <tech> --target .             # preview every destination
 rk init --tech <tech> --target . --apply     # write the files and the landing record
 # check: the apply reports each written file, including SECURITY.md, and every sentinel left to fill
-# already landed: the apply refuses; rk upgrade --target . --apply takes an existing landing to a newer payload
+# already landed: the apply refuses; rk upgrade --target . --apply takes an existing landing to the installed binary's projection
 # a record from before the style parameter: the upgrade refuses until --style names one
 ```
 
@@ -344,7 +344,7 @@ Then answer every reported sentinel and confirm the record:
 grep -rn 'TODO(release-kit)' . --exclude-dir=.git
 # check: prints nothing once each sentinel is answered
 rk status --check --target .
-# check: reports the landed payload as current
+# check: reports the landing as current
 ```
 
 ### 4b. Gate the artifact plan

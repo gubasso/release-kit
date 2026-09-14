@@ -31,7 +31,7 @@ pub enum SkillAction {
         /// Write the files; without it the destinations are listed.
         #[arg(long)]
         apply: bool,
-        /// Overwrite a destination whose bytes differ from the payload.
+        /// Overwrite a destination whose bytes differ from the embedded skill.
         #[arg(long, requires = "apply")]
         force: bool,
         /// Emit one JSON object on stdout instead of the human report.

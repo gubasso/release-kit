@@ -57,15 +57,15 @@ Verify: `rg -n '"[0-9]+\.[0-9]+\.[0-9]+"' flake.nix nix/ | grep . && exit 1 || e
 
 ### `packaging:the-package-source-carries-every-root` — The package source carries every root
 
-The package build MUST fail naming the path when its source omits a root declared in `src/payload_roots.rs` or a license file `src/embedded.rs` embeds, because a filtered source that drops a root still produces a binary that builds and lies.
+The package build MUST fail naming the path when its source omits a root declared in `src/distribution_roots.rs` or a license file `src/embedded.rs` embeds, because a filtered source that drops a root still produces a binary that builds and lies.
 
 #### Scenario: A source filter is narrowed later
 
-- GIVEN a package expression whose source filter newly omits a payload root
+- GIVEN a package expression whose source filter newly omits a distribution root
 - WHEN `nix build` runs
 - THEN the build fails naming the missing root, before any smoke command that would never notice
 
-Verify: `grep -q 'src/payload_roots.rs' nix/package.nix`
+Verify: `grep -q 'src/distribution_roots.rs' nix/package.nix`
 
 ### `packaging:an-advertised-system-is-a-proven-system` — An advertised system is a proven system
 
@@ -81,9 +81,9 @@ Verify: `cargo nextest run -E 'test(a_fresh_rust_landing_advertises_only_x86_64_
 
 ### `packaging:the-checks-carry-the-nix-side-signal` — The checks carry the Nix-side signal
 
-The flake's `checks` MUST build the package and smoke the served payload, because `nix flake check` builds only the `checks` output and the crate's test suite, which drives real git and forge CLIs the sandbox lacks, stays out of the package build.
+The flake's `checks` MUST build the package and smoke what the binary serves, because `nix flake check` builds only the `checks` output and the crate's test suite, which drives real git and forge CLIs the sandbox lacks, stays out of the package build.
 
-#### Scenario: A payload regression survives the build
+#### Scenario: A served-content regression survives the build
 
 - GIVEN a change that breaks what the binary serves without breaking compilation
 - WHEN `nix flake check` runs

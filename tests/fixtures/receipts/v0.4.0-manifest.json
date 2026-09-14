@@ -1,12 +1,13 @@
 {
-  "schema_version": 7,
+  "schema_version": 6,
   "rk_version": "0.4.0",
+  "payload_sha256": "e5c14a76e782682076615fb486bb4c27e27a3b244d30fd2f458f32cb25dfcc38",
   "origin": "adopt",
   "tech": "rust",
   "forge": "github",
-  "landed_at": "2026-08-30T00:14:29Z",
+  "landed_at": "2026-09-10T12:00:00Z",
   "parameters": {
-    "repo": "gubasso/release-kit",
+    "repo": "acme/widget",
     "workflow": "worktree",
     "style": "trunk",
     "nix": false,
@@ -19,45 +20,50 @@
     {
       "destination": ".github/workflows/pr-title.yml",
       "kind": "rendered",
-      "sha256": "972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c"
+      "sha256": "972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c",
+      "baseline_sha256": "0205b9f369179ae855a5feb84d034860632c3187818dd4ae8a23b1fe0aa79bda"
     },
     {
       "destination": ".github/workflows/release-plz.yml",
       "kind": "rendered",
-      "sha256": "dae0bfc1282b30535df0a13562b0b3ea5b4ff59af63009301f5ee86a9406c968"
+      "sha256": "dae0bfc1282b30535df0a13562b0b3ea5b4ff59af63009301f5ee86a9406c968",
+      "baseline_sha256": "2815a2dd91138807ad760fa5e43cde3220beb2980846417ad2b7c5d2f0ba4905"
     },
     {
       "destination": ".pre-commit-config.yaml",
       "kind": "rendered",
       "sha256": "78149baea10341037a25dd728b31ae014c9d391a1c75375076d494663783e6f1",
-      "placement": "region"
+      "baseline_sha256": "96ddd38956586d8ea9a74bcc30b00c90199d6a9b8ecdee8df80da8da3676f1bd"
     },
     {
       "destination": "AGENTS.md",
       "kind": "rendered",
-      "sha256": "f5b0cdda452317a7735a4d0a5c5a65003d62eaf8766e0db1971fefcfe3b4989f",
-      "placement": "region"
+      "sha256": "2c8d67375a633a9a6028766cc51630c4c03fed7ab89290e833590c4ee8ff50e1",
+      "baseline_sha256": "5748807dd5d66494c4c0b393441827805560eb5b346007059599d93313a1cbc5"
     },
     {
       "destination": "GLOSSARY.md",
       "kind": "rendered",
-      "sha256": "f87056fd6911ed36f7d0ed920cb23b737652bfe06c0239f19fce8a3952b7b0c4",
-      "placement": "region"
+      "sha256": "7a3f1c9e5b2d4a6f8c0e1d3b5a7f9c1e3b5d7f9a1c3e5b7d9f1a3c5e7b9d1f3a",
+      "baseline_sha256": "1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c1e3b5d7f9a1c3e5b7d9f1a3c5e7b9d1f3a"
     },
     {
       "destination": "SECURITY.md",
       "kind": "rendered",
-      "sha256": "88ceadde64b7d4b36b79a103cdfdf009f18b9c24900cbbabb1409e32dd7541f6"
+      "sha256": "88ceadde64b7d4b36b79a103cdfdf009f18b9c24900cbbabb1409e32dd7541f6",
+      "baseline_sha256": "c7effad58bca6f1325f7c7123ccf48fe61420b83da7234b74f37215ec0a2b16e"
     },
     {
       "destination": "dist-workspace.toml",
       "kind": "seeded",
-      "sha256": "84b6e8a7658c4c3e1c9bfa12f44c8ffe021bc259d2e306c11b56734baa8f9cd6"
+      "sha256": "028b96d7732600d9862f46a61675f7a17495ba03cdb863ae4e68bb35a762778b",
+      "baseline_sha256": "eae26fd9dfe93105726202da221a6ccd61545ef9c51b9f5f7e2bc7375ee08e6b"
     },
     {
       "destination": "release-plz.toml",
       "kind": "seeded",
-      "sha256": "ebda41e2283305369c865aa8bdfce86d97cbc51c77fe79f80a9e13884f388edc"
+      "sha256": "ebda41e2283305369c865aa8bdfce86d97cbc51c77fe79f80a9e13884f388edc",
+      "baseline_sha256": "f78039556fb75c71a5dd756064b199019f78ec243b2adc10e59dd28e90ae5c3d"
     }
   ],
   "pins": {

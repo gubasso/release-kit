@@ -15,7 +15,7 @@ The binary embeds every payload root at compile time, and the landing projection
 
 Chosen option: an engine that can only describe the payload compiled into it must be re-obtained to answer for another release, and a seam turns that executable into data the running engine reads. The projection and every landing verb take a source and name no embedded global. `payload_schema` is the protocol version: an engine reads any bundle at or below its own and refuses a newer one by naming the engine to install. The crate source verifies an archive against the index checksum before keeping it, caches by that checksum under the state root, serves a cached bundle offline, and keeps four.
 
-Enforced by `release-bundle:every-release-is-read-through-one-seam`, `release-bundle:the-payload-schema-is-the-protocol-version`, `release-bundle:a-fetched-bundle-is-verified-data`, and `release-bundle:the-release-cache-is-content-addressed-and-bounded`.
+Enforced by no live rule; see [its successor](./ADR-let-the-installed-binary-render-its-own-release.md).
 
 ## Consequences
 
@@ -24,4 +24,4 @@ Enforced by `release-bundle:every-release-is-read-through-one-seam`, `release-bu
 
 ## Status
 
-Implemented: `src/release/`, `src/landing.rs`, `src/commands/payload.rs`.
+Superseded by [its successor](./ADR-let-the-installed-binary-render-its-own-release.md).

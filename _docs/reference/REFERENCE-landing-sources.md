@@ -75,7 +75,7 @@ Import brings pre-existing infrastructure under management by recording it rathe
 - <https://helm.sh/community/hips/hip-0023/>
 - <https://developer.hashicorp.com/terraform/cli/commands/plan>
 
-Bearing: `landing:an-adoption-writes-the-record-and-nothing-else`. Adoption records both digests for a file the target may edit, refuses outright on a mismatch in a file the payload owns, and changes no target file — which is the strictest reading of this family's shared rule rather than a departure from it.
+Bearing: `landing:an-adoption-writes-the-record-and-nothing-else`. Adoption records both digests for a file the target may edit, refuses outright on a mismatch in a file the projection owns, and changes no target file — which is the strictest reading of this family's shared rule rather than a departure from it.
 
 ## pre-commit, on the stages and environment the landed hooks lean on
 
@@ -109,7 +109,7 @@ Bearing: `landing:the-arming-identity-is-the-bot`, both scenarios, and the armin
 
 ## The Nix capability's destinations
 
-The Nix-owned destinations the payload names, verified against the Nix reference documentation on 2026-09-04. The flake file must be named `flake.nix` and live in the repository's root directory: the reference manual's flake description states that a flake is a filesystem tree whose root directory contains `flake.nix`, and the `nix flake` reference documents resolution of a `github:`/`git+https:` reference to the flake file at the tree's root. `flake.lock` is written beside it by the lock machinery, in the same root, and is maintained by Nix's own commands after landing — which is why it lands as a `state` file. The `nix/` subdirectory for auxiliary expressions is a placement release-kit chooses for its own seed, not a Nix requirement: the seed's `flake.nix` names the path explicitly, so a target may move it and adjust the call.
+The Nix-owned destinations the projection names, verified against the Nix reference documentation on 2026-09-04. The flake file must be named `flake.nix` and live in the repository's root directory: the reference manual's flake description states that a flake is a filesystem tree whose root directory contains `flake.nix`, and the `nix flake` reference documents resolution of a `github:`/`git+https:` reference to the flake file at the tree's root. `flake.lock` is written beside it by the lock machinery, in the same root, and is maintained by Nix's own commands after landing — which is why it lands as a `state` file. The `nix/` subdirectory for auxiliary expressions is a placement release-kit chooses for its own seed, not a Nix requirement: the seed's `flake.nix` names the path explicitly, so a target may move it and adjust the call.
 
 - <https://nix.dev/manual/nix/latest/command-ref/new-cli/nix3-flake>
 - <https://nix.dev/manual/nix/latest/command-ref/new-cli/nix3-flake-lock>

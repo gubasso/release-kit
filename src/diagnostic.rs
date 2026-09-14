@@ -60,17 +60,17 @@ pub enum Reason {
     Internal,
     /// A hand-authored target configuration is invalid.
     ConfigInvalid,
-    /// A registry or an index the engine reads a release from did not
-    /// answer.
+    /// A registry did not answer. No live path emits it; the vocabulary
+    /// is append-only, so the word stays.
     RegistryUnreachable,
-    /// A fetched release bundle failed its verification against the
-    /// registry's own checksum, and nothing of it was kept.
+    /// A fetched artifact failed its verification. No live path emits
+    /// it; the vocabulary is append-only, so the word stays.
     BundleUnverified,
-    /// A stored plan is not ready: a required precondition does not hold
-    /// or a decision the operator owns waits, and nothing was written.
+    /// A precondition did not hold before a write. No live path emits
+    /// it; the vocabulary is append-only, so the word stays.
     PlanNotReady,
-    /// An apply's writes landed and a postcondition then found the target
-    /// short of what the plan promised.
+    /// A postcondition found the target short after a write. No live
+    /// path emits it; the vocabulary is append-only, so the word stays.
     PostconditionFailed,
     /// Another run holds the target, and this one wrote nothing.
     TargetBusy,

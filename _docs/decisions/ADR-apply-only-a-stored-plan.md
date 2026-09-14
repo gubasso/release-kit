@@ -15,7 +15,7 @@ A plan is computed, reviewed, and approved. What does the approval bind to, and 
 
 Chosen option: store every plan and apply only a stored one. A plan gate is a prompt and a revalidation is a program, and the difference matters exactly when an agent is wrong in a way that looks like being right. The apply recomputes the plan over the stored request, compares the fingerprints, verifies every `before` digest, and refuses before the first write, naming what moved. It proceeds on `ready` alone. Every write is staged and renamed in order with the record last, so an interruption leaves each destination whole. The run lands in the journal. The three fronts land through the same path.
 
-Enforced by `reconcile:a-stored-plan-is-owner-only-and-pruned`, `reconcile:apply-revalidates-before-the-first-write`, `reconcile:apply-proceeds-on-ready-alone`, `reconcile:an-apply-is-one-transaction-with-the-record-last`, and `reconcile:every-front-lands-through-the-engine`.
+Enforced by no live rule; see [its successor](./ADR-let-the-installed-binary-render-its-own-release.md).
 
 ## Consequences
 
@@ -24,4 +24,4 @@ Enforced by `reconcile:a-stored-plan-is-owner-only-and-pruned`, `reconcile:apply
 
 ## Status
 
-Implemented: `src/plan/store.rs`, `src/plan/apply.rs`, `src/atomic.rs`, `src/commands/reconcile.rs`, `src/commands/init.rs`, `src/commands/upgrade.rs`, `src/commands/adopt.rs`.
+Superseded by [its successor](./ADR-let-the-installed-binary-render-its-own-release.md).

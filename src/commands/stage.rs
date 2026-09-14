@@ -19,7 +19,6 @@ use crate::landing::manifest::{self, Style, Workflow};
 use crate::landing::{self, Params};
 use crate::output::Output;
 use crate::projection::{Projection, ProjectionInput, TargetEvidence};
-use crate::release::EmbeddedReleaseSource;
 use crate::stage::{self, OutputSource, Receipt, clean};
 
 /// The machine form of a staging: the receipt as written, plus where the
@@ -95,7 +94,6 @@ fn create(args: &StageArgs) -> Result<(), RkError> {
     };
     let receipt_schema_version = stage::recorded_schema_version(&target);
     let params = Params::resolve(
-        &EmbeddedReleaseSource,
         &target,
         &landing::Inputs {
             tech: args.tech.as_deref(),

@@ -15,7 +15,7 @@ pub struct UpgradeArgs {
     #[arg(long, default_value = ".")]
     pub target: Utf8PathBuf,
 
-    /// Override the configured payload binding.
+    /// Override the configured binding.
     #[arg(long)]
     pub tech: Option<String>,
 
@@ -41,7 +41,7 @@ pub struct UpgradeArgs {
 
     /// Change the recorded Nix opt-in: `on` adds the capability's files
     /// and records it; `off` drops them from the record while the files
-    /// stay on disk as the target's own, like any file this payload stops
+    /// stay on disk as the target's own, like any file this binary stops
     /// shipping. Omitted, configuration precedes the recorded choice.
     #[arg(long)]
     pub nix: Option<String>,

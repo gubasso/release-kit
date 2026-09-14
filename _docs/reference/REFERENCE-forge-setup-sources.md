@@ -242,7 +242,7 @@ Verified 2026-09-08. A repository with a merge queue must add the `merge_group` 
 
 - <https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-a-merge-queue>
 
-Bearing: `forge-setup:an-unowned-protection-names-its-consequence`, and the merge-queue bullet in `forges/github.md`. The payload lands no workflow carrying that trigger, which is why the queue is refused rather than supported.
+Bearing: `forge-setup:an-unowned-protection-names-its-consequence`, and the merge-queue bullet in `forges/github.md`. The landing ships no workflow carrying that trigger, which is why the queue is refused rather than supported.
 
 ## The GitLab version endpoint
 
@@ -370,4 +370,4 @@ The action that publishes a result restricts the workflow carrying it. With `pub
 - <https://github.com/ossf/scorecard/blob/main/checks/evaluation/pinned_dependencies.go>
 - <https://github.com/ossf/scorecard-action#workflow-restrictions>
 
-Two claims in release-kit issue 117 do not survive these sources, and the forge paragraph states neither. Branch-Protection does not need a long-lived classic personal access token: a non-admin run is scored as though every administrator requirement is met, so the short-lived App token this convention uses costs the check nothing. And Pinned-Dependencies is no longer capped by tag-referenced actions, because `ADR-pin-every-action-by-commit.md` pins every action in the payload by commit. What remains is the generated release workflow's two piped installers, which `KI-dist-generates-an-unhardened-workflow.md` already owns.
+Two claims in release-kit issue 117 do not survive these sources, and the forge paragraph states neither. Branch-Protection does not need a long-lived classic personal access token: a non-admin run is scored as though every administrator requirement is met, so the short-lived App token this convention uses costs the check nothing. And Pinned-Dependencies is no longer capped by tag-referenced actions, because `ADR-pin-every-action-by-commit.md` pins every action in the snippets by commit. What remains is the generated release workflow's two piped installers, which `KI-dist-generates-an-unhardened-workflow.md` already owns.

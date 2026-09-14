@@ -107,7 +107,7 @@ pub fn run(args: &SetupArgs) -> Result<(), RkError> {
 
 /// Whether a full run skips this step at this target.
 ///
-/// `optional` is the payload's claim that a step is not universal; the
+/// `optional` is the setup declaration's claim that a step is not universal; the
 /// target's own configuration answers whether it wants this one. Today
 /// `protect-release-lines` is the single such step, and a project that
 /// sets `setup.release_lines` gets it run rather than skipped and

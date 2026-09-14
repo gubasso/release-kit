@@ -24,7 +24,6 @@ use crate::landing::manifest::{self, Style, Workflow};
 use crate::landing::{self, Kind, lock};
 use crate::output::Output;
 use crate::projection::Placement;
-use crate::release::EmbeddedReleaseSource;
 
 /// One verified destination.
 #[derive(Debug, Serialize)]
@@ -127,7 +126,6 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
     }
     let config = crate::config::load(held.base().as_std_path())?;
     let params = landing::Params::resolve(
-        &EmbeddedReleaseSource,
         held.base(),
         &landing::Inputs {
             tech: args.tech.as_deref(),

@@ -27,7 +27,7 @@ pub struct Config {
     pub project: Project,
     /// Values resolved into the landing record.
     pub landing: Landing,
-    /// Report-routing facts, currently not rendered into any payload.
+    /// Report-routing facts, currently not rendered into any landed file.
     pub security: Security,
     /// Forge setup inputs.
     pub setup: Setup,
@@ -56,7 +56,7 @@ pub struct Project {
     pub repo: String,
     /// P: github or gitlab; empty means detect.
     pub forge: String,
-    /// P: payload binding; empty means detect.
+    /// P: the binding; empty means detect.
     pub tech: String,
     /// P: the one permanent branch, rendered into every landed artifact
     /// that names it. Absent means the landing has not answered it, so a
@@ -387,9 +387,7 @@ fn parse(text: &str) -> Result<Config, RkError> {
                 .get_dir(&config.project.tech)
                 .is_none())
     {
-        return Err(invalid(
-            "project.tech must name a supported payload binding",
-        ));
+        return Err(invalid("project.tech must name a supported binding"));
     }
     if let Some(contact) = &config.security.contact {
         canonical_contact(contact).map_err(invalid)?;

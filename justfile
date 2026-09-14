@@ -23,7 +23,7 @@ test:
 # The scratch round trip, end to end with the real binary: land, tune the
 # seeded file, upgrade, and assert the tune survived with the record moved
 # — the same again for the nix opt-in — then assert the published crate
-# carries every payload root and the landed seed actually builds.
+# carries every distribution root and the landed seed actually builds.
 build:
     set -eu; d=$(mktemp -d); trap 'rm -rf "$d"' EXIT; mkdir -p "$d/.git"; \
     cargo run -q -- init --tech rust --forge github --repo acme/widget --target "$d" --apply >/dev/null; \

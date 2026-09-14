@@ -33,7 +33,7 @@
 
 ## Purpose
 
-Rules governing what `rk init`, `rk status`, `rk upgrade`, and `rk adopt` owe a target repository: the receipt at `.release-kit/manifest.json`, the ownership kinds, and the comparisons each verb may make from them. The kinds are `rendered`, a whole file or marked region this binary generates and owns, `seeded`, a starting point the target tunes, and `state`, a file the target's own tooling moves. `rendered` is the kind's name, and generated is the word for what the kind means. Every landing is rendered afresh by the installed binary from its embedded sources and the target as they stand at invocation. Its subject is writing into a target and staying truthful about what was written, which is neither carrying a payload, bound by `SPEC-distribution.md`, nor staging a candidate for study, bound by `SPEC-staging.md`, nor acting on a remote forge, bound by `SPEC-forge-setup.md`. No adopting project adopts this spec: a project cannot violate a rule about how `rk` behaves and cannot run the verification. The comparable tools these rules were checked against are in `../reference/REFERENCE-landing-sources.md`.
+Rules governing what `rk init`, `rk status`, `rk upgrade`, and `rk adopt` owe a target repository: the receipt at `.release-kit/manifest.json`, the ownership kinds, and the comparisons each verb may make from them. The kinds are `rendered`, a whole file or marked region this binary generates and owns, `seeded`, a starting point the target tunes, and `state`, a file the target's own tooling moves. `rendered` is the kind's name, and generated is the word for what the kind means. Every landing is rendered afresh by the installed binary from its embedded sources and the target as they stand at invocation. Its subject is writing into a target and staying truthful about what was written, which is neither carrying the embedded sources, bound by `SPEC-distribution.md`, nor staging a candidate for study, bound by `SPEC-staging.md`, nor acting on a remote forge, bound by `SPEC-forge-setup.md`. No adopting project adopts this spec: a project cannot violate a rule about how `rk` behaves and cannot run the verification. The comparable tools these rules were checked against are in `../reference/REFERENCE-landing-sources.md`.
 
 ## Requirements
 
@@ -51,7 +51,7 @@ Verify: `cargo nextest run -E 'test(fresh_init_preview_is_read_only_and_apply_wr
 
 ### `landing:a-record-states-its-schema` — A record states its schema
 
-The receipt MUST carry an integer `schema_version`, and a receipt at a version this binary does not know MUST refuse by that record schema alone, naming the record and independent of any other schema, never a best-effort read, because commands make decisions from it and must be able to say when they cannot, and at schema 7 the receipt MUST name the producing `rk_version`, the origin, the resolved parameters, and per destination the path, the kind, the placement where the destination is a marked region, and the digest of the bytes or region now present, and this binary MUST read a receipt at schemas 1 through 6 through one bounded conversion that ignores the retired payload and baseline digests and write schema 7 at the next successful landing.
+The receipt MUST carry an integer `schema_version`, and a receipt at a version this binary does not know MUST refuse by that record schema alone, naming the record and independent of any other schema, never a best-effort read, because commands make decisions from it and must be able to say when they cannot, and at schema 7 the receipt MUST name the producing `rk_version`, the origin, the resolved parameters, and per destination the path, the kind, the placement where the destination is a marked region, and the digest of the bytes or region now present, and this binary MUST read a receipt at schemas 1 through 6 through one bounded conversion that ignores the two retired digest fields and write schema 7 at the next successful landing.
 
 #### Scenario: A schema 3 receipt and a schema 999 receipt meet this binary
 
@@ -63,7 +63,7 @@ Verify: `cargo nextest run -E 'test(receipt_schemas_1_through_6_load_without_a_r
 
 ### `landing:a-rendered-file-is-reproducible` — A rendered file is reproducible
 
-A `rendered` file's landed bytes MUST be a deterministic function of the payload and the recorded parameters only, and every substituted value MUST be recorded in the manifest's `parameters`, so every re-render and comparison reads the manifest parameters alone, whatever a later configuration says. A value the payload substitutes from one constant — the commit scope's shape — is not a parameter, so it MUST NOT be recorded, and a parameter an earlier schema recorded and this binary substitutes nowhere MUST read without it and rewrite without it. A parameter a payload file supplies its own fallback for MUST carry that fallback in the authored snippet inside removable markers rather than in the binary, so a record predating the parameter renders its file byte for byte and a per-forge wording stays the forge's own; the record's value MUST be held to the same grammar the configuration key is, because the record is what a re-render reads.
+A `rendered` file's landed bytes MUST be a deterministic function of the embedded sources and the recorded parameters only, and every substituted value MUST be recorded in the manifest's `parameters`, so every re-render and comparison reads the manifest parameters alone, whatever a later configuration says. A value the renderer substitutes from one constant — the commit scope's shape — is not a parameter, so it MUST NOT be recorded, and a parameter an earlier schema recorded and this binary substitutes nowhere MUST read without it and rewrite without it. A parameter a snippet supplies its own fallback for MUST carry that fallback in the authored snippet inside removable markers rather than in the binary, so a record predating the parameter renders its file byte for byte and a per-forge wording stays the forge's own; the record's value MUST be held to the same grammar the configuration key is, because the record is what a re-render reads.
 
 #### Scenario: The owner and the security contact substitute from the parameters
 
@@ -183,11 +183,11 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `landing:status-judges-only-under-check` — Status judges only under check
 
-Plain `rk status` MUST report and exit 0 for every reportable state — drift, staleness, unresolved sentinels, invariant failures, a pending payload, and no landing at all — and `rk status --check` MUST compute the identical report and exit 1 exactly on a violation: drift to a `rendered` file, a record whose own parameters do not reproduce its recorded bytes or its recorded destination set, an invalid or missing landing, an unresolved judgment sentinel, or an invariant failure under `landing:a-seeded-file-still-carries-the-invariants`. Seeded drift, pin staleness, a pending payload, and committed configuration the landing verbs have yet to take up stay informational in both modes. A pending payload is what the report MUST route an upgrade from, counted as the destinations this binary's projection under the recorded parameters would add, drop, reclassify, or rewrite; the recorded `rk_version` names the binary that wrote the record and MUST prompt nothing on its own, because a release that changes no landed file leaves the target with nothing to take and the two facts answer different questions.
+Plain `rk status` MUST report and exit 0 for every reportable state — drift, staleness, unresolved sentinels, invariant failures, a pending projection, and no landing at all — and `rk status --check` MUST compute the identical report and exit 1 exactly on a violation: drift to a `rendered` file, a record whose own parameters do not reproduce its recorded bytes or its recorded destination set, an invalid or missing landing, an unresolved judgment sentinel, or an invariant failure under `landing:a-seeded-file-still-carries-the-invariants`. Seeded drift, pin staleness, a pending projection, and committed configuration the landing verbs have yet to take up stay informational in both modes. A pending projection is what the report MUST route an upgrade from, counted as the destinations this binary's projection under the recorded parameters would add, drop, reclassify, or rewrite; the recorded `rk_version` names the binary that wrote the record and MUST prompt nothing on its own, because a release that changes no landed file leaves the target with nothing to take and the two facts answer different questions.
 
 #### Scenario: The same target, judged and not
 
-- GIVEN a landed target recorded by an older `rk` whose destinations this payload projects byte for byte, with a tuned seeded file and an edited rendered file
+- GIVEN a landed target recorded by an older `rk` whose destinations this binary projects byte for byte, with a tuned seeded file and an edited rendered file
 - WHEN `rk status` and `rk status --check` run
 - THEN both print the same report, the plain run exits 0, the check exits 1 naming the rendered drift in its violations, and neither counts a pending destination nor routes to an upgrade the version gap alone does not earn
 
@@ -195,25 +195,25 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `landing:a-landing-classifies-its-target-first` — A landing classifies its target first
 
-Where a setup or migration task finds no landing record at a target, the skills and the shared pre-flight gate MUST route by `rk assess`, which MUST report its evidence and exactly one verdict — `brownfield` where another tool's release marker or a payload destination is already present, `greenfield` where no release mechanism and no release history exists, and `needs-decision` where tags or a second long-lived branch exist with no mechanism behind them — writing nothing, touching no network, and exiting 0 on every verdict, because a target already releasing somehow that reads as a fresh start is how a repository ends up with two release paths.
+Where a setup or migration task finds no landing record at a target, the skills and the shared pre-flight gate MUST route by `rk assess`, which MUST report its evidence and exactly one verdict — `brownfield` where another tool's release marker or a landed destination is already present, `greenfield` where no release mechanism and no release history exists, and `needs-decision` where tags or a second long-lived branch exist with no mechanism behind them — writing nothing, touching no network, and exiting 0 on every verdict, because a target already releasing somehow that reads as a fresh start is how a repository ends up with two release paths.
 
 #### Scenario: A target releasing through another tool carries no record
 
 - GIVEN a repository holding a release tool's configuration and no `.release-kit/manifest.json`
 - WHEN `rk assess --target . --json` runs
-- THEN the report classifies `brownfield`, names the marker, and exits 0, so the routing skill loads the migration procedure instead of landing the payload beside the tool
+- THEN the report classifies `brownfield`, names the marker, and exits 0, so the routing skill loads the migration procedure instead of landing the convention beside the tool
 
 Verify: `cargo nextest run -E 'test(/^assess_/)'`
 
 ### `landing:an-adoption-writes-the-record-and-nothing-else` — An adoption writes the record and nothing else
 
-`rk adopt` MUST verify every `rendered` destination byte for byte against this binary's projection, refuse listing every mismatch and every missing expected file in one run, and end a successful pass by writing only inside `.release-kit/`, the config and then the receipt, last, with its origin stating the adoption, leaving every payload destination untouched.
+`rk adopt` MUST verify every `rendered` destination byte for byte against this binary's projection, refuse listing every mismatch and every missing expected file in one run, and end a successful pass by writing only inside `.release-kit/`, the config and then the receipt, last, with its origin stating the adoption, leaving every landed destination untouched.
 
 #### Scenario: A pre-record target is adopted
 
-- GIVEN a repository running the convention with no record, matching what this payload renders
+- GIVEN a repository running the convention with no record, matching what this binary renders
 - WHEN `rk adopt --apply` runs
-- THEN the manifest appears with `origin` set to `adopt`, the config appears beside it, every payload destination stays unchanged, and `rk status` then reports the landing
+- THEN the manifest appears with `origin` set to `adopt`, the config appears beside it, every landed destination stays unchanged, and `rk status` then reports the landing
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 
@@ -231,11 +231,11 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `landing:the-shared-zone-composes-into-every-pair` — The shared zone composes into every pair
 
-`snippets/_shared/<forge>` MUST land with every `(technology, forge)` pair for its forge, MUST never be selectable as a technology, and a destination the shared zone and a pair both ship MUST refuse as a payload defect, never one zone silently winning.
+`snippets/_shared/<forge>` MUST land with every `(technology, forge)` pair for its forge, MUST never be selectable as a technology, and a destination the shared zone and a pair both ship MUST refuse as a projection defect, never one zone silently winning.
 
 #### Scenario: The shared zone is offered as a technology
 
-- GIVEN the embedded payload carrying `snippets/_shared/`
+- GIVEN the embedded sources carrying `snippets/_shared/`
 - WHEN `rk init --tech _shared` runs, and the supported pairs are listed for an unknown pair
 - THEN the tech refuses as unknown, and neither listing names `_shared`
 

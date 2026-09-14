@@ -11,7 +11,7 @@
 
 /// The flake-input URL prefix every consumer pin begins with; the tag
 /// follows it. A grammar in the same class as the branch grammar: a
-/// source constant, never a payload text.
+/// source constant, never an authored text.
 pub const PIN_PREFIX: &str = "github:gubasso/release-kit/";
 
 /// One matched pin line, with the byte range of the tag alone.

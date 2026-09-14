@@ -95,15 +95,15 @@ Verify: `cargo nextest run -E 'test(the_tag_follows_the_source_tag_style) or tes
 
 ### `dependencies:a-fragment-names-no-project-of-its-own` — A fragment names no project of its own
 
-Every `blocks/depend-*.in` MUST carry only `RK_DEP_*` tokens where a name, owner, tag, or version goes, because the payload names no project other than release-kit.
+Every `blocks/depend-*.in` MUST carry only `RK_DEP_*` tokens where a name, owner, tag, or version goes, because the distribution names no project other than release-kit.
 
 #### Scenario: Every block renders
 
 - GIVEN a full token set
 - WHEN every depend block renders
-- THEN no `RK_DEP_` token remains and the payload scan finds no foreign name
+- THEN no `RK_DEP_` token remains and the distribution scan finds no foreign name
 
-Verify: `cargo nextest run -E 'test(the_payload_names_no_other_project) or test(every_depend_block_renders_all_its_tokens)'`
+Verify: `cargo nextest run -E 'test(the_distribution_names_no_other_project) or test(every_depend_block_renders_all_its_tokens)'`
 
 ### `dependencies:the-source-is-a-local-checkout` — The source is a local checkout
 

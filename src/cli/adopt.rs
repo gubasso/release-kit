@@ -6,7 +6,7 @@ use clap::Args;
 /// Write the landing record for a repository that already runs the
 /// convention, landed before the record existed.
 ///
-/// Strict: every rendered file must match what this payload would
+/// Strict: every rendered file must match what this binary would
 /// render, and no target file is ever changed.
 #[derive(Debug, Clone, Args)]
 pub struct AdoptArgs {
@@ -14,12 +14,12 @@ pub struct AdoptArgs {
     #[arg(long, default_value = ".")]
     pub target: Utf8PathBuf,
 
-    /// The technology whose payload the target runs. Defaults to
+    /// The technology whose files the target runs. Defaults to
     /// detection from the version file.
     #[arg(long)]
     pub tech: Option<String>,
 
-    /// The forge whose payload the target runs: github or gitlab.
+    /// The forge whose files the target runs: github or gitlab.
     /// Defaults to detection from the target's git remote.
     #[arg(long)]
     pub forge: Option<String>,

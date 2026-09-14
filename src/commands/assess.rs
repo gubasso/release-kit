@@ -76,7 +76,7 @@ pub fn run(args: &AssessArgs) -> Result<(), RkError> {
         join_or_none(&evidence.release_markers)
     ));
     out.result_line(format!(
-        "payload collisions: {}",
+        "landable-destination collisions: {}",
         join_or_none(&evidence.collisions)
     ));
     if evidence.git {

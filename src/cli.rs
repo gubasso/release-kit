@@ -13,9 +13,7 @@ pub mod init;
 pub mod issue;
 pub mod lines;
 pub mod message;
-pub mod payload;
 pub mod read;
-pub mod reconcile;
 pub mod runs;
 pub mod self_depend;
 pub mod setup;
@@ -52,13 +50,11 @@ pub enum Commands {
     Forge(read::ReadArgs),
     /// Print the pinned-tool registry, with --check as its online freshness report.
     Versions(versions::VersionsArgs),
-    /// Report the payload this binary carries, with its digests.
-    Payload(payload::PayloadArgs),
     /// Land a technology's files into a target repository.
     Init(init::InitArgs),
     /// Report what landed in a target and whether it drifted.
     Status(status::StatusArgs),
-    /// Take a landed target to this binary's payload.
+    /// Take a landed target to this binary's embedded sources.
     Upgrade(upgrade::UpgradeArgs),
     /// Record a target landed before the record existed.
     Adopt(adopt::AdoptArgs),
@@ -66,8 +62,6 @@ pub enum Commands {
     Assess(assess::AssessArgs),
     /// Write the candidate this binary would land into a disposable stage, beside its knowledge.
     Stage(stage::StageArgs),
-    /// Compute the plan that converges a target toward one release, and print it.
-    Reconcile(reconcile::ReconcileArgs),
     /// Execute the repository-side setup against the detected forge.
     Setup(setup::SetupArgs),
     /// Report and prune local branches the forge already merged.

@@ -1,8 +1,8 @@
-//! Shared argument shape for the read-only payload commands.
+//! Shared argument shape for the read-only commands over the embedded sources.
 
 use clap::Args;
 
-/// Read one payload entry, or list the valid names.
+/// Read one embedded entry, or list the valid names.
 ///
 /// The group makes the either-or explicit to clap, so `rk method` with
 /// neither is refused at parse time and `rk usage` can render the

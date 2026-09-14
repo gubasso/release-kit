@@ -2,7 +2,7 @@ name: ci
 
 # Nothing here writes to the repository: every job reads the checkout and
 # reports. The floor is nothing, and the three jobs that check out raise it to
-# contents alone, which is the shape release-kit's own payload teaches.
+# contents alone, which is the shape release-kit's own snippets teach.
 permissions: {}
 
 on:

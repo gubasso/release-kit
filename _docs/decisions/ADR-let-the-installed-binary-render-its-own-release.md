@@ -28,4 +28,4 @@ Enforced by `staging:production-never-reads-a-stage`, `landing:ownership-is-elem
 
 ## Status
 
-Proposed. Supersedes `ADR-read-every-release-through-one-seam`, `ADR-ship-compatibility-and-guidance-in-the-bundle`, `ADR-apply-only-a-stored-plan`, and `ADR-plan-every-landing-write-as-one-typed-document`.
+Implemented: `src/projection.rs`, `src/stage.rs`, `src/landing/apply.rs`. Supersedes `ADR-read-every-release-through-one-seam`, `ADR-ship-compatibility-and-guidance-in-the-bundle`, `ADR-apply-only-a-stored-plan`, and `ADR-plan-every-landing-write-as-one-typed-document`.

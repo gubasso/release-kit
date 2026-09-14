@@ -1,4 +1,4 @@
-//! The agent skills: the payload, the user-scope record, and the installer.
+//! The agent skills: the embedded files, the user-scope record, and the installer.
 //!
 //! Skills land under the invoking user's home and never into a target
 //! repository. An agent resolves a skill by name across scopes, so a second
@@ -76,7 +76,7 @@ pub struct Skill {
 /// # Errors
 ///
 /// Returns [`RkError::Other`] when a skill directory carries no readable
-/// UTF-8 `SKILL.md`. That is a defect in the payload this binary was built
+/// UTF-8 `SKILL.md`. That is a defect in the sources this binary was built
 /// from, not something a caller can correct.
 pub fn all() -> Result<Vec<Skill>, RkError> {
     let mut out = Vec::new();
@@ -85,7 +85,7 @@ pub fn all() -> Result<Vec<Skill>, RkError> {
         let text = dir
             .get_file(format!("{name}/SKILL.md"))
             .and_then(include_dir::File::contents_utf8)
-            .ok_or_else(|| anyhow::anyhow!("payload skill carries no UTF-8 SKILL.md: {name}"))?;
+            .ok_or_else(|| anyhow::anyhow!("embedded skill carries no UTF-8 SKILL.md: {name}"))?;
         out.push(Skill { name, text });
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
@@ -119,20 +119,20 @@ mod tests {
     use super::{all, shared};
 
     #[test]
-    fn the_payload_carries_the_shared_plan_gate() {
+    fn the_binary_carries_the_shared_plan_gate() {
         let shared = shared();
         assert!(
             shared
                 .iter()
                 .any(|artifact| artifact.path == "plan-gate.md"),
-            "the payload carries no shared plan gate"
+            "the binary carries no shared plan gate"
         );
     }
 
     #[test]
-    fn the_payload_carries_every_authored_skill() {
+    fn the_binary_carries_every_authored_skill() {
         let skills = all().expect("the embedded skills read");
-        assert!(!skills.is_empty(), "the payload carries no skills");
+        assert!(!skills.is_empty(), "the binary carries no skills");
         for skill in &skills {
             assert!(
                 skill.text.contains(&format!("name: {}", skill.name)),

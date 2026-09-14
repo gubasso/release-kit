@@ -68,7 +68,7 @@
           # installed package owns its own runtime closure in nix/package.nix.
           #
           # rk is absent on purpose, and it is the one tool this shell may not
-          # carry. A binary embeds the payload it was compiled from, so an rk
+          # carry. A binary embeds the sources it was compiled from, so an rk
           # built when the lock last moved judges the current snippets against a
           # stale copy of them and reports drift that is not there. This
           # repository's rk is the one it just built: the justfile puts
@@ -91,7 +91,7 @@
               pkgs.markdownlint-cli2
               pkgs.lychee
               pkgs.ripsecrets
-              # The payload is GitHub Actions workflows, so the workflows are
+              # The snippets are GitHub Actions workflows, so the workflows are
               # what this project lints. zizmor audits them for security and
               # actionlint for correctness, both over snippets/ and over this
               # repository's own .github/workflows/.
@@ -114,7 +114,7 @@
           # nix flake check builds only the checks output; packages are merely
           # evaluated, so the package itself is the first check.
           package = pkg;
-          # The payload canary plus the wrapper proof, offline. HOME is set
+          # The served-content canary plus the wrapper proof, offline. HOME is set
           # because the state-root probe is Hard by design with no home; only
           # PATH is cleared, so a failure here means the wrapper lost a tool,
           # not that the sandbox lost a variable. The greps hold the git

@@ -4,11 +4,11 @@
 
 - [Purpose](#purpose)
 - [Requirements](#requirements)
-  - [`distribution:the-payload-roots-are-declared-once` — The payload roots are declared once](#distributionthe-payload-roots-are-declared-once--the-payload-roots-are-declared-once)
+  - [`distribution:the-distribution-roots-are-declared-once` — The distribution roots are declared once](#distributionthe-distribution-roots-are-declared-once--the-distribution-roots-are-declared-once)
   - [`distribution:the-published-crate-carries-every-root` — The published crate carries every root](#distributionthe-published-crate-carries-every-root--the-published-crate-carries-every-root)
   - [`distribution:machine-output-declares-its-schema` — Machine output declares its schema](#distributionmachine-output-declares-its-schema--machine-output-declares-its-schema)
   - [`distribution:a-human-faced-artifact-is-authored-text` — A human-faced artifact is authored text](#distributiona-human-faced-artifact-is-authored-text--a-human-faced-artifact-is-authored-text)
-  - [`distribution:the-payload-names-no-other-project` — The payload names no other project](#distributionthe-payload-names-no-other-project--the-payload-names-no-other-project)
+  - [`distribution:the-distribution-names-no-other-project` — The distribution names no other project](#distributionthe-distribution-names-no-other-project--the-distribution-names-no-other-project)
   - [`distribution:a-runbook-renders-the-spine` — A runbook renders the spine](#distributiona-runbook-renders-the-spine--a-runbook-renders-the-spine)
   - [`distribution:a-skill-routes-and-never-restates` — A skill routes and never restates](#distributiona-skill-routes-and-never-restates--a-skill-routes-and-never-restates)
   - [`distribution:a-forge-document-answers-its-own-axis` — A forge document answers its own axis](#distributiona-forge-document-answers-its-own-axis--a-forge-document-answers-its-own-axis)
@@ -34,13 +34,13 @@ Rules governing what the `rk` binary carries and what it writes outside a target
 
 ## Requirements
 
-### `distribution:the-payload-roots-are-declared-once` — The payload roots are declared once
+### `distribution:the-distribution-roots-are-declared-once` — The distribution roots are declared once
 
 Every authored root the binary carries, `guidance/` included as the versioned reference material a stage copies, MUST be named in one inventory that the embed, the build script's change tracking, the package-contents check, the projection, the staging command, the reader commands, and the skill installer all read directly.
 
-#### Scenario: A payload root is embedded without entering the inventory
+#### Scenario: A distribution root is embedded without entering the inventory
 
-- GIVEN a new root embedded in `src/embedded.rs` and absent from the inventory in `src/payload_roots.rs`
+- GIVEN a new root embedded in `src/embedded.rs` and absent from the inventory in `src/distribution_roots.rs`
 - WHEN the test suite runs
 - THEN the agreement test fails naming both files, before a development build can serve stale bytes for a root the build script does not watch
 
@@ -48,11 +48,11 @@ Verify: `cargo nextest run -E 'kind(lib)'`
 
 ### `distribution:the-published-crate-carries-every-root` — The published crate carries every root
 
-The published package MUST contain every payload root, and the check MUST run before a release rather than at a consumer.
+The published package MUST contain every distribution root, and the check MUST run before a release rather than at a consumer.
 
-#### Scenario: An exclude entry is broadened and removes a payload root
+#### Scenario: An exclude entry is broadened and removes a distribution root
 
-- GIVEN a `Cargo.toml` `exclude` entry that newly matches a payload root
+- GIVEN a `Cargo.toml` `exclude` entry that newly matches a distribution root
 - WHEN `just check` runs its build gate
 - THEN the package-contents test fails naming the root, before `cargo publish` can ship a crate that fails to compile at the consumer
 
@@ -82,7 +82,7 @@ Every whole artifact the binary writes into a target or a host — a spliced blo
 
 Verify: `cargo nextest run -E 'binary(cli) or kind(lib)'`
 
-### `distribution:the-payload-names-no-other-project` — The payload names no other project
+### `distribution:the-distribution-names-no-other-project` — The distribution names no other project
 
 Nothing the distribution carries or serves MAY name a specific project, repository, or organization other than release-kit's own configuration, so a reader needs no knowledge outside this repository.
 
@@ -140,7 +140,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 The distribution MUST embed every skill authored under `skills/` and serve it byte-identically, so a binary carries the skills of its own version and no project fetches them.
 
-#### Scenario: A skill is edited without rebuilding the payload list
+#### Scenario: A skill is edited and the binary is rebuilt
 
 - GIVEN a skill directory under `skills/` whose `SKILL.md` changed
 - WHEN the binary is rebuilt and `rk skill show <name>` runs
@@ -232,13 +232,13 @@ A difference the record vouches for is a stale install and its remediation MUST 
 
 - GIVEN a home whose agent roots hold the skills while the shared root does not
 - WHEN `rk doctor` runs
-- THEN the gate probe fails, names the missing artifact, and gives the install that lands it, while the payload probe still reports the skills as installed
+- THEN the gate probe fails, names the missing artifact, and gives the install that lands it, while the `skill-sources` probe still reports the skills as installed
 
 #### Scenario: An installed skill is not the running binary's
 
-- GIVEN a home holding a skill whose bytes differ from the payload
+- GIVEN a home holding a skill whose bytes differ from the embedded skill
 - WHEN `rk doctor` runs
-- THEN the payload probe fails and names the running version, asking for the forcing apply only where the record cannot vouch for the bytes it would overwrite
+- THEN the `skill-sources` probe fails and names the running version, asking for the forcing apply only where the record cannot vouch for the bytes it would overwrite
 
 #### Scenario: A skill root refuses writes
 
@@ -250,7 +250,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `distribution:skill-install-previews-before-writing` — A skill install previews before writing
 
-When run without `--apply`, `rk skill install` MUST list every destination and write nothing, and where a destination holds bytes neither the payload nor the user-scope record accounts for, an apply MUST refuse atomically, naming every conflict in one run.
+When run without `--apply`, `rk skill install` MUST list every destination and write nothing, and where a destination holds bytes neither the embedded sources nor the user-scope record account for, an apply MUST refuse atomically, naming every conflict in one run.
 
 #### Scenario: A home directory already carries an edited skill
 
@@ -286,7 +286,7 @@ Verify: `cargo nextest run -E 'kind(lib)'`
 
 ### `distribution:an-install-sweeps-what-the-payload-dropped` — An install sweeps what the payload dropped
 
-Where the record vouches for a destination under the roots a run touches and the payload no longer names it, `rk skill install --apply` and `rk skill uninstall --apply` MUST remove it, and MUST leave a destination whose bytes the record does not vouch for.
+Where the record vouches for a destination under the roots a run touches and the embedded sources no longer name it, `rk skill install --apply` and `rk skill uninstall --apply` MUST remove it, and MUST leave a destination whose bytes the record does not vouch for.
 
 #### Scenario: A release renames a skill
 
@@ -316,7 +316,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `distribution:skill-uninstall-removes-only-what-it-wrote` — A skill uninstall removes only what it wrote
 
-`rk skill uninstall --apply` MUST remove only the payload's own destinations and the leftovers the record vouches for, and MUST keep a directory holding anything else.
+`rk skill uninstall --apply` MUST remove only the embedded skills' own destinations and the leftovers the record vouches for, and MUST keep a directory holding anything else.
 
 #### Scenario: A user keeps notes beside an installed skill
 

@@ -36,7 +36,7 @@ Removing the `release.yml` entries from `zizmor.yml` returns five findings. Remo
 
 `zizmor.yml` carries `release.yml` under the `excessive-permissions` and `template-injection` ignore lists, and the `actionlint` hook excludes the file. Both carry a comment pointing here.
 
-The two ignores are keyed by base filename, which is the only key zizmor accepts, so they would also reach `snippets/bash/github/.github/workflows/release.yml`. The `zizmor-payload` hook runs `--no-config` for that reason, and the payload is audited with no ignore list at all.
+The two ignores are keyed by base filename, which is the only key zizmor accepts, so they would also reach `snippets/bash/github/.github/workflows/release.yml`. The `zizmor-snippets` hook runs `--no-config` for that reason, and the snippets are audited with no ignore list at all.
 
 ## Upstream
 

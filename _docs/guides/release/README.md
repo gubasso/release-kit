@@ -15,7 +15,7 @@ The two operating pages open with a shell block exporting these; fill it in once
 - `APP_ID`: the bot App's numeric id, setup only
 - `KEY`: absolute path to the App's `.pem`, outside every repository, setup only
 
-A variable here is something a project is free to choose. Everything the convention fixes is written literally in the runbooks instead, because changing it means changing the payload rather than the page; each entry below names where the payload fixes it.
+A variable here is something a project is free to choose. Everything the convention fixes is written literally in the runbooks instead, because changing it means changing the embedded sources rather than the page; each entry below names where the sources fix it.
 
 - Trunk: `master`
   - fixed by `TRUNK_BRANCH` in `src/setup/context.rs`, and by the `branches:` filter in the landed `release-plz.yml`
@@ -43,7 +43,7 @@ A variable here is something a project is free to choose. Everything the convent
 - Version truth: `Cargo.toml`
   - fixed by release-plz
 - Tool pins: `versions.toml`
-  - the payload's own registry
+  - the distribution's own registry
 
 ## The whole system
 

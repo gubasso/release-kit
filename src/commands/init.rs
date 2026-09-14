@@ -26,7 +26,6 @@ use crate::landing::apply::{self, Action, Collision, Prepared};
 use crate::landing::manifest::{self, Style, Workflow};
 use crate::landing::{self, lock};
 use crate::output::Output;
-use crate::release::EmbeddedReleaseSource;
 
 /// One destination and what happened to it.
 #[derive(Debug, Serialize)]
@@ -147,7 +146,6 @@ pub fn run(args: &InitArgs) -> Result<(), RkError> {
     held::pause(apply::PAUSE_VAR, "held", "proceed-held");
     let config = crate::config::load(held.base().as_std_path())?;
     let params = landing::Params::resolve(
-        &EmbeddedReleaseSource,
         held.base(),
         &landing::Inputs {
             tech: args.tech.as_deref(),
