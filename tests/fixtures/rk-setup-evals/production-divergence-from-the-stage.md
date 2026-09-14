@@ -19,9 +19,9 @@ A landed target where the operator changed `security.contact` in `.release-kit/c
 4. `rk guide landing` step 2b: diff each artifact against the working tree, read `.release-kit/manifest.json`, and read `git log` and `git diff` for each differing destination.
 5. State the evidence class: receipt plus useful history.
 6. `rk guide landing` step 3: preview `rk upgrade --target .`, then run `rk upgrade --target . --apply`.
-7. `rk guide landing` step 4a: `diff -q` reports `SECURITY.md` differs from its artifact. Inspect the deviation: the config key changed after the stage, and the landing rendered the new value. Report the cause. Where the benchmark itself must be refreshed, stage again into another directory with `rk stage --target . --output <dir>`.
+7. `rk guide landing` step 4a: `diff -q` reports `SECURITY.md` differs from its artifact. Inspect the deviation: the config key changed after the stage, and the landing rendered the new value. Report the cause. Where the benchmark itself must be refreshed, stage again into another directory with `rk stage --target . --output <dir>`, and add `<dir>` to the inventory of stage paths.
 8. `rk guide landing` step 4b: run `rk status --check --target .`, `rk setup check --target .`, and the project's checks.
-9. `rk guide landing` step 5a: show `rk stage clean <stage>`. Run it only because the request's authority includes cleanup. Every stage the task wrote is named, and each is cleaned by its own path.
+9. `rk guide landing` step 5a: show `rk stage clean <stage>`. Run it only because the request's authority includes cleanup. Then `rk stage clean <dir>` for the second stage: every path in the inventory is cleaned by name, and none is left.
 
 ## Authority
 

@@ -15,13 +15,13 @@ The installed binary is a 0.4.x release, and the operator asked to update `rk` a
 
 1. `rk guide landing` step 1a: run `rk --version` and `rk self-depend status --target .`. The installed version is the one the operator chose. No step selects, fetches, or installs another. The installed binary is 0.4.x.
 2. `rk guide landing` step 1b, with the installed 0.4.x binary: `rk reconcile list` names an active stored plan.
-3. An active operation stops the update. Report the plan by id and ask the operator to finish it or explicitly abandon it with the installed binary before the tool is replaced. Nothing below runs until then.
-4. Record every inactive plan, result, run journal, and release cache path under the state root as local evidence, with why each is obsolete. Remove nothing.
+3. An active operation stops the update. Report the plan by id and ask the operator to apply it with the installed binary before the tool is replaced, or to decline it. Abandonment is that decision and no command: a declined plan is reclassified as inactive. Nothing below runs until the operator answers.
+4. Record every inactive path under the state root as local evidence, with why each is obsolete: each stored plan at `<state root>/plans/<plan-id>/` from `rk reconcile list`, each run journal at `<state root>/runs/<run-id>/` from `rk runs list`, and the release cache at `<state root>/release/`, listed directly. Remove nothing.
 
 ## Authority
 
 - Updating `rk` is the operator's move through the project's manager. This skill never chooses, installs, updates, downgrades, or fetches a version.
-- Finishing or abandoning the stored plan is an action of the installed binary, named to the operator as its exact command.
+- Applying the stored plan is an action of the installed binary, named to the operator as its exact command. Declining it is the operator's decision and runs nothing.
 - Inactive legacy state is named by exact path and is never removed without explicit cleanup authorization.
 
 ## Documentation

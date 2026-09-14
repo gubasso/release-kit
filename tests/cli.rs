@@ -2557,7 +2557,6 @@ fn no_skill_shared_resource_or_eval_asks_rk_to_install_or_select_a_release() {
             "rk payload",
             "--fetch",
             "--decide",
-            "plan-id",
             "fingerprint",
         ] {
             assert!(
@@ -2627,6 +2626,13 @@ fn every_landing_eval_stages_first_and_cleans_last_or_keeps_the_stage() {
                         "{stem}: {verb} runs after the cleanup"
                     );
                 }
+                // Every stage the route created is cleaned by its own path:
+                // one cleanup per creation, no stage left unnamed.
+                assert_eq!(
+                    route.matches("rk stage --target").count(),
+                    route.matches("rk stage clean").count(),
+                    "{stem}: each stage the route creates is cleaned by name"
+                );
                 assert!(
                     route.contains("authority includes cleanup"),
                     "{stem}: the cleanup names its authority"
@@ -2843,7 +2849,7 @@ fn every_eval_keeps_project_documentation_and_the_reference_corpus_distinct() {
     }
     let skill = setup_skill();
     assert!(
-        skill.contains("the `reference/` tree teaches this skill and is copied into no project"),
+        skill.contains("The `reference/` tree teaches this skill and is copied into no project"),
         "the skill keeps the corpus out of the project"
     );
 }
@@ -24570,25 +24576,42 @@ fn the_landing_pair_renders() {
         .stdout(predicate::str::contains("landing"));
 }
 
-/// The setup and migration runbooks name the landing runbook's steps by
-/// number for the landing, and carry no second stage-land-verify sequence
-/// and no route to the stored-plan path.
+/// The body of one `### Na.` substep of a runbook, up to the next heading.
+fn runbook_substep<'a>(text: &'a str, label: &str) -> &'a str {
+    let marker = format!("\n### {label}");
+    let start = text
+        .find(&marker)
+        .unwrap_or_else(|| panic!("no substep {label}"));
+    let rest = &text[start + 1..];
+    rest[1..].find("\n##").map_or(rest, |end| &rest[..=end])
+}
+
+/// Every setup and migration substep that can invoke `rk init`,
+/// `rk adopt`, or `rk upgrade` routes through the whole landing procedure
+/// by step number, runs no front of its own in a command block, and
+/// carries no second stage-land-verify sequence, no stored-plan route, and
+/// no conflict or force semantics the direct landing retired.
 #[test]
 fn the_setup_and_migration_runbooks_route_their_landing_steps_to_landing() {
-    for path in ["runbooks/setup.md", "runbooks/migration.md"] {
-        let text = std::fs::read_to_string(repo_path(path)).expect("reads");
-        assert!(
-            text.contains("[the landing runbook](./landing.md) steps 1 and 2"),
-            "{path} routes its landing to the landing runbook by step number"
-        );
-        assert!(
-            text.contains("that runbook's step 3"),
-            "{path} names the production verb as the landing runbook's step"
-        );
-        for retired in ["rk reconcile", "reconcile runbook", "./reconcile.md"] {
+    let setup = std::fs::read_to_string(repo_path("runbooks/setup.md")).expect("reads");
+    let migration = std::fs::read_to_string(repo_path("runbooks/migration.md")).expect("reads");
+    for (path, text) in [
+        ("runbooks/setup.md", &setup),
+        ("runbooks/migration.md", &migration),
+    ] {
+        for retired in [
+            "rk reconcile",
+            "reconcile runbook",
+            "./reconcile.md",
+            "rk snippet",
+            "rk payload",
+            "force past",
+            "conflict line",
+            "hand edits conflict",
+        ] {
             assert!(
                 !text.contains(retired),
-                "{path} still routes to the stored-plan path: {retired}"
+                "{path} still carries the retired path or semantics: {retired}"
             );
         }
         assert!(
@@ -24596,13 +24619,237 @@ fn the_setup_and_migration_runbooks_route_their_landing_steps_to_landing() {
             "{path} restates the cleanup the landing runbook owns"
         );
     }
-    let migration = std::fs::read_to_string(repo_path("runbooks/migration.md")).expect("reads");
+    // The first landing: the setup runbook's 4a surrounds the front with
+    // the landing runbook's steps by number.
+    let landing_4a = runbook_substep(&setup, "4a.");
     assert!(
-        migration.contains(
-            "its step 2d carries the collision, the tuned seeded file, and the retired destination"
+        landing_4a.contains("[the landing runbook](./landing.md) steps 1 and 2")
+            && landing_4a.contains("that runbook's step 3")
+            && landing_4a.contains("steps 4 and 5"),
+        "setup 4a routes its landing to the landing runbook by step number"
+    );
+    // Every migration substep that lands: the whole procedure, and no
+    // front run from a command block of its own.
+    for label in ["2a.", "2b.", "2c."] {
+        let substep = runbook_substep(&migration, label);
+        assert!(
+            substep.contains("[the landing runbook](./landing.md) steps 1 to 5"),
+            "migration {label} routes through the whole landing procedure"
+        );
+        assert!(
+            substep.contains("as the front in its step 3"),
+            "migration {label} names its front as the landing runbook's step 3"
+        );
+        let mut fenced = false;
+        for line in substep.lines() {
+            if line.starts_with("```") {
+                fenced = !fenced;
+                continue;
+            }
+            if fenced {
+                for verb in ["rk init", "rk adopt", "rk upgrade"] {
+                    assert!(
+                        !line.contains(verb),
+                        "migration {label} runs {verb} outside the landing procedure: {line}"
+                    );
+                }
+            }
+        }
+    }
+    assert!(
+        runbook_substep(&migration, "2b.").contains(
+            "its step 2d carries the collision, the tuned seeded file, the edited generated file, and the retired destination"
         ),
         "the migration runbook routes the preparation to landing step 2d"
     );
+    assert!(
+        runbook_substep(&migration, "2b.").contains("prints `replaced`"),
+        "an edited generated file is replaced, not a conflict"
+    );
+}
+
+/// The field names the landing runbook's step 2a tells the reader to find
+/// in `stage.json` are the ones the serialized stage carries, checked
+/// against a real `rk stage --json` run and against the runbook's text.
+#[test]
+fn the_landing_runbook_names_the_real_stage_fields() {
+    let runbook = std::fs::read_to_string(repo_path("runbooks/landing.md")).expect("reads");
+    let step = runbook_substep(&runbook, "2a.");
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let target = stage_target();
+    let report = stage_json(target.path(), &scratch.path().join("stage"));
+    assert_eq!(report["schema"], "rk.stage/1");
+    for top in [
+        "schema",
+        "rk_version",
+        "target",
+        "candidates",
+        "omissions",
+        "collisions",
+        "retired",
+    ] {
+        assert!(!report[top].is_null(), "the stage carries {top}: {report}");
+        assert!(step.contains(top), "step 2a names the {top} field");
+    }
+    let candidates = report["candidates"].as_array().expect("candidates");
+    assert!(!candidates.is_empty());
+    let mut saw_region = false;
+    for candidate in candidates {
+        for field in ["destination", "kind", "placement", "sha256", "sources"] {
+            assert!(
+                !candidate[field].is_null(),
+                "a candidate carries {field}: {candidate}"
+            );
+            assert!(step.contains(field), "step 2a names the {field} field");
+        }
+        if candidate["placement"] == "region" {
+            saw_region = true;
+            assert!(candidate["region_sha256"].is_string(), "{candidate}");
+        } else {
+            assert!(candidate["region_sha256"].is_null(), "{candidate}");
+        }
+    }
+    assert!(saw_region, "the fixture stages a marked region");
+    assert!(step.contains("region_sha256 where the placement is region"));
+    // The omission and collision shapes, and the retired strings, from the
+    // serializer's own snapshot (a format string, so its braces double):
+    // the scratch target raises none of them.
+    let snapshot = std::fs::read_to_string(repo_path("src/stage.rs")).expect("reads");
+    for shape in [
+        r#""omissions":[{{"destination":"flake.nix","reason":"#,
+        r#""retired":["old.yml"]"#,
+    ] {
+        assert!(
+            snapshot.contains(shape),
+            "the stage snapshot carries {shape}"
+        );
+    }
+    assert!(step.contains("each omissions and collisions entry carries destination and reason"));
+    assert!(step.contains("each retired entry is a destination alone"));
+    assert!(
+        report["retired"]
+            .as_array()
+            .is_some_and(|r| r.iter().all(serde_json::Value::is_string)),
+        "retired entries are destination strings"
+    );
+}
+
+/// The report words the landing runbook's step 3 cites for each front
+/// are the words the fronts print: the ownership words from the
+/// landing's own vocabulary, and the adoption and receipt lines from
+/// real preview and apply runs on a scratch target.
+#[test]
+fn the_landing_runbook_cites_the_words_the_fronts_print() {
+    let runbook = std::fs::read_to_string(repo_path("runbooks/landing.md")).expect("reads");
+    let step = {
+        let start = runbook.find("\n## 3. Land").expect("step 3");
+        let rest = &runbook[start..];
+        &rest[..rest[1..].find("\n## ").map_or(rest.len(), |end| end + 1)]
+    };
+    for action in [
+        release_kit::landing::apply::Action::Created,
+        release_kit::landing::apply::Action::Replaced,
+        release_kit::landing::apply::Action::Matched,
+        release_kit::landing::apply::Action::Preserved,
+        release_kit::landing::apply::Action::Drift,
+        release_kit::landing::apply::Action::Released,
+    ] {
+        assert!(
+            step.contains(action.as_str()),
+            "step 3 cites the word {}",
+            action.as_str()
+        );
+    }
+    let (init, upgrade, preview, applied) = front_reports();
+    for word in [
+        "created ",
+        "added .release-kit/config.toml",
+        "wrote .release-kit/manifest.json",
+    ] {
+        assert!(init.contains(word), "init prints {word}: {init}");
+    }
+    for word in [
+        "replaced ",
+        "preserved ",
+        "updated .release-kit/config.toml",
+        "rewrote .release-kit/manifest.json",
+    ] {
+        assert!(upgrade.contains(word), "upgrade prints {word}: {upgrade}");
+    }
+    for word in [
+        "added or updated .release-kit/config.toml",
+        "wrote or rewrote .release-kit/manifest.json",
+    ] {
+        assert!(step.contains(word), "step 3 cites {word}");
+    }
+    assert!(
+        preview.contains("matches "),
+        "adopt prints matches: {preview}"
+    );
+    assert!(
+        !preview.contains("sentinel"),
+        "adopt lists no sentinel: {preview}"
+    );
+    for word in [
+        "matches ",
+        "wrote .release-kit/manifest.json",
+        "added .release-kit/config.toml",
+    ] {
+        assert!(
+            applied.contains(word),
+            "adopt --apply prints {word}: {applied}"
+        );
+    }
+    for word in [
+        "matches",
+        "differs",
+        "state",
+        "No sentinel is listed",
+        "wrote .release-kit/manifest.json and added .release-kit/config.toml",
+    ] {
+        assert!(step.contains(word), "step 3 cites the adoption word {word}");
+    }
+}
+
+/// The human reports of one init apply, one upgrade apply, and one adopt
+/// preview and apply over a fresh scratch target, in that order.
+fn front_reports() -> (String, String, String, String) {
+    let text = |assert: assert_cmd::assert::Assert| {
+        String::from_utf8_lossy(&assert.get_output().stdout).into_owned()
+    };
+    let target = tempfile::tempdir().expect("a target exists");
+    std::fs::create_dir_all(target.path().join(".git")).expect("a repository");
+    let init = text(land_rust(target.path()).success());
+    let upgrade = text(
+        rk().args(["upgrade", "--target"])
+            .arg(target.path())
+            .arg("--apply")
+            .assert()
+            .success(),
+    );
+    std::fs::remove_dir_all(target.path().join(".release-kit")).expect("the record goes");
+    let adopt = |apply: bool| {
+        let mut command = rk();
+        command
+            .args([
+                "adopt",
+                "--tech",
+                "rust",
+                "--forge",
+                "github",
+                "--repo",
+                "acme/widget",
+            ])
+            .args(["--workflow", "worktree", "--style", "trunk", "--target"])
+            .arg(target.path());
+        if apply {
+            command.arg("--apply");
+        }
+        text(command.assert().success())
+    };
+    let preview = adopt(false);
+    let applied = adopt(true);
+    (init, upgrade, preview, applied)
 }
 
 /// The migration and setup chapters name the landing chapter, so a

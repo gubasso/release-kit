@@ -14,7 +14,7 @@ The operator updated `rk` from a 0.4.x release after `rk guide landing` step 1b 
 ## Route
 
 1. `rk guide landing` step 1a: run `rk --version` and `rk self-depend status --target .`. The installed version is the one the operator chose. No step selects, fetches, or installs another.
-2. `rk guide landing` step 1b, recorded before the update: no active operation, and each inactive path written down as local evidence, with why it is obsolete.
+2. `rk guide landing` step 1b, recorded before the update: no active operation, and each inactive path written down as local evidence, with why it is obsolete: each stored plan at `<state root>/plans/<plan-id>/` from `rk reconcile list`, each run journal at `<state root>/runs/<run-id>/` from `rk runs list`, and the release cache at `<state root>/release/`, listed directly.
 3. `rk guide landing` step 1c: run `rk stage --target .` and hold `<stage>` for the whole task.
 4. `rk guide landing` step 2a: read `<stage>/stage.json`, `<stage>/artifacts/`, and `<stage>/reference/`.
 5. `rk guide landing` step 2b: diff each artifact against the working tree, read `.release-kit/manifest.json`, and read `git log` and `git diff` for each differing destination.
@@ -22,7 +22,7 @@ The operator updated `rk` from a 0.4.x release after `rk guide landing` step 1b 
 7. `rk guide landing` step 3: preview `rk upgrade --target .`, then run `rk upgrade --target . --apply`.
 8. `rk guide landing` step 4: compare `git diff --stat` with `<stage>/artifacts/`, then run `rk status --check --target .`, `rk setup check --target .`, and the project's checks.
 9. `rk guide landing` step 5a: show `rk stage clean <stage>`. Run it only because the request's authority includes cleanup.
-10. `rk guide landing` step 5b: show each recorded exact path, `<state root>/plans/<id>` and the rest, and why each is obsolete. Confirm again that no active old operation remains. Remove each by name, one at a time, only under the explicit cleanup authorization the request carries. No `rk` verb removes this state, and no verb takes a directory as a recursive target.
+10. `rk guide landing` step 5b: show each recorded exact path, every `<state root>/plans/<plan-id>/`, every `<state root>/runs/<run-id>/`, and `<state root>/release/`, and why each is obsolete. Confirm again that no active old operation remains. For each path, resolve it, confirm it sits under one of those three classes, print its complete contents with `find`, and have the operator review that list. Remove each by name, one at a time, only under the explicit cleanup authorization the request carries. No `rk` verb removes this state, and no verb takes a directory as a recursive target.
 
 ## Authority
 

@@ -12,7 +12,7 @@ The setup runbook's prerequisites, unchanged: `rk` on `PATH`, this binary's skil
 rk assess --target .
 # check: the verdict and its evidence; brownfield is this runbook's subject, greenfield takes rk guide setup instead, and needs-decision is the operator's answer before any plan
 rk status --target .
-# check: none, or the landing with its version, drift, sentinels, and invariants; a recorded target routes by this report to rk guide landing, not by the verdict
+# check: none, or the landing with its version, drift, sentinels, and invariants. A recorded target routes by this report to rk guide landing, not by the verdict
 rk setup check --target .
 # check: what the forge enforces today, step by step
 rk versions --check
@@ -27,44 +27,25 @@ Every line of those reports that is not green is one entry in the inventory. Not
 
 ### 2a. Adopt a target with no record
 
-Adoption verifies the disk against one rendered candidate and never blesses the disk. `landing.workflow` and `landing.style` in `.release-kit/config.toml` choose the candidate, and invocation flags override them; style requires an answer from one of those inputs.
+Adoption verifies the disk against one rendered candidate and never blesses the disk. `landing.workflow` and `landing.style` in `.release-kit/config.toml` choose the candidate, and invocation flags override them. Style requires an answer from one of those inputs.
 
-```bash
-rk adopt --target . --workflow <mode> --style <style>
-# check: every rendered destination reports matches; a differs line names a destination to bring to the candidate's bytes
-rk snippet <tech>/<forge>/<path>
-# check: the candidate's bytes for one destination; rk payload lists them all with their digests
-rk adopt --target . --workflow <mode> --style <style> --apply
-# check: the config and manifest exist inside .release-kit/; every payload destination is unchanged
-```
+The adoption is the whole landing procedure: [the landing runbook](./landing.md) steps 1 to 5, with `rk adopt` as the front in its step 3. Its step 2b is where each destination the stage names as a collision is compared with the candidate, and its step 2d is where the target is brought to the candidate's bytes before the front runs (check: the front's preview prints `matches` for every rendered destination).
 
-- a refusal naming the two marked blocks: the alignment is still owed; bring `AGENTS.md` and `.pre-commit-config.yaml` to the candidate's blocks, then rerun. It is never an error to force past.
-- `branches` is the default when neither the config nor a flag answers workflow, the compatibility-safe reading of a pre-record target; the mode change to `worktree`, where wanted, is its own entry through 2c.
+- a refusal naming a destination as `expected and missing` or differing: the alignment is still owed. Return to the landing runbook's step 2d for that destination, then rerun. No flag forces past it.
+- `branches` is the default when neither the config nor a flag answers workflow, the compatibility-safe reading of a pre-record target. The mode change to `worktree`, where wanted, is its own entry through 2c.
 
 ### 2b. Upgrade a recorded target
 
-The upgrade is staged, investigated, rendered, and verified: [the landing runbook](./landing.md) steps 1 and 2 carry the stage and the investigation, and its step 2d carries the collision, the tuned seeded file, and the retired destination. The front below is that runbook's step 3, and its steps 4 and 5 follow it.
+The upgrade is the whole landing procedure: [the landing runbook](./landing.md) steps 1 to 5, with `rk upgrade` as the front in its step 3. Its steps 1 and 2 carry the stage and the investigation, and its step 2d carries the collision, the tuned seeded file, the edited generated file, and the retired destination. Its steps 4 and 5 carry the verification and the cleanup (check: the front's preview prints one word per destination, and no `collision` line).
 
-```bash
-rk upgrade --target .
-# check: the preview names differing config keys and every file action; a conflict line names a release-kit-owned file the target edited
-rk upgrade --target . --apply
-# check: the config is written before .release-kit/manifest.json; every sentinel left to fill is listed
-```
-
+- an edited generated file: the landing replaces it and prints `replaced`. Only an unattributed differing file refuses, and no flag forces past that refusal. The landing runbook's steps 2d and 3 carry both.
 - a record without the style parameter: answer `landing.style` in the config or pass `--style <style>`, asked of the operator only where the config is silent, because arming an existing project's release request changes what a green trunk does.
-- an absent config: the upgrade seeds it from the record; where the payload is unchanged, only that file is added.
-- a hook block lacking the `rk-message` content guard: the upgrade re-renders the block; a hand-edited block is reconciled first, per 2d.
+- an absent config: the upgrade seeds it from the record. Where the payload is unchanged, only that file is added.
+- a hook block lacking the `rk-message` content guard: the upgrade re-renders the block. A hand-edited block is brought to the candidate first, per 2d.
 
 ### 2c. Change a landing parameter
 
-Edit `landing.workflow` or `landing.style` in `.release-kit/config.toml`. Check: `rk status --check` reports the key as pending and exits 0 on an otherwise healthy landing. Preview and apply with the following commands; the optional flags override the file and write back on apply.
-
-```bash
-rk upgrade --target . --workflow <mode>            # or --style <style>
-rk upgrade --target . --workflow <mode> --apply
-# check: the affected rendered files, config, and record moved; the committed diff is the visible change
-```
+Edit `landing.workflow` or `landing.style` in `.release-kit/config.toml` (check: `rk status --check` reports the key as pending and exits 0 on an otherwise healthy landing). Then take the whole landing procedure, [the landing runbook](./landing.md) steps 1 to 5, with `rk upgrade` as the front in its step 3 and `--workflow <mode>` or `--style <style>` passed to both the stage and the front. The flag overrides the file and writes back on apply (check: the affected rendered files, the config, and the record moved, and the committed diff is the visible change).
 
 On worktree:
 

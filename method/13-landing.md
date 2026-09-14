@@ -4,7 +4,7 @@ How a release-kit write reaches a repository. The installed binary stages its ow
 
 ## The version is the operator's
 
-`rk` renders one release: its own. The operator chooses the installed version through the manager the project already runs, and `rk self-depend` can assist that manager. No landing verb fetches, resolves, or runs another release, and no verb installs `rk`. A stage, a landing, and a status report therefore describe what the binary on `PATH` would do, and nothing else. A record whose `rk_version` is newer than the binary refuses and names the version to install, because rewriting a newer landing with older bytes is a downgrade rather than an upgrade.
+`rk` renders one release: its own. The operator chooses the installed version through the manager the project already runs, and `rk self-depend` can assist that manager. No landing verb fetches, resolves, or runs another release, and no verb installs `rk`. A stage, a landing, and a status report therefore describe what the binary on `PATH` does, and nothing else. A record whose `rk_version` is newer than the binary refuses and names the version to install, because rewriting a newer landing with older bytes is a downgrade rather than an upgrade.
 
 Reading how the project obtains `rk` comes before any comparison. A version the operator did not choose is not a version to migrate to. Where the request did not authorize an update, the installed state is the whole report, and the migration work waits.
 
@@ -53,7 +53,7 @@ A documentation file the projection selects for this target is an ordinary candi
 
 ## Legacy operation state
 
-Release 0.4.x stored plans, results, run journals, and release caches under the state root. Before an operator-owned update from such a release, the installed binary is the one that reads them. An active operation is finished or abandoned with that binary before the tool is replaced, because the next binary carries no parser for it. Inactive state is recorded as local evidence: its exact paths, and why each is obsolete. The new binary offers no verb that removes it and no recursive target. Its removal is a one-time, agent-guided host cleanup, taken only under explicit cleanup authorization and only after no active old operation remains.
+Release 0.4.x stored plans, results, run journals, and release caches under the state root. Before an operator-owned update from such a release, the installed binary is the one that reads them. An active operation is finished with that binary before the tool is replaced, or the operator decides to abandon it, because the next binary carries no parser for it. Inactive state is recorded as local evidence: its exact paths, and why each is obsolete. The new binary offers no verb that removes it and no recursive target. Its removal is a one-time, agent-guided host cleanup, taken only under explicit cleanup authorization and only after no active old operation remains.
 
 ## Boundary tests
 

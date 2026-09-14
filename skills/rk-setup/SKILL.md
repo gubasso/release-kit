@@ -68,30 +68,30 @@ A request naming an issue — an issue URL, or "fix", "address", "implement", or
 2. Read the version and stop where no update was authorized. `rk guide landing` step 1a reads how the project obtains `rk`. This skill never chooses, installs, updates, downgrades, or fetches a version: where the request did not authorize an update, report the installed state and end the task before any migration work. Where the installed binary is a 0.4.x release the operator will replace, `rk guide landing` step 1b runs first, with that binary.
 3. Stage and investigate, `rk guide landing` steps 1c and 2. Keep the stage path for the whole task. Name the evidence class from the section below before proposing any edit, and prepare the target only within the request's authority.
 4. Land, `rk guide landing` step 3. The production verb renders again from the binary and the target. Read each word it prints and quote them, and take a refusal back to the investigation, never to a flag.
-5. Verify and clean, `rk guide landing` steps 4 and 5. Compare the real diff with the stage, run the checks, and repair through another fresh production run. Show the exact `rk stage clean <path>` only after everything passed, and run it only where the request's authority includes cleanup.
+5. Verify and clean, `rk guide landing` steps 4 and 5. Compare the real diff with the stage, run the checks, and repair through another fresh production run. Keep an inventory of every stage path the task created. Show the exact `rk stage clean <path>` for each one only after everything passed, and run them only where the request's authority includes cleanup.
 
 ## Which chapter the arrival loads
 
-- `greenfield`, from `rk assess`: `rk method setup` and `rk guide setup`. The landing is that runbook's step 4a; steps 1 to 3 surround it on the forge side and steps 5 to 8 on the registry side. The workflow mode, the release style, and the Nix opt-in are asked with the consequences `rk method model` and `rk method worktrees` state, before the plan is approved. The gate job and the required check are step 3c's decision. A `package-check` limitation is read out, not treated as done; `rk method setup` owns why and `rk binding <tech>` names the inspection.
-- `brownfield`, from `rk assess`: `rk method migration` and `rk guide migration`. The stage's collision, retired, and omitted lines are the inventory's first entries, one per finding with its disposition, and that runbook's step 1 reports the rest. The landing is its step 2, taken through `rk guide landing`, and the migration runbook owns everything around it. Before approval, state that the plan may need the gated steps below, each a `rk setup step` outside the landing.
-- `needs-decision`, from `rk assess`: stop and ask. The operator says what the tags or the second branch are before any plan claims to know; `rk method migration` owns the verdict.
+- `greenfield`, from `rk assess`: `rk method setup` and `rk guide setup`. The landing is that runbook's step 4a. Steps 1 to 3 surround it on the forge side and steps 5 to 8 on the registry side. The workflow mode, the release style, and the Nix opt-in are asked with the consequences `rk method model` and `rk method worktrees` state, before the plan is approved. The gate job and the required check are step 3c's decision. A `package-check` limitation is read out, not treated as done; `rk method setup` owns why and `rk binding <tech>` names the inspection.
+- `brownfield`, from `rk assess`: `rk method migration` and `rk guide migration`. The stage's collision, retired, and omitted lines are the inventory's first entries, one per finding with its disposition, and that runbook's step 1 reports the rest. The landing is its step 2, taken through `rk guide landing`, and the migration runbook owns everything around it. Before approval, state that the plan can need the gated steps below, each a `rk setup step` outside the landing.
+- `needs-decision`, from `rk assess`: stop and ask. The operator says what the tags or the second branch are before any plan claims to know, and `rk method migration` owns the verdict.
 - `recorded`, from `rk status`: `rk method landing` alone, through `rk upgrade`. A preview that prints only `matched` and `preserved` words means the target is at this release: stop and say so. The changelog and the guidance in the stage's `reference/` are the operator's reading for the releases between.
 - `newer`, a record whose `rk_version` is above the binary's: stop. `rk upgrade` refuses and names the version to install, and installing it is the operator's move.
 
 ## What the evidence allows
 
-State one class from `rk method landing` before the first edit, and let it bound what the plan may propose.
+State one class from `rk method landing` before the first edit, and let it bound what the plan can propose.
 
 - Receipt and useful history: propose bringing each collision to the candidate, with its author and reason quoted from `git log`.
 - Receipt without useful history: propose by kind and digest, and show every edit since the record as a question.
 - History without receipt: propose only what the log attributes, and ask about every file it does not.
 - Neither: a best-effort report. Every uncertain ownership decision is a question with `AskUserQuestion`, and no file is brought to the candidate without an answer.
 
-Under every class: never copy the stage tree into the target, and never offer `stage.json` or the stage path to `rk init`, `rk upgrade`, or `rk adopt`. Candidate documentation the stage lists under `artifacts/` is an ordinary destination; the `reference/` tree teaches this skill and is copied into no project.
+Under every class: never copy the stage tree into the target, and never offer `stage.json` or the stage path to `rk init`, `rk upgrade`, or `rk adopt`. Candidate documentation the stage lists under `artifacts/` is an ordinary destination. The `reference/` tree teaches this skill and is copied into no project.
 
 ## Legacy operation state, from a 0.4.x release
 
-- Before the update, with the installed binary: finish or explicitly abandon every active stored operation, per `rk guide landing` step 1b. An active operation stops the update.
+- Before the update, with the installed binary: finish every active stored operation, or record the operator's decision to abandon it, per `rk guide landing` step 1b. Abandonment is that decision and no command. An active operation stops the update.
 - Record every inactive plan, result, run journal, and release cache path under the state root as local evidence, with why each is obsolete. Do not describe their contents, and teach the new binary nothing about them.
 - After the landing passed, show those exact paths. Remove them only under explicit cleanup authorization, only after confirming no active old operation remains, and only by name, per `rk guide landing` step 5b. No `rk` verb removes them.
 
@@ -103,7 +103,7 @@ Gate each of these: print the exact command, say what it changes and why, wait, 
 - `rk setup step single-trunk --apply` — that runbook's step 5b; destructive, and its ancestry guard refusing is a stop, not an obstacle.
 - `install-bot` and `bot-secrets` — the bot identity and its credentials; `rk forge <name>` carries the walkthrough.
 - Registry actions: the first hand publish, registering the trusted publisher, turning on enforcement. `rk guide setup` names each with its reason.
-- The release style, on a record that predates it and whose config leaves it unanswered: `rk upgrade` refuses until `--style` answers it; ask it the way the greenfield arrival states, because arming an existing project's release request changes what a green trunk does.
+- The release style, on a record that predates it and whose config leaves it unanswered: `rk upgrade` refuses until `--style` answers it. Ask it the way the greenfield arrival states, because arming an existing project's release request changes what a green trunk does.
 - The development environment, where the project obtains `rk` by a host install or a hand-rolled bump — `rk guide migration` step 6, with the replacement as the default; the migration is not done while the cleanup's `leftovers` list is non-empty.
 - Regenerating what a landed configuration generates — `rk guide landing` step 4b names the order, and `rk guide setup` step 4b carries the command.
 - The predecessor's removal itself, a retired destination's removal, and every other removal: what it removes is committed first, per the migration chapter's recoverability section.
