@@ -28,8 +28,8 @@
 //! every writer: a hand edit during an apply is what the before-digests
 //! and the postconditions are for.
 
-use std::fs::{File, TryLockError};
-use std::io::Write;
+use std::fs::{File, OpenOptions, TryLockError};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use camino::Utf8Path;
@@ -114,16 +114,12 @@ pub fn acquire_in(dir: &Path, target: &Utf8Path) -> Result<TargetLock, RkError> 
     let canonical = std::fs::canonicalize(target)
         .map_or_else(|_| target.to_string(), |path| path.display().to_string());
     std::fs::create_dir_all(dir)?;
+    restrict_lock_dir(dir)?;
     let path = dir.join(format!("{}.lock", Digest::of(canonical.as_bytes())));
     // Opened rather than created exclusively: the file outlives every
     // run that took it, so its existence says a target was locked once,
     // never that it is locked now. Only the lock below says that.
-    let mut file = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&path)?;
+    let mut file = open_lock_file(&path)?;
     match file.try_lock() {
         Ok(()) => {
             // Best effort: the body is for the operator reading a
@@ -139,6 +135,81 @@ pub fn acquire_in(dir: &Path, target: &Utf8Path) -> Result<TargetLock, RkError> 
         Err(TryLockError::WouldBlock) => Err(busy(&canonical, &path)),
         Err(TryLockError::Error(error)) => Err(RkError::Io(error)),
     }
+}
+
+/// Make the lock namespace private and refuse a link or another file type.
+fn restrict_lock_dir(dir: &Path) -> io::Result<()> {
+    let metadata = std::fs::symlink_metadata(dir)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(invalid_lock_entry(dir, "lock namespace is not a directory"));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+
+        let directory = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+            .open(dir)?;
+        directory.set_permissions(std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
+/// Open the persistent lock entry without following its final component.
+fn open_lock_file(path: &Path) -> io::Result<File> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            return Err(invalid_lock_entry(path, "lock entry is not a regular file"));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    configure_lock_open(&mut options);
+    let file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(invalid_lock_entry(path, "lock entry is not a regular file"));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(file)
+}
+
+#[cfg(unix)]
+fn configure_lock_open(options: &mut OpenOptions) {
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    options
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+}
+
+#[cfg(windows)]
+fn configure_lock_open(options: &mut OpenOptions) {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    // Win32 FILE_FLAG_OPEN_REPARSE_POINT makes CreateFileW open the link
+    // itself, so the regular-file check below refuses it rather than opening
+    // its destination.
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+}
+
+#[cfg(not(any(unix, windows)))]
+fn configure_lock_open(_options: &mut OpenOptions) {}
+
+fn invalid_lock_entry(path: &Path, detail: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("{detail}: {}", path.display()),
+    )
 }
 
 /// The refusal for a target another run holds.
@@ -166,9 +237,18 @@ fn busy(target: &str, path: &Path) -> RkError {
 mod tests {
     use super::{acquire_in, busy, rootless};
     use crate::diagnostic::Reason;
+    use crate::digest::Digest;
 
     fn utf8(dir: &tempfile::TempDir) -> camino::Utf8PathBuf {
         camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).expect("a utf-8 path")
+    }
+
+    fn lock_path(locks: &tempfile::TempDir, target: &camino::Utf8Path) -> std::path::PathBuf {
+        let canonical = std::fs::canonicalize(target).expect("the target canonicalizes");
+        locks.path().join(format!(
+            "{}.lock",
+            Digest::of(canonical.display().to_string().as_bytes())
+        ))
     }
 
     /// The second acquisition refuses while the first is held, and the
@@ -226,6 +306,90 @@ mod tests {
         assert!(
             body.starts_with(&format!("{}\n", std::process::id())),
             "the taking run names itself, and no tail of the corpse survives: {body:?}"
+        );
+    }
+
+    /// A lock pathname cannot redirect the holder description writes to
+    /// another file.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_lock_file_is_refused_without_touching_its_target() {
+        use std::os::unix::fs::symlink;
+
+        let locks = tempfile::tempdir().expect("a scratch locks directory exists");
+        let target = tempfile::tempdir().expect("a scratch target exists");
+        let path = utf8(&target);
+        let victim = locks.path().join("victim");
+        std::fs::write(&victim, "untouched\n").expect("the victim exists");
+        symlink(&victim, lock_path(&locks, &path)).expect("the crafted lock link exists");
+
+        acquire_in(locks.path(), &path).expect_err("a lock link is refused");
+        assert_eq!(
+            std::fs::read_to_string(victim).expect("the victim reads"),
+            "untouched\n",
+            "acquisition must not truncate or write through the link"
+        );
+    }
+
+    /// A persistent lock entry is a regular file, never another kind of
+    /// filesystem object.
+    #[test]
+    fn a_non_regular_lock_entry_is_refused() {
+        let locks = tempfile::tempdir().expect("a scratch locks directory exists");
+        let target = tempfile::tempdir().expect("a scratch target exists");
+        let path = utf8(&target);
+        let entry = lock_path(&locks, &path);
+        std::fs::create_dir(&entry).expect("a non-regular entry exists");
+
+        acquire_in(locks.path(), &path).expect_err("a non-regular lock is refused");
+        assert!(entry.is_dir(), "the refused entry stays unchanged");
+    }
+
+    /// The lock namespace and its operator-readable entries belong only
+    /// to the user running rk.
+    #[cfg(unix)]
+    #[test]
+    fn the_lock_namespace_and_file_are_owner_only() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let locks = tempfile::tempdir().expect("a scratch locks directory exists");
+        let target = tempfile::tempdir().expect("a scratch target exists");
+        let taken = acquire_in(locks.path(), &utf8(&target)).expect("the target is taken");
+
+        let dir_mode = std::fs::metadata(locks.path())
+            .expect("the namespace has metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        let file_mode = std::fs::metadata(taken.path())
+            .expect("the lock has metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(dir_mode, 0o700);
+        assert_eq!(file_mode, 0o600);
+    }
+
+    /// The namespace itself cannot redirect every target lock into
+    /// another directory.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_lock_namespace_is_refused() {
+        use std::os::unix::fs::symlink;
+
+        let parent = tempfile::tempdir().expect("a scratch parent exists");
+        let destination = tempfile::tempdir().expect("a scratch destination exists");
+        let locks = parent.path().join("locks");
+        symlink(destination.path(), &locks).expect("the crafted namespace link exists");
+        let target = tempfile::tempdir().expect("a scratch target exists");
+
+        acquire_in(&locks, &utf8(&target)).expect_err("a linked namespace is refused");
+        assert_eq!(
+            std::fs::read_dir(destination.path())
+                .expect("the destination reads")
+                .count(),
+            0,
+            "no lock is written through the namespace link"
         );
     }
 
