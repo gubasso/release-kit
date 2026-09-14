@@ -17,9 +17,10 @@
   outputs =
     { self, nixpkgs, release-kit }:
     let
+      # One system: the platform release-kit itself builds and supports.
+      # Grow the list together with a native CI runner for each addition.
       systems = [
         "x86_64-linux"
-        "aarch64-linux"
       ];
       eachSystem = f: nixpkgs.lib.genAttrs systems (system: f system);
     in

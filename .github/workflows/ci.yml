@@ -38,15 +38,12 @@ jobs:
         env:
           SKIP: no-commit-to-branch,rk-worktree-location
 
-  # Every system the flake advertises is one this job natively builds and
-  # smokes; the flake's system list and this matrix grow together. A
-  # cross-evaluated check is not the same proof, so each runner checks
-  # its own system.
+  # The one system the flake advertises is the one this job natively
+  # builds and smokes. A cross-evaluated check is not the same proof, so
+  # the runner checks its own system, and a second system would need a
+  # second native runner here in the same change.
   flake:
-    strategy:
-      matrix:
-        runner: [ubuntu-latest, ubuntu-24.04-arm]
-    runs-on: ${{ matrix.runner }}
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:

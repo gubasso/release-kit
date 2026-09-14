@@ -24312,3 +24312,109 @@ fn an_unsealed_cached_baseline_is_not_observed_with_its_reason() {
         "{mismatched}"
     );
 }
+
+/// One supported target, landed as the one default: a fresh Rust landing
+/// on either forge advertises exactly one Nix system, `x86_64-linux`; the
+/// GitHub release declaration names exactly one target and exactly the
+/// shell installer; the root flake, both dependency seeds, and the CI
+/// flake proof make the same one-system claim. The lists are compared
+/// whole, so a second platform of any spelling fails here.
+/// ADR-linux-is-the-only-supported-target owns the why.
+#[test]
+fn a_fresh_rust_landing_advertises_only_x86_64_linux() {
+    let systems_of = |flake: &str, what: &str| -> Vec<String> {
+        let open = flake
+            .find("systems = [")
+            .unwrap_or_else(|| panic!("{what} has a systems list"));
+        let rest = &flake[open + "systems = [".len()..];
+        let close = rest
+            .find("];")
+            .unwrap_or_else(|| panic!("{what} closes its systems list"));
+        rest[..close]
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .map(|line| line.trim_matches('"').to_owned())
+            .collect()
+    };
+    let toml_list = |text: &str, key: &str, what: &str| -> Vec<String> {
+        let table: toml::Table = text
+            .parse()
+            .unwrap_or_else(|_| panic!("{what} parses as TOML"));
+        table["dist"][key]
+            .as_array()
+            .unwrap_or_else(|| panic!("{what} has a {key} array"))
+            .iter()
+            .map(|v| v.as_str().expect("a string").to_owned())
+            .collect()
+    };
+    for forge in ["github", "gitlab"] {
+        let target = tempfile::tempdir().expect("a scratch dir exists");
+        seed_crate(target.path());
+        rk().args(["init", "--tech", "rust", "--forge", forge])
+            .args(["--repo", "acme/widget", "--nix"])
+            .arg("--target")
+            .arg(target.path())
+            .arg("--apply")
+            .assert()
+            .success();
+        let flake = std::fs::read_to_string(target.path().join("flake.nix"))
+            .expect("the seeded flake reads");
+        assert_eq!(
+            systems_of(&flake, &format!("the {forge} flake")),
+            ["x86_64-linux"]
+        );
+        if forge == "github" {
+            let dist = std::fs::read_to_string(target.path().join("dist-workspace.toml"))
+                .expect("the release declaration reads");
+            assert_eq!(
+                toml_list(&dist, "targets", "the seeded declaration"),
+                ["x86_64-unknown-linux-gnu"]
+            );
+            assert_eq!(
+                toml_list(&dist, "installers", "the seeded declaration"),
+                ["shell"]
+            );
+        } else {
+            assert!(!target.path().join("dist-workspace.toml").exists());
+        }
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for seed in [
+        "blocks/depend-seed-flake.nix.in",
+        "blocks/self-depend-seed-flake.nix.in",
+        "flake.nix",
+    ] {
+        let text = std::fs::read_to_string(root.join(seed)).expect("the seed reads");
+        assert_eq!(systems_of(&text, seed), ["x86_64-linux"], "{seed}");
+    }
+    let dist = std::fs::read_to_string(root.join("dist-workspace.toml"))
+        .expect("the root declaration reads");
+    assert_eq!(
+        toml_list(&dist, "targets", "the root declaration"),
+        ["x86_64-unknown-linux-gnu"]
+    );
+    assert_eq!(
+        toml_list(&dist, "installers", "the root declaration"),
+        ["shell"]
+    );
+    // The flake proof runs natively on the one system's runner and on no
+    // matrix: the flake's list and the CI proof name the same one system.
+    let ci = std::fs::read_to_string(root.join(".github/workflows/ci.yml")).expect("ci.yml reads");
+    let flake_job = ci
+        .split("\n  flake:\n")
+        .nth(1)
+        .expect("ci.yml has a flake job");
+    let flake_job = flake_job
+        .split("\n  dist-plan:\n")
+        .next()
+        .expect("the flake job ends");
+    assert!(
+        flake_job.contains("runs-on: ubuntu-latest"),
+        "the flake job runs on the one native runner"
+    );
+    assert!(
+        !flake_job.contains("matrix"),
+        "the flake job has no runner matrix"
+    );
+}
