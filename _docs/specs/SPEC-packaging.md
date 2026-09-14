@@ -68,7 +68,7 @@ Verify: `grep -q 'src/payload_roots.rs' nix/package.nix`
 
 ### `packaging:an-advertised-system-is-a-proven-system` — An advertised system is a proven system
 
-Where the flake advertises a system, CI MUST natively build and run the flake's checks on that system, because an output set is a support promise and a cross-evaluated check builds nothing.
+Where the flake advertises a system, CI MUST natively build and run the flake's checks on that system, because an output set is a support promise and a cross-evaluated check builds nothing. The one system this repository advertises, proves, and releases for is x86_64 Linux: `x86_64-linux` as the flake system and `x86_64-unknown-linux-gnu` as the release target, with the shell installer as the one installer. Every flake and release declaration `rk` lands or seeds MUST default to that same one system, because a seed advertises what the landed proof natively runs, and `rk` MUST NOT generate, test, or claim another platform; a project widens its own files after landing (`ADR-linux-is-the-only-supported-target`).
 
 #### Scenario: A system joins the flake's list without a runner
 
@@ -76,7 +76,7 @@ Where the flake advertises a system, CI MUST natively build and run the flake's 
 - WHEN the change is reviewed
 - THEN either a native runner joins the matrix in the same change or the system stays out of the list
 
-Verify: reviewer confirms the flake's system list and the CI matrix name the same systems
+Verify: `! grep -rEi 'aarch64|darwin|apple|windows-msvc|powershell' flake.nix dist-workspace.toml snippets/rust blocks .github/workflows/ci.yml`
 
 ### `packaging:the-checks-carry-the-nix-side-signal` — The checks carry the Nix-side signal
 

@@ -24312,3 +24312,59 @@ fn an_unsealed_cached_baseline_is_not_observed_with_its_reason() {
         "{mismatched}"
     );
 }
+
+/// One supported target, landed as the one default: a fresh Rust landing
+/// on either forge advertises the `x86_64` Linux Nix system alone, the
+/// GitHub release declaration names the one GNU/Linux target and the
+/// shell installer, and the two dependency seeds carry the same claim.
+/// ADR-linux-is-the-only-supported-target owns the why.
+#[test]
+fn a_fresh_rust_landing_advertises_only_x86_64_linux() {
+    let foreign = ["aarch64", "darwin", "apple", "windows-msvc", "powershell"];
+    let free_of_foreign = |text: &str, what: &str| {
+        let lower = text.to_lowercase();
+        for word in foreign {
+            assert!(!lower.contains(word), "{what} advertises {word}");
+        }
+    };
+    for forge in ["github", "gitlab"] {
+        let target = tempfile::tempdir().expect("a scratch dir exists");
+        seed_crate(target.path());
+        rk().args(["init", "--tech", "rust", "--forge", forge])
+            .args(["--repo", "acme/widget", "--nix"])
+            .arg("--target")
+            .arg(target.path())
+            .arg("--apply")
+            .assert()
+            .success();
+        let flake = std::fs::read_to_string(target.path().join("flake.nix"))
+            .expect("the seeded flake reads");
+        assert!(
+            flake.contains("\"x86_64-linux\""),
+            "the {forge} flake names the one system"
+        );
+        free_of_foreign(&flake, &format!("the {forge} flake"));
+        if forge == "github" {
+            let dist = std::fs::read_to_string(target.path().join("dist-workspace.toml"))
+                .expect("the release declaration reads");
+            assert!(dist.contains("targets = [\"x86_64-unknown-linux-gnu\"]"));
+            assert!(dist.contains("installers = [\"shell\"]"));
+            free_of_foreign(&dist, "the release declaration");
+        } else {
+            assert!(!target.path().join("dist-workspace.toml").exists());
+        }
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for seed in [
+        "blocks/depend-seed-flake.nix.in",
+        "blocks/self-depend-seed-flake.nix.in",
+        "flake.nix",
+    ] {
+        let text = std::fs::read_to_string(root.join(seed)).expect("the seed reads");
+        assert!(
+            text.contains("\"x86_64-linux\""),
+            "{seed} names the one system"
+        );
+        free_of_foreign(&text, seed);
+    }
+}

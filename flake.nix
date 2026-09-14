@@ -30,12 +30,11 @@
       spec-driven-docs,
     }:
     let
-      # The support claim, not a convenience: every system named here is one
-      # CI natively builds and smokes, and the list grows together with the
-      # CI matrix (packaging:an-advertised-system-is-a-proven-system).
+      # The support claim, not a convenience: the one system named here is
+      # the one CI natively builds and smokes, and the only platform this
+      # project supports (packaging:an-advertised-system-is-a-proven-system).
       systems = [
         "x86_64-linux"
-        "aarch64-linux"
       ];
       eachSystem =
         f:
