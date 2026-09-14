@@ -137,7 +137,12 @@ pub fn run(args: &InitArgs) -> Result<(), RkError> {
     // One directory descriptor, held from here through the receipt write:
     // every read and every write goes through it, so a root exchanged
     // under the pathname later receives nothing.
-    let held = apply::Held::open(&args.target)?;
+    // The proof's pause: the lock is held and the directory is not yet.
+    held::pause(apply::PAUSE_VAR, "locked", "proceed-locked");
+    let held = lock.as_ref().map_or_else(
+        || apply::Held::open(&args.target),
+        |lock| apply::Held::open_locked(&args.target, lock),
+    )?;
     // The proof's pause: the target is held, and nothing has been read.
     held::pause(apply::PAUSE_VAR, "held", "proceed-held");
     let config = crate::config::load(held.base().as_std_path())?;

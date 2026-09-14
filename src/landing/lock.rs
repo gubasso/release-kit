@@ -52,9 +52,19 @@ pub struct TargetLock {
     /// with this value.
     _file: File,
     path: PathBuf,
+    /// The identity of the directory the lock key was derived from, so
+    /// the directory later held can be checked to be the same one.
+    identity: Option<crate::held::Identity>,
 }
 
 impl TargetLock {
+    /// The identity of the directory this lock was taken for, or `None`
+    /// where the target did not resolve when the lock was taken.
+    #[must_use]
+    pub const fn identity(&self) -> Option<crate::held::Identity> {
+        self.identity
+    }
+
     /// The lock file's path, while it is held.
     #[must_use]
     pub fn path(&self) -> &Path {
@@ -104,8 +114,12 @@ fn rootless() -> RkError {
 ///
 /// As [`acquire`].
 pub fn acquire_in(dir: &Path, target: &Utf8Path) -> Result<TargetLock, RkError> {
-    let canonical = std::fs::canonicalize(target)
-        .map_or_else(|_| target.to_string(), |path| path.display().to_string());
+    let resolved = std::fs::canonicalize(target).ok();
+    let identity = resolved
+        .as_deref()
+        .and_then(|path| std::fs::metadata(path).ok())
+        .map(|metadata| crate::held::Identity::of(&metadata));
+    let canonical = resolved.map_or_else(|| target.to_string(), |path| path.display().to_string());
     std::fs::create_dir_all(dir)?;
     restrict_lock_dir(dir)?;
     let path = dir.join(format!("{}.lock", Digest::of(canonical.as_bytes())));
@@ -120,7 +134,11 @@ pub fn acquire_in(dir: &Path, target: &Utf8Path) -> Result<TargetLock, RkError> 
             // all the entry needs to be. Truncated only after the open
             // verified a regular file, so a crafted entry loses nothing.
             let _ = file.set_len(0);
-            Ok(TargetLock { _file: file, path })
+            Ok(TargetLock {
+                _file: file,
+                path,
+                identity,
+            })
         }
         Err(TryLockError::WouldBlock) => Err(busy(&canonical)),
         Err(TryLockError::Error(error)) => Err(RkError::Io(error)),

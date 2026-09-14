@@ -27363,9 +27363,12 @@ impl PausedLanding {
             .stderr(std::process::Stdio::piped())
             .spawn()
             .expect("the landing starts");
-        // A run paused at a later tag passes the earlier pause at once.
-        if tag != "held" {
-            std::fs::write(pause.path().join("proceed-held"), b"").expect("the first pause opens");
+        // A run paused at a later tag passes every earlier pause at once.
+        let order = ["locked", "held", "validated"];
+        let wanted = order.iter().position(|t| *t == tag).expect("a known tag");
+        for earlier in &order[..wanted] {
+            std::fs::write(pause.path().join(format!("proceed-{earlier}")), b"")
+                .expect("an earlier pause opens");
         }
         let reached = pause.path().join(tag);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
@@ -27385,7 +27388,7 @@ impl PausedLanding {
     /// Let the landing proceed past every pause and return its exit code,
     /// its report, and its diagnostic.
     fn proceed_reporting(self) -> (Option<i32>, serde_json::Value, serde_json::Value) {
-        for proceed in ["proceed-held", "proceed"] {
+        for proceed in ["proceed-locked", "proceed-held", "proceed"] {
             std::fs::write(self.pause.path().join(proceed), b"").expect("the landing proceeds");
         }
         let output = self.child.wait_with_output().expect("the landing ends");
@@ -28013,4 +28016,51 @@ fn a_decoy_remote_at_the_exchanged_pathname_does_not_change_the_held_projection(
         }
         other => panic!("the landing neither landed nor refused cleanly: {other:?} {diagnostic}"),
     }
+}
+
+/// SATISFIES landing:a-partial-landing-is-visible-and-rerunnable
+#[test]
+fn a_target_exchanged_between_the_lock_and_the_hold_is_refused() {
+    let parent = tempfile::tempdir().expect("a scratch parent exists");
+    let target = parent.path().join("widget");
+    std::fs::create_dir_all(target.join(".git")).expect("the target is a repository");
+    std::fs::write(
+        target.join("Cargo.toml"),
+        "[package]\nname = \"widget\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("the version file writes");
+    let real_before = tree_digests(&target);
+    let paused = PausedLanding::start_at(
+        &target,
+        &[&INIT_RUST[..], &["acme/widget"]].concat(),
+        "locked",
+    );
+    // The lock is held for the real directory; a decoy takes its pathname
+    // before the directory is held.
+    let real = parent.path().join("real");
+    std::fs::rename(&target, &real).expect("the real target moves aside");
+    std::fs::create_dir(&target).expect("the decoy stands at the path");
+    std::fs::write(target.join("decoy.txt"), "untouched\n").expect("the decoy has a file");
+    let decoy_before = tree_digests(&target);
+    let (code, diagnostic) = paused.proceed();
+    assert_eq!(code, Some(73), "{diagnostic}");
+    assert_eq!(diagnostic["reason"], "state-drift", "{diagnostic}");
+    assert_eq!(diagnostic["target_state"], "unchanged", "{diagnostic}");
+    assert!(
+        diagnostic["message"]
+            .as_str()
+            .expect("a message")
+            .contains("exchanged"),
+        "{diagnostic}"
+    );
+    assert_eq!(
+        tree_digests(&target),
+        decoy_before,
+        "the decoy received a write"
+    );
+    assert_eq!(
+        tree_digests(&real),
+        real_before,
+        "the real target received a write"
+    );
 }

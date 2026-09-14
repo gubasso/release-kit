@@ -139,6 +139,32 @@ impl Held {
         })
     }
 
+    /// Hold `target` under `lock`: the directory opened must be the one
+    /// the lock key was derived from, or the target was exchanged between
+    /// the two steps and the landing refuses before it reads anything.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::open`], and a `state-drift` refusal naming the exchange.
+    pub fn open_locked(target: &Utf8Path, lock: &lock::TargetLock) -> Result<Self, RkError> {
+        let held = Self::open(target)?;
+        let opened = held::Identity::of(&held.root.metadata()?);
+        if lock.identity().is_some_and(|locked| locked != opened) {
+            return Err(RkError::refusal(
+                Diagnostic::new(
+                    Reason::StateDrift,
+                    format!(
+                        "the directory at {target} was exchanged after the lock was taken, and nothing was written"
+                    ),
+                )
+                .expected("one directory at the target path from the lock through the receipt write")
+                .action("re-run once the target is at rest")
+                .target_state("unchanged"),
+            ));
+        }
+        Ok(held)
+    }
+
     /// The path every read of this target goes through: the kernel's
     /// link to the held directory.
     #[must_use]
