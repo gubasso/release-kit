@@ -26436,14 +26436,19 @@ const RETIRED_SURFACE_ALLOWLIST: &[(&str, &str, &str)] = &[
         "the field of a legacy receipt the loader drops",
     ),
     (
-        "tests/fixtures/receipts/v0.4.0-manifest.json",
+        "tests/fixtures/v0.4.0-target/.release-kit/manifest.json",
         "payload_sha256",
         "a receipt as public v0.4.0 wrote it",
     ),
     (
-        "tests/fixtures/receipts/v0.4.0-manifest.json",
+        "tests/fixtures/v0.4.0-target/.release-kit/manifest.json",
         "baseline_sha256",
         "a receipt as public v0.4.0 wrote it",
+    ),
+    (
+        "tests/fixtures/v0.4.0-target/.release-kit/config.toml",
+        "payload binding",
+        "the answers file as public v0.4.0 wrote it",
     ),
     // historical: rule ids and a record name an immutable decision cites
     (
@@ -26466,7 +26471,17 @@ const RETIRED_SURFACE_ALLOWLIST: &[(&str, &str, &str)] = &[
         "ADR-author-every-host-written-text-as-payload",
         "the immutable record's file name",
     ),
-    // unrelated: another meaning of the word
+    // unrelated: another meaning of the word, or another tool's record
+    (
+        ".spec-driven-docs/manifest.json",
+        "baseline_sha256",
+        "spec-driven-docs' own receipt, a third-party tool's record",
+    ),
+    (
+        "snippets/bash/gitlab/.gitlab-ci.yml",
+        "reconciles rather than skips",
+        "the attach job's rerun semantics, ordinary English in a landed snippet",
+    ),
     (
         "_docs/specs/SPEC-tracking.md",
         "revalidat",
@@ -26642,10 +26657,11 @@ fn files_under(root: &Path, out: &mut Vec<PathBuf>) {
 }
 
 /// No live surface names the retired cross-release bundle or stored-plan
-/// architecture: every help page, `rk usage`, and every live file under
-/// the roots below. Immutable decision records and the changelog are
-/// history and are not scanned; the ledger's `historical` and `unrelated`
-/// verdicts are the allowlist above, and nothing else is.
+/// architecture: every help page, `rk usage`, and every tracked or
+/// untracked-and-not-ignored text file of the repository, as `git
+/// ls-files` enumerates them. Immutable decision records and the
+/// changelog are history and are not scanned; the ledger's `historical`
+/// and `unrelated` verdicts are the allowlist above, and nothing else is.
 #[test]
 fn no_live_surface_names_the_retired_architecture() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -26661,44 +26677,40 @@ fn no_live_surface_names_the_retired_architecture() {
         "rk usage".to_owned(),
         String::from_utf8_lossy(&usage).into_owned(),
     ));
-    let mut files = Vec::new();
-    for name in [
-        "README.md",
-        "AGENTS.md",
-        "GLOSSARY.md",
-        "method",
-        "runbooks",
-        "bindings",
-        "forges",
-        "skills",
-        "skill-shared",
-        "blocks",
-        "guidance",
-        "_docs/specs",
-        "_docs/reference",
-        "_docs/guides",
-        "src",
-        "tests",
-    ] {
-        let path = root.join(name);
-        assert!(path.exists(), "{name} is not in the tree");
-        if path.is_dir() {
-            files_under(&path, &mut files);
-        } else {
-            files.push(path);
+    let listed = std::process::Command::new("git")
+        .args([
+            "-C",
+            &root.to_string_lossy(),
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+        ])
+        .output()
+        .expect("git ls-files runs");
+    assert!(listed.status.success(), "git ls-files failed");
+    let mut seen = 0;
+    for relative in String::from_utf8_lossy(&listed.stdout).split('\0') {
+        if relative.is_empty()
+            || relative == "CHANGELOG.md"
+            || relative.starts_with("_docs/decisions/")
+        {
+            continue;
         }
-    }
-    for path in files {
-        let Ok(text) = std::fs::read_to_string(&path) else {
+        let path = root.join(relative);
+        // A file git lists and the tree no longer holds is a deletion in
+        // flight; a file that is not UTF-8 is not a text surface.
+        let Ok(bytes) = std::fs::read(&path) else {
             continue;
         };
-        let relative = path
-            .strip_prefix(root)
-            .expect("under the manifest dir")
-            .to_string_lossy()
-            .into_owned();
-        surfaces.push((relative, text));
+        let Ok(text) = String::from_utf8(bytes) else {
+            continue;
+        };
+        seen += 1;
+        surfaces.push((relative.to_owned(), text));
     }
+    assert!(seen > 100, "git ls-files enumerated {seen} text files");
 
     let mut hits = Vec::new();
     for (label, text) in &surfaces {
@@ -26926,49 +26938,35 @@ fn the_gitlab_floor_is_declared_once() {
     assert!(String::from_utf8_lossy(&out).contains(&floor));
 }
 
-/// A target public v0.4.0 landed, reproduced from its committed receipt
-/// and the files that release wrote, upgrades through `rk upgrade --apply`
-/// from the receipt and the working tree alone: nothing is downloaded,
-/// no other release's sources are read, the receipt is rewritten as the
-/// one current shape, and `rk status --check` then passes.
+/// A target public v0.4.0 landed, kept whole under
+/// `tests/fixtures/v0.4.0-target/` exactly as that release's `rk init`
+/// wrote it, upgrades through `rk upgrade --apply` from its receipt and
+/// working tree alone: nothing is downloaded, no other release's sources
+/// are read, the receipt is rewritten as the one current shape, every
+/// seeded file keeps its bytes, and every rendered file is either
+/// untouched or replaced as the report says.
 #[test]
 fn a_public_v0_4_0_target_upgrades_from_its_receipt_alone() {
-    let curl = OfflineCurl::new();
-    let target = plan_target();
-    // The files as a release-kit landing leaves them, then the receipt as
-    // v0.4.0 wrote it: schema 6, its bundle digest, a baseline digest per
-    // file, no placement, and the file digests of that landing.
-    land_rust(target.path()).success();
-    let fixture =
-        std::fs::read_to_string(repo_path("tests/fixtures/receipts/v0.4.0-manifest.json"))
-            .expect("the fixture reads");
-    let legacy: serde_json::Value = serde_json::from_str(&fixture).expect("one JSON object");
-    assert_eq!(legacy["schema_version"], 6);
-    assert_eq!(legacy["rk_version"], "0.4.0");
-    assert!(legacy.get(LEGACY_BUNDLE_DIGEST_FIELD).is_some());
-    for file in legacy["files"].as_array().expect("files") {
-        assert!(file.get(LEGACY_BASELINE_FIELD).is_some());
-        assert!(file.get("placement").is_none());
-    }
-    write_manifest(target.path(), &legacy);
-    // The receipt digests belong to another checkout, so status reads the
-    // rendered files as drift and nothing else refuses.
-    let before = curl
-        .rk()
-        .args(["status", "--json", "--target"])
-        .arg(target.path())
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let before: serde_json::Value = serde_json::from_slice(&before).expect("one JSON object");
-    assert_eq!(before["rk_version"], "0.4.0", "{before}");
+    let fixture = repo_path("tests/fixtures/v0.4.0-target");
+    let recorded = v0_4_0_fixture_records(&fixture);
 
+    let scratch = committed_copy_of(&fixture);
+    let target = scratch.path();
+    let before: std::collections::BTreeMap<String, Vec<u8>> = recorded
+        .iter()
+        .map(|(destination, ..)| {
+            (
+                destination.clone(),
+                std::fs::read(target.join(destination)).expect("reads"),
+            )
+        })
+        .collect();
+
+    let curl = OfflineCurl::new();
     let out = curl
         .rk()
         .args(["upgrade", "--json", "--apply", "--target"])
-        .arg(target.path())
+        .arg(target)
         .assert()
         .success()
         .get_output()
@@ -26976,25 +26974,70 @@ fn a_public_v0_4_0_target_upgrades_from_its_receipt_alone() {
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
     assert_eq!(report["schema"], "rk.upgrade/7", "{report}");
-    let manifest = read_manifest(target.path());
+    assert_eq!(report["from_version"], "0.4.0", "{report}");
+    let action_of = |destination: &str| -> String {
+        report["files"]
+            .as_array()
+            .expect("files")
+            .iter()
+            .find(|file| file["path"] == destination)
+            .unwrap_or_else(|| panic!("{destination} is not in the report: {report}"))["action"]
+            .as_str()
+            .expect("an action")
+            .to_owned()
+    };
+    for (destination, kind, _) in &recorded {
+        let after = std::fs::read(target.join(destination)).expect("reads");
+        let action = action_of(destination);
+        match kind.as_str() {
+            "seeded" => {
+                assert_eq!(
+                    after, before[destination],
+                    "{destination}: a seeded file changed"
+                );
+                assert!(
+                    ["preserved", "drift"].contains(&action.as_str()),
+                    "{destination}: {action}"
+                );
+            }
+            "rendered" => {
+                if after == before[destination] {
+                    assert!(
+                        ["replaced", "matched"].contains(&action.as_str()),
+                        "{destination}: unchanged bytes reported as {action}"
+                    );
+                } else {
+                    assert_eq!(
+                        action, "replaced",
+                        "{destination}: changed bytes reported as {action}"
+                    );
+                }
+            }
+            other => panic!("{destination}: kind {other}"),
+        }
+    }
+
+    let manifest = read_manifest(target);
     assert_eq!(manifest["schema_version"], 7);
     assert_eq!(manifest["rk_version"], env!("CARGO_PKG_VERSION"));
-    let text = std::fs::read_to_string(target.path().join(".release-kit/manifest.json"))
+    let text = std::fs::read_to_string(target.join(".release-kit/manifest.json"))
         .expect("the receipt reads");
     assert!(!text.contains(LEGACY_BUNDLE_DIGEST_FIELD), "{text}");
     assert!(!text.contains(LEGACY_BASELINE_FIELD), "{text}");
     for destination in ["AGENTS.md", "GLOSSARY.md", ".pre-commit-config.yaml"] {
         assert_eq!(manifest_file(&manifest, destination)["placement"], "region");
     }
-    // The seeded files the operator tuned in 0.4.0's landing are preserved.
-    assert_eq!(
-        manifest_file(&manifest, "release-plz.toml")["kind"],
-        "seeded"
-    );
+    for (destination, kind, _) in &recorded {
+        assert_eq!(
+            &manifest_file(&manifest, destination)["kind"],
+            kind,
+            "{destination}"
+        );
+    }
     let status = curl
         .rk()
         .args(["status", "--json", "--target"])
-        .arg(target.path())
+        .arg(target)
         .assert()
         .success()
         .get_output()
@@ -27003,6 +27046,74 @@ fn a_public_v0_4_0_target_upgrades_from_its_receipt_alone() {
     let status: serde_json::Value = serde_json::from_slice(&status).expect("one JSON object");
     assert_eq!(status["alignment"], "aligned", "{status}");
     assert_eq!(status["pending"], 0, "{status}");
-    assert_eq!(status["rk_version"], env!("CARGO_PKG_VERSION"), "{status}");
     assert_eq!(curl.calls(), 0, "no release was resolved over the network");
+}
+
+/// The v0.4.0 fixture's receipt as `(destination, kind, sha256)` per
+/// recorded file, after asserting the receipt is the schema 6 shape that
+/// release wrote and that every recorded digest is the digest of the
+/// file, or of the marked region, on disk.
+fn v0_4_0_fixture_records(fixture: &Path) -> Vec<(String, String, String)> {
+    use release_kit::landing::read_recorded;
+
+    let legacy = read_manifest(fixture);
+
+    assert_eq!(legacy["schema_version"], 6);
+    assert_eq!(legacy["rk_version"], "0.4.0");
+    assert!(legacy.get(LEGACY_BUNDLE_DIGEST_FIELD).is_some());
+    let recorded: Vec<(String, String, String)> = legacy["files"]
+        .as_array()
+        .expect("files")
+        .iter()
+        .map(|file| {
+            assert!(file.get(LEGACY_BASELINE_FIELD).is_some());
+            assert!(file.get("placement").is_none());
+            (
+                file["destination"]
+                    .as_str()
+                    .expect("a destination")
+                    .to_owned(),
+                file["kind"].as_str().expect("a kind").to_owned(),
+                file["sha256"].as_str().expect("a digest").to_owned(),
+            )
+        })
+        .collect();
+    assert!(!recorded.is_empty());
+    // The fixture is the landing the receipt describes: every recorded
+    // digest is the digest of the file, or of the marked region, on disk.
+    for (destination, _, sha256) in &recorded {
+        let bytes = read_recorded(&utf8(fixture), destination)
+            .expect("reads")
+            .unwrap_or_else(|| panic!("{destination}: the fixture lacks it"));
+        assert_eq!(&Digest::of(&bytes).to_string(), sha256, "{destination}");
+    }
+
+    recorded
+}
+
+/// A scratch repository holding a copy of `fixture`, with one commit.
+fn committed_copy_of(fixture: &Path) -> tempfile::TempDir {
+    let scratch = tempfile::tempdir().expect("a scratch target exists");
+    let target = scratch.path();
+    copy_tree(fixture, target);
+    git_in(target, &["init", "-q", "-b", "master"]);
+    let identity = ["-c", "user.name=t", "-c", "user.email=t@example.invalid"];
+    git_in(target, &[&identity[..], &["add", "-A"]].concat());
+    git_in(
+        target,
+        &[&identity[..], &["commit", "-q", "-m", "chore: land 0.4.0"]].concat(),
+    );
+    scratch
+}
+
+/// Copy every file under `from` into `to`, directories created as needed.
+fn copy_tree(from: &Path, to: &Path) {
+    let mut files = Vec::new();
+    files_under(from, &mut files);
+    for path in files {
+        let relative = path.strip_prefix(from).expect("under the source");
+        let destination = to.join(relative);
+        std::fs::create_dir_all(destination.parent().expect("a parent")).expect("dirs exist");
+        std::fs::copy(&path, &destination).expect("the file copies");
+    }
 }

@@ -1,0 +1,33 @@
+[workspace]
+changelog_update = true
+# The bot's own release request has a release-plz-* head branch, which is
+# exactly what the branch heuristic behind this default recognizes: the
+# release half fires only on the push that lands that request's bump, so an
+# ordinary work merge publishes nothing and the release decision stays on the
+# one merge button.
+release_always = false
+publish = true
+# This tag shape assumes one released package.
+git_tag_name = "v{{ version }}"
+# cargo-dist owns the GitHub release, because it is the half that has the
+# installers to attach. release-plz creating it first leaves dist's host job
+# failing on "a release with the same tag name already exists" and every
+# release carrying no binaries. The tag stays release-plz's; git_tag_enable is
+# separate and still on.
+git_release_enable = false
+# TODO(release-kit): keep false for a binary-only crate or a lib target only
+# this crate's own tests link; set true when external consumers hold the API.
+semver_check = false
+
+[changelog]
+# The default header hard-wraps its last sentence across two lines. A
+# reflowing markdown formatter joins them, the next release writes the wrapped
+# form back, and the trunk is dirty after every release. The bot pushes
+# without hooks, so no check on a request ever sees it. This is the default
+# text with that sentence on one line, which both forms agree on.
+header = """# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+"""

@@ -1,11 +1,11 @@
 {
   "schema_version": 6,
   "rk_version": "0.4.0",
-  "payload_sha256": "e5c14a76e782682076615fb486bb4c27e27a3b244d30fd2f458f32cb25dfcc38",
-  "origin": "adopt",
+  "payload_sha256": "4dc1d547fffaa3db30e26c89825df5b3d14e16311d2eea7a83391d8f60b01d43",
+  "origin": "init",
   "tech": "rust",
   "forge": "github",
-  "landed_at": "2026-09-10T12:00:00Z",
+  "landed_at": "2026-09-14T20:28:57Z",
   "parameters": {
     "repo": "acme/widget",
     "workflow": "worktree",
@@ -26,7 +26,7 @@
     {
       "destination": ".github/workflows/release-plz.yml",
       "kind": "rendered",
-      "sha256": "dae0bfc1282b30535df0a13562b0b3ea5b4ff59af63009301f5ee86a9406c968",
+      "sha256": "84cb9c22d18b1dd5a42244bf814e0273f9c5bfc1513b308549e218b248c1864a",
       "baseline_sha256": "2815a2dd91138807ad760fa5e43cde3220beb2980846417ad2b7c5d2f0ba4905"
     },
     {
@@ -38,32 +38,32 @@
     {
       "destination": "AGENTS.md",
       "kind": "rendered",
-      "sha256": "2c8d67375a633a9a6028766cc51630c4c03fed7ab89290e833590c4ee8ff50e1",
-      "baseline_sha256": "5748807dd5d66494c4c0b393441827805560eb5b346007059599d93313a1cbc5"
+      "sha256": "f5b0cdda452317a7735a4d0a5c5a65003d62eaf8766e0db1971fefcfe3b4989f",
+      "baseline_sha256": "2a44e1d476c77305b54c652934306d72f0ae7e6bd9a07a295ba9dc91e94e3ecc"
     },
     {
       "destination": "GLOSSARY.md",
       "kind": "rendered",
-      "sha256": "7a3f1c9e5b2d4a6f8c0e1d3b5a7f9c1e3b5d7f9a1c3e5b7d9f1a3c5e7b9d1f3a",
-      "baseline_sha256": "1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c1e3b5d7f9a1c3e5b7d9f1a3c5e7b9d1f3a"
+      "sha256": "f87056fd6911ed36f7d0ed920cb23b737652bfe06c0239f19fce8a3952b7b0c4",
+      "baseline_sha256": "f87056fd6911ed36f7d0ed920cb23b737652bfe06c0239f19fce8a3952b7b0c4"
     },
     {
       "destination": "SECURITY.md",
       "kind": "rendered",
-      "sha256": "88ceadde64b7d4b36b79a103cdfdf009f18b9c24900cbbabb1409e32dd7541f6",
+      "sha256": "75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d",
       "baseline_sha256": "c7effad58bca6f1325f7c7123ccf48fe61420b83da7234b74f37215ec0a2b16e"
     },
     {
       "destination": "dist-workspace.toml",
       "kind": "seeded",
       "sha256": "028b96d7732600d9862f46a61675f7a17495ba03cdb863ae4e68bb35a762778b",
-      "baseline_sha256": "eae26fd9dfe93105726202da221a6ccd61545ef9c51b9f5f7e2bc7375ee08e6b"
+      "baseline_sha256": "028b96d7732600d9862f46a61675f7a17495ba03cdb863ae4e68bb35a762778b"
     },
     {
       "destination": "release-plz.toml",
       "kind": "seeded",
-      "sha256": "ebda41e2283305369c865aa8bdfce86d97cbc51c77fe79f80a9e13884f388edc",
-      "baseline_sha256": "f78039556fb75c71a5dd756064b199019f78ec243b2adc10e59dd28e90ae5c3d"
+      "sha256": "a4a3721636fb73891675b1fb0081ce8e5a2c5dcb57db317d38ee79fd584cc995",
+      "baseline_sha256": "a4a3721636fb73891675b1fb0081ce8e5a2c5dcb57db317d38ee79fd584cc995"
     }
   ],
   "pins": {
