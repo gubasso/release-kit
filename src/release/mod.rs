@@ -34,7 +34,15 @@ pub use embedded::EmbeddedReleaseSource;
 /// The one number an engine compares before it reads a bundle. The
 /// constant is declared with this exact spelling because a bundle's own
 /// copy is read back out of its sources by [`dir::declared_schema`].
-pub const PAYLOAD_SCHEMA: u32 = 1;
+///
+/// Schema 2 adds `GLOSSARY.md` to the destinations a landing writes. The
+/// number moves because an engine that projects only the schema-1
+/// destinations would land a routing block naming a file it never
+/// writes, which no declaration inside the bundle can prevent: the
+/// projection is the engine's own code. An engine reads every schema at
+/// or below this number, so a schema-1 bundle stays readable here and a
+/// schema-1 engine refuses this bundle naming the version to install.
+pub const PAYLOAD_SCHEMA: u32 = 2;
 
 /// One artifact of a bundle and the digest of its bytes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

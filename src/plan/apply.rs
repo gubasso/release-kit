@@ -624,16 +624,19 @@ fn stage(
                 txn.stage(target.join(path).as_std_path(), blob(blobs, after)?)?;
             }
             Operation::SpliceBlock { path, after, .. } => {
-                let existing = read_optional(target, path)?
-                    .map(|bytes| String::from_utf8_lossy(&bytes).into_owned());
+                let existing = read_optional(target, path)?;
                 let block = String::from_utf8_lossy(blob(blobs, after)?).into_owned();
-                let spliced = if path == landing::HOOKS_DESTINATION {
-                    landing::splice_hooks_block(existing.as_deref(), &block)
-                        .map_err(std::io::Error::other)?
+                if path == landing::HOOKS_DESTINATION {
+                    let text = existing.map(|bytes| String::from_utf8_lossy(&bytes).into_owned());
+                    let spliced = landing::splice_hooks_block(text.as_deref(), &block)
+                        .map_err(std::io::Error::other)?;
+                    txn.stage(target.join(path).as_std_path(), spliced.as_bytes())?;
                 } else {
-                    landing::splice_agents_block(existing.as_deref(), &block)
-                };
-                txn.stage(target.join(path).as_std_path(), spliced.as_bytes())?;
+                    // The document is the target's bytes: a markdown
+                    // splice decodes none of them.
+                    let spliced = landing::splice_marked_block(existing.as_deref(), &block);
+                    txn.stage(target.join(path).as_std_path(), &spliced)?;
+                }
             }
             Operation::RemoveOwnedFile { path, .. } => removals.push(path.clone()),
             Operation::WriteRecord { after, .. } => {
