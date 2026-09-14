@@ -388,18 +388,18 @@ pub fn compute_frozen(
     );
 
     // The recorded release's bundle: the embedded one where the record
-    // names its payload, the cache where it holds the recorded version,
-    // the venue where `--fetch` allows it, and not observed otherwise.
+    // names this binary's version, the cache where it holds the recorded
+    // version, the venue where `--fetch` allows it, and not observed
+    // otherwise. The receipt carries no payload digest, so the version
+    // is the whole identity.
     let recorded = match &observation.record {
-        RecordRead::Present { manifest, .. } => {
-            Some((manifest.rk_version.clone(), manifest.payload_sha256.clone()))
-        }
+        RecordRead::Present { manifest, .. } => Some(manifest.rk_version.clone()),
         RecordRead::Absent | RecordRead::Invalid { .. } => None,
     };
     let baseline_crate = match &recorded {
-        Some((version, digest))
-            if *digest != EmbeddedReleaseSource::manifest_ref().payload_sha256
-                && *digest != candidate_manifest.payload_sha256 =>
+        Some(version)
+            if *version != EmbeddedReleaseSource::manifest_ref().release_kit_version
+                && *version != candidate_manifest.release_kit_version =>
         {
             let source = CrateReleaseSource::new(version)?;
             if request.fetch || source.is_cached() {
@@ -412,16 +412,14 @@ pub fn compute_frozen(
     };
     let baseline = match &recorded {
         None => Baseline::NotNeeded,
-        Some((_, digest)) if *digest == EmbeddedReleaseSource::manifest_ref().payload_sha256 => {
+        Some(version) if *version == EmbeddedReleaseSource::manifest_ref().release_kit_version => {
             Baseline::Embedded(&embedded)
         }
-        Some((version, digest)) if *digest == candidate_manifest.payload_sha256 => {
-            Baseline::Cached {
-                version: version.clone(),
-                source: candidate_source,
-            }
-        }
-        Some((version, _)) => cached_baseline(version, baseline_crate.as_ref()),
+        Some(version) if *version == candidate_manifest.release_kit_version => Baseline::Cached {
+            version: version.clone(),
+            source: candidate_source,
+        },
+        Some(version) => cached_baseline(version, baseline_crate.as_ref()),
     };
     planner::plan(planner::Inputs {
         intent: request.intent,

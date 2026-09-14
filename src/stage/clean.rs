@@ -13,10 +13,10 @@
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 
-use super::held::{self, Identity, open_dir, proc_path};
 use super::{RECEIPT_NAME, STAGE_SCHEMA};
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
+use crate::held::{self, Identity, open_dir, proc_path};
 
 /// The proof's seam: a directory where the run writes `validated` after
 /// it has opened the stage, then waits for `proceed` before it removes

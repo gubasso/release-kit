@@ -983,7 +983,9 @@ pub fn plan(inputs: Inputs<'_>) -> Result<Planned, RkError> {
         RecordRead::Absent => RecordState::Absent,
         RecordRead::Present { manifest, bytes } => RecordState::Present {
             rk_version: manifest.rk_version.clone(),
-            payload_sha256: manifest.payload_sha256.clone(),
+            // The receipt carries no payload digest since schema 7; the
+            // stored plan's field keeps its shape until the plan goes.
+            payload_sha256: Digest::of(b""),
             schema_version: manifest.schema_version,
             origin: manifest.origin.clone(),
             sha256: Digest::of(bytes),
@@ -1174,9 +1176,7 @@ fn disposition(
     match (named, c.entry.kind) {
         (Some(_), Kind::Rendered) => Disposition::Unchanged,
         (Some(_), Kind::Seeded) => {
-            let at_baseline = disk
-                .map(|bytes| Digest::of(bytes))
-                .is_some_and(|digest| Some(&digest) == c.record.baseline_sha256.as_ref());
+            let at_baseline = disk.is_some_and(|bytes| Digest::of(bytes) == c.record.sha256);
             if at_baseline {
                 Disposition::Unchanged
             } else {
@@ -1220,7 +1220,7 @@ fn compare_fresh(entry: &Entry, disk: Option<&[u8]>) -> Outcome {
             destination: entry.destination.clone(),
             kind: entry.kind,
             sha256: Digest::of(&landed),
-            baseline_sha256: baseline_digest(entry),
+            placement: placement_of(entry),
         },
     }
 }
@@ -1235,13 +1235,13 @@ fn compare_recorded(entry: &Entry, recorded: Option<&FileRecord>, disk: Option<&
         destination: entry.destination.clone(),
         kind: entry.kind,
         sha256,
-        baseline_sha256: baseline_digest(entry),
+        placement: placement_of(entry),
     };
     // A seeded file this payload reclassifies as rendered claims ownership
-    // of a file the target may have tuned; only untouched bytes permit it.
+    // of a file the target may have tuned; the receipt carries no
+    // baseline any more, so the claim is refused as a conflict.
     if recorded.kind == Kind::Seeded && entry.kind == Kind::Rendered {
-        let untouched =
-            disk.is_some_and(|bytes| Some(Digest::of(bytes)) == recorded.baseline_sha256);
+        let untouched = false;
         return Outcome {
             write: untouched,
             conflict: !untouched,
@@ -1271,13 +1271,7 @@ fn compare_recorded(entry: &Entry, recorded: Option<&FileRecord>, disk: Option<&
             },
         },
         Kind::Seeded => {
-            // Never written; the record follows the target's bytes and
-            // keeps the baseline it tunes away from.
-            let baseline = if recorded.kind == Kind::Rendered {
-                Some(recorded.sha256.clone())
-            } else {
-                recorded.baseline_sha256.clone()
-            };
+            // Never written; the record follows the target's bytes.
             let sha256 = disk.map_or_else(|| recorded.sha256.clone(), Digest::of);
             Outcome {
                 write: false,
@@ -1287,7 +1281,7 @@ fn compare_recorded(entry: &Entry, recorded: Option<&FileRecord>, disk: Option<&
                     destination: entry.destination.clone(),
                     kind: entry.kind,
                     sha256,
-                    baseline_sha256: baseline,
+                    placement: placement_of(entry),
                 },
             }
         }
@@ -1299,25 +1293,28 @@ fn compare_recorded(entry: &Entry, recorded: Option<&FileRecord>, disk: Option<&
                 destination: entry.destination.clone(),
                 kind: entry.kind,
                 sha256: recorded.sha256.clone(),
-                baseline_sha256: None,
+                placement: placement_of(entry),
             },
         },
     }
 }
 
-/// The digest a fresh record keeps as a destination's baseline.
-fn baseline_digest(entry: &Entry) -> Option<Digest> {
-    match entry.kind {
-        Kind::State => None,
-        Kind::Rendered | Kind::Seeded => Some(Digest::of(&entry.baseline)),
+/// The placement a fresh record states for a destination.
+const fn placement_of(entry: &Entry) -> manifest::Placement {
+    match entry.placement {
+        landing::Placement::Whole => manifest::Placement::Whole,
+        landing::Placement::Block => manifest::Placement::Region,
     }
 }
 
-/// The recorded release's bytes for one destination, where the baseline
-/// bundle carries the artifact the record's baseline digest names.
-fn baseline_bytes(source: &dyn ReleaseSource, record: &Manifest, entry: &Entry) -> Option<Vec<u8>> {
-    let digest = record.file(&entry.destination)?.baseline_sha256.as_ref()?;
-    source.blob(digest).ok()
+/// The recorded release's bytes for one destination. The receipt carries
+/// no baseline digest any more, so nothing resolves here.
+fn baseline_bytes(
+    _source: &dyn ReleaseSource,
+    _record: &Manifest,
+    _entry: &Entry,
+) -> Option<Vec<u8>> {
+    None
 }
 
 /// The record an apply writes: the candidate's identity, the resolved
@@ -1342,7 +1339,6 @@ fn planned_manifest<'a>(
     Manifest {
         schema_version: manifest::SCHEMA_VERSION,
         rk_version: candidate.manifest.release_kit_version.clone(),
-        payload_sha256: candidate.manifest.payload_sha256.clone(),
         origin: recorded.map_or_else(
             || {
                 if intent == Intent::Adopt {
@@ -1371,7 +1367,7 @@ fn planned_manifest<'a>(
                 destination: file.destination.clone(),
                 kind: file.kind,
                 sha256: file.sha256.clone(),
-                baseline_sha256: file.baseline_sha256.clone(),
+                placement: file.placement,
             })
             .collect(),
         pins,

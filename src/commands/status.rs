@@ -1,12 +1,17 @@
 //! `rk status`: a target describes itself from its own disk.
 //!
-//! Read-only and offline: the record supplies what landed, the binary's
-//! embedded registry supplies the pin comparison, and no network is ever
-//! touched — a fetch is a way for a status command to hang, fail on a
-//! network it should not need, or leak a repository's existence. Plain
-//! `rk status` reports and exits 0 for every reportable state, drift and
-//! no-landing included; `--check` computes the identical report and
-//! changes only the final judgment, the one sanctioned bare exit 1.
+//! Read-only and offline: the receipt supplies what landed, this binary's
+//! projection supplies what an upgrade would offer, the embedded registry
+//! supplies the pin comparison, and no network is ever touched: a fetch
+//! is a way for a status command to hang, fail on a network it should not
+//! need, or leak a repository's existence. Status compares the current
+//! target with this binary's projection and the receipt and nothing else;
+//! it reads no stage and resolves no other release. Plain `rk status`
+//! reports and exits 0 for every reportable state, drift and no-landing
+//! included; `--check` computes the identical report and changes only
+//! the final judgment, the one sanctioned bare exit 1.
+//!
+//! SATISFIES landing:status-judges-only-under-check
 
 use serde::Serialize;
 
@@ -16,10 +21,16 @@ use crate::digest::Digest;
 use crate::error::RkError;
 use crate::landing::invariants::{self, InvariantFailure};
 use crate::landing::manifest::{self, Alignment, Manifest};
-use crate::landing::{self, Entry, Kind};
+use crate::landing::{self, Kind};
 use crate::output::Output;
+use crate::projection::{Candidate, Placement, Projection, ProjectionInput, TargetEvidence};
 use crate::release::EmbeddedReleaseSource;
 use crate::{embedded, registry};
+
+/// The one seam name every front carries until the seam path goes: the
+/// status verb reads the target and this binary's projection alone.
+#[allow(dead_code, reason = "the seam path is deleted in a later phase")]
+const SOURCE: EmbeddedReleaseSource = EmbeddedReleaseSource;
 
 /// Drift counts by owned kind; `state` files are never compared.
 #[derive(Debug, Serialize)]
@@ -138,12 +149,16 @@ fn report_absent(
             args.target
         ),
         format!(
-            "rk adopt --target {} records a landing made before the record existed",
+            "rk adopt --target {} records a landing made before the receipt existed",
+            args.target
+        ),
+        format!(
+            "rk stage --target {} stages this binary's candidate; the rk-setup skill carries the best-effort migration",
             args.target
         ),
     ]);
     out.emit(&Report {
-        schema: "rk.status/8",
+        schema: "rk.status/9",
         landed: false,
         config: config_state(config, None),
         tech: None,
@@ -170,7 +185,7 @@ fn report_absent(
                 format!("no landing at {}, and --check requires one", args.target),
             )
             .expected("a target carrying .release-kit/manifest.json")
-            .action("rk init lands the workflow; rk adopt records an existing landing"),
+            .action("rk init lands the workflow; rk adopt records an existing landing; rk stage and the rk-setup skill carry the migration"),
         ));
     }
     Ok(())
@@ -193,7 +208,8 @@ struct Observed {
     sentinels: Vec<(String, usize, String)>,
     invariants: Vec<InvariantFailure>,
     /// The destinations an upgrade would change, or `None` where this
-    /// binary carries no payload for the recorded pair and so cannot say.
+    /// binary carries no projection for the recorded pair and so cannot
+    /// say.
     pending: Option<Vec<String>>,
 }
 
@@ -234,7 +250,7 @@ pub fn run(args: &StatusArgs) -> Result<(), RkError> {
 
     let violations = violations_of(&observed);
     out.emit(&Report {
-        schema: "rk.status/8",
+        schema: "rk.status/9",
         landed: true,
         config,
         tech: Some(manifest.tech),
@@ -331,6 +347,18 @@ fn observe(args: &StatusArgs, manifest: &Manifest) -> Result<Observed, RkError> 
         invariants: Vec::new(),
         pending: None,
     };
+    // One projection serves every reader below, because each asks what
+    // this binary makes of the recorded parameters at this target. A pair
+    // this binary does not carry cannot be projected at all: under a
+    // receipt this binary wrote that is a defect and still fails, and
+    // under a landing from another rk it is a fact to report.
+    let aligned =
+        manifest::alignment(&manifest.rk_version, env!("CARGO_PKG_VERSION")) == Alignment::Aligned;
+    let projected = match project(args, manifest) {
+        Ok(projection) => Some(projection),
+        Err(err) if aligned => return Err(err),
+        Err(_) => None,
+    };
     for file in &manifest.files {
         let Some(bytes) = landing::read_recorded(&args.target, &file.destination)? else {
             observed.missing.push(file.destination.clone());
@@ -359,13 +387,17 @@ fn observe(args: &StatusArgs, manifest: &Manifest) -> Result<Observed, RkError> 
                 ));
             }
         }
-        // The hook file's markers must be well formed even when its first
-        // block matches the record: a duplicate block still executes, so
-        // an ill-formed file reads as rendered drift, never as clean.
-        if file.destination == landing::HOOKS_DESTINATION
-            && !observed.drift_rendered.contains(&file.destination)
-            && landing::hooks_file_defect(&EmbeddedReleaseSource, &args.target)?.is_some()
-        {
+        // A marked document's markers must be well formed even when its
+        // first block matches the receipt: a duplicate hook block still
+        // executes, so an ill-formed document reads as rendered drift,
+        // never as clean.
+        let defective = projected.as_ref().is_some_and(|projection| {
+            projection
+                .collisions
+                .iter()
+                .any(|collision| collision.destination == file.destination)
+        });
+        if defective && !observed.drift_rendered.contains(&file.destination) {
             observed.drift_rendered.push(file.destination.clone());
         }
     }
@@ -378,31 +410,17 @@ fn observe(args: &StatusArgs, manifest: &Manifest) -> Result<Observed, RkError> 
         &manifest.forge,
         &args.target,
     ));
-    let same_payload =
-        manifest.payload_sha256 == EmbeddedReleaseSource::manifest_ref().payload_sha256;
-    // One projection serves both readers below, because both ask what this
-    // binary's payload makes of the recorded parameters. A pair this
-    // binary does not carry cannot be projected at all: under its own
-    // payload that is a defect in this binary and still fails, and under a
-    // landing from another rk it is a fact to report rather than an error.
-    let projected = match project(args, manifest) {
-        Ok(entries) => Some(entries),
-        Err(err) if same_payload => return Err(err),
-        Err(_) => None,
-    };
-    if same_payload {
-        observe_parameter_drift(manifest, &mut observed)?;
-        if let Some(entries) = projected.as_deref() {
-            observe_record_set(manifest, entries, &mut observed.record_drift);
-        }
+    if aligned && let Some(projection) = projected.as_ref() {
+        observe_parameter_drift(manifest, projection, &mut observed);
+        observe_record_set(manifest, projection, &mut observed.record_drift);
     }
     // What an upgrade would change, which is the only honest ground for
     // telling an operator to run one. The recorded version says who wrote
-    // the record, and two releases apart can carry identical bytes for
+    // the receipt, and two releases apart can carry identical bytes for
     // this pair, so it answers a different question and prompts nothing.
     observed.pending = projected
-        .as_deref()
-        .map(|entries| pending_of(manifest, entries));
+        .as_ref()
+        .map(|projection| pending_of(manifest, &projection.candidates));
     // Stale means behind, not merely different: a landing from a newer rk
     // can carry pins ahead of this binary's registry, and that is the
     // alignment line's story, not a freshness complaint.
@@ -420,65 +438,59 @@ fn observe(args: &StatusArgs, manifest: &Manifest) -> Result<Observed, RkError> 
     Ok(observed)
 }
 
-/// The record-consistency step over the two mode-bearing blocks.
+/// The receipt-consistency step over the two mode-bearing regions.
 ///
-/// Recorded digests alone cannot see a manifest edited only at its
-/// parameters — every file still matches its own record — so the two
-/// block destinations are re-rendered from the record's own parameters
-/// and compared against the digest the record stores for each. Called
-/// only under this binary's own payload: an older landing's blocks
-/// legitimately differ from this payload's candidate, which is the
-/// alignment line's story and the upgrade's job, not parameter drift. A
-/// destination already reported as rendered drift is the file's own
-/// story, not the record's, and is skipped too.
-fn observe_parameter_drift(manifest: &Manifest, observed: &mut Observed) -> Result<(), RkError> {
-    let params = landing::Params::from_record(manifest);
-    for (destination, template) in [
-        (
-            landing::AGENTS_DESTINATION,
-            landing::routing_block(&EmbeddedReleaseSource, params.workflow())?,
-        ),
-        (
-            landing::HOOKS_DESTINATION,
-            landing::hooks_block(&EmbeddedReleaseSource, params.workflow())?,
-        ),
-    ] {
-        let Some(record) = manifest.file(destination) else {
+/// Recorded digests alone cannot see a receipt edited only at its
+/// parameters, since every file still matches its own record, so the two
+/// region destinations that render a parameter are compared, as this
+/// projection renders them from the receipt's own parameters, against the
+/// digest the receipt stores for each. Called only where this binary
+/// wrote the receipt: an older landing's regions legitimately differ from
+/// this projection, which is the alignment line's story and the
+/// upgrade's job, not parameter drift. A destination already reported as
+/// rendered drift is the file's own story, not the receipt's, and is
+/// skipped too.
+fn observe_parameter_drift(manifest: &Manifest, projection: &Projection, observed: &mut Observed) {
+    for candidate in &projection.candidates {
+        let Placement::Region { .. } = candidate.placement else {
             continue;
         };
-        if observed
-            .drift_rendered
-            .iter()
-            .any(|path| path == destination)
-            || observed.missing.iter().any(|path| path == destination)
+        if ![landing::AGENTS_DESTINATION, landing::HOOKS_DESTINATION]
+            .contains(&candidate.destination.as_str())
         {
             continue;
         }
-        let candidate = landing::render(template.as_bytes(), &params);
-        if Digest::of(&candidate) != record.sha256 {
+        let Some(record) = manifest.file(&candidate.destination) else {
+            continue;
+        };
+        if observed.drift_rendered.contains(&candidate.destination)
+            || observed.missing.contains(&candidate.destination)
+        {
+            continue;
+        }
+        if Digest::of(recorded_form(candidate)) != record.sha256 {
             observed
                 .parameter_drift
-                .push(format!("{destination} (parameters.workflow)"));
+                .push(format!("{} (parameters)", candidate.destination));
         }
     }
-    Ok(())
 }
 
-/// What this binary's payload projects under the record's own parameters,
-/// with the same withhold judgment a landing applies, so the comparison
-/// stands against what an upgrade would actually offer this target.
-fn project(args: &StatusArgs, manifest: &Manifest) -> Result<Vec<Entry>, RkError> {
-    let mut projected = landing::projection(
-        &EmbeddedReleaseSource,
-        &landing::Params::from_record(manifest),
-    )?;
-    landing::withhold_nix(
-        &args.target,
-        manifest.parameters.nix,
-        Some(manifest),
-        &mut projected,
-    )?;
-    Ok(projected)
+/// What this binary projects under the receipt's own parameters at this
+/// target, with the same withhold judgment a landing applies, so the
+/// comparison stands against what an upgrade would actually offer.
+fn project(args: &StatusArgs, manifest: &Manifest) -> Result<Projection, RkError> {
+    let evidence = TargetEvidence::gather(&args.target, Some(manifest))?;
+    Projection::compute(&ProjectionInput {
+        params: landing::Params::from_record(manifest),
+        evidence,
+    })
+}
+
+/// The bytes the receipt digests for a candidate: the whole file, or the
+/// marked region alone.
+fn recorded_form(candidate: &Candidate) -> &[u8] {
+    candidate.region.as_deref().unwrap_or(&candidate.bytes)
 }
 
 /// The destinations an upgrade would change, read off the record alone.
@@ -489,12 +501,13 @@ fn project(args: &StatusArgs, manifest: &Manifest) -> Result<Vec<Entry>, RkError
 /// record already names is never rewritten, so only a change of kind
 /// counts for it. Disk drift is a separate story, told by its own lines:
 /// an edited file is the target's doing, not a newer payload's.
-fn pending_of(manifest: &Manifest, projected: &[Entry]) -> Vec<String> {
+fn pending_of(manifest: &Manifest, projected: &[Candidate]) -> Vec<String> {
     let mut pending = Vec::new();
     for entry in projected {
         let changed = manifest.file(&entry.destination).is_none_or(|record| {
             record.kind != entry.kind
-                || (entry.kind == Kind::Rendered && record.sha256 != Digest::of(&entry.rendered))
+                || (entry.kind == Kind::Rendered
+                    && record.sha256 != Digest::of(recorded_form(entry)))
         });
         if changed {
             pending.push(entry.destination.clone());
@@ -513,31 +526,42 @@ fn pending_of(manifest: &Manifest, projected: &[Entry]) -> Vec<String> {
     pending
 }
 
-/// The record-set consistency step: the recorded digests judge each
-/// named file, and the block re-render judges the two block records, but
-/// neither can see a record whose parameters and file list disagree — a
-/// nix flag flipped in the record with no file landed, or a once-withheld
-/// capability whose target grew into the supported shape. So the
-/// projection is reconstructed from the record's own parameters, the same
-/// withhold judgment applied, and the two destination sets compared both
-/// ways. Called only under this binary's own payload: an older landing's
-/// set legitimately differs, and that is the alignment line's story.
-fn observe_record_set(manifest: &Manifest, projected: &[Entry], record_drift: &mut Vec<String>) {
-    for entry in projected {
+/// The receipt-set consistency step: the recorded digests judge each
+/// named file, and the region re-render judges the region records, but
+/// neither can see a receipt whose parameters and file list disagree, a
+/// nix flag flipped in the receipt with no file landed, or a
+/// once-withheld capability whose target grew into the supported shape.
+/// So the projection is computed from the receipt's own parameters, the
+/// same withhold judgment applied, and the two destination sets compared
+/// both ways. A destination the projection withholds at this target is
+/// absent because withheld, which is not drift. Called only where this
+/// binary wrote the receipt: an older landing's set legitimately differs,
+/// and that is the alignment line's story.
+fn observe_record_set(
+    manifest: &Manifest,
+    projection: &Projection,
+    record_drift: &mut Vec<String>,
+) {
+    for entry in &projection.candidates {
         if manifest.file(&entry.destination).is_none() {
             record_drift.push(format!(
-                "the recorded parameters project {}, which the record does not name",
+                "the recorded parameters project {}, which the receipt does not name",
                 entry.destination
             ));
         }
     }
     for file in &manifest.files {
-        if !projected
+        let produced = projection
+            .candidates
             .iter()
             .any(|entry| entry.destination == file.destination)
-        {
+            || projection
+                .omissions
+                .iter()
+                .any(|omission| omission.destination == file.destination);
+        if !produced {
             record_drift.push(format!(
-                "the record names {}, which the recorded parameters do not project",
+                "the receipt names {}, which the recorded parameters do not project",
                 file.destination
             ));
         }
@@ -573,12 +597,12 @@ fn render_human(
     }
     match observed.pending.as_deref() {
         None => out.result_line(format!(
-            "this binary carries no {}/{} payload, so what an upgrade would change is unknown",
+            "this binary carries no {}/{} projection, so what an upgrade would change is unknown",
             manifest.tech, manifest.forge
         )),
         Some(paths) => {
             for path in paths {
-                out.result_line(format!("PENDING {path} (this payload would change it)"));
+                out.result_line(format!("PENDING {path} (this binary would change it)"));
             }
         }
     }
@@ -620,7 +644,7 @@ fn render_human(
     }
     if !observed.record_drift.is_empty() {
         next.push(format!(
-            "rk upgrade --target {} reconciles the record with its parameters",
+            "rk upgrade --target {} rewrites the receipt from its parameters",
             args.target
         ));
     }
@@ -646,12 +670,12 @@ fn render_human(
 mod tests {
     use super::{Drift, InvariantFailure, Report, StalePin};
 
-    /// The complete `rk.status/8` shape, held by snapshot in both the
+    /// The complete `rk.status/9` shape, held by snapshot in both the
     /// landed and absent forms.
     #[test]
     fn the_status_report_schema_snapshot_holds() {
         let landed = Report {
-            schema: "rk.status/8",
+            schema: "rk.status/9",
             landed: true,
             config: super::ConfigState {
                 state: "pending",
@@ -688,7 +712,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&landed).expect("a report serializes"),
-            r#"{"schema":"rk.status/8","landed":true,"config":{"state":"pending","pending":["landing.style"]},"tech":"rust","forge":"github","workflow":"worktree","style":"trunk","nix":true,"rk_version":"0.1.0","binary_version":"0.2.0","alignment":"binary-newer","drift":{"rendered":0,"seeded":1},"missing":[],"stale_pins":[{"tool":"release-plz","landed":"0.3.160","available":"0.3.170"}],"sentinels":1,"record_drift":0,"invariant_failures":[{"code":"attestations-disabled","destination":"dist-workspace.toml","reason":"github-attestations is not effectively true","remediation":"set github-attestations = true in [dist]"}],"pending":2}"#
+            r#"{"schema":"rk.status/9","landed":true,"config":{"state":"pending","pending":["landing.style"]},"tech":"rust","forge":"github","workflow":"worktree","style":"trunk","nix":true,"rk_version":"0.1.0","binary_version":"0.2.0","alignment":"binary-newer","drift":{"rendered":0,"seeded":1},"missing":[],"stale_pins":[{"tool":"release-plz","landed":"0.3.160","available":"0.3.170"}],"sentinels":1,"record_drift":0,"invariant_failures":[{"code":"attestations-disabled","destination":"dist-workspace.toml","reason":"github-attestations is not effectively true","remediation":"set github-attestations = true in [dist]"}],"pending":2}"#
         );
         let absent = Report {
             landed: false,
@@ -716,7 +740,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&absent).expect("a report serializes"),
-            r#"{"schema":"rk.status/8","landed":false,"config":{"state":"absent","pending":[]}}"#,
+            r#"{"schema":"rk.status/9","landed":false,"config":{"state":"absent","pending":[]}}"#,
             "an absent landing reports one field a caller can branch on"
         );
     }

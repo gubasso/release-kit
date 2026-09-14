@@ -1,28 +1,30 @@
 //! `rk init`: land a technology's deterministic files into a target.
 //!
-//! A front over the engine: the plan is computed with the setup intent,
-//! and on `--apply` the engine executes exactly its operations through
-//! one staged transaction with the record last. Dry-run by default:
-//! without `--apply` the destinations are listed and nothing is touched.
-//! The payload is rendered before anything is compared, so the comparison
-//! is against what would be written, not against the raw payload. Apply
-//! is all-or-nothing against conflicts on `rendered` files; a differing
-//! `seeded` or `state` file is the target's own and is reported and kept.
-//! A refused landing writes nothing, the record included.
+//! A front over the direct writer: the target's evidence is gathered
+//! once, this binary's projection is computed from its embedded sources,
+//! every destination is decided by elementary ownership, and on `--apply`
+//! the writer lands the files and the receipt last under one target lock.
+//! Dry-run by default: without `--apply` the destinations and what a
+//! fresh production invocation would do with them are listed and nothing
+//! is touched; `rk stage` is the full-byte comparison surface. A
+//! whole-file destination present on disk with no receipt naming it
+//! refuses before any write, every collision collected in one pass, and
+//! no force flag exists.
+//!
+//! SATISFIES landing:a-landing-leaves-a-record
+//! SATISFIES landing:a-missing-receipt-is-a-classification
 
 use camino::Utf8Path;
 use serde::Serialize;
 
 use crate::cli::init::InitArgs;
-use crate::commands::reconcile::{self, FrontApplied, Trace};
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::embedded;
 use crate::error::RkError;
+use crate::landing::apply::{self, Action, Collision, Prepared};
 use crate::landing::manifest::{self, Style, Workflow};
-use crate::landing::{self, Kind};
+use crate::landing::{self, lock};
 use crate::output::Output;
-use crate::plan::gather::Flags;
-use crate::plan::{Disposition, Intent, PlanRequest, Planned};
 use crate::release::EmbeddedReleaseSource;
 
 /// One destination and what happened to it.
@@ -32,7 +34,8 @@ struct FileEntry {
     path: String,
     /// The declared ownership kind.
     kind: &'static str,
-    /// `land` in a preview; `write`, `unchanged`, or `kept` in an apply.
+    /// `created`, `replaced`, `preserved`, `drift`, `released`, or
+    /// `collision` in a preview.
     action: &'static str,
 }
 
@@ -72,17 +75,32 @@ struct Report {
     /// absent where nothing was withheld.
     #[serde(skip_serializing_if = "Option::is_none")]
     withheld: Option<Vec<landing::Withheld>>,
+    /// The destinations a production landing refuses as they stand;
+    /// absent where there is none. A preview lists them and exits 0.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    collisions: Option<Vec<Collision>>,
     config: crate::config::Plan,
     /// Every destination, with its kind and action.
     files: Vec<FileEntry>,
     /// The sentinels an apply left to fill; absent in a preview.
     #[serde(skip_serializing_if = "Option::is_none")]
     sentinels: Option<Vec<SentinelEntry>>,
-    /// The plan the apply executed; absent in a preview.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    plan: Option<Trace>,
     /// What plausibly follows.
     next: Vec<String>,
+}
+
+/// The withheld list a report carries.
+fn withheld_of(prepared: &Prepared) -> Option<Vec<landing::Withheld>> {
+    let withheld: Vec<landing::Withheld> = prepared
+        .projection
+        .omissions
+        .iter()
+        .map(|omission| landing::Withheld {
+            path: omission.destination.clone(),
+            reason: omission.reason.clone(),
+        })
+        .collect();
+    (!withheld.is_empty()).then_some(withheld)
 }
 
 /// Land the files for `--tech` into `--target`.
@@ -91,9 +109,8 @@ struct Report {
 ///
 /// Returns [`RkError::Usage`] for an unknown technology or pair,
 /// [`RkError::Refusal`] when the target is missing, already carries a
-/// record, or a `rendered` destination conflicts, [`RkError::Missing`]
-/// when an apply resolves no repository, and [`RkError::Io`] on
-/// filesystem failure.
+/// receipt, or a destination collides, [`RkError::Missing`] when an apply
+/// resolves no repository, and [`RkError::Io`] on filesystem failure.
 pub fn run(args: &InitArgs) -> Result<(), RkError> {
     let out = Output::new(args.json);
     if !args.target.is_dir() {
@@ -110,9 +127,8 @@ pub fn run(args: &InitArgs) -> Result<(), RkError> {
         ));
     }
     let config = crate::config::load(args.target.as_std_path())?;
-    let source = EmbeddedReleaseSource;
     let params = landing::Params::resolve(
-        &source,
+        &EmbeddedReleaseSource,
         &args.target,
         &landing::Inputs {
             tech: args.tech.as_deref(),
@@ -130,203 +146,159 @@ pub fn run(args: &InitArgs) -> Result<(), RkError> {
             landing::Purpose::Preview
         },
     )?;
-    let mut effective = args.clone();
-    effective.tech = Some(params.tech().into());
-    effective.nix = params.nix();
     let style = params
         .style()
         .ok_or_else(|| RkError::Usage("landing style is unresolved".into()))?;
-    // The resolved answers ride into the plan as flags, so the planner
-    // resolves the same parameters and asks no decision the front already
-    // answered by its defaults.
-    let request = PlanRequest {
-        target: args.target.clone(),
-        intent: Intent::Setup,
-        selector: "embedded".into(),
-        fetch: false,
-        observe_forge: false,
-        flags: Flags {
-            tech: Some(params.tech().to_owned()),
-            forge: Some(params.forge().to_owned()),
-            repo: args
-                .repo
-                .clone()
-                .or_else(|| (params.repo() != "OWNER").then(|| params.repo().to_owned())),
-            workflow: Some(params.workflow().as_str().to_owned()),
-            style: Some(style.as_str().to_owned()),
-            nix: Some(params.nix()),
-        },
-        decisions: std::collections::BTreeMap::new(),
-    }
-    .canonicalized()?;
-    let planned = reconcile::compute(&request, &manifest::now())?;
-    let config_plan = planned
-        .config
-        .clone()
-        .ok_or_else(|| RkError::Usage("landing parameters are unresolved".into()))?;
     if args.apply {
-        apply(
-            out,
-            &effective,
-            params.forge(),
-            params.repo(),
-            params.workflow(),
-            style,
-            &planned,
-            &request,
-            config_plan,
-        )
+        refuse_a_recorded_target(&args.target)?;
+        // The target is taken before the evidence is gathered, so the
+        // world the decisions describe is the world the writer writes.
+        let lock = lock::acquire(&args.target)?;
+        let prepared = apply::prepare(&args.target, None, &params, config.as_ref())?;
+        let landed = apply::land(&args.target, None, &prepared, apply::Origin::Init, &lock)?;
+        drop(lock);
+        report_apply(out, args, &params, style, &prepared, &landed)
     } else {
-        let repo = (params.repo() != "OWNER").then(|| params.repo().to_owned());
+        let prepared = apply::prepare(&args.target, None, &params, config.as_ref())?;
+        let repo = (params.repo() != landing::REPO_PLACEHOLDER).then(|| params.repo().to_owned());
         if repo.is_none() {
             out.frame(
                 "note: no repository detected; an apply derives the owner from --repo <path>",
             );
         }
-        preview(
-            out,
-            &effective,
-            params.forge(),
-            repo,
-            params.workflow(),
-            style,
-            &planned,
-            config_plan,
-        )
+        preview(out, args, &params, repo, style, &prepared)
     }
 }
 
-/// List every destination and write nothing.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "the landing parameters are one flat set the caller resolves once, and a struct around them would add a type nothing else reads"
-)]
+/// List every destination with what a production landing would do, and
+/// write nothing.
 fn preview(
     out: Output,
     args: &InitArgs,
-    forge: &str,
+    params: &landing::Params,
     repo: Option<String>,
-    workflow: Workflow,
     style: Style,
-    planned: &Planned,
-    config: crate::config::Plan,
+    prepared: &Prepared,
 ) -> Result<(), RkError> {
     let repo_argument = repo.as_deref().unwrap_or("<owner/name>");
-    let nix_flag = if args.nix { " --nix" } else { "" };
-    let next = vec![format!(
-        "rk init --tech {} --forge {forge} --repo {repo_argument} --workflow {} --style {}{nix_flag} --target {} --apply",
-        args.tech.as_deref().unwrap_or_default(),
-        workflow.as_str(),
+    let nix_flag = if params.nix() { " --nix" } else { "" };
+    let mut next = vec![format!(
+        "rk init --tech {} --forge {} --repo {repo_argument} --workflow {} --style {}{nix_flag} --target {} --apply",
+        params.tech(),
+        params.forge(),
+        params.workflow().as_str(),
         style.as_str(),
         args.target
     )];
+    if !prepared.collisions.is_empty() {
+        next.insert(
+            0,
+            "resolve each collision above through the rk-setup skill; the apply refuses until then"
+                .to_owned(),
+        );
+    }
+    next.push(format!(
+        "rk stage --target {} stages the complete candidate for a byte comparison",
+        args.target
+    ));
     out.result_line(format!(
         "DRY RUN: rk init writes these files into {}; re-run with --apply",
         args.target
     ));
-    for outcome in &planned.outcomes {
-        out.result_line(&outcome.path);
+    for decision in &prepared.decisions {
+        out.result_line(format!(
+            "{} {}",
+            decision.action.as_str(),
+            decision.destination
+        ));
+    }
+    for collision in &prepared.collisions {
+        out.result_line(format!(
+            "collision {}: {}",
+            collision.path, collision.reason
+        ));
     }
     out.result_line(format!(
         "{} {}\n{}",
-        config.action,
+        prepared.config.action,
         crate::config::CONFIG_PATH,
-        config.content
+        prepared.config.content
     ));
-    for entry in &planned.withheld {
-        out.result_line(format!("withheld {}: {}", entry.path, entry.reason));
+    for entry in &prepared.projection.omissions {
+        out.result_line(format!("withheld {}: {}", entry.destination, entry.reason));
     }
     out.next(&next);
     out.emit(&Report {
-        schema: "rk.init/6",
-        config,
+        schema: "rk.init/7",
+        config: prepared.config.clone(),
         mode: "preview",
-        tech: args.tech.clone().unwrap_or_default(),
-        forge: forge.to_owned(),
+        tech: params.tech().to_owned(),
+        forge: params.forge().to_owned(),
         target: args.target.to_string(),
         repo,
-        workflow: workflow.as_str(),
+        workflow: params.workflow().as_str(),
         style: style.as_str(),
-        nix: args.nix,
-        withheld: (!planned.withheld.is_empty()).then(|| planned.withheld.clone()),
-        files: planned
-            .outcomes
+        nix: params.nix(),
+        withheld: withheld_of(prepared),
+        collisions: (!prepared.collisions.is_empty()).then(|| prepared.collisions.clone()),
+        files: prepared
+            .decisions
             .iter()
-            .map(|outcome| FileEntry {
-                path: outcome.path.clone(),
-                kind: outcome.kind.as_str(),
-                action: "land",
+            .map(|decision| FileEntry {
+                path: decision.destination.clone(),
+                kind: decision.kind.as_str(),
+                action: decision.action.as_str(),
             })
+            .chain(prepared.collisions.iter().map(|collision| FileEntry {
+                path: collision.path.clone(),
+                kind: landing::kind_of(&collision.path).map_or("unknown", landing::Kind::as_str),
+                action: "collision",
+            }))
             .collect(),
         sentinels: None,
-        plan: None,
         next,
     })
 }
 
-/// Land the files through the engine — all-or-nothing against `rendered`
-/// conflicts — with the record last, and report the judgment sentinels
-/// the operator still owes.
-#[allow(
-    clippy::too_many_arguments,
-    clippy::too_many_lines,
-    reason = "the landing parameters are one flat set the caller resolves once, and the landing is all-or-nothing, so its ordered steps stay in one place"
-)]
-fn apply(
+/// Report a landing the writer completed, with the judgment sentinels the
+/// operator still owes.
+fn report_apply(
     out: Output,
     args: &InitArgs,
-    forge: &str,
-    repo: &str,
-    workflow: Workflow,
+    params: &landing::Params,
     style: Style,
-    planned: &Planned,
-    request: &PlanRequest,
-    config: crate::config::Plan,
+    prepared: &Prepared,
+    landed: &apply::Landed,
 ) -> Result<(), RkError> {
-    refuse_a_recorded_target(args)?;
-    landing::hooks_splice_refusal(&EmbeddedReleaseSource, &args.target)?;
-    refuse_conflicts(planned)?;
-    let applied = reconcile::apply_in_process(planned, request, "init")?;
     let mut file_entries = Vec::new();
     let mut sentinels = Vec::new();
-    for outcome in &planned.outcomes {
-        let action = match outcome.disposition {
-            Disposition::Write => "write",
-            Disposition::Kept | Disposition::Drift | Disposition::State => "kept",
-            Disposition::Unchanged | Disposition::Conflict | Disposition::Missing => "unchanged",
-        };
-        out.result_line(format!(
-            "{} {}",
-            match action {
-                "write" => "wrote",
-                "kept" => "kept (target-owned)",
-                _ => "unchanged",
-            },
-            outcome.path
-        ));
-        // What the destination now holds: the written bytes, or the
-        // target's own where a seeded or state file was kept.
-        let landed: Vec<u8> = match FrontApplied::written(planned, &outcome.path) {
-            Some(bytes) => bytes.to_vec(),
-            None => landing::read_recorded(&args.target, &outcome.path)?.unwrap_or_default(),
-        };
-        collect_sentinels(&args.target, &outcome.path, &landed, &mut sentinels);
+    for decision in &prepared.decisions {
+        out.result_line(describe(decision));
+        if decision.action != Action::Released {
+            let bytes =
+                landing::read_recorded(&args.target, &decision.destination)?.unwrap_or_default();
+            collect_sentinels(&args.target, &decision.destination, &bytes, &mut sentinels);
+        }
         file_entries.push(FileEntry {
-            path: outcome.path.clone(),
-            kind: outcome.kind.as_str(),
-            action,
+            path: decision.destination.clone(),
+            kind: decision.kind.as_str(),
+            action: decision.action.as_str(),
         });
     }
-    for entry in &planned.withheld {
-        out.result_line(format!("withheld {}: {}", entry.path, entry.reason));
+    for entry in &prepared.projection.omissions {
+        out.result_line(format!("withheld {}: {}", entry.destination, entry.reason));
     }
-
-    out.result_line(format!("{} {}", config.action, crate::config::CONFIG_PATH));
+    out.result_line(format!(
+        "{} {}",
+        prepared.config.action,
+        crate::config::CONFIG_PATH
+    ));
     for (key, empty_line) in [
         ("setup.required_check", "required_check = \"\""),
         ("setup.bot.app_id", "app_id = \"\""),
     ] {
-        if let Some((index, _)) = config
+        if let Some((index, _)) = prepared
+            .config
             .content
             .lines()
             .enumerate()
@@ -340,7 +312,10 @@ fn apply(
         }
     }
     out.result_line(format!("wrote {}", manifest::MANIFEST_PATH));
-    out.result_line(applied.line());
+    debug_assert_eq!(
+        landed.completed.last().map(String::as_str),
+        Some(manifest::MANIFEST_PATH)
+    );
 
     if sentinels.is_empty() {
         out.result_line("no sentinels to fill");
@@ -355,85 +330,71 @@ fn apply(
     }
     let next = vec![
         if sentinels.is_empty() {
-            "commit the landed files, the record included".to_owned()
+            "commit the landed files, the receipt included".to_owned()
         } else {
-            "fill each sentinel above, then commit the landed files, the record included".to_owned()
+            "fill each sentinel above, then commit the landed files, the receipt included"
+                .to_owned()
         },
         format!("rk status --target {} reports this landing", args.target),
         "rk method setup orders what follows".to_owned(),
     ];
     out.next(&next);
     out.emit(&Report {
-        schema: "rk.init/6",
-        config,
+        schema: "rk.init/7",
+        config: prepared.config.clone(),
         mode: "apply",
-        tech: args.tech.clone().unwrap_or_default(),
-        forge: forge.to_owned(),
+        tech: params.tech().to_owned(),
+        forge: params.forge().to_owned(),
         target: args.target.to_string(),
-        repo: Some(repo.to_owned()),
-        workflow: workflow.as_str(),
+        repo: Some(params.repo().to_owned()),
+        workflow: params.workflow().as_str(),
         style: style.as_str(),
-        nix: args.nix,
-        withheld: (!planned.withheld.is_empty()).then(|| planned.withheld.clone()),
+        nix: params.nix(),
+        withheld: withheld_of(prepared),
+        collisions: None,
         files: file_entries,
         sentinels: Some(sentinels),
-        plan: Some(applied.trace()),
         next,
-    })?;
-    applied.applied.failure().map_or(Ok(()), Err)
+    })
 }
 
-/// A re-landing over an existing record is `rk upgrade`'s job, not a
+/// The human line for one decision.
+pub(crate) fn describe(decision: &apply::Decision) -> String {
+    match decision.action {
+        Action::Preserved | Action::Drift => format!(
+            "{} {} ({}, target-owned)",
+            decision.action.as_str(),
+            decision.destination,
+            decision.kind.as_str()
+        ),
+        Action::Released => format!(
+            "released {} (no longer produced; target-owned from this landing)",
+            decision.destination
+        ),
+        Action::Created | Action::Replaced => {
+            format!("{} {}", decision.action.as_str(), decision.destination)
+        }
+    }
+}
+
+/// A re-landing over an existing receipt is `rk upgrade`'s job, not a
 /// second `rk init`.
-fn refuse_a_recorded_target(args: &InitArgs) -> Result<(), RkError> {
-    if landing::manifest::load(&args.target)?.is_none() {
+fn refuse_a_recorded_target(target: &Utf8Path) -> Result<(), RkError> {
+    if landing::manifest::load(target)?.is_none() {
         return Ok(());
     }
     Err(RkError::refusal(
         Diagnostic::new(
             Reason::StateDrift,
             format!(
-                "{} already carries {}, and nothing was written",
-                args.target,
+                "{target} already carries {}, and nothing was written",
                 manifest::MANIFEST_PATH
             ),
         )
-        .expected("a target without a landing record")
+        .expected("a target without a landing receipt")
         .action(format!(
-            "rk upgrade --target {} takes it to this binary's payload",
-            args.target
+            "rk upgrade --target {target} takes it to this binary's projection"
         ))
-        .target_state("unchanged"),
-    ))
-}
-
-/// Every `rendered` conflict the plan found, refused in one run before
-/// anything writes.
-fn refuse_conflicts(planned: &Planned) -> Result<(), RkError> {
-    let conflicts: Vec<&str> = planned
-        .outcomes
-        .iter()
-        .filter(|outcome| {
-            outcome.kind == Kind::Rendered
-                && matches!(
-                    outcome.disposition,
-                    Disposition::Conflict | Disposition::Missing
-                )
-        })
-        .map(|outcome| outcome.path.as_str())
-        .collect();
-    if conflicts.is_empty() {
-        return Ok(());
-    }
-    Err(RkError::refusal(
-        Diagnostic::new(
-            Reason::StateDrift,
-            format!(
-                "these files exist with different content, and nothing was written: {}",
-                conflicts.join(", ")
-            ),
-        )
-        .expected("every rendered destination absent, or holding this landing's bytes")
         .target_state("unchanged"),
     ))
 }
@@ -461,15 +422,14 @@ fn collect_sentinels(
 #[cfg(test)]
 mod tests {
     use super::{FileEntry, Report, SentinelEntry};
-    use crate::digest::Digest;
 
-    /// The complete `rk.init/6` shape, held by snapshot in both modes: a
+    /// The complete `rk.init/7` shape, held by snapshot in both modes: a
     /// field rename or removal fails here and becomes a schema-version
     /// bump instead of a silent parser break at some agent.
     #[test]
     fn the_init_report_schema_snapshot_holds() {
         let apply = Report {
-            schema: "rk.init/6",
+            schema: "rk.init/7",
             config: crate::config::Plan {
                 action: "added",
                 changes: vec![],
@@ -487,30 +447,22 @@ mod tests {
                 path: "flake.nix".into(),
                 reason: "the target already carries flake.nix".into(),
             }]),
+            collisions: None,
             files: vec![FileEntry {
                 path: "release-plz.toml".into(),
                 kind: "seeded",
-                action: "write",
+                action: "created",
             }],
             sentinels: Some(vec![SentinelEntry {
                 path: "/tmp/t/release-plz.toml".into(),
                 line: 3,
                 text: "# TODO(release-kit): keep false for a binary-only crate".into(),
             }]),
-            plan: Some(crate::commands::reconcile::Trace {
-                plan_id: "0123456789abcdef".into(),
-                input_fingerprint: Digest::of(b"a"),
-                stored: true,
-                run_id: Some("run".into()),
-            }),
-            next: vec!["commit the landed files, the record included".into()],
+            next: vec!["commit the landed files, the receipt included".into()],
         };
         assert_eq!(
             serde_json::to_string(&apply).expect("a report serializes"),
-            format!(
-                r##"{{"schema":"rk.init/6","mode":"apply","tech":"rust","forge":"github","target":"/tmp/t","repo":"acme/widget","workflow":"worktree","style":"trunk","nix":true,"withheld":[{{"path":"flake.nix","reason":"the target already carries flake.nix"}}],"config":{{"action":"added","changes":[],"content":"schema_version = 1\n"}},"files":[{{"path":"release-plz.toml","kind":"seeded","action":"write"}}],"sentinels":[{{"path":"/tmp/t/release-plz.toml","line":3,"text":"# TODO(release-kit): keep false for a binary-only crate"}}],"plan":{{"plan_id":"0123456789abcdef","input_fingerprint":"{}","stored":true,"run_id":"run"}},"next":["commit the landed files, the record included"]}}"##,
-                Digest::of(b"a")
-            )
+            r##"{"schema":"rk.init/7","mode":"apply","tech":"rust","forge":"github","target":"/tmp/t","repo":"acme/widget","workflow":"worktree","style":"trunk","nix":true,"withheld":[{"path":"flake.nix","reason":"the target already carries flake.nix"}],"config":{"action":"added","changes":[],"content":"schema_version = 1\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"created"}],"sentinels":[{"path":"/tmp/t/release-plz.toml","line":3,"text":"# TODO(release-kit): keep false for a binary-only crate"}],"next":["commit the landed files, the receipt included"]}"##
         );
         let preview = Report {
             sentinels: None,
@@ -518,13 +470,16 @@ mod tests {
             mode: "preview",
             nix: false,
             withheld: None,
-            plan: None,
+            collisions: Some(vec![super::Collision {
+                path: "SECURITY.md".into(),
+                reason: "exists, and no receipt attributes it to release-kit".into(),
+            }]),
             ..apply
         };
         assert_eq!(
             serde_json::to_string(&preview).expect("a report serializes"),
-            r#"{"schema":"rk.init/6","mode":"preview","tech":"rust","forge":"github","target":"/tmp/t","workflow":"worktree","style":"trunk","nix":false,"config":{"action":"added","changes":[],"content":"schema_version = 1\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"write"}],"next":["commit the landed files, the record included"]}"#,
-            "a preview omits the sentinels, the unresolved repo, the plan, and an empty withheld list rather than serializing null"
+            r#"{"schema":"rk.init/7","mode":"preview","tech":"rust","forge":"github","target":"/tmp/t","workflow":"worktree","style":"trunk","nix":false,"collisions":[{"path":"SECURITY.md","reason":"exists, and no receipt attributes it to release-kit"}],"config":{"action":"added","changes":[],"content":"schema_version = 1\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"created"}],"next":["commit the landed files, the receipt included"]}"#,
+            "a preview omits the sentinels, the unresolved repo, and an empty withheld list rather than serializing null"
         );
     }
 }

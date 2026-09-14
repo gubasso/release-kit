@@ -16,7 +16,6 @@
 //! receipt are created owner-only.
 
 pub mod clean;
-pub(crate) mod held;
 
 use std::borrow::Cow;
 use std::fs::{self, File};
@@ -649,7 +648,7 @@ pub const PAUSE_AFTER_LAND_VAR: &str = "RK_STAGE_PAUSE_AFTER_LAND";
 fn temp_name(name: &std::ffi::OsStr, attempt: u32) -> std::ffi::OsString {
     let mut out = std::ffi::OsString::from(format!(".rk-stage-{}", std::process::id()));
     if attempt > 0 {
-        out.push(format!("-{:08x}", held::nonce() & 0xffff_ffff));
+        out.push(format!("-{:08x}", crate::held::nonce() & 0xffff_ffff));
     }
     out.push(".");
     out.push(name);
@@ -662,7 +661,7 @@ fn temp_name(name: &std::ffi::OsStr, attempt: u32) -> std::ffi::OsString {
 struct Temp {
     name: std::ffi::OsString,
     dir: File,
-    identity: held::Identity,
+    identity: crate::held::Identity,
 }
 
 /// Create the fresh sibling this write owns, exclusively, and hold it
@@ -673,13 +672,13 @@ fn create_temp(prepared: &Prepared, parent: &File) -> std::io::Result<Temp> {
     if prepared.owner_only {
         builder.mode(0o700);
     }
-    let base = held::proc_path(parent);
+    let base = crate::held::proc_path(parent);
     for attempt in 0..TEMP_ATTEMPTS {
         let name = temp_name(&prepared.name, attempt);
         match builder.create(base.join(&name)) {
             Ok(()) => {
-                let dir = held::open_dir(&base.join(&name))?;
-                let identity = held::Identity::of(&dir.metadata()?);
+                let dir = crate::held::open_dir(&base.join(&name))?;
+                let identity = crate::held::Identity::of(&dir.metadata()?);
                 return Ok(Temp {
                     name,
                     dir,
@@ -730,7 +729,7 @@ pub fn write_stopping_at(
     composed: &Composed,
     stop: Option<&Path>,
 ) -> Result<(), RkError> {
-    let parent = held::open_dir(&prepared.parent)?;
+    let parent = crate::held::open_dir(&prepared.parent)?;
     let temp = create_temp(prepared, &parent)?;
     if let Err(error) = write_into(&temp, composed, stop) {
         return Err(RkError::Io(cleanup(
@@ -757,10 +756,10 @@ pub fn write_stopping_at(
 /// at is not a stage, and one reachable through a replaced parent might
 /// be anywhere.
 fn land(parent: &File, temp: &Temp, prepared: &Prepared) -> std::io::Result<()> {
-    held::pause(PAUSE_BEFORE_LAND_VAR, "finished", "proceed");
-    let base = held::proc_path(parent);
-    let (claim, current) = held::quarantine(parent, &temp.name, CLAIM_PREFIX)?;
-    if current.file_type().is_symlink() || held::Identity::of(&current) != temp.identity {
+    crate::held::pause(PAUSE_BEFORE_LAND_VAR, "finished", "proceed");
+    let base = crate::held::proc_path(parent);
+    let (claim, current) = crate::held::quarantine(parent, &temp.name, CLAIM_PREFIX)?;
+    if current.file_type().is_symlink() || crate::held::Identity::of(&current) != temp.identity {
         return Err(std::io::Error::other(format!(
             "the sibling under {} was exchanged before the stage could land; the entry that took its name was moved to {} beside it and left in place, and nothing was published",
             prepared.parent.join(&temp.name).display(),
@@ -770,11 +769,11 @@ fn land(parent: &File, temp: &Temp, prepared: &Prepared) -> std::io::Result<()> 
     if let Err(error) = fs::rename(base.join(&claim), base.join(&prepared.name)) {
         return Err(cleanup(parent, &claim, temp.identity, error));
     }
-    held::pause(PAUSE_AFTER_LAND_VAR, "landed", "proceed");
+    crate::held::pause(PAUSE_AFTER_LAND_VAR, "landed", "proceed");
     let public = fs::metadata(&prepared.parent)
         .ok()
-        .map(|metadata| held::Identity::of(&metadata));
-    let held_parent = held::Identity::of(&parent.metadata()?);
+        .map(|metadata| crate::held::Identity::of(&metadata));
+    let held_parent = crate::held::Identity::of(&parent.metadata()?);
     if public == Some(held_parent) {
         return Ok(());
     }
@@ -795,12 +794,12 @@ fn land(parent: &File, temp: &Temp, prepared: &Prepared) -> std::io::Result<()> 
 fn cleanup(
     parent: &File,
     name: &std::ffi::OsStr,
-    identity: held::Identity,
+    identity: crate::held::Identity,
     error: std::io::Error,
 ) -> std::io::Error {
-    held::pause(PAUSE_BEFORE_CLEANUP_VAR, "stopped", "proceed");
-    let base = held::proc_path(parent);
-    let (quarantined, current) = match held::quarantine(parent, name, QUARANTINE_PREFIX) {
+    crate::held::pause(PAUSE_BEFORE_CLEANUP_VAR, "stopped", "proceed");
+    let base = crate::held::proc_path(parent);
+    let (quarantined, current) = match crate::held::quarantine(parent, name, QUARANTINE_PREFIX) {
         Ok(moved) => moved,
         Err(quarantine) => {
             return std::io::Error::new(
@@ -812,7 +811,7 @@ fn cleanup(
             );
         }
     };
-    if current.file_type().is_symlink() || held::Identity::of(&current) != identity {
+    if current.file_type().is_symlink() || crate::held::Identity::of(&current) != identity {
         return std::io::Error::new(
             error.kind(),
             format!(
@@ -837,7 +836,7 @@ fn cleanup(
 /// The body of [`write`]: every file into the held sibling, then the
 /// receipt, each addressed through the descriptor.
 fn write_into(temp: &Temp, composed: &Composed, stop: Option<&Path>) -> std::io::Result<()> {
-    let base = held::proc_path(&temp.dir);
+    let base = crate::held::proc_path(&temp.dir);
     for (path, bytes) in &composed.files {
         let destination = base.join(path);
         if let Some(parent) = destination.parent() {
