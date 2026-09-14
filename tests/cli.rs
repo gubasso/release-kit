@@ -463,7 +463,10 @@ fn payload_json_parses_and_its_digests_match_the_embedded_bytes() {
         report["release_kit_version"],
         serde_json::Value::from(env!("CARGO_PKG_VERSION"))
     );
-    assert_eq!(report["payload_schema"], serde_json::Value::from(1));
+    assert_eq!(
+        report["payload_schema"],
+        serde_json::Value::from(release_kit::release::PAYLOAD_SCHEMA)
+    );
     let embedded: std::collections::BTreeMap<String, &[u8]> =
         release_kit::embedded::artifacts().into_iter().collect();
     let artifacts = report["artifacts"].as_array().expect("an artifact list");
@@ -6091,6 +6094,35 @@ fn the_routing_block_splices_and_is_recorded() {
     assert_eq!(
         manifest_file(&read_manifest(target.path()), "AGENTS.md")["kind"],
         "rendered"
+    );
+}
+
+/// The destination and the protocol version move together. An engine
+/// that projects only the schema-1 destinations would land a routing
+/// block naming a file it never writes, and no declaration inside the
+/// bundle can stop it, because the projection is the engine's own code.
+/// The schema is the one number such an engine reads before it projects.
+#[test]
+fn the_glossary_destination_moved_the_payload_schema() {
+    use release_kit::release::ReleaseSource;
+
+    assert_eq!(
+        release_kit::release::EmbeddedReleaseSource
+            .manifest()
+            .expect("the embedded bundle describes itself")
+            .payload_schema,
+        2,
+        "the glossary destination landed in payload schema 2"
+    );
+    let params = render_params_for("rust", "github", release_kit::landing::Workflow::Worktree);
+    let entries =
+        release_kit::landing::projection(&release_kit::release::EmbeddedReleaseSource, &params)
+            .expect("the embedded pair projects");
+    assert!(
+        entries
+            .iter()
+            .any(|entry| entry.destination == "GLOSSARY.md"),
+        "the engine that declares this schema projects the destination"
     );
 }
 
@@ -21411,7 +21443,10 @@ fn the_embedded_source_answers_the_manifest_the_payload_verb_emits() {
         .expect("the embedded bundle describes itself");
     let through_seam = serde_json::to_value(&manifest).expect("a manifest serializes");
     assert_eq!(printed, through_seam);
-    assert_eq!(printed["payload_schema"], serde_json::Value::from(1));
+    assert_eq!(
+        printed["payload_schema"],
+        serde_json::Value::from(release_kit::release::PAYLOAD_SCHEMA)
+    );
 }
 
 /// The refactor's proof: every destination the seam projects carries the
@@ -21575,6 +21610,8 @@ fn the_crate_source_verifies_against_the_index_checksum() {
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
     assert_eq!(report["release_kit_version"], "0.9.0");
+    // The fixture publishes schema 1, and this engine reads it: a bundle
+    // below the current schema stays readable.
     assert_eq!(report["payload_schema"], serde_json::Value::from(1));
     let paths: Vec<&str> = report["artifacts"]
         .as_array()
