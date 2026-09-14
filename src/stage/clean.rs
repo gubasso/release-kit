@@ -10,10 +10,10 @@
 //! walk uses the kernel's own link to an open directory instead of
 //! `openat` and `unlinkat` through FFI.
 
-use std::fs::{self, File, OpenOptions};
-use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
+use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 
+use super::held::{self, Identity, open_dir, proc_path};
 use super::{RECEIPT_NAME, STAGE_SCHEMA};
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
@@ -28,13 +28,22 @@ pub const PAUSE_VAR: &str = "RK_STAGE_CLEAN_PAUSE_AFTER_VALIDATE";
 /// directory, having written `checked` there.
 pub const PAUSE_BEFORE_OPEN_VAR: &str = "RK_STAGE_CLEAN_PAUSE_BEFORE_OPEN";
 
+/// The proof's third seam: the name of one entry whose removal waits.
+///
+/// A file, a child directory, or the stage root itself: after its
+/// quarantined identity has been judged, the run writes `quarantined`
+/// under the pause directory and waits for `proceed-quarantined` there.
+pub const PAUSE_AFTER_QUARANTINE_VAR: &str = "RK_STAGE_CLEAN_PAUSE_AFTER_QUARANTINE";
+
+/// The prefix of a quarantined entry's name inside the held directory.
+const QUARANTINE_PREFIX: &str = ".rk-clean-quarantine-";
+
 /// A stage validated and held open for removal.
 #[derive(Debug)]
 pub struct Validated {
     parent: File,
     stage: File,
-    stage_dev: u64,
-    stage_ino: u64,
+    stage_identity: Identity,
     name: std::ffi::OsString,
     resolved: PathBuf,
     target: String,
@@ -52,20 +61,6 @@ impl Validated {
     pub fn target(&self) -> &str {
         &self.target
     }
-}
-
-/// The kernel's link to an open directory.
-fn proc_path(dir: &File) -> PathBuf {
-    use std::os::fd::AsRawFd as _;
-    PathBuf::from(format!("/proc/self/fd/{}", dir.as_raw_fd()))
-}
-
-/// Open a directory without following a final symlink.
-fn open_dir(path: &Path) -> std::io::Result<File> {
-    OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(path)
 }
 
 fn refuse(message: String, expected: &str) -> RkError {
@@ -94,9 +89,8 @@ pub fn validate(argument: &Path) -> Result<Validated, RkError> {
     let target = judge_receipt(&resolved)?;
     let parent_dir = open_dir(&parent)?;
     let stage = open_dir(&proc_path(&parent_dir).join(&name))?;
-    let opened = stage.metadata()?;
-    let (stage_dev, stage_ino) = (opened.dev(), opened.ino());
-    if Identity::of(&opened) != Identity::of(&metadata) {
+    let stage_identity = Identity::of(&stage.metadata()?);
+    if stage_identity != Identity::of(&metadata) {
         return Err(refuse(
             format!(
                 "{} changed while it was being validated",
@@ -108,8 +102,7 @@ pub fn validate(argument: &Path) -> Result<Validated, RkError> {
     Ok(Validated {
         parent: parent_dir,
         stage,
-        stage_dev,
-        stage_ino,
+        stage_identity,
         name,
         resolved,
         target,
@@ -331,23 +324,6 @@ fn missing(argument: &Path, error: &std::io::Error) -> RkError {
     }
 }
 
-/// One entry's identity: the device and inode the check saw, which the
-/// opened descriptor must agree with before anything below it goes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Identity {
-    dev: u64,
-    ino: u64,
-}
-
-impl Identity {
-    fn of(metadata: &fs::Metadata) -> Self {
-        Self {
-            dev: metadata.dev(),
-            ino: metadata.ino(),
-        }
-    }
-}
-
 /// The failure for an entry that changed under the removal: the walk
 /// stops, nothing beyond the held descriptors was touched, and the run
 /// exits as an I/O failure naming where.
@@ -367,25 +343,31 @@ fn swapped_leaving(path: &Path, detail: &str, aftermath: &str) -> std::io::Error
     ))
 }
 
-/// Remove the validated stage through its held descriptors: every entry
-/// below it, then the directory entry itself, which is removed only while
-/// the parent still names the directory that was validated.
+/// Remove the validated stage through its held descriptors.
+///
+/// Every entry below it goes first, then the directory entry itself,
+/// quarantined under an unpredictable name inside its validated parent,
+/// judged against the validated identity, and removed only on a match.
 ///
 /// # Errors
 ///
 /// Any removal failure, and an I/O failure naming the entry where the
 /// tree changed under the removal: a child whose opened identity differs
-/// from the one checked, a name that vanished after validation, or a
-/// parent entry replaced while the stage was being emptied. In the last
-/// case the validated directory's contents are gone and the entry at the
-/// path was left alone.
+/// from the one checked, a name that vanished after validation, an entry
+/// that gained content after it was emptied, or a parent entry replaced
+/// while the stage was being emptied. In the last case the validated
+/// directory's contents are gone and the entry now under the quarantine
+/// name was left alone.
 pub fn remove(validated: &Validated) -> Result<(), RkError> {
-    pause_for_proof("validated");
+    held::pause(PAUSE_VAR, "validated", "proceed");
     let shown = validated.resolved.as_path();
     remove_contents(&validated.stage, shown)?;
-    let entry = proc_path(&validated.parent).join(&validated.name);
-    let current = match fs::symlink_metadata(&entry) {
-        Ok(current) => current,
+    let (quarantined, current) = match held::quarantine(
+        &validated.parent,
+        &validated.name,
+        QUARANTINE_PREFIX,
+    ) {
+        Ok(moved) => moved,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Err(RkError::Io(swapped_leaving(
                 shown,
@@ -397,28 +379,45 @@ pub fn remove(validated: &Validated) -> Result<(), RkError> {
     };
     if current.file_type().is_symlink()
         || !current.is_dir()
-        || Identity::of(&current)
-            != (Identity {
-                dev: validated.stage_dev,
-                ino: validated.stage_ino,
-            })
+        || Identity::of(&current) != validated.stage_identity
     {
         return Err(RkError::Io(swapped_leaving(
             shown,
             "was replaced",
-            "the validated directory's contents were removed and the entry now at that path was left alone",
+            &format!(
+                "the validated directory's contents were removed, and the entry that stood at its path was moved to {} beside it and left alone",
+                quarantined.display()
+            ),
         )));
     }
-    fs::remove_dir(&entry)?;
+    pause_after_quarantine(&validated.name);
+    let entry = proc_path(&validated.parent).join(&quarantined);
+    fs::remove_dir(&entry).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::DirectoryNotEmpty {
+            swapped_leaving(
+                shown,
+                "gained entries after it was emptied",
+                &format!(
+                    "the validated directory was moved to {} beside its path and left alone with what it gained",
+                    quarantined.display()
+                ),
+            )
+        } else {
+            error
+        }
+    })?;
     Ok(())
 }
 
 /// Remove every entry below the open directory `dir`, addressing each by
-/// the descriptor and never by the validated path. A directory child is
-/// opened and its descriptor's identity compared with the checked entry
-/// before the walk descends, and compared again before its name goes; a
-/// file's entry is checked immediately before its unlink. `shown` is the
-/// path the failure names for the operator.
+/// the descriptor and never by the validated path. The entries are listed
+/// once, up front, so an entry added while the walk runs is not removed.
+/// A directory child is opened and its descriptor's identity compared
+/// with the checked entry before the walk descends. Every removal goes
+/// through a quarantine: the entry is renamed to an unpredictable name
+/// inside the held directory, judged there against its checked identity,
+/// and removed only on a match. `shown` is the path the failure names
+/// for the operator.
 fn remove_contents(dir: &File, shown: &Path) -> std::io::Result<()> {
     let base = proc_path(dir);
     let vanished = |error: std::io::Error, name: &std::ffi::OsStr| {
@@ -428,12 +427,13 @@ fn remove_contents(dir: &File, shown: &Path) -> std::io::Result<()> {
             error
         }
     };
-    for entry in fs::read_dir(&base)? {
-        let entry = entry?;
-        let name = entry.file_name();
+    let names: Vec<std::ffi::OsString> = fs::read_dir(&base)?
+        .map(|entry| entry.map(|entry| entry.file_name()))
+        .collect::<std::io::Result<_>>()?;
+    for name in names {
         let path = base.join(&name);
         let checked = fs::symlink_metadata(&path).map_err(|error| vanished(error, &name))?;
-        if checked.is_dir() {
+        let expected = if checked.is_dir() {
             pause_before_open(&name);
             let sub = open_dir(&path).map_err(|error| vanished(error, &name))?;
             let opened = Identity::of(&sub.metadata()?);
@@ -444,48 +444,40 @@ fn remove_contents(dir: &File, shown: &Path) -> std::io::Result<()> {
                 ));
             }
             remove_contents(&sub, &shown.join(&name))?;
-            drop(sub);
-            let again = fs::symlink_metadata(&path).map_err(|error| vanished(error, &name))?;
-            if again.file_type().is_symlink() || Identity::of(&again) != opened {
-                return Err(swapped(
-                    &shown.join(&name),
-                    "was replaced after it was emptied",
-                ));
-            }
-            fs::remove_dir(&path).map_err(|error| vanished(error, &name))?;
+            opened
         } else {
-            let again = fs::symlink_metadata(&path).map_err(|error| vanished(error, &name))?;
-            if again.is_dir() || Identity::of(&again) != Identity::of(&checked) {
-                return Err(swapped(
-                    &shown.join(&name),
-                    "was exchanged for another entry",
-                ));
-            }
-            fs::remove_file(&path).map_err(|error| vanished(error, &name))?;
+            Identity::of(&checked)
+        };
+        let (quarantined, current) = held::quarantine(dir, &name, QUARANTINE_PREFIX)
+            .map_err(|error| vanished(error, &name))?;
+        if current.is_dir() != checked.is_dir()
+            || current.file_type().is_symlink() != checked.file_type().is_symlink()
+            || Identity::of(&current) != expected
+        {
+            return Err(swapped_leaving(
+                &shown.join(&name),
+                "was exchanged for another entry",
+                &format!(
+                    "the entry that took its name was moved to {} inside the stage and left alone",
+                    quarantined.display()
+                ),
+            ));
+        }
+        pause_after_quarantine(&name);
+        let held_entry = base.join(&quarantined);
+        if current.is_dir() {
+            fs::remove_dir(&held_entry).map_err(|error| {
+                if error.kind() == std::io::ErrorKind::DirectoryNotEmpty {
+                    swapped(&shown.join(&name), "gained entries after it was emptied")
+                } else {
+                    error
+                }
+            })?;
+        } else {
+            fs::remove_file(&held_entry)?;
         }
     }
     Ok(())
-}
-
-/// The proof's pause: announce `tag` under the pause directory, then
-/// wait for the matching go-ahead. Bounded, so a forgotten variable
-/// cannot hang a run forever. The first pause, after validation, waits
-/// for `proceed`; every later one waits for `proceed-<tag>`.
-fn pause_for_proof(tag: &str) {
-    let Some(dir) = std::env::var_os(PAUSE_VAR).filter(|value| !value.is_empty()) else {
-        return;
-    };
-    let dir = PathBuf::from(dir);
-    let _ = fs::write(dir.join(tag), b"");
-    let proceed = if tag == "validated" {
-        dir.join("proceed")
-    } else {
-        dir.join(format!("proceed-{tag}"))
-    };
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-    while !proceed.exists() && std::time::Instant::now() < deadline {
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
 }
 
 /// The second seam: pause between the check of a child directory named
@@ -493,7 +485,16 @@ fn pause_for_proof(tag: &str) {
 /// in the one window the identity comparison exists for.
 fn pause_before_open(name: &std::ffi::OsStr) {
     if std::env::var_os(PAUSE_BEFORE_OPEN_VAR).is_some_and(|wanted| wanted == name) {
-        pause_for_proof("checked");
+        held::pause(PAUSE_VAR, "checked", "proceed-checked");
+    }
+}
+
+/// The third seam: pause after the quarantined entry named by
+/// [`PAUSE_AFTER_QUARANTINE_VAR`] has been judged and before it goes, so
+/// a test can put something at its old name and prove that survives.
+fn pause_after_quarantine(name: &std::ffi::OsStr) {
+    if std::env::var_os(PAUSE_AFTER_QUARANTINE_VAR).is_some_and(|wanted| wanted == name) {
+        held::pause(PAUSE_VAR, "quarantined", "proceed-quarantined");
     }
 }
 

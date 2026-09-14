@@ -16,9 +16,10 @@
 //! receipt are created owner-only.
 
 pub mod clean;
+pub(crate) mod held;
 
 use std::borrow::Cow;
-use std::fs;
+use std::fs::{self, File};
 use std::io::Write as _;
 use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
@@ -618,35 +619,57 @@ pub fn reference_files() -> Vec<(String, &'static [u8])> {
 /// How many sibling names a write tries before it refuses.
 const TEMP_ATTEMPTS: u32 = 8;
 
+/// The proof's seam for the failure cleanup: a directory where a stopped
+/// write announces `stopped` before it quarantines its sibling and waits
+/// for `proceed`.
+pub const PAUSE_BEFORE_CLEANUP_VAR: &str = "RK_STAGE_PAUSE_BEFORE_CLEANUP";
+
+/// The prefix of a quarantined sibling's name.
+const QUARANTINE_PREFIX: &str = ".rk-stage-quarantine-";
+
 /// The sibling name for one attempt: the first names this process alone,
 /// and every retry adds a nonce, so an entry somebody else left under the
 /// first name is stepped around rather than reused.
 fn temp_name(name: &std::ffi::OsStr, attempt: u32) -> std::ffi::OsString {
     let mut out = std::ffi::OsString::from(format!(".rk-stage-{}", std::process::id()));
     if attempt > 0 {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |since| since.subsec_nanos())
-            ^ attempt.rotate_left(20);
-        out.push(format!("-{nonce:08x}"));
+        out.push(format!("-{:08x}", held::nonce() & 0xffff_ffff));
     }
     out.push(".");
     out.push(name);
     out
 }
 
-/// Create the fresh sibling this write owns, exclusively: a name that
-/// already exists is never entered or removed, and the next name is tried
-/// instead, a bounded number of times.
-fn create_temp(prepared: &Prepared) -> std::io::Result<PathBuf> {
+/// The sibling this write created and holds: its name under the held
+/// parent, the open directory, and the identity the directory had the
+/// moment it was opened, which every later act on it is judged against.
+struct Temp {
+    name: std::ffi::OsString,
+    dir: File,
+    identity: held::Identity,
+}
+
+/// Create the fresh sibling this write owns, exclusively, and hold it
+/// open: a name that already exists is never entered or removed, and the
+/// next name is tried instead, a bounded number of times.
+fn create_temp(prepared: &Prepared, parent: &File) -> std::io::Result<Temp> {
     let mut builder = fs::DirBuilder::new();
     if prepared.owner_only {
         builder.mode(0o700);
     }
+    let base = held::proc_path(parent);
     for attempt in 0..TEMP_ATTEMPTS {
-        let temp = prepared.parent.join(temp_name(&prepared.name, attempt));
-        match builder.create(&temp) {
-            Ok(()) => return Ok(temp),
+        let name = temp_name(&prepared.name, attempt);
+        match builder.create(base.join(&name)) {
+            Ok(()) => {
+                let dir = held::open_dir(&base.join(&name))?;
+                let identity = held::Identity::of(&dir.metadata()?);
+                return Ok(Temp {
+                    name,
+                    dir,
+                    identity,
+                });
+            }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(error) => return Err(error),
         }
@@ -662,11 +685,14 @@ fn create_temp(prepared: &Prepared) -> std::io::Result<PathBuf> {
 
 /// Write the composed stage whole, then rename it into place.
 ///
-/// Every file goes under a fresh sibling of the resolved root that this
-/// write created exclusively, the receipt last and owner-only, then one
-/// rename. A failure anywhere removes that sibling alone and leaves
-/// nothing at the resolved path; an entry this write did not create is
-/// never touched.
+/// Every file goes into a fresh sibling of the resolved root that this
+/// write created exclusively and holds open, written through the held
+/// descriptor rather than by name; the receipt goes last and owner-only;
+/// then, once the entry under the sibling's name still carries the
+/// created identity, one rename lands it. A failure anywhere quarantines
+/// the entry under an unpredictable name in the same parent, judges it
+/// against the created identity, and removes it only on a match: an
+/// entry this write did not create is never removed.
 ///
 /// # Errors
 ///
@@ -688,20 +714,79 @@ pub fn write_stopping_at(
     composed: &Composed,
     stop: Option<&Path>,
 ) -> Result<(), RkError> {
-    let temp = create_temp(prepared)?;
-    let written =
-        write_into(&temp, composed, stop).and_then(|()| fs::rename(&temp, &prepared.resolved));
-    if written.is_err() {
-        let _ = fs::remove_dir_all(&temp);
+    let parent = held::open_dir(&prepared.parent)?;
+    let temp = create_temp(prepared, &parent)?;
+    if let Err(error) = write_into(&temp, composed, stop) {
+        return Err(RkError::Io(cleanup(&parent, &temp, error)));
     }
-    written.map_err(RkError::Io)
+    land(&parent, &temp, prepared).map_err(RkError::Io)
 }
 
-/// The body of [`write`]: every file into the created sibling, then the
-/// receipt.
-fn write_into(temp: &Path, composed: &Composed, stop: Option<&Path>) -> std::io::Result<()> {
+/// Rename the finished sibling into place, from its verified identity:
+/// the entry under the sibling's name is judged against the created
+/// identity immediately before the rename, and a mismatch refuses
+/// without touching anything.
+fn land(parent: &File, temp: &Temp, prepared: &Prepared) -> std::io::Result<()> {
+    let base = held::proc_path(parent);
+    let current = fs::symlink_metadata(base.join(&temp.name))?;
+    if current.file_type().is_symlink() || held::Identity::of(&current) != temp.identity {
+        return Err(std::io::Error::other(format!(
+            "the sibling under {} was replaced before the stage could land; nothing was renamed or removed",
+            prepared.parent.join(&temp.name).display()
+        )));
+    }
+    match fs::rename(base.join(&temp.name), &prepared.resolved) {
+        Ok(()) => Ok(()),
+        Err(error) => Err(cleanup(parent, temp, error)),
+    }
+}
+
+/// The failure cleanup: quarantine whatever stands under the sibling's
+/// name, judge it against the created identity, and remove it only on a
+/// match. Returns `error` annotated with what was left where.
+fn cleanup(parent: &File, temp: &Temp, error: std::io::Error) -> std::io::Error {
+    held::pause(PAUSE_BEFORE_CLEANUP_VAR, "stopped", "proceed");
+    let base = held::proc_path(parent);
+    let (quarantined, current) = match held::quarantine(parent, &temp.name, QUARANTINE_PREFIX) {
+        Ok(moved) => moved,
+        Err(quarantine) => {
+            return std::io::Error::new(
+                error.kind(),
+                format!(
+                    "{error}; the sibling under {} could not be quarantined and was left in place: {quarantine}",
+                    temp.name.display()
+                ),
+            );
+        }
+    };
+    if current.file_type().is_symlink() || held::Identity::of(&current) != temp.identity {
+        return std::io::Error::new(
+            error.kind(),
+            format!(
+                "{error}; the entry under the sibling's name {} was not the directory this run created, so it was moved to {} and left in place",
+                temp.name.display(),
+                quarantined.display()
+            ),
+        );
+    }
+    match fs::remove_dir_all(base.join(&quarantined)) {
+        Ok(()) => error,
+        Err(removal) => std::io::Error::new(
+            error.kind(),
+            format!(
+                "{error}; the stopped sibling was moved to {} and could not be removed: {removal}",
+                quarantined.display()
+            ),
+        ),
+    }
+}
+
+/// The body of [`write`]: every file into the held sibling, then the
+/// receipt, each addressed through the descriptor.
+fn write_into(temp: &Temp, composed: &Composed, stop: Option<&Path>) -> std::io::Result<()> {
+    let base = held::proc_path(&temp.dir);
     for (path, bytes) in &composed.files {
-        let destination = temp.join(path);
+        let destination = base.join(path);
         if let Some(parent) = destination.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -717,7 +802,7 @@ fn write_into(temp: &Path, composed: &Composed, stop: Option<&Path>) -> std::io:
         .write(true)
         .create_new(true)
         .mode(0o600)
-        .open(temp.join(RECEIPT_NAME))?;
+        .open(base.join(RECEIPT_NAME))?;
     receipt.write_all(text.as_bytes())?;
     receipt.write_all(b"\n")?;
     receipt.sync_all()?;

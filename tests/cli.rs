@@ -24929,26 +24929,22 @@ fn production_commands_neither_read_nor_remove_a_stage() {
 /// Process-level observation of a stage: every directory below each root
 /// watched for an open, a read, an attribute change, a deletion, or a
 /// move-out, so a production command that so much as opened a staged
-/// file is caught. Where the kernel offers no inotify, the watcher is
-/// absent and says so; the byte snapshot beside it still holds.
+/// file is caught. The byte snapshot beside it holds the same bytes.
 struct StageWatcher {
-    inotify: Option<inotify::Inotify>,
+    inotify: inotify::Inotify,
     names: std::collections::HashMap<inotify::WatchDescriptor, PathBuf>,
 }
 
 impl StageWatcher {
     fn over(roots: &[&Path]) -> Self {
+        // Linux is the one supported platform, and inotify is part of it:
+        // a host without it cannot prove the isolation, so the test says
+        // so rather than passing on the snapshot alone.
         let inotify = match inotify::Inotify::init() {
             Ok(inotify) => inotify,
-            Err(error) => {
-                println!(
-                    "note: inotify is unavailable here ({error}); the byte snapshot alone holds"
-                );
-                return Self {
-                    inotify: None,
-                    names: std::collections::HashMap::new(),
-                };
-            }
+            Err(error) => panic!(
+                "inotify_init failed ({error}); the isolation proof needs inotify on this Linux host"
+            ),
         };
         let mask = inotify::WatchMask::OPEN
             | inotify::WatchMask::ACCESS
@@ -24976,17 +24972,12 @@ impl StageWatcher {
             let descriptor = watches.add(&dir, mask).expect("the directory is watchable");
             names.insert(descriptor, dir);
         }
-        Self {
-            inotify: Some(inotify),
-            names,
-        }
+        Self { inotify, names }
     }
 
     /// Every event that arrived, as `directory/name: mask`.
     fn drain(&mut self) -> Vec<String> {
-        let Some(inotify) = self.inotify.as_mut() else {
-            return Vec::new();
-        };
+        let inotify = &mut self.inotify;
         let mut buffer = [0u8; 16384];
         let mut out = Vec::new();
         loop {
@@ -25958,13 +25949,17 @@ fn stage_clean_stays_confined_after_an_adversarial_swap() {
         decoy_before,
         "the decoy lost bytes: {stderr}"
     );
+    // The impostor link was quarantined beside the path under an
+    // unpredictable name and left alone, still pointing at the decoy.
+    assert!(!stage.exists(), "something stands at the stage path");
+    let quarantined = quarantined_entries(&canonical);
+    assert_eq!(quarantined.len(), 1, "{quarantined:?}");
+    let link = std::fs::symlink_metadata(&quarantined[0]).expect("the link stands");
     assert!(
-        std::fs::symlink_metadata(&stage)
-            .expect("the link stands")
-            .file_type()
-            .is_symlink(),
-        "the link at the stage path was removed or replaced"
+        link.file_type().is_symlink(),
+        "the quarantined entry is not the link"
     );
+    assert_eq!(std::fs::read_link(&quarantined[0]).expect("reads"), decoy);
     assert!(
         moved.is_dir(),
         "the validated directory's entry was not ours to remove"
@@ -26101,4 +26096,275 @@ fn wait_for(flag: &Path) {
         );
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
+}
+
+/// Every quarantined entry directly below `dir`, from either verb.
+fn quarantined_entries(dir: &Path) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = std::fs::read_dir(dir)
+        .expect("reads")
+        .map(|entry| entry.expect("an entry").path())
+        .filter(|path| {
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy().contains("-quarantine-"))
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+/// `rk stage` spawned as a child with the section's flags and the given
+/// extra variables, so a test can act while the run is paused.
+fn spawn_stage(target: &Path, output: &Path, vars: &[(&str, &Path)]) -> std::process::Child {
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_rk"));
+    for var in GIT_HOOK_VARS {
+        child.env_remove(var);
+    }
+    child
+        .env("XDG_STATE_HOME", scratch_state_root())
+        .env_remove("RK_STAGE_ROOT")
+        .env_remove("RK_STAGE_INTERRUPT_AT")
+        .env_remove("RK_STAGE_PAUSE_BEFORE_CLEANUP");
+    for (name, value) in vars {
+        child.env(name, value);
+    }
+    child
+        .args(["stage", "--target"])
+        .arg(target)
+        .args(STAGE_FLAGS)
+        .arg("--output")
+        .arg(output)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("the stage spawns")
+}
+
+/// SATISFIES staging:a-visible-stage-is-complete
+///
+/// The sibling a stopped write created is exchanged for another tree
+/// before the cleanup runs. The cleanup quarantines whatever stands under
+/// the sibling's name, finds it is not the directory it created, and
+/// leaves it in place: the replacement tree survives byte for byte, and
+/// so does the directory moved aside.
+#[test]
+fn a_temp_sibling_exchanged_before_cleanup_is_left_in_place() {
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let canonical = std::fs::canonicalize(scratch.path()).expect("canonical");
+    let target = stage_target();
+    let output = canonical.join("stage");
+    let pause = canonical.join("pause");
+    std::fs::create_dir(&pause).expect("creates");
+    let child = spawn_stage(
+        target.path(),
+        &output,
+        &[
+            (
+                "RK_STAGE_INTERRUPT_AT",
+                Path::new("artifacts/.github/workflows/pr-title.yml"),
+            ),
+            ("RK_STAGE_PAUSE_BEFORE_CLEANUP", &pause),
+        ],
+    );
+    wait_for(&pause.join("stopped"));
+    let temps: Vec<PathBuf> = std::fs::read_dir(&canonical)
+        .expect("reads")
+        .map(|entry| entry.expect("an entry").path())
+        .filter(|path| {
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with(".rk-stage-"))
+        })
+        .collect();
+    assert_eq!(temps.len(), 1, "one sibling under construction: {temps:?}");
+    let temp = temps[0].clone();
+    let aside = canonical.join("aside");
+    std::fs::rename(&temp, &aside).expect("the sibling moves aside");
+    std::fs::create_dir_all(temp.join("deep")).expect("the replacement tree creates");
+    std::fs::write(temp.join("canary"), b"not yours").expect("writes");
+    std::fs::write(temp.join("deep/canary"), b"not yours either").expect("writes");
+    let replacement = tree_digests(&temp);
+    std::fs::write(pause.join("proceed"), b"").expect("the go-ahead writes");
+    let out = child.wait_with_output().expect("the run finishes");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(74), "{stderr}");
+    assert!(stderr.contains("stopped after"), "{stderr}");
+    assert!(
+        stderr.contains("was not the directory this run created")
+            && stderr.contains("left in place"),
+        "{stderr}"
+    );
+    assert!(!output.exists(), "a stopped stage landed");
+    assert!(
+        !temp.exists(),
+        "the replacement was not moved to quarantine"
+    );
+    let quarantined = quarantined_entries(&canonical);
+    assert_eq!(quarantined.len(), 1, "{quarantined:?}");
+    assert_eq!(
+        tree_digests(&quarantined[0]),
+        replacement,
+        "the replacement tree lost bytes"
+    );
+    assert!(
+        aside
+            .join("artifacts/.github/workflows/pr-title.yml")
+            .is_file(),
+        "the directory moved aside was emptied through its old name"
+    );
+}
+
+/// The run paused after quarantining `name`: the stage at `stage`, the
+/// pause directory, and the child, for the three quarantine proofs.
+fn paused_after_quarantine(stage: &Path, pause: &Path, name: &str) -> std::process::Child {
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_rk"));
+    for var in GIT_HOOK_VARS {
+        child.env_remove(var);
+    }
+    let child = child
+        .env("XDG_STATE_HOME", scratch_state_root())
+        .env("RK_STAGE_CLEAN_PAUSE_AFTER_VALIDATE", pause)
+        .env_remove("RK_STAGE_CLEAN_PAUSE_BEFORE_OPEN")
+        .env("RK_STAGE_CLEAN_PAUSE_AFTER_QUARANTINE", name)
+        .args(["stage", "clean"])
+        .arg(stage)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("the clean spawns");
+    wait_for(&pause.join("validated"));
+    std::fs::write(pause.join("proceed"), b"").expect("the first go-ahead writes");
+    wait_for(&pause.join("quarantined"));
+    child
+}
+
+/// SATISFIES staging:cleanup-holds-what-it-validated-open
+///
+/// After a file's quarantined identity is judged, a new file takes its
+/// old name. The removal deletes the quarantined entry alone; the new
+/// file survives, and the stage root, which it keeps nonempty, is
+/// reported rather than forced.
+#[test]
+fn stage_clean_removes_only_the_quarantined_file_after_its_check() {
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let canonical = std::fs::canonicalize(scratch.path()).expect("canonical");
+    let target = stage_target();
+    let stage = canonical.join("stage");
+    stage_json(target.path(), &stage);
+    let pause = canonical.join("pause");
+    std::fs::create_dir(&pause).expect("creates");
+    let child = paused_after_quarantine(&stage, &pause, "stage.json");
+    assert!(
+        !stage.join("stage.json").exists(),
+        "the receipt was not quarantined"
+    );
+    assert_eq!(quarantined_entries(&stage).len(), 1);
+    std::fs::write(stage.join("stage.json"), b"a newcomer, not the receipt").expect("writes");
+    std::fs::write(pause.join("proceed-quarantined"), b"").expect("the go-ahead writes");
+    let out = child.wait_with_output().expect("the run finishes");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(74), "{stderr}");
+    assert!(
+        stderr.contains("gained entries after it was emptied"),
+        "{stderr}"
+    );
+    // The root, emptied of what it held, was quarantined beside its path
+    // before the newcomer made it unremovable; the newcomer stands inside
+    // it, and the quarantined receipt is gone.
+    let roots = quarantined_entries(&canonical);
+    assert_eq!(roots.len(), 1, "{roots:?}");
+    assert_eq!(
+        std::fs::read(roots[0].join("stage.json")).expect("the newcomer stands"),
+        b"a newcomer, not the receipt"
+    );
+    assert_eq!(stage_paths(&roots[0]), vec!["stage.json".to_owned()]);
+}
+
+/// SATISFIES staging:cleanup-holds-what-it-validated-open
+///
+/// After an emptied child directory's quarantined identity is judged, a
+/// decoy tree takes its old name. The quarantined directory alone goes;
+/// the decoy keeps every byte.
+#[test]
+fn stage_clean_removes_only_the_quarantined_directory_after_its_check() {
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let canonical = std::fs::canonicalize(scratch.path()).expect("canonical");
+    let target = stage_target();
+    let stage = canonical.join("stage");
+    stage_json(target.path(), &stage);
+    let decoy = canonical.join("decoy");
+    std::fs::create_dir_all(decoy.join("deep")).expect("creates");
+    std::fs::write(decoy.join("canary"), b"still here").expect("writes");
+    std::fs::write(decoy.join("deep/canary"), b"still here too").expect("writes");
+    let decoy_before = tree_digests(&decoy);
+    let pause = canonical.join("pause");
+    std::fs::create_dir(&pause).expect("creates");
+    let child = paused_after_quarantine(&stage, &pause, "reference");
+    assert!(
+        !stage.join("reference").exists(),
+        "the directory was not quarantined"
+    );
+    std::fs::rename(&decoy, stage.join("reference")).expect("the decoy takes the name");
+    std::fs::write(pause.join("proceed-quarantined"), b"").expect("the go-ahead writes");
+    let out = child.wait_with_output().expect("the run finishes");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(74), "{stderr}");
+    assert!(
+        stderr.contains("gained entries after it was emptied"),
+        "{stderr}"
+    );
+    // The root was quarantined beside its path before the decoy made it
+    // unremovable; the decoy stands inside it whole, and the quarantined
+    // directory is gone.
+    let roots = quarantined_entries(&canonical);
+    assert_eq!(roots.len(), 1, "{roots:?}");
+    assert_eq!(
+        tree_digests(&roots[0].join("reference")),
+        decoy_before,
+        "the decoy lost bytes: {stderr}"
+    );
+    assert!(
+        quarantined_entries(&roots[0]).is_empty(),
+        "the quarantined directory was left"
+    );
+}
+
+/// SATISFIES staging:cleanup-holds-what-it-validated-open
+///
+/// After the emptied stage root's quarantined identity is judged, a
+/// decoy takes the stage path. The quarantined root alone goes, the run
+/// reports the removal, and the decoy keeps every byte.
+#[test]
+fn stage_clean_removes_only_the_quarantined_root_after_its_check() {
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let canonical = std::fs::canonicalize(scratch.path()).expect("canonical");
+    let target = stage_target();
+    let stage = canonical.join("stage");
+    stage_json(target.path(), &stage);
+    let decoy = canonical.join("decoy");
+    std::fs::create_dir_all(decoy.join("deep")).expect("creates");
+    std::fs::write(decoy.join("canary"), b"still here").expect("writes");
+    let decoy_before = tree_digests(&decoy);
+    let pause = canonical.join("pause");
+    std::fs::create_dir(&pause).expect("creates");
+    let child = paused_after_quarantine(&stage, &pause, "stage");
+    assert!(!stage.exists(), "the root was not quarantined");
+    let quarantined = quarantined_entries(&canonical);
+    assert_eq!(quarantined.len(), 1, "{quarantined:?}");
+    assert!(
+        std::fs::read_dir(&quarantined[0])
+            .expect("reads")
+            .next()
+            .is_none(),
+        "the quarantined root kept content"
+    );
+    std::fs::rename(&decoy, &stage).expect("the decoy takes the path");
+    std::fs::write(pause.join("proceed-quarantined"), b"").expect("the go-ahead writes");
+    let out = child.wait_with_output().expect("the run finishes");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "{stderr}");
+    assert!(String::from_utf8_lossy(&out.stdout).contains(&format!("removed {}", stage.display())));
+    assert_eq!(tree_digests(&stage), decoy_before, "the decoy lost bytes");
+    assert!(
+        quarantined_entries(&canonical).is_empty(),
+        "the quarantined root was left"
+    );
 }
