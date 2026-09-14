@@ -26123,7 +26123,9 @@ fn spawn_stage(target: &Path, output: &Path, vars: &[(&str, &Path)]) -> std::pro
         .env("XDG_STATE_HOME", scratch_state_root())
         .env_remove("RK_STAGE_ROOT")
         .env_remove("RK_STAGE_INTERRUPT_AT")
-        .env_remove("RK_STAGE_PAUSE_BEFORE_CLEANUP");
+        .env_remove("RK_STAGE_PAUSE_BEFORE_CLEANUP")
+        .env_remove("RK_STAGE_PAUSE_BEFORE_LAND")
+        .env_remove("RK_STAGE_PAUSE_AFTER_LAND");
     for (name, value) in vars {
         child.env(name, value);
     }
@@ -26366,5 +26368,134 @@ fn stage_clean_removes_only_the_quarantined_root_after_its_check() {
     assert!(
         quarantined_entries(&canonical).is_empty(),
         "the quarantined root was left"
+    );
+}
+
+/// SATISFIES staging:a-visible-stage-is-complete
+///
+/// The finished sibling is exchanged for another tree in the window
+/// before publication. The claim moves whatever stands under the
+/// sibling's name to an unpredictable name and judges it there: the
+/// exchanged tree is not published, survives whole, and the finished
+/// stage moved aside is left untouched.
+#[test]
+fn a_sibling_exchanged_before_publication_is_not_published() {
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let canonical = std::fs::canonicalize(scratch.path()).expect("canonical");
+    let target = stage_target();
+    let output = canonical.join("stage");
+    let pause = canonical.join("pause");
+    std::fs::create_dir(&pause).expect("creates");
+    let child = spawn_stage(
+        target.path(),
+        &output,
+        &[("RK_STAGE_PAUSE_BEFORE_LAND", &pause)],
+    );
+    wait_for(&pause.join("finished"));
+    let temps: Vec<PathBuf> = std::fs::read_dir(&canonical)
+        .expect("reads")
+        .map(|entry| entry.expect("an entry").path())
+        .filter(|path| {
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with(".rk-stage-"))
+        })
+        .collect();
+    assert_eq!(temps.len(), 1, "one finished sibling: {temps:?}");
+    let temp = temps[0].clone();
+    let aside = canonical.join("aside");
+    std::fs::rename(&temp, &aside).expect("the sibling moves aside");
+    let finished = tree_digests(&aside);
+    std::fs::create_dir_all(temp.join("deep")).expect("the replacement tree creates");
+    std::fs::write(temp.join("canary"), b"not a stage").expect("writes");
+    std::fs::write(temp.join("deep/canary"), b"not a stage either").expect("writes");
+    let replacement = tree_digests(&temp);
+    std::fs::write(pause.join("proceed"), b"").expect("the go-ahead writes");
+    let out = child.wait_with_output().expect("the run finishes");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(74), "{stderr}");
+    assert!(
+        stderr.contains("was exchanged before the stage could land")
+            && stderr.contains("nothing was published"),
+        "{stderr}"
+    );
+    assert!(
+        !output.exists(),
+        "the exchanged tree was published as a stage"
+    );
+    let claims: Vec<PathBuf> = std::fs::read_dir(&canonical)
+        .expect("reads")
+        .map(|entry| entry.expect("an entry").path())
+        .filter(|path| {
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with(".rk-stage-claim-"))
+        })
+        .collect();
+    assert_eq!(claims.len(), 1, "{claims:?}");
+    assert_eq!(
+        tree_digests(&claims[0]),
+        replacement,
+        "the exchanged tree lost bytes"
+    );
+    assert_eq!(
+        tree_digests(&aside),
+        finished,
+        "the finished stage moved aside was touched"
+    );
+}
+
+/// SATISFIES staging:a-stage-is-one-target-specific-candidate
+///
+/// The output's parent pathname is replaced by a link into the target
+/// after the parent was opened. The stage publishes under the held
+/// parent, the check finds the public pathname naming something else,
+/// and the stage is removed again through the descriptor: nothing appears
+/// under the replacement, and the target stays byte-identical.
+#[test]
+fn a_parent_replaced_after_it_was_opened_receives_no_stage() {
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let canonical = std::fs::canonicalize(scratch.path()).expect("canonical");
+    let target = stage_target();
+    let target_before = tree_digests(target.path());
+    let parent = canonical.join("parent");
+    std::fs::create_dir(&parent).expect("creates");
+    let output = parent.join("stage");
+    let pause = canonical.join("pause");
+    std::fs::create_dir(&pause).expect("creates");
+    let child = spawn_stage(
+        target.path(),
+        &output,
+        &[("RK_STAGE_PAUSE_AFTER_LAND", &pause)],
+    );
+    wait_for(&pause.join("landed"));
+    let real = canonical.join("real-parent");
+    std::fs::rename(&parent, &real).expect("the parent moves aside");
+    assert!(
+        real.join("stage/stage.json").is_file(),
+        "the stage was published under the held parent"
+    );
+    std::os::unix::fs::symlink(target.path(), &parent)
+        .expect("a link into the target takes the parent's path");
+    std::fs::write(pause.join("proceed"), b"").expect("the go-ahead writes");
+    let out = child.wait_with_output().expect("the run finishes");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(74), "{stderr}");
+    assert!(
+        stderr.contains("was replaced after it was opened") && stderr.contains("removed again"),
+        "{stderr}"
+    );
+    assert_eq!(
+        tree_digests(target.path()),
+        target_before,
+        "the target changed"
+    );
+    assert!(
+        !target.path().join("stage").exists(),
+        "a stage appeared under the replacement"
+    );
+    assert!(!output.exists(), "a stage stands at the promised path");
+    assert!(
+        std::fs::read_dir(&real).expect("reads").next().is_none(),
+        "the published stage was left under the real parent: {:?}",
+        stage_paths(&real)
     );
 }

@@ -627,6 +627,22 @@ pub const PAUSE_BEFORE_CLEANUP_VAR: &str = "RK_STAGE_PAUSE_BEFORE_CLEANUP";
 /// The prefix of a quarantined sibling's name.
 const QUARANTINE_PREFIX: &str = ".rk-stage-quarantine-";
 
+/// The prefix of a finished sibling's claim name, the unpredictable name
+/// it is judged under before it is published.
+const CLAIM_PREFIX: &str = ".rk-stage-claim-";
+
+/// The proof's seam before publication: a finished write announces
+/// `finished` under this directory before it claims its sibling and
+/// waits for `proceed`.
+pub const PAUSE_BEFORE_LAND_VAR: &str = "RK_STAGE_PAUSE_BEFORE_LAND";
+
+/// The proof's seam after publication.
+///
+/// A write announces `landed` under this directory after the rename and
+/// before it checks that the public parent pathname still names the held
+/// parent, then waits for `proceed`.
+pub const PAUSE_AFTER_LAND_VAR: &str = "RK_STAGE_PAUSE_AFTER_LAND";
+
 /// The sibling name for one attempt: the first names this process alone,
 /// and every retry adds a nonce, so an entry somebody else left under the
 /// first name is stepped around rather than reused.
@@ -717,54 +733,91 @@ pub fn write_stopping_at(
     let parent = held::open_dir(&prepared.parent)?;
     let temp = create_temp(prepared, &parent)?;
     if let Err(error) = write_into(&temp, composed, stop) {
-        return Err(RkError::Io(cleanup(&parent, &temp, error)));
+        return Err(RkError::Io(cleanup(
+            &parent,
+            &temp.name,
+            temp.identity,
+            error,
+        )));
     }
     land(&parent, &temp, prepared).map_err(RkError::Io)
 }
 
-/// Rename the finished sibling into place, from its verified identity:
-/// the entry under the sibling's name is judged against the created
-/// identity immediately before the rename, and a mismatch refuses
-/// without touching anything.
+/// Publish the finished sibling, every operand resolved through the held
+/// parent descriptor.
+///
+/// The sibling is first claimed: renamed to an unpredictable name under
+/// the held parent, then judged there against the created identity, so
+/// nothing exchanged under the sibling's name can be published. The
+/// claimed entry is renamed to the stage's name under the same
+/// descriptor. Afterwards the public parent pathname is checked to still
+/// name the held parent; where it does not, the stage just published is
+/// quarantined, judged, removed through the descriptor, and the run
+/// fails, because a stage nobody can reach by the path it was promised
+/// at is not a stage, and one reachable through a replaced parent might
+/// be anywhere.
 fn land(parent: &File, temp: &Temp, prepared: &Prepared) -> std::io::Result<()> {
+    held::pause(PAUSE_BEFORE_LAND_VAR, "finished", "proceed");
     let base = held::proc_path(parent);
-    let current = fs::symlink_metadata(base.join(&temp.name))?;
+    let (claim, current) = held::quarantine(parent, &temp.name, CLAIM_PREFIX)?;
     if current.file_type().is_symlink() || held::Identity::of(&current) != temp.identity {
         return Err(std::io::Error::other(format!(
-            "the sibling under {} was replaced before the stage could land; nothing was renamed or removed",
-            prepared.parent.join(&temp.name).display()
+            "the sibling under {} was exchanged before the stage could land; the entry that took its name was moved to {} beside it and left in place, and nothing was published",
+            prepared.parent.join(&temp.name).display(),
+            claim.display()
         )));
     }
-    match fs::rename(base.join(&temp.name), &prepared.resolved) {
-        Ok(()) => Ok(()),
-        Err(error) => Err(cleanup(parent, temp, error)),
+    if let Err(error) = fs::rename(base.join(&claim), base.join(&prepared.name)) {
+        return Err(cleanup(parent, &claim, temp.identity, error));
     }
+    held::pause(PAUSE_AFTER_LAND_VAR, "landed", "proceed");
+    let public = fs::metadata(&prepared.parent)
+        .ok()
+        .map(|metadata| held::Identity::of(&metadata));
+    let held_parent = held::Identity::of(&parent.metadata()?);
+    if public == Some(held_parent) {
+        return Ok(());
+    }
+    Err(cleanup(
+        parent,
+        &prepared.name,
+        temp.identity,
+        std::io::Error::other(format!(
+            "the parent {} was replaced after it was opened, so the stage published under it is not where it was promised; it was removed again through the held descriptor",
+            prepared.parent.display()
+        )),
+    ))
 }
 
-/// The failure cleanup: quarantine whatever stands under the sibling's
-/// name, judge it against the created identity, and remove it only on a
+/// The failure cleanup: quarantine whatever stands under `name` in the
+/// held parent, judge it against `identity`, and remove it only on a
 /// match. Returns `error` annotated with what was left where.
-fn cleanup(parent: &File, temp: &Temp, error: std::io::Error) -> std::io::Error {
+fn cleanup(
+    parent: &File,
+    name: &std::ffi::OsStr,
+    identity: held::Identity,
+    error: std::io::Error,
+) -> std::io::Error {
     held::pause(PAUSE_BEFORE_CLEANUP_VAR, "stopped", "proceed");
     let base = held::proc_path(parent);
-    let (quarantined, current) = match held::quarantine(parent, &temp.name, QUARANTINE_PREFIX) {
+    let (quarantined, current) = match held::quarantine(parent, name, QUARANTINE_PREFIX) {
         Ok(moved) => moved,
         Err(quarantine) => {
             return std::io::Error::new(
                 error.kind(),
                 format!(
-                    "{error}; the sibling under {} could not be quarantined and was left in place: {quarantine}",
-                    temp.name.display()
+                    "{error}; the entry under {} could not be quarantined and was left in place: {quarantine}",
+                    name.display()
                 ),
             );
         }
     };
-    if current.file_type().is_symlink() || held::Identity::of(&current) != temp.identity {
+    if current.file_type().is_symlink() || held::Identity::of(&current) != identity {
         return std::io::Error::new(
             error.kind(),
             format!(
-                "{error}; the entry under the sibling's name {} was not the directory this run created, so it was moved to {} and left in place",
-                temp.name.display(),
+                "{error}; the entry under {} was not the directory this run created, so it was moved to {} and left in place",
+                name.display(),
                 quarantined.display()
             ),
         );
@@ -774,7 +827,7 @@ fn cleanup(parent: &File, temp: &Temp, error: std::io::Error) -> std::io::Error 
         Err(removal) => std::io::Error::new(
             error.kind(),
             format!(
-                "{error}; the stopped sibling was moved to {} and could not be removed: {removal}",
+                "{error}; the directory was moved to {} and could not be removed: {removal}",
                 quarantined.display()
             ),
         ),
