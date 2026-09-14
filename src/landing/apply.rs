@@ -54,6 +54,11 @@ pub enum Action {
     /// A recorded generated whole file or marked region is rewritten from
     /// the candidate, whatever its bytes were.
     Replaced,
+    /// A whole-file destination the receipt does not name already holds
+    /// the candidate's bytes: nothing is written, and the receipt records
+    /// it, because replacing identical bytes changes nothing and a run
+    /// stopped after creating it must be rerunnable.
+    Matched,
     /// A recorded seeded or state file stays as it is, its current digest
     /// entering the receipt.
     Preserved,
@@ -72,6 +77,7 @@ impl Action {
         match self {
             Self::Created => "created",
             Self::Replaced => "replaced",
+            Self::Matched => "matched",
             Self::Preserved => "preserved",
             Self::Drift => "drift",
             Self::Released => "released",
@@ -164,6 +170,11 @@ pub fn prepare(
 /// Decide every destination from the receipt and the disk, collecting
 /// every collision rather than stopping at the first.
 ///
+/// Every existing parent component of a candidate is walked relative to
+/// the held target directory with no link followed, so a linked or
+/// non-directory component is a collision here, before any write, and
+/// not a failure after the configuration landed.
+///
 /// # Errors
 ///
 /// A read failure other than absence.
@@ -172,6 +183,7 @@ pub fn decide(
     recorded: Option<&Manifest>,
     projection: &Projection,
 ) -> Result<(Vec<Decision>, Vec<Collision>), RkError> {
+    let root = held::open_dir(target.as_std_path())?;
     let mut decisions = Vec::new();
     let mut collisions: Vec<Collision> = projection
         .collisions
@@ -182,6 +194,13 @@ pub fn decide(
         })
         .collect();
     for candidate in &projection.candidates {
+        if let Some(reason) = parent_defect(&root, &candidate.destination) {
+            collisions.push(Collision {
+                path: candidate.destination.clone(),
+                reason,
+            });
+            continue;
+        }
         let record = recorded.and_then(|record| record.file(&candidate.destination));
         let path = target.join(&candidate.destination);
         let present = match std::fs::symlink_metadata(path.as_std_path()) {
@@ -204,12 +223,22 @@ pub fn decide(
             // the receipt names it or not: the bytes outside the markers
             // stay the target's, so nothing is taken from it.
             (Placement::Region { .. }, true, _) => Action::Replaced,
+            // An unrecorded whole file holding the candidate's bytes is
+            // attributed by its content: a run stopped after creating it
+            // leaves exactly this, and replacing identical bytes changes
+            // nothing. Differing bytes are the target's, and refuse.
             (Placement::Whole, true, None) => {
-                collisions.push(Collision {
-                    path: candidate.destination.clone(),
-                    reason: "exists, and no receipt attributes it to release-kit".to_owned(),
-                });
-                continue;
+                if std::fs::read(path.as_std_path())? == candidate.bytes {
+                    Action::Matched
+                } else {
+                    collisions.push(Collision {
+                        path: candidate.destination.clone(),
+                        reason:
+                            "exists with bytes differing from the candidate, and no receipt attributes it to release-kit"
+                                .to_owned(),
+                    });
+                    continue;
+                }
             }
             (Placement::Whole, true, Some(record)) => match (candidate.kind, record.kind) {
                 (Kind::Rendered, Kind::Rendered) => Action::Replaced,
@@ -260,6 +289,18 @@ pub fn decide(
     Ok((decisions, collisions))
 }
 
+/// Why a candidate's existing parent components cannot be written
+/// through, or `None` where every existing component is a directory
+/// reached without following a link.
+fn parent_defect(root: &File, destination: &str) -> Option<String> {
+    let parent = Path::new(destination).parent()?;
+    match held::hold_dir_existing(root, parent) {
+        Ok(_) => None,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => Some(format!("a parent component cannot be held: {error}")),
+    }
+}
+
 /// The one refusal for every collision, before any write.
 ///
 /// The verbs offer no force flag: an unattributed file becomes landable
@@ -280,7 +321,7 @@ pub fn refusal(target: &Utf8Path, collisions: &[Collision]) -> RkError {
             ),
         )
         .expected(
-            "every whole-file destination absent or named by the receipt, and every marked document offering its block one place",
+            "every whole-file destination absent, named by the receipt, or already holding the candidate's bytes, every parent component a directory reached through no link, and every marked document offering its block one place",
         )
         .action(format!(
             "rk stage --target {target} stages this binary's candidate for a byte comparison; the rk-setup skill carries the migration that brings each file to the candidate or records it, then re-run"
@@ -342,6 +383,11 @@ pub fn land(
     // The proof's pause: validation is over and the target is held, so a
     // link swapped in from here on meets the held directory, not a path.
     held::pause(PAUSE_VAR, "validated", "proceed");
+    // Every destination the landing does not write is read again through
+    // the held directory before the first write: a preserved or matched
+    // file must still stand, and an adopted value must still equal the
+    // candidate, or the landing refuses with the old receipt intact.
+    let unwritten = reverify(&root, prepared, origin)?;
     let mut writer = Writer {
         root: &root,
         completed: Vec::new(),
@@ -355,36 +401,15 @@ pub fn land(
     }
     let mut files = Vec::new();
     for candidate in &prepared.projection.candidates {
-        // An adoption verified every destination beforehand and writes
-        // none: the receipt digests what stands. A landing writes by its
-        // decision, and a candidate without one was a collision the
-        // refusal above already named.
-        let action = match origin {
-            Origin::Adopt => Action::Preserved,
-            Origin::Init | Origin::Upgrade => match prepared.decision(&candidate.destination) {
-                Some(decision) => decision.action,
-                None => continue,
-            },
-        };
-        let sha256 = match action {
-            Action::Preserved | Action::Drift => {
-                // What the destination holds now is what the receipt
-                // digests: the whole file, or the marked region alone.
-                let current = read_relative(&root, &candidate.destination)?.unwrap_or_default();
-                match candidate.placement {
-                    Placement::Whole => Digest::of(&current),
-                    Placement::Region { begin, end } => {
-                        let text = String::from_utf8_lossy(&current);
-                        super::extract_block(&text, begin, end)
-                            .map_or_else(|| Digest::of(b""), |block| Digest::of(block.as_bytes()))
-                    }
+        let sha256 = match unwritten.get(&candidate.destination) {
+            Some(digest) => digest.clone(),
+            None => match action_of(prepared, origin, &candidate.destination) {
+                Some(Action::Created | Action::Replaced) => {
+                    writer.write(&candidate.destination, &candidate.bytes)?;
+                    candidate_digest(candidate)
                 }
-            }
-            Action::Created | Action::Replaced => {
-                writer.write(&candidate.destination, &candidate.bytes)?;
-                candidate_digest(candidate)
-            }
-            Action::Released => continue,
+                _ => continue,
+            },
         };
         files.push(FileRecord {
             destination: candidate.destination.clone(),
@@ -403,6 +428,87 @@ pub fn land(
         config_written,
         receipt,
     })
+}
+
+/// What the landing does with one destination under `origin`: an
+/// adoption preserves everything it verified; a landing follows its
+/// decision, and a candidate without one was a collision the refusal
+/// already named.
+fn action_of(prepared: &Prepared, origin: Origin, destination: &str) -> Option<Action> {
+    match origin {
+        Origin::Adopt => Some(Action::Preserved),
+        Origin::Init | Origin::Upgrade => prepared.decision(destination).map(|d| d.action),
+    }
+}
+
+/// The recorded form of what a destination holds now, read through the
+/// held directory: the whole file, or the marked region alone; `None`
+/// where the file, or the region, is absent.
+fn current_form(root: &File, candidate: &Candidate) -> Result<Option<Vec<u8>>, RkError> {
+    let Some(current) = read_relative(root, &candidate.destination)? else {
+        return Ok(None);
+    };
+    Ok(match candidate.placement {
+        Placement::Whole => Some(current),
+        Placement::Region { begin, end } => {
+            let text = String::from_utf8_lossy(&current);
+            super::extract_block(&text, begin, end).map(|block| block.as_bytes().to_vec())
+        }
+    })
+}
+
+/// Read every destination the landing leaves unwritten again, through
+/// the held directory, and digest it for the receipt: a preserved,
+/// drifted, or matched file must still be present, and a matched or
+/// adopted rendered value must still equal the candidate.
+///
+/// # Errors
+///
+/// A `state-drift` refusal naming the destination that moved since the
+/// decision, with nothing written; and any read failure.
+fn reverify(
+    root: &File,
+    prepared: &Prepared,
+    origin: Origin,
+) -> Result<std::collections::BTreeMap<String, Digest>, RkError> {
+    let mut digests = std::collections::BTreeMap::new();
+    for candidate in &prepared.projection.candidates {
+        let action = action_of(prepared, origin, &candidate.destination);
+        let must_match = match (origin, action) {
+            (Origin::Adopt, _) => candidate.kind == Kind::Rendered,
+            (_, Some(Action::Matched)) => true,
+            (_, Some(Action::Preserved | Action::Drift)) => false,
+            _ => continue,
+        };
+        let Some(current) = current_form(root, candidate)? else {
+            return Err(moved(&candidate.destination, "is no longer present"));
+        };
+        let expected: &[u8] = candidate.region.as_deref().unwrap_or(&candidate.bytes);
+        if must_match && current != expected {
+            return Err(moved(
+                &candidate.destination,
+                "no longer holds the candidate's bytes",
+            ));
+        }
+        digests.insert(candidate.destination.clone(), Digest::of(&current));
+    }
+    Ok(digests)
+}
+
+/// The refusal for a destination that changed between the decision and
+/// the first write.
+fn moved(destination: &str, what: &str) -> RkError {
+    RkError::refusal(
+        Diagnostic::new(
+            Reason::StateDrift,
+            format!(
+                "{destination} {what} since it was validated, and nothing was written; the previous receipt stands"
+            ),
+        )
+        .expected("every destination the landing leaves as it stands to stand still until the receipt is written")
+        .action("re-run once the target is at rest")
+        .target_state("unchanged"),
+    )
 }
 
 /// The digest the receipt carries for a written candidate: the whole

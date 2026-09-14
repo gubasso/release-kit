@@ -23,7 +23,7 @@ use crate::landing::invariants::{self, InvariantFailure};
 use crate::landing::manifest::{self, Alignment, Manifest};
 use crate::landing::{self, Kind};
 use crate::output::Output;
-use crate::projection::{Candidate, Placement, Projection, ProjectionInput, TargetEvidence};
+use crate::projection::{Candidate, Projection, ProjectionInput, TargetEvidence};
 use crate::release::EmbeddedReleaseSource;
 use crate::{embedded, registry};
 
@@ -438,26 +438,20 @@ fn observe(args: &StatusArgs, manifest: &Manifest) -> Result<Observed, RkError> 
     Ok(observed)
 }
 
-/// The receipt-consistency step over the two mode-bearing regions.
+/// The receipt-consistency step over every rendered destination.
 ///
 /// Recorded digests alone cannot see a receipt edited only at its
-/// parameters, since every file still matches its own record, so the two
-/// region destinations that render a parameter are compared, as this
-/// projection renders them from the receipt's own parameters, against the
-/// digest the receipt stores for each. Called only where this binary
-/// wrote the receipt: an older landing's regions legitimately differ from
-/// this projection, which is the alignment line's story and the
-/// upgrade's job, not parameter drift. A destination already reported as
-/// rendered drift is the file's own story, not the receipt's, and is
-/// skipped too.
+/// parameters, since every file still matches its own record, so every
+/// rendered candidate, whole file or region, as this projection renders
+/// it from the receipt's own parameters, is compared against the digest
+/// the receipt stores for it. Called only where this binary wrote the
+/// receipt: an older landing's files legitimately differ from this
+/// projection, which is the alignment line's story and the upgrade's job,
+/// not parameter drift. A destination already reported as rendered drift
+/// is the file's own story, not the receipt's, and is skipped too.
 fn observe_parameter_drift(manifest: &Manifest, projection: &Projection, observed: &mut Observed) {
     for candidate in &projection.candidates {
-        let Placement::Region { .. } = candidate.placement else {
-            continue;
-        };
-        if ![landing::AGENTS_DESTINATION, landing::HOOKS_DESTINATION]
-            .contains(&candidate.destination.as_str())
-        {
+        if candidate.kind != Kind::Rendered {
             continue;
         }
         let Some(record) = manifest.file(&candidate.destination) else {

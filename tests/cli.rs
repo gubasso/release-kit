@@ -6397,9 +6397,11 @@ fn upgrade_takes_the_glossary_and_keeps_the_operators_terms() {
             file["baseline_sha256"] = digest.clone();
         }
     }
+    manifest["rk_version"] = serde_json::json!("0.1.0");
     write_manifest(target.path(), &manifest);
 
-    // Nobody edited the block, so this is the payload's story and not drift.
+    // Nobody edited the block, and the receipt names the older release
+    // that wrote it, so this is that release's story and not drift.
     let out = rk()
         .args(["status", "--json", "--target"])
         .arg(target.path())
@@ -6903,6 +6905,7 @@ fn status_prompts_on_what_an_upgrade_would_change() {
             file["baseline_sha256"] = digest.clone();
         }
     }
+    manifest["rk_version"] = serde_json::json!("0.1.0");
     // A destination this payload does not ship: an upgrade drops it from
     // the record, which is a change the prompt must count.
     manifest["files"]
@@ -6961,6 +6964,7 @@ fn status_check_does_not_fail_on_a_pending_upgrade() {
             file["baseline_sha256"] = digest.clone();
         }
     }
+    manifest["rk_version"] = serde_json::json!("0.1.0");
     write_manifest(target.path(), &manifest);
     // The landed seeded file still carries its sentinel, which is the one
     // violation here, so fill it before judging.
@@ -7162,7 +7166,12 @@ fn an_upgrade_replaces_a_recorded_generated_file_whose_bytes_differ() {
     std::fs::write(&agents, &block).expect("the block edit writes");
     let seeded = target.path().join("release-plz.toml");
     std::fs::write(&seeded, "semver_check = true\n").expect("the tune writes");
-    // An unattributed whole file: the receipt does not name it.
+    // An unattributed whole file: the receipt does not name it, and its
+    // bytes are the target's own, differing from the candidate.
+    let policy = target.path().join("SECURITY.md");
+    let mut ours = std::fs::read_to_string(&policy).expect("the policy reads");
+    ours.push_str("\nOur own commitment.\n");
+    std::fs::write(&policy, &ours).expect("the policy edit writes");
     let mut manifest = read_manifest(target.path());
     manifest["files"]
         .as_array_mut()
@@ -22307,7 +22316,7 @@ fn an_edited_rendered_file_is_a_blocked_conflict() {
 /// A seeded file the target tuned is never written; the planned record
 /// follows the target's bytes and keeps the baseline it tunes away from.
 #[test]
-#[ignore = "the schema 7 receipt carries no baseline the stored plan compared against; the clean-cut phase deletes the plan and this test"]
+#[ignore = "its subject is the receipt's per-file baseline digest, which schema 7 retired with the three-way comparison; the clean-cut phase deletes the stored plan and this test"]
 fn a_tuned_seeded_file_is_kept_and_its_baseline_moves() {
     let target = plan_target();
     land_rust(target.path()).success();
@@ -22834,14 +22843,18 @@ fn show_renders_a_stored_plan_and_refuses_a_pruned_one() {
 /// Apply refuses after the record changed, naming it, with the target
 /// byte-identical.
 #[test]
-#[ignore = "the schema 7 receipt carries no baseline the stored plan compared against; the clean-cut phase deletes the plan and this test"]
 fn apply_refuses_after_the_record_changes() {
     let home = tempfile::tempdir().expect("a scratch home exists");
     let target = landed_old_target();
     let (id, _) = plan_stored(
         home.path(),
         target.path(),
-        &["--decide", "partial-guidance=accept"],
+        &[
+            "--decide",
+            "partial-guidance=accept",
+            "--decide",
+            "partial-baseline=accept",
+        ],
     );
     let mut manifest = read_manifest(target.path());
     manifest["rk_version"] = serde_json::json!("0.1.1");
@@ -22862,14 +22875,18 @@ fn apply_refuses_after_the_record_changes() {
 
 /// Apply refuses after the configuration changed, naming it.
 #[test]
-#[ignore = "the schema 7 receipt carries no baseline the stored plan compared against; the clean-cut phase deletes the plan and this test"]
 fn apply_refuses_after_the_configuration_changes() {
     let home = tempfile::tempdir().expect("a scratch home exists");
     let target = landed_old_target();
     let (id, _) = plan_stored(
         home.path(),
         target.path(),
-        &["--decide", "partial-guidance=accept"],
+        &[
+            "--decide",
+            "partial-guidance=accept",
+            "--decide",
+            "partial-baseline=accept",
+        ],
     );
     let config = target.path().join(".release-kit/config.toml");
     let mut text = std::fs::read_to_string(&config).expect("reads");
@@ -22890,14 +22907,18 @@ fn apply_refuses_after_the_configuration_changes() {
 
 /// Apply refuses after a destination changed, naming that destination.
 #[test]
-#[ignore = "the schema 7 receipt carries no baseline the stored plan compared against; the clean-cut phase deletes the plan and this test"]
 fn apply_refuses_after_a_destination_changes_naming_it() {
     let home = tempfile::tempdir().expect("a scratch home exists");
     let target = landed_old_target();
     let (id, _) = plan_stored(
         home.path(),
         target.path(),
-        &["--decide", "partial-guidance=accept"],
+        &[
+            "--decide",
+            "partial-guidance=accept",
+            "--decide",
+            "partial-baseline=accept",
+        ],
     );
     let policy = target.path().join("SECURITY.md");
     std::fs::write(&policy, b"# Security policy\n\nEdited after the plan.\n").expect("writes");
@@ -22918,14 +22939,18 @@ fn apply_refuses_after_a_destination_changes_naming_it() {
 /// than the one it is recomputed against: the store is recomputed too,
 /// so a plan edited after approval reads as moved.
 #[test]
-#[ignore = "the schema 7 receipt carries no baseline the stored plan compared against; the clean-cut phase deletes the plan and this test"]
 fn apply_refuses_after_the_bundle_changes() {
     let home = tempfile::tempdir().expect("a scratch home exists");
     let target = landed_old_target();
     let (id, _) = plan_stored(
         home.path(),
         target.path(),
-        &["--decide", "partial-guidance=accept"],
+        &[
+            "--decide",
+            "partial-guidance=accept",
+            "--decide",
+            "partial-baseline=accept",
+        ],
     );
     let path = stored_dir(home.path(), &id).join("plan.json");
     let mut plan: serde_json::Value =
@@ -23129,7 +23154,6 @@ fn an_interrupted_apply_leaves_each_destination_whole_and_journals_it() {
 /// The record is the last operation in every plan that carries one, and
 /// the last rename an apply makes.
 #[test]
-#[ignore = "the schema 7 receipt carries no baseline the stored plan compared against; the clean-cut phase deletes the plan and this test"]
 fn the_record_is_written_last() {
     let home = tempfile::tempdir().expect("a scratch home exists");
     for target in [plan_target(), landed_old_target()] {
@@ -23145,6 +23169,8 @@ fn the_record_is_written_last() {
                 "trunk",
                 "--decide",
                 "partial-guidance=accept",
+                "--decide",
+                "partial-baseline=accept",
             ],
         );
         let ops = operations_of(&plan);
@@ -23169,14 +23195,18 @@ fn the_record_is_written_last() {
 /// An apply lands in the runs journal the way a setup step does, with
 /// the plan id and its fingerprint in the events.
 #[test]
-#[ignore = "the schema 7 receipt carries no baseline the stored plan compared against; the clean-cut phase deletes the plan and this test"]
 fn an_apply_lands_in_the_runs_journal() {
     let home = tempfile::tempdir().expect("a scratch home exists");
     let target = landed_old_target();
     let (id, plan) = plan_stored(
         home.path(),
         target.path(),
-        &["--decide", "partial-guidance=accept"],
+        &[
+            "--decide",
+            "partial-guidance=accept",
+            "--decide",
+            "partial-baseline=accept",
+        ],
     );
     let applied = apply_stored(home.path(), &id)
         .success()
@@ -23217,7 +23247,6 @@ fn an_apply_lands_in_the_runs_journal() {
 
 /// Every apply refusal carries a reason from the closed vocabulary.
 #[test]
-#[ignore = "the schema 7 receipt carries no baseline the stored plan compared against; the clean-cut phase deletes the plan and this test"]
 fn every_apply_refusal_names_a_reason_from_the_closed_set() {
     let wire: Vec<&str> = release_kit::diagnostic::REASONS
         .iter()
@@ -23239,7 +23268,12 @@ fn every_apply_refusal_names_a_reason_from_the_closed_set() {
     let (id, _) = plan_stored(
         home.path(),
         target.path(),
-        &["--decide", "partial-guidance=accept"],
+        &[
+            "--decide",
+            "partial-guidance=accept",
+            "--decide",
+            "partial-baseline=accept",
+        ],
     );
     std::fs::write(target.path().join("SECURITY.md"), b"moved\n").expect("writes");
     reasons.push(
@@ -23269,7 +23303,6 @@ fn every_apply_refusal_names_a_reason_from_the_closed_set() {
 /// stopped by I/O, and 1 for a postcondition that failed after the
 /// writes landed, which `exit_code_matrix` holds at the unit level.
 #[test]
-#[ignore = "the schema 7 receipt carries no baseline the stored plan compared against; the clean-cut phase deletes the plan and this test"]
 fn the_apply_exit_codes_match_the_matrix() {
     let home = tempfile::tempdir().expect("a scratch home exists");
     let target = plan_target();
@@ -23280,7 +23313,12 @@ fn the_apply_exit_codes_match_the_matrix() {
     let (id, _) = plan_stored(
         home.path(),
         target.path(),
-        &["--decide", "partial-guidance=accept"],
+        &[
+            "--decide",
+            "partial-guidance=accept",
+            "--decide",
+            "partial-baseline=accept",
+        ],
     );
     rk_home(home.path())
         .env("RK_APPLY_INTERRUPT_AT", ".release-kit/manifest.json")
@@ -23405,14 +23443,18 @@ fn the_record_is_the_last_operation() {
 /// so apply proves the bytes still digest to that name before it stages
 /// anything. A corrupted blob costs the target nothing.
 #[test]
-#[ignore = "the schema 7 receipt carries no baseline the stored plan compared against; the clean-cut phase deletes the plan and this test"]
 fn apply_refuses_a_corrupted_blob_with_the_target_unchanged() {
     let home = tempfile::tempdir().expect("a scratch home exists");
     let target = landed_old_target();
     let (id, plan) = plan_stored(
         home.path(),
         target.path(),
-        &["--decide", "partial-guidance=accept"],
+        &[
+            "--decide",
+            "partial-guidance=accept",
+            "--decide",
+            "partial-baseline=accept",
+        ],
     );
     let before = tree_digests(target.path());
     // The bytes a write operation names, not just any blob the store
@@ -23452,14 +23494,18 @@ fn apply_refuses_a_corrupted_blob_with_the_target_unchanged() {
 /// the freshly derived readiness sees it, and apply proceeds on ready
 /// alone.
 #[test]
-#[ignore = "the schema 7 receipt carries no baseline the stored plan compared against; the clean-cut phase deletes the plan and this test"]
 fn apply_refuses_when_the_world_needs_a_new_decision() {
     let home = tempfile::tempdir().expect("a scratch home exists");
     let target = landed_old_target();
     let (id, plan) = plan_stored(
         home.path(),
         target.path(),
-        &["--decide", "partial-guidance=accept"],
+        &[
+            "--decide",
+            "partial-guidance=accept",
+            "--decide",
+            "partial-baseline=accept",
+        ],
     );
     assert_eq!(plan["readiness"], "ready", "the stored plan is ready");
 
@@ -23474,7 +23520,15 @@ fn apply_refuses_when_the_world_needs_a_new_decision() {
     .expect("the manager file writes");
     let before = tree_digests(target.path());
 
-    let fresh = plan_json(target.path(), &["--decide", "partial-guidance=accept"]);
+    let fresh = plan_json(
+        target.path(),
+        &[
+            "--decide",
+            "partial-guidance=accept",
+            "--decide",
+            "partial-baseline=accept",
+        ],
+    );
     assert_eq!(
         fresh["input_fingerprint"], plan["input_fingerprint"],
         "the fingerprint is blind to it"
@@ -23686,7 +23740,6 @@ fn every_guidance_file_names_its_destinations() {
 /// alone: a landed target far behind plans with a partial coverage and
 /// the steps the bundle has, and the network is never touched.
 #[test]
-#[ignore = "the schema 7 receipt carries no baseline the stored plan compared against; the clean-cut phase deletes the plan and this test"]
 fn the_changelog_interval_is_derived_offline() {
     let fixture = RegistryFixture::new();
     std::fs::write(fixture.mock.path().join("curl_fail"), "").expect("the network is gone");
@@ -23744,12 +23797,17 @@ fn the_changelog_interval_is_derived_offline() {
             .any(|d| d["id"] == "partial-guidance"),
         "{plan}"
     );
-    let out = run(&["--decide", "partial-guidance=accept"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
+    let out = run(&[
+        "--decide",
+        "partial-guidance=accept",
+        "--decide",
+        "partial-baseline=accept",
+    ])
+    .assert()
+    .success()
+    .get_output()
+    .stdout
+    .clone();
     let accepted: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
     assert_eq!(accepted["readiness"], "ready", "{accepted}");
     assert_ne!(
@@ -27271,48 +27329,66 @@ fn a_reported_rename_failure_is_observed_again_before_it_is_named() {
     assert!(!fresh.path().join("SECURITY.md").exists());
 }
 
+/// A landing verb started and paused after its validation, through the
+/// `RK_APPLY_PAUSE_DIR` seam: the test changes the target, then lets it
+/// proceed.
+struct PausedLanding {
+    child: std::process::Child,
+    pause: tempfile::TempDir,
+}
+
+impl PausedLanding {
+    /// Start `args` against `target` in JSON mode and wait until the
+    /// landing has validated and holds the target.
+    fn start(target: &Path, args: &[&str]) -> Self {
+        let pause = tempfile::tempdir().expect("a pause dir exists");
+        let mut child = std::process::Command::new(assert_cmd::cargo::cargo_bin("rk"));
+        for var in GIT_HOOK_VARS {
+            child.env_remove(var);
+        }
+        let child = child
+            .env("XDG_STATE_HOME", scratch_state_root())
+            .env("RK_APPLY_PAUSE_DIR", pause.path())
+            .args(args)
+            .args(["--json", "--target"])
+            .arg(target)
+            .arg("--apply")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("the landing starts");
+        let validated = pause.path().join("validated");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while !validated.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(validated.exists(), "the landing paused after validation");
+        Self { child, pause }
+    }
+
+    /// Let the landing proceed and return its exit code and diagnostic.
+    fn proceed(self) -> (Option<i32>, serde_json::Value) {
+        std::fs::write(self.pause.path().join("proceed"), b"").expect("the landing proceeds");
+        let output = self.child.wait_with_output().expect("the landing ends");
+        let diagnostic = serde_json::from_slice(&output.stderr).unwrap_or_default();
+        (output.status.code(), diagnostic)
+    }
+}
+
+const INIT_RUST: [&str; 6] = ["init", "--tech", "rust", "--forge", "github", "--repo"];
+
 /// SATISFIES landing:a-partial-landing-is-visible-and-rerunnable
 #[test]
 fn a_component_swapped_to_a_symlink_after_validation_cannot_redirect_a_write() {
     let target = plan_target();
     std::fs::create_dir(target.path().join(".github")).expect("the component exists");
     let outside = tempfile::tempdir().expect("a directory outside the target exists");
-    let pause = tempfile::tempdir().expect("a pause dir exists");
-
-    let mut child = std::process::Command::new(assert_cmd::cargo::cargo_bin("rk"));
-    for var in GIT_HOOK_VARS {
-        child.env_remove(var);
-    }
-    let child = child
-        .env("XDG_STATE_HOME", scratch_state_root())
-        .env("RK_APPLY_PAUSE_DIR", pause.path())
-        .args(["init", "--tech", "rust", "--forge", "github"])
-        .args(["--repo", "acme/widget", "--json", "--target"])
-        .arg(target.path())
-        .arg("--apply")
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .expect("the landing starts");
-    let validated = pause.path().join("validated");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-    while !validated.exists() && std::time::Instant::now() < deadline {
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    assert!(validated.exists(), "the landing paused after validation");
+    let paused = PausedLanding::start(target.path(), &[&INIT_RUST[..], &["acme/widget"]].concat());
     // Validation is over: swap the component for a link outside.
     std::fs::remove_dir(target.path().join(".github")).expect("the component removes");
     std::os::unix::fs::symlink(outside.path(), target.path().join(".github")).expect("the link");
-    std::fs::write(pause.path().join("proceed"), b"").expect("the landing proceeds");
-    let output = child.wait_with_output().expect("the landing ends");
-    assert_eq!(
-        output.status.code(),
-        Some(74),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let diagnostic: serde_json::Value =
-        serde_json::from_slice(&output.stderr).expect("a JSON diagnostic on stderr");
+    let (code, diagnostic) = paused.proceed();
+    assert_eq!(code, Some(74), "{diagnostic}");
     let message = diagnostic["message"].as_str().expect("a message");
     assert!(message.contains("link"), "{message}");
     assert!(
@@ -27346,6 +27422,9 @@ fn a_missing_receipt_routes_init_adopt_and_upgrade_by_classification() {
     let target = plan_target();
     land_rust(target.path()).success();
     std::fs::remove_dir_all(target.path().join(".release-kit")).expect("the receipt removes");
+    // A seeded file the target tuned: with no receipt and bytes differing
+    // from the candidate, nothing attributes it, so the init refuses it.
+    std::fs::write(target.path().join("release-plz.toml"), "tuned = true\n").expect("writes");
     let before = tree_digests(target.path());
 
     let refused = curl
@@ -27379,15 +27458,11 @@ fn a_missing_receipt_routes_init_adopt_and_upgrade_by_classification() {
         .code(73);
     let diagnostic = refusal_of(&refused);
     let message = diagnostic["message"].as_str().expect("a message");
-    for whole in [
-        ".github/workflows/pr-title.yml",
-        ".github/workflows/release-plz.yml",
-        "SECURITY.md",
-        "dist-workspace.toml",
-        "release-plz.toml",
-    ] {
-        assert!(message.contains(whole), "{whole} missing from {message}");
-    }
+    assert!(message.contains("release-plz.toml"), "{message}");
+    assert!(
+        !message.contains("SECURITY.md"),
+        "a file already holding the candidate's bytes is attributed by content: {message}"
+    );
     let action = diagnostic["action"].as_str().expect("an action");
     assert!(
         action.contains("rk stage") && action.contains("rk-setup"),
@@ -27504,4 +27579,315 @@ fn stage_and_landing_need_no_release_resolution_network_access() {
         .assert()
         .success();
     assert_eq!(curl.calls(), 0, "a landing verb reached for the network");
+}
+
+/// SATISFIES landing:status-judges-only-under-check
+#[test]
+fn status_check_judges_every_rendered_file_against_the_receipts_parameters() {
+    for (key, value, destination) in [
+        ("repo", serde_json::json!("acme/other"), "SECURITY.md"),
+        (
+            "style",
+            serde_json::json!("lines"),
+            ".github/workflows/release-plz.yml",
+        ),
+        (
+            "trunk",
+            serde_json::json!("main"),
+            ".github/workflows/release-plz.yml",
+        ),
+        (
+            "line_prefix",
+            serde_json::json!("maint/"),
+            ".github/workflows/release-plz.yml",
+        ),
+        (
+            "security_response",
+            serde_json::json!("14 days"),
+            "SECURITY.md",
+        ),
+    ] {
+        let target = plan_target();
+        land_rust(target.path()).success();
+        // The seeded sentinel and the dist profile are judged elsewhere:
+        // clear them so the one violation here is the receipt's.
+        let seeded = target.path().join("release-plz.toml");
+        let text = std::fs::read_to_string(&seeded).expect("reads");
+        let text: String = text
+            .lines()
+            .filter(|line| !line.contains("TODO(release-kit)"))
+            .flat_map(|line| [line, "\n"])
+            .collect();
+        std::fs::write(&seeded, text).expect("writes");
+        std::fs::write(
+            target.path().join("Cargo.toml"),
+            "[package]\nname = \"widget\"\nversion = \"0.1.0\"\n\n[profile.dist]\ninherits = \"release\"\n",
+        )
+        .expect("writes");
+        rk().args(["status", "--check", "--target"])
+            .arg(target.path())
+            .assert()
+            .success();
+
+        // The receipt's parameter moves; every file stays as landed.
+        let mut manifest = read_manifest(target.path());
+        manifest["parameters"][key] = value;
+        write_manifest(target.path(), &manifest);
+        let out = rk()
+            .args(["status", "--check", "--json", "--target"])
+            .arg(target.path())
+            .assert()
+            .code(1)
+            .get_output()
+            .stdout
+            .clone();
+        let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+        let violations = report["violations"].as_array().expect("violations");
+        assert!(
+            violations
+                .iter()
+                .any(|line| line.as_str().is_some_and(
+                    |line| line.starts_with("parameter drift:") && line.contains(destination)
+                )),
+            "{key}: {report}"
+        );
+        assert_eq!(
+            report["config"]["state"], "pending",
+            "{key}: the committed configuration stays informational: {report}"
+        );
+    }
+}
+
+/// SATISFIES landing:a-partial-landing-is-visible-and-rerunnable
+#[test]
+fn the_lock_is_taken_before_the_receipt_is_read() {
+    let home = tempfile::tempdir().expect("a scratch home exists");
+    let target = plan_target();
+    land_rust(target.path()).success();
+    // A receipt no verb can read: the refusal a read would give is
+    // `unsupported-schema`, so a `target-busy` refusal proves the lock
+    // came first.
+    let mut manifest = read_manifest(target.path());
+    manifest["schema_version"] = serde_json::json!(999);
+    write_manifest(target.path(), &manifest);
+    let (_, holder) = hold_target_lock(home.path(), target.path());
+    for verb in [
+        vec!["upgrade"],
+        vec![
+            "init",
+            "--tech",
+            "rust",
+            "--forge",
+            "github",
+            "--repo",
+            "acme/widget",
+        ],
+        vec![
+            "adopt",
+            "--tech",
+            "rust",
+            "--forge",
+            "github",
+            "--repo",
+            "acme/widget",
+            "--style",
+            "trunk",
+        ],
+    ] {
+        let refused = rk_home(home.path())
+            .args(&verb)
+            .args(["--apply", "--json", "--target"])
+            .arg(target.path())
+            .assert()
+            .code(73);
+        assert_eq!(refusal_of(&refused)["reason"], "target-busy", "{verb:?}");
+    }
+    // A preview holds nothing and reads the receipt.
+    let refused = rk_home(home.path())
+        .args(["upgrade", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .code(73);
+    assert_eq!(refusal_of(&refused)["reason"], "unsupported-schema");
+    drop(holder);
+}
+
+/// SATISFIES landing:ownership-is-elementary
+#[test]
+fn a_linked_parent_component_is_a_collision_before_the_first_write() {
+    let target = plan_target();
+    let outside = tempfile::tempdir().expect("a directory outside the target exists");
+    std::os::unix::fs::symlink(outside.path(), target.path().join(".github")).expect("the link");
+    let before = tree_digests(target.path());
+    let refused = rk()
+        .args(INIT_RUST)
+        .args(["acme/widget", "--json", "--target"])
+        .arg(target.path())
+        .arg("--apply")
+        .assert()
+        .code(73);
+    let diagnostic = refusal_of(&refused);
+    let message = diagnostic["message"].as_str().expect("a message");
+    assert!(
+        message.contains(".github/workflows/pr-title.yml"),
+        "{message}"
+    );
+    assert!(message.contains("link"), "{message}");
+    assert_eq!(diagnostic["target_state"], "unchanged");
+    assert_eq!(tree_digests(target.path()), before, "nothing was written");
+    assert!(!target.path().join(".release-kit").exists());
+    assert_eq!(std::fs::read_dir(outside.path()).expect("reads").count(), 0);
+}
+
+/// SATISFIES landing:a-partial-landing-is-visible-and-rerunnable
+#[test]
+fn a_fresh_init_interrupted_after_creating_a_file_reruns_to_completion() {
+    let target = plan_target();
+    rk().env("RK_APPLY_INTERRUPT_AT", ".github/workflows/release-plz.yml")
+        .args(INIT_RUST)
+        .args(["acme/widget", "--target"])
+        .arg(target.path())
+        .arg("--apply")
+        .assert()
+        .code(74);
+    assert!(
+        target
+            .path()
+            .join(".github/workflows/pr-title.yml")
+            .is_file()
+    );
+    assert!(!target.path().join(".release-kit/manifest.json").exists());
+    land_rust(target.path()).success().stdout(
+        predicate::str::contains("matched .github/workflows/pr-title.yml").and(
+            predicate::str::contains("created .github/workflows/release-plz.yml"),
+        ),
+    );
+    let receipt = read_manifest(target.path());
+    let title = std::fs::read(target.path().join(".github/workflows/pr-title.yml")).expect("reads");
+    assert_eq!(
+        manifest_file(&receipt, ".github/workflows/pr-title.yml")["sha256"],
+        Digest::of(&title).to_string()
+    );
+    let out = rk()
+        .args(["status", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["drift"]["rendered"], 0, "{report}");
+    assert_eq!(report["pending"], 0, "{report}");
+}
+
+/// SATISFIES landing:a-partial-landing-is-visible-and-rerunnable
+#[test]
+fn an_upgrade_introducing_a_new_whole_file_interrupted_after_creating_it_reruns() {
+    let target = plan_target();
+    land_rust(target.path()).success();
+    // Stand in for an older release that shipped no policy: the file is
+    // gone and the receipt never named it.
+    std::fs::remove_file(target.path().join("SECURITY.md")).expect("removes");
+    let mut manifest = read_manifest(target.path());
+    manifest["rk_version"] = serde_json::json!("0.1.0");
+    manifest["files"]
+        .as_array_mut()
+        .expect("files")
+        .retain(|file| file["destination"] != "SECURITY.md");
+    write_manifest(target.path(), &manifest);
+    let receipt_before =
+        std::fs::read(target.path().join(".release-kit/manifest.json")).expect("reads");
+
+    rk().env("RK_APPLY_INTERRUPT_AT", ".release-kit/manifest.json")
+        .args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .code(74)
+        .stderr(predicate::str::contains("SECURITY.md"));
+    assert!(
+        target.path().join("SECURITY.md").is_file(),
+        "the new file was created"
+    );
+    assert_eq!(
+        std::fs::read(target.path().join(".release-kit/manifest.json")).expect("reads"),
+        receipt_before,
+        "the previous receipt stands"
+    );
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("matched SECURITY.md"));
+    let receipt = read_manifest(target.path());
+    assert_eq!(receipt["rk_version"], env!("CARGO_PKG_VERSION"));
+    let policy = std::fs::read(target.path().join("SECURITY.md")).expect("reads");
+    assert_eq!(
+        manifest_file(&receipt, "SECURITY.md")["sha256"],
+        Digest::of(&policy).to_string()
+    );
+}
+
+/// SATISFIES landing:a-seeded-file-is-never-rewritten
+#[test]
+fn a_seeded_file_deleted_after_validation_refuses_with_the_old_receipt_intact() {
+    let target = plan_target();
+    land_rust(target.path()).success();
+    let mut manifest = read_manifest(target.path());
+    manifest["rk_version"] = serde_json::json!("0.1.0");
+    write_manifest(target.path(), &manifest);
+    let before: Vec<(String, String)> = tree_digests(target.path())
+        .into_iter()
+        .filter(|(path, _)| path != "release-plz.toml")
+        .collect();
+    let paused = PausedLanding::start(target.path(), &["upgrade"]);
+    std::fs::remove_file(target.path().join("release-plz.toml")).expect("the seeded file goes");
+    let (code, diagnostic) = paused.proceed();
+    assert_eq!(code, Some(73), "{diagnostic}");
+    assert_eq!(diagnostic["reason"], "state-drift", "{diagnostic}");
+    assert_eq!(diagnostic["target_state"], "unchanged", "{diagnostic}");
+    let message = diagnostic["message"].as_str().expect("a message");
+    assert!(message.contains("release-plz.toml"), "{message}");
+    assert_eq!(
+        tree_digests(target.path()),
+        before,
+        "nothing was written, the receipt included"
+    );
+}
+
+/// SATISFIES landing:an-adoption-writes-the-record-and-nothing-else
+#[test]
+fn a_rendered_file_edited_after_adopt_verification_refuses() {
+    let target = plan_target();
+    land_rust(target.path()).success();
+    std::fs::remove_dir_all(target.path().join(".release-kit")).expect("the receipt removes");
+    let paused = PausedLanding::start(
+        target.path(),
+        &[
+            "adopt",
+            "--tech",
+            "rust",
+            "--forge",
+            "github",
+            "--repo",
+            "acme/widget",
+            "--style",
+            "trunk",
+            "--workflow",
+            "worktree",
+        ],
+    );
+    let policy = target.path().join("SECURITY.md");
+    let mut edited = std::fs::read_to_string(&policy).expect("reads");
+    edited.push_str("\nEdited after verification.\n");
+    std::fs::write(&policy, &edited).expect("writes");
+    let (code, diagnostic) = paused.proceed();
+    assert_eq!(code, Some(73), "{diagnostic}");
+    let message = diagnostic["message"].as_str().expect("a message");
+    assert!(message.contains("SECURITY.md"), "{message}");
+    assert!(
+        !target.path().join(".release-kit").exists(),
+        "no receipt was blessed"
+    );
+    assert_eq!(std::fs::read_to_string(&policy).expect("reads"), edited);
 }

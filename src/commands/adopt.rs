@@ -88,6 +88,13 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
             .expected("an existing repository to adopt"),
         ));
     }
+    // An apply takes the target before it reads anything of it, the
+    // receipt and the configuration included, so the bytes verified are
+    // the bytes the receipt digests. A preview holds nothing.
+    let lock = args
+        .apply
+        .then(|| lock::acquire(&args.target))
+        .transpose()?;
     if landing::manifest::load(&args.target)?.is_some() {
         return Err(RkError::refusal(
             Diagnostic::new(
@@ -127,12 +134,6 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
         .style()
         .ok_or_else(|| RkError::Usage("landing style is unresolved".into()))?;
 
-    // The lock is taken before the verification under an apply, so the
-    // bytes verified are the bytes the receipt digests.
-    let lock = args
-        .apply
-        .then(|| lock::acquire(&args.target))
-        .transpose()?;
     let mut prepared = apply::prepare(&args.target, None, &params, config.as_ref())?;
     let files = verify(args, workflow, &prepared)?;
     // Every destination verified, so what the decision pass read as an

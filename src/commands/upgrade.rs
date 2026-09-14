@@ -37,8 +37,8 @@ struct FileEntry {
     /// The kind this projection declares for it, or the recorded kind of
     /// a released destination.
     kind: &'static str,
-    /// `created`, `replaced`, `preserved`, `drift`, `released`, or
-    /// `collision` in a preview.
+    /// `created`, `replaced`, `matched`, `preserved`, `drift`, `released`,
+    /// or `collision` in a preview.
     action: &'static str,
 }
 
@@ -88,6 +88,12 @@ struct Report {
 /// and [`RkError::Io`] on filesystem failure.
 pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
     let out = Output::new(args.json);
+    // An apply takes the target before it reads anything of it, the
+    // receipt and the configuration included. A preview holds nothing.
+    let lock = args
+        .apply
+        .then(|| lock::acquire(&args.target))
+        .transpose()?;
     let recorded = load_upgradable(&args.target)?;
     let existing = crate::config::load(args.target.as_std_path())?;
     let params = resolve_params(args, &recorded, existing.as_ref())?;
@@ -95,8 +101,7 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
         .style()
         .ok_or_else(|| RkError::Usage("landing style is unresolved".into()))?;
 
-    let (prepared, landed) = if args.apply {
-        let lock = lock::acquire(&args.target)?;
+    let (prepared, landed) = if let Some(lock) = lock {
         let prepared = apply::prepare(&args.target, Some(&recorded), &params, existing.as_ref())?;
         let landed = apply::land(
             &args.target,
@@ -105,6 +110,7 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
             apply::Origin::Upgrade,
             &lock,
         )?;
+        drop(lock);
         (prepared, Some(landed))
     } else {
         (

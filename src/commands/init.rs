@@ -34,8 +34,8 @@ struct FileEntry {
     path: String,
     /// The declared ownership kind.
     kind: &'static str,
-    /// `created`, `replaced`, `preserved`, `drift`, `released`, or
-    /// `collision` in a preview.
+    /// `created`, `replaced`, `matched`, `preserved`, `drift`, `released`,
+    /// or `collision` in a preview.
     action: &'static str,
 }
 
@@ -126,6 +126,13 @@ pub fn run(args: &InitArgs) -> Result<(), RkError> {
             .target_state("unchanged"),
         ));
     }
+    // An apply takes the target before it reads anything of it, the
+    // receipt and the configuration included, so the world the decisions
+    // describe is the world the writer writes. A preview holds nothing.
+    let lock = args
+        .apply
+        .then(|| lock::acquire(&args.target))
+        .transpose()?;
     let config = crate::config::load(args.target.as_std_path())?;
     let params = landing::Params::resolve(
         &EmbeddedReleaseSource,
@@ -149,11 +156,8 @@ pub fn run(args: &InitArgs) -> Result<(), RkError> {
     let style = params
         .style()
         .ok_or_else(|| RkError::Usage("landing style is unresolved".into()))?;
-    if args.apply {
+    if let Some(lock) = lock {
         refuse_a_recorded_target(&args.target)?;
-        // The target is taken before the evidence is gathered, so the
-        // world the decisions describe is the world the writer writes.
-        let lock = lock::acquire(&args.target)?;
         let prepared = apply::prepare(&args.target, None, &params, config.as_ref())?;
         let landed = apply::land(&args.target, None, &prepared, apply::Origin::Init, &lock)?;
         drop(lock);
@@ -369,6 +373,10 @@ pub(crate) fn describe(decision: &apply::Decision) -> String {
         ),
         Action::Released => format!(
             "released {} (no longer produced; target-owned from this landing)",
+            decision.destination
+        ),
+        Action::Matched => format!(
+            "matched {} (already holds the candidate's bytes)",
             decision.destination
         ),
         Action::Created | Action::Replaced => {
