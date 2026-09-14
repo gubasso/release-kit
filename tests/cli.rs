@@ -117,6 +117,132 @@ fn utf8(path: &Path) -> Utf8PathBuf {
     Utf8PathBuf::from_path_buf(path.to_path_buf()).expect("the scratch path is UTF-8")
 }
 
+/// The landing parameters of one fixture combination, built from a record
+/// the way a comparison rebuilds them, so no target is needed.
+fn projection_params(
+    tech: &str,
+    forge: &str,
+    workflow: release_kit::landing::Workflow,
+    style: release_kit::landing::Style,
+    nix: bool,
+) -> release_kit::landing::Params {
+    use release_kit::landing::manifest::{Manifest, Parameters, SCHEMA_VERSION};
+    release_kit::landing::Params::from_record(&Manifest {
+        schema_version: SCHEMA_VERSION,
+        rk_version: "0.0.0".to_owned(),
+        payload_sha256: release_kit::digest::Digest::of(b""),
+        origin: "init".to_owned(),
+        tech: tech.to_owned(),
+        forge: forge.to_owned(),
+        landed_at: "2026-08-29T00:00:00Z".to_owned(),
+        parameters: Parameters {
+            repo: "acme/widget".to_owned(),
+            workflow,
+            style: Some(style),
+            nix,
+            trunk: release_kit::config::TRUNK_DEFAULT.to_owned(),
+            line_prefix: release_kit::config::LINE_PREFIX_DEFAULT.to_owned(),
+            security_contact: String::new(),
+            security_response: release_kit::config::RESPONSE_DEFAULT.to_owned(),
+        },
+        files: Vec::new(),
+        pins: std::collections::BTreeMap::new(),
+    })
+}
+
+/// The Nix evidence a fixture combination runs under, on both sides of
+/// the comparison: the pure evidence for the new projection and the
+/// scratch target the seam path's withhold judgment reads.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NixShape {
+    /// A supported single crate with no flake of its own: nothing withheld.
+    Supported,
+    /// No `Cargo.toml` at all: the whole capability withheld.
+    NoCrate,
+    /// A supported crate beside the target's own `flake.nix`: the pair
+    /// withheld.
+    OwnFlake,
+}
+
+impl NixShape {
+    /// The `nix` column of the fixture line.
+    const fn column(self) -> &'static str {
+        match self {
+            Self::Supported => "true",
+            Self::NoCrate => "withheld-shape",
+            Self::OwnFlake => "withheld-flake",
+        }
+    }
+
+    fn evidence(self) -> release_kit::projection::TargetEvidence {
+        use release_kit::projection::{CrateShape, TargetEvidence};
+        let supported = CrateShape {
+            cargo_toml: Some(FIXTURE_CARGO_TOML.to_owned()),
+            cargo_lock: true,
+            main_rs: true,
+        };
+        match self {
+            Self::Supported => TargetEvidence {
+                crate_shape: supported,
+                ..TargetEvidence::default()
+            },
+            Self::NoCrate => TargetEvidence::default(),
+            Self::OwnFlake => TargetEvidence {
+                crate_shape: supported,
+                flake_nix_present: true,
+                ..TargetEvidence::default()
+            },
+        }
+    }
+
+    /// A scratch target carrying the same facts on disk.
+    fn target(self) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("a scratch target exists");
+        if self != Self::NoCrate {
+            std::fs::write(dir.path().join("Cargo.toml"), FIXTURE_CARGO_TOML).expect("writes");
+            std::fs::write(dir.path().join("Cargo.lock"), "version = 4\n").expect("writes");
+            std::fs::create_dir_all(dir.path().join("src")).expect("creates");
+            std::fs::write(dir.path().join("src/main.rs"), "fn main() {}\n").expect("writes");
+        }
+        if self == Self::OwnFlake {
+            std::fs::write(dir.path().join("flake.nix"), "{ }\n").expect("writes");
+        }
+        dir
+    }
+}
+
+/// The crate manifest every fixture combination's Nix evidence reads.
+const FIXTURE_CARGO_TOML: &str = "[package]\nname = \"widget\"\nversion = \"0.1.0\"\n";
+
+/// Every fixture combination the projection digests cover: each shipped
+/// pair crossed with both workflows, both styles, and the Nix answers,
+/// `nix = true` under each evidence shape.
+fn projection_fixture_combinations() -> Vec<(
+    String,
+    String,
+    release_kit::landing::Workflow,
+    release_kit::landing::Style,
+    Option<NixShape>,
+)> {
+    use release_kit::landing::{Style, Workflow};
+    let mut out = Vec::new();
+    for (tech, forge) in release_kit::projection::supported_pairs() {
+        for workflow in [Workflow::Worktree, Workflow::Branches] {
+            for style in [Style::Trunk, Style::Lines] {
+                for nix in [
+                    None,
+                    Some(NixShape::Supported),
+                    Some(NixShape::NoCrate),
+                    Some(NixShape::OwnFlake),
+                ] {
+                    out.push((tech.clone(), forge.clone(), workflow, style, nix));
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Land the rust payload into `target` under the standard test parameters
 /// and return the assertion to judge.
 fn land_rust(target: &Path) -> assert_cmd::assert::Assert {
@@ -24418,4 +24544,156 @@ fn a_fresh_rust_landing_advertises_only_x86_64_linux() {
         !flake_job.contains("matrix"),
         "the flake job has no runner matrix"
     );
+}
+
+/// The new pure projection and the seam path agree on every current
+/// fixture: destination set, kinds, placement class, whole-file bytes,
+/// and the rendered block of every marked destination. The digest of
+/// every candidate's complete bytes is pinned in
+/// `tests/fixtures/projection-digests.txt`, regenerated only under
+/// `RK_UPDATE_FIXTURES=1`, so a later phase that changes landed bytes
+/// updates the fixture deliberately.
+#[test]
+fn every_current_landing_fixture_keeps_its_destinations_kinds_placement_and_digests() {
+    use release_kit::landing::{self, Placement as OldPlacement};
+    use release_kit::projection::{Placement, Projection, ProjectionInput};
+    use release_kit::release::EmbeddedReleaseSource;
+
+    let mut lines = Vec::new();
+    for (tech, forge, workflow, style, nix) in projection_fixture_combinations() {
+        let params = projection_params(&tech, &forge, workflow, style, nix.is_some());
+        let shape = nix.unwrap_or(NixShape::Supported);
+        let new = Projection::compute(&ProjectionInput {
+            params: projection_params(&tech, &forge, workflow, style, nix.is_some()),
+            evidence: shape.evidence(),
+        })
+        .expect("the pair projects");
+        assert!(
+            new.collisions.is_empty(),
+            "{tech} {forge}: {:?}",
+            new.collisions
+        );
+
+        let target = shape.target();
+        let mut old = landing::projection(&EmbeddedReleaseSource, &params).expect("projects");
+        let withheld = landing::withhold_nix(&utf8(target.path()), nix.is_some(), None, &mut old)
+            .expect("the judgment runs");
+
+        let label = format!(
+            "{tech} {forge} {} {} {}",
+            workflow.as_str(),
+            style.as_str(),
+            nix.map_or("false", NixShape::column)
+        );
+        let old_destinations: Vec<&str> = old.iter().map(|e| e.destination.as_str()).collect();
+        let new_destinations: Vec<&str> = new
+            .candidates
+            .iter()
+            .map(|c| c.destination.as_str())
+            .collect();
+        assert_eq!(
+            new_destinations, old_destinations,
+            "{label}: destination set"
+        );
+        let old_withheld: Vec<(&str, &str)> = withheld
+            .iter()
+            .map(|w| (w.path.as_str(), w.reason.as_str()))
+            .collect();
+        let new_omitted: Vec<(&str, &str)> = new
+            .omissions
+            .iter()
+            .map(|o| (o.destination.as_str(), o.reason.as_str()))
+            .collect();
+        assert_eq!(new_omitted, old_withheld, "{label}: omissions");
+        for (candidate, entry) in new.candidates.iter().zip(&old) {
+            let at = format!("{label} {}", candidate.destination);
+            assert_eq!(candidate.kind, entry.kind, "{at}: kind");
+            match (candidate.placement, entry.placement) {
+                (Placement::Whole, OldPlacement::Whole) => {
+                    assert_eq!(candidate.bytes, entry.rendered, "{at}: whole bytes");
+                    assert!(
+                        candidate.region.is_none(),
+                        "{at}: a whole file has no region"
+                    );
+                }
+                (Placement::Region { begin, end }, OldPlacement::Block) => {
+                    assert_eq!(
+                        candidate.region.as_deref(),
+                        Some(&entry.rendered[..]),
+                        "{at}: region"
+                    );
+                    assert_eq!(
+                        landing::block_markers(&candidate.destination),
+                        Some((begin, end)),
+                        "{at}: markers"
+                    );
+                }
+                (new, old) => panic!("{at}: placement {new:?} against {old:?}"),
+            }
+            assert!(!candidate.sources.is_empty(), "{at}: no source");
+            lines.push(format!(
+                "{label} {} {}",
+                candidate.destination,
+                release_kit::digest::Digest::of(&candidate.bytes)
+            ));
+        }
+    }
+    let text = format!("{}\n", lines.join("\n"));
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/projection-digests.txt");
+    if std::env::var_os("RK_UPDATE_FIXTURES").is_some_and(|v| v == "1") {
+        std::fs::create_dir_all(fixture.parent().expect("a parent")).expect("the dir exists");
+        std::fs::write(&fixture, &text).expect("the fixture writes");
+    }
+    let pinned = std::fs::read_to_string(&fixture).expect(
+        "tests/fixtures/projection-digests.txt exists; RK_UPDATE_FIXTURES=1 regenerates it",
+    );
+    if pinned != text {
+        let pinned: std::collections::BTreeSet<&str> = pinned.lines().collect();
+        let current: std::collections::BTreeSet<&str> = text.lines().collect();
+        let gone: Vec<&&str> = pinned.difference(&current).collect();
+        let added: Vec<&&str> = current.difference(&pinned).collect();
+        panic!(
+            "the projection digests moved; a deliberate change reruns with RK_UPDATE_FIXTURES=1\nno longer produced: {gone:#?}\nnewly produced: {added:#?}"
+        );
+    }
+}
+
+/// Every source a candidate names is a file under a root the one
+/// inventory declares, and nothing outside it is ever selected.
+#[test]
+fn every_selected_embedded_source_belongs_to_the_one_distribution_root_inventory() {
+    use release_kit::payload_roots::PAYLOAD_ROOTS;
+    use release_kit::projection::{Projection, ProjectionInput};
+
+    let mut seen = 0;
+    for (tech, forge, workflow, style, nix) in projection_fixture_combinations() {
+        let projection = Projection::compute(&ProjectionInput {
+            params: projection_params(&tech, &forge, workflow, style, nix.is_some()),
+            evidence: nix.unwrap_or(NixShape::Supported).evidence(),
+        })
+        .expect("the pair projects");
+        for candidate in &projection.candidates {
+            for source in &candidate.sources {
+                seen += 1;
+                let root = source
+                    .split('/')
+                    .next()
+                    .expect("a source has a first segment");
+                assert!(
+                    PAYLOAD_ROOTS.contains(&root),
+                    "{}: source {source} names a root outside the inventory",
+                    candidate.destination
+                );
+                let files =
+                    release_kit::embedded::root_files(root).expect("a declared root resolves");
+                assert!(
+                    files.iter().any(|(path, _)| path == source),
+                    "{}: source {source} is not a file under {root}",
+                    candidate.destination
+                );
+            }
+        }
+    }
+    assert!(seen > 0, "the fixture combinations selected no source");
 }

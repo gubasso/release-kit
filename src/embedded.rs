@@ -34,7 +34,7 @@ pub static SNIPPETS: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/snippets")
 ///
 /// The spliced blocks and the host-side hook body, authored as files so
 /// no human-faced artifact lives as a source literal; the readers in
-/// `src/landing.rs` and `src/setup/branch_reminder.rs` embed each file
+/// `src/projection.rs` and `src/setup/branch_reminder.rs` embed each file
 /// by name.
 pub static BLOCKS: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/blocks");
 
@@ -264,7 +264,7 @@ mod tests {
 
     /// The interpolation glues the decoded-break net exempts, by their
     /// exact source text: the two splice compositions in
-    /// `src/landing.rs` and the header block in `src/setup/app_jwt.rs`.
+    /// `src/projection.rs` and the header block in `src/setup/app_jwt.rs`.
     /// Growing this list is a reviewed act; a whole artifact body never
     /// belongs on it.
     const GLUE: [&str; 3] = [

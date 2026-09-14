@@ -1,30 +1,48 @@
-//! The target-side landing model: file kinds, parameter rendering, and
-//! the routing block.
+//! The target-side landing model on the release seam: parameter
+//! resolution, the seam-based projection, and the target writes.
 //!
-//! Every landable file has a declared kind — `rendered` files release-kit
+//! Every landable file has a declared kind, `rendered` files release-kit
 //! owns and may rewrite, `seeded` files the target tunes, `state` files
-//! the release automation maintains — and a `rendered` file's bytes are a
+//! the release automation maintains, and a `rendered` file's bytes are a
 //! deterministic function of the payload plus the landing parameters, so
 //! a later command can compare what is on disk against what would be
-//! written. The kinds are declared here, beside the payload, never
-//! inferred at runtime; a test holds the table closed over every snippet.
+//! written.
+//!
+//! The pure pieces of that model, the kind table, the token rendering,
+//! the block templating, the splice and marker judgments, the pair
+//! selection, and the Nix crate-shape judgment, have one implementation
+//! in [`crate::projection`] and are re-exported here under their old
+//! names. What stays in this file is the path that reads a release bundle
+//! through the seam ([`projection`] over a [`ReleaseSource`]), which the
+//! planner and `--to` still need until a later phase deletes it, and the
+//! functions that read or write a target.
 
 pub mod invariants;
 pub mod manifest;
 
 use camino::Utf8Path;
-use serde::{Deserialize, Serialize};
 
+pub use crate::projection::{
+    AGENTS_DESTINATION, BLOCK_BEGIN, BLOCK_DESTINATIONS, BLOCK_END, BRANCH_GRAMMAR,
+    GLOSSARY_DESTINATION, HOOK_TYPES_LINE, HOOKS_BEGIN, HOOKS_DESTINATION, HOOKS_END, Kind,
+    LINE_PREFIX_RE_TOKEN, LINE_PREFIX_TOKEN, NIX_DESTINATIONS, NIX_WITHHOLDABLE, OWNER_TOKEN,
+    REPO_PLACEHOLDER, REPO_TOKEN, SCOPE_SHAPE, SCOPE_SHAPE_TOKEN, SECURITY_SPANS, STYLE_TOKEN,
+    TRUNK_BRANCH_TOKEN, authored, block_markers, destinations, extract_block, hooks_marker_defect,
+    kind_of, marker_defect, render, scope_is_shaped, splice_hooks_block, splice_marked_block,
+    substitute,
+};
 pub use manifest::{Style, Workflow};
+use serde::Serialize;
 
 use crate::atomic;
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
+use crate::projection::{self as pure, evidence};
 use crate::release::{self, ReleaseManifest, ReleaseSource};
 
 /// The complete input to a payload projection. Comparisons reconstruct it
 /// from the landing record; landing verbs resolve their candidate inputs.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Params {
     tech: String,
     forge: String,
@@ -285,327 +303,12 @@ impl Params {
             ..Self::for_test("acme/widget", Some(Style::Trunk))
         }
     }
-}
 
-/// Who owns a landed file's bytes after landing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Kind {
-    /// release-kit owns it: a newer payload re-renders it, and a target
-    /// edit is a conflict.
-    Rendered,
-    /// The target owns it: a starting point the project tunes, reported
-    /// and never rewritten.
-    Seeded,
-    /// The release automation owns it: never written after the first
-    /// landing, never compared.
-    State,
-}
-
-impl Kind {
-    /// The wire and report form.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Rendered => "rendered",
-            Self::Seeded => "seeded",
-            Self::State => "state",
-        }
+    /// The same set with the Nix opt-in answered.
+    pub(crate) fn set_nix_for_test(&mut self, nix: bool) {
+        self.nix = nix;
     }
 }
-
-/// The declared classification: every landable destination and its kind.
-/// The workflow and pipeline files carry the release automation and the
-/// OIDC permission, so release-kit owns them; the tool configurations are
-/// per-project judgment; the two state files are rewritten by the release
-/// automation itself.
-const KINDS: [(&str, Kind); 16] = [
-    (".github/workflows/release-plz.yml", Kind::Rendered),
-    (".github/workflows/release-please.yml", Kind::Rendered),
-    (".github/workflows/release.yml", Kind::Rendered),
-    (".github/workflows/pr-title.yml", Kind::Rendered),
-    (".gitlab-ci.yml", Kind::Rendered),
-    ("SECURITY.md", Kind::Rendered),
-    (".gitlab/ci/mr-title.yml", Kind::Rendered),
-    ("release-plz.toml", Kind::Seeded),
-    ("dist-workspace.toml", Kind::Seeded),
-    ("release-please-config.json", Kind::Seeded),
-    ("cliff.toml", Kind::Seeded),
-    ("nix/package.nix", Kind::Seeded),
-    ("flake.nix", Kind::Seeded),
-    (".release-please-manifest.json", Kind::State),
-    ("VERSION", Kind::State),
-    ("flake.lock", Kind::State),
-];
-
-/// The destinations of the opt-in Nix capability, present in a projection
-/// only where the landing's `nix` parameter is on.
-///
-/// The parameter is recorded, so `status`, `upgrade`, and `adopt` can
-/// reconstruct whether these files are supposed to exist: an absent file
-/// under `nix = false` is not wanted, never drifted.
-///
-/// The capability lands no workflow, on either forge, and each forge's
-/// reason is its own. On GitHub a job gates the merge only inside the
-/// workflow the required check needs, and that workflow is the target's
-/// own. On GitLab the merge check is the whole pipeline, and a target's
-/// jobs live in the child pipeline the rendered parent triggers, which the
-/// target owns. The bindings serve the job for both.
-pub const NIX_DESTINATIONS: [&str; 3] = ["nix/package.nix", "flake.nix", "flake.lock"];
-
-/// The subset a target with a flake of its own keeps out: the seed pair,
-/// whose files would sit beside a flake release-kit did not author.
-///
-/// The seeded package expression is not in it — it lands either way, as
-/// the starting point the target integrates by hand.
-pub const NIX_WITHHOLDABLE: [&str; 2] = ["flake.nix", "flake.lock"];
-
-/// The declared kind of a destination, or `None` for a file the payload
-/// does not classify.
-#[must_use]
-pub fn kind_of(destination: &str) -> Option<Kind> {
-    if destination == AGENTS_DESTINATION
-        || destination == GLOSSARY_DESTINATION
-        || destination == HOOKS_DESTINATION
-    {
-        return Some(Kind::Rendered);
-    }
-    KINDS
-        .iter()
-        .find(|(name, _)| *name == destination)
-        .map(|(_, kind)| *kind)
-}
-
-/// Every destination the payload can land, in declaration order.
-///
-/// The whole files and the three block destinations. The classification
-/// reads it to ask whether a destination is already present at a target.
-pub fn destinations() -> impl Iterator<Item = &'static str> {
-    KINDS
-        .iter()
-        .map(|(name, _)| *name)
-        .chain(BLOCK_DESTINATIONS)
-}
-
-/// The mechanical substitution sites in `rendered` files.
-///
-/// Known values, substituted identically everywhere each appears. The
-/// owner is derived from the landing's `repo` parameter and the scope
-/// shape from [`SCOPE_SHAPE`], so the landed bytes stay a deterministic
-/// function of payload plus parameters.
-pub const OWNER_TOKEN: &[u8] = b"OWNER";
-
-/// The repository a preview stands in for where nothing answered.
-///
-/// It is a placeholder, never a project path: a plan that would render
-/// it into a target is blocked, and only a preview may carry it.
-pub const REPO_PLACEHOLDER: &str = "OWNER";
-
-/// The full recorded project path, including nested namespaces.
-pub const REPO_TOKEN: &[u8] = b"RK_REPO";
-
-/// The one scope shape: the title checks' regular expression.
-pub const SCOPE_SHAPE_TOKEN: &[u8] = b"RK_SCOPE_SHAPE";
-
-/// The recorded release style: `trunk` arms the bot's request in the
-/// landed release workflow, `lines` leaves every request unarmed.
-pub const STYLE_TOKEN: &[u8] = b"RK_STYLE";
-
-/// The one permanent branch. A landed release trigger, ref guard, and
-/// branch guard each name it, so a target whose trunk is not `master`
-/// needs its own answer in its own bytes.
-pub const TRUNK_BRANCH_TOKEN: &[u8] = b"RK_TRUNK_BRANCH";
-
-/// The release-line branch prefix, naming the lines a release trigger
-/// accepts beside the trunk.
-pub const LINE_PREFIX_TOKEN: &[u8] = b"RK_LINE_PREFIX";
-
-/// The same prefix, escaped for a slash-delimited regular expression.
-///
-/// A GitLab rule names a line that way, and a raw `release/` would close
-/// the delimiter and break the pipeline, so the two forms are two tokens.
-/// This one substitutes first: the plain token is its own prefix.
-pub const LINE_PREFIX_RE_TOKEN: &[u8] = b"RK_LINE_PREFIX_RE";
-
-/// The three replaceable spans of a landed security policy, each as its
-/// ordered begin and end marker.
-///
-/// A span is not a token. Each forge's policy carries its own authored
-/// prose inside the markers, so a landing that answers neither security
-/// parameter strips the markers and reproduces the file the forge's
-/// snippet states, byte for byte and in that forge's own words. A landing
-/// that answers one replaces the interior of the spans that fact belongs
-/// to. The markers are HTML comments because the snippet is Markdown a
-/// reader may open before it is ever rendered.
-pub const SECURITY_SPANS: [(&[u8], &[u8]); 3] = [
-    (
-        b"<!--RK_SECURITY_CONTACT_BEGIN-->",
-        b"<!--RK_SECURITY_CONTACT_END-->",
-    ),
-    (
-        b"<!--RK_SECURITY_RESPONSE_BEGIN-->",
-        b"<!--RK_SECURITY_RESPONSE_END-->",
-    ),
-    (
-        b"<!--RK_SECURITY_DEADLINE_BEGIN-->",
-        b"<!--RK_SECURITY_DEADLINE_END-->",
-    ),
-];
-
-/// The sentence a policy with an acknowledgment window states in place of
-/// the forge's best-effort wording.
-fn acknowledgment(response: &str) -> String {
-    format!("Maintainers acknowledge a report within {response}.")
-}
-
-/// What a policy with an acknowledgment window says about deadlines: the
-/// authored sentence disclaims a response deadline, which a stated window
-/// contradicts, so only the disclosure half survives.
-const DISCLOSURE_ONLY: &[u8] = b"This policy commits to no disclosure deadline.";
-
-/// The replacement for each span under one parameter set, or `None` where
-/// the forge's authored interior stands.
-fn security_replacements(params: &Params) -> [Option<Vec<u8>>; 3] {
-    let contact = (!params.security_contact().is_empty())
-        .then(|| params.security_contact().as_bytes().to_vec());
-    let promised = params.security_response() != crate::config::RESPONSE_DEFAULT;
-    [
-        contact,
-        promised.then(|| acknowledgment(params.security_response()).into_bytes()),
-        promised.then(|| DISCLOSURE_ONLY.to_vec()),
-    ]
-}
-
-/// One marked span replaced, or the markers alone removed.
-///
-/// Exactly one ordered begin and end pair is a span; anything else is a
-/// payload defect a test holds, so this leaves such bytes untouched rather
-/// than growing a runtime failure mode into every rendered file.
-fn replace_span(baseline: &[u8], begin: &[u8], end: &[u8], value: Option<&[u8]>) -> Vec<u8> {
-    let ordered = find(baseline, begin)
-        .zip(find(baseline, end))
-        .filter(|(start, stop)| stop > start);
-    let Some((start, stop)) = ordered else {
-        return baseline.to_vec();
-    };
-    let mut out = Vec::with_capacity(baseline.len());
-    out.extend_from_slice(&baseline[..start]);
-    out.extend_from_slice(value.unwrap_or_else(|| &baseline[start + begin.len()..stop]));
-    out.extend_from_slice(&baseline[stop + end.len()..]);
-    out
-}
-
-/// Substitute the landing parameters into a `rendered` file's bytes.
-///
-/// The repository's owner — the project path's first segment — replaces
-/// every `OWNER` occurrence; the full path replaces `RK_REPO` last.
-/// The one scope shape replaces the scope
-/// token, and the recorded style replaces the style token. The scope
-/// shape rests on no parameter, so it substitutes always. An unresolved
-/// style leaves its token standing, which only a preview renders under:
-/// an apply refuses before reaching here.
-///
-/// The trunk and the line prefix substitute from the same parameters, so
-/// a target that renames either carries the new name in every artifact
-/// that names it rather than in the binary's behavior alone.
-///
-/// The security policy's marked spans resolve last, after every token, so
-/// a contact that happens to spell a token name lands literally rather
-/// than being read as one more substitution site.
-#[must_use]
-pub fn render(baseline: &[u8], params: &Params) -> Vec<u8> {
-    let repo = params.repo();
-    let owner = repo.split('/').next().unwrap_or(repo);
-    let mut out = substitute(baseline, OWNER_TOKEN, owner.as_bytes());
-    if let Some(style) = params.style() {
-        out = substitute(&out, STYLE_TOKEN, style.as_str().as_bytes());
-    }
-    out = substitute(&out, SCOPE_SHAPE_TOKEN, SCOPE_SHAPE.as_bytes());
-    out = substitute(&out, TRUNK_BRANCH_TOKEN, params.trunk().as_bytes());
-    let escaped = params.line_prefix().replace('/', "\\/");
-    out = substitute(&out, LINE_PREFIX_RE_TOKEN, escaped.as_bytes());
-    out = substitute(&out, LINE_PREFIX_TOKEN, params.line_prefix().as_bytes());
-    out = substitute(&out, REPO_TOKEN, repo.as_bytes());
-    for ((begin, end), value) in SECURITY_SPANS.iter().zip(security_replacements(params)) {
-        out = replace_span(&out, begin, end, value.as_deref());
-    }
-    out
-}
-
-/// Every `token` occurrence replaced with `value`.
-pub(crate) fn substitute(baseline: &[u8], token: &[u8], value: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(baseline.len());
-    let mut rest = baseline;
-    while let Some(at) = find(rest, token) {
-        out.extend_from_slice(&rest[..at]);
-        out.extend_from_slice(value);
-        rest = &rest[at + token.len()..];
-    }
-    out.extend_from_slice(rest);
-    out
-}
-
-/// First occurrence of `needle` in `haystack`.
-fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
-}
-
-/// The destination the routing block splices into.
-pub const AGENTS_DESTINATION: &str = "AGENTS.md";
-
-/// The block's opening marker.
-pub const BLOCK_BEGIN: &str = "<!-- BEGIN release-kit -->";
-
-/// The block's closing marker.
-pub const BLOCK_END: &str = "<!-- END release-kit -->";
-
-/// The destination the glossary block splices into.
-///
-/// The document is the target's own vocabulary, so the block shares
-/// `AGENTS.md`'s marker pair and owns nothing outside it.
-pub const GLOSSARY_DESTINATION: &str = "GLOSSARY.md";
-
-/// The destination the hook block splices into.
-pub const HOOKS_DESTINATION: &str = ".pre-commit-config.yaml";
-
-/// Every block destination, in the order a landing writes them.
-///
-/// A block destination owns the lines between its markers and nothing
-/// else, so every verb that asks whether a destination is block-placed
-/// reads this one list.
-pub const BLOCK_DESTINATIONS: [&str; 3] =
-    [AGENTS_DESTINATION, GLOSSARY_DESTINATION, HOOKS_DESTINATION];
-
-/// The hook block's opening marker, a YAML comment at column zero.
-pub const HOOKS_BEGIN: &str = "# BEGIN release-kit";
-
-/// The hook block's closing marker.
-pub const HOOKS_END: &str = "# END release-kit";
-
-/// The top-level key the fresh hook file carries and the skills verify on
-/// an existing one: the commit-msg and pre-push hooks run only where their
-/// hook types are installed.
-pub const HOOK_TYPES_LINE: &str = "default_install_hook_types: [pre-commit, commit-msg, pre-push]";
-
-/// The authored routing-block template, `blocks/agents-block.md.in`.
-const AGENTS_BLOCK: &str = "blocks/agents-block.md.in";
-
-/// The authored glossary template, `blocks/glossary.md.in`.
-const GLOSSARY_BLOCK: &str = "blocks/glossary.md.in";
-
-/// The routing block's mode line, worktree form.
-const AGENTS_LINE_WORKTREE: &str = "blocks/agents-line-worktree.md.in";
-
-/// The routing block's mode line, branches form.
-const AGENTS_LINE_BRANCHES: &str = "blocks/agents-line-branches.md.in";
-
-/// The authored hook-block template, `blocks/pre-commit-block.yaml.in`.
-const PRE_COMMIT_BLOCK: &str = "blocks/pre-commit-block.yaml.in";
-
-/// The worktree mode's guard entry, `blocks/pre-commit-worktree-guard.yaml.in`.
-const PRE_COMMIT_WORKTREE_GUARD: &str = "blocks/pre-commit-worktree-guard.yaml.in";
 
 /// One authored block, read through the seam as text.
 fn block(
@@ -617,55 +320,8 @@ fn block(
     String::from_utf8(bytes).map_err(|_| anyhow::anyhow!("{path}: a block is UTF-8").into())
 }
 
-/// An authored block without the one final newline the repository's
-/// hooks enforce on every file under `blocks/`; a test in
-/// `src/embedded.rs` holds each file to exactly one.
-fn authored(text: &str) -> &str {
-    text.strip_suffix('\n').unwrap_or(text)
-}
-
-/// The one branch grammar.
-///
-/// The extended regular expression the landed
-/// `rk-branch-name` hook tests, and the same anchored language
-/// `rk worktree add` validates before creating anything. One owner by
-/// token — `concat!` cannot interpolate a const, so [`hooks_block`]
-/// substitutes it for the template's `RK_BRANCH_GRAMMAR` token.
-pub const BRANCH_GRAMMAR: &str = r"^((build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)/[A-Za-z0-9._/-]+|([0-9]+|[A-Z][A-Z0-9]+-[0-9]+)-[A-Za-z0-9._-]+|release[-/].+)$";
-
-/// The one commit scope shape.
-///
-/// A bracket expression, lowercase, admitting the digits and `_ . / -`
-/// beside the letters, so `area/subarea` reads as one scope. It holds the
-/// shape of a scope and never its vocabulary: the word itself is the
-/// author's, guided by the routing block and by the repository's own
-/// history. One owner by token — the title checks take it as
-/// `RK_SCOPE_SHAPE` through [`render`], and `rk message --check` reads it
-/// directly, so the desk and the forge judge one language.
-pub const SCOPE_SHAPE: &str = "[a-z0-9._/-]+";
-
-/// Whether one scope matches [`SCOPE_SHAPE`].
-///
-/// The predicate and the pattern are one owner, so the desk's judgment
-/// cannot drift from the forge's: `rk message --check` calls this, the
-/// title checks render the pattern, and a test holds the two equal over
-/// every ASCII character.
-#[must_use]
-pub fn scope_is_shaped(scope: &str) -> bool {
-    !scope.is_empty()
-        && scope.chars().all(|c| {
-            c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '.' | '/' | '-')
-        })
-}
-
-/// The routing block for one workflow mode: the whole of target-side
-/// governance, authored as `blocks/agents-block.md.in` and never grown
-/// into a method chapter, read from the bundle `source` carries.
-///
-/// Markers included, without a
-/// trailing newline and with its scope token unrendered: the template
-/// with the mode's one orientation line substituted, everything else —
-/// the agent-boundary line included — byte-identical across modes.
+/// The routing block for one workflow mode, read from the bundle `source`
+/// carries and composed by [`pure::compose_routing`].
 ///
 /// # Errors
 ///
@@ -673,23 +329,12 @@ pub fn scope_is_shaped(scope: &str) -> bool {
 /// block.
 pub fn routing_block(source: &dyn ReleaseSource, workflow: Workflow) -> Result<String, RkError> {
     let manifest = source.manifest()?;
-    let line = block(
-        source,
-        &manifest,
-        match workflow {
-            Workflow::Worktree => AGENTS_LINE_WORKTREE,
-            Workflow::Branches => AGENTS_LINE_BRANCHES,
-        },
-    )?;
-    let template = block(source, &manifest, AGENTS_BLOCK)?;
-    Ok(authored(&template).replacen("RK_WORKFLOW_LINE", authored(&line), 1))
+    let line = block(source, &manifest, pure::routing_line(workflow))?;
+    let template = block(source, &manifest, pure::AGENTS_BLOCK)?;
+    Ok(pure::compose_routing(&template, &line))
 }
 
 /// The glossary block, read from the bundle `source` carries.
-///
-/// Markers included and without a trailing newline, like the routing
-/// block. It carries no token and no mode: every term it names expands
-/// to steps of the one workflow, so the same bytes land in every target.
 ///
 /// # Errors
 ///
@@ -697,21 +342,15 @@ pub fn routing_block(source: &dyn ReleaseSource, workflow: Workflow) -> Result<S
 /// block.
 pub fn glossary_block(source: &dyn ReleaseSource) -> Result<String, RkError> {
     let manifest = source.manifest()?;
-    Ok(authored(&block(source, &manifest, GLOSSARY_BLOCK)?).to_owned())
+    Ok(pure::compose_glossary(&block(
+        source,
+        &manifest,
+        pure::GLOSSARY_BLOCK,
+    )?))
 }
 
 /// The hook block for one workflow mode, read from the bundle `source`
-/// carries.
-///
-/// Authored as `blocks/pre-commit-block.yaml.in` with the worktree mode's
-/// guard entry beside it in `blocks/pre-commit-worktree-guard.yaml.in`.
-/// Markers included, without a
-/// trailing newline and with its scope token unrendered. What is landed
-/// is what runs: the worktree mode's block carries the location guard and
-/// names the sweep-skip pair, and the branches mode's block carries no
-/// guard entry at all — never an entry that reads local state to decide
-/// whether to enforce. The one branch grammar substitutes here from
-/// [`BRANCH_GRAMMAR`].
+/// carries and composed by [`pure::compose_hooks`].
 ///
 /// # Errors
 ///
@@ -719,142 +358,12 @@ pub fn glossary_block(source: &dyn ReleaseSource) -> Result<String, RkError> {
 /// block.
 pub fn hooks_block(source: &dyn ReleaseSource, workflow: Workflow) -> Result<String, RkError> {
     let manifest = source.manifest()?;
-    let (guard, skip) = match workflow {
-        Workflow::Worktree => (
-            format!(
-                "{}\n",
-                authored(&block(source, &manifest, PRE_COMMIT_WORKTREE_GUARD)?)
-            ),
-            "no-commit-to-branch,rk-worktree-location",
-        ),
-        Workflow::Branches => (String::new(), "no-commit-to-branch"),
+    let guard = match workflow {
+        Workflow::Worktree => Some(block(source, &manifest, pure::PRE_COMMIT_WORKTREE_GUARD)?),
+        Workflow::Branches => None,
     };
-    let template = block(source, &manifest, PRE_COMMIT_BLOCK)?;
-    Ok(authored(&template)
-        .replacen("RK_BRANCH_GRAMMAR", BRANCH_GRAMMAR, 1)
-        .replacen("RK_SWEEP_SKIP", skip, 1)
-        .replacen("RK_WORKTREE_GUARD", &guard, 1))
-}
-
-/// The markers of a block destination, or `None` for a whole-file one.
-#[must_use]
-pub fn block_markers(destination: &str) -> Option<(&'static str, &'static str)> {
-    match destination {
-        AGENTS_DESTINATION | GLOSSARY_DESTINATION => Some((BLOCK_BEGIN, BLOCK_END)),
-        HOOKS_DESTINATION => Some((HOOKS_BEGIN, HOOKS_END)),
-        _ => None,
-    }
-}
-
-/// The marked block inside a document, markers included, or `None` where
-/// the text carries no complete block.
-#[must_use]
-pub fn extract_block<'a>(text: &'a str, begin: &str, end: &str) -> Option<&'a str> {
-    let start = text.find(begin)?;
-    let stop = text[start..].find(end)? + start + end.len();
-    Some(&text[start..stop])
-}
-
-/// The whole document's bytes after splicing a marked block into it.
-///
-/// A fresh file where none exists, the block replaced in place where one
-/// is marked, appended after the target's own content otherwise —
-/// release-kit owns the lines inside the markers, not the document. Both
-/// markdown destinations take this shape, `AGENTS.md` and the glossary.
-#[must_use]
-pub fn splice_marked_block(existing: Option<&[u8]>, block: &str) -> Vec<u8> {
-    let block = block.as_bytes();
-    let Some(text) = existing else {
-        return [block, b"\n"].concat();
-    };
-    // Bytes, never text: the document belongs to the target and a decode
-    // that replaces one invalid sequence rewrites a byte outside the
-    // markers, which is the one thing a block destination never does.
-    if let Some(start) = find(text, BLOCK_BEGIN.as_bytes())
-        && let Some(offset) = find(&text[start..], BLOCK_END.as_bytes())
-    {
-        let stop = start + offset + BLOCK_END.len();
-        return [&text[..start], block, &text[stop..]].concat();
-    }
-    // Appending keeps every byte the target wrote, trailing blank lines
-    // and an absent final newline included. The only addition is the
-    // separator that opens the block's own line.
-    let separator: &[u8] = if text.ends_with(b"\n") {
-        b"\n"
-    } else {
-        b"\n\n"
-    };
-    [text, separator, block, b"\n"].concat()
-}
-
-/// The whole `.pre-commit-config.yaml` content after splicing the
-/// rendered hook block.
-///
-/// A fresh file carries the hook-types key, the `repos:` key, and the
-/// block; a marked file takes the block in place; an unmarked file takes
-/// it directly under its `repos:` line, above the target's own hooks. An
-/// unmarked file with no `repos:` line is refused by name — the block's
-/// entries are list items and have nowhere honest to go.
-///
-/// # Errors
-///
-/// The reason the block has no place, for the caller's refusal to carry.
-pub fn splice_hooks_block(existing: Option<&str>, block: &str) -> Result<String, String> {
-    let Some(text) = existing else {
-        return Ok(format!("{HOOK_TYPES_LINE}\n\nrepos:\n{block}\n"));
-    };
-    if let Some(defect) = hooks_marker_defect(text) {
-        return Err(defect);
-    }
-    if let Some(found) = extract_block(text, HOOKS_BEGIN, HOOKS_END) {
-        return Ok(text.replacen(found, block, 1));
-    }
-    let mut out = String::with_capacity(text.len() + block.len() + 1);
-    let mut placed = false;
-    for line in text.split_inclusive('\n') {
-        out.push_str(line);
-        if !placed && line.trim_end() == "repos:" {
-            if !out.ends_with('\n') {
-                out.push('\n');
-            }
-            out.push_str(block);
-            out.push('\n');
-            placed = true;
-        }
-    }
-    if placed {
-        Ok(out)
-    } else {
-        Err(format!(
-            "{HOOKS_DESTINATION} exists with no repos: line, so the hook block has nowhere to land"
-        ))
-    }
-}
-
-/// The one definition of an ill-formed hook file, shared by the splice
-/// and every reader that judges one.
-///
-/// The hooks between the markers execute, so ownership must be
-/// unambiguous: exactly one begin marker paired with exactly one end
-/// marker after it, or none of either. A second begin is a second block
-/// pre-commit would still run, and a marker without its pair — or an end
-/// before its begin — is a block whose extent nothing can state.
-#[must_use]
-pub fn hooks_marker_defect(text: &str) -> Option<String> {
-    let begins = text.matches(HOOKS_BEGIN).count();
-    let ends = text.matches(HOOKS_END).count();
-    if begins > 1 || ends > 1 {
-        return Some(format!(
-            "{HOOKS_DESTINATION} carries more than one release-kit marker pair; release-kit owns exactly one block"
-        ));
-    }
-    match (text.find(HOOKS_BEGIN), text.find(HOOKS_END)) {
-        (Some(begin), Some(end)) if end > begin => None,
-        (None, None) => None,
-        _ => Some(format!(
-            "{HOOKS_DESTINATION} carries an unmatched or misordered release-kit marker, so the block's extent is ambiguous"
-        )),
-    }
+    let template = block(source, &manifest, pure::PRE_COMMIT_BLOCK)?;
+    Ok(pure::compose_hooks(&template, guard.as_deref()))
 }
 
 /// How a projected artifact occupies its destination.
@@ -885,7 +394,8 @@ pub struct Entry {
 }
 
 /// The landable files of one `(technology, forge)` pair, as
-/// `(destination, payload bytes)`, read from the bundle `source` carries.
+/// `(destination, payload bytes)`, read from the bundle `source` carries
+/// and selected by [`pure::select_pair`].
 ///
 /// # Errors
 ///
@@ -897,52 +407,15 @@ pub fn pair_files(
     forge: &str,
 ) -> Result<Vec<(String, Vec<u8>)>, RkError> {
     let manifest = source.manifest()?;
-    let techs: Vec<String> = manifest
-        .dirs_under("snippets")
-        .into_iter()
-        .filter(|name| !name.starts_with('_'))
+    let files: Vec<(String, crate::digest::Digest)> = manifest
+        .under("snippets")
+        .map(|(rel, artifact)| (format!("snippets/{rel}"), artifact.sha256.clone()))
         .collect();
-    // The shared zone is not a technology: `_shared/<forge>` composes into
-    // every pair and never names one.
-    if tech.starts_with('_') || !techs.iter().any(|known| known == tech) {
-        return Err(RkError::Usage(format!(
-            "unknown tech '{tech}'; the bindings are: {}",
-            techs.join(", ")
-        )));
+    let mut out = Vec::new();
+    for selected in pure::select_pair(&files, tech, forge)? {
+        out.push((selected.destination, source.blob(selected.payload)?));
     }
-    let pair = format!("snippets/{tech}/{forge}");
-    if manifest.under(&pair).next().is_none() {
-        let known: Vec<String> = techs
-            .iter()
-            .flat_map(|tech| {
-                manifest
-                    .dirs_under(&format!("snippets/{tech}"))
-                    .into_iter()
-                    .map(move |forge| format!("{tech}, {forge}"))
-            })
-            .collect();
-        return Err(RkError::Usage(format!(
-            "the pair ({tech}, {forge}) has no landable files; the supported pairs are: {}",
-            known.join("; ")
-        )));
-    }
-    // Payload paths carry their zone prefix; destinations do not. The
-    // shared zone lands first, and a destination both zones ship is a
-    // payload defect refused by name, never one zone silently winning.
-    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
-    for (rel, artifact) in manifest.under(&format!("snippets/_shared/{forge}")) {
-        files.push((rel.to_owned(), source.blob(&artifact.sha256)?));
-    }
-    for (rel, artifact) in manifest.under(&pair) {
-        if files.iter().any(|(existing, _)| existing == rel) {
-            return Err(anyhow::anyhow!(
-                "the shared zone and the pair ({tech}, {forge}) both ship {rel}; the payload is defective"
-            )
-            .into());
-        }
-        files.push((rel.to_owned(), source.blob(&artifact.sha256)?));
-    }
-    Ok(files)
+    Ok(out)
 }
 
 /// The whole payload projection for one pair, from the bundle `source`
@@ -985,7 +458,7 @@ pub fn projection(source: &dyn ReleaseSource, params: &Params) -> Result<Vec<Ent
     // it, and an older release stays selectable: the destination joins the
     // projection only where the selected bundle carries it.
     let mut blocks = vec![(AGENTS_DESTINATION, routing_block(source, params.workflow)?)];
-    if source.manifest()?.artifact(GLOSSARY_BLOCK).is_some() {
+    if source.manifest()?.artifact(pure::GLOSSARY_BLOCK).is_some() {
         blocks.push((GLOSSARY_DESTINATION, glossary_block(source)?));
     }
     blocks.push((HOOKS_DESTINATION, hooks_block(source, params.workflow)?));
@@ -1003,162 +476,19 @@ pub fn projection(source: &dyn ReleaseSource, params: &Params) -> Result<Vec<Ent
 }
 
 /// Why the whole Nix capability stays out of a landing, or `None` where
-/// the target's crate shape supports the seed.
-///
-/// The gate holds every structural prerequisite the seed relies on, not
-/// only evaluation: the package expression reads `Cargo.toml` through
-/// `importTOML` and throws without `../Cargo.lock`, and the seed flake's
-/// smoke check runs the crate's binary, which only an implicit
-/// `src/main.rs` or an explicit `[[bin]]` entry produces. A shape
-/// missing any of these would land files that fail on their first
-/// evaluation or first check, so the landing reports the smaller product
-/// with the missing piece named instead.
+/// the target's crate shape supports the seed: the crate shape read from
+/// `target`, judged by [`pure::nix_unsupported_shape`].
 #[must_use]
 pub fn nix_unsupported_shape(target: &Utf8Path) -> Option<String> {
-    let Ok(text) = std::fs::read_to_string(target.join("Cargo.toml")) else {
-        return Some(
-            "the target has no readable Cargo.toml, which the seeded package expression reads; no Nix file lands".to_owned(),
-        );
-    };
-    let Ok(table) = text.parse::<toml::Table>() else {
-        return Some(
-            "the target's Cargo.toml does not parse, and the seeded package expression reads it; no Nix file lands".to_owned(),
-        );
-    };
-    if !table.contains_key("package") {
-        return Some(
-            "the target's Cargo.toml has no [package] table; the seed supports a single crate, so no Nix file lands".to_owned(),
-        );
-    }
-    if !target.join("Cargo.lock").is_file() {
-        return Some(
-            "the target has no Cargo.lock, which the seeded package expression builds from; commit one, then opt in".to_owned(),
-        );
-    }
-    let implicit_bin = target.join("src/main.rs").is_file()
-        && table
-            .get("package")
-            .and_then(toml::Value::as_table)
-            .and_then(|package| package.get("autobins"))
-            .and_then(toml::Value::as_bool)
-            != Some(false);
-    let explicit_bins = table.get("bin").and_then(toml::Value::as_array);
-    if explicit_bins.is_none() && !implicit_bin {
-        return Some(
-            "the target declares no binary — no effective src/main.rs and no [[bin]] entry — and the seed flake's smoke check runs one; no Nix file lands".to_owned(),
-        );
-    }
-    // The seed's mainProgram is the first [[bin]] entry; one whose
-    // required-features a default build does not enable produces no
-    // executable, so the smoke check would fail on a green landing. A
-    // requirement the default feature set covers builds normally and
-    // passes.
-    if let Some(bins) = explicit_bins {
-        let required = bins
-            .first()
-            .and_then(toml::Value::as_table)
-            .and_then(|bin| bin.get("required-features"))
-            .and_then(toml::Value::as_array);
-        if let Some(required) = required {
-            let enabled = default_features(&table);
-            let missing = required
-                .iter()
-                .filter_map(toml::Value::as_str)
-                .any(|feature| !enabled.contains(feature));
-            if missing {
-                return Some(
-                    "the target's first [[bin]] entry requires features a default build does not enable; no Nix file lands".to_owned(),
-                );
-            }
-        }
-    }
-    None
-}
-
-/// Whether any feature's list carries a `dep:name` edge, which is what
-/// suppresses the optional dependency's implicit same-named feature.
-fn dep_edge_suppresses(features: &toml::Table, name: &str) -> bool {
-    let edge = format!("dep:{name}");
-    features.values().any(|list| {
-        list.as_array().is_some_and(|entries| {
-            entries
-                .iter()
-                .filter_map(toml::Value::as_str)
-                .any(|entry| entry == edge)
-        })
-    })
-}
-
-/// Whether `name` is declared an optional dependency, in any of the
-/// dependency tables a binary's build reads.
-fn is_optional_dependency(table: &toml::Table, name: &str) -> bool {
-    ["dependencies", "build-dependencies"]
-        .iter()
-        .any(|section| {
-            table
-                .get(*section)
-                .and_then(toml::Value::as_table)
-                .and_then(|dependencies| dependencies.get(name))
-                .and_then(toml::Value::as_table)
-                .and_then(|dependency| dependency.get("optional"))
-                .and_then(toml::Value::as_bool)
-                == Some(true)
-        })
-}
-
-/// The features a default build enables: the `default` feature resolved
-/// through the `[features]` table's own enables — an approximation of
-/// cargo's default resolution for the documented supported shapes, erring
-/// toward withholding where the semantics run deeper. Dependency forms —
-/// `dep:name`, weak `name?/feature` — are not feature names here and are
-/// skipped; the closure is bounded by the table's size.
-fn default_features(table: &toml::Table) -> std::collections::BTreeSet<String> {
-    let Some(features) = table.get("features").and_then(toml::Value::as_table) else {
-        return std::collections::BTreeSet::new();
-    };
-    let mut enabled = std::collections::BTreeSet::new();
-    let mut queue = vec!["default".to_owned()];
-    while let Some(name) = queue.pop() {
-        if !enabled.insert(name.clone()) {
-            continue;
-        }
-        if let Some(implies) = features.get(&name).and_then(toml::Value::as_array) {
-            for implied in implies.iter().filter_map(toml::Value::as_str) {
-                if implied.starts_with("dep:") || implied.contains("?/") {
-                    // `dep:name` enables the dependency without a feature
-                    // of this crate; a weak `name?/feature` edge enables
-                    // nothing by itself.
-                    continue;
-                }
-                if let Some((package, _)) = implied.split_once('/') {
-                    // A strong `name/feature` edge activates this crate's
-                    // same-named feature only for an optional dependency,
-                    // and only where that feature exists: declared
-                    // explicitly, or implicit and not suppressed by a
-                    // `dep:` edge anywhere in the table. A non-optional
-                    // dependency's edge enables a feature of the
-                    // dependency and nothing of this crate.
-                    let feature_exists =
-                        features.contains_key(package) || !dep_edge_suppresses(features, package);
-                    if is_optional_dependency(table, package) && feature_exists {
-                        queue.push(package.to_owned());
-                    }
-                } else {
-                    queue.push(implied.to_owned());
-                }
-            }
-        }
-    }
-    enabled
+    pure::nix_unsupported_shape(&evidence::crate_shape(target))
 }
 
 /// Why the flake half of the Nix capability stays out of this landing, or
 /// `None` where the pair lands whole.
 ///
-/// The pair is all-or-nothing: a target that already carries a
-/// `flake.nix` or `flake.lock` of its own keeps its pair, because a seed
-/// lock beside a foreign flake describes the wrong input graph. A pair
-/// the record names is release-kit's own landing and is never withheld.
+/// The flake pair's presence is read from `target` and judged by
+/// [`pure::flake_pair_withheld`]. A pair the record names is never
+/// withheld, and its presence is then not even read.
 ///
 /// # Errors
 ///
@@ -1167,24 +497,11 @@ pub fn nix_withheld(
     target: &Utf8Path,
     recorded: Option<&manifest::Manifest>,
 ) -> std::io::Result<Option<String>> {
-    if recorded.is_some_and(|record| record.file("flake.nix").is_some()) {
+    if evidence::flake_recorded(recorded) {
         return Ok(None);
     }
-    let mut present = Vec::new();
-    for name in ["flake.nix", "flake.lock"] {
-        match std::fs::symlink_metadata(target.join(name).as_std_path()) {
-            Ok(_) => present.push(name),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e),
-        }
-    }
-    if present.is_empty() {
-        return Ok(None);
-    }
-    Ok(Some(format!(
-        "the target already carries {}; its flake pair stays its own",
-        present.join(" and ")
-    )))
+    let (flake_nix, flake_lock) = evidence::flake_presence(target)?;
+    Ok(pure::flake_pair_withheld(false, flake_nix, flake_lock))
 }
 
 /// One destination a landing withholds, with why.
@@ -1422,7 +739,7 @@ pub fn hooks_file_defect(
         Ok(bytes) => {
             let text = String::from_utf8_lossy(&bytes);
             let manifest = source.manifest()?;
-            let template = block(source, &manifest, PRE_COMMIT_BLOCK)?;
+            let template = block(source, &manifest, pure::PRE_COMMIT_BLOCK)?;
             Ok(splice_hooks_block(Some(&text), authored(&template)).err())
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
