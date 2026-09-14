@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/gubasso/release-kit/compare/v0.3.32...v0.4.0) - 2026-09-14
+
+### Added
+
+- *(landing/glossary)* [**breaking**] land the glossary and move the payload schema to 2 ([#195](https://github.com/gubasso/release-kit/pull/195))
+
+### Fixed
+
+- *(reconcile/lock)* refuse a lock path that names a link or another file type ([#198](https://github.com/gubasso/release-kit/pull/198))
+
+### Other
+
+- *(skills/glossary)* let the gate read a term as the actions it names ([#197](https://github.com/gubasso/release-kit/pull/197))
+
 ## [0.3.32](https://github.com/gubasso/release-kit/compare/v0.3.31...v0.3.32) - 2026-09-13
 
 ### Fixed
