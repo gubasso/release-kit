@@ -30,13 +30,13 @@
 
 ## Purpose
 
-Rules governing what the `rk` binary carries and what it writes outside a target repository. The distribution is one installed binary embedding the method, the bindings, the snippets, the skills, and the pinned-tool registry, and every rule here binds whoever authors that binary. The files `rk init` lands inside a target are governed by the invariants in `method/01-invariants.md`, which an adopting project owns; the documentation this repository writes about itself is governed by `SPEC-instance.md`. No adopting project adopts this spec: its subject is the installer, so a project holding these rules would hold obligations it cannot violate and verifications it cannot run. The external sources these rules were checked against are in `../reference/REFERENCE-distribution-sources.md`.
+Rules governing what the `rk` binary carries and what it writes outside a target repository. The distribution is one installed binary embedding the method, the bindings, the snippets, the blocks, the guidance, the skills, and the pinned-tool registry, read directly by every command that renders, stages, serves, or installs them, and every rule here binds whoever authors that binary. The binary answers for its own release alone: the candidate a stage shows and the landing production writes both come from these embedded sources, bound by `SPEC-staging.md` and `SPEC-landing.md`. The files `rk init` lands inside a target are governed by the invariants in `method/01-invariants.md`, which an adopting project owns; the documentation this repository writes about itself is governed by `SPEC-instance.md`. No adopting project adopts this spec: its subject is the installer, so a project holding these rules would hold obligations it cannot violate and verifications it cannot run. The external sources these rules were checked against are in `../reference/REFERENCE-distribution-sources.md`.
 
 ## Requirements
 
 ### `distribution:the-payload-roots-are-declared-once` — The payload roots are declared once
 
-Every authored root the binary carries, the bundle's `compatibility.toml` and `guidance/` included, MUST be named in one inventory that the embed, the build script's change tracking, and the package-contents check all read.
+Every authored root the binary carries, `guidance/` included as the versioned reference material a stage copies, MUST be named in one inventory that the embed, the build script's change tracking, the package-contents check, the projection, the staging command, the reader commands, and the skill installer all read directly.
 
 #### Scenario: A payload root is embedded without entering the inventory
 

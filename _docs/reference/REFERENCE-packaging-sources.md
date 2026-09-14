@@ -2,7 +2,7 @@
 
 External sources behind the consumer-pin rules of `SPEC-packaging.md` and the artifact-reach half of `SPEC-forge-setup.md`: what the Nix CLI, direnv, the forge, each venue `rk` publishes to, and each binding's packaging tool promise, and which rule each promise bears on.
 
-Verified against the listed sources on 2026-09-04, the packaging-tool sections on 2026-09-11, and the venue sections on 2026-09-12.
+Verified against the listed sources on 2026-09-04, the packaging-tool sections on 2026-09-11, the venue sections on 2026-09-12, and the exact-version install section on 2026-09-14.
 
 ## Venue `crates`, on `cargo install` and the mise cargo backend
 
@@ -12,6 +12,14 @@ Verified against the listed sources on 2026-09-04, the packaging-tool sections o
 - <https://mise.jdx.dev/dev-tools/backends/cargo.html>
 
 Bearing: `packaging:the-venue-and-the-manager-cross-in-one-matrix` — the mise and crates pair renders the cargo backend entry with the bare version, which is the form the registry names, and `rk self-depend sync` moves that one value.
+
+## Cargo, on installing one exact version into one root
+
+`cargo install --version` accepts a version requirement such as `~1.2`, and a value without a requirement operator must be in the form `MAJOR.MINOR.PATCH` and installs exactly that version, which is not treated as a caret requirement. `--root` names the installation root and takes precedence over `CARGO_INSTALL_ROOT`, the `install.root` config value, `CARGO_HOME`, and `$HOME/.cargo`, and every executable lands in that root's `bin`. `--locked` forces Cargo to use the `Cargo.lock` the package ships, which the default ignores. An install whose version, source, binaries, features, profile, and target are unchanged is a no-op without `--force`.
+
+- <https://doc.rust-lang.org/cargo/commands/cargo-install.html>
+
+Bearing: `packaging:the-operator-selects-the-installed-version`. The manager's own surface already installs one exact release into a root of the operator's choosing, so acquisition needs no verb in `rk`, and a landing that fetched a release would duplicate what this command does with a checked lockfile.
 
 ## Venue `flake`, on flake references in a flake input and in devbox
 

@@ -10346,9 +10346,10 @@ fn message_check_holds_the_scope_to_the_shape() {
         .success();
 }
 
-/// SATISFIES landing:an-upgrade-refuses-on-owned-drift
 /// A mode change on a drifted target refuses atomically: exit nonzero,
-/// every file and the manifest byte-identical.
+/// every file and the manifest byte-identical. This is the refusal the
+/// current writer makes; the direct writer replaces it with a fresh
+/// render of the owned file.
 #[test]
 fn a_mode_change_refuses_atomically_on_owned_drift() {
     let target = tempfile::tempdir().expect("a scratch dir exists");

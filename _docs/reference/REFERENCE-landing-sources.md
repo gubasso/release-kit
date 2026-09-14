@@ -12,7 +12,7 @@ Verified against the listed sources on 2026-08-28 and re-checked on 2026-08-29; 
 - <https://axodotdev.github.io/cargo-dist/>
 - <https://github.com/axodotdev/cargo-dist/blob/main/CHANGELOG.md>
 
-Bearing: `landing:a-rendered-file-is-reproducible` and `landing:an-upgrade-refuses-on-owned-drift`. This is also the exemplar release-kit already teaches its own users about in `bindings/rust.md`, so adopting the same shape for its own landed files is consistent with what it asks of them. The general stance is the load-bearing part: a tool that generates a file should be able to say whether that file is still what it generated, which is what the recorded digests are for.
+Bearing: `landing:a-rendered-file-is-reproducible` and `landing:ownership-is-elementary`, whose replacement of a recorded generated file takes the other half of the same stance: a tool that generates a file can say whether the file is still its own, and here the receipt says it and Git keeps the previous bytes. This is also the exemplar release-kit already teaches its own users about in `bindings/rust.md`, so adopting the same shape for its own landed files is consistent with what it asks of them. The general stance is the load-bearing part: a tool that generates a file should be able to say whether that file is still what it generated, which is what the recorded digests are for.
 
 ## cargo-dist, on the run mode, and the projects that skip it
 

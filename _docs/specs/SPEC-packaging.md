@@ -13,6 +13,7 @@
   - [`packaging:the-derivation-mirrors-the-probe-registry` — The derivation mirrors the probe registry](#packagingthe-derivation-mirrors-the-probe-registry--the-derivation-mirrors-the-probe-registry)
   - [`packaging:a-launcher-resolves-through-one-owner` — A launcher resolves through one owner](#packaginga-launcher-resolves-through-one-owner--a-launcher-resolves-through-one-owner)
   - [`packaging:the-landable-capability-promises-a-buildable-flake` — The landable capability promises a buildable flake](#packagingthe-landable-capability-promises-a-buildable-flake--the-landable-capability-promises-a-buildable-flake)
+  - [`packaging:the-operator-selects-the-installed-version` — The operator selects the installed version](#packagingthe-operator-selects-the-installed-version--the-operator-selects-the-installed-version)
   - [`packaging:the-consumer-pin-has-two-facts-and-one-mover` — The consumer pin has two facts and one mover](#packagingthe-consumer-pin-has-two-facts-and-one-mover--the-consumer-pin-has-two-facts-and-one-mover)
   - [`packaging:the-pin-is-read-through-a-manager-axis` — The pin is read through a manager axis](#packagingthe-pin-is-read-through-a-manager-axis--the-pin-is-read-through-a-manager-axis)
   - [`packaging:the-venue-and-the-manager-cross-in-one-matrix` — The venue and the manager cross in one matrix](#packagingthe-venue-and-the-manager-cross-in-one-matrix--the-venue-and-the-manager-cross-in-one-matrix)
@@ -137,6 +138,18 @@ The landed Nix capability MUST promise exactly a package expression that evaluat
 - THEN the promise is the build, and the job that proves it in the target's own pipeline on each supported forge, with registry distribution named as the target's own later step
 
 Verify: `cargo nextest run -E 'test(nix)'`
+
+### `packaging:the-operator-selects-the-installed-version` — The operator selects the installed version
+
+The operator and the target's tool manager MUST choose the installed `rk` version before any staging or landing begins, and `rk stage`, `rk init`, `rk upgrade`, `rk adopt`, and `rk status` MUST run from the installed binary alone, with no fetch, resolution, or execution of another release, because acquisition is the manager's workflow, which `rk self-depend` may assist, and a landing that reaches for another release is a second installer inside the tool.
+
+#### Scenario: A target two releases behind is staged and landed offline
+
+- GIVEN a target whose receipt names an older `rk_version`, a newer `rk` the operator installed through the target's manager, and no network
+- WHEN `rk stage` and then `rk upgrade --apply` run
+- THEN both complete from the installed binary, no registry, forge, or cache is consulted, and the receipt names the installed version
+
+Verify: `cargo nextest run -E 'test(stage_and_landing_need_no_release_resolution_network_access)'`
 
 ### `packaging:the-consumer-pin-has-two-facts-and-one-mover` — The consumer pin has two facts and one mover
 
