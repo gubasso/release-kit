@@ -14,6 +14,8 @@ allow = [
   "Apache-2.0 WITH LLVM-exception",
   "Unicode-3.0",
   "Unlicense",
+  # inotify and inotify-sys, dev-only, behind the stage isolation proof.
+  "ISC",
 ]
 exceptions = [
   { name = "release-kit", allow = ["CC-BY-4.0"] },

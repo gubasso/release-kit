@@ -57,8 +57,9 @@ struct CleanReport {
 /// # Errors
 ///
 /// Returns [`RkError::Missing`] for a target that is not a directory, the
-/// parameter resolution's own failures, a `state-drift` refusal for an
-/// existing nonempty output, and [`RkError::Io`] for a write that fails;
+/// parameter resolution's own failures, a `destructive-refusal` for a
+/// stage root inside the target, a `state-drift` refusal for an existing
+/// nonempty output, and [`RkError::Io`] for a write that fails;
 /// `clean` returns the refusals `crate::stage::clean::validate` names.
 pub fn run(args: &StageArgs) -> Result<(), RkError> {
     match &args.action {
@@ -118,7 +119,7 @@ fn create(args: &StageArgs) -> Result<(), RkError> {
         evidence,
     })?;
     let (output, source) = stage::resolve_output(args.output.as_deref(), target.as_std_path())?;
-    let prepared = stage::prepare(&output, source)?;
+    let prepared = stage::prepare(&output, source, target.as_std_path())?;
     let composed = stage::compose(
         &projection,
         &params,

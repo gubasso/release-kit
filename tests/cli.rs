@@ -24879,6 +24879,7 @@ fn production_commands_neither_read_nor_remove_a_stage() {
     }
     let before_default = tree_snapshot(&default_stage);
     let before_custom = tree_snapshot(&custom_stage);
+    let mut watcher = StageWatcher::over(&[&default_stage, &custom_stage]);
 
     let mut init = rk();
     with_state(&mut init);
@@ -24898,6 +24899,12 @@ fn production_commands_neither_read_nor_remove_a_stage() {
         .env("RK_STAGE_ROOT", &custom)
         .assert()
         .success();
+    // Drained before the snapshot below reads the stage itself.
+    let events = watcher.drain();
+    assert!(
+        events.is_empty(),
+        "a production command touched the stage: {events:?}"
+    );
     for output in [init.get_output(), status.get_output()] {
         let text = format!(
             "{}{}",
@@ -24917,6 +24924,95 @@ fn production_commands_neither_read_nor_remove_a_stage() {
     }
     assert_eq!(tree_snapshot(&default_stage), before_default);
     assert_eq!(tree_snapshot(&custom_stage), before_custom);
+}
+
+/// Process-level observation of a stage: every directory below each root
+/// watched for an open, a read, an attribute change, a deletion, or a
+/// move-out, so a production command that so much as opened a staged
+/// file is caught. Where the kernel offers no inotify, the watcher is
+/// absent and says so; the byte snapshot beside it still holds.
+struct StageWatcher {
+    inotify: Option<inotify::Inotify>,
+    names: std::collections::HashMap<inotify::WatchDescriptor, PathBuf>,
+}
+
+impl StageWatcher {
+    fn over(roots: &[&Path]) -> Self {
+        let inotify = match inotify::Inotify::init() {
+            Ok(inotify) => inotify,
+            Err(error) => {
+                println!(
+                    "note: inotify is unavailable here ({error}); the byte snapshot alone holds"
+                );
+                return Self {
+                    inotify: None,
+                    names: std::collections::HashMap::new(),
+                };
+            }
+        };
+        let mask = inotify::WatchMask::OPEN
+            | inotify::WatchMask::ACCESS
+            | inotify::WatchMask::ATTRIB
+            | inotify::WatchMask::DELETE
+            | inotify::WatchMask::MOVED_FROM;
+        // Every directory is listed before any watch is added, so the
+        // listing itself is not an event the watches see.
+        let mut dirs = Vec::new();
+        for root in roots {
+            let mut stack = vec![root.to_path_buf()];
+            while let Some(dir) = stack.pop() {
+                for entry in std::fs::read_dir(&dir).expect("the directory reads") {
+                    let path = entry.expect("an entry").path();
+                    if path.is_dir() {
+                        stack.push(path);
+                    }
+                }
+                dirs.push(dir);
+            }
+        }
+        let mut names = std::collections::HashMap::new();
+        let mut watches = inotify.watches();
+        for dir in dirs {
+            let descriptor = watches.add(&dir, mask).expect("the directory is watchable");
+            names.insert(descriptor, dir);
+        }
+        Self {
+            inotify: Some(inotify),
+            names,
+        }
+    }
+
+    /// Every event that arrived, as `directory/name: mask`.
+    fn drain(&mut self) -> Vec<String> {
+        let Some(inotify) = self.inotify.as_mut() else {
+            return Vec::new();
+        };
+        let mut buffer = [0u8; 16384];
+        let mut out = Vec::new();
+        loop {
+            match inotify.read_events(&mut buffer) {
+                Ok(events) => {
+                    for event in events {
+                        let dir = self
+                            .names
+                            .get(&event.wd)
+                            .map_or_else(|| "?".to_owned(), |dir| dir.display().to_string());
+                        out.push(format!(
+                            "{dir}/{}: {:?}",
+                            event
+                                .name
+                                .map(|name| name.to_string_lossy().into_owned())
+                                .unwrap_or_default(),
+                            event.mask
+                        ));
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(error) => panic!("the inotify queue failed to read: {error}"),
+            }
+        }
+        out
+    }
 }
 
 /// SATISFIES staging:a-stage-is-one-target-specific-candidate
@@ -25050,6 +25146,78 @@ fn stage_output_precedence_is_flag_then_env_then_state_root() {
     assert_eq!(report["stage_root"], expected.display().to_string());
     assert_eq!(report["output_source"], "state root");
     assert!(expected.join("stage.json").is_file());
+}
+
+/// SATISFIES staging:a-stage-is-one-target-specific-candidate
+///
+/// Whichever source names it, a stage root at or below the target refuses
+/// before any component is created, and the target stays byte-identical.
+#[test]
+fn a_stage_root_inside_the_target_refuses_and_the_target_stays_byte_identical() {
+    let target = stage_target();
+    let canonical = std::fs::canonicalize(target.path()).expect("canonical");
+    let before = tree_digests(target.path());
+    let entries_before = std::fs::read_dir(target.path()).expect("reads").count();
+    // The application log is silenced: a state root inside the target is
+    // the operator's own choice, and the log record it writes there is not
+    // the stage this test holds out.
+    let refused = |assert: assert_cmd::assert::Assert| {
+        let out = assert
+            .code(73)
+            .stderr(predicate::str::contains("inside the target"))
+            .get_output()
+            .stderr
+            .clone();
+        let diagnostic: serde_json::Value = serde_json::from_slice(&out).expect("one line");
+        assert_eq!(diagnostic["reason"], "destructive-refusal");
+        assert_eq!(diagnostic["target_state"], "unchanged");
+    };
+    // --output inside the target, absent and nested, and the target itself.
+    for output in [
+        canonical.join("stage"),
+        canonical.join("deep/er/stage"),
+        canonical.clone(),
+    ] {
+        refused(
+            stage_cmd(target.path())
+                .env("RUST_LOG", "off")
+                .arg("--output")
+                .arg(&output)
+                .arg("--json")
+                .assert(),
+        );
+    }
+    // RK_STAGE_ROOT below the target.
+    refused(
+        stage_cmd(target.path())
+            .env("RUST_LOG", "off")
+            .env("RK_STAGE_ROOT", canonical.join("stages"))
+            .arg("--json")
+            .assert(),
+    );
+    // The state root below the target, through XDG_STATE_HOME and
+    // through HOME alone.
+    refused(
+        stage_cmd(target.path())
+            .env("RUST_LOG", "off")
+            .env("XDG_STATE_HOME", canonical.join(".state"))
+            .arg("--json")
+            .assert(),
+    );
+    refused(
+        stage_cmd(target.path())
+            .env("RUST_LOG", "off")
+            .env_remove("XDG_STATE_HOME")
+            .env("HOME", &canonical)
+            .arg("--json")
+            .assert(),
+    );
+    assert_eq!(tree_digests(target.path()), before, "the target changed");
+    assert_eq!(
+        std::fs::read_dir(target.path()).expect("reads").count(),
+        entries_before,
+        "a refusal created an entry inside the target"
+    );
 }
 
 /// SATISFIES staging:a-visible-stage-is-complete
@@ -25811,4 +25979,126 @@ fn stage_clean_stays_confined_after_an_adversarial_swap() {
         stderr.contains("was replaced while the stage was being removed"),
         "{stderr}"
     );
+}
+
+/// SATISFIES staging:cleanup-holds-what-it-validated-open
+///
+/// The stage moves aside after validation and nothing takes its path.
+/// The held descriptor still empties the validated directory; the absent
+/// name is reported as the swap it is, never as a missing input.
+#[test]
+fn stage_clean_reports_a_stage_moved_aside_during_removal_as_a_swap() {
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let canonical = std::fs::canonicalize(scratch.path()).expect("canonical");
+    let target = stage_target();
+    let stage = canonical.join("stage");
+    stage_json(target.path(), &stage);
+    let pause = canonical.join("pause");
+    std::fs::create_dir(&pause).expect("creates");
+    let child = spawn_clean(&stage, &pause, None);
+    wait_for(&pause.join("validated"));
+    let moved = canonical.join("moved");
+    std::fs::rename(&stage, &moved).expect("the stage moves aside");
+    std::fs::write(pause.join("proceed"), b"").expect("the go-ahead writes");
+    let output = child.wait_with_output().expect("the run finishes");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(74), "{stderr}");
+    assert!(
+        stderr.contains("vanished from its parent while the stage was being removed"),
+        "{stderr}"
+    );
+    assert!(!stage.exists());
+    assert!(moved.is_dir());
+    assert!(
+        std::fs::read_dir(&moved).expect("reads").next().is_none(),
+        "the validated directory kept content: {:?}",
+        stage_paths(&moved)
+    );
+}
+
+/// SATISFIES staging:cleanup-holds-what-it-validated-open
+///
+/// A subdirectory is exchanged for another tree between its check and
+/// its open. The opened descriptor's identity differs from the checked
+/// entry, the walk stops there, and the tree that took the name keeps
+/// every byte.
+#[test]
+fn stage_clean_stays_confined_after_a_nested_directory_exchange() {
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let canonical = std::fs::canonicalize(scratch.path()).expect("canonical");
+    let target = stage_target();
+    let stage = canonical.join("stage");
+    stage_json(target.path(), &stage);
+    let decoy = canonical.join("decoy");
+    std::fs::create_dir_all(decoy.join("deep")).expect("creates");
+    std::fs::write(decoy.join("canary"), b"still here").expect("writes");
+    std::fs::write(decoy.join("deep/canary"), b"still here too").expect("writes");
+    let decoy_before = tree_digests(&decoy);
+    let pause = canonical.join("pause");
+    std::fs::create_dir(&pause).expect("creates");
+    let child = spawn_clean(&stage, &pause, Some("reference"));
+    wait_for(&pause.join("validated"));
+    std::fs::write(pause.join("proceed"), b"").expect("the first go-ahead writes");
+    wait_for(&pause.join("checked"));
+    // The exchange, in the window between the check and the open.
+    let aside = canonical.join("reference-aside");
+    std::fs::rename(stage.join("reference"), &aside).expect("the checked directory moves aside");
+    std::fs::rename(&decoy, stage.join("reference")).expect("the decoy takes its name");
+    std::fs::write(pause.join("proceed-checked"), b"").expect("the second go-ahead writes");
+    let output = child.wait_with_output().expect("the run finishes");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(74), "{stderr}");
+    assert!(
+        stderr.contains("was exchanged for another directory while the stage was being removed"),
+        "{stderr}"
+    );
+    assert_eq!(
+        tree_digests(&stage.join("reference")),
+        decoy_before,
+        "the exchanged-in tree lost bytes: {stderr}"
+    );
+    assert!(
+        aside.join("CHANGELOG.md").is_file(),
+        "the directory moved aside was walked through its old name"
+    );
+    assert!(
+        stage.is_dir(),
+        "the stage root itself went while the walk had stopped"
+    );
+}
+
+/// `rk stage clean <stage>` spawned with the proof seams: `pause` is the
+/// pause directory, and `before_open` names the child whose open waits.
+fn spawn_clean(stage: &Path, pause: &Path, before_open: Option<&str>) -> std::process::Child {
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_rk"));
+    for var in GIT_HOOK_VARS {
+        child.env_remove(var);
+    }
+    child
+        .env("XDG_STATE_HOME", scratch_state_root())
+        .env("RK_STAGE_CLEAN_PAUSE_AFTER_VALIDATE", pause)
+        .env_remove("RK_STAGE_CLEAN_PAUSE_BEFORE_OPEN");
+    if let Some(name) = before_open {
+        child.env("RK_STAGE_CLEAN_PAUSE_BEFORE_OPEN", name);
+    }
+    child
+        .args(["stage", "clean"])
+        .arg(stage)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("the clean spawns")
+}
+
+/// Wait, bounded, for the run to announce a seam.
+fn wait_for(flag: &Path) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while !flag.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the run never reached {}",
+            flag.display()
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
 }

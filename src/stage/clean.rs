@@ -23,11 +23,17 @@ use crate::error::RkError;
 /// anything, so a test can swap the path in between.
 pub const PAUSE_VAR: &str = "RK_STAGE_CLEAN_PAUSE_AFTER_VALIDATE";
 
+/// The proof's second seam: the name of one child directory whose open
+/// waits, after its check, for `proceed-checked` under the pause
+/// directory, having written `checked` there.
+pub const PAUSE_BEFORE_OPEN_VAR: &str = "RK_STAGE_CLEAN_PAUSE_BEFORE_OPEN";
+
 /// A stage validated and held open for removal.
 #[derive(Debug)]
 pub struct Validated {
     parent: File,
     stage: File,
+    stage_dev: u64,
     stage_ino: u64,
     name: std::ffi::OsString,
     resolved: PathBuf,
@@ -88,8 +94,9 @@ pub fn validate(argument: &Path) -> Result<Validated, RkError> {
     let target = judge_receipt(&resolved)?;
     let parent_dir = open_dir(&parent)?;
     let stage = open_dir(&proc_path(&parent_dir).join(&name))?;
-    let stage_ino = stage.metadata()?.ino();
-    if stage_ino != metadata.ino() {
+    let opened = stage.metadata()?;
+    let (stage_dev, stage_ino) = (opened.dev(), opened.ino());
+    if Identity::of(&opened) != Identity::of(&metadata) {
         return Err(refuse(
             format!(
                 "{} changed while it was being validated",
@@ -101,6 +108,7 @@ pub fn validate(argument: &Path) -> Result<Validated, RkError> {
     Ok(Validated {
         parent: parent_dir,
         stage,
+        stage_dev,
         stage_ino,
         name,
         resolved,
@@ -181,21 +189,39 @@ fn judge_entry(argument: &Path, resolved: &Path) -> Result<fs::Metadata, RkError
     Ok(metadata)
 }
 
-/// The receipt at the resolved path, judged: present, parsing, at this
-/// binary's schema, naming the directory it sits in, and naming a target
-/// that is not the directory or below it. Returns the target it names.
+/// The schema alone, read first so a receipt at another schema is named
+/// as such rather than as one missing this schema's fields.
+#[derive(Debug, serde::Deserialize)]
+struct SchemaOnly {
+    schema: String,
+}
+
+/// The two paths a cleanup reads from a receipt once its schema is
+/// known, each required: a receipt missing one is not a stage receipt
+/// this verb removes.
+#[derive(Debug, serde::Deserialize)]
+struct CleanReceipt {
+    stage_root: String,
+    target: String,
+}
+
+/// The receipt at the resolved path, judged: present, parsing as a typed
+/// receipt, at this binary's schema, naming the directory it sits in, and
+/// naming a canonical absolute target that is not the directory or below
+/// it. Returns the target it names.
 fn judge_receipt(resolved: &Path) -> Result<String, RkError> {
     let receipt_path = resolved.join(RECEIPT_NAME);
-    let receipt: serde_json::Value = match fs::read(&receipt_path) {
-        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|error| {
-            refuse(
-                format!(
-                    "{} does not parse as a stage receipt: {error}",
-                    receipt_path.display()
-                ),
-                "a directory rk stage wrote, whose stage.json reads",
-            )
-        })?,
+    let unparsed = |error: serde_json::Error| {
+        refuse(
+            format!(
+                "{} does not parse as a stage receipt: {error}",
+                receipt_path.display()
+            ),
+            "a directory rk stage wrote, whose stage.json carries schema, stage_root, and target",
+        )
+    };
+    let bytes = match fs::read(&receipt_path) {
+        Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Err(refuse(
                 format!(
@@ -207,50 +233,86 @@ fn judge_receipt(resolved: &Path) -> Result<String, RkError> {
         }
         Err(error) => return Err(error.into()),
     };
-    let schema = receipt.get("schema").and_then(serde_json::Value::as_str);
-    if schema != Some(STAGE_SCHEMA) {
+    let declared: SchemaOnly = serde_json::from_slice(&bytes).map_err(unparsed)?;
+    if declared.schema != STAGE_SCHEMA {
         return Err(RkError::refusal(
             Diagnostic::new(
                 Reason::UnsupportedSchema,
                 format!(
-                    "{} declares schema {}, and this binary removes only {STAGE_SCHEMA}",
+                    "{} declares schema {:?}, and this binary removes only {STAGE_SCHEMA}",
                     receipt_path.display(),
-                    schema.map_or_else(|| "none".to_owned(), |schema| format!("{schema:?}"))
+                    declared.schema
                 ),
             )
             .expected(format!("a receipt declaring {STAGE_SCHEMA}"))
             .target_state("unchanged"),
         ));
     }
-    let declared = receipt
-        .get("stage_root")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
-    if Path::new(declared) != resolved {
+    let receipt: CleanReceipt = serde_json::from_slice(&bytes).map_err(unparsed)?;
+    if Path::new(&receipt.stage_root) != resolved {
         return Err(refuse(
             format!(
-                "{} names {declared:?} as its stage root, not {}",
+                "{} names {:?} as its stage root, not {}",
                 receipt_path.display(),
+                receipt.stage_root,
                 resolved.display()
             ),
             "a receipt whose stage_root is the directory it sits in",
         ));
     }
-    let target = receipt
-        .get("target")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default()
-        .to_owned();
-    if !target.is_empty() && Path::new(&target).starts_with(resolved) {
+    let target = Path::new(&receipt.target);
+    if !is_canonical_shape(target) {
         return Err(refuse(
             format!(
-                "{} is the target {target} or an ancestor of it, never a stage",
-                resolved.display()
+                "{} names {:?} as its target, which is not a canonical absolute path",
+                receipt_path.display(),
+                receipt.target
+            ),
+            "a receipt whose target is the canonical absolute path rk stage recorded",
+        ));
+    }
+    if let Ok(canonical) = fs::canonicalize(target)
+        && canonical != target
+    {
+        return Err(refuse(
+            format!(
+                "{} names {:?} as its target, whose canonical path is {}",
+                receipt_path.display(),
+                receipt.target,
+                canonical.display()
+            ),
+            "a receipt whose target is the canonical absolute path rk stage recorded",
+        ));
+    }
+    if target.starts_with(resolved) {
+        return Err(refuse(
+            format!(
+                "{} is the target {} or an ancestor of it, never a stage",
+                resolved.display(),
+                receipt.target
             ),
             "a stage directory outside the target it describes",
         ));
     }
-    Ok(target)
+    Ok(receipt.target)
+}
+
+/// Whether a recorded path has the shape a canonical path has: absolute,
+/// nonempty, and made of plain names alone.
+fn is_canonical_shape(path: &Path) -> bool {
+    use std::path::Component;
+    let mut components = path.components();
+    if components.next() != Some(Component::RootDir) {
+        return false;
+    }
+    let mut any = false;
+    for component in components {
+        if !matches!(component, Component::Normal(_)) {
+            return false;
+        }
+        any = true;
+    }
+    any
 }
 
 /// The absence of the argument, as the no-input failure.
@@ -269,64 +331,169 @@ fn missing(argument: &Path, error: &std::io::Error) -> RkError {
     }
 }
 
+/// One entry's identity: the device and inode the check saw, which the
+/// opened descriptor must agree with before anything below it goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Identity {
+    dev: u64,
+    ino: u64,
+}
+
+impl Identity {
+    fn of(metadata: &fs::Metadata) -> Self {
+        Self {
+            dev: metadata.dev(),
+            ino: metadata.ino(),
+        }
+    }
+}
+
+/// The failure for an entry that changed under the removal: the walk
+/// stops, nothing beyond the held descriptors was touched, and the run
+/// exits as an I/O failure naming where.
+fn swapped(path: &Path, detail: &str) -> std::io::Error {
+    swapped_leaving(
+        path,
+        detail,
+        "the removal stopped there, and nothing outside the validated stage was touched",
+    )
+}
+
+/// [`swapped`], stating what the run left behind in its own words.
+fn swapped_leaving(path: &Path, detail: &str, aftermath: &str) -> std::io::Error {
+    std::io::Error::other(format!(
+        "{} {detail} while the stage was being removed; {aftermath}",
+        path.display()
+    ))
+}
+
 /// Remove the validated stage through its held descriptors: every entry
 /// below it, then the directory entry itself, which is removed only while
 /// the parent still names the directory that was validated.
 ///
 /// # Errors
 ///
-/// Any removal failure, and an I/O failure naming the path where the
-/// parent's entry was replaced while the stage was being emptied; in that
+/// Any removal failure, and an I/O failure naming the entry where the
+/// tree changed under the removal: a child whose opened identity differs
+/// from the one checked, a name that vanished after validation, or a
+/// parent entry replaced while the stage was being emptied. In the last
 /// case the validated directory's contents are gone and the entry at the
 /// path was left alone.
 pub fn remove(validated: &Validated) -> Result<(), RkError> {
-    pause_for_proof();
-    remove_contents(&validated.stage)?;
+    pause_for_proof("validated");
+    let shown = validated.resolved.as_path();
+    remove_contents(&validated.stage, shown)?;
     let entry = proc_path(&validated.parent).join(&validated.name);
-    let current = fs::symlink_metadata(&entry)?;
-    if current.file_type().is_symlink() || !current.is_dir() || current.ino() != validated.stage_ino
+    let current = match fs::symlink_metadata(&entry) {
+        Ok(current) => current,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(RkError::Io(swapped_leaving(
+                shown,
+                "vanished from its parent",
+                "the validated directory's contents were removed through the held descriptor, and nothing else was touched",
+            )));
+        }
+        Err(error) => return Err(error.into()),
+    };
+    if current.file_type().is_symlink()
+        || !current.is_dir()
+        || Identity::of(&current)
+            != (Identity {
+                dev: validated.stage_dev,
+                ino: validated.stage_ino,
+            })
     {
-        return Err(RkError::Io(std::io::Error::other(format!(
-            "{} was replaced while the stage was being removed; the validated directory's contents were removed and the entry now at that path was left alone",
-            validated.resolved.display()
-        ))));
+        return Err(RkError::Io(swapped_leaving(
+            shown,
+            "was replaced",
+            "the validated directory's contents were removed and the entry now at that path was left alone",
+        )));
     }
     fs::remove_dir(&entry)?;
     Ok(())
 }
 
 /// Remove every entry below the open directory `dir`, addressing each by
-/// the descriptor and never by the validated path.
-fn remove_contents(dir: &File) -> std::io::Result<()> {
+/// the descriptor and never by the validated path. A directory child is
+/// opened and its descriptor's identity compared with the checked entry
+/// before the walk descends, and compared again before its name goes; a
+/// file's entry is checked immediately before its unlink. `shown` is the
+/// path the failure names for the operator.
+fn remove_contents(dir: &File, shown: &Path) -> std::io::Result<()> {
     let base = proc_path(dir);
+    let vanished = |error: std::io::Error, name: &std::ffi::OsStr| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            swapped(&shown.join(name), "vanished")
+        } else {
+            error
+        }
+    };
     for entry in fs::read_dir(&base)? {
         let entry = entry?;
-        let path = base.join(entry.file_name());
-        let metadata = fs::symlink_metadata(&path)?;
-        if metadata.is_dir() {
-            let sub = open_dir(&path)?;
-            remove_contents(&sub)?;
+        let name = entry.file_name();
+        let path = base.join(&name);
+        let checked = fs::symlink_metadata(&path).map_err(|error| vanished(error, &name))?;
+        if checked.is_dir() {
+            pause_before_open(&name);
+            let sub = open_dir(&path).map_err(|error| vanished(error, &name))?;
+            let opened = Identity::of(&sub.metadata()?);
+            if opened != Identity::of(&checked) {
+                return Err(swapped(
+                    &shown.join(&name),
+                    "was exchanged for another directory",
+                ));
+            }
+            remove_contents(&sub, &shown.join(&name))?;
             drop(sub);
-            fs::remove_dir(&path)?;
+            let again = fs::symlink_metadata(&path).map_err(|error| vanished(error, &name))?;
+            if again.file_type().is_symlink() || Identity::of(&again) != opened {
+                return Err(swapped(
+                    &shown.join(&name),
+                    "was replaced after it was emptied",
+                ));
+            }
+            fs::remove_dir(&path).map_err(|error| vanished(error, &name))?;
         } else {
-            fs::remove_file(&path)?;
+            let again = fs::symlink_metadata(&path).map_err(|error| vanished(error, &name))?;
+            if again.is_dir() || Identity::of(&again) != Identity::of(&checked) {
+                return Err(swapped(
+                    &shown.join(&name),
+                    "was exchanged for another entry",
+                ));
+            }
+            fs::remove_file(&path).map_err(|error| vanished(error, &name))?;
         }
     }
     Ok(())
 }
 
-/// The proof's pause: announce that validation is done, then wait for the
-/// go-ahead. Bounded, so a forgotten variable cannot hang a run forever.
-fn pause_for_proof() {
+/// The proof's pause: announce `tag` under the pause directory, then
+/// wait for the matching go-ahead. Bounded, so a forgotten variable
+/// cannot hang a run forever. The first pause, after validation, waits
+/// for `proceed`; every later one waits for `proceed-<tag>`.
+fn pause_for_proof(tag: &str) {
     let Some(dir) = std::env::var_os(PAUSE_VAR).filter(|value| !value.is_empty()) else {
         return;
     };
     let dir = PathBuf::from(dir);
-    let _ = fs::write(dir.join("validated"), b"");
-    let proceed = dir.join("proceed");
+    let _ = fs::write(dir.join(tag), b"");
+    let proceed = if tag == "validated" {
+        dir.join("proceed")
+    } else {
+        dir.join(format!("proceed-{tag}"))
+    };
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     while !proceed.exists() && std::time::Instant::now() < deadline {
         std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+/// The second seam: pause between the check of a child directory named
+/// by [`PAUSE_BEFORE_OPEN_VAR`] and its open, so a test can exchange it
+/// in the one window the identity comparison exists for.
+fn pause_before_open(name: &std::ffi::OsStr) {
+    if std::env::var_os(PAUSE_BEFORE_OPEN_VAR).is_some_and(|wanted| wanted == name) {
+        pause_for_proof("checked");
     }
 }
 
@@ -373,6 +540,74 @@ mod tests {
             Reason::DestructiveRefusal
         );
         assert!(bare.is_dir() && other.is_dir() && moved.is_dir());
+    }
+
+    /// A receipt lacking its target, naming a relative target, or naming a
+    /// non-canonical target refuses before anything opens, even where a
+    /// repository sits below the candidate path.
+    #[test]
+    fn a_malformed_receipt_refuses_before_anything_is_removed() {
+        let scratch = tempfile::tempdir().expect("a scratch dir exists");
+        let canonical = std::fs::canonicalize(scratch.path()).expect("canonical");
+        let candidate = canonical.join("candidate");
+        std::fs::create_dir_all(candidate.join("repo/.git")).expect("creates");
+        std::fs::write(candidate.join("repo/precious"), b"keep").expect("writes");
+        let receipt = candidate.join("stage.json");
+        for body in [
+            format!(
+                r#"{{"schema":"rk.stage/1","stage_root":"{}"}}"#,
+                candidate.display()
+            ),
+            format!(
+                r#"{{"schema":"rk.stage/1","stage_root":"{}","target":null}}"#,
+                candidate.display()
+            ),
+            format!(
+                r#"{{"schema":"rk.stage/1","stage_root":"{}","target":""}}"#,
+                candidate.display()
+            ),
+            format!(
+                r#"{{"schema":"rk.stage/1","stage_root":"{}","target":"repo"}}"#,
+                candidate.display()
+            ),
+            format!(
+                r#"{{"schema":"rk.stage/1","stage_root":"{}","target":"{}/../candidate/repo"}}"#,
+                candidate.display(),
+                candidate.display()
+            ),
+            format!(
+                r#"{{"schema":"rk.stage/1","stage_root":"{}","target":"{}/repo/"}}"#,
+                candidate.display(),
+                candidate.display()
+            ),
+        ] {
+            std::fs::write(&receipt, &body).expect("writes");
+            let error = validate(&candidate).expect_err("refuses");
+            assert_eq!(reason_of(&error), Reason::DestructiveRefusal, "{body}");
+            assert_eq!(
+                std::fs::read(candidate.join("repo/precious")).expect("reads"),
+                b"keep",
+                "{body}"
+            );
+        }
+        // A receipt whose target is a link to the real repository: its
+        // canonical path differs from what it names.
+        let link = canonical.join("link");
+        std::os::unix::fs::symlink(candidate.join("repo"), &link).expect("links");
+        std::fs::write(
+            &receipt,
+            format!(
+                r#"{{"schema":"rk.stage/1","stage_root":"{}","target":"{}"}}"#,
+                candidate.display(),
+                link.display()
+            ),
+        )
+        .expect("writes");
+        assert_eq!(
+            reason_of(&validate(&candidate).expect_err("refuses")),
+            Reason::DestructiveRefusal
+        );
+        assert!(candidate.join("repo/.git").is_dir());
     }
 
     /// A valid stage is removed through its descriptors, and its siblings

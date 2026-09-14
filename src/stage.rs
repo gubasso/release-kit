@@ -277,20 +277,79 @@ impl Prepared {
     }
 }
 
-/// Create the output's parent, refuse an existing nonempty output, and
-/// name the canonical stage root.
-///
-/// Below the state root every directory this creates is owner-only, and
-/// a base that turns out to be a link or another file type refuses,
-/// because a private stage under a directory somebody else controls is
-/// not private.
+/// The path `output` will stand at once created, computed without
+/// creating any component: the deepest existing ancestor canonicalized,
+/// the remaining components appended as named.
 ///
 /// # Errors
 ///
-/// Returns a `state-drift` refusal for an existing nonempty output, a
+/// A refusal for a remaining component that is `..`, which no stage path
+/// may carry, and [`RkError::Io`] where the existing ancestor cannot be
+/// canonicalized.
+fn eventual(output: &Path) -> Result<PathBuf, RkError> {
+    let mut existing = output;
+    let mut rest: Vec<&std::ffi::OsStr> = Vec::new();
+    loop {
+        match fs::symlink_metadata(existing) {
+            Ok(_) => break,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        let Some(name) = existing.file_name() else {
+            break;
+        };
+        rest.push(name);
+        existing = existing.parent().unwrap_or_else(|| Path::new("/"));
+    }
+    let mut path = fs::canonicalize(if existing.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        existing
+    })?;
+    for name in rest.into_iter().rev() {
+        if name == ".." {
+            return Err(RkError::refusal(
+                Diagnostic::new(
+                    Reason::Usage,
+                    format!(
+                        "{} climbs through a directory that does not exist yet, and nothing was written",
+                        output.display()
+                    ),
+                )
+                .expected("an output path whose absent components are plain names")
+                .target_state("unchanged"),
+            ));
+        }
+        if name != "." {
+            path.push(name);
+        }
+    }
+    Ok(path)
+}
+
+/// Resolve where the stage will stand, refuse a stage inside the target,
+/// refuse an existing nonempty output, create the parent, and name the
+/// canonical stage root.
+///
+/// Nothing is created before the stage root is known and judged against
+/// the target: a stage below the target would be a write inside the
+/// repository this verb promises to leave alone, whichever of the flag,
+/// the variable, or the state root put it there. Below the state root
+/// every directory this creates is owner-only, and a base that turns out
+/// to be a link or another file type refuses, because a private stage
+/// under a directory somebody else controls is not private.
+///
+/// # Errors
+///
+/// Returns a `destructive-refusal` for a stage root at or below the
+/// target, a `state-drift` refusal for an existing nonempty output, a
 /// refusal for an output whose final component is no name, and
 /// [`RkError::Io`] for a parent that cannot be created or read.
-pub fn prepare(output: &Path, source: OutputSource) -> Result<Prepared, RkError> {
+pub fn prepare(
+    output: &Path,
+    source: OutputSource,
+    canonical_target: &Path,
+) -> Result<Prepared, RkError> {
     let name = output
         .file_name()
         .filter(|name| *name != "." && *name != "..")
@@ -305,6 +364,30 @@ pub fn prepare(output: &Path, source: OutputSource) -> Result<Prepared, RkError>
             )
         })?
         .to_owned();
+    let eventual = eventual(output)?;
+    if eventual.starts_with(canonical_target) {
+        return Err(RkError::refusal(
+            Diagnostic::new(
+                Reason::DestructiveRefusal,
+                format!(
+                    "the stage would stand at {}, inside the target {}, and nothing was written",
+                    eventual.display(),
+                    canonical_target.display()
+                ),
+            )
+            .expected("a stage root outside the target repository")
+            .action(match source {
+                OutputSource::Flag => "pass an --output outside the target".to_owned(),
+                OutputSource::Environment => {
+                    format!("point {OUTPUT_ROOT_VAR} outside the target, or pass --output")
+                }
+                OutputSource::StateRoot => {
+                    "move the state root outside the target, or pass --output".to_owned()
+                }
+            })
+            .target_state("unchanged"),
+        ));
+    }
     let parent = output
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -532,44 +615,98 @@ pub fn reference_files() -> Vec<(String, &'static [u8])> {
     out
 }
 
+/// How many sibling names a write tries before it refuses.
+const TEMP_ATTEMPTS: u32 = 8;
+
+/// The sibling name for one attempt: the first names this process alone,
+/// and every retry adds a nonce, so an entry somebody else left under the
+/// first name is stepped around rather than reused.
+fn temp_name(name: &std::ffi::OsStr, attempt: u32) -> std::ffi::OsString {
+    let mut out = std::ffi::OsString::from(format!(".rk-stage-{}", std::process::id()));
+    if attempt > 0 {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.subsec_nanos())
+            ^ attempt.rotate_left(20);
+        out.push(format!("-{nonce:08x}"));
+    }
+    out.push(".");
+    out.push(name);
+    out
+}
+
+/// Create the fresh sibling this write owns, exclusively: a name that
+/// already exists is never entered or removed, and the next name is tried
+/// instead, a bounded number of times.
+fn create_temp(prepared: &Prepared) -> std::io::Result<PathBuf> {
+    let mut builder = fs::DirBuilder::new();
+    if prepared.owner_only {
+        builder.mode(0o700);
+    }
+    for attempt in 0..TEMP_ATTEMPTS {
+        let temp = prepared.parent.join(temp_name(&prepared.name, attempt));
+        match builder.create(&temp) {
+            Ok(()) => return Ok(temp),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        format!(
+            "every sibling name for the stage below {} is taken, and nothing was written or removed",
+            prepared.parent.display()
+        ),
+    ))
+}
+
 /// Write the composed stage whole, then rename it into place.
 ///
-/// Every file goes under a fresh sibling of the resolved root, the
-/// receipt last and owner-only, then one rename. A failure anywhere
-/// removes the sibling and leaves nothing at the resolved path.
+/// Every file goes under a fresh sibling of the resolved root that this
+/// write created exclusively, the receipt last and owner-only, then one
+/// rename. A failure anywhere removes that sibling alone and leaves
+/// nothing at the resolved path; an entry this write did not create is
+/// never touched.
 ///
 /// # Errors
 ///
 /// Any I/O failure, including the injected stop of the interruption
 /// proof, which reports as an I/O failure naming the path it stopped at.
 pub fn write(prepared: &Prepared, composed: &Composed) -> Result<(), RkError> {
-    let mut temp_name = std::ffi::OsString::from(format!(".rk-stage-{}.", std::process::id()));
-    temp_name.push(&prepared.name);
-    let temp = prepared.parent.join(temp_name);
-    let written = write_into(&temp, prepared.owner_only, composed)
-        .and_then(|()| fs::rename(&temp, &prepared.resolved));
+    let stop = std::env::var_os(INTERRUPT_VAR).map(PathBuf::from);
+    write_stopping_at(prepared, composed, stop.as_deref())
+}
+
+/// [`write`], stopped on purpose after the file at `stop`, as if the
+/// write after it had failed: the interruption proof's seam.
+///
+/// # Errors
+///
+/// As [`write`], plus the injected stop.
+pub fn write_stopping_at(
+    prepared: &Prepared,
+    composed: &Composed,
+    stop: Option<&Path>,
+) -> Result<(), RkError> {
+    let temp = create_temp(prepared)?;
+    let written =
+        write_into(&temp, composed, stop).and_then(|()| fs::rename(&temp, &prepared.resolved));
     if written.is_err() {
         let _ = fs::remove_dir_all(&temp);
     }
     written.map_err(RkError::Io)
 }
 
-/// The body of [`write`]: the sibling directory, every file, the
+/// The body of [`write`]: every file into the created sibling, then the
 /// receipt.
-fn write_into(temp: &Path, owner_only: bool, composed: &Composed) -> std::io::Result<()> {
-    let mut builder = fs::DirBuilder::new();
-    if owner_only {
-        builder.mode(0o700);
-    }
-    builder.create(temp)?;
-    let stop = std::env::var_os(INTERRUPT_VAR).map(PathBuf::from);
+fn write_into(temp: &Path, composed: &Composed, stop: Option<&Path>) -> std::io::Result<()> {
     for (path, bytes) in &composed.files {
         let destination = temp.join(path);
         if let Some(parent) = destination.parent() {
             fs::create_dir_all(parent)?;
         }
         fs::write(&destination, bytes)?;
-        if stop.as_deref().is_some_and(|stop| Path::new(path) == stop) {
+        if stop.is_some_and(|stop| Path::new(path) == stop) {
             return Err(std::io::Error::other(format!(
                 "the stage was stopped after {path} for the proof"
             )));
@@ -701,6 +838,142 @@ mod tests {
                     .any(|part| part == "_docs" || part == "tests" || part == "src"),
                 "{path}: an instance-owned or source path in the reference tree"
             );
+        }
+    }
+
+    /// A sibling somebody else left under the exact first candidate name
+    /// is neither entered nor removed: the write steps to the next name,
+    /// lands, and every byte of the stranger survives.
+    #[test]
+    fn a_pre_existing_temp_sibling_is_never_touched() {
+        let scratch = tempfile::tempdir().expect("a scratch dir exists");
+        let parent = std::fs::canonicalize(scratch.path()).expect("canonical");
+        let output = parent.join("stage");
+        let target = parent.join("target");
+        std::fs::create_dir(&target).expect("creates");
+        let prepared =
+            super::prepare(&output, super::OutputSource::Flag, &target).expect("prepares");
+        let stranger = parent.join(super::temp_name(std::ffi::OsStr::new("stage"), 0));
+        std::fs::create_dir_all(stranger.join("deep")).expect("creates");
+        std::fs::write(stranger.join("deep/canary"), b"not yours").expect("writes");
+        std::fs::write(stranger.join("canary"), b"still not yours").expect("writes");
+        let composed = super::Composed {
+            files: vec![(
+                "artifacts/a.txt".to_owned(),
+                std::borrow::Cow::Borrowed(b"a"),
+            )],
+            receipt: sample_receipt(),
+        };
+        super::write(&prepared, &composed).expect("the write lands beside the stranger");
+        assert_eq!(
+            std::fs::read(output.join("artifacts/a.txt")).expect("reads"),
+            b"a"
+        );
+        assert_eq!(
+            std::fs::read(stranger.join("deep/canary")).expect("the stranger reads"),
+            b"not yours"
+        );
+        assert_eq!(
+            std::fs::read(stranger.join("canary")).expect("the stranger reads"),
+            b"still not yours"
+        );
+        // The interrupted variant removes only what it created.
+        let output_two = parent.join("stage-two");
+        let prepared =
+            super::prepare(&output_two, super::OutputSource::Flag, &target).expect("prepares");
+        let stranger_two = parent.join(super::temp_name(std::ffi::OsStr::new("stage-two"), 0));
+        std::fs::create_dir(&stranger_two).expect("creates");
+        std::fs::write(stranger_two.join("canary"), b"kept").expect("writes");
+        let stopped = super::write_stopping_at(
+            &prepared,
+            &composed,
+            Some(std::path::Path::new("artifacts/a.txt")),
+        );
+        assert!(stopped.is_err());
+        assert!(!output_two.exists());
+        assert_eq!(
+            std::fs::read(stranger_two.join("canary")).expect("the stranger reads"),
+            b"kept"
+        );
+        let leftovers: Vec<String> = std::fs::read_dir(&parent)
+            .expect("reads")
+            .map(|entry| {
+                entry
+                    .expect("an entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .filter(|name| name.starts_with(".rk-stage-"))
+            .collect();
+        assert_eq!(
+            leftovers.len(),
+            2,
+            "only the two strangers remain: {leftovers:?}"
+        );
+    }
+
+    /// A stage root at or below the target refuses before any component
+    /// is created, whichever source named it.
+    #[test]
+    fn a_stage_root_inside_the_target_refuses_before_anything_is_created() {
+        let scratch = tempfile::tempdir().expect("a scratch dir exists");
+        let target = std::fs::canonicalize(scratch.path())
+            .expect("canonical")
+            .join("t");
+        std::fs::create_dir(&target).expect("creates");
+        for (output, source) in [
+            (target.join("stage"), super::OutputSource::Flag),
+            (
+                target.join("deep/er/stage"),
+                super::OutputSource::Environment,
+            ),
+            (
+                target.join("state/release-kit/stages/k/v"),
+                super::OutputSource::StateRoot,
+            ),
+            (target.clone(), super::OutputSource::Flag),
+        ] {
+            let error = super::prepare(&output, source, &target).expect_err("refuses");
+            assert_eq!(
+                error.reason(),
+                crate::diagnostic::Reason::DestructiveRefusal
+            );
+            assert_eq!(error.exit_code(), 73);
+        }
+        assert_eq!(
+            std::fs::read_dir(&target).expect("reads").count(),
+            0,
+            "a refusal created a component inside the target"
+        );
+    }
+
+    fn sample_receipt() -> Receipt {
+        Receipt {
+            schema: STAGE_SCHEMA.to_owned(),
+            rk_version: "0.0.0".into(),
+            target: "/tmp/t".into(),
+            stage_root: "/tmp/s".into(),
+            parameters: Parameters {
+                tech: "rust".into(),
+                forge: "github".into(),
+                repo: "acme/widget".into(),
+                workflow: Workflow::Worktree,
+                style: Some(Style::Trunk),
+                nix: false,
+                trunk: "master".into(),
+                line_prefix: "release/".into(),
+                security_contact: String::new(),
+                security_response: "best-effort".into(),
+            },
+            receipt_schema_version: None,
+            candidates: vec![],
+            omissions: vec![],
+            collisions: vec![],
+            retired: vec![],
+            seeded_present: vec![],
+            state_present: vec![],
+            reference: vec![],
         }
     }
 
