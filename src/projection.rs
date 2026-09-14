@@ -172,11 +172,17 @@ impl Projection {
     /// destination two sources ship, a snippet the kind table does not
     /// classify, or a block this binary does not embed.
     pub fn compute(input: &ProjectionInput) -> Result<Self, RkError> {
+        Self::compute_over(&embedded_snippets(), input)
+    }
+
+    /// [`Self::compute`] over an explicit snippet list, whose paths carry
+    /// the `snippets/` root; the embedded tree in production, an injected
+    /// one under test.
+    fn compute_over(files: &[(String, &[u8])], input: &ProjectionInput) -> Result<Self, RkError> {
         let params = &input.params;
         let evidence = &input.evidence;
-        let files = embedded_snippets();
         let mut candidates = Vec::new();
-        for selected in select_pair(&files, params.tech(), params.forge())? {
+        for selected in select_pair(files, params.tech(), params.forge())? {
             if !params.nix() && NIX_DESTINATIONS.contains(&selected.destination.as_str()) {
                 continue;
             }
@@ -201,17 +207,18 @@ impl Projection {
         }
         let mut collisions = Vec::new();
         for destination in BLOCK_DESTINATIONS {
+            let (template, sources) = block_template(destination, params.workflow())?;
             if let Some(whole) = candidates
                 .iter()
                 .find(|candidate| candidate.destination == destination)
             {
                 return Err(anyhow::anyhow!(
-                    "{destination} is both a whole file from {} and a marked region; the payload is defective",
-                    whole.sources.join(", ")
+                    "{destination} is both a whole file from {} and a marked region from {}; the payload is defective",
+                    whole.sources.join(", "),
+                    sources.join(", ")
                 )
                 .into());
             }
-            let (template, sources) = block_template(destination, params.workflow())?;
             let region = render(template.as_bytes(), params);
             let (begin, end) = block_markers(destination).ok_or_else(|| {
                 anyhow::anyhow!("{destination} is a block destination with no markers")
@@ -1007,8 +1014,10 @@ fn propose_document(
     existing: Option<&[u8]>,
     region: &[u8],
 ) -> Result<Vec<u8>, String> {
-    // The block is release-kit's own text; the document is the target's
-    // bytes and is decoded only to judge its markers, which are ASCII.
+    // The block is release-kit's own text. The document is the target's
+    // bytes: the markdown splice works on them directly, and the marker
+    // judgment decodes a copy only to count ASCII markers, which a
+    // replacement character neither creates nor hides.
     let block = String::from_utf8_lossy(region).into_owned();
     if let Some(text) = existing
         && let Some(defect) = marker_defect(destination, &String::from_utf8_lossy(text))
@@ -1016,8 +1025,18 @@ fn propose_document(
         return Err(defect);
     }
     if destination == HOOKS_DESTINATION {
-        let text = existing.map(|bytes| String::from_utf8_lossy(bytes).into_owned());
-        return splice_hooks_block(text.as_deref(), &block).map(String::into_bytes);
+        // The hook splice is line-based text, so a document that is not
+        // UTF-8 has no honest place for the block: a lossy decode would
+        // rewrite a byte outside the markers, which a region never does.
+        let text = match existing {
+            None => None,
+            Some(bytes) => Some(std::str::from_utf8(bytes).map_err(|_| {
+                format!(
+                    "{destination} is not UTF-8, so the hook block has nowhere to land without rewriting the target's bytes"
+                )
+            })?),
+        };
+        return splice_hooks_block(text, &block).map(String::into_bytes);
     }
     Ok(splice_marked_block(existing, &block))
 }
@@ -1492,6 +1511,100 @@ mod tests {
             [region, b"\n"].concat(),
             "an absent file is fresh"
         );
+    }
+
+    /// A hook document that is not UTF-8 offers the block no place: the
+    /// line-based splice would have to decode it, and a lossy decode
+    /// rewrites a byte outside the markers. A valid document still
+    /// splices, and the markdown destinations, spliced as bytes, take an
+    /// invalid byte outside their markers unchanged.
+    #[test]
+    fn a_hook_document_that_is_not_utf8_collides_instead_of_being_rewritten() {
+        let mut documents = std::collections::BTreeMap::new();
+        let mut invalid = b"repos:\n# own \xff above\n".to_vec();
+        invalid.extend_from_slice(format!("{HOOKS_BEGIN}\nstale\n{HOOKS_END}\n").as_bytes());
+        invalid.extend_from_slice(b"  - repo: local \xff below\n");
+        documents.insert(HOOKS_DESTINATION.to_owned(), invalid);
+        let mut agents = b"# Widget r\xe9sum\xe9\n\n".to_vec();
+        agents.extend_from_slice(format!("{BLOCK_BEGIN}\nstale\n{BLOCK_END}\n\n").as_bytes());
+        agents.extend_from_slice(b"r\xe9sum\xe9\n");
+        documents.insert(AGENTS_DESTINATION.to_owned(), agents.clone());
+        let projection = compute(TargetEvidence {
+            documents,
+            crate_shape: supported_shape(),
+            ..TargetEvidence::default()
+        });
+        let collided: Vec<&str> = projection
+            .collisions
+            .iter()
+            .map(|c| c.destination.as_str())
+            .collect();
+        assert_eq!(collided, [HOOKS_DESTINATION]);
+        assert!(
+            projection.collisions[0].reason.contains("not UTF-8"),
+            "{}",
+            projection.collisions[0].reason
+        );
+        assert!(
+            !projection
+                .candidates
+                .iter()
+                .any(|c| c.destination == HOOKS_DESTINATION),
+            "a colliding destination projects no candidate"
+        );
+        let agents = candidate(&projection, AGENTS_DESTINATION);
+        assert!(
+            agents.bytes.starts_with(b"# Widget r\xe9sum\xe9\n\n"),
+            "{:?}",
+            agents.bytes
+        );
+        assert!(
+            agents.bytes.ends_with(b"\n\nr\xe9sum\xe9\n"),
+            "{:?}",
+            agents.bytes
+        );
+        assert!(
+            !agents.bytes.contains(&0xEF),
+            "a replacement character landed"
+        );
+
+        let mut documents = std::collections::BTreeMap::new();
+        let valid =
+            format!("repos:\n# own above\n{HOOKS_BEGIN}\nstale\n{HOOKS_END}\n  - repo: local\n");
+        documents.insert(HOOKS_DESTINATION.to_owned(), valid.into_bytes());
+        let projection = compute(TargetEvidence {
+            documents,
+            crate_shape: supported_shape(),
+            ..TargetEvidence::default()
+        });
+        assert!(
+            projection.collisions.is_empty(),
+            "{:?}",
+            projection.collisions
+        );
+        let hooks = candidate(&projection, HOOKS_DESTINATION);
+        let text = String::from_utf8(hooks.bytes.clone()).expect("a valid document stays text");
+        assert!(text.starts_with("repos:\n# own above\n"), "{text}");
+        assert!(text.ends_with("\n  - repo: local\n"), "{text}");
+        assert!(!text.contains("stale"), "the region is replaced: {text}");
+    }
+
+    /// A snippet that ships a block destination as a whole file is a
+    /// payload defect named by both sides: the snippet's source path and
+    /// the block's template paths.
+    #[test]
+    fn a_whole_file_colliding_with_a_marked_region_names_both_source_paths() {
+        let files: Vec<(String, &[u8])> = vec![
+            ("snippets/_shared/github/SECURITY.md".to_owned(), b"policy"),
+            ("snippets/rust/github/AGENTS.md".to_owned(), b"whole"),
+        ];
+        let err = Projection::compute_over(&files, &input(TargetEvidence::default()))
+            .expect_err("a whole file at a block destination refuses");
+        let text = err.to_string();
+        assert!(text.contains("snippets/rust/github/AGENTS.md"), "{text}");
+        assert!(text.contains(super::AGENTS_BLOCK), "{text}");
+        assert!(text.contains(super::AGENTS_LINE_WORKTREE), "{text}");
+        assert!(text.contains("payload is defective"), "{text}");
     }
 
     #[test]
