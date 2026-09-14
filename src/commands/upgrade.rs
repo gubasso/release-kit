@@ -94,17 +94,21 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
         .apply
         .then(|| lock::acquire(&args.target))
         .transpose()?;
-    let recorded = load_upgradable(&args.target)?;
-    let existing = crate::config::load(args.target.as_std_path())?;
+    // One directory descriptor, held from here through the receipt write:
+    // every read and every write goes through it, so a root exchanged
+    // under the pathname later receives nothing.
+    let held = apply::Held::open(&args.target)?;
+    let recorded = load_upgradable(&held)?;
+    let existing = crate::config::load(held.base().as_std_path())?;
     let params = resolve_params(args, &recorded, existing.as_ref())?;
     let style = params
         .style()
         .ok_or_else(|| RkError::Usage("landing style is unresolved".into()))?;
 
     let (prepared, landed) = if let Some(lock) = lock {
-        let prepared = apply::prepare(&args.target, Some(&recorded), &params, existing.as_ref())?;
+        let prepared = apply::prepare(&held, Some(&recorded), &params, existing.as_ref())?;
         let landed = apply::land(
-            &args.target,
+            &held,
             Some(&recorded),
             &prepared,
             apply::Origin::Upgrade,
@@ -114,7 +118,7 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
         (prepared, Some(landed))
     } else {
         (
-            apply::prepare(&args.target, Some(&recorded), &params, existing.as_ref())?,
+            apply::prepare(&held, Some(&recorded), &params, existing.as_ref())?,
             None,
         )
     };
@@ -288,8 +292,9 @@ fn next_lines(args: &UpgradeArgs, clean: bool) -> Vec<String> {
 
 /// The receipt an upgrade may act on: present, at a known schema, and not
 /// from a newer binary than this one.
-fn load_upgradable(target: &camino::Utf8Path) -> Result<Manifest, RkError> {
-    let Some(recorded) = manifest::load(target)? else {
+fn load_upgradable(held: &apply::Held) -> Result<Manifest, RkError> {
+    let target = held.display();
+    let Some(recorded) = manifest::load(held.base())? else {
         return Err(RkError::refusal(
             Diagnostic::new(
                 Reason::StateDrift,

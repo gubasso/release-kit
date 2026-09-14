@@ -133,7 +133,11 @@ pub fn run(args: &InitArgs) -> Result<(), RkError> {
         .apply
         .then(|| lock::acquire(&args.target))
         .transpose()?;
-    let config = crate::config::load(args.target.as_std_path())?;
+    // One directory descriptor, held from here through the receipt write:
+    // every read and every write goes through it, so a root exchanged
+    // under the pathname later receives nothing.
+    let held = apply::Held::open(&args.target)?;
+    let config = crate::config::load(held.base().as_std_path())?;
     let params = landing::Params::resolve(
         &EmbeddedReleaseSource,
         &args.target,
@@ -157,13 +161,13 @@ pub fn run(args: &InitArgs) -> Result<(), RkError> {
         .style()
         .ok_or_else(|| RkError::Usage("landing style is unresolved".into()))?;
     if let Some(lock) = lock {
-        refuse_a_recorded_target(&args.target)?;
-        let prepared = apply::prepare(&args.target, None, &params, config.as_ref())?;
-        let landed = apply::land(&args.target, None, &prepared, apply::Origin::Init, &lock)?;
+        refuse_a_recorded_target(&held)?;
+        let prepared = apply::prepare(&held, None, &params, config.as_ref())?;
+        let landed = apply::land(&held, None, &prepared, apply::Origin::Init, &lock)?;
         drop(lock);
         report_apply(out, args, &params, style, &prepared, &landed)
     } else {
-        let prepared = apply::prepare(&args.target, None, &params, config.as_ref())?;
+        let prepared = apply::prepare(&held, None, &params, config.as_ref())?;
         let repo = (params.repo() != landing::REPO_PLACEHOLDER).then(|| params.repo().to_owned());
         if repo.is_none() {
             out.frame(
@@ -387,10 +391,11 @@ pub(crate) fn describe(decision: &apply::Decision) -> String {
 
 /// A re-landing over an existing receipt is `rk upgrade`'s job, not a
 /// second `rk init`.
-fn refuse_a_recorded_target(target: &Utf8Path) -> Result<(), RkError> {
-    if landing::manifest::load(target)?.is_none() {
+fn refuse_a_recorded_target(held: &apply::Held) -> Result<(), RkError> {
+    if landing::manifest::load(held.base())?.is_none() {
         return Ok(());
     }
+    let target = held.display();
     Err(RkError::refusal(
         Diagnostic::new(
             Reason::StateDrift,

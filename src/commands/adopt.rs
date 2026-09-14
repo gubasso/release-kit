@@ -95,7 +95,11 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
         .apply
         .then(|| lock::acquire(&args.target))
         .transpose()?;
-    if landing::manifest::load(&args.target)?.is_some() {
+    // One directory descriptor, held from here through the receipt write:
+    // every read and every write goes through it, so a root exchanged
+    // under the pathname later receives nothing.
+    let held = apply::Held::open(&args.target)?;
+    if landing::manifest::load(held.base())?.is_some() {
         return Err(RkError::refusal(
             Diagnostic::new(
                 Reason::StateDrift,
@@ -113,7 +117,7 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
             .target_state("unchanged"),
         ));
     }
-    let config = crate::config::load(args.target.as_std_path())?;
+    let config = crate::config::load(held.base().as_std_path())?;
     let params = landing::Params::resolve(
         &EmbeddedReleaseSource,
         &args.target,
@@ -134,8 +138,8 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
         .style()
         .ok_or_else(|| RkError::Usage("landing style is unresolved".into()))?;
 
-    let mut prepared = apply::prepare(&args.target, None, &params, config.as_ref())?;
-    let files = verify(args, workflow, &prepared)?;
+    let mut prepared = apply::prepare(&held, None, &params, config.as_ref())?;
+    let files = verify(&held, workflow, &prepared)?;
     // Every destination verified, so what the decision pass read as an
     // unattributed whole file is a file the agent brought to the
     // projection: the adoption records it and writes nothing else.
@@ -152,7 +156,7 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
     }
 
     if let Some(lock) = &lock {
-        apply::land(&args.target, None, &prepared, apply::Origin::Adopt, lock)?;
+        apply::land(&held, None, &prepared, apply::Origin::Adopt, lock)?;
         out.result_line(format!("wrote {}", manifest::MANIFEST_PATH));
     }
     drop(lock);
@@ -226,10 +230,11 @@ fn report(
 /// every failure collected before the one refusal, so an operator
 /// resolves everything and re-runs once.
 fn verify(
-    args: &AdoptArgs,
+    held: &apply::Held,
     workflow: Workflow,
     prepared: &Prepared,
 ) -> Result<Vec<FileEntry>, RkError> {
+    let target = held.display();
     let mut mismatches: Vec<String> = Vec::new();
     let mut missing: Vec<String> = Vec::new();
     let mut files = Vec::new();
@@ -242,7 +247,7 @@ fn verify(
         .map(|collision| collision.reason.clone())
         .collect();
     for candidate in &prepared.projection.candidates {
-        let path = args.target.join(&candidate.destination);
+        let path = held.base().join(&candidate.destination);
         let regular = std::fs::symlink_metadata(path.as_std_path())
             .is_ok_and(|metadata| metadata.is_file())
             || !path.exists();
@@ -250,7 +255,7 @@ fn verify(
             mismatches.push(format!("{} (is not a regular file)", candidate.destination));
             continue;
         }
-        let current = landing::read_recorded(&args.target, &candidate.destination)?;
+        let current = landing::read_recorded(held.base(), &candidate.destination)?;
         let Some(current) = current else {
             // A block-placed artifact reads as absent from a file that
             // exists; the operator's remedy differs, so the label must.
@@ -307,7 +312,7 @@ fn verify(
         ))
         .action(format!(
             "align first: rk stage --target {} stages the candidate for a byte comparison, and the rk-setup skill carries the migration that brings each destination to it; then re-run, or select the other candidate with --workflow or --style{}",
-            args.target,
+            target,
             // A policy the target wrote its own contact into is the one
             // mismatch a committed answer resolves rather than an edit:
             // naming the keys turns a dead end into the next step.

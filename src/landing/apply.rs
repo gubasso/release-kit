@@ -108,6 +108,51 @@ pub struct Collision {
     pub reason: String,
 }
 
+/// One target directory held open for a whole landing verb.
+///
+/// Opened once, right after the lock under an apply and before any
+/// evidence is gathered, and carried through every decision read and
+/// every write, so a target root exchanged under the pathname after
+/// validation receives nothing: the descriptor names the directory that
+/// was validated, whatever its path has since become.
+#[derive(Debug)]
+pub struct Held {
+    root: File,
+    base: camino::Utf8PathBuf,
+    display: camino::Utf8PathBuf,
+}
+
+impl Held {
+    /// Hold `target`, following no link at its final component.
+    ///
+    /// # Errors
+    ///
+    /// The open failure, and a kernel link that is not UTF-8.
+    pub fn open(target: &Utf8Path) -> Result<Self, RkError> {
+        let root = held::open_dir(target.as_std_path())?;
+        let base = camino::Utf8PathBuf::from_path_buf(held::proc_path(&root))
+            .map_err(|path| anyhow::anyhow!("the kernel's link {} is not UTF-8", path.display()))?;
+        Ok(Self {
+            root,
+            base,
+            display: target.to_owned(),
+        })
+    }
+
+    /// The path every read of this target goes through: the kernel's
+    /// link to the held directory.
+    #[must_use]
+    pub fn base(&self) -> &Utf8Path {
+        &self.base
+    }
+
+    /// The path the operator named, for reports.
+    #[must_use]
+    pub fn display(&self) -> &Utf8Path {
+        &self.display
+    }
+}
+
 /// The landing decided and ready: the projection, every decision in
 /// projection order with the released destinations after them, every
 /// collision, and the configuration the landing writes first.
@@ -146,18 +191,23 @@ impl Prepared {
 /// The evidence read's failures, the projection's own defects, and an
 /// invalid committed configuration.
 pub fn prepare(
-    target: &Utf8Path,
+    target: &Held,
     recorded: Option<&Manifest>,
     params: &Params,
     existing_config: Option<&config::Config>,
 ) -> Result<Prepared, RkError> {
-    let evidence = TargetEvidence::gather(target, recorded)?;
+    let evidence = TargetEvidence::gather(target.base(), recorded)?;
     let projection = Projection::compute(&ProjectionInput {
         params: params.clone(),
         evidence,
     })?;
     let (decisions, collisions) = decide(target, recorded, &projection)?;
-    let config = config::Plan::new(target.as_std_path(), params, existing_config, recorded)?;
+    let config = config::Plan::new(
+        target.base().as_std_path(),
+        params,
+        existing_config,
+        recorded,
+    )?;
     Ok(Prepared {
         params: params.clone(),
         projection,
@@ -179,11 +229,11 @@ pub fn prepare(
 ///
 /// A read failure other than absence.
 pub fn decide(
-    target: &Utf8Path,
+    target: &Held,
     recorded: Option<&Manifest>,
     projection: &Projection,
 ) -> Result<(Vec<Decision>, Vec<Collision>), RkError> {
-    let root = held::open_dir(target.as_std_path())?;
+    let root = &target.root;
     let mut decisions = Vec::new();
     let mut collisions: Vec<Collision> = projection
         .collisions
@@ -194,30 +244,20 @@ pub fn decide(
         })
         .collect();
     for candidate in &projection.candidates {
-        if let Some(reason) = parent_defect(&root, &candidate.destination) {
-            collisions.push(Collision {
-                path: candidate.destination.clone(),
-                reason,
-            });
-            continue;
-        }
         let record = recorded.and_then(|record| record.file(&candidate.destination));
-        let path = target.join(&candidate.destination);
-        let present = match std::fs::symlink_metadata(path.as_std_path()) {
-            Ok(metadata) => Some(metadata),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => return Err(error.into()),
+        let located = match locate(root, &candidate.destination)? {
+            Located::Collision(reason) => {
+                collisions.push(Collision {
+                    path: candidate.destination.clone(),
+                    reason,
+                });
+                continue;
+            }
+            other => other,
         };
-        if let Some(metadata) = &present
-            && (metadata.file_type().is_symlink() || !metadata.is_file())
-        {
-            collisions.push(Collision {
-                path: candidate.destination.clone(),
-                reason: "exists and is not a regular file".to_owned(),
-            });
-            continue;
-        }
-        let action = match (candidate.placement, present.is_some(), record) {
+        let present = matches!(located, Located::Present { .. });
+        let current = || located.read();
+        let action = match (candidate.placement, present, record) {
             (_, false, _) => Action::Created,
             // A marked region lands into the target's document whether
             // the receipt names it or not: the bytes outside the markers
@@ -228,7 +268,7 @@ pub fn decide(
             // leaves exactly this, and replacing identical bytes changes
             // nothing. Differing bytes are the target's, and refuse.
             (Placement::Whole, true, None) => {
-                if std::fs::read(path.as_std_path())? == candidate.bytes {
+                if current()? == candidate.bytes {
                     Action::Matched
                 } else {
                     collisions.push(Collision {
@@ -253,8 +293,7 @@ pub fn decide(
                     continue;
                 }
                 (Kind::Seeded, _) => {
-                    let bytes = std::fs::read(path.as_std_path())?;
-                    if Digest::of(&bytes) == record.sha256 {
+                    if Digest::of(&current()?) == record.sha256 {
                         Action::Preserved
                     } else {
                         Action::Drift
@@ -289,15 +328,53 @@ pub fn decide(
     Ok((decisions, collisions))
 }
 
-/// Why a candidate's existing parent components cannot be written
-/// through, or `None` where every existing component is a directory
-/// reached without following a link.
-fn parent_defect(root: &File, destination: &str) -> Option<String> {
-    let parent = Path::new(destination).parent()?;
-    match held::hold_dir_existing(root, parent) {
-        Ok(_) => None,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => Some(format!("a parent component cannot be held: {error}")),
+/// What stands at a destination inside the held target.
+enum Located {
+    /// The parent chain or the final component cannot be landed through:
+    /// a linked or non-directory parent, or a non-regular entry.
+    Collision(String),
+    /// Nothing stands there.
+    Absent,
+    /// A regular file stands there, inside its held parent.
+    Present { dir: File, name: std::ffi::OsString },
+}
+
+impl Located {
+    /// The bytes present, empty where nothing stands.
+    fn read(&self) -> std::io::Result<Vec<u8>> {
+        match self {
+            Self::Present { dir, name } => {
+                held::read_file(dir, name).map(Option::unwrap_or_default)
+            }
+            Self::Absent | Self::Collision(_) => Ok(Vec::new()),
+        }
+    }
+}
+
+/// Locate `destination` inside the held `root`: the parent chain is held
+/// first, following no link, and the final component is then examined
+/// inside the held parent.
+fn locate(root: &File, destination: &str) -> std::io::Result<Located> {
+    let (parent, name) = split(Path::new(destination))?;
+    let dir = match held::hold_dir_existing(root, parent) {
+        Ok(dir) => dir,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Located::Absent),
+        Err(error) => {
+            return Ok(Located::Collision(format!(
+                "a parent component cannot be held: {error}"
+            )));
+        }
+    };
+    match std::fs::symlink_metadata(held::proc_path(&dir).join(name)) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => Ok(
+            Located::Collision("exists and is not a regular file".to_owned()),
+        ),
+        Ok(_) => Ok(Located::Present {
+            dir,
+            name: name.to_owned(),
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Located::Absent),
+        Err(error) => Err(error),
     }
 }
 
@@ -370,31 +447,32 @@ pub struct Landed {
 /// refusals; and [`RkError::Io`] for a write that fails, naming every
 /// path completed before it, with the previous receipt left in place.
 pub fn land(
-    target: &Utf8Path,
+    target: &Held,
     recorded: Option<&Manifest>,
     prepared: &Prepared,
     origin: Origin,
     _lock: &lock::TargetLock,
 ) -> Result<Landed, RkError> {
     if !prepared.collisions.is_empty() {
-        return Err(refusal(target, &prepared.collisions));
+        return Err(refusal(target.display(), &prepared.collisions));
     }
-    let root = held::open_dir(target.as_std_path())?;
+    let root = &target.root;
     // The proof's pause: validation is over and the target is held, so a
-    // link swapped in from here on meets the held directory, not a path.
+    // link or a directory swapped in under the pathname from here on
+    // meets the held descriptor, not the path.
     held::pause(PAUSE_VAR, "validated", "proceed");
     // Every destination the landing does not write is read again through
     // the held directory before the first write: a preserved or matched
     // file must still stand, and an adopted value must still equal the
     // candidate, or the landing refuses with the old receipt intact.
-    let unwritten = reverify(&root, prepared, origin)?;
+    let unwritten = reverify(root, prepared, origin)?;
     let mut writer = Writer {
-        root: &root,
+        root,
         completed: Vec::new(),
         stop: std::env::var_os(INTERRUPT_VAR).map(|value| value.to_string_lossy().into_owned()),
     };
     // The configuration first, where the resolved answers changed.
-    let config_current = read_relative(&root, config::CONFIG_PATH)?;
+    let config_current = read_relative(root, config::CONFIG_PATH)?;
     let config_written = config_current.as_deref() != Some(prepared.config.content.as_bytes());
     if config_written {
         writer.write(config::CONFIG_PATH, prepared.config.content.as_bytes())?;
@@ -639,7 +717,7 @@ impl Writer<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Action, Origin, Prepared, decide, land, prepare};
+    use super::{Action, Held, Origin, Prepared, decide, land, prepare};
     use crate::landing::manifest::{self, Manifest};
     use crate::landing::{Params, Style, lock};
     use crate::projection::{Projection, ProjectionInput, TargetEvidence};
@@ -655,7 +733,13 @@ mod tests {
     }
 
     fn prepared(target: &camino::Utf8Path, recorded: Option<&Manifest>) -> Prepared {
-        prepare(target, recorded, &params(), None).expect("prepares")
+        prepare(
+            &Held::open(target).expect("opens"),
+            recorded,
+            &params(),
+            None,
+        )
+        .expect("prepares")
     }
 
     fn landed(
@@ -665,7 +749,8 @@ mod tests {
     ) -> super::Landed {
         let locks = tempfile::tempdir().expect("a scratch locks directory exists");
         let lock = lock::acquire_in(locks.path(), target).expect("the target is taken");
-        land(target, recorded, &prepared(target, recorded), origin, &lock).expect("lands")
+        let held = Held::open(target).expect("opens");
+        land(&held, recorded, &prepared(target, recorded), origin, &lock).expect("lands")
     }
 
     /// A fresh target: every candidate is created, the receipt is written
@@ -725,8 +810,9 @@ mod tests {
         assert_eq!(paths, ["AGENTS.md", "SECURITY.md", "release-plz.toml"]);
         let locks = tempfile::tempdir().expect("a scratch locks directory exists");
         let lock = lock::acquire_in(locks.path(), &target).expect("the target is taken");
+        let held = Held::open(&target).expect("opens");
         let refused =
-            land(&target, None, &prepared, Origin::Init, &lock).expect_err("the landing refuses");
+            land(&held, None, &prepared, Origin::Init, &lock).expect_err("the landing refuses");
         assert_eq!(refused.exit_code(), 73);
         assert!(!target.join(".release-kit").exists());
         assert!(!target.join("dist-workspace.toml").exists());
@@ -747,7 +833,7 @@ mod tests {
             placement: manifest::Placement::Whole,
         });
         let (decisions, _) = decide(
-            &target,
+            &Held::open(&target).expect("opens"),
             Some(&record),
             &Projection::compute(&ProjectionInput {
                 params: params(),

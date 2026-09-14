@@ -123,13 +123,13 @@ Verify: `cargo nextest run -E 'test(a_failpoint_at_every_write_boundary_leaves_w
 
 ### `landing:a-missing-receipt-is-a-classification` — A missing receipt is a classification
 
-Where a target carries no receipt, `rk init` MUST create only absent candidates and refuse unattributed collisions, `rk adopt` MUST record only a target the agent already brought to the installed projection, `rk upgrade` MUST refuse naming the missing receipt, and each of them MUST read the receipt and the tree alone, routing the best-effort migration to `rk stage` and the `rk-setup` skill.
+Where a target carries no receipt, `rk init` MUST create absent candidates, record a present whole file whose bytes equal the candidate as matched, and refuse a differing unattributed file, `rk adopt` MUST record only a target the agent already brought to the installed projection, `rk upgrade` MUST refuse naming the missing receipt, and each of them MUST read the receipt and the tree alone, routing the best-effort migration to `rk stage` and the `rk-setup` skill.
 
 #### Scenario: A target lost its receipt and its history
 
 - GIVEN a repository holding landed files, no `.release-kit/manifest.json`, and a shallow clone with no useful history
 - WHEN `rk upgrade --apply` and `rk init --apply` run
-- THEN the upgrade refuses naming the receipt, the init refuses naming every collision and fetches nothing, and both route to the stage and the skill
+- THEN the upgrade refuses naming the receipt, the init refuses naming every differing unattributed file and fetches nothing, and both route to the stage and the skill
 
 Verify: `cargo nextest run -E 'test(a_missing_receipt_routes_init_adopt_and_upgrade_by_classification)'`
 

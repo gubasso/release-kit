@@ -27891,3 +27891,40 @@ fn a_rendered_file_edited_after_adopt_verification_refuses() {
     );
     assert_eq!(std::fs::read_to_string(&policy).expect("reads"), edited);
 }
+
+/// SATISFIES landing:a-partial-landing-is-visible-and-rerunnable
+#[test]
+fn a_target_root_exchanged_after_validation_receives_nothing() {
+    let parent = tempfile::tempdir().expect("a scratch parent exists");
+    let target = parent.path().join("widget");
+    std::fs::create_dir_all(target.join(".git")).expect("the target is a repository");
+    std::fs::write(
+        target.join("Cargo.toml"),
+        "[package]\nname = \"widget\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("the version file writes");
+    let paused = PausedLanding::start(&target, &[&INIT_RUST[..], &["acme/widget"]].concat());
+    // Validation is over: the real target moves aside and a decoy takes
+    // its pathname.
+    let real = parent.path().join("real");
+    std::fs::rename(&target, &real).expect("the real target moves aside");
+    std::fs::create_dir(&target).expect("the decoy stands at the path");
+    std::fs::write(target.join("decoy.txt"), "untouched\n").expect("the decoy has a file");
+    let decoy_before = tree_digests(&target);
+    let (code, diagnostic) = paused.proceed();
+    assert_eq!(
+        tree_digests(&target),
+        decoy_before,
+        "the decoy at the pathname received a write: {diagnostic}"
+    );
+    match code {
+        Some(0) => {
+            assert!(
+                real.join(".release-kit/manifest.json").is_file(),
+                "the landing reached the held directory"
+            );
+            assert!(real.join("SECURITY.md").is_file());
+        }
+        other => panic!("the landing neither landed nor refused cleanly: {other:?} {diagnostic}"),
+    }
+}
