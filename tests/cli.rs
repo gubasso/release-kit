@@ -319,6 +319,7 @@ fn method_lists_every_chapter() {
             .and(predicate::str::contains("recovery"))
             .and(predicate::str::contains("migration"))
             .and(predicate::str::contains("reconcile"))
+            .and(predicate::str::contains("landing"))
             .and(predicate::str::contains("diff-surface")),
     );
 }
@@ -2265,36 +2266,36 @@ fn the_setup_skill_names_the_five_steps() {
     assert_eq!(steps.len(), 5, "five numbered steps: {steps:?}");
     for (step, opening) in steps.iter().zip([
         "1. Run the gates",
-        "2. Request the plan",
-        "3. Present it",
-        "4. Route approved work to `rk reconcile apply",
-        "5. Read the result",
+        "2. Read the version and stop where no update was authorized",
+        "3. Stage and investigate, `rk guide landing` steps 1c and 2",
+        "4. Land, `rk guide landing` step 3",
+        "5. Verify and clean, `rk guide landing` steps 4 and 5",
     ]) {
         assert!(step.starts_with(opening), "{step}");
     }
 }
 
-/// Every classification the plan can carry has one line in the router
-/// naming the chapter it loads, so a new word in the engine is a missing
-/// line here.
+/// Every arrival the skill can meet has one line in the router naming
+/// the chapter it loads: the three `rk assess` verdicts, the recorded
+/// target `rk status` reports, and the record newer than the binary.
 #[test]
-fn the_setup_skill_routes_each_classification_to_its_chapter() {
+fn the_setup_skill_routes_each_arrival_to_its_chapter() {
     let text = setup_skill();
     let start = text
-        .find("## Which chapter the classification loads")
-        .expect("the classification section");
+        .find("## Which chapter the arrival loads")
+        .expect("the arrival section");
     let section = &text[start..];
     for (word, chapter) in [
-        ("setup", "`rk method setup`"),
-        ("migration", "`rk method migration`"),
-        ("upgrade", "`rk method reconcile`"),
-        ("drift", "`rk method reconcile`"),
-        ("invalid", "stop"),
+        ("greenfield", "`rk method setup`"),
+        ("brownfield", "`rk method migration`"),
+        ("needs-decision", "stop and ask"),
+        ("recorded", "`rk method landing`"),
+        ("newer", "stop"),
     ] {
         let line = section
             .lines()
-            .find(|line| line.starts_with(&format!("- `{word}`:")))
-            .unwrap_or_else(|| panic!("no line for the {word} classification"));
+            .find(|line| line.starts_with(&format!("- `{word}`")))
+            .unwrap_or_else(|| panic!("no line for the {word} arrival"));
         assert!(line.contains(chapter), "{word} routes to {chapter}: {line}");
     }
 }
@@ -2315,30 +2316,38 @@ fn the_pre_flight_gate_dispatches_to_no_skill() {
     assert!(text.contains("No field routes to another skill"));
 }
 
-/// Step 6 of the pre-flight requests a plan and reads the three fields
-/// the router acts on.
+/// Step 6 of the pre-flight reads the installed version and the target's
+/// record, and asks `rk` to select, fetch, or install nothing: the
+/// operator chose the version, per
+/// `packaging:the-operator-selects-the-installed-version`.
 #[test]
-fn the_pre_flight_gate_requests_a_plan() {
+fn the_pre_flight_gate_reads_the_installed_version_and_the_record() {
     let text = pre_flight_gate();
     let step = text
         .lines()
         .find(|line| line.starts_with("6. "))
         .expect("the gate has a sixth step");
-    assert!(
-        step.contains("`rk reconcile plan --target . --json`"),
-        "{step}"
-    );
-    for field in ["`classification`", "`readiness`", "`decisions`"] {
-        assert!(step.contains(field), "step 6 reads {field}: {step}");
-    }
-    for word in [
-        "`setup`",
-        "`migration`",
-        "`upgrade`",
-        "`drift`",
-        "`invalid`",
+    for phrase in [
+        "`rk --version`",
+        "`rk status --target . --json`",
+        "`rk_version`",
+        "no step selects, fetches, or installs another",
+        "A record newer than the binary is a stop",
+        "No field routes to another skill",
     ] {
-        assert!(step.contains(word), "step 6 names {word}");
+        assert!(step.contains(phrase), "step 6 carries '{phrase}': {step}");
+    }
+    for retired in [
+        "reconcile",
+        "plan id",
+        "readiness",
+        "--decide",
+        "fingerprint",
+    ] {
+        assert!(
+            !text.contains(retired),
+            "the pre-flight gate still names the stored-plan path: {retired}"
+        );
     }
 }
 
@@ -2348,7 +2357,7 @@ fn the_pre_flight_gate_requests_a_plan() {
 fn the_setup_skill_declares_its_destructive_steps() {
     let text = setup_skill();
     let start = text
-        .find("## What waits for the operator, under the migration classification")
+        .find("## What waits for the operator, under the brownfield arrival")
         .expect("the gated section");
     let section = &text[start..];
     for phrase in [
@@ -2360,8 +2369,8 @@ fn the_setup_skill_declares_its_destructive_steps() {
     }
     let route = text
         .lines()
-        .find(|line| line.starts_with("- `migration`:"))
-        .expect("the migration route");
+        .find(|line| line.starts_with("- `brownfield`"))
+        .expect("the brownfield route");
     assert!(
         route.contains("Before approval") && route.contains("`rk setup step`"),
         "the migration route declares the gated steps before approval: {route}"
@@ -2398,6 +2407,480 @@ fn the_setup_skill_restates_no_procedure() {
                 || line.contains("the plan's first step")
                 || line.contains("gated step"),
             "a step named outside its guide: {line}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The rk-setup evaluation fixtures: one situation per file under
+// `tests/fixtures/rk-setup-evals/`, each stating the route through the
+// landing runbook's steps and the authority boundaries it holds. They live
+// under tests/ rather than beside the skill because `skills/` is a payload
+// root the binary embeds whole, and a fixture is not a skill.
+// ---------------------------------------------------------------------------
+
+/// The thirteen situations the phase names, by file stem.
+const SETUP_EVALS: [&str; 13] = [
+    "active-legacy-operation-before-update",
+    "clean-attributed-upgrade",
+    "edited-generated-file",
+    "failed-verification-with-stage-retained",
+    "greenfield",
+    "inactive-legacy-host-state-after-success",
+    "marked-region-customization",
+    "missing-receipt-with-history",
+    "missing-receipt-without-history",
+    "production-divergence-from-the-stage",
+    "retired-destination",
+    "successful-cleanup",
+    "tuned-seeded-file",
+];
+
+/// Every fixture as `(stem, text)`, sorted by stem.
+fn setup_evals() -> Vec<(String, String)> {
+    let mut evals: Vec<(String, String)> =
+        std::fs::read_dir(repo_path("tests/fixtures/rk-setup-evals"))
+            .expect("the evals directory reads")
+            .filter_map(|entry| {
+                let path = entry.expect("an entry").path();
+                let stem = path.file_stem()?.to_str()?.to_owned();
+                (stem != "README").then(|| {
+                    (
+                        stem,
+                        std::fs::read_to_string(&path).expect("a fixture reads"),
+                    )
+                })
+            })
+            .collect();
+    evals.sort();
+    evals
+}
+
+/// The value of one `- key: value` field in a fixture's header.
+fn eval_field<'a>(text: &'a str, key: &str) -> &'a str {
+    let prefix = format!("- {key}: ");
+    text.lines()
+        .find_map(|line| line.strip_prefix(&prefix))
+        .unwrap_or_else(|| panic!("no '{key}' field"))
+        .trim()
+}
+
+/// The body of one `## ` section of a fixture.
+fn eval_section<'a>(text: &'a str, heading: &str) -> &'a str {
+    let marker = format!("\n## {heading}\n");
+    let start = text
+        .find(&marker)
+        .unwrap_or_else(|| panic!("no '## {heading}' section"))
+        + marker.len();
+    let rest = &text[start..];
+    rest.find("\n## ").map_or(rest, |end| &rest[..end])
+}
+
+/// The skill and every shared resource it routes to, as `(name, text)`.
+fn skill_and_shared_resources() -> Vec<(&'static str, String)> {
+    vec![
+        ("skills/rk-setup/SKILL.md", setup_skill()),
+        ("skill-shared/pre-flight-gate.md", pre_flight_gate()),
+        (
+            "skill-shared/plan-gate.md",
+            std::fs::read_to_string(repo_path("skill-shared/plan-gate.md"))
+                .expect("the plan gate reads"),
+        ),
+    ]
+}
+
+/// Every named situation has one fixture of the declared shape, and every
+/// fixture routes through the landing runbook by step number.
+#[test]
+fn every_setup_eval_has_the_declared_shape() {
+    let evals = setup_evals();
+    let stems: Vec<&str> = evals.iter().map(|(stem, _)| stem.as_str()).collect();
+    assert_eq!(stems, SETUP_EVALS, "the evaluation set changed");
+    for (stem, text) in &evals {
+        assert_eq!(
+            eval_field(text, "case"),
+            stem,
+            "{stem}: the case names its file"
+        );
+        assert!(
+            ["yes", "no"].contains(&eval_field(text, "landing")),
+            "{stem}: landing is yes or no"
+        );
+        assert!(
+            ["present", "missing"].contains(&eval_field(text, "receipt")),
+            "{stem}: receipt is present or missing"
+        );
+        assert!(
+            ["useful", "none"].contains(&eval_field(text, "history")),
+            "{stem}: history is useful or none"
+        );
+        assert!(
+            ["none", "active", "inactive"].contains(&eval_field(text, "legacy")),
+            "{stem}: legacy is none, active, or inactive"
+        );
+        assert!(
+            ["cleaned", "kept", "none"].contains(&eval_field(text, "stage")),
+            "{stem}: stage is cleaned, kept, or none"
+        );
+        for heading in ["Situation", "Route", "Authority", "Documentation"] {
+            assert!(
+                !eval_section(text, heading).trim().is_empty(),
+                "{stem}: the {heading} section is empty"
+            );
+        }
+        assert!(
+            eval_section(text, "Route").contains("`rk guide landing` step"),
+            "{stem}: the route names no landing runbook step"
+        );
+    }
+}
+
+/// No skill, shared resource, or fixture asks `rk` to install, select,
+/// fetch, or move to a release: the operator chose the installed version,
+/// per `packaging:the-operator-selects-the-installed-version`.
+#[test]
+fn no_skill_shared_resource_or_eval_asks_rk_to_install_or_select_a_release() {
+    let mut texts = skill_and_shared_resources();
+    for (stem, text) in setup_evals() {
+        texts.push(("eval", text.clone()));
+        let _ = stem;
+    }
+    for (name, text) in &texts {
+        for retired in [
+            "rk self-depend sync",
+            "`--to ",
+            " --to ",
+            "--release",
+            "reconcile plan",
+            "reconcile apply",
+            "reconcile show",
+            "rk payload",
+            "--fetch",
+            "--decide",
+            "plan-id",
+            "fingerprint",
+        ] {
+            assert!(
+                !text.contains(retired),
+                "{name} asks rk to select or install a release, or names the stored-plan path: {retired}"
+            );
+        }
+    }
+    let skill = setup_skill();
+    assert!(
+        skill.contains("never chooses, installs, updates, downgrades, or fetches a version"),
+        "the skill states that the version is the operator's"
+    );
+    assert!(
+        skill.contains("report the installed state and end the task before any migration work"),
+        "the skill stops where no update was authorized"
+    );
+}
+
+/// Every landing fixture stages first, keeps the stage through the
+/// verification, and either cleans it last or leaves it explicitly.
+#[test]
+fn every_landing_eval_stages_first_and_cleans_last_or_keeps_the_stage() {
+    for (stem, text) in setup_evals() {
+        let route = eval_section(&text, "Route");
+        if eval_field(&text, "landing") == "no" {
+            assert_eq!(eval_field(&text, "stage"), "none", "{stem}");
+            assert!(!route.contains("rk stage"), "{stem}: no landing, no stage");
+            assert!(!route.contains("--apply"), "{stem}: no landing, no apply");
+            continue;
+        }
+        let staged = route
+            .find("rk stage --target .")
+            .unwrap_or_else(|| panic!("{stem}: the route never stages"));
+        let applied = route
+            .find("--apply")
+            .unwrap_or_else(|| panic!("{stem}: the route never lands"));
+        assert!(
+            staged < applied,
+            "{stem}: the stage comes before the landing"
+        );
+        let verified = route
+            .find("rk status --check")
+            .unwrap_or_else(|| panic!("{stem}: the route never verifies"));
+        assert!(
+            applied < verified,
+            "{stem}: the verification follows the landing"
+        );
+        assert!(
+            route.contains("Production renders afresh")
+                || text.contains("Production renders afresh"),
+            "{stem}: the fixture states that production renders afresh"
+        );
+        match eval_field(&text, "stage") {
+            "cleaned" => {
+                let cleaned = route
+                    .find("rk stage clean")
+                    .unwrap_or_else(|| panic!("{stem}: a cleaned stage names the command"));
+                assert!(
+                    verified < cleaned,
+                    "{stem}: the cleanup follows the verification"
+                );
+                let after = &route[cleaned..];
+                for verb in ["rk init", "rk upgrade", "rk adopt", "rk stage --target"] {
+                    assert!(
+                        !after.contains(verb),
+                        "{stem}: {verb} runs after the cleanup"
+                    );
+                }
+                assert!(
+                    route.contains("authority includes cleanup"),
+                    "{stem}: the cleanup names its authority"
+                );
+            }
+            "kept" => {
+                assert!(
+                    !route.contains("rk stage clean") || text.contains("is not shown"),
+                    "{stem}: a kept stage is not cleaned"
+                );
+                assert!(
+                    route.contains("leaves the stage in place as recoverable evidence"),
+                    "{stem}: a kept stage is left explicitly, with its path"
+                );
+            }
+            other => panic!("{stem}: a landing fixture's stage is cleaned or kept, not {other}"),
+        }
+    }
+}
+
+/// No fixture copies staged bytes into production or offers the stage or
+/// its receipt to a landing verb, per `staging:production-never-reads-a-stage`.
+#[test]
+fn no_eval_copies_staged_bytes_or_offers_the_stage_as_input() {
+    for (stem, text) in setup_evals() {
+        for line in text.lines() {
+            for copy in [
+                "cp -",
+                "cp <stage>",
+                "rsync",
+                "mv <stage>",
+                "--from-stage",
+                "--stage ",
+            ] {
+                assert!(
+                    !line.contains(copy),
+                    "{stem}: a staged byte is copied: {line}"
+                );
+            }
+            if line.contains("stage.json") || line.contains("<stage>/artifacts") {
+                for verb in ["rk init", "rk upgrade", "rk adopt"] {
+                    assert!(
+                        !line.contains(verb)
+                            || line.contains("offered to no verb")
+                            || line.contains("never opens"),
+                        "{stem}: the stage meets a landing verb on one line: {line}"
+                    );
+                }
+            }
+        }
+        if eval_field(&text, "landing") == "yes" {
+            assert!(
+                text.contains("`stage.json` is offered to no verb"),
+                "{stem}: the receipt is stated as no verb's input"
+            );
+            assert!(
+                text.contains("Nothing is copied out of `<stage>/artifacts/`"),
+                "{stem}: the artifacts are stated as never copied"
+            );
+        }
+    }
+    let skill = setup_skill();
+    assert!(
+        skill.contains("never copy the stage tree into the target"),
+        "the skill forbids the wholesale copy"
+    );
+    assert!(
+        skill.contains(
+            "never offer `stage.json` or the stage path to `rk init`, `rk upgrade`, or `rk adopt`"
+        ),
+        "the skill forbids the stage as apply input"
+    );
+}
+
+/// Missing provenance produces a bounded heuristic report and never an
+/// automatic overwrite, per `landing:a-missing-receipt-is-a-classification`.
+#[test]
+fn missing_provenance_produces_a_bounded_heuristic_and_no_automatic_overwrite() {
+    let mut seen = 0;
+    for (stem, text) in setup_evals() {
+        if eval_field(&text, "receipt") != "missing" || eval_field(&text, "landing") != "yes" {
+            continue;
+        }
+        seen += 1;
+        let route = eval_section(&text, "Route").to_lowercase();
+        assert!(
+            route.contains("heuristic"),
+            "{stem}: the class is a heuristic"
+        );
+        assert!(
+            route.contains("no automatic overwrite"),
+            "{stem}: the route rules out an automatic overwrite"
+        );
+        if eval_field(&text, "history") == "none" {
+            assert!(
+                route.contains("best-effort"),
+                "{stem}: neither source is a best-effort heuristic"
+            );
+            assert!(
+                text.contains("shown to the operator") || text.contains("ask the operator"),
+                "{stem}: every uncertain decision reaches the operator"
+            );
+        } else {
+            assert!(
+                route.contains("history-guided"),
+                "{stem}: history alone is a history-guided heuristic"
+            );
+        }
+    }
+    assert_eq!(seen, 3, "greenfield and the two missing-receipt cases");
+    let skill = setup_skill();
+    for class in [
+        "Receipt and useful history",
+        "Receipt without useful history",
+        "History without receipt",
+        "Neither: a best-effort report",
+    ] {
+        assert!(skill.contains(class), "the skill names the class: {class}");
+    }
+}
+
+/// Active legacy work stops the update; inactive legacy host state is
+/// named by exact path and never removed without explicit cleanup
+/// authority, and no CLI verb removes it.
+#[test]
+fn legacy_state_stops_the_update_or_is_named_and_never_removed_without_authority() {
+    let mut active = 0;
+    let mut inactive = 0;
+    for (stem, text) in setup_evals() {
+        match eval_field(&text, "legacy") {
+            "active" => {
+                active += 1;
+                assert_eq!(
+                    eval_field(&text, "landing"),
+                    "no",
+                    "{stem}: an active operation stops the update"
+                );
+                let route = eval_section(&text, "Route");
+                assert!(route.contains("stops the update"), "{stem}");
+                assert!(
+                    route.contains("with the installed binary"),
+                    "{stem}: the old binary closes its own work"
+                );
+                assert!(
+                    route.contains("Remove nothing"),
+                    "{stem}: nothing is removed before the update"
+                );
+            }
+            "inactive" => {
+                inactive += 1;
+                let route = eval_section(&text, "Route");
+                for phrase in [
+                    "exact path",
+                    "why each is obsolete",
+                    "no active old operation remains",
+                    "explicit cleanup authorization",
+                    "No `rk` verb removes this state",
+                ] {
+                    assert!(
+                        route.contains(phrase),
+                        "{stem}: the route carries '{phrase}'"
+                    );
+                }
+                let landed = route.find("--apply").expect("the landing");
+                let removed = route.find("Remove each by name").expect("the removal");
+                assert!(
+                    landed < removed,
+                    "{stem}: legacy removal follows the landing"
+                );
+            }
+            _ => {}
+        }
+        if eval_field(&text, "legacy") != "none" {
+            assert!(
+                eval_section(&text, "Authority")
+                    .contains("never removed without explicit cleanup authorization"),
+                "{stem}: the authority section binds the removal"
+            );
+        }
+    }
+    assert_eq!((active, inactive), (1, 1));
+    let skill = setup_skill();
+    for phrase in [
+        "An active operation stops the update",
+        "No `rk` verb removes them",
+        "only under explicit cleanup authorization",
+    ] {
+        assert!(skill.contains(phrase), "the skill states: {phrase}");
+    }
+}
+
+/// Project-specific documentation artifacts and the tool's reference
+/// documents stay distinct in every fixture.
+#[test]
+fn every_eval_keeps_project_documentation_and_the_reference_corpus_distinct() {
+    for (stem, text) in setup_evals() {
+        let docs = eval_section(&text, "Documentation");
+        let project = docs
+            .lines()
+            .find(|line| line.starts_with("- project documentation:"))
+            .unwrap_or_else(|| panic!("{stem}: no project documentation line"));
+        let reference = docs
+            .lines()
+            .find(|line| line.starts_with("- reference corpus:"))
+            .unwrap_or_else(|| panic!("{stem}: no reference corpus line"));
+        assert!(
+            reference.contains("not copied into the project"),
+            "{stem}: the reference corpus is read, never copied"
+        );
+        assert!(
+            !project.contains("reference/"),
+            "{stem}: project documentation names the reference tree"
+        );
+    }
+    let skill = setup_skill();
+    assert!(
+        skill.contains("the `reference/` tree teaches this skill and is copied into no project"),
+        "the skill keeps the corpus out of the project"
+    );
+}
+
+/// The skill restates no projection or manager matrix the CLI owns: the
+/// ownership kinds, the decision words, and the manager and venue pairs
+/// are served by `rk method landing`, `rk init`, and `rk self-depend`.
+#[test]
+fn the_setup_skill_restates_no_projection_or_manager_matrix() {
+    let skill = setup_skill();
+    for line in skill.lines() {
+        if line.starts_with("| ") {
+            for cell in [
+                "rendered", "seeded", "`state`", "mise", "asdf", "devbox", "flake", "cargo",
+            ] {
+                assert!(!line.contains(cell), "a matrix row names {cell}: {line}");
+            }
+        }
+        for word in [
+            "created",
+            "replaced",
+            "matched",
+            "preserved",
+            "drift",
+            "released",
+            "collision",
+        ] {
+            assert!(
+                !line.starts_with(&format!("- `{word}`")),
+                "the skill lists the decision words the chapter owns: {line}"
+            );
+        }
+    }
+    for manager in ["mise", "asdf", "devbox", "pipx", "ubi"] {
+        assert!(
+            !skill.contains(manager),
+            "the skill names a manager the self-depend matrix owns: {manager}"
         );
     }
 }
@@ -2980,6 +3463,7 @@ fn the_runbooks_match_their_method_chapters() {
         ("method/10-migration.md", "runbooks/migration.md"),
         ("method/11-dependencies.md", "runbooks/dependencies.md"),
         ("method/12-reconcile.md", "runbooks/reconcile.md"),
+        ("method/13-landing.md", "runbooks/landing.md"),
     ] {
         let rendered = std::fs::read_to_string(repo_path(runbook)).expect("reads");
         assert_eq!(
@@ -24005,46 +24489,150 @@ fn the_reconcile_runbook_renders_the_spine() {
     }
 }
 
-/// The setup and migration runbooks name the reconcile runbook's steps by
-/// number for the landing, and carry no second plan-decide-apply sequence.
+/// SATISFIES distribution:a-runbook-renders-the-spine
+/// The landing pair shares one five-step spine: the chapter's sequence
+/// and the runbook's `## N.` headings, in order, each opening with the
+/// same word.
 #[test]
-fn the_setup_and_migration_runbooks_route_their_landing_steps_to_reconcile() {
+fn the_landing_runbook_renders_the_spine() {
+    let chapter = std::fs::read_to_string(repo_path("method/13-landing.md")).expect("reads");
+    let runbook = std::fs::read_to_string(repo_path("runbooks/landing.md")).expect("reads");
+    let sequence: Vec<&str> = chapter
+        .lines()
+        .filter(|line| {
+            line.split_once(". ")
+                .is_some_and(|(n, _)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+        })
+        .collect();
+    let headings = numbered_headings(&runbook);
+    assert_eq!(sequence.len(), 5, "{sequence:?}");
+    assert_eq!(sequence.len(), headings.len(), "{headings:?}");
+    for (step, heading) in sequence.iter().zip(&headings) {
+        let (n, title) = step.split_once(". ").expect("a numbered line");
+        let word = title.split(['.', ',']).next().expect("a title").trim();
+        assert!(
+            heading.starts_with(&format!("## {n}. {word}")),
+            "step {n}: chapter says '{word}', runbook says '{heading}'"
+        );
+    }
+    for (n, word) in [
+        (1, "Stage"),
+        (2, "Investigate"),
+        (3, "Land"),
+        (4, "Verify"),
+        (5, "Clean"),
+    ] {
+        assert_eq!(headings[n - 1], format!("## {n}. {word}"));
+    }
+}
+
+/// `rk guide landing` and `rk method landing` serve the pair the way every
+/// other pair is served, and both lists name them.
+#[test]
+fn the_landing_pair_renders() {
+    let target = tempfile::tempdir().expect("a target exists");
+    land_rust(target.path()).success();
+    let out = rk()
+        .args(["guide", "landing", "--repo", "acme/widget"])
+        .current_dir(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8_lossy(&out);
+    assert!(text.starts_with("# Landing runbook"), "{text}");
+    assert!(
+        text.contains("rk init --tech rust --target ."),
+        "detection fills <tech>: {text}"
+    );
+    for command in [
+        "rk stage --target .",
+        "rk stage clean <stage>",
+        "rk status --check --target .",
+    ] {
+        assert!(
+            text.contains(command),
+            "the runbook carries {command}: {text}"
+        );
+    }
+    rk().args(["method", "landing"])
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("# 13 — Landing"));
+    rk().args(["method", "--list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("landing"));
+    rk().args(["guide", "--list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("landing"));
+}
+
+/// The setup and migration runbooks name the landing runbook's steps by
+/// number for the landing, and carry no second stage-land-verify sequence
+/// and no route to the stored-plan path.
+#[test]
+fn the_setup_and_migration_runbooks_route_their_landing_steps_to_landing() {
     for path in ["runbooks/setup.md", "runbooks/migration.md"] {
         let text = std::fs::read_to_string(repo_path(path)).expect("reads");
         assert!(
-            text.contains("[the reconcile runbook](./reconcile.md) steps 2, 4, and 6"),
-            "{path} routes its landing to reconcile by step number"
+            text.contains("[the landing runbook](./landing.md) steps 1 and 2"),
+            "{path} routes its landing to the landing runbook by step number"
         );
         assert!(
-            !text.contains("rk reconcile apply"),
-            "{path} restates the apply the reconcile runbook owns"
+            text.contains("that runbook's step 3"),
+            "{path} names the production verb as the landing runbook's step"
+        );
+        for retired in ["rk reconcile", "reconcile runbook", "./reconcile.md"] {
+            assert!(
+                !text.contains(retired),
+                "{path} still routes to the stored-plan path: {retired}"
+            );
+        }
+        assert!(
+            !text.contains("rk stage clean"),
+            "{path} restates the cleanup the landing runbook owns"
         );
     }
     let migration = std::fs::read_to_string(repo_path("runbooks/migration.md")).expect("reads");
     assert!(
-        migration.contains("its step 5 carries the owned drift"),
-        "the migration runbook routes the reconciliations to reconcile step 5"
+        migration.contains(
+            "its step 2d carries the collision, the tuned seeded file, and the retired destination"
+        ),
+        "the migration runbook routes the preparation to landing step 2d"
     );
 }
 
-/// The migration chapter's recorded-landing sentence names the reconcile
-/// chapter, so a recorded target has a route.
+/// The migration and setup chapters name the landing chapter, so a
+/// recorded target and a first landing each have one route, and neither
+/// chapter routes to the stored-plan path.
 #[test]
-fn the_migration_chapter_sends_a_recorded_target_to_the_reconcile_chapter() {
+fn the_migration_and_setup_chapters_send_the_landing_to_the_landing_chapter() {
     let text = std::fs::read_to_string(repo_path("method/10-migration.md")).expect("reads");
     let sentence = text
         .lines()
         .find(|line| line.starts_with("A recorded landing is a fourth state"))
         .expect("the recorded-landing sentence");
     assert!(
-        sentence.contains("[reconcile](./12-reconcile.md)"),
+        sentence.contains("[landing](./13-landing.md)"),
         "{sentence}"
     );
     let setup = std::fs::read_to_string(repo_path("method/02-setup.md")).expect("reads");
     assert!(
-        setup.contains("[reconcile](./12-reconcile.md)"),
-        "the setup chapter sends its landing mechanics to reconcile"
+        setup.contains("(./13-landing.md)"),
+        "the setup chapter sends its landing mechanics to the landing chapter"
     );
+    for (path, chapter) in [
+        ("method/10-migration.md", text),
+        ("method/02-setup.md", setup),
+    ] {
+        assert!(
+            !chapter.contains("12-reconcile.md"),
+            "{path} still routes to the stored-plan chapter"
+        );
+    }
 }
 
 /// The runbook's header states once that a plan holds target bytes and is

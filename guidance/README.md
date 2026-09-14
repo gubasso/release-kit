@@ -1,6 +1,6 @@
 # Guidance
 
-One file per release that needs an operator step or an explanation a target must read before it takes the release. The engine ships every file whole in the bundle, selects the ones between a target's recorded release and the candidate, filters them against the destinations the target has, and carries the rest in the plan. A changelog is written for a reader who decides whether to upgrade. A guidance file is read by an agent that already decided.
+One file per release that needs an operator step or an explanation a target must read before it takes the release. Guidance is versioned reference material. The installed binary ships every file whole, and `rk stage` copies them into the stage's `reference/guidance` for the agent to read. The agent selects the files above the target's recorded release whose destinations the target has. A changelog is written for a reader who decides whether to upgrade. A guidance file is read by an agent that already decided.
 
 ## Authoring rules
 
