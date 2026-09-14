@@ -90,13 +90,17 @@ State the evidence class the chapter names: receipt and history, receipt alone, 
 
 ### 2c. Read the release's knowledge
 
-`<installed>` is the version `rk --version` printed in 1a, and `<recorded>` is the receipt's `rk_version`. The changelog opens each release with a `## [<version>]` heading, newest first.
+The changelog opens each release with a `## [<version>]` heading, newest first. `rk --version` prints `rk <version>`, so the bare version is cut from it, and the recorded version comes from the receipt.
 
 ```bash
-awk -v from='## [<installed>]' -v to='## [<recorded>]' 'index($0, from) == 1 {p = 1} index($0, to) == 1 {exit} p' <stage>/reference/CHANGELOG.md
-# check: prints the entries from the installed version down to the recorded one, and excludes the recorded release itself. A target with no record reads the whole file
+installed="$(rk --version | sed 's/^rk //')"
+recorded="$(jq -r .rk_version .release-kit/manifest.json)"
+awk -v from="## [$installed]" -v to="## [$recorded]" 'index($0, from) == 1 {p = 1} index($0, to) == 1 {exit} p' <stage>/reference/CHANGELOG.md
+# check: prints the entries from the installed version down to the recorded one, and excludes the recorded release itself
+cat <stage>/reference/CHANGELOG.md
+# a target with no record: this line replaces the two above, because every release is between nothing and the installed one
 ls <stage>/reference/guidance
-# check: one file per release that needs an operator step. Read every file above <recorded> whose destinations field names a path this target has
+# check: one file per release that needs an operator step. Read every file above the recorded version whose destinations field names a path this target has
 ```
 
 The `destinations` field of each guidance file decides which files this target reads, and the changelog prose decides nothing about that. Read `<stage>/reference/method`, `bindings`, `runbooks`, and `forges` only for the topics the comparison raised. The source at the exact release tag is the last resort, and trunk never stands in for the installed release.
@@ -179,17 +183,26 @@ rk stage clean <stage>
 
 ### 5b. Remove inactive legacy state
 
-Only where 1b recorded paths, only under explicit cleanup authorization, and only after 1b confirmed that no active old operation remains. No `rk` verb removes this state and no verb takes a directory as a recursive target, so each path is removed by hand and by name. `<root>` is the state root 1b derived, and `<path>` is one path 1b recorded.
+Only where 1b recorded paths, only under explicit cleanup authorization, and only after 1b confirmed that no active old operation remains. No `rk` verb removes this state and no verb takes a directory as a recursive target, so each path is removed by hand and by name. `<path>` is one path 1b recorded, and the function below removes it only after the class guard accepted it twice.
 
 ```bash
-root="${XDG_STATE_HOME:-$HOME/.local/state}/release-kit"
-resolved="$(realpath -e -- "<path>")"
-case "$resolved" in "$root"/plans/*|"$root"/runs/*|"$root"/release) ;; *) echo "outside the legacy classes: $resolved" >&2; false;; esac
-# check: prints nothing. A path that resolves outside the three classes under the state root is not legacy state, and nothing below runs for it
-find "$resolved" -mindepth 1 -xdev -print
-# check: the complete list of entries the removal will delete, with no link followed. Review every line with the operator, and stop where one is not the stored plan, run journal, or cached release 1b recorded
-find "$resolved" -mindepth 1 -xdev -depth -delete && rmdir -- "$resolved"
-# check: the same list is gone and the directory with it. The -delete consumes exactly the entries the review printed, and the directory goes last
+remove_legacy_path() {
+  root="${XDG_STATE_HOME:-$HOME/.local/state}/release-kit"
+  legacy_path_ok() {
+    case "$1" in
+      "$root"/plans/?*|"$root"/runs/?*|"$root"/release) [ -d "$1" ] ;;
+      *) echo "outside the legacy classes, nothing removed: $1" >&2; return 1 ;;
+    esac
+  }
+  resolved="$(realpath -e -- "$1")" && legacy_path_ok "$resolved" || return 1
+  # check: no refusal printed. A path that resolves outside the three classes under the state root is not legacy state, and the function returns before it lists or removes anything
+  legacy_path_ok "$resolved" && find "$resolved" -mindepth 1 -xdev -print || return 1
+  # check: the complete list of entries the removal will delete, with no link followed. Review every line with the operator, and stop where one is not the stored plan, run journal, or cached release 1b recorded
+  legacy_path_ok "$resolved" && find "$resolved" -mindepth 1 -xdev -depth -delete && rmdir -- "$resolved"
+  # check: the same list is gone and the directory with it. The guard runs again before the -delete, the -delete consumes exactly the entries the review printed, and the directory goes last
+}
+remove_legacy_path "<path>"
+# check: exits 0 with the path gone, or exits 1 naming the refused path with nothing removed
 ```
 
 Repeat for each recorded path, one at a time. Then commit the landed files, the receipt included, through the trunk's one path. The stage and the legacy state are not among them.

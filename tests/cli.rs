@@ -24852,6 +24852,142 @@ fn front_reports() -> (String, String, String, String) {
     (init, upgrade, preview, applied)
 }
 
+/// The first fenced `bash` block of one `### Na.` substep of a runbook,
+/// as the reader would paste it.
+fn runbook_fence(text: &str, label: &str) -> String {
+    let substep = runbook_substep(text, label);
+    let start = substep.find("```bash\n").expect("a bash fence") + "```bash\n".len();
+    let rest = &substep[start..];
+    rest[..rest.find("\n```").expect("the fence closes")].to_owned()
+}
+
+/// Run one shell fragment under `sh -eu` with the given environment and
+/// working directory, returning its exit status and stdout.
+fn run_fragment(script: &str, env: &[(&str, &Path)], cwd: &Path) -> (bool, String) {
+    let bin_dir = Command::cargo_bin("rk")
+        .expect("the rk binary builds")
+        .get_program()
+        .to_owned();
+    let bin_dir = Path::new(&bin_dir)
+        .parent()
+        .expect("a directory")
+        .to_owned();
+    let path = format!(
+        "{}:{}",
+        bin_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let mut command = std::process::Command::new("sh");
+    command
+        .args(["-eu", "-c", script])
+        .current_dir(cwd)
+        .env("PATH", path);
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    let out = command.output().expect("sh runs");
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+    )
+}
+
+/// The landing runbook's legacy removal, run as written: a path outside
+/// the three legacy classes is refused with nothing removed, and a stored
+/// plan directory under the state root is removed alone.
+#[test]
+fn the_landing_runbooks_legacy_removal_refuses_an_outside_path_and_removes_one_plan() {
+    let runbook = std::fs::read_to_string(repo_path("runbooks/landing.md")).expect("reads");
+    let fragment = runbook_fence(&runbook, "5b.");
+    assert!(fragment.contains("remove_legacy_path \"<path>\""));
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let state = scratch.path().join("state");
+    let root = state.join("release-kit");
+    let plan = root.join("plans").join("abc123");
+    let other = root.join("plans").join("other");
+    let protected = scratch.path().join("protected");
+    for dir in [plan.join("blobs"), other.clone(), protected.clone()] {
+        std::fs::create_dir_all(&dir).expect("the fixture tree creates");
+    }
+    std::fs::write(plan.join("plan.json"), "{}").expect("writes");
+    std::fs::write(plan.join("blobs").join("deadbeef"), "bytes").expect("writes");
+    std::fs::write(other.join("plan.json"), "{}").expect("writes");
+    std::fs::write(protected.join("keep.txt"), "keep").expect("writes");
+    let env: [(&str, &Path); 2] = [("XDG_STATE_HOME", &state), ("HOME", scratch.path())];
+
+    let (ok, _) = run_fragment(
+        &fragment.replace("<path>", &protected.display().to_string()),
+        &env,
+        scratch.path(),
+    );
+    assert!(!ok, "an outside path is refused");
+    assert!(
+        protected.join("keep.txt").exists(),
+        "the protected tree stays"
+    );
+    assert!(plan.join("plan.json").exists(), "a refusal removes nothing");
+
+    let (ok, listed) = run_fragment(
+        &fragment.replace("<path>", &plan.display().to_string()),
+        &env,
+        scratch.path(),
+    );
+    assert!(ok, "a stored plan under the state root is removed");
+    assert!(
+        listed.contains("plan.json") && listed.contains("deadbeef"),
+        "{listed}"
+    );
+    assert!(!plan.exists(), "exactly that directory is gone");
+    assert!(other.join("plan.json").exists(), "the sibling plan stays");
+    assert!(
+        protected.join("keep.txt").exists(),
+        "the protected tree stays"
+    );
+}
+
+/// The landing runbook's changelog selector, run as written with the real
+/// `rk --version` output and a receipt: it prints the entries from the
+/// installed version down to, and excluding, the recorded one.
+#[test]
+fn the_landing_runbooks_changelog_selector_prints_the_interval() {
+    let runbook = std::fs::read_to_string(repo_path("runbooks/landing.md")).expect("reads");
+    let fence = runbook_fence(&runbook, "2c.");
+    let selector: String = fence
+        .lines()
+        .take_while(|line| !line.starts_with('#'))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(selector.contains("rk --version | sed") && selector.contains("jq -r .rk_version"));
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let stage = scratch.path().join("stage");
+    let target = scratch.path().join("target");
+    std::fs::create_dir_all(stage.join("reference").join("guidance")).expect("creates");
+    std::fs::create_dir_all(target.join(".release-kit")).expect("creates");
+    let installed = env!("CARGO_PKG_VERSION");
+    let changelog = format!(
+        "# Changelog\n\n## [Unreleased]\n\n- pending\n\n## [99.0.0] - later\n\n- newer than installed\n\n## [{installed}] - now\n\n- the installed release\n\n## [0.2.0] - before\n\n- between\n\n## [0.1.0] - recorded\n\n- the recorded release\n\n## [0.0.1] - first\n\n- oldest\n"
+    );
+    std::fs::write(stage.join("reference").join("CHANGELOG.md"), &changelog).expect("writes");
+    std::fs::write(
+        target.join(".release-kit").join("manifest.json"),
+        r#"{"schema_version":7,"rk_version":"0.1.0"}"#,
+    )
+    .expect("writes");
+    let (ok, printed) = run_fragment(
+        &selector.replace("<stage>", &stage.display().to_string()),
+        &[],
+        &target,
+    );
+    assert!(ok, "the selector runs");
+    assert_eq!(
+        printed,
+        format!(
+            "## [{installed}] - now\n\n- the installed release\n\n## [0.2.0] - before\n\n- between\n\n"
+        ),
+        "the interval is the installed release down to the recorded one, excluded"
+    );
+}
+
 /// The migration and setup chapters name the landing chapter, so a
 /// recorded target and a first landing each have one route, and neither
 /// chapter routes to the stored-plan path.
