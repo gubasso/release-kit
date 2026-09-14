@@ -3,8 +3,12 @@
 use camino::Utf8PathBuf;
 use clap::Args;
 
-/// Take a landed target to this binary's payload, resolving flags over
-/// configuration and keeping recorded answers where both are silent.
+/// Take a landed target to this binary's projection.
+///
+/// Flags resolve over configuration, and recorded answers stand where
+/// both are silent. Preview by default; `--apply` replaces every recorded
+/// generated file, preserves every seeded and state file, and rewrites
+/// the receipt last.
 #[derive(Debug, Args)]
 pub struct UpgradeArgs {
     /// The landed repository to upgrade.
@@ -42,14 +46,8 @@ pub struct UpgradeArgs {
     #[arg(long)]
     pub nix: Option<String>,
 
-    /// Select an answer to a decision the plan asks, as `<id>=<answer>`,
-    /// such as `partial-guidance=accept` for a record the bundle's
-    /// guidance does not reach back to. Repeatable.
-    #[arg(long, value_name = "ID=ANSWER")]
-    pub decide: Vec<String>,
-
     /// Write the upgrade; without it every file's action is listed and
-    /// nothing is touched.
+    /// nothing is touched. `rk stage` is the full-byte comparison surface.
     #[arg(long)]
     pub apply: bool,
 

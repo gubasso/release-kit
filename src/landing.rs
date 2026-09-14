@@ -17,7 +17,9 @@
 //! planner and `--to` still need until a later phase deletes it, and the
 //! functions that read or write a target.
 
+pub mod apply;
 pub mod invariants;
+pub mod lock;
 pub mod manifest;
 
 use camino::Utf8Path;
@@ -1075,7 +1077,6 @@ mod tests {
                             let record = manifest::Manifest {
                                 schema_version: manifest::SCHEMA_VERSION,
                                 rk_version: "0.1.0".to_owned(),
-                                payload_sha256: crate::digest::Digest::of(b""),
                                 origin: "init".to_owned(),
                                 tech: tech.to_owned(),
                                 forge: forge.to_owned(),

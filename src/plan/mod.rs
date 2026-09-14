@@ -16,7 +16,7 @@ pub mod evidence;
 pub mod fingerprint;
 pub mod gather;
 pub mod guidance;
-pub mod lock;
+pub use crate::landing::lock;
 pub mod operation;
 pub mod planner;
 pub mod readiness;

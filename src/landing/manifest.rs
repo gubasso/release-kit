@@ -25,19 +25,22 @@ pub const MANIFEST_PATH: &str = ".release-kit/manifest.json";
 
 /// The schema this binary writes.
 ///
-/// It also reads schema 1 — the pre-mode record, whose absent `workflow`
-/// parameter reads as `branches` — schema 2 — the pre-style record,
-/// whose absent `style` parameter reads as none and holds an upgrade
-/// until `--style` names one — and schema 3 — the pre-nix record, whose
-/// absent `nix` parameter reads as opt-out, so an existing target's
-/// upgrade never sprouts files nobody requested — and schema 4 — the
-/// scope-vocabulary record, whose `scopes` parameter this binary renders
-/// nowhere, so a read drops it and the next rewrite lands without it —
-/// and schema 5 — the pre-policy record, whose absent security parameters
-/// read as the empty contact and the best-effort stance, which is exactly
-/// what such a landing wrote into `SECURITY.md`, so its bytes reproduce —
-/// and refuses anything else by name.
-pub const SCHEMA_VERSION: u64 = 6;
+/// Schema 7 is the receipt of a direct landing: the producing
+/// `rk_version`, the origin, the resolved parameters, and per destination
+/// the path, the kind, the placement where the destination is a marked
+/// region, and the digest of the bytes or region now present. It carries
+/// no payload digest and no baseline digest, because the landing renders
+/// afresh from this binary and compares against no earlier release.
+///
+/// Schemas 1 through 6 read through one bounded conversion in
+/// [`legacy`]: the retired `payload_sha256`, per-file `baseline_sha256`,
+/// and `parameters.scopes` fields are dropped, and the parameters a
+/// record predates take the defaults such a landing wrote. The next
+/// successful landing rewrites schema 7. Anything past this schema
+/// refuses by name.
+///
+/// SATISFIES landing:a-record-states-its-schema
+pub const SCHEMA_VERSION: u64 = 7;
 
 /// The oldest schema this binary still reads.
 const OLDEST_READABLE_SCHEMA: u64 = 1;
@@ -135,9 +138,6 @@ pub struct Manifest {
     pub schema_version: u64,
     /// The binary that produced the landing.
     pub rk_version: String,
-    /// The aggregate payload digest from `rk payload`: which payload
-    /// actually landed, where the version alone is ambiguous.
-    pub payload_sha256: Digest,
     /// `init` or `adopt` — how the record came to exist.
     pub origin: String,
     /// The technology that selected the payload.
@@ -265,19 +265,82 @@ pub struct FileRecord {
     pub destination: String,
     /// The declared ownership kind.
     pub kind: Kind,
-    /// The digest of what was written — after substitution for a
-    /// `rendered` file, of the marked block for `AGENTS.md`.
+    /// The digest of what the destination holds: the bytes now present
+    /// for a whole file, the marked region alone for a region destination.
     pub sha256: Digest,
-    /// The digest of the bytes this file's comparisons start from — what
-    /// makes the three-way comparison at upgrade possible. For a
-    /// `rendered` file, the payload as it stood at landing, before
-    /// substitution; for a `seeded` file, the starting point the target
-    /// tunes away from — the seeding payload, or, where a later payload
-    /// reclassified the file from `rendered`, the rendered bytes
-    /// release-kit last wrote. Absent for `state` files, which are never
-    /// compared.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub baseline_sha256: Option<Digest>,
+    /// How the landing occupies the destination: the whole file, which
+    /// the record omits, or one marked region inside a document the
+    /// target owns.
+    #[serde(default, skip_serializing_if = "Placement::is_whole")]
+    pub placement: Placement,
+}
+
+/// How a recorded destination is occupied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Placement {
+    /// The landing owns the whole file.
+    #[default]
+    Whole,
+    /// The landing owns the one marked region; every byte outside it is
+    /// the target's.
+    Region,
+}
+
+impl Placement {
+    /// Whether this is the default the record omits.
+    #[must_use]
+    pub const fn is_whole(&self) -> bool {
+        matches!(self, Self::Whole)
+    }
+
+    /// The report form.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Whole => "whole",
+            Self::Region => "region",
+        }
+    }
+}
+
+/// The one bounded conversion from a record at schemas 1 through 6 to the
+/// current shape.
+///
+/// It reads no other release and interprets no payload: it drops the
+/// fields the direct landing retired and lets the serde defaults on
+/// [`Parameters`] answer what an older record left unsaid.
+pub mod legacy {
+    /// Drop every retired field from a record value at a schema before
+    /// this binary's, so it deserializes as the current shape.
+    ///
+    /// `payload_sha256` named a bundle digest no comparison reads any
+    /// more; per-file `baseline_sha256` fed a three-way comparison that
+    /// no longer exists; `parameters.scopes` was a vocabulary this binary
+    /// renders nowhere.
+    pub fn convert(mut value: serde_json::Value) -> serde_json::Value {
+        if let Some(record) = value.as_object_mut() {
+            record.remove("payload_sha256");
+            if let Some(parameters) = record
+                .get_mut("parameters")
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                parameters.remove("scopes");
+            }
+            if let Some(files) = record
+                .get_mut("files")
+                .and_then(serde_json::Value::as_array_mut)
+            {
+                for file in files
+                    .iter_mut()
+                    .filter_map(serde_json::Value::as_object_mut)
+                {
+                    file.remove("baseline_sha256");
+                }
+            }
+        }
+        value
+    }
 }
 
 impl Manifest {
@@ -313,11 +376,10 @@ pub fn load(target: &Utf8Path) -> Result<Option<Manifest>, RkError> {
     };
     let value: serde_json::Value = serde_json::from_slice(&bytes)
         .map_err(|e| anyhow::anyhow!("{path} is not a landing record: {e}"))?;
-    // Schema 1 is the pre-mode record: it parses through the same
-    // `Parameters`, whose serde default reads the absent `workflow` as
-    // `branches`. Anything past this binary's schema refuses by name —
-    // the record decides whether a guard is landed, and an older binary
-    // must never silently ignore that.
+    // A record at an earlier schema converts through the one legacy
+    // conversion. Anything past this binary's schema refuses by the
+    // record schema alone: the record decides whether a guard is landed,
+    // and an older binary must never silently ignore that.
     let schema = value
         .get("schema_version")
         .and_then(serde_json::Value::as_u64);
@@ -330,14 +392,26 @@ pub fn load(target: &Utf8Path) -> Result<Option<Manifest>, RkError> {
                     "{path} declares schema_version {found}, and this binary knows only {OLDEST_READABLE_SCHEMA} through {SCHEMA_VERSION}"
                 ),
             )
-            .expected("a record this binary can read")
-            .action("run the rk release that wrote this record, or a newer one")
+            .expected("a landing record at a schema this binary knows")
+            .action("install the rk release that wrote this record, or a newer one")
             .target_state("unchanged"),
         ));
     }
     let declared = schema.unwrap_or(SCHEMA_VERSION);
-    let manifest: Manifest = serde_json::from_value(value)
+    let value = if declared < SCHEMA_VERSION {
+        legacy::convert(value)
+    } else {
+        value
+    };
+    let mut manifest: Manifest = serde_json::from_value(value)
         .map_err(|e| anyhow::anyhow!("{path} does not parse at schema_version {declared}: {e}"))?;
+    // A record before schema 7 stated no placement: the block destinations
+    // were regions by their names alone, and the loaded shape says so.
+    for file in &mut manifest.files {
+        if declared < SCHEMA_VERSION && crate::landing::block_markers(&file.destination).is_some() {
+            file.placement = Placement::Region;
+        }
+    }
     Ok(Some(manifest))
 }
 
@@ -352,8 +426,7 @@ pub fn write(target: &Utf8Path, manifest: &Manifest) -> Result<(), RkError> {
     Ok(())
 }
 
-/// The bytes [`write`] puts on disk for a record, so a planner can name
-/// the digest of the record an apply writes before anything is written.
+/// The bytes [`write`] puts on disk for a record.
 ///
 /// # Errors
 ///
@@ -477,19 +550,20 @@ fn numeric_core(version: &str) -> Vec<u64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Alignment, FileRecord, Manifest, Parameters, Style, Workflow, alignment};
+    use super::{
+        Alignment, FileRecord, Manifest, Parameters, Placement, Style, Workflow, alignment,
+    };
     use crate::digest::Digest;
     use crate::landing::Kind;
 
-    /// The complete record shape at schema 6, held by snapshot: a field
+    /// The complete record shape at schema 7, held by snapshot: a field
     /// rename or removal fails here and becomes a schema-version bump
     /// instead of a silent break at every reader.
     #[test]
     fn the_manifest_schema_snapshot_holds() {
         let manifest = Manifest {
-            schema_version: 6,
+            schema_version: 7,
             rk_version: "0.1.0".into(),
-            payload_sha256: Digest::of(b""),
             origin: "init".into(),
             tech: "rust".into(),
             forge: "github".into(),
@@ -509,31 +583,34 @@ mod tests {
                     destination: "release-plz.toml".into(),
                     kind: Kind::Seeded,
                     sha256: Digest::of(b""),
-                    baseline_sha256: Some(Digest::of(b"")),
+                    placement: Placement::Whole,
                 },
                 FileRecord {
-                    destination: "VERSION".into(),
-                    kind: Kind::State,
+                    destination: "AGENTS.md".into(),
+                    kind: Kind::Rendered,
                     sha256: Digest::of(b""),
-                    baseline_sha256: None,
+                    placement: Placement::Region,
                 },
             ],
             pins: std::iter::once(("release-plz".to_owned(), "0.3.160".to_owned())).collect(),
         };
         let empty = Digest::of(b"").to_string();
+        let text = serde_json::to_string(&manifest).expect("a manifest serializes");
         assert_eq!(
-            serde_json::to_string(&manifest).expect("a manifest serializes"),
+            text,
             format!(
-                r#"{{"schema_version":6,"rk_version":"0.1.0","payload_sha256":"{empty}","origin":"init","tech":"rust","forge":"github","landed_at":"2026-08-29T00:00:00Z","parameters":{{"repo":"acme/widget","workflow":"worktree","style":"trunk","nix":true,"trunk":"master","line_prefix":"release/","security_contact":"","security_response":"best-effort"}},"files":[{{"destination":"release-plz.toml","kind":"seeded","sha256":"{empty}","baseline_sha256":"{empty}"}},{{"destination":"VERSION","kind":"state","sha256":"{empty}"}}],"pins":{{"release-plz":"0.3.160"}}}}"#
+                r#"{{"schema_version":7,"rk_version":"0.1.0","origin":"init","tech":"rust","forge":"github","landed_at":"2026-08-29T00:00:00Z","parameters":{{"repo":"acme/widget","workflow":"worktree","style":"trunk","nix":true,"trunk":"master","line_prefix":"release/","security_contact":"","security_response":"best-effort"}},"files":[{{"destination":"release-plz.toml","kind":"seeded","sha256":"{empty}"}},{{"destination":"AGENTS.md","kind":"rendered","sha256":"{empty}","placement":"region"}}],"pins":{{"release-plz":"0.3.160"}}}}"#
             ),
-            "a state file must omit baseline_sha256 rather than serializing null"
+            "a whole file omits its placement, and no retired digest field survives"
         );
+        assert!(!text.contains("payload_sha256") && !text.contains("baseline_sha256"));
     }
 
     /// A record written before the mode existed reads as `branches`, and
-    /// its scope vocabulary drops, because this binary renders none. A
-    /// record past this binary's schema refuses by name, because the field
-    /// it cannot see decides whether a guard is landed.
+    /// its scope vocabulary drops, because this binary renders none. Every
+    /// earlier schema converts through the one legacy path with its
+    /// retired digests ignored, and a record past this binary's schema
+    /// refuses by the record schema alone, naming no other schema.
     #[test]
     fn a_schema_1_record_reads_as_branches_and_a_newer_schema_refuses() {
         let dir = tempfile::tempdir().expect("a scratch target exists");
@@ -567,10 +644,41 @@ mod tests {
             "a pre-policy record promises no window, which is what its policy landed"
         );
 
-        std::fs::write(target.join(super::MANIFEST_PATH), record(7)).expect("the record writes");
-        let refused = super::load(target).expect_err("a schema-7 record refuses");
+        for schema in 2..=6 {
+            std::fs::write(
+                target.join(super::MANIFEST_PATH),
+                format!(
+                    r#"{{"schema_version":{schema},"rk_version":"0.1.0","payload_sha256":"0000000000000000000000000000000000000000000000000000000000000000","origin":"init","tech":"rust","forge":"github","landed_at":"2026-08-29T00:00:00Z","parameters":{{"repo":"acme/widget"}},"files":[{{"destination":"AGENTS.md","kind":"rendered","sha256":"0000000000000000000000000000000000000000000000000000000000000000","baseline_sha256":"0000000000000000000000000000000000000000000000000000000000000000"}}],"pins":{{}}}}"#
+                ),
+            )
+            .expect("the record writes");
+            let manifest = super::load(target)
+                .expect("an earlier record loads")
+                .expect("the record exists");
+            assert_eq!(manifest.schema_version, schema);
+            assert_eq!(
+                manifest.files[0].placement,
+                Placement::Region,
+                "a block destination reads as a region"
+            );
+            let rewritten = super::render(&manifest).expect("renders");
+            let text = String::from_utf8(rewritten).expect("text");
+            assert!(!text.contains("baseline_sha256"), "{text}");
+        }
+
+        std::fs::write(target.join(super::MANIFEST_PATH), record(999)).expect("the record writes");
+        let refused = super::load(target).expect_err("a schema-999 record refuses");
+        assert_eq!(
+            refused.reason(),
+            crate::diagnostic::Reason::UnsupportedSchema
+        );
         let message = refused.to_string();
-        assert!(message.contains('7'), "{message}");
+        assert!(message.contains("999"), "{message}");
+        assert!(message.contains(super::MANIFEST_PATH), "{message}");
+        assert!(
+            !message.to_lowercase().contains("payload"),
+            "the record schema stands alone: {message}"
+        );
     }
 
     /// The record is the one input a re-render reads, so a hand-edited
@@ -594,7 +702,7 @@ mod tests {
             ("security_response", ""),
         ] {
             let record = format!(
-                r#"{{"schema_version":6,"rk_version":"0.1.0","payload_sha256":"0000000000000000000000000000000000000000000000000000000000000000","origin":"init","tech":"rust","forge":"github","landed_at":"2026-08-29T00:00:00Z","parameters":{{"repo":"acme/widget","{field}":"{value}"}},"files":[],"pins":{{}}}}"#
+                r#"{{"schema_version":7,"rk_version":"0.1.0","origin":"init","tech":"rust","forge":"github","landed_at":"2026-08-29T00:00:00Z","parameters":{{"repo":"acme/widget","{field}":"{value}"}},"files":[],"pins":{{}}}}"#
             );
             std::fs::write(target.join(super::MANIFEST_PATH), record).expect("the record writes");
             let refused = super::load(target).expect_err("an uncanonical record refuses");
