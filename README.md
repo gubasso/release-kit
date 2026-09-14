@@ -21,6 +21,7 @@ The binary is `rk`.
 - Read the method: [method/README.md](./method/README.md), or `rk method --list` anywhere.
 - Read a technology binding: [bindings/](./bindings/README.md), or `rk binding rust`.
 - Land the workflow in a project: `rk init --tech rust --target .` previews; `--apply` writes the files and the landing record.
+- See the candidate before it lands: `rk stage --target .` writes this binary's proposed files and its version-matched knowledge into a disposable stage, kept through the landing and removed only by `rk stage clean <path>`.
 - Ask a landed project about itself: `rk status`, with `--check` for a CI gate; take a newer payload with `rk upgrade`; record a pre-record project with `rk adopt`; classify a project before anything lands with `rk assess`; compute the plan that converges it toward a release with `rk reconcile plan`, offline by default, and execute exactly that plan with `rk reconcile apply`, which refuses when its inputs moved; the plan carries the compatibility the release declares and the guidance it ships, filtered to the project.
 - See the pinned tools and their freshness: `rk versions`, and `rk versions --check` to compare each pin upstream.
 - Take `rk` through the tool manager a project already runs and keep it fresh: `rk self-depend add` prints the fragments for one manager and venue pair and seeds the file the project lacks; `rk self-depend sync` moves the pin from `.envrc`; `rk self-depend clean` removes what a hand-rolled bump left.

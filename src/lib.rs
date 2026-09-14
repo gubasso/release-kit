@@ -6,7 +6,8 @@
 //! `commands` the handlers, `projection` the one pure candidate tree over
 //! the embedded sources, `release` the seam the older landing path reads a
 //! release bundle through, `plan` the typed document every landing write
-//! comes from, `self_depend` the consumer pin, `depend` the
+//! comes from, `stage` the disposable candidate stage over the projection,
+//! `self_depend` the consumer pin, `depend` the
 //! dependency matrix, `skills` the user-scope skill install,
 //! `digest` the one hash type, and `error` the one exit-code matrix.
 
@@ -37,4 +38,5 @@ pub mod release;
 pub mod self_depend;
 pub mod setup;
 pub mod skills;
+pub mod stage;
 pub mod worktree;

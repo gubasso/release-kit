@@ -21,6 +21,7 @@ pub mod runs;
 pub mod self_depend;
 pub mod setup;
 pub mod skill;
+pub mod stage;
 pub mod status;
 pub mod upgrade;
 pub mod usage;

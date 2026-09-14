@@ -20,6 +20,7 @@ pub mod runs;
 pub mod self_depend;
 pub mod setup;
 pub mod skill;
+pub mod stage;
 pub mod status;
 pub mod upgrade;
 pub mod versions;
@@ -63,6 +64,8 @@ pub enum Commands {
     Adopt(adopt::AdoptArgs),
     /// Classify a target before anything lands: greenfield, brownfield, or needs-decision.
     Assess(assess::AssessArgs),
+    /// Write the candidate this binary would land into a disposable stage, beside its knowledge.
+    Stage(stage::StageArgs),
     /// Compute the plan that converges a target toward one release, and print it.
     Reconcile(reconcile::ReconcileArgs),
     /// Execute the repository-side setup against the detected forge.

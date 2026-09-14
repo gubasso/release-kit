@@ -57,6 +57,7 @@ fn run(cli: &Cli) -> Result<(), RkError> {
         Commands::Upgrade(args) => commands::upgrade::run(args),
         Commands::Adopt(args) => commands::adopt::run(args),
         Commands::Assess(args) => commands::assess::run(args),
+        Commands::Stage(args) => commands::stage::run(args),
         Commands::Reconcile(args) => commands::reconcile::run(args),
         Commands::Setup(args) => commands::setup::run(args),
         Commands::Branches(args) => commands::branches::run(args),
@@ -121,6 +122,7 @@ const fn name(command: &Commands) -> &'static str {
         Commands::Upgrade(_) => "upgrade",
         Commands::Adopt(_) => "adopt",
         Commands::Assess(_) => "assess",
+        Commands::Stage(_) => "stage",
         Commands::Reconcile(_) => "reconcile",
         Commands::Setup(_) => "setup",
         Commands::Branches(_) => "branches",
@@ -151,6 +153,7 @@ const fn wants_json(command: &Commands) -> bool {
     use release_kit::cli::self_depend::SelfDependAction;
     use release_kit::cli::setup::SetupAction;
     use release_kit::cli::skill::SkillAction;
+    use release_kit::cli::stage::StageAction;
     use release_kit::cli::worktree::WorktreeAction;
     match command {
         Commands::Payload(args) => args.json,
@@ -159,6 +162,10 @@ const fn wants_json(command: &Commands) -> bool {
         Commands::Upgrade(args) => args.json,
         Commands::Adopt(args) => args.json,
         Commands::Assess(args) => args.json,
+        Commands::Stage(args) => match &args.action {
+            Some(StageAction::Clean { json, .. }) => *json,
+            None => args.json,
+        },
         Commands::Reconcile(args) => match &args.action {
             ReconcileAction::Plan(plan) => plan.json,
             ReconcileAction::Show(show) => show.json,
