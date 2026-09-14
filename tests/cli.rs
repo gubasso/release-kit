@@ -23662,14 +23662,21 @@ fn the_changelog_interval_is_derived_offline() {
         accepted["input_fingerprint"], plan["input_fingerprint"],
         "the selected decision is a fingerprint input"
     );
-    // Without the .envrc the step is excluded, and counted.
+    // Without the .envrc the step is excluded, and counted. The other
+    // steps in the interval are judged by their own destinations, so the
+    // assertion names this one rather than emptying the list: a later
+    // release adding a guidance file must not read as a regression here.
     std::fs::remove_file(target.path().join(".envrc")).expect("the .envrc goes");
     let out = run(&[]).assert().success().get_output().stdout.clone();
     let bare: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
     let guidance = &bare["release"]["guidance"];
     assert!(
-        guidance["steps"].as_array().expect("steps").is_empty(),
-        "{guidance}"
+        !guidance["steps"]
+            .as_array()
+            .expect("steps")
+            .iter()
+            .any(|s| s["version"] == "0.3.19" && s["destinations"][0] == ".envrc"),
+        "the step whose only destination went is gone: {guidance}"
     );
     assert_eq!(guidance["excluded"], u64::from(step_expected), "{guidance}");
 }
