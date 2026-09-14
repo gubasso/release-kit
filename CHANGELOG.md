@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/gubasso/release-kit/compare/v0.4.0...v0.5.0) - 2026-09-14
+
+### Added
+
+- *(landing)* [**breaking**] land every front directly from the installed binary's projection
+- *(stage)* stage the candidate an agent studies and clean it on request
+- *(distribution)* [**breaking**] support x86_64 linux as the only release and landed target
+
+### Other
+
+- *(skills/setup)* make the setup skill own the migration from the installed binary's stage
+- *(landing)* project the candidate tree from the embedded sources through one pure boundary
+
 ## [0.4.0](https://github.com/gubasso/release-kit/compare/v0.3.32...v0.4.0) - 2026-09-14
 
 ### Added
