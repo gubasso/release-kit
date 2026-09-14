@@ -26336,6 +26336,53 @@ const RETIRED_PACKAGE_PATHS: [&str; 4] =
 /// reason)`: a hit on `path` whose line carries `pattern` is allowed for
 /// the stated reason and for no other.
 const RETIRED_SURFACE_ALLOWLIST: &[(&str, &str, &str)] = &[
+    // historical: the guidance of the release that removed the design tells
+    // a target still on 0.5.0 what to finish with that binary first
+    (
+        "guidance/0.6.0.md",
+        "rk payload",
+        "the 0.6.0 guidance names what that release removed, for a target migrating from 0.5.0",
+    ),
+    (
+        "guidance/0.6.0.md",
+        "rk reconcile",
+        "the 0.6.0 guidance names what that release removed, for a target migrating from 0.5.0",
+    ),
+    (
+        "guidance/0.6.0.md",
+        "reconcile",
+        "the 0.6.0 guidance names what that release removed, for a target migrating from 0.5.0",
+    ),
+    (
+        "guidance/0.6.0.md",
+        "--fetch",
+        "the 0.6.0 guidance names what that release removed, for a target migrating from 0.5.0",
+    ),
+    (
+        "guidance/0.6.0.md",
+        "--to`",
+        "the 0.6.0 guidance names what that release removed, for a target migrating from 0.5.0",
+    ),
+    (
+        "guidance/0.6.0.md",
+        "compatibility.toml",
+        "the 0.6.0 guidance names what that release removed, for a target migrating from 0.5.0",
+    ),
+    (
+        "guidance/0.6.0.md",
+        "payload",
+        "the 0.6.0 guidance names what that release removed, for a target migrating from 0.5.0",
+    ),
+    (
+        "guidance/0.6.0.md",
+        "stored plan",
+        "the 0.6.0 guidance names what that release removed, for a target migrating from 0.5.0",
+    ),
+    (
+        "guidance/0.6.0.md",
+        "release cache",
+        "the 0.6.0 guidance names what that release removed, for a target migrating from 0.5.0",
+    ),
     // historical: what a 0.4.x binary left under the state root, which the
     // landing runbook has the agent inventory and remove by hand
     (
