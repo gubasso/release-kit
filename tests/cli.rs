@@ -3697,6 +3697,7 @@ fn every_setup_script_passes_the_static_battery() {
         "RK_TAG_RULESET",
         "RK_LINES_RULESET",
         "RK_TITLE_CHECK",
+        "RK_TRUNK_RULES",
         "RK_TAG_PATTERN",
         "RK_REVIEW_COUNT",
         "RK_DISMISS_STALE_REVIEWS",
@@ -4952,9 +4953,33 @@ fn a_full_github_apply_lands_reasserts_and_checks_clean() {
         "exactly two protections: {rulesets}"
     );
     let body = std::fs::read_to_string(fixture.state("ruleset_master-protection")).expect("reads");
-    assert!(body.contains(r#""context": "test-check""#));
-    assert!(body.contains(r#""context": "pr-title""#));
-    assert!(body.contains(r#""allowed_merge_methods": ["squash"]"#));
+    // Read as JSON rather than as text: the rules are composed from the
+    // one owned-rules key now, so what matters is the shape they carry
+    // and not how the serializer laid it out.
+    let ruleset: serde_json::Value = serde_json::from_str(&body).expect("the ruleset parses");
+    let rules = ruleset["rules"].as_array().expect("a rules array");
+    let rule = |kind: &str| {
+        rules
+            .iter()
+            .find(|rule| rule["type"] == kind)
+            .unwrap_or_else(|| panic!("the {kind} rule: {body}"))
+    };
+    let contexts: Vec<&str> =
+        rule("required_status_checks")["parameters"]["required_status_checks"]
+            .as_array()
+            .expect("a context list")
+            .iter()
+            .filter_map(|check| check["context"].as_str())
+            .collect();
+    assert_eq!(contexts, ["test-check", "pr-title"], "{body}");
+    assert_eq!(
+        rule("pull_request")["parameters"]["allowed_merge_methods"],
+        serde_json::json!(["squash"]),
+        "{body}"
+    );
+    for kind in ["deletion", "non_fast_forward"] {
+        rule(kind);
+    }
     assert_eq!(
         std::fs::read_to_string(fixture.state("squash_merge_commit_title")).expect("state reads"),
         "PR_TITLE\n",
@@ -30413,6 +30438,38 @@ fn integrate_fixture() -> (tempfile::TempDir, PathBuf) {
         "schema_version = 2\n[git]\ntrunk = \"master\"\ncheckout_mode = \"linked-worktree\"\nintegration = \"local\"\n",
     )
     .expect("the config writes");
+    // The record, not the configuration, is what `rk integrate` reads:
+    // the record is what landed, and an edited configuration is pending
+    // input to the next landing rather than a runtime override.
+    std::fs::write(
+        repo.join(".release-kit/manifest.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "schema_version": 10,
+            "rk_version": "0.0.0",
+            "origin": "init",
+            "landed_at": "2026-09-15T00:00:00Z",
+            "profile": { "technologies": [], "release": { "mode": "none" } },
+            "git": {
+                "trunk": "master",
+                "checkout_mode": "linked-worktree",
+                "integration": "local",
+            },
+            "capabilities": {
+                "nix_packaging": false,
+                "reporting_policy": false,
+                "scorecard": false,
+            },
+            "parameters": {
+                "repo": "",
+                "security_contact": "",
+                "security_response": "best-effort",
+            },
+            "files": [],
+            "pins": {},
+        }))
+        .expect("the record serializes"),
+    )
+    .expect("the record writes");
     git_in(&repo, &["add", "-A"]);
     git_in(&repo, &["commit", "-qm", "chore(rk): seed the local mode"]);
     git_in(&repo, &["push", "-q", "origin", "master"]);
@@ -30832,5 +30889,177 @@ fn a_fresh_landing_takes_the_local_authority() {
     assert!(
         config.contains("integration = \"local\" # P: local or forge"),
         "the key lands with its template comment: {config}"
+    );
+}
+
+/// An unreadable evidence ledger refuses before anything is built, so the
+/// trunk still stands where it stood. Reading it after publishing would
+/// leave a squash on the trunk with no evidence and a report claiming the
+/// target was untouched.
+///
+/// SATISFIES git:a-local-integration-is-a-transaction
+#[test]
+fn integrate_judges_its_ledger_before_it_builds_anything() {
+    let (_parent, repo) = integrate_fixture();
+    std::fs::create_dir_all(repo.join(".git/rk")).expect("the dir creates");
+    std::fs::write(repo.join(".git/rk/integrations.json"), "{ not json")
+        .expect("the ledger writes");
+    let before = rev_parse(&repo, "master");
+    rk_scrubbed()
+        .args(["integrate", "feat/greeting", "--apply"])
+        .args(["-m", "feat(greeting): add it", "--target"])
+        .arg(&repo)
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("integration ledger"));
+    assert_eq!(rev_parse(&repo, "master"), before);
+}
+
+/// A preview refreshes nothing: no lock, no fetch, no ref moved. A dry
+/// run that wrote `FETCH_HEAD` and advanced remote-tracking refs would
+/// make its own promise false.
+#[test]
+fn integrate_preview_refreshes_nothing() {
+    let (_parent, repo) = integrate_fixture();
+    // Advance origin behind the checkout's back, so a fetch would be
+    // visible in the remote-tracking ref.
+    let other = repo.parent().expect("a parent").join("other");
+    git_in(
+        repo.parent().expect("a parent"),
+        &[
+            "clone",
+            "-q",
+            repo.join(".git").to_str().expect("utf-8"),
+            other.to_str().expect("utf-8"),
+        ],
+    );
+    let tracking_before = rev_parse(&repo, "refs/remotes/origin/master");
+    let fetch_head = repo.join(".git/FETCH_HEAD");
+    let fetch_head_before = fetch_head.exists();
+
+    rk_scrubbed()
+        .args(["integrate", "feat/greeting", "--target"])
+        .arg(&repo)
+        .args(["-m", "feat(greeting): add it"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("a preview refreshes nothing"));
+
+    assert_eq!(
+        rev_parse(&repo, "refs/remotes/origin/master"),
+        tracking_before,
+        "a preview moved a remote-tracking ref"
+    );
+    assert_eq!(
+        fetch_head.exists(),
+        fetch_head_before,
+        "a preview wrote FETCH_HEAD"
+    );
+}
+
+/// An origin that is configured and will not answer refuses, because a
+/// newer or divergent trunk may sit behind that failure. An origin that
+/// is genuinely absent is a different fact and proceeds.
+#[test]
+fn integrate_refuses_a_configured_origin_that_will_not_answer() {
+    if !pre_commit_present() {
+        return;
+    }
+    let (_parent, repo) = integrate_fixture();
+    git_in(
+        &repo,
+        &["remote", "set-url", "origin", "/nonexistent/origin.git"],
+    );
+    let before = rev_parse(&repo, "master");
+    rk_scrubbed()
+        .args(["integrate", "feat/greeting", "--apply"])
+        .args(["-m", "feat(greeting): add it", "--target"])
+        .arg(&repo)
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("did not answer"));
+    assert_eq!(rev_parse(&repo, "master"), before);
+
+    // With no origin at all the local trunk stands alone and the
+    // integration proceeds.
+    git_in(&repo, &["remote", "remove", "origin"]);
+    rk_scrubbed()
+        .args(["integrate", "feat/greeting", "--apply"])
+        .args(["-m", "feat(greeting): add it", "--target"])
+        .arg(&repo)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("no origin remote"));
+    assert_ne!(rev_parse(&repo, "master"), before);
+}
+
+/// The record is the operational answer. An edited configuration is
+/// pending input to the next landing, so taking it here would integrate
+/// locally in a target whose landed hooks and forge protections still say
+/// forge.
+#[test]
+fn integrate_reads_the_record_and_not_the_pending_configuration() {
+    let (_parent, repo) = integrate_fixture();
+    let record = repo.join(".release-kit/manifest.json");
+    let mut held: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&record).expect("reads"))
+            .expect("the record parses");
+    held["git"]["integration"] = serde_json::json!("forge");
+    std::fs::write(&record, held.to_string()).expect("the record writes");
+    // The configuration still says local, and is ignored.
+    let out = rk_scrubbed()
+        .args(["integrate", "feat/greeting", "--json", "--target"])
+        .arg(&repo)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["integration"], "forge", "{report}");
+    assert_eq!(report["authority_source"], "record", "{report}");
+
+    // A flag still overrides one execution, and says so.
+    let out = rk_scrubbed()
+        .args(["integrate", "feat/greeting", "--local", "--json"])
+        .args(["-m", "feat(greeting): add it", "--target"])
+        .arg(&repo)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["integration"], "local", "{report}");
+    assert_eq!(report["authority_source"], "flag", "{report}");
+}
+
+/// The evidence certifies the object the squash was built from. A tree
+/// that matches proves the two observations are one: evidence for a tip
+/// whose work the trunk does not carry is what would let a prune delete
+/// that work.
+#[test]
+fn the_recorded_tip_is_the_object_the_squash_was_built_from() {
+    if !pre_commit_present() {
+        return;
+    }
+    let (_parent, repo) = integrate_fixture();
+    rk_scrubbed()
+        .args(["integrate", "feat/greeting", "--apply"])
+        .args(["-m", "feat(greeting): add it", "--target"])
+        .arg(&repo)
+        .assert()
+        .success();
+    let ledger: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(repo.join(".git/rk/integrations.json")).expect("the ledger reads"),
+    )
+    .expect("the ledger parses");
+    let entry = &ledger["entries"][0];
+    let recorded = entry["branch_tip"].as_str().expect("a tip");
+    let trunk_commit = entry["trunk_commit"].as_str().expect("a commit");
+    assert_eq!(
+        git_out(&repo, &["rev-parse", &format!("{recorded}^{{tree}}")]),
+        git_out(&repo, &["rev-parse", &format!("{trunk_commit}^{{tree}}")]),
+        "the evidence certifies the tree that reached the trunk"
     );
 }

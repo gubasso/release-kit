@@ -117,9 +117,15 @@ struct LocalRun<'a> {
 
 /// The authority this execution uses, and where it came from.
 ///
-/// The record answers unless a flag overrides it for this one execution,
-/// which is the per-execution choice the method states. An override
-/// writes nothing.
+/// The record answers, because the record is what landed: the hook block
+/// that admits or refuses these writes, the routing block an agent reads,
+/// and the forge protections the setup installed all render from it. A
+/// configuration edit is pending input to the next landing, never a
+/// runtime override — taking it here would run a local integration in a
+/// target whose installed controls still say forge, which is the split
+/// authority `target-config:the-config-is-input-and-the-record-is-the-record`
+/// exists to prevent. `--local` and `--forge` override one execution and
+/// write nothing.
 fn authority(
     args: &IntegrateArgs,
     target: &Utf8Path,
@@ -131,18 +137,9 @@ fn authority(
         return Ok((Integration::Forge, "flag"));
     }
     let recorded = crate::landing::manifest::load(target)?.map(|record| record.git.integration);
-    let configured = crate::config::load(target.as_std_path())?.and_then(|c| c.git.integration);
-    Ok((
-        configured
-            .or(recorded)
-            .unwrap_or(crate::landing::manifest::integration_forge()),
-        if configured.is_some() {
-            "config"
-        } else if recorded.is_some() {
-            "record"
-        } else {
-            "default"
-        },
+    Ok(recorded.map_or(
+        (crate::landing::manifest::integration_forge(), "default"),
+        |mode| (mode, "record"),
     ))
 }
 
@@ -219,28 +216,28 @@ fn request_commands(seat: &Utf8Path, trunk: &str, branch: &str) -> Vec<String> {
 }
 
 /// The local transaction.
+///
+/// The preview comes first and takes no lock, runs no fetch, and touches
+/// no ref: a dry run that refreshed remote-tracking refs and wrote
+/// `FETCH_HEAD` would make its own promise false.
+///
+/// The apply reads its evidence ledger before it builds anything, so a
+/// ledger this binary cannot parse refuses while the trunk still stands
+/// where it stood. Publishing is the last failure point that moves a ref.
 fn local_path(args: &IntegrateArgs, out: Output, run: &LocalRun<'_>) -> Result<(), RkError> {
     let message = args.message.as_deref().unwrap_or_default();
-    if let Some(reason) = refuse_message(message) {
-        return Err(refuse(Reason::Usage, reason));
-    }
+    refuse_message(run.target, message)?;
     let mut steps = Vec::new();
 
-    // The lock is the common git directory, so two seats of one clone
-    // collide on it: they write one trunk ref.
-    let _held = crate::landing::lock::acquire(run.git_dir)?;
-
-    refresh_trunk(args, run, &mut steps)?;
-
-    let trunk_before = rev_parse(run.seat, run.trunk)?;
-
     if !args.apply {
+        let trunk_before = rev_parse(run.seat, run.trunk)?;
+        steps.push("no fetch and no lock: a preview refreshes nothing".to_owned());
         steps.push(format!(
-            "would rebase {} onto {}",
+            "would rebase {} onto {}, or onto whatever the fetch brings",
             args.branch,
             integrate::short(&trunk_before)
         ));
-        steps.push("would run pre-commit run --hook-stage manual --all-files".to_owned());
+        steps.push("would run the manual stage in the seat".to_owned());
         steps.push(format!("would write one squash commit onto {}", run.trunk));
         return report(
             args,
@@ -255,6 +252,20 @@ fn local_path(args: &IntegrateArgs, out: Output, run: &LocalRun<'_>) -> Result<(
             )],
         );
     }
+
+    // The lock is the common git directory, so two seats of one clone
+    // collide on it: they write one trunk ref.
+    let _held = crate::landing::lock::acquire(run.git_dir)?;
+
+    // The evidence ledger is read and judged before anything is built, so
+    // an unreadable one refuses with the trunk untouched rather than
+    // after the squash is published.
+    let ledger_path = run.git_dir.join(integrate::LEDGER_PATH);
+    let mut ledger = read_ledger(&ledger_path)?;
+
+    refresh_trunk(run, &mut steps)?;
+
+    let trunk_before = rev_parse(run.seat, run.trunk)?;
 
     // Bring the branch onto the trunk. A conflict refuses and leaves both
     // refs where it found them.
@@ -292,21 +303,24 @@ fn local_path(args: &IntegrateArgs, out: Output, run: &LocalRun<'_>) -> Result<(
     }
     steps.push("the manual stage passed".to_owned());
 
-    let commit = build_squash(run, &args.branch, &trunk_before, message)?;
+    // One observation of the branch feeds both the tree that is
+    // integrated and the tip the evidence certifies. Reading them
+    // separately would let a commit landing between the two write
+    // evidence for a tip whose work never reached the trunk, and the
+    // prune predicate would then accept it and delete that work. The
+    // lock bounds this binary's own runs and bounds no hand at the desk.
+    let branch_tip = rev_parse(run.seat, &args.branch)?;
+    let commit = build_squash(run, &branch_tip, &trunk_before, message)?;
     // Publish it with one compare-and-swap carrying the tip observed
     // before the gate ran. A trunk that moved under the gate refuses here
     // and nothing was written.
     publish(run, &commit, &trunk_before)?;
-    let branch_tip = rev_parse(run.seat, &args.branch)?;
     steps.push(format!(
         "{} now carries {}",
         run.trunk,
         integrate::short(&commit)
     ));
 
-    // The evidence the prune verbs read, written last.
-    let ledger_path = run.git_dir.join(integrate::LEDGER_PATH);
-    let mut ledger = read_ledger(&ledger_path)?;
     ledger.record(Entry {
         branch: args.branch.clone(),
         branch_tip,
@@ -344,11 +358,11 @@ fn local_path(args: &IntegrateArgs, out: Output, run: &LocalRun<'_>) -> Result<(
 /// makes every refusal before that point leave nothing behind.
 fn build_squash(
     run: &LocalRun<'_>,
-    branch: &str,
+    branch_tip: &str,
     parent: &str,
     message: &str,
 ) -> Result<String, RkError> {
-    let tree = rev_parse(run.seat, &format!("{branch}^{{tree}}"))?;
+    let tree = rev_parse(run.seat, &format!("{branch_tip}^{{tree}}"))?;
     let built = git(
         run.seat,
         &["commit-tree", &tree, "-p", parent, "-m", message],
@@ -371,22 +385,34 @@ fn build_squash(
 /// and a trunk ahead of it is the ordinary state under local
 /// integration: integrations accumulate and the operator pushes when
 /// they decide to.
-fn refresh_trunk(
-    args: &IntegrateArgs,
-    run: &LocalRun<'_>,
-    steps: &mut Vec<String>,
-) -> Result<(), RkError> {
-    let fetched = git(run.seat, &["fetch", "--quiet", "origin"]);
-    let Some(remote) = (match fetched {
-        Ok(answer) if answer.status.success() => {
-            steps.push("fetched origin".to_owned());
-            rev_parse(run.seat, &format!("refs/remotes/origin/{}", run.trunk)).ok()
-        }
-        _ => {
-            steps.push("no remote answered; the local trunk stands alone".to_owned());
-            None
-        }
-    }) else {
+fn refresh_trunk(run: &LocalRun<'_>, steps: &mut Vec<String>) -> Result<(), RkError> {
+    // An absent origin and an origin that will not answer are different
+    // facts. A project with no remote integrates against its local trunk
+    // alone; a project whose remote exists and cannot be reached may have
+    // a newer or divergent trunk behind that failure, so proceeding from
+    // stale local state could publish an integration nobody can push.
+    let named = git(run.seat, &["remote", "get-url", "origin"])?;
+    if !named.status.success() {
+        steps.push("no origin remote; the local trunk stands alone".to_owned());
+        return Ok(());
+    }
+    let fetched = git(run.seat, &["fetch", "--quiet", "origin"])?;
+    if !fetched.status.success() {
+        return Err(refuse(
+            Reason::ForgeTemporary,
+            format!(
+                "origin is configured and did not answer, so the trunk could not be refreshed: {}",
+                last_line(&fetched.stderr)
+            ),
+        ));
+    }
+    steps.push("fetched origin".to_owned());
+    let Some(remote) = rev_parse(run.seat, &format!("refs/remotes/origin/{}", run.trunk)).ok()
+    else {
+        steps.push(format!(
+            "origin carries no {} yet; the local trunk stands alone",
+            run.trunk
+        ));
         return Ok(());
     };
     let local = rev_parse(run.seat, run.trunk)?;
@@ -399,15 +425,12 @@ fn refresh_trunk(
         return Err(refuse(Reason::RemoteConflict, reason));
     }
     match state {
-        integrate::TrunkState::Behind if args.apply => {
+        integrate::TrunkState::Behind => {
             fast_forward_trunk(run, &remote, &local)?;
             steps.push(format!(
                 "fast-forwarded {} to origin/{}",
                 run.trunk, run.trunk
             ));
-        }
-        integrate::TrunkState::Behind => {
-            steps.push(format!("would fast-forward {} to its remote", run.trunk));
         }
         integrate::TrunkState::Ahead => {
             steps.push(format!(
@@ -556,21 +579,60 @@ const TYPES: [&str; 11] = [
     "build", "chore", "ci", "docs", "feat", "fix", "perf", "refactor", "revert", "style", "test",
 ];
 
-/// Why a trunk commit message cannot be written, or `None`.
+/// Refuse a trunk commit message the landed guards would refuse.
 ///
-/// `git commit-tree` fires no hook, so the guards the landed commit-msg
-/// stage would have applied are applied here instead: the subject is a
-/// Conventional Commit, its type is one the branch grammar admits, and
-/// its scope is present and shaped the way the forge's title check reads.
-#[must_use]
-fn refuse_message(text: &str) -> Option<String> {
+/// `git commit-tree` fires no hook, so the whole `commit-msg` stage is
+/// applied here instead, and it is applied through the one owner rather
+/// than a second, weaker copy: the Conventional Commit shape the
+/// `conventional-pre-commit` hook holds, and then every finding
+/// `rk message --check` reports — agent attribution, a reference to a
+/// path the target ignores, and a scope outside the title check's shape.
+/// A message that reaches the trunk here reaches a permanent history and
+/// a forge-facing changelog, so the two paths judge one set.
+///
+/// # Errors
+///
+/// Returns [`RkError::Refusal`] naming what a landed guard would have
+/// refused, with the target untouched.
+fn refuse_message(target: &Utf8Path, text: &str) -> Result<(), RkError> {
     let subject = text.lines().next().unwrap_or("").trim();
     if subject.is_empty() {
-        return Some(
-            "a local integration writes the trunk's commit message, so --message is required"
-                .to_owned(),
-        );
+        return Err(refuse(
+            Reason::Usage,
+            "a local integration writes the trunk's commit message, so --message is required",
+        ));
     }
+    if let Some(reason) = misshapen_subject(subject) {
+        return Err(refuse(Reason::Usage, reason));
+    }
+    let (findings, _) = crate::commands::message::judge(
+        text,
+        crate::cli::message::MessageKind::Commit,
+        target,
+        subject,
+        crate::commands::message::exempt_title(subject),
+    );
+    if findings.is_empty() {
+        return Ok(());
+    }
+    let named: Vec<String> = findings
+        .iter()
+        .map(|finding| format!("{}:{} {}", finding.class, finding.line, finding.detail))
+        .collect();
+    Err(refuse(
+        Reason::Usage,
+        format!(
+            "the trunk message carries {} finding{} the landed commit-msg stage would refuse, and git commit-tree fires no hook: {}",
+            findings.len(),
+            if findings.len() == 1 { "" } else { "s" },
+            named.join("; ")
+        ),
+    ))
+}
+
+/// Why a subject is not a scoped Conventional Commit, or `None`.
+#[must_use]
+fn misshapen_subject(subject: &str) -> Option<String> {
     let Some((head, description)) = subject.split_once(": ") else {
         return Some(format!("'{subject}' is not {SHAPE}"));
     };
@@ -741,36 +803,68 @@ fn git(at: &Utf8Path, args: &[&str]) -> Result<std::process::Output, RkError> {
 
 #[cfg(test)]
 mod tests {
-    use super::refuse_message;
+    use camino::Utf8Path;
+
+    use super::{misshapen_subject, refuse_message};
 
     #[test]
-    fn a_trunk_message_is_held_to_the_landed_convention() {
-        assert_eq!(refuse_message("feat(integrate): land the verb"), None);
-        assert_eq!(refuse_message("feat(a/b)!: break it"), None);
+    fn a_trunk_subject_is_held_to_the_landed_convention() {
+        assert_eq!(misshapen_subject("feat(integrate): land the verb"), None);
+        assert_eq!(misshapen_subject("feat(a/b)!: break it"), None);
         assert!(
-            refuse_message("")
-                .expect("an empty message refuses")
-                .contains("--message is required")
-        );
-        assert!(
-            refuse_message("land the verb")
+            misshapen_subject("land the verb")
                 .expect("an unscoped subject refuses")
                 .contains("Conventional Commit")
         );
         assert!(
-            refuse_message("feat: land the verb")
+            misshapen_subject("feat: land the verb")
                 .expect("a missing scope refuses")
-                .contains("Conventional Commit")
+                .contains("names no scope")
         );
         assert!(
-            refuse_message("wat(integrate): land it")
+            misshapen_subject("feat(integrate):   ")
+                .expect("an empty description refuses")
+                .contains("no description")
+        );
+        assert!(
+            misshapen_subject("wat(integrate): land it")
                 .expect("an unknown type refuses")
                 .contains("not a Conventional Commit type")
         );
         assert!(
-            refuse_message("feat(Integrate): land it")
+            misshapen_subject("feat(Integrate): land it")
                 .expect("a misshapen scope refuses")
                 .contains("outside")
         );
+    }
+
+    /// The whole landed commit-msg stage runs here, not the subject
+    /// alone: `git commit-tree` fires no hook, so a body the landed
+    /// guard refuses must refuse here or it reaches a permanent history.
+    #[test]
+    fn a_trunk_body_is_judged_by_the_one_message_owner() {
+        let dir = tempfile::tempdir().expect("a scratch dir exists");
+        let target = Utf8Path::from_path(dir.path()).expect("utf-8");
+        refuse_message(target, "feat(integrate): land the verb\n\nThe context.\n")
+            .expect("a clean message passes");
+        let error = refuse_message(
+            target,
+            "feat(integrate): land the verb\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n",
+        )
+        .expect_err("agent attribution refuses")
+        .to_string();
+        assert!(error.contains("attribution"), "{error}");
+        assert!(error.contains("commit-tree fires no hook"), "{error}");
+        let error = refuse_message(
+            target,
+            "feat(integrate): land the verb\n\nSee .draft/plan.md for the rest.\n",
+        )
+        .expect_err("an internal path refuses")
+        .to_string();
+        assert!(error.contains("internal-path"), "{error}");
+        let error = refuse_message(target, "")
+            .expect_err("an empty message refuses")
+            .to_string();
+        assert!(error.contains("--message is required"), "{error}");
     }
 }

@@ -35,13 +35,13 @@ static GUARDS: &str = include_str!("../../blocks/message-guards");
 
 /// One finding.
 #[derive(Debug, Serialize)]
-struct Finding {
+pub(crate) struct Finding {
     /// `attribution`, `internal-path`, or `scope-shape`.
-    class: &'static str,
+    pub(crate) class: &'static str,
     /// The 1-based line the finding sits on.
-    line: usize,
+    pub(crate) line: usize,
     /// What matched.
-    detail: String,
+    pub(crate) detail: String,
 }
 
 /// The machine form of a report.
@@ -74,71 +74,13 @@ pub fn run(args: &MessageArgs) -> Result<(), RkError> {
     };
     let exempt = bot_title(title);
 
-    let mut findings = Vec::new();
-    for (index, line) in text.lines().enumerate() {
-        if !exempt {
-            findings.extend(attribution_hits(line).into_iter().map(|detail| Finding {
-                class: "attribution",
-                line: index + 1,
-                detail,
-            }));
-        }
+    let (findings, no_repo) = judge(&text, args.kind, &args.target, title, exempt);
+    if no_repo && !args.json {
+        out.warn(format!(
+            "{} is not a git repository; only the fixed .draft/ pattern was tested",
+            args.target
+        ));
     }
-    // The subject is line 1 of a commit message and of a title; a body's
-    // title is context passed beside it, and its findings would carry no
-    // line the reader can open.
-    if matches!(args.kind, MessageKind::Commit | MessageKind::Title)
-        && !exempt
-        && let Some(scope) = misshapen_scope(title)
-    {
-        findings.push(Finding {
-            class: "scope-shape",
-            line: 1,
-            detail: format!(
-                "the scope '{scope}' is outside {}: lowercase letters, digits, and _ . / -",
-                landing::SCOPE_SHAPE
-            ),
-        });
-    }
-    let mut seen: std::collections::BTreeSet<(usize, String)> = std::collections::BTreeSet::new();
-    match ignored_paths(&args.target, &text) {
-        IgnoreJudgment::Repo(hits) => {
-            for (line, token) in hits {
-                findings.push(Finding {
-                    class: "internal-path",
-                    line,
-                    detail: format!("{token} is git-ignored in {}", args.target),
-                });
-                seen.insert((line, token));
-            }
-        }
-        IgnoreJudgment::NoRepo => {
-            if !args.json {
-                out.warn(format!(
-                    "{} is not a git repository; only the fixed .draft/ pattern was tested",
-                    args.target
-                ));
-            }
-        }
-    }
-    // A fixed-pattern fragment already inside a reported token on the
-    // same line — `nested/.draft/plan.md` carrying `.draft/plan.md` — is
-    // the same reference, not a second finding.
-    findings.extend(
-        fixed_draft_hits(&text)
-            .into_iter()
-            .filter(|(line, fragment)| {
-                !seen
-                    .iter()
-                    .any(|(seen_line, token)| seen_line == line && token.contains(fragment))
-            })
-            .map(|(line, fragment)| Finding {
-                class: "internal-path",
-                line,
-                detail: format!("{fragment} references the internal .draft/ tree"),
-            }),
-    );
-    findings.sort_by_key(|finding| finding.line);
 
     if exempt {
         out.result_line("exempt: the release bot's request, by its title");
@@ -175,6 +117,87 @@ pub fn run(args: &MessageArgs) -> Result<(), RkError> {
         ));
     }
     Ok(())
+}
+
+/// Every finding one text carries, in line order, beside whether the
+/// ignore judgment had no repository to ask.
+///
+/// The one owner of what `rk message --check` judges, so a second caller
+/// cannot judge a weaker set. `rk integrate` calls it before writing a
+/// trunk commit with `git commit-tree`, which fires no `commit-msg` hook
+/// and would otherwise publish a message the landed hook refuses.
+pub(crate) fn judge(
+    text: &str,
+    kind: MessageKind,
+    target: &Utf8Path,
+    title: &str,
+    exempt: bool,
+) -> (Vec<Finding>, bool) {
+    let mut findings = Vec::new();
+    let mut no_repo = false;
+    for (index, line) in text.lines().enumerate() {
+        if !exempt {
+            findings.extend(attribution_hits(line).into_iter().map(|detail| Finding {
+                class: "attribution",
+                line: index + 1,
+                detail,
+            }));
+        }
+    }
+    // The subject is line 1 of a commit message and of a title; a body's
+    // title is context passed beside it, and its findings would carry no
+    // line the reader can open.
+    if matches!(kind, MessageKind::Commit | MessageKind::Title)
+        && !exempt
+        && let Some(scope) = misshapen_scope(title)
+    {
+        findings.push(Finding {
+            class: "scope-shape",
+            line: 1,
+            detail: format!(
+                "the scope '{scope}' is outside {}: lowercase letters, digits, and _ . / -",
+                landing::SCOPE_SHAPE
+            ),
+        });
+    }
+    let mut seen: std::collections::BTreeSet<(usize, String)> = std::collections::BTreeSet::new();
+    match ignored_paths(target, text) {
+        IgnoreJudgment::Repo(hits) => {
+            for (line, token) in hits {
+                findings.push(Finding {
+                    class: "internal-path",
+                    line,
+                    detail: format!("{token} is git-ignored in {target}"),
+                });
+                seen.insert((line, token));
+            }
+        }
+        IgnoreJudgment::NoRepo => no_repo = true,
+    }
+    // A fixed-pattern fragment already inside a reported token on the
+    // same line — `nested/.draft/plan.md` carrying `.draft/plan.md` — is
+    // the same reference, not a second finding.
+    findings.extend(
+        fixed_draft_hits(text)
+            .into_iter()
+            .filter(|(line, fragment)| {
+                !seen
+                    .iter()
+                    .any(|(seen_line, token)| seen_line == line && token.contains(fragment))
+            })
+            .map(|(line, fragment)| Finding {
+                class: "internal-path",
+                line,
+                detail: format!("{fragment} references the internal .draft/ tree"),
+            }),
+    );
+    findings.sort_by_key(|finding| finding.line);
+    (findings, no_repo)
+}
+
+/// Whether the release bot's exemption applies to one title.
+pub(crate) fn exempt_title(title: &str) -> bool {
+    bot_title(title)
 }
 
 /// The text: stdin for `-` or no file, the file otherwise.

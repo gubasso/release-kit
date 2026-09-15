@@ -12,6 +12,8 @@ The axes are orthogonal, and every pairing works. Parallel work still takes one 
 
 `git.integration` is a recorded Git workflow parameter. The landing verbs resolve it from a flag, the committed configuration, a compatible record, and a compiled default in that order, write it to `.release-kit/manifest.json`, render it into the committed hook block and routing block, and report it through `rk status`. `rk status --check` judges it. Changing it is `rk upgrade --integration <mode> --apply`, whose committed diff reaches every clone through the trunk, never an ad hoc local toggle. The compiled default is `local`. A record written before this axis existed answers `forge`, because that is what such a target actually landed.
 
+`rk integrate` reads the record alone, never the committed configuration. The record is what landed: the hook block that admits or refuses its writes, the routing block an agent reads, and the forge protections the setup installed all render from it. An edited configuration is pending input to the next landing, so taking it at execution time would integrate locally in a target whose installed controls still say forge.
+
 ## The invariant split
 
 An implementation reaches the trunk through a short-lived branch, as one validated squash commit, and the trunk stays continuously releasable. The recorded integration mode chooses the authority that performs that integration. A pull request is one integration mechanism and not the definition of trunk-based development. [The model](./00-model.md) carries the branch forms and [the invariants](./01-invariants.md) carries the two rules this chapter splits.
@@ -48,15 +50,17 @@ Local integration is the default. A single-writer project integrates one impleme
 
 Under this mode the branch is born and dies in the checkout. It reaches no forge, so it has no pull request, no remote tip, and no review artifact. That is the mode's whole saving and its whole cost.
 
-`rk integrate <branch>` performs the transaction and is the only path that writes a local trunk commit. It resolves the branch and its seat, refuses a dirty seat and a branch off the grammar, refreshes the trunk, brings the branch onto that tip, runs the `manual` stage, re-observes the trunk, creates one squash commit, runs the trunk gate against the new tip, and records the evidence the prune verbs read. Every refusal leaves the trunk at the tip it started from.
+`rk integrate <branch>` performs the transaction and is the only path that writes a local trunk commit. It resolves the branch and its seat, refuses a dirty seat and a branch off the grammar, refreshes the trunk, brings the branch onto that tip, and runs the `manual` stage. Then it builds the squash commit as an object no ref names and publishes it with one compare-and-swap carrying the tip it observed before the gate ran. Nothing is undone, because nothing is published early: a trunk that moved under the gate refuses with no ref touched. It records the evidence the prune verbs read last.
 
-The command never pushes. The trunk push is a separate operator action and takes the fast-forward form alone. Where another writer wins the push, the loser fetches, replays the implementation, runs the gates again, and retries. No local integration uses a force-push.
+Two things the command holds that a forge would have held for it. The trunk message passes the whole landed `commit-msg` judgment here, because the command that writes the commit fires no hook, so a message with agent attribution or a reference to an ignored path refuses at the desk rather than reaching a permanent history. And the branch is observed once: the tree that is integrated and the tip the evidence certifies are one object, so a commit landing in the seat mid-transaction cannot leave evidence for work the trunk does not carry.
+
+The command never pushes, and a preview refreshes nothing: it takes no lock, runs no fetch, and moves no ref. The trunk push is a separate operator action and takes the fast-forward form alone. Where another writer wins the push, the loser fetches, replays the implementation, runs the gates again, and retries. No local integration uses a force-push.
 
 The local path cannot observe remote checks before the trunk push, because the push is what starts them. Whoever pushes watches the resulting run and the release request, and repairs a failure as a fresh implementation integrated the same way.
 
 ## Forge integration
 
-Forge integration runs the same local gates, then pushes the branch and opens or updates the pull request or merge request. The forge holds the merge behind its required check and performs the squash. The request is the integration record and the place review happens.
+Forge integration runs the project's own `pre-push` stage by pushing the branch, then names the request command for the forge the remote resolves to. Opening the request is the operator's act, and no verb here authors a request body: `rk message --check --kind body` is what judges one. The forge holds the merge behind its required check and performs the squash. The request is the integration record and the place review happens.
 
 A project with more than one writer and a review requirement uses forge integration. No local gate substitutes for a second person reading a diff, and a local default does not make that gap smaller.
 
@@ -66,7 +70,7 @@ A recorded default binds no single execution. `--forge` and `--local` select the
 
 Under forge integration the trunk keeps every protection [setup](./02-setup.md) installs: no direct push, no force-push, a request carrying the named passing check, and squash as the only merge method.
 
-Under local integration the forge keeps what still holds against a direct push: no deletion, no force-push, and a restriction naming who may write the trunk. It drops the request rule and the required-check rule, because no forge can require a check before the push that starts it. Every tag protection and every release-request protection is unchanged, in both modes.
+Under local integration the forge keeps what still holds against a direct push: no deletion, no force-push, and a restriction naming who may write the trunk. It drops the request rule and the required-check rule, because no forge can require a check before the push that starts it. `rk setup` installs the set the recorded mode names, and the configuration floors judge the same set, so a target that records `local` is not handed a trunk its own integrations cannot push. Every tag protection and every release-request protection is unchanged, in both modes.
 
 The desk and the forge remain the two distances [setup](./02-setup.md) describes. What changes is how far the forge's refusal reaches. A hook is discipline and not a boundary: it dies to `--no-verify` in either mode. What catches a bypass is the integration transaction, the trunk gate, the post-push run, and the release request that refuses to go green on a broken trunk.
 
