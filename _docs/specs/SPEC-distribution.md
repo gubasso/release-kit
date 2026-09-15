@@ -6,6 +6,7 @@
 - [Requirements](#requirements)
   - [`distribution:the-distribution-roots-are-declared-once` — The distribution roots are declared once](#distributionthe-distribution-roots-are-declared-once--the-distribution-roots-are-declared-once)
   - [`distribution:the-published-crate-carries-every-root` — The published crate carries every root](#distributionthe-published-crate-carries-every-root--the-published-crate-carries-every-root)
+  - [`distribution:guidance-names-the-version-the-release-mints` — Guidance names the version the release mints](#distributionguidance-names-the-version-the-release-mints--guidance-names-the-version-the-release-mints)
   - [`distribution:machine-output-declares-its-schema` — Machine output declares its schema](#distributionmachine-output-declares-its-schema--machine-output-declares-its-schema)
   - [`distribution:a-human-faced-artifact-is-authored-text` — A human-faced artifact is authored text](#distributiona-human-faced-artifact-is-authored-text--a-human-faced-artifact-is-authored-text)
   - [`distribution:the-distribution-names-no-other-project` — The distribution names no other project](#distributionthe-distribution-names-no-other-project--the-distribution-names-no-other-project)
@@ -57,6 +58,18 @@ The published package MUST contain every distribution root, and the check MUST r
 - THEN the package-contents test fails naming the root, before `cargo publish` can ship a crate that fails to compile at the consumer
 
 Verify: `cargo nextest run --run-ignored ignored-only -E 'test(the_published_crate_carries_every_root)'`
+
+### `distribution:guidance-names-the-version-the-release-mints` — Guidance names the version the release mints
+
+A release that changes a landed destination MUST carry coverage naming the version that release mints, as a guidance file or a recorded silence, and the gate holding it MUST prove that exact version where the checkout carries a readable release candidate and MUST prove the weaker above-the-last-tag statement otherwise, naming which of the two it proved.
+
+#### Scenario: A guidance file names a version the release will not mint
+
+- GIVEN a checkout whose package version states the candidate 0.6.2 over the last tag v0.6.1, and coverage naming 0.7.0 alone
+- WHEN the authoring gate runs
+- THEN it fails naming the version the release mints and the file to add, rather than accepting a file that reaches no target because every agent selects guidance by the version a target records
+
+Verify: `cargo nextest run -E 'test(a_candidate_release_rejects_coverage_naming_another_version)'`
 
 ### `distribution:machine-output-declares-its-schema` — Machine output declares its schema
 
@@ -182,12 +195,6 @@ Every skill MUST route to the shared plan gate in a section preceding every othe
 - WHEN the test suite runs
 - THEN the conformance test fails and names the skill, because an agent reading top to bottom would act before reaching the gate
 
-#### Scenario: The gate is read for what it authorizes
-
-- GIVEN the shared plan gate every skill names
-- WHEN the test suite reads it
-- THEN it carries the section bounding a request's authority, so every skill holding the gate holds that boundary
-
 Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `distribution:a-skill-checks-its-host-before-it-plans` — A skill checks its host before it plans
@@ -212,8 +219,6 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 The distribution MUST install what the skills share once, outside the agent skill roots and under the invoking user's home, whichever agent a run selects; and `rk skill uninstall --apply` MUST keep those artifacts while any agent root still holds a skill that names them. A skill MUST name each of them by that absolute path, because the two agent roots make no relative path reach one file from both.
 
-The location is home-relative rather than `XDG_STATE_HOME`-relative for the reason the record already states: the skills reading these artifacts live under `$HOME/.claude` and `$HOME/.agents`, which no XDG variable moves.
-
 #### Scenario: One agent family is uninstalled while the other stays
 
 - GIVEN a home carrying the skills under both agent roots
@@ -224,9 +229,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `distribution:the-doctor-answers-for-the-installed-skills` — The doctor answers for the installed skills
 
-The probe catalog MUST report whether the shared artifacts and the skills installed under the invoking user's home are the ones the running binary carries, and whether the roots an install writes accept writes at all. One installed binary serves every repository while its skills sit in three separate directories under a home, so the two can be updated apart and the home can be shared — into a container, a sandbox, or across machines — with some of those directories carried and others not. The failures that produces are silent in exactly the wrong way: a skill resolves by name and then cannot read the gate it is told to read first, or it follows a routing table naming verbs the binary on PATH does not answer. Prose cannot catch either, because the artifact that would carry the warning is the missing one.
-
-A difference the record vouches for is a stale install and its remediation MUST be the plain apply; a difference the record cannot account for is the operator's own and its remediation MUST be the forcing one, per `distribution:a-stale-skill-is-not-a-conflict`. An absent agent root MUST NOT be a failure on its own, because `--agent` selects one family and leaves the other's root untouched. These probes MUST NOT create any destination they judge, because a preview must still be able to report a root as absent.
+The probe catalog MUST report whether the shared artifacts and the skills installed under the invoking user's home are the ones the running binary carries, and whether the roots an install writes accept writes at all, because one binary serves every repository while its skills sit in three directories under a home that can be carried between machines in part. A difference the record vouches for is a stale install and its remediation MUST be the plain apply; a difference the record cannot account for is the operator's own and its remediation MUST be the forcing one, per `distribution:a-stale-skill-is-not-a-conflict`. An absent agent root MUST NOT be a failure on its own, because `--agent` selects one family and leaves the other's root untouched. These probes MUST NOT create any destination they judge, because a preview must still be able to report a root as absent.
 
 #### Scenario: A home carries the skills and not what they share
 
@@ -239,12 +242,6 @@ A difference the record vouches for is a stale install and its remediation MUST 
 - GIVEN a home holding a skill whose bytes differ from the embedded skill
 - WHEN `rk doctor` runs
 - THEN the `skill-sources` probe fails and names the running version, asking for the forcing apply only where the record cannot vouch for the bytes it would overwrite
-
-#### Scenario: A skill root refuses writes
-
-- GIVEN a home whose agent root is mounted read-only
-- WHEN `rk doctor` runs
-- THEN the roots probe fails and names the directory, because the install that would fix the other two probes cannot run there
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 

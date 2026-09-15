@@ -28439,17 +28439,102 @@ fn guidance_index() -> (String, Vec<String>) {
     (since, no_steps)
 }
 
-/// `a` is a lower version than `b`, both dotted digit triples.
-fn version_below(a: &str, b: &str) -> bool {
-    let parse = |v: &str| -> Vec<u64> {
-        v.split('.')
-            .map(|part| {
-                part.parse::<u64>()
-                    .unwrap_or_else(|_| panic!("{v}: not a version"))
-            })
-            .collect()
+/// A version as exactly three dotted unsigned integers, or why the text
+/// is none. Every version this file compares goes through it: a guidance
+/// filename, `since`, a `no_steps` entry, the last release tag, and the
+/// committed package version. A looser parser accepts `0.7` and `1` and
+/// then orders them against a triple, which no caller means.
+fn parse_version(value: &str) -> Result<[u64; 3], String> {
+    let parts: Vec<&str> = value.split('.').collect();
+    let [major, minor, patch] = parts[..] else {
+        return Err(format!(
+            "{value:?} is no version; a version is three dotted integers"
+        ));
     };
-    parse(a) < parse(b)
+    let mut out = [0_u64; 3];
+    for (slot, part) in out.iter_mut().zip([major, minor, patch]) {
+        if part.is_empty() || !part.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(format!(
+                "{value:?} is no version; a version is three dotted integers"
+            ));
+        }
+        *slot = part.parse::<u64>().map_err(|_| {
+            format!("{value:?} is no version; {part:?} is outside the range of a version part")
+        })?;
+    }
+    Ok(out)
+}
+
+/// The version `value` states, failing by the name of the file or the key
+/// it came from.
+fn version_at(value: &str, at: &str) -> [u64; 3] {
+    parse_version(value).unwrap_or_else(|why| panic!("{at}: {why}"))
+}
+
+/// The rule the authoring gate holds, cited in every failure it prints.
+const GUIDANCE_RULE: &str = "distribution:guidance-names-the-version-the-release-mints";
+
+/// What one run of the authoring gate proved. There are two proof modes
+/// and no third: a state that fits neither is a failure rather than a
+/// weaker proof.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CoverageProof {
+    /// The checkout carries a release candidate, and coverage names that
+    /// exact version.
+    CandidateExact(String),
+    /// No candidate is readable, and coverage names some version above the
+    /// last tag. This is the authoring fallback.
+    AboveLastTag(String),
+}
+
+/// Judge the coverage of a release that changed a landed destination.
+///
+/// `tag` is the last release tag's version, `candidate` the committed
+/// package version, `coverage` every version a guidance file or a
+/// `no_steps` entry names with the place it came from, and `changed` the
+/// landed surface that moved. Nothing here reads the network or the
+/// filesystem, so the table tests drive it directly.
+fn coverage_proof(
+    tag: &str,
+    candidate: &str,
+    coverage: &[(String, String)],
+    changed: &[String],
+) -> Result<CoverageProof, String> {
+    let tag_version =
+        parse_version(tag).map_err(|why| format!("the last release tag v{tag}: {why}"))?;
+    let candidate_version = parse_version(candidate)
+        .map_err(|why| format!("the package version in Cargo.toml: {why}"))?;
+    let mut named = Vec::new();
+    for (version, at) in coverage {
+        named.push((
+            parse_version(version).map_err(|why| format!("{at}: {why}"))?,
+            version.clone(),
+        ));
+    }
+    let paths = changed.join(", ");
+    match candidate_version.cmp(&tag_version) {
+        std::cmp::Ordering::Greater => {
+            if named.iter().any(|(version, _)| *version == candidate_version) {
+                Ok(CoverageProof::CandidateExact(candidate.to_owned()))
+            } else {
+                Err(format!(
+                    "the release mints {candidate}, which changes a landed destination ({paths}), and no guidance file or no_steps entry names {candidate}; add guidance/{candidate}.md, or record {candidate} under no_steps in guidance/index.toml ({GUIDANCE_RULE})"
+                ))
+            }
+        }
+        std::cmp::Ordering::Equal => named
+            .iter()
+            .find(|(version, _)| *version > tag_version)
+            .map(|(_, version)| CoverageProof::AboveLastTag(version.clone()))
+            .ok_or_else(|| {
+                format!(
+                    "a landed destination changed since v{tag} ({paths}) and no guidance file or no_steps entry names a release above it; this checkout carries no release candidate, so only the weaker above-the-tag proof ran ({GUIDANCE_RULE})"
+                )
+            }),
+        std::cmp::Ordering::Less => Err(format!(
+            "the package version {candidate} is below the last release tag v{tag}; Cargo.toml is this repository's release source of truth and a tag mirrors it, so this checkout is broken repository state rather than a release candidate ({GUIDANCE_RULE})"
+        )),
+    }
 }
 
 /// Every guidance file the binary ships names at least one landed
@@ -28482,7 +28567,8 @@ fn every_guidance_file_names_its_destinations() {
             "{version}: the heading names another release"
         );
         assert!(
-            version_below(&since, version),
+            version_at(&since, "guidance/index.toml since")
+                < version_at(version, &format!("guidance/{version}.md")),
             "{version}: a guidance file below since {since} describes a release the index claims not to cover"
         );
         assert!(
@@ -28492,7 +28578,8 @@ fn every_guidance_file_names_its_destinations() {
     }
     for version in &no_steps {
         assert!(
-            version_below(&since, version),
+            version_at(&since, "guidance/index.toml since")
+                < version_at(version, "guidance/index.toml no_steps"),
             "{version}: no_steps names a release below since"
         );
     }
@@ -28560,16 +28647,184 @@ fn a_release_changing_a_destination_without_guidance_is_named() {
     if changed.is_empty() {
         return;
     }
+    let coverage = guidance_coverage();
+    match coverage_proof(&tag_version, env!("CARGO_PKG_VERSION"), &coverage, &changed) {
+        Ok(CoverageProof::CandidateExact(version)) => {
+            eprintln!("the release candidate is {version} and coverage names it");
+        }
+        Ok(CoverageProof::AboveLastTag(version)) => {
+            eprintln!(
+                "no release candidate is readable, so the authoring fallback ran: coverage names {version}, above {tag}"
+            );
+        }
+        Err(why) => panic!("{why}"),
+    }
+}
+
+/// Every version the guidance coverage names, each with the file or the
+/// key it came from. Both channels take the same judgment, so a
+/// deliberate silence is held to the standard a file is held to.
+fn guidance_coverage() -> Vec<(String, String)> {
     let (_, no_steps) = guidance_index();
-    let described = guidance_files()
+    guidance_files()
         .iter()
-        .map(|(version, ..)| version.clone())
-        .chain(no_steps)
-        .any(|version| version_below(&tag_version, &version));
-    assert!(
-        described,
-        "a landed destination changed since {tag} ({changed:?}) and no guidance file names a release above it; add guidance/<next version>.md, or record the release under no_steps in guidance/index.toml"
+        .map(|(version, ..)| (version.clone(), format!("guidance/{version}.md")))
+        .chain(
+            no_steps
+                .into_iter()
+                .map(|version| (version, "guidance/index.toml no_steps".to_owned())),
+        )
+        .collect()
+}
+
+/// The landed surface one table test states as changed.
+fn changed_surface() -> Vec<String> {
+    vec!["tests/fixtures/projection-digests.txt".to_owned()]
+}
+
+/// Coverage naming `versions`, as guidance files.
+fn files_naming(versions: &[&str]) -> Vec<(String, String)> {
+    versions
+        .iter()
+        .map(|version| ((*version).to_owned(), format!("guidance/{version}.md")))
+        .collect()
+}
+
+/// Coverage naming `versions`, as `no_steps` entries.
+fn no_steps_naming(versions: &[&str]) -> Vec<(String, String)> {
+    versions
+        .iter()
+        .map(|version| {
+            (
+                (*version).to_owned(),
+                "guidance/index.toml no_steps".to_owned(),
+            )
+        })
+        .collect()
+}
+
+/// A checkout whose package version leads the last tag carries the
+/// release candidate, and coverage satisfies the gate only by naming that
+/// exact version.
+#[test]
+fn a_candidate_release_needs_coverage_naming_its_exact_version() {
+    assert_eq!(
+        coverage_proof(
+            "0.6.1",
+            "0.6.2",
+            &files_naming(&["0.6.2"]),
+            &changed_surface()
+        ),
+        Ok(CoverageProof::CandidateExact("0.6.2".to_owned()))
     );
+}
+
+/// The defect this gate removes: a guidance file named for a version the
+/// release will not mint satisfied the old check because it sat above the
+/// last tag. Under a readable candidate it no longer does.
+#[test]
+fn a_candidate_release_rejects_coverage_naming_another_version() {
+    let why = coverage_proof(
+        "0.6.1",
+        "0.6.2",
+        &files_naming(&["0.7.0"]),
+        &changed_surface(),
+    )
+    .expect_err("0.7.0 is no coverage for the release that mints 0.6.2");
+    assert!(why.contains("the release mints 0.6.2"), "{why}");
+    assert!(why.contains("add guidance/0.6.2.md"), "{why}");
+    assert!(why.contains(GUIDANCE_RULE), "{why}");
+}
+
+/// An ordinary branch carries no candidate, because release-plz writes the
+/// proposed version only on the release branch. The gate then proves what
+/// authoring can prove: some version above the last tag.
+#[test]
+fn no_candidate_falls_back_to_the_above_the_tag_proof() {
+    assert_eq!(
+        coverage_proof(
+            "0.6.1",
+            "0.6.1",
+            &files_naming(&["0.7.0"]),
+            &changed_surface()
+        ),
+        Ok(CoverageProof::AboveLastTag("0.7.0".to_owned()))
+    );
+    let why = coverage_proof(
+        "0.6.1",
+        "0.6.1",
+        &files_naming(&["0.6.0"]),
+        &changed_surface(),
+    )
+    .expect_err("coverage below the tag proves nothing about what changed since it");
+    assert!(why.contains("names a release above it"), "{why}");
+    assert!(why.contains(GUIDANCE_RULE), "{why}");
+}
+
+/// A package version under its own latest tag is broken repository state,
+/// not a weaker proof mode. The committed version leads and the tag
+/// mirrors it, so the gate names both rather than falling back.
+#[test]
+fn a_package_version_below_its_own_tag_fails() {
+    let why = coverage_proof(
+        "0.6.1",
+        "0.6.0",
+        &files_naming(&["0.7.0"]),
+        &changed_surface(),
+    )
+    .expect_err("a version below its own tag reaches no proof mode");
+    assert!(why.contains("the package version 0.6.0 is below"), "{why}");
+    assert!(why.contains("v0.6.1"), "{why}");
+    assert!(why.contains(GUIDANCE_RULE), "{why}");
+}
+
+/// A deliberate silence is coverage, and it is held to the standard a
+/// guidance file is held to: both channels pass and fail identically
+/// under each proof mode.
+#[test]
+fn a_no_steps_entry_takes_the_same_judgment_as_a_guidance_file() {
+    let changed = changed_surface();
+    for (tag, candidate, names, expected) in [
+        ("0.6.1", "0.6.2", "0.6.2", true),
+        ("0.6.1", "0.6.2", "0.7.0", false),
+        ("0.6.1", "0.6.1", "0.7.0", true),
+        ("0.6.1", "0.6.1", "0.6.0", false),
+    ] {
+        let by_file = coverage_proof(tag, candidate, &files_naming(&[names]), &changed);
+        let by_entry = coverage_proof(tag, candidate, &no_steps_naming(&[names]), &changed);
+        assert_eq!(
+            by_file.is_ok(),
+            expected,
+            "a guidance file naming {names} under tag {tag} and candidate {candidate}"
+        );
+        assert_eq!(
+            by_file.is_ok(),
+            by_entry.is_ok(),
+            "the two coverage channels disagree over {names}"
+        );
+    }
+}
+
+/// Every version this gate compares is three dotted integers. The older
+/// parser accepted `0.7` and `0.7.0.1` and ordered them against a triple,
+/// so a `no_steps` entry could record a silence against a version no
+/// other reader accepts.
+#[test]
+fn a_version_is_three_dotted_integers() {
+    for value in ["0.7", "1", "0.7.0.1", "", "0.x.1", "0..1", "v0.7.0"] {
+        let why = parse_version(value).expect_err("the value is no version");
+        assert!(why.contains("three dotted integers"), "{value}: {why}");
+    }
+    assert_eq!(parse_version("0.7.0"), Ok([0, 7, 0]));
+    assert_eq!(parse_version("10.20.30"), Ok([10, 20, 30]));
+    let why = coverage_proof(
+        "0.6.1",
+        "0.6.2",
+        &no_steps_naming(&["0.7"]),
+        &changed_surface(),
+    )
+    .expect_err("a malformed entry fails by the key it came from");
+    assert!(why.contains("guidance/index.toml no_steps"), "{why}");
 }
 
 /// The job that runs the authoring gate checks out the release tags. The

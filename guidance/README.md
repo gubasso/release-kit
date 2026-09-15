@@ -4,7 +4,8 @@ One file per release that needs an operator step or an explanation a target must
 
 ## Authoring rules
 
-- Name the file by the version that introduces the change: `0.3.19.md` for a change that ships in release 0.3.19. On a `0.x` line a feature or a fix mints the next patch version, so name the file for the version release-plz will mint.
+- Name the file by the version the release mints: `0.3.19.md` for a change that ships in release 0.3.19. On a `0.x` line a feature mints the next patch version, not the next minor one, because `features_always_increment_minor` is off here. Do not predict the version. Read it from the open release request's title, and where the file was named before that request existed, rename it there.
+- The authoring gate proves the exact name only once a release candidate exists, which is the release branch, where release-plz has written the proposed version into `Cargo.toml`. On an ordinary branch it proves the weaker statement that some coverage names a version above the last tag, so a name that is wrong passes there and fails at the release.
 - Open with one `#` heading naming the release.
 - Follow the heading with a list of exactly two fields, in this order, each on one line. `destinations` names every landed path the step concerns, comma separated. `action` is `operator-step` for a step the operator takes or `landing-write` for a change the landing writes on its own.
 - Write the body under two headings, `## What changed` and `## What to do`. State the step as a command or an edit the reader can take.
