@@ -13,7 +13,7 @@ A repository with no release mechanism, no tag, no second long-lived branch, and
 
 ## Route
 
-1. `rk guide landing` step 1a: run `rk --version` and `rk self-depend status --target .`. The installed version is the one the operator chose. No step selects, fetches, or installs another.
+1. `rk guide landing` step 1a: run `rk --version` and `rk self-depend status --target .`. The installed version is the one the operator chose. No step selects, fetches, or installs another. The report names no wired manager on a bare tree, so no freshness offer is raised here: there is no pin for a line to move.
 2. `rk assess --target .`: the verdict is `greenfield`, so the arrival loads `rk method setup` and `rk guide setup`. The landing is that runbook's step 4a.
 3. `rk guide landing` step 1c: run `rk stage --target . --tech <tech> --workflow <mode> --style <style>` and hold `<stage>`.
 4. `rk guide landing` step 2a: read `<stage>/stage.json`, `<stage>/artifacts/`, and `<stage>/reference/`. Every candidate is a creation, because no destination exists yet.
