@@ -20,6 +20,7 @@ use super::secrets;
 use crate::detect::{self, Forge};
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
+use crate::profile::{CapabilityRequests, ProfileSnapshot, ReleaseMode};
 
 // The trunk every setup asserts is the one permanent branch the target
 // states in its own committed configuration, read through `Ctx::trunk`.
@@ -67,10 +68,20 @@ pub use super::secrets::VALUE_VARS as SECRET_VARS;
 pub struct Ctx {
     /// The repository being set up.
     pub target: Utf8PathBuf,
-    /// The project path on the forge.
+    /// The project path on the forge, empty where the profile names none.
     pub repo: String,
-    /// The forge the run acts on.
-    pub forge: Forge,
+    /// The forge adapter the run acts through, where the profile names a
+    /// forge this release drives. A target with no forge, or one this
+    /// release has no adapter for, carries none: its local steps still
+    /// run and its forge steps report as not applicable.
+    pub forge: Option<Forge>,
+    /// The forge the profile declares, preserved whatever the adapter
+    /// says, so an unknown name stays readable.
+    pub declared_forge: Option<String>,
+    /// What the project is, as the target configuration resolves it.
+    pub profile: ProfileSnapshot,
+    /// Which optional products the target requests.
+    pub capabilities: CapabilityRequests,
     /// The remote host, where one was detected.
     pub host: Option<String>,
     /// The value of `--required-check`, where given.
@@ -145,45 +156,36 @@ impl Ctx {
             })
             .transpose()?;
         let detected = detect::detect(target.as_std_path());
-        let Some(forge) = forge_flag.or(detected.forge) else {
-            let diagnostic = detected.host.as_ref().map_or_else(
-                || {
-                    Diagnostic::new(
-                        Reason::ForgeUndetected,
-                        "no forge detected: the target has no origin remote",
-                    )
-                },
-                |host| {
-                    Diagnostic::new(
-                        Reason::ForgeUndetected,
-                        format!("no forge detected: the host {host} is not recognized"),
-                    )
-                },
-            );
-            let diagnostic = diagnostic
-                .expected("a github.com or gitlab remote, or an override")
-                .action("pass --forge <github|gitlab>, and --repo <path> if the remote is absent");
-            // An unrecognized host is a refusal, never a default; a
-            // missing remote is absent input, in the sysexits sense.
-            return Err(if detected.host.is_some() {
-                RkError::refusal(diagnostic)
-            } else {
-                RkError::missing(diagnostic)
-            });
-        };
-
-        let Some(repo) = repo_flag.map(str::to_owned).or(detected.repo) else {
-            return Err(RkError::missing(
-                Diagnostic::new(
-                    Reason::ForgeUndetected,
-                    "no repository detected: the target has no origin remote",
-                )
-                .expected("an origin remote naming the project")
-                .action("pass --repo <owner/name>"),
-            ));
-        };
-        let cli = resolve_cli(forge)?;
         let config = crate::config::load(target.as_std_path())?;
+        let record = crate::landing::manifest::load(target)?;
+        // The setup reads the same target configuration a landing records,
+        // so which steps apply follows the profile rather than a second
+        // detection of its own.
+        let resolved = crate::profile::Params::resolve(
+            target,
+            &crate::profile::Inputs {
+                forge: forge_flag.map(Forge::as_str),
+                repo: repo_flag,
+                ..crate::profile::Inputs::default()
+            },
+            config.as_ref(),
+            record.as_ref(),
+            crate::profile::Purpose::Preview,
+        )?;
+        let declared_forge = resolved.forge().map(str::to_owned);
+        let forge = declared_forge.as_deref().and_then(Forge::parse);
+        let repo = resolved.repo().to_owned();
+        let repo = if repo == crate::projection::REPO_PLACEHOLDER {
+            String::new()
+        } else {
+            repo
+        };
+        // A forge step spawns the forge CLI, so the run resolves it where
+        // an adapter exists and never where none does.
+        let cli = match forge {
+            Some(forge) => resolve_cli(forge)?,
+            None => PathBuf::new(),
+        };
         let answers = config
             .as_ref()
             .map_or_else(crate::config::Setup::default, |held| held.setup.clone());
@@ -192,10 +194,10 @@ impl Ctx {
         // one, so a shared configuration must not make that refusal fire.
         let required_check = required_check.map(str::to_owned).or_else(|| {
             Some(answers.required_check.clone())
-                .filter(|name| !name.is_empty() && forge == Forge::Github)
+                .filter(|name| !name.is_empty() && forge == Some(Forge::Github))
         });
         let bot_app_id = Some(answers.bot.app_id.clone()).filter(|id| !id.is_empty());
-        let trunk = crate::config::trunk_of(target.as_std_path())?;
+        let trunk = resolved.trunk().to_owned();
         let protection = config
             .as_ref()
             .map_or_else(crate::config::Protection::default, |held| {
@@ -208,14 +210,21 @@ impl Ctx {
             host: detected.host,
             required_check,
             cli,
-            tech: detect::tech_of(target.as_std_path()),
+            tech: resolved.driver().and_then(|driver| {
+                ["rust", "python", "bash"]
+                    .into_iter()
+                    .find(|known| *known == driver)
+            }),
             trunk_ruleset: protection.trunk_ruleset(&trunk),
             tag_ruleset: protection.tag_ruleset.clone(),
             lines_ruleset: protection.lines_ruleset.clone(),
             title_check: protection.title_check.clone(),
             protection,
             trunk,
-            line_prefix: crate::config::line_prefix_of(target.as_std_path())?,
+            line_prefix: resolved.line_prefix().to_owned(),
+            profile: resolved.profile().clone(),
+            capabilities: resolved.capabilities().clone(),
+            declared_forge,
             retired_branches: answers.retired_branches,
             release_lines: answers.release_lines,
             excluded_steps: answers.excluded_steps,
@@ -240,7 +249,24 @@ impl Ctx {
         Self {
             target,
             repo,
-            forge,
+            forge: Some(forge),
+            declared_forge: Some(forge.as_str().to_owned()),
+            profile: ProfileSnapshot {
+                technologies: tech.into_iter().map(str::to_owned).collect(),
+                forge: Some(forge.as_str().to_owned()),
+                release: crate::profile::ReleaseIntent {
+                    mode: ReleaseMode::Automatic,
+                    driver: tech.map(str::to_owned),
+                    style: Some(crate::landing::Style::Trunk),
+                    line_prefix: Some(crate::config::LINE_PREFIX_DEFAULT.to_owned()),
+                },
+            },
+            capabilities: CapabilityRequests {
+                nix_packaging: false,
+                reporting_policy: true,
+                scorecard: false,
+                code_scanning: None,
+            },
             host: None,
             required_check: None,
             cli,
@@ -257,6 +283,63 @@ impl Ctx {
             title_check: defaults.title_check.clone(),
             protection: defaults,
         }
+    }
+
+    /// Whether the run has a forge adapter to act through.
+    #[must_use]
+    pub const fn has_adapter(&self) -> bool {
+        self.forge.is_some()
+    }
+
+    /// The forge adapter, or the refusal a forge operation answers where
+    /// the profile names no forge this release drives.
+    ///
+    /// # Errors
+    ///
+    /// A `prerequisite-unmet` refusal naming the declared forge and the
+    /// ones this release drives.
+    pub fn adapter(&self) -> Result<Forge, RkError> {
+        self.forge.ok_or_else(|| {
+            let named = self.declared_forge.as_deref();
+            let message = named.map_or_else(
+                || "the profile names no forge, and this operation acts on one".to_owned(),
+                |name| {
+                    format!(
+                        "the profile names the forge {name}, which this release has no adapter for"
+                    )
+                },
+            );
+            RkError::refusal(
+                Diagnostic::new(Reason::PrerequisiteUnmet, message)
+                    .expected("a profile naming github or gitlab")
+                    .action("set profile.forge in .release-kit/config.toml, or pass --forge <github|gitlab>")
+                    .target_state("unchanged"),
+            )
+        })
+    }
+
+    /// Whether this target's release is one release-kit drives.
+    #[must_use]
+    pub const fn automatic_release(&self) -> bool {
+        matches!(self.profile.release.mode, ReleaseMode::Automatic)
+    }
+
+    /// The release driver, where the profile names one.
+    #[must_use]
+    pub fn driver(&self) -> Option<&str> {
+        self.profile.release.driver.as_deref()
+    }
+
+    /// The forge the profile declares, whatever the adapter says.
+    #[must_use]
+    pub fn declared_forge(&self) -> Option<&str> {
+        self.declared_forge.as_deref()
+    }
+
+    /// Whether the target requested the landed reporting policy.
+    #[must_use]
+    pub const fn reporting_policy(&self) -> bool {
+        self.capabilities.reporting_policy
     }
 
     /// The one permanent branch this run asserts.
@@ -337,7 +420,7 @@ impl Ctx {
     /// where registry trusted publishing cannot reach.
     #[must_use]
     pub fn self_hosted_gitlab(&self) -> bool {
-        self.forge == Forge::Gitlab
+        self.forge == Some(Forge::Gitlab)
             && self
                 .host
                 .as_deref()
@@ -347,9 +430,16 @@ impl Ctx {
     /// The constructed environment a step receives. Secrets enter only for
     /// the step that consumes them; the caller records their handling.
     #[must_use]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one pass builds the whole environment a step receives, and splitting it would separate a variable from the value it carries"
+    )]
     pub fn child_env(&self, step: &str) -> Vec<(OsString, OsString)> {
         let mut env: Vec<(OsString, OsString)> = vec![
-            ("RK_FORGE".into(), self.forge.as_str().into()),
+            (
+                "RK_FORGE".into(),
+                self.forge.map_or("", Forge::as_str).into(),
+            ),
             ("RK_REPO".into(), self.repo.clone().into()),
             ("RK_TRUNK_BRANCH".into(), self.trunk.clone().into()),
             ("RK_LINE_PREFIX".into(), self.line_prefix.clone().into()),
@@ -423,7 +513,7 @@ impl Ctx {
             ("GLAB_PAGER".into(), "".into()),
         ];
         if let Some(check) = &self.required_check
-            && self.forge == Forge::Github
+            && self.forge == Some(Forge::Github)
             && matches!(step, "protect-trunk" | "protections-check")
         {
             env.push(("RK_REQUIRED_CHECK".into(), check.clone().into()));
@@ -458,7 +548,7 @@ impl Ctx {
 
     /// The directory of an explicitly overridden forge CLI, where one is set.
     fn cli_override_dir(&self) -> Option<PathBuf> {
-        let overridden = std::env::var_os(match self.forge {
+        let overridden = std::env::var_os(match self.forge? {
             Forge::Github => "RK_GH_BIN",
             Forge::Gitlab => "RK_GLAB_BIN",
         })?;

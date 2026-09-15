@@ -55,7 +55,9 @@ On rust:
 
 The registry account is signed in at crates.io with a verified email, and `cargo info <crate>` 404s unless the account already owns the crate; [the binding](../bindings/rust.md) says why the email gates the first publish.
 
-A project that runs part of this convention declares that before its first apply. `setup.excluded_steps` in `.release-kit/config.toml` names each step the project does not run against the reason it does not, and `rk setup --list` names the steps it may hold. A full run then states each exclusion and runs nothing for it, `rk setup check --target .` reports each one with its reason and judges the rest, and `rk setup step <name> --apply` refuses a step named there until the entry goes. The file needs no landing to be read, so a project that lands no file still declares its model.
+Which steps apply is the target configuration's answer before it is the operator's. A forge step applies where `profile.forge` names a forge this release drives; the release half applies where `profile.release.mode` is `automatic`; the packaging gate applies where that release names a driver; the reporting channel applies where `capabilities.reporting_policy` asks for the landed policy. `rk profile --target .` reports those values, and every run prints the step's stance before it acts.
+
+A project that runs part of what still applies declares that before its first apply. `setup.excluded_steps` in `.release-kit/config.toml` names each step the project does not run against the reason it does not, and `rk setup --list` names the steps it may hold. A full run then states each exclusion and runs nothing for it, `rk setup check --target .` reports each one with its reason and judges the rest, and `rk setup step <name> --apply` refuses a step named there until the entry goes. An exclusion declared for a step that does not apply here reports as redundant. The file needs no landing to be read, so a project that lands no file still declares its model.
 
 ## 0. Gate the package metadata
 

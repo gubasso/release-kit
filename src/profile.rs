@@ -847,11 +847,16 @@ pub fn resolve(
         (Some(value), source)
     });
 
+    // A reporting purpose never refuses what it can state: `rk profile`
+    // and every preview report an intent the target cannot yet take, and
+    // the capability catalog says why. A purpose that writes refuses,
+    // because a record must not claim a release nothing can land.
+    let reporting = purpose == Purpose::Preview;
     let release = match mode {
         ReleaseMode::Automatic => {
             if let Some(Proposal::Ambiguous { drivers }) = &proposal
                 && driver.is_none()
-                && purpose != Purpose::Preview
+                && !reporting
             {
                 return Err(RkError::Usage(format!(
                     "the target carries more than one release-bearing technology, {}, and nothing names the driver; pass --release-driver <name>, or set profile.release.driver in {}",
@@ -859,7 +864,7 @@ pub fn resolve(
                     crate::config::CONFIG_PATH
                 )));
             }
-            if forge.is_none() {
+            if forge.is_none() && !reporting {
                 let message = observed.host.map_or_else(
                     || "no forge detected: the target has no origin remote, and an automatic release needs one".to_owned(),
                     |host| format!("no forge detected: the host {host} is not recognized, and an automatic release needs one"),
@@ -870,13 +875,16 @@ pub fn resolve(
                         .action("pass --forge <github|gitlab>, or --release-mode none for a project that releases nothing"),
                 ));
             }
-            let Some(driver) = driver else {
+            if driver.is_none() && !reporting {
                 return Err(invalid_release(format!(
                     "profile.release.mode is automatic and no driver is named; pass --release-driver <{}>",
                     known_drivers.join("|")
                 )));
-            };
-            if !technologies.contains(&driver) {
+            }
+            if let Some(driver) = &driver
+                && !technologies.contains(driver)
+                && !reporting
+            {
                 return Err(invalid_release(format!(
                     "profile.release.driver names {driver}, which profile.technologies does not carry ({})",
                     if technologies.is_empty() {
@@ -900,7 +908,7 @@ pub fn resolve(
             sources.insert("profile.release.line_prefix", prefix_source);
             ReleaseIntent {
                 mode,
-                driver: Some(driver),
+                driver,
                 style: Some(style),
                 line_prefix: Some(
                     line_prefix.unwrap_or_else(|| crate::config::LINE_PREFIX_DEFAULT.to_owned()),

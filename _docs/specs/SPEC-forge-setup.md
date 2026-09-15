@@ -8,6 +8,7 @@
   - [`forge-setup:a-step-is-idempotent` — A step is idempotent](#forge-setupa-step-is-idempotent--a-step-is-idempotent)
   - [`forge-setup:a-secret-never-reaches-argv` — A secret never reaches argv](#forge-setupa-secret-never-reaches-argv--a-secret-never-reaches-argv)
   - [`forge-setup:key-material-never-reaches-the-environment` — Key material never reaches the environment](#forge-setupkey-material-never-reaches-the-environment--key-material-never-reaches-the-environment)
+  - [`forge-setup:applicability-follows-the-target-configuration` — Applicability follows the target configuration](#forge-setupapplicability-follows-the-target-configuration--applicability-follows-the-target-configuration)
   - [`forge-setup:every-supported-forge-runs-every-step` — Every supported forge runs every step](#forge-setupevery-supported-forge-runs-every-step--every-supported-forge-runs-every-step)
   - [`forge-setup:a-check-reports-what-the-forge-enforces` — A check reports what the forge enforces](#forge-setupa-check-reports-what-the-forge-enforces--a-check-reports-what-the-forge-enforces)
   - [`forge-setup:the-check-judges-the-steps-the-target-runs` — The check judges the steps the target runs](#forge-setupthe-check-judges-the-steps-the-target-runs--the-check-judges-the-steps-the-target-runs)
@@ -90,6 +91,18 @@ An environment block is readable from outside the process and every later child 
 - THEN the validated bytes reach the signing child on standard input alone and its argument list names no key file, while an absent export leaves the step unknown with both exports named
 
 Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `forge-setup:applicability-follows-the-target-configuration` — Applicability follows the target configuration
+
+Which steps a run acts on MUST follow the resolved target configuration through one pure predicate per step: a step that calls a forge applies only where the profile names a forge this release drives, the release half applies only to an automatic release, the packaging gate applies only where that release names a driver, and the reporting channel applies only where the target requested the landed policy. A step that does not apply MUST report as not applicable with the profile value that decided it and MUST carry no operator reason, a declared exclusion MUST report with the reason the target stated, an exclusion declared for a step that does not apply MUST report as redundant, and only the applicable steps MUST count toward a check's verdict. Naming an inapplicable step by hand MUST refuse rather than apply it, because changing the configuration is the auditable act.
+
+#### Scenario: A repository with no forge and no release is set up
+
+- GIVEN a target whose profile names no forge and whose release mode is `none`
+- WHEN `rk setup` previews and `rk setup step protect-trunk --apply` runs
+- THEN the preview reports the local steps and every forge step as not applicable, the run does not fail, and the named step refuses saying the profile names no forge
+
+Verify: `cargo nextest run -E 'test(the_applicability_matrix_follows_the_profile) or test(detection_selects_the_tree_and_refuses_an_unknown_host)'`
 
 ### `forge-setup:every-supported-forge-runs-every-step` — Every supported forge runs every step
 

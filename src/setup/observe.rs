@@ -131,8 +131,14 @@ pub fn observe(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkE
         return forge_version(ctx, run);
     }
     match ctx.forge {
-        Forge::Github => github(ctx, step, run),
-        Forge::Gitlab => gitlab(ctx, step, run),
+        Some(Forge::Github) => github(ctx, step, run),
+        Some(Forge::Gitlab) => gitlab(ctx, step, run),
+        // A forge step at a target with no adapter proves nothing and
+        // reads nothing: the applicability gate states why, and this is
+        // the observation saying the same.
+        None => Ok(StepState::inapplicable(
+            "the profile names no forge this release drives",
+        )),
     }
 }
 
@@ -356,7 +362,7 @@ fn version_refusal(found: &str, prerelease: Option<&str>) -> String {
 /// read-only `GET /version`, and every failure to read is `Unknown`, which
 /// blocks the `protect-trunk` prerequisite exactly as `Unsatisfied` does.
 fn forge_version(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkError> {
-    if ctx.forge == Forge::Github {
+    if ctx.forge == Some(Forge::Github) {
         return Ok(StepState::ok(
             "github.com is a rolling service and declares no version floor",
         ));
@@ -421,8 +427,11 @@ pub fn single_trunk_guard(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkEr
             continue;
         }
         let state = match ctx.forge {
-            Forge::Github => github_candidate_guard(ctx, run, candidate)?,
-            Forge::Gitlab => gitlab_candidate_guard(ctx, run, candidate)?,
+            Some(Forge::Github) => github_candidate_guard(ctx, run, candidate)?,
+            Some(Forge::Gitlab) => gitlab_candidate_guard(ctx, run, candidate)?,
+            // A destructive step fails closed, and an absent adapter is
+            // one more thing the guard cannot establish.
+            None => StepState::unknown("the profile names no forge this release drives"),
         };
         if !state.satisfied() {
             return Ok(state);

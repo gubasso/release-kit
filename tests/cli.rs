@@ -4060,6 +4060,7 @@ fn init_refuses_an_unsupported_pair_and_an_undetectable_forge() {
         "automatic",
         "--release-driver",
         "rust",
+        "--apply",
         "--target",
     ])
     .arg(target.path())
@@ -4693,6 +4694,12 @@ impl ForgeFixture {
             "[package]\nname = \"widget\"\nversion = \"0.1.0\"\n",
         )
         .expect("the crate manifest writes");
+        // One driver, not two: the fixture's own VERSION file would make
+        // the observation ambiguous, and this target is a crate.
+        let version = self.target.path().join("VERSION");
+        if version.is_file() {
+            std::fs::remove_file(version).expect("the bash version file goes");
+        }
         let ids: Vec<String> = members.iter().map(|(id, _)| format!("\"{id}\"")).collect();
         let packages: Vec<String> = members
             .iter()
@@ -5301,8 +5308,9 @@ fn package_check_line(fixture: &ForgeFixture) -> String {
         .find(|line| line.contains("package-check"))
         .unwrap_or_else(|| {
             panic!(
-                "the check reports the step: {}",
-                String::from_utf8_lossy(&out.stdout)
+                "the check reports the step: {}\n{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
             )
         })
         .to_owned()
@@ -6632,6 +6640,9 @@ fn detection_selects_the_tree_and_refuses_an_unknown_host() {
         .success()
         .stderr(predicate::str::contains("GitLab.com only"));
 
+    // A host this release has no adapter for: the profile keeps the name,
+    // the local steps still preview, and every forge step reports as not
+    // applicable rather than refusing the whole run.
     git(&[
         "remote",
         "set-url",
@@ -6641,8 +6652,18 @@ fn detection_selects_the_tree_and_refuses_an_unknown_host() {
     fixture
         .rk(&["setup"])
         .assert()
+        .success()
+        .stdout(predicate::str::contains("branch-reminder"))
+        .stdout(predicate::str::contains(
+            "not applicable: the profile names no forge",
+        ));
+    // Naming one of those steps by hand refuses, and says what is missing.
+    fixture
+        .rk(&["setup", "step", "protect-trunk", "--apply"])
+        .assert()
         .code(73)
-        .stderr(predicate::str::contains("--forge").and(predicate::str::contains("--repo")));
+        .stderr(predicate::str::contains("does not apply to this target"))
+        .stderr(predicate::str::contains("rk profile"));
 }
 
 /// An apply that cannot create its journal refuses unrun; a preview in the
@@ -23105,8 +23126,8 @@ fn an_excluded_step_is_reported_and_left_out_of_the_verdict() {
         "an exclusion is reported with its reason:\n{text}"
     );
     assert!(
-        text.contains("13 steps excluded by .release-kit/config.toml"),
-        "the excluded set is counted rather than hidden:\n{text}"
+        text.contains("2 steps judged; the rest do not apply to this target or .release-kit/config.toml excludes them"),
+        "the judged set is counted rather than hidden:\n{text}"
     );
     assert!(
         !text.contains("unsatisfied"),
@@ -23207,7 +23228,7 @@ fn a_full_apply_skips_an_excluded_step_and_demands_nothing_for_it() {
         "an excluded protection asks for no check name:\n{text}"
     );
     assert!(
-        text.contains("protect-trunk — excluded (.release-kit/config.toml"),
+        text.contains("protect-trunk — excluded by .release-kit/config.toml"),
         "the skip states itself:\n{text}"
     );
     assert!(
