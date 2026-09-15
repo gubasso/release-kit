@@ -2374,8 +2374,9 @@ fn the_setup_skill_restates_no_procedure() {
 // root the binary embeds whole, and a fixture is not a skill.
 // ---------------------------------------------------------------------------
 
-/// The thirteen situations the phase names, by file stem.
-const SETUP_EVALS: [&str; 13] = [
+/// Every situation the phase names, by file stem. The array's own length
+/// is the count.
+const SETUP_EVALS: [&str; 14] = [
     "active-legacy-operation-before-update",
     "clean-attributed-upgrade",
     "edited-generated-file",
@@ -2389,6 +2390,7 @@ const SETUP_EVALS: [&str; 13] = [
     "retired-destination",
     "successful-cleanup",
     "tuned-seeded-file",
+    "wired-target-without-the-sync-line",
 ];
 
 /// Every fixture as `(stem, text)`, sorted by stem.
@@ -2693,7 +2695,10 @@ fn missing_provenance_produces_a_bounded_heuristic_and_no_automatic_overwrite() 
             );
         }
     }
-    assert_eq!(seen, 3, "greenfield and the two missing-receipt cases");
+    assert_eq!(
+        seen, 4,
+        "greenfield, the wired target, and the two missing-receipt cases"
+    );
     let skill = setup_skill();
     for class in [
         "Receipt and useful history",
@@ -2803,6 +2808,100 @@ fn every_eval_keeps_project_documentation_and_the_reference_corpus_distinct() {
         skill.contains("The `reference/` tree teaches this skill and is copied into no project"),
         "the skill keeps the corpus out of the project"
     );
+}
+
+/// A landing cannot close over a pin nobody moves, per
+/// `packaging:the-setup-offers-the-freshness-wire`. The skill reads the
+/// gap from the status report, asks the operator, and gates the edit into
+/// the file the target owns.
+#[test]
+fn the_setup_skill_offers_the_freshness_wire_to_a_wired_target() {
+    let skill = setup_skill();
+    let start = skill
+        .find("## How the target obtains `rk`")
+        .expect("the acquisition section");
+    let section = &skill[start..];
+    let end = section[1..]
+        .find("\n## ")
+        .map_or(section.len(), |offset| offset + 1);
+    let section = &section[..end];
+    for phrase in [
+        "rk self-depend status --target . --json",
+        "`wired`, `envrc`, and `envrc_sync`",
+        "Where `wired` names a manager and `envrc_sync` is false",
+        "AskUserQuestion",
+        "rk self-depend add --manager <wired> --target . --json",
+        "as a gated step",
+        "writes only a file the target lacks",
+    ] {
+        assert!(
+            section.contains(phrase),
+            "the acquisition section drops '{phrase}': {section}"
+        );
+    }
+    // The manager is the report's answer, not this skill's: the section
+    // predicts no file count and names no manager of its own.
+    assert!(
+        section.contains("How many files that diff carries is the manager's own answer"),
+        "the section predicts the shape of a bump: {section}"
+    );
+    assert!(
+        skill.contains("Then raise the decision below, before the task closes"),
+        "the last of the five steps routes to the decision"
+    );
+
+    let wired = setup_evals()
+        .into_iter()
+        .find(|(stem, _)| stem == "wired-target-without-the-sync-line")
+        .expect("the wired fixture");
+    let route = eval_section(&wired.1, "Route");
+    assert!(
+        route.contains("Ask the operator about the freshness wire before the task closes"),
+        "the wired route raises the decision: {route}"
+    );
+    let landed = route.find("--apply").expect("the landing");
+    let asked = route
+        .find("Ask the operator about the freshness wire")
+        .expect("the decision");
+    assert!(landed < asked, "the offer follows the landing: {route}");
+    assert!(
+        route.contains("On a refusal, record the answer in the report"),
+        "a refusal is a recorded answer: {route}"
+    );
+
+    // The negative branch, stated by a fixture rather than inferred: the
+    // bare tree names no wired manager, so this phase raises nothing. The
+    // acquisition route for such a target is the case this phase refuses
+    // to own.
+    let bare = setup_evals()
+        .into_iter()
+        .find(|(stem, _)| stem == "greenfield")
+        .expect("the greenfield fixture");
+    let bare_route = eval_section(&bare.1, "Route");
+    assert!(
+        bare_route.contains("names no wired manager")
+            && bare_route.contains("no freshness offer is raised here"),
+        "the bare route states the absent manager and the silence: {bare_route}"
+    );
+    assert!(
+        !bare_route.contains("Ask the operator about the freshness wire"),
+        "the bare route raises the offer: {bare_route}"
+    );
+
+    // An upgrade of a recorded target asks nothing, which the plan left
+    // for a later decision and this phase does not take.
+    assert!(
+        section.contains("An upgrade of a recorded target asks nothing"),
+        "the section bounds itself to a first landing: {section}"
+    );
+    for (stem, text) in setup_evals() {
+        if eval_field(&text, "receipt") == "present" {
+            assert!(
+                !text.contains("freshness"),
+                "{stem}: a recorded target carries the offer"
+            );
+        }
+    }
 }
 
 /// The skill restates no projection or manager matrix the CLI owns: the

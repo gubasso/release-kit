@@ -22,6 +22,7 @@
   - [`packaging:add-serves-a-fragment-and-edits-no-owned-file` — Add serves a fragment and edits no owned file](#packagingadd-serves-a-fragment-and-edits-no-owned-file--add-serves-a-fragment-and-edits-no-owned-file)
   - [`packaging:a-wired-target-runs-one-bump-mechanism` — A wired target runs one bump mechanism](#packaginga-wired-target-runs-one-bump-mechanism--a-wired-target-runs-one-bump-mechanism)
   - [`packaging:the-cleanup-removes-only-what-it-can-judge` — The cleanup removes only what it can judge](#packagingthe-cleanup-removes-only-what-it-can-judge--the-cleanup-removes-only-what-it-can-judge)
+  - [`packaging:the-setup-offers-the-freshness-wire` — The setup offers the freshness wire](#packagingthe-setup-offers-the-freshness-wire--the-setup-offers-the-freshness-wire)
 
 <!--TOC-->
 
@@ -246,3 +247,15 @@ Verify: `cargo nextest run -E 'test(self_depend_status_names_a_predecessor_mecha
 - THEN the justfile is byte-identical and the report's `manual` list names it by file, line, and reason
 
 Verify: `cargo nextest run -E 'test(self_depend_clean_apply_leaves_the_justfile_and_the_flake_and_names_them) or test(a_catalog_file_matches_on_its_content_and_not_on_its_name_alone)'`
+
+### `packaging:the-setup-offers-the-freshness-wire` — The setup offers the freshness wire
+
+Where a landing records a target for the first time and that target is wired to a manager and carries no sync line, the setup skill MUST raise that gap as a decision the operator answers before the task closes, and MUST record the answer, because `packaging:add-serves-a-fragment-and-edits-no-owned-file` refuses the binary an edit into an `.envrc` the target already owns and a capability nobody offers reaches only the operator who already knew about it. The skill MUST read the gap and the manager from `rk self-depend status --json` rather than from a manager list of its own, and MUST raise nothing under this requirement where `wired` names no manager or where the landing is an upgrade of a recorded target.
+
+#### Scenario: A first landing closes over a pin nobody moves
+
+- GIVEN a target with no record, whose manager pins release-kit and whose `.envrc` carries no sync line
+- WHEN the landing reaches its last step
+- THEN the skill states what the line does and asks the operator, and a refusal closes the landing as a recorded answer
+
+Verify: `cargo nextest run -E 'test(the_setup_skill_offers_the_freshness_wire_to_a_wired_target)'`

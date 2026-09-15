@@ -68,7 +68,18 @@ A request naming an issue — an issue URL, or "fix", "address", "implement", or
 2. Read the version and stop where no update was authorized. `rk guide landing` step 1a reads how the project obtains `rk`. This skill never chooses, installs, updates, downgrades, or fetches a version: where the request did not authorize an update, report the installed state and end the task before any migration work. Where the installed binary is a 0.4.x release the operator will replace, `rk guide landing` step 1b runs first, with that binary.
 3. Stage and investigate, `rk guide landing` steps 1c and 2. Keep the stage path for the whole task. Name the evidence class from the section below before proposing any edit, and prepare the target only within the request's authority.
 4. Land, `rk guide landing` step 3. The production verb renders again from the binary and the target. Read each word it prints and quote them, and take a refusal back to the investigation, never to a flag.
-5. Verify and clean, `rk guide landing` steps 4 and 5. Compare the real diff with the stage, run the checks, and repair through another fresh production run. Keep an inventory of every stage path the task created. Show the exact `rk stage clean <path>` for each one only after everything passed, and run them only where the request's authority includes cleanup.
+5. Verify and clean, `rk guide landing` steps 4 and 5. Compare the real diff with the stage, run the checks, and repair through another fresh production run. Keep an inventory of every stage path the task created. Show the exact `rk stage clean <path>` for each one only after everything passed, and run them only where the request's authority includes cleanup. Then raise the decision below, before the task closes.
+
+## How the target obtains `rk`
+
+A landing that leaves this unasked leaves the recorded pin with nothing moving it, so the project stays on the release it pinned until somebody bumps it by hand. `rk self-depend status` reports the gap, this is the only place that reads it, and the report carries the operator's answer either way.
+
+- Raise it where the landing recorded the target for the first time, through `rk init` or `rk adopt`. An upgrade of a recorded target asks nothing: the question was answered once, and repeating it is noise.
+- Read `rk self-depend status --target . --json` and hold `wired`, `envrc`, and `envrc_sync`. The report is the only source: no manager list of this skill's own.
+- Where `wired` names a manager and `envrc_sync` is false, the pin is there and nothing moves it. Ask with `AskUserQuestion`, and state what the line does: on directory entry, at most once a day, it asks the wired manager's pin to move forward, and it leaves a diff to review. How many files that diff carries is the manager's own answer, which the sync report names. Do not predict it.
+- Where the operator accepts, run `rk self-depend add --manager <wired> --target . --json` with the manager the report named. An unqualified call resolves the manager from the files present, so it refuses a target carrying more than one.
+- Place the served line as a gated step: print the exact edit, wait, then apply it. The verb writes only a file the target lacks, so an `.envrc` already there takes the line by the operator's approval alone.
+- The binary may serve the line and may not place it, so nothing else in this loop asks. A refusal ends the decision and goes in the report.
 
 ## Which chapter the arrival loads
 

@@ -35,6 +35,10 @@ rk self-depend status --target . --json
 # check: ready, with an empty leftovers list; nothing else in the tree names an rk version
 ```
 
+A target already wired to another manager takes the `add` step alone, and the block above is the flake route rather than its own. Pass `--manager` with the manager the status named under `wired`: an unqualified `add` resolves the manager from the files present and refuses a target carrying more than one. What a bump then moves is that manager's own answer, which the sync report names, so read the report rather than the two-file shape below. `rk self-depend status --target . --json` reports `envrc_sync` false until the line is placed.
+
+Decide the wire before a first landing closes, with an agent or without one. Without the line the pin holds its release until somebody bumps it by hand. To accept, place the served line in `.envrc`, run `direnv allow`, and commit the file. To refuse, record the reason where the project keeps its own decisions, so a later reader tells a choice from an omission. Either answer closes the landing.
+
 From then on the `.envrc` line runs the sync on directory entry, at most once a day per checkout, silently when there is nothing to do, and leaves a two-file diff to review and commit when the pin moved. `RK_DEVSHELL_SYNC=0` in `.envrc.local` switches it off, and a CI variable switches it off on a runner. A failed bump restores both files and the shell still starts; `rk self-depend sync --caller operator` retries now and fails loudly.
 
 Where a file lands for a third-party application — an agent root, an editor directory — is this project's own decision, made against that application's current documentation and recorded with a dated citation. Release-kit states where its own artifacts go; it never decides such a placement on a project's behalf.
