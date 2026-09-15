@@ -43,7 +43,7 @@ fn templated(decor: Option<&str>) -> bool {
 /// The template is a TOML skeleton whose values are substitution tokens,
 /// so it is read line by line rather than parsed: a `[table]` header
 /// names the path above each `key = TOKEN # comment` line below it.
-fn template_comment(path: &[&str]) -> Option<String> {
+pub(crate) fn template_comment(path: &[&str]) -> Option<String> {
     let text = crate::embedded::BLOCKS
         .get_file("target-config.toml.in")
         .and_then(include_dir::File::contents_utf8)?;

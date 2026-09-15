@@ -1,9 +1,7 @@
 # BEGIN release-kit
 # The release convention's hooks. Install every stage they run at:
 # pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push
-# A CI sweep commits nothing, so a job running pre-commit against a trunk
-# checkout sets SKIP=RK_SWEEP_SKIP in its environment.
-  - repo: https://github.com/compilerla/conventional-pre-commit
+RK_SWEEP_NOTE  - repo: https://github.com/compilerla/conventional-pre-commit
     rev: v4.4.0
     hooks:
       - id: conventional-pre-commit
@@ -16,12 +14,7 @@
         stages: [commit-msg]
         language: system
         entry: rk message --check
-  - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v6.0.0
-    hooks:
-      - id: no-commit-to-branch
-        args: [--branch, RK_TRUNK_BRANCH]
-  - repo: local
+RK_TRUNK_COMMIT_GUARD  - repo: local
     hooks:
       - id: rk-branch-name
         name: rk branch name
@@ -29,14 +22,7 @@
         always_run: true
         pass_filenames: false
         entry: sh -c 'branch=$(git symbolic-ref --quiet --short HEAD) || exit 0; [ "$branch" = RK_TRUNK_BRANCH ] && exit 0; printf %s "$branch" | grep -Eq "RK_BRANCH_GRAMMAR" && exit 0; echo "branch $branch is neither <type>/<slug> nor <issue-id>-<slug>; gh issue develop <issue> --checkout or its glab counterpart mints the linked form" >&2; exit 1'
-RK_WORKTREE_GUARD      - id: rk-no-push-to-trunk
-        name: rk no push to trunk
-        stages: [pre-push]
-        language: system
-        always_run: true
-        pass_filenames: false
-        entry: sh -c '[ "$PRE_COMMIT_REMOTE_BRANCH" != refs/heads/RK_TRUNK_BRANCH ] || { echo "the trunk takes no direct push; it is written through squash-merged pull requests alone" >&2; exit 1; }'
-      - id: rk-no-hand-authored-tag
+RK_WORKTREE_GUARDRK_TRUNK_PUSH_GUARD      - id: rk-no-hand-authored-tag
         name: rk no hand-authored tag
         stages: [pre-push]
         language: system

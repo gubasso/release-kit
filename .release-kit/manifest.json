@@ -1,6 +1,6 @@
 {
-  "schema_version": 9,
-  "rk_version": "0.6.2",
+  "schema_version": 10,
+  "rk_version": "0.7.0",
   "origin": "adopt",
   "landed_at": "2026-08-30T00:14:29Z",
   "profile": {
@@ -17,7 +17,8 @@
   },
   "git": {
     "trunk": "master",
-    "checkout_mode": "linked-worktree"
+    "checkout_mode": "linked-worktree",
+    "integration": "forge"
   },
   "capabilities": {
     "nix_packaging": false,
@@ -49,13 +50,13 @@
     {
       "destination": "AGENTS.md",
       "kind": "rendered",
-      "sha256": "f5b0cdda452317a7735a4d0a5c5a65003d62eaf8766e0db1971fefcfe3b4989f",
+      "sha256": "51be7a598918fd6604c4dcf3134f9b799a3c5ee72568f8221a27119b78fc3ae4",
       "placement": "region"
     },
     {
       "destination": "GLOSSARY.md",
       "kind": "rendered",
-      "sha256": "f87056fd6911ed36f7d0ed920cb23b737652bfe06c0239f19fce8a3952b7b0c4",
+      "sha256": "ad1166cb6d5c1c94619501b7c561e57e4956e78c997c5e0b79c8689bef59e285",
       "placement": "region"
     },
     {

@@ -39,6 +39,92 @@ fn json_list(values: &[String]) -> String {
     format!("[{}]", inner.join(", "))
 }
 
+/// The GitHub trunk ruleset's `rules` array, as JSON.
+///
+/// Every rule comes from `protection.owned_trunk_rules`, which the floor
+/// table judges per integration mode and the observer checks against, so
+/// one key decides what a run installs and what the check expects. A rule
+/// this convention parameterizes carries its parameters; the rest are
+/// bare type entries.
+fn compose_trunk_rules(
+    protection: &crate::config::Protection,
+    required_check: &str,
+    title_check: &str,
+) -> String {
+    let rules: Vec<serde_json::Value> = protection
+        .owned_trunk_rules
+        .iter()
+        .map(|rule| match rule.as_str() {
+            "pull_request" => serde_json::json!({
+                "type": "pull_request",
+                "parameters": {
+                    "required_approving_review_count": protection.required_approving_review_count,
+                    "dismiss_stale_reviews_on_push": protection.dismiss_stale_reviews_on_push,
+                    "require_code_owner_review": protection.require_code_owner_review,
+                    "require_last_push_approval": protection.require_last_push_approval,
+                    "required_review_thread_resolution": false,
+                    "require_extra_approval_for_unattributed_changes": false,
+                    "allowed_merge_methods": protection.allowed_merge_methods,
+                }
+            }),
+            "required_status_checks" => serde_json::json!({
+                "type": "required_status_checks",
+                "parameters": {
+                    "do_not_enforce_on_create": true,
+                    "strict_required_status_checks_policy":
+                        protection.strict_required_status_checks,
+                    "required_status_checks": [
+                        { "context": required_check },
+                        { "context": title_check },
+                    ],
+                }
+            }),
+            other => serde_json::json!({ "type": other }),
+        })
+        .collect();
+    // Pretty rather than compact: the body a run sends is what an
+    // operator reads back off the forge when a protection is in doubt.
+    serde_json::to_string_pretty(&rules).unwrap_or_else(|_| "[]".to_owned())
+}
+
+/// One target's effective protection policy: what it stated, resolved
+/// against the authority that carries an implementation onto its trunk.
+///
+/// A target that stated a policy gets its own values: the floor table
+/// already judged them under the same mode, and an operator who narrowed
+/// or widened something meant it. A target that stated nothing gets the
+/// compiled defaults, which describe forge integration because that is
+/// the shape this convention had before the axis existed — so under
+/// local integration they are adjusted rather than installed.
+///
+/// Two adjustments, and both only where the target stated nothing. The
+/// owned rules drop the request rule and the required-check rule, which
+/// no forge can apply to a push. The GitLab push level moves off zero to
+/// the narrowest level that still admits a push, because zero closes the
+/// trunk to the very act that mode's integrations end in.
+///
+/// One resolution serves the body a step sends, the observer that reads
+/// the answer back, and the prerequisites, so a canonical apply cannot
+/// install one shape and then fault its own result for not being another.
+fn effective_protection(
+    stated: Option<&crate::config::Protection>,
+    integration: crate::landing::Integration,
+) -> crate::config::Protection {
+    if let Some(stated) = stated {
+        return stated.clone();
+    }
+    let mut policy = crate::config::Protection::default();
+    if integration == crate::landing::Integration::Local {
+        /// The narrowest GitLab access level that still admits a push.
+        const MAINTAINER: i64 = 40;
+        policy
+            .owned_trunk_rules
+            .retain(|rule| rule != "pull_request" && rule != "required_status_checks");
+        policy.gitlab.push_access_level = MAINTAINER;
+    }
+    policy
+}
+
 /// The variables that pass through from the operator's environment to a
 /// step: the interpreter's search path, the forge CLI's configuration and
 /// authentication, and nothing else.
@@ -116,10 +202,19 @@ pub struct Ctx {
     lines_ruleset: String,
     /// The context the landed title job reports under.
     title_check: String,
-    /// The floored policy this target states. Every value here passed the
-    /// floor table at load, so a run can pass it to a step without
-    /// judging it again.
+    /// The effective policy this target runs under: what the target
+    /// stated, resolved against the recorded integration mode. Every
+    /// stated value passed the floor table at load, so a run passes this
+    /// to a step without judging it again, and one resolution serves the
+    /// body a step sends, the observer that reads the answer back, and
+    /// every prerequisite — so a run cannot install one shape and then
+    /// fault its own result for not being another.
     protection: crate::config::Protection,
+    /// Which authority carries an implementation onto this target's trunk.
+    /// A local-integration trunk takes the direct push that mode's
+    /// integrations end in, so the protection a run installs is not the
+    /// forge-integration one.
+    integration: crate::landing::Integration,
 }
 
 impl Ctx {
@@ -196,11 +291,17 @@ impl Ctx {
         });
         let bot_app_id = Some(answers.bot.app_id.clone()).filter(|id| !id.is_empty());
         let trunk = resolved.trunk().to_owned();
-        let protection = config
+        // The record, not the resolution's compiled default: a setup
+        // configures a forge to match what landed, and a target with no
+        // record has landed nothing here. Forge is what such a target
+        // carries, the same compatibility answer `rk integrate` reads.
+        let integration = record
             .as_ref()
-            .map_or_else(crate::config::Protection::default, |held| {
-                held.protection.clone()
+            .map_or_else(crate::landing::manifest::integration_forge, |held| {
+                held.git.integration
             });
+        let stated = config.as_ref().map(|held| &held.protection);
+        let protection = effective_protection(stated, integration);
         Ok(Self {
             target: target.clone(),
             repo,
@@ -218,6 +319,7 @@ impl Ctx {
             lines_ruleset: protection.lines_ruleset.clone(),
             title_check: protection.title_check.clone(),
             protection,
+            integration,
             trunk,
             line_prefix: resolved.line_prefix().to_owned(),
             profile: resolved.profile().clone(),
@@ -272,6 +374,9 @@ impl Ctx {
     ) -> Self {
         let defaults = crate::config::Protection::default();
         Self {
+            // The forge-integration shape, which is what every observer
+            // and request-body test here asserts; a local-mode case states it.
+            integration: crate::landing::Integration::Forge,
             target,
             repo,
             forge: Some(forge),
@@ -435,6 +540,21 @@ impl Ctx {
         &self.title_check
     }
 
+    /// Which authority carries an implementation onto this trunk.
+    #[must_use]
+    pub const fn integration(&self) -> crate::landing::Integration {
+        self.integration
+    }
+
+    /// The trunk ruleset's rules, for the body a run sends the forge.
+    fn trunk_rules(&self) -> String {
+        compose_trunk_rules(
+            &self.protection,
+            self.required_check.as_deref().unwrap_or_default(),
+            &self.title_check,
+        )
+    }
+
     /// The floored policy this target states, already judged at load.
     #[must_use]
     pub const fn protection(&self) -> &crate::config::Protection {
@@ -530,6 +650,13 @@ impl Ctx {
                 "RK_GITLAB_PUSH_LEVEL".into(),
                 self.protection.gitlab.push_access_level.to_string().into(),
             ),
+            // The trunk ruleset's rules, built from the one key the floor
+            // table judges and the observer reads, so the body a run
+            // sends cannot install a rule the check does not expect, or
+            // omit one it does. A local-integration target's key names the two rules
+            // that still hold against a direct push, and the request and
+            // required-check rules are simply absent.
+            ("RK_TRUNK_RULES".into(), self.trunk_rules().into()),
             (
                 "RK_GITLAB_MERGE_LEVEL".into(),
                 self.protection.gitlab.merge_access_level.to_string().into(),
@@ -666,4 +793,93 @@ pub fn resolve_cli(forge: Forge) -> Result<PathBuf, RkError> {
             .action(format!("install {name}, then run {name} auth login")),
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    /// The trunk ruleset's rules come from the one owned-rules key, so
+    /// what a run installs, what the floor table judges, and what the
+    /// check expects cannot disagree. A local-integration target names
+    /// the two rules that still hold against a direct push, and the
+    /// request and required-check rules are absent rather than installed
+    /// against the mode that needs the push.
+    #[test]
+    fn the_trunk_rules_follow_the_owned_rule_key() {
+        let mut policy = crate::config::Protection::default();
+        let forge = super::compose_trunk_rules(&policy, "gate", "pr-title");
+        let parsed: Vec<serde_json::Value> = serde_json::from_str(&forge).expect("the rules parse");
+        let kinds: Vec<&str> = parsed
+            .iter()
+            .filter_map(|rule| rule["type"].as_str())
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                "deletion",
+                "non_fast_forward",
+                "pull_request",
+                "required_status_checks"
+            ]
+        );
+        let checks = parsed
+            .iter()
+            .find(|rule| rule["type"] == "required_status_checks")
+            .expect("the check rule");
+        assert_eq!(
+            checks["parameters"]["required_status_checks"],
+            serde_json::json!([{ "context": "gate" }, { "context": "pr-title" }])
+        );
+
+        policy.owned_trunk_rules = vec!["deletion".into(), "non_fast_forward".into()];
+        let local = super::compose_trunk_rules(&policy, "gate", "pr-title");
+        let parsed: Vec<serde_json::Value> = serde_json::from_str(&local).expect("the rules parse");
+        let kinds: Vec<&str> = parsed
+            .iter()
+            .filter_map(|rule| rule["type"].as_str())
+            .collect();
+        assert_eq!(kinds, ["deletion", "non_fast_forward"]);
+        assert!(!local.contains("pull_request"), "{local}");
+        assert!(!local.contains("required_status_checks"), "{local}");
+    }
+
+    /// One effective policy serves the body a step sends, the observer
+    /// that reads the answer back, and every prerequisite.
+    ///
+    /// A target that stated nothing gets the compiled defaults, which
+    /// describe forge integration because that is the shape this
+    /// convention had before the axis existed — so under local
+    /// integration they are adjusted: the two rules no forge can apply
+    /// to a push are dropped, and the GitLab level moves off the zero
+    /// that would close the trunk to the push that mode ends in. A
+    /// target that stated a policy keeps every value it stated, because
+    /// the floor table already judged it under the same mode.
+    #[test]
+    fn the_effective_policy_follows_the_recorded_authority() {
+        use crate::landing::Integration;
+        let silent = super::effective_protection(None, Integration::Forge);
+        assert!(
+            silent
+                .owned_trunk_rules
+                .contains(&"pull_request".to_owned())
+        );
+        assert_eq!(silent.gitlab.push_access_level, 0);
+
+        let silent = super::effective_protection(None, Integration::Local);
+        assert_eq!(
+            silent.owned_trunk_rules,
+            ["deletion".to_owned(), "non_fast_forward".to_owned()],
+            "no forge can apply a request rule to a push"
+        );
+        assert_eq!(
+            silent.gitlab.push_access_level, 40,
+            "zero would close the trunk to the push this mode ends in"
+        );
+
+        let mut stated = crate::config::Protection::default();
+        stated.gitlab.push_access_level = 0;
+        stated.owned_trunk_rules = vec!["deletion".into()];
+        let held = super::effective_protection(Some(&stated), Integration::Local);
+        assert_eq!(held.gitlab.push_access_level, 0, "a stated value wins");
+        assert_eq!(held.owned_trunk_rules, ["deletion".to_owned()]);
+    }
 }

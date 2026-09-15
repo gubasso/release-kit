@@ -37,7 +37,7 @@ use serde::{Deserialize, Serialize};
 use crate::embedded;
 use crate::error::RkError;
 pub use crate::landing::manifest::Provider;
-use crate::landing::{CheckoutMode, Params};
+use crate::landing::{CheckoutMode, Integration, Params};
 use crate::profile::ReleaseMode;
 use crate::profile::catalog::{self, Availability, Selection, Status};
 
@@ -282,7 +282,8 @@ impl Projection {
         }
         let mut collisions = Vec::new();
         for destination in BLOCK_DESTINATIONS {
-            let (template, sources) = block_template(destination, params.checkout_mode())?;
+            let (template, sources) =
+                block_template(destination, params.checkout_mode(), params.integration())?;
             if let Some(whole) = candidates
                 .iter()
                 .find(|candidate| candidate.destination == destination)
@@ -1259,11 +1260,41 @@ pub const AGENTS_LINE_WORKTREE: &str = "blocks/agents-line-worktree.md.in";
 /// The routing block's mode line, branches form.
 pub const AGENTS_LINE_BRANCHES: &str = "blocks/agents-line-branches.md.in";
 
+/// The routing block's integration line, forge form.
+pub const AGENTS_LINE_INTEGRATION_FORGE: &str = "blocks/agents-line-integration-forge.md.in";
+
+/// The routing block's integration line, local form.
+pub const AGENTS_LINE_INTEGRATION_LOCAL: &str = "blocks/agents-line-integration-local.md.in";
+
+/// The routing block's integration line for one integration mode.
+#[must_use]
+pub const fn integration_line(integration: Integration) -> &'static str {
+    match integration {
+        Integration::Forge => AGENTS_LINE_INTEGRATION_FORGE,
+        Integration::Local => AGENTS_LINE_INTEGRATION_LOCAL,
+    }
+}
+
 /// The authored hook-block template.
 pub const PRE_COMMIT_BLOCK: &str = "blocks/pre-commit-block.yaml.in";
 
 /// The worktree mode's guard entry.
 pub const PRE_COMMIT_WORKTREE_GUARD: &str = "blocks/pre-commit-worktree-guard.yaml.in";
+
+/// The forge integration mode's guard against a trunk commit.
+pub const PRE_COMMIT_TRUNK_COMMIT_GUARD: &str = "blocks/pre-commit-trunk-commit-guard.yaml.in";
+
+/// The forge integration mode's guard against a trunk push.
+pub const PRE_COMMIT_TRUNK_PUSH_GUARD: &str = "blocks/pre-commit-trunk-push-guard.yaml.in";
+
+/// The header note naming what a CI sweep skips.
+pub const PRE_COMMIT_SWEEP_SKIP: &str = "blocks/pre-commit-sweep-skip.yaml.in";
+
+/// The header note for the pairing whose sweep skips nothing.
+pub const PRE_COMMIT_SWEEP_NONE: &str = "blocks/pre-commit-sweep-none.yaml.in";
+
+/// The header note naming the pre-integrate contract.
+pub const PRE_COMMIT_INTEGRATE_NOTE: &str = "blocks/pre-commit-integrate-note.yaml.in";
 
 /// The routing block's mode line for one checkout mode.
 #[must_use]
@@ -1338,8 +1369,10 @@ pub fn scope_is_shaped(scope: &str) -> bool {
 /// unrendered. Everything but the substituted line, the agent-boundary
 /// line included, is byte-identical across modes.
 #[must_use]
-pub fn compose_routing(template: &str, line: &str) -> String {
-    authored(template).replacen("RK_WORKFLOW_LINE", authored(line), 1)
+pub fn compose_routing(template: &str, line: &str, integration_line: &str) -> String {
+    authored(template)
+        .replacen("RK_WORKFLOW_LINE", authored(line), 1)
+        .replacen("RK_INTEGRATION_LINE", authored(integration_line), 1)
 }
 
 /// The glossary block from its authored template: markers included and
@@ -1350,30 +1383,77 @@ pub fn compose_glossary(template: &str) -> String {
     authored(template).to_owned()
 }
 
-/// The hook block from its authored template, with the worktree mode's
-/// guard entry where `guard` carries one.
+/// The hook block from its authored template, for one pairing of the two
+/// Git workflow axes.
 ///
-/// `Some` is the worktree mode: the block carries the location guard and
-/// names the sweep-skip pair. `None` is the branches mode: no guard entry
-/// at all, never an entry that reads local state to decide whether to
-/// enforce. The one branch grammar substitutes from [`BRANCH_GRAMMAR`].
-/// Markers included, without a trailing newline and with its scope token
+/// `guard` is the checkout mode's answer: `Some` is the worktree mode,
+/// which carries the location guard, and `None` is the branches mode,
+/// which carries no guard entry at all rather than one that reads local
+/// state to decide whether to enforce.
+///
+/// `parts` is the integration mode's answer. Under forge integration the
+/// two trunk guards render and the block is byte-identical to what every
+/// landed target already carries. Under local integration neither
+/// renders, because `rk integrate` writes the trunk commit and the
+/// operator pushes the trunk, and the header carries the pre-integrate
+/// note in their place.
+///
+/// The one branch grammar substitutes from [`BRANCH_GRAMMAR`]. Markers
+/// included, without a trailing newline and with its scope token
 /// unrendered.
 #[must_use]
-pub fn compose_hooks(template: &str, guard: Option<&str>) -> String {
-    let (guard, skip) = guard.map_or_else(
-        || (String::new(), "no-commit-to-branch"),
-        |entry| {
-            (
-                format!("{}\n", authored(entry)),
-                "no-commit-to-branch,rk-worktree-location",
-            )
-        },
-    );
+pub fn compose_hooks(template: &str, guard: Option<&str>, parts: &TrunkGuards) -> String {
+    let guard = guard.map_or_else(String::new, |entry| format!("{}\n", authored(entry)));
+    let mut skips: Vec<&str> = Vec::new();
+    if parts.integration == Integration::Forge {
+        skips.push("no-commit-to-branch");
+    }
+    if !guard.is_empty() {
+        skips.push("rk-worktree-location");
+    }
+    let sweep = if skips.is_empty() {
+        format!("{}\n", authored(parts.sweep_none))
+    } else {
+        format!(
+            "{}\n",
+            authored(parts.sweep_skip).replacen("RK_SWEEP_SKIP", &skips.join(","), 1)
+        )
+    };
+    let (commit_guard, push_guard, note) = match parts.integration {
+        Integration::Forge => (
+            format!("{}\n", authored(parts.trunk_commit)),
+            format!("{}\n", authored(parts.trunk_push)),
+            String::new(),
+        ),
+        Integration::Local => (
+            String::new(),
+            String::new(),
+            format!("{}\n", authored(parts.integrate_note)),
+        ),
+    };
     authored(template)
         .replacen("RK_BRANCH_GRAMMAR", BRANCH_GRAMMAR, 1)
-        .replacen("RK_SWEEP_SKIP", skip, 1)
+        .replacen("RK_SWEEP_NOTE", &format!("{sweep}{note}"), 1)
+        .replacen("RK_TRUNK_COMMIT_GUARD", &commit_guard, 1)
         .replacen("RK_WORKTREE_GUARD", &guard, 1)
+        .replacen("RK_TRUNK_PUSH_GUARD", &push_guard, 1)
+}
+
+/// The two authored guard entries the integration mode selects between,
+/// beside the mode itself.
+pub struct TrunkGuards<'a> {
+    /// Which authority moves an implementation onto the trunk.
+    pub integration: Integration,
+    /// The `no-commit-to-branch` entry that refuses a trunk commit.
+    pub trunk_commit: &'a str,
+    /// The `rk-no-push-to-trunk` entry that refuses a trunk push.
+    pub trunk_push: &'a str,
+    /// The header note naming what a CI sweep skips.
+    pub sweep_skip: &'a str,
+    /// The header note for the pairing where a sweep skips nothing.
+    pub sweep_none: &'a str,
+    /// The header note naming the pre-integrate contract.
+    pub integrate_note: &'a str,
 }
 
 /// The routing block for one checkout mode, from this binary's embedded
@@ -1382,10 +1462,11 @@ pub fn compose_hooks(template: &str, guard: Option<&str>) -> String {
 /// # Errors
 ///
 /// A block this binary does not embed, a defect in the binary.
-pub fn routing_block(mode: CheckoutMode) -> Result<String, RkError> {
+pub fn routing_block(mode: CheckoutMode, integration: Integration) -> Result<String, RkError> {
     Ok(compose_routing(
         embedded_block(AGENTS_BLOCK)?,
         embedded_block(routing_line(mode))?,
+        embedded_block(integration_line(integration))?,
     ))
 }
 
@@ -1404,21 +1485,41 @@ pub fn glossary_block() -> Result<String, RkError> {
 /// # Errors
 ///
 /// A block this binary does not embed, a defect in the binary.
-pub fn hooks_block(mode: CheckoutMode) -> Result<String, RkError> {
+pub fn hooks_block(mode: CheckoutMode, integration: Integration) -> Result<String, RkError> {
     let guard = match mode {
         CheckoutMode::LinkedWorktree => Some(embedded_block(PRE_COMMIT_WORKTREE_GUARD)?),
         CheckoutMode::MainWorktree => None,
     };
-    Ok(compose_hooks(embedded_block(PRE_COMMIT_BLOCK)?, guard))
+    let parts = TrunkGuards {
+        integration,
+        trunk_commit: embedded_block(PRE_COMMIT_TRUNK_COMMIT_GUARD)?,
+        trunk_push: embedded_block(PRE_COMMIT_TRUNK_PUSH_GUARD)?,
+        sweep_skip: embedded_block(PRE_COMMIT_SWEEP_SKIP)?,
+        sweep_none: embedded_block(PRE_COMMIT_SWEEP_NONE)?,
+        integrate_note: embedded_block(PRE_COMMIT_INTEGRATE_NOTE)?,
+    };
+    Ok(compose_hooks(
+        embedded_block(PRE_COMMIT_BLOCK)?,
+        guard,
+        &parts,
+    ))
 }
 
 /// The unrendered block for one block destination under one checkout mode,
 /// with the embedded source paths it was composed from.
-fn block_template(destination: &str, mode: CheckoutMode) -> Result<(String, Vec<String>), RkError> {
+fn block_template(
+    destination: &str,
+    mode: CheckoutMode,
+    integration: Integration,
+) -> Result<(String, Vec<String>), RkError> {
     match destination {
         AGENTS_DESTINATION => Ok((
-            routing_block(mode)?,
-            vec![AGENTS_BLOCK.to_owned(), routing_line(mode).to_owned()],
+            routing_block(mode, integration)?,
+            vec![
+                AGENTS_BLOCK.to_owned(),
+                routing_line(mode).to_owned(),
+                integration_line(integration).to_owned(),
+            ],
         )),
         GLOSSARY_DESTINATION => Ok((glossary_block()?, vec![GLOSSARY_BLOCK.to_owned()])),
         HOOKS_DESTINATION => {
@@ -1426,7 +1527,22 @@ fn block_template(destination: &str, mode: CheckoutMode) -> Result<(String, Vec<
             if mode == CheckoutMode::LinkedWorktree {
                 sources.push(PRE_COMMIT_WORKTREE_GUARD.to_owned());
             }
-            Ok((hooks_block(mode)?, sources))
+            match integration {
+                Integration::Forge => {
+                    sources.push(PRE_COMMIT_TRUNK_COMMIT_GUARD.to_owned());
+                    sources.push(PRE_COMMIT_TRUNK_PUSH_GUARD.to_owned());
+                    sources.push(PRE_COMMIT_SWEEP_SKIP.to_owned());
+                }
+                Integration::Local => {
+                    if mode == CheckoutMode::LinkedWorktree {
+                        sources.push(PRE_COMMIT_SWEEP_SKIP.to_owned());
+                    } else {
+                        sources.push(PRE_COMMIT_SWEEP_NONE.to_owned());
+                    }
+                    sources.push(PRE_COMMIT_INTEGRATE_NOTE.to_owned());
+                }
+            }
+            Ok((hooks_block(mode, integration)?, sources))
         }
         other => Err(anyhow::anyhow!("{other} is not a block destination").into()),
     }

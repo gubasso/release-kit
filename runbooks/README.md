@@ -9,11 +9,12 @@ The human-facing step by step: the chapter and its runbook state each procedure 
 | [backport](./backport.md)           | `rk method branch-for-release` | `rk guide backport`      |
 | [release-lines](./release-lines.md) | `rk method release-lines`      | `rk guide release-lines` |
 | [worktree](./worktree.md)           | `rk method worktrees`          | `rk guide worktree`      |
+| [integration](./integration.md)     | `rk method integration`        | `rk guide integration`   |
 | [issue](./issue.md)                 | `rk method model`              | `rk guide issue`         |
 | [migration](./migration.md)         | `rk method migration`          | `rk guide migration`     |
 | [dependencies](./dependencies.md)   | `rk method dependencies`       | `rk guide dependencies`  |
 | [landing](./landing.md)             | `rk method landing`            | `rk guide landing`       |
 
-`rk guide` substitutes invocation flags, committed configuration, and detection — the project path as `<repo>`, the technology as `<tech>` — and nothing else. Blocks labeled `On github:`, `On gitlab:`, `On rust:`, `On python:`, `On bash:`, `On worktree:`, `On branches:`, `On trunk:`, or `On lines:` are variants: when the axis is resolved, the matching block is kept and its siblings are dropped; unresolved, every variant prints with its label. The workflow and style axes resolve from flags, configuration, then the landing record; forge, repository and technology resolve from flags, configuration, then detection. Placeholders such as `<release pr>` exist only once a bot has opened them and are never substituted: a stale number merges someone else's work, where a visible placeholder fails loudly.
+`rk guide` substitutes invocation flags, committed configuration, and detection — the project path as `<repo>`, the technology as `<tech>` — and nothing else. Blocks labeled `On github:`, `On gitlab:`, `On rust:`, `On python:`, `On bash:`, `On worktree:`, `On branches:`, `On trunk:`, `On lines:`, `On local:`, or `On forge:` are variants: when the axis is resolved, the matching block is kept and its siblings are dropped; unresolved, every variant prints with its label. The checkout-mode, style, and integration axes resolve from flags, configuration, then the landing record; forge, repository and technology resolve from flags, configuration, then detection. Placeholders such as `<release pr>` exist only once a bot has opened them and are never substituted: a stale number merges someone else's work, where a visible placeholder fails loudly.
 
 The landing runbook is the procedure every landing write follows.

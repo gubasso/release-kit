@@ -1,0 +1,7 @@
+      - id: rk-no-push-to-trunk
+        name: rk no push to trunk
+        stages: [pre-push]
+        language: system
+        always_run: true
+        pass_filenames: false
+        entry: sh -c '[ "$PRE_COMMIT_REMOTE_BRANCH" != refs/heads/RK_TRUNK_BRANCH ] || { echo "the trunk takes no direct push; it is written through squash-merged pull requests alone" >&2; exit 1; }'

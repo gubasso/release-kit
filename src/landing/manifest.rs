@@ -28,7 +28,7 @@ pub const MANIFEST_PATH: &str = ".release-kit/manifest.json";
 
 /// The schema this binary writes.
 ///
-/// Schema 9 is the receipt of a direct landing: the producing
+/// Schema 10 is the receipt of a direct landing: the producing
 /// `rk_version`, the origin, the resolved target configuration by domain,
 /// and per destination the path, the kind, the placement where the
 /// destination is a marked region, and the digest of the bytes or region
@@ -41,10 +41,14 @@ pub const MANIFEST_PATH: &str = ".release-kit/manifest.json";
 /// and `parameters.scopes` fields are dropped, the one technology becomes
 /// the sole technology and the automatic release driver, and the flat
 /// parameters move into their domains. The next successful landing
-/// rewrites schema 9. Anything past this schema refuses by name.
+/// rewrites schema 10. Anything past this schema refuses by name.
+///
+/// Schema 10 adds `git.integration`, the authority that moves an
+/// implementation onto the trunk. A record at schema 9 or below carries
+/// no such key and reads as `forge`, which is the authority it landed.
 ///
 /// SATISFIES landing:a-record-states-its-schema
-pub const SCHEMA_VERSION: u64 = 9;
+pub const SCHEMA_VERSION: u64 = 10;
 
 /// The oldest schema this binary still reads.
 const OLDEST_READABLE_SCHEMA: u64 = 1;
@@ -116,6 +120,66 @@ impl<'de> serde::Deserialize<'de> for CheckoutMode {
         let raw = String::deserialize(reader)?;
         Self::parse(&raw).map_err(|error| serde::de::Error::custom(error.to_string()))
     }
+}
+
+/// The integration mode a landing records: which authority moves an
+/// implementation onto the trunk.
+///
+/// A Git workflow parameter, rendered into the landed blocks and changed
+/// only through the landing verbs. It selects an authority and nothing
+/// else: no branching method, no checkout mode, and no release path.
+///
+/// SATISFIES git:integration-mode-selects-the-authority-that-squashes
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Integration {
+    /// The checkout performs and records the integration, through
+    /// `rk integrate`, and the operator pushes the trunk separately.
+    Local,
+    /// The forge performs and records the integration, through a pull
+    /// request or a merge request behind its required check.
+    Forge,
+}
+
+impl Integration {
+    /// The flag, wire, and report form.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Forge => "forge",
+        }
+    }
+
+    /// Parse an `--integration` flag value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RkError::Usage`] naming the two values.
+    pub fn parse(raw: &str) -> Result<Self, RkError> {
+        match raw {
+            "local" => Ok(Self::Local),
+            "forge" => Ok(Self::Forge),
+            other => Err(RkError::Usage(format!(
+                "unknown integration mode '{other}'; the modes are: local, forge"
+            ))),
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Integration {
+    fn deserialize<D: serde::Deserializer<'de>>(reader: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(reader)?;
+        Self::parse(&raw).map_err(|error| serde::de::Error::custom(error.to_string()))
+    }
+}
+
+/// The compatibility answer for a record written before the integration
+/// axis existed: such a target landed the forge blocks and the forge
+/// protections, so reading it as `local` would tell it that its trunk
+/// takes direct pushes.
+pub(crate) const fn integration_forge() -> Integration {
+    Integration::Forge
 }
 
 /// The release style a landing records.
@@ -662,6 +726,7 @@ mod tests {
         Placement, ProfileSnapshot, Provider, ReleaseIntent, ReleaseMode, Style, alignment,
     };
     use crate::digest::Digest;
+    use crate::landing::Integration;
     use crate::landing::Kind;
 
     /// The complete record shape at schema 9, held by snapshot: a field
@@ -670,7 +735,7 @@ mod tests {
     #[test]
     fn the_manifest_schema_snapshot_holds() {
         let manifest = Manifest {
-            schema_version: 9,
+            schema_version: super::SCHEMA_VERSION,
             rk_version: "0.1.0".into(),
             origin: "init".into(),
             landed_at: "2026-08-29T00:00:00Z".into(),
@@ -687,6 +752,7 @@ mod tests {
             git: GitWorkflow {
                 trunk: crate::config::TRUNK_DEFAULT.to_owned(),
                 checkout_mode: CheckoutMode::LinkedWorktree,
+                integration: Integration::Local,
             },
             capabilities: CapabilityRequests {
                 nix_packaging: true,
@@ -720,7 +786,7 @@ mod tests {
         assert_eq!(
             text,
             format!(
-                r#"{{"schema_version":9,"rk_version":"0.1.0","origin":"init","landed_at":"2026-08-29T00:00:00Z","profile":{{"technologies":["rust"],"forge":"github","release":{{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}}}},"git":{{"trunk":"master","checkout_mode":"linked-worktree"}},"capabilities":{{"nix_packaging":true,"reporting_policy":true,"scorecard":true,"code_scanning":"semgrep"}},"parameters":{{"repo":"acme/widget","security_contact":"","security_response":"best-effort"}},"files":[{{"destination":"release-plz.toml","kind":"seeded","sha256":"{empty}"}},{{"destination":"AGENTS.md","kind":"rendered","sha256":"{empty}","placement":"region"}}],"pins":{{"release-plz":"0.3.160"}}}}"#
+                r#"{{"schema_version":10,"rk_version":"0.1.0","origin":"init","landed_at":"2026-08-29T00:00:00Z","profile":{{"technologies":["rust"],"forge":"github","release":{{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}}}},"git":{{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"}},"capabilities":{{"nix_packaging":true,"reporting_policy":true,"scorecard":true,"code_scanning":"semgrep"}},"parameters":{{"repo":"acme/widget","security_contact":"","security_response":"best-effort"}},"files":[{{"destination":"release-plz.toml","kind":"seeded","sha256":"{empty}"}},{{"destination":"AGENTS.md","kind":"rendered","sha256":"{empty}","placement":"region"}}],"pins":{{"release-plz":"0.3.160"}}}}"#
             ),
             "a whole file omits its placement, and no retired digest field survives"
         );
@@ -754,7 +820,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&release_less).expect("serializes"),
-            r#"{"schema_version":9,"rk_version":"0.1.0","origin":"init","landed_at":"2026-08-29T00:00:00Z","profile":{"technologies":[],"release":{"mode":"none"}},"git":{"trunk":"master","checkout_mode":"linked-worktree"},"capabilities":{"nix_packaging":false,"reporting_policy":false,"scorecard":false},"parameters":{"repo":"","security_contact":"","security_response":"best-effort"},"files":[],"pins":{}}"#
+            r#"{"schema_version":10,"rk_version":"0.1.0","origin":"init","landed_at":"2026-08-29T00:00:00Z","profile":{"technologies":[],"release":{"mode":"none"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"},"capabilities":{"nix_packaging":false,"reporting_policy":false,"scorecard":false},"parameters":{"repo":"","security_contact":"","security_response":"best-effort"},"files":[],"pins":{}}"#
         );
     }
 
@@ -889,7 +955,7 @@ mod tests {
             ("security_response", ""),
         ] {
             let record = format!(
-                r#"{{"schema_version":9,"rk_version":"0.1.0","origin":"init","landed_at":"2026-08-29T00:00:00Z","profile":{{"technologies":["rust"],"forge":"github","release":{{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}}}},"git":{{"trunk":"master","checkout_mode":"linked-worktree"}},"capabilities":{{"nix_packaging":false,"reporting_policy":true,"scorecard":false}},"parameters":{{"repo":"acme/widget","{field}":"{value}"}},"files":[],"pins":{{}}}}"#
+                r#"{{"schema_version":10,"rk_version":"0.1.0","origin":"init","landed_at":"2026-08-29T00:00:00Z","profile":{{"technologies":["rust"],"forge":"github","release":{{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}}}},"git":{{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"}},"capabilities":{{"nix_packaging":false,"reporting_policy":true,"scorecard":false}},"parameters":{{"repo":"acme/widget","{field}":"{value}"}},"files":[],"pins":{{}}}}"#
             );
             std::fs::write(target.join(super::MANIFEST_PATH), record).expect("the record writes");
             let refused = super::load(target).expect_err("an uncanonical record refuses");

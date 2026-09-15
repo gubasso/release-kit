@@ -21,6 +21,7 @@ line_prefix = "release/" # P: release-line branch prefix, rendered into the rele
 [git]
 trunk = "master" # P: the one permanent branch, rendered into every artifact naming it
 checkout_mode = "linked-worktree" # P: linked-worktree or main-worktree, where a topic branch opens
+integration = "forge" # P: local or forge, which authority moves an implementation onto the trunk
 
 [capabilities]
 nix_packaging = false # P: opt-in Nix capability

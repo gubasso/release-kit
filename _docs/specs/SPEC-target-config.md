@@ -62,7 +62,13 @@ Verify: `cargo nextest run -E 'test(config) or test(params_from_a_record) or tes
 
 ### `target-config:a-flag-overrides-and-a-landing-writes-back` — A flag overrides and a landing writes back
 
-When a landing applies a class P invocation flag, the verb MUST write that key back through the comment-preserving editor, with class N names and class F policy left to their use-time readers.
+When a landing applies a class P invocation flag, the verb MUST write that key back through the comment-preserving editor, with class N names and class F policy left to their use-time readers. Exactly two class F keys are excepted, because `git.integration` decides them and a configuration carrying one authority's key beside the other's mode is one its own floor table refuses: `protection.owned_trunk_rules` and `protection.gitlab.push_access_level` travel with that parameter where they still match a compiled authority's pair, keep whatever a target narrowed or widened them to otherwise, and are excluded from the comparison that reports untaken configuration, because the record holds no baseline for a floored policy.
+
+#### Scenario: The integration authority changes
+
+- GIVEN a landed target whose protection keys are one authority's compiled pair
+- WHEN a landing resolves the other authority
+- THEN both keys are written to that authority's pair, the configuration passes its own floor table, and status reports it aligned
 
 #### Scenario: A style flag overrides a commented key
 
@@ -86,13 +92,19 @@ Verify: `cargo nextest run -E 'test(config) or test(params_from_a_record) or tes
 
 ### `target-config:an-invariant-bearing-key-carries-a-floor` — An invariant-bearing key carries a floor
 
-The config reader MUST judge class F values through one floor table naming each key, its minimum and its source heading in `rk method invariants`, accept stricter values, and refuse a weaker value naming all three.
+The config reader MUST judge class F values through a floor table selected by the resolved `git.integration` mode, naming each key, its minimum and its source heading in `rk method invariants`, accept stricter values, and refuse a weaker value naming all three. The forge table MUST carry the request rule and the required-check rule; the local table MUST drop exactly those, because no forge can require a check before the push that starts it, and MUST keep every deletion, force-push, squash, and tag floor, refusing only a GitLab push access level broad enough to name every writer. Every heading either table cites MUST exist in the invariants chapter.
 
 #### Scenario: A target permits an additional merge method
 
 - GIVEN a policy allowing squash and merge commits
 - WHEN the config reader checks the policy
 - THEN it refuses naming `protection.allowed_merge_methods`, exactly squash, and `rk method invariants`
+
+#### Scenario: One policy is judged under each mode
+
+- GIVEN a policy whose owned trunk rules name deletion and non-fast-forward alone
+- WHEN the config reader checks it under `forge` and then under `local`
+- THEN the forge check refuses naming the missing request rule, and the local check passes
 
 Verify: `cargo nextest run -E 'test(config) or test(params_from_a_record) or test(a_schema_1_config_migrates_into_its_domains)'`
 

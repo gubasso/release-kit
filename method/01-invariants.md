@@ -24,13 +24,19 @@ The registry refuses a second upload of the same version, and a moved tag serves
 
 ## Git and trunk-based development are requirements
 
-Every target is a non-bare Git repository with one main working tree, and trunk-based development is the one development method: one configured trunk receives short-lived topic branches through guarded pull requests or merge requests. Neither is a parameter, so the target configuration carries no key that selects either. What varies per target is recorded under `[git]`: the trunk's name, and the checkout mode that says where a topic branch opens, `linked-worktree` or `main-worktree`. A checkout mode changes the working tree a branch uses and nothing about branching, rebasing, or merging. [The Git specification](../_docs/specs/SPEC-git.md) binds these rules.
+Every target is a non-bare Git repository with one main working tree, and trunk-based development is the one development method: one configured trunk receives short-lived topic branches, each squash-merged as one validated commit. Neither is a parameter, so the target configuration carries no key that selects either. What varies per target is recorded under `[git]`: the trunk's name, the checkout mode that says where a topic branch opens, `linked-worktree` or `main-worktree`, and the integration mode that says which authority carries a branch onto the trunk, `local` or `forge`. A checkout mode changes the working tree a branch uses and nothing about branching, rebasing, or merging. [The Git specification](../_docs/specs/SPEC-git.md) binds these rules, and [integration](./12-integration.md) owns the second axis.
 
-## Trunk is written through pull requests only
+## The trunk takes one validated squash commit at a time
 
-The trunk takes no direct push and no force-push, requires the named passing check, and merges only by squash, so one pull request is one commit and the history stays linear. Nothing in the pipeline writes the branch outside a merge, so the ruleset names no bypass actor; the bot's bump rides the same merge button as everyone's work.
+An implementation reaches the trunk through a short-lived branch, as one squash commit that passed every gate the project declared, so one implementation is one commit and the history stays linear. The trunk takes no force-push and no deletion, merges only by squash, and names no bypass actor. The recorded integration mode chooses who performs that squash: the forge, behind a pull request or a merge request carrying the named passing check, or the checkout, through `rk integrate`, which runs the same gates before it writes. A local-integration target permits the trunk push its integrations end in, and what narrows who may make it is the forge's own answer: a push access level on GitLab, and write access on a GitHub repository, whose rulesets carry no allowed-pushers list. Deletion and force-push protection hold in both modes.
 
 The trunk's name is the project's own. `master` is the default, and a project states another in `git.trunk` in its committed configuration; the landing renders that name into every artifact that names a branch, and records it, so the binary and the landed bytes cannot disagree about which branch is the trunk.
+
+## A forge-integrated trunk merges through a checked request
+
+Where the recorded integration mode is `forge`, the trunk takes no direct push at all: every change arrives through a request that carries the named passing check, tested against the trunk it merges into. Review policy above that floor is the project's to raise and never to lower. Where the mode is `local`, those two rules are absent rather than weakened, because no forge can require a check before the push that starts it.
+
+The release request integrates at the forge in both modes. Merging it is the only event that authorizes the tag, the publish, the provenance, and the artifacts, so a local-integration target still owns every protection that request rides through.
 
 ## A protection carries a name and a policy
 

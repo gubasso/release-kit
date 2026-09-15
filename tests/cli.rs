@@ -123,6 +123,7 @@ fn projection_params(
     driver: &str,
     forge: &str,
     checkout_mode: release_kit::landing::CheckoutMode,
+    integration: release_kit::landing::Integration,
     style: release_kit::landing::Style,
     nix: bool,
 ) -> release_kit::landing::Params {
@@ -130,6 +131,7 @@ fn projection_params(
         driver,
         forge,
         checkout_mode,
+        integration,
         Some(style),
         nix,
         "acme/widget",
@@ -143,6 +145,7 @@ fn record_params(
     driver: &str,
     forge: &str,
     checkout_mode: release_kit::landing::CheckoutMode,
+    integration: release_kit::landing::Integration,
     style: Option<release_kit::landing::Style>,
     nix: bool,
     repo: &str,
@@ -152,6 +155,7 @@ fn record_params(
         driver,
         forge,
         checkout_mode,
+        integration,
         style,
         repo,
         CapabilityRequests {
@@ -170,6 +174,7 @@ fn params_requesting(
     driver: &str,
     forge: &str,
     checkout_mode: release_kit::landing::CheckoutMode,
+    integration: release_kit::landing::Integration,
     style: Option<release_kit::landing::Style>,
     repo: &str,
     capabilities: release_kit::profile::CapabilityRequests,
@@ -194,6 +199,7 @@ fn params_requesting(
         git: GitWorkflow {
             trunk: release_kit::config::TRUNK_DEFAULT.to_owned(),
             checkout_mode,
+            integration,
         },
         capabilities,
         parameters: Parameters {
@@ -262,21 +268,31 @@ fn projection_fixture_combinations() -> Vec<(
     String,
     String,
     release_kit::landing::CheckoutMode,
+    release_kit::landing::Integration,
     release_kit::landing::Style,
     Option<NixShape>,
 )> {
-    use release_kit::landing::{CheckoutMode, Style};
+    use release_kit::landing::{CheckoutMode, Integration, Style};
     let mut out = Vec::new();
     for (tech, forge) in release_kit::projection::supported_pairs() {
         for workflow in [CheckoutMode::LinkedWorktree, CheckoutMode::MainWorktree] {
-            for style in [Style::Trunk, Style::Lines] {
-                for nix in [
-                    None,
-                    Some(NixShape::Supported),
-                    Some(NixShape::NoCrate),
-                    Some(NixShape::OwnFlake),
-                ] {
-                    out.push((tech.clone(), forge.clone(), workflow, style, nix));
+            for integration in [Integration::Forge, Integration::Local] {
+                for style in [Style::Trunk, Style::Lines] {
+                    for nix in [
+                        None,
+                        Some(NixShape::Supported),
+                        Some(NixShape::NoCrate),
+                        Some(NixShape::OwnFlake),
+                    ] {
+                        out.push((
+                            tech.clone(),
+                            forge.clone(),
+                            workflow,
+                            integration,
+                            style,
+                            nix,
+                        ));
+                    }
                 }
             }
         }
@@ -286,9 +302,37 @@ fn projection_fixture_combinations() -> Vec<(
 
 /// Land the rust files into `target` under the standard test parameters
 /// and return the assertion to judge.
+///
+/// The integration axis is stated rather than defaulted: every caller
+/// that reads a landed guard reads the forge-integration block, which is
+/// what this convention shipped before the axis existed. The default
+/// itself is proved by `init_defaults_to_the_worktree_workflow` and by
+/// `land_rust_locally` beside this.
 fn land_rust(target: &Path) -> assert_cmd::assert::Assert {
     rk().args(["init", "--tech", "rust", "--forge", "github"])
-        .args(["--repo", "acme/widget", "--target"])
+        .args([
+            "--repo",
+            "acme/widget",
+            "--integration",
+            "forge",
+            "--target",
+        ])
+        .arg(target)
+        .arg("--apply")
+        .assert()
+}
+
+/// The same landing under local integration, for the tests that read what
+/// that mode renders.
+fn land_rust_locally(target: &Path) -> assert_cmd::assert::Assert {
+    rk().args(["init", "--tech", "rust", "--forge", "github"])
+        .args([
+            "--repo",
+            "acme/widget",
+            "--integration",
+            "local",
+            "--target",
+        ])
         .arg(target)
         .arg("--apply")
         .assert()
@@ -305,6 +349,7 @@ fn render_params(
         "rust",
         "github",
         release_kit::landing::CheckoutMode::LinkedWorktree,
+        release_kit::landing::Integration::Forge,
         style,
         false,
         repo,
@@ -779,7 +824,7 @@ fn init_preview_human_lines_are_snapshot_held() {
     let path = target.path().to_string_lossy().into_owned();
     let expected = format!(
         "DRY RUN: rk init writes these files into {path}; re-run with --apply\n\
-         profile: technologies rust; forge github; repo unresolved; release automatic (driver rust, style trunk, line prefix release/); trunk master; checkout mode linked-worktree; requests reporting_policy\n\
+         profile: technologies rust; forge github; repo unresolved; release automatic (driver rust, style trunk, line prefix release/); trunk master; checkout mode linked-worktree; integration local; requests reporting_policy\n\
          capability git.guards: selected\n\
          capability git.title-check: selected\n\
          capability security.reporting-policy: selected\n\
@@ -795,7 +840,7 @@ fn init_preview_human_lines_are_snapshot_held() {
          created SECURITY.md\n\
          created dist-workspace.toml\n\
          created release-plz.toml\n\
-         Next:\n  rk init --technology rust --forge github --release-mode automatic --release-driver rust --release-style trunk --trunk master --checkout-mode linked-worktree --repo <owner/name> --reporting-policy --code-scanning off --target {path} --apply\n\
+         Next:\n  rk init --technology rust --forge github --release-mode automatic --release-driver rust --release-style trunk --trunk master --checkout-mode linked-worktree --integration local --repo <owner/name> --reporting-policy --code-scanning off --target {path} --apply\n\
          \x20 rk stage --target {path} stages the complete candidate for a byte comparison\n"
     );
     let output = rk()
@@ -3263,8 +3308,11 @@ fn the_routing_block_bounds_the_agents_initiative() {
         release_kit::landing::CheckoutMode::LinkedWorktree,
         release_kit::landing::CheckoutMode::MainWorktree,
     ] {
-        let block =
-            release_kit::projection::routing_block(workflow).expect("the binary embeds the block");
+        let block = release_kit::projection::routing_block(
+            workflow,
+            release_kit::landing::Integration::Forge,
+        )
+        .expect("the binary embeds the block");
         for phrase in [
             "guides and never drives",
             "unless the operator's request named that action",
@@ -3523,9 +3571,12 @@ fn the_routing_block_reads_as_plain_prose() {
         release_kit::landing::CheckoutMode::MainWorktree,
     ] {
         let rendered = release_kit::landing::render(
-            release_kit::projection::routing_block(workflow)
-                .expect("the binary embeds the block")
-                .as_bytes(),
+            release_kit::projection::routing_block(
+                workflow,
+                release_kit::landing::Integration::Forge,
+            )
+            .expect("the binary embeds the block")
+            .as_bytes(),
             &render_params("acme/widget", None),
         );
         let text = String::from_utf8(rendered).expect("the block is text");
@@ -3648,6 +3699,7 @@ fn every_setup_script_passes_the_static_battery() {
         "RK_TAG_RULESET",
         "RK_LINES_RULESET",
         "RK_TITLE_CHECK",
+        "RK_TRUNK_RULES",
         "RK_TAG_PATTERN",
         "RK_REVIEW_COUNT",
         "RK_DISMISS_STALE_REVIEWS",
@@ -4903,9 +4955,33 @@ fn a_full_github_apply_lands_reasserts_and_checks_clean() {
         "exactly two protections: {rulesets}"
     );
     let body = std::fs::read_to_string(fixture.state("ruleset_master-protection")).expect("reads");
-    assert!(body.contains(r#""context": "test-check""#));
-    assert!(body.contains(r#""context": "pr-title""#));
-    assert!(body.contains(r#""allowed_merge_methods": ["squash"]"#));
+    // Read as JSON rather than as text: the rules are composed from the
+    // one owned-rules key now, so what matters is the shape they carry
+    // and not how the serializer laid it out.
+    let ruleset: serde_json::Value = serde_json::from_str(&body).expect("the ruleset parses");
+    let rules = ruleset["rules"].as_array().expect("a rules array");
+    let rule = |kind: &str| {
+        rules
+            .iter()
+            .find(|rule| rule["type"] == kind)
+            .unwrap_or_else(|| panic!("the {kind} rule: {body}"))
+    };
+    let contexts: Vec<&str> =
+        rule("required_status_checks")["parameters"]["required_status_checks"]
+            .as_array()
+            .expect("a context list")
+            .iter()
+            .filter_map(|check| check["context"].as_str())
+            .collect();
+    assert_eq!(contexts, ["test-check", "pr-title"], "{body}");
+    assert_eq!(
+        rule("pull_request")["parameters"]["allowed_merge_methods"],
+        serde_json::json!(["squash"]),
+        "{body}"
+    );
+    for kind in ["deletion", "non_fast_forward"] {
+        rule(kind);
+    }
     assert_eq!(
         std::fs::read_to_string(fixture.state("squash_merge_commit_title")).expect("state reads"),
         "PR_TITLE\n",
@@ -7040,7 +7116,7 @@ fn a_landing_writes_the_record_with_its_identity() {
         .success()
         .stdout(predicate::str::contains("wrote .release-kit/manifest.json"));
     let manifest = read_manifest(target.path());
-    assert_eq!(manifest["schema_version"], 9);
+    assert_eq!(manifest["schema_version"], 10);
     assert_eq!(manifest["rk_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(manifest["origin"], "init");
     assert_eq!(manifest["profile"]["release"]["driver"], "rust");
@@ -8046,7 +8122,7 @@ fn an_upgrade_replaces_a_recorded_generated_file_whose_bytes_differ() {
         "semver_check = true\n"
     );
     let receipt = read_manifest(target.path());
-    assert_eq!(receipt["schema_version"], 9);
+    assert_eq!(receipt["schema_version"], 10);
     assert_eq!(
         manifest_file(&receipt, ".github/workflows/release-plz.yml")["sha256"],
         Digest::of(landed.as_bytes()).to_string()
@@ -8916,7 +8992,7 @@ fn branches_prune_json_is_one_object_with_schema_and_next() {
         .success();
     let report: serde_json::Value =
         serde_json::from_slice(&out.get_output().stdout).expect("one JSON object");
-    assert_eq!(report["schema"], "rk.branches-prune/1");
+    assert_eq!(report["schema"], "rk.branches-prune/2");
     assert_eq!(report["mode"], "preview");
     assert_eq!(report["branches"][0]["name"], "feat/x");
     assert_eq!(report["branches"][0]["status"], "candidate");
@@ -9054,7 +9130,7 @@ fn branches_prune_verify_confirms_against_the_forge() {
         .assert()
         .success();
     let text = String::from_utf8_lossy(&out.get_output().stdout).into_owned();
-    assert!(text.contains("confirmed: merged request #8"), "{text}");
+    assert!(text.contains("confirmed: #8 matches this tip"), "{text}");
     assert!(text.contains("unconfirmed"), "{text}");
     let names = branch_names(repo.path());
     assert!(
@@ -9081,7 +9157,7 @@ fn branches_prune_apply_deletes_confirmed_and_keeps_unknown() {
         .assert()
         .success();
     let text = String::from_utf8_lossy(&out.get_output().stdout).into_owned();
-    assert!(text.contains("deleted (merged request #8)"), "{text}");
+    assert!(text.contains("deleted (#8)"), "{text}");
     assert!(text.contains("unknown"), "{text}");
     let names = branch_names(repo.path());
     assert!(!names.contains("feat/merged"), "the proven branch goes");
@@ -9380,7 +9456,7 @@ fn branches_prune_apply_reports_a_surviving_branch_configuration() {
         .success();
     let text = String::from_utf8_lossy(&out.get_output().stdout).into_owned();
     assert!(
-        text.contains("deleted (merged request #8); the branch configuration survives: git config --remove-section branch.feat/merged"),
+        text.contains("deleted (#8); the branch configuration survives: git config --remove-section branch.feat/merged"),
         "{text}"
     );
     assert!(
@@ -11123,6 +11199,7 @@ fn this_repos_own_record_carries_every_rust_pin() {
             "rust",
             "github",
             release_kit::landing::CheckoutMode::LinkedWorktree,
+            release_kit::landing::Integration::Forge,
             Some(release_kit::landing::Style::Trunk),
             false,
             "gubasso/release-kit",
@@ -11154,6 +11231,7 @@ fn this_repos_own_record_carries_every_rust_pin() {
 /// Land the rust files under one explicit workflow mode.
 fn land_rust_with_workflow(target: &Path, workflow: &str) -> assert_cmd::assert::Assert {
     rk().args(["init", "--tech", "rust", "--forge", "github"])
+        .args(["--integration", "forge"])
         .args(["--repo", "acme/widget", "--workflow"])
         .arg(workflow)
         .args(["--target"])
@@ -11167,9 +11245,18 @@ fn land_rust_with_workflow(target: &Path, workflow: &str) -> assert_cmd::assert:
 #[test]
 fn init_defaults_to_the_worktree_workflow() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
-    land_rust(target.path()).success();
+    rk().args(["init", "--tech", "rust", "--forge", "github"])
+        .args(["--repo", "acme/widget", "--target"])
+        .arg(target.path())
+        .arg("--apply")
+        .assert()
+        .success();
     let manifest = read_manifest(target.path());
     assert_eq!(manifest["git"]["checkout_mode"], "linked-worktree");
+    // The two axes default independently: the checkout mode to the
+    // linked worktree, and the integration authority to the local
+    // checkout.
+    assert_eq!(manifest["git"]["integration"], "local");
     let hooks = std::fs::read_to_string(target.path().join(".pre-commit-config.yaml"))
         .expect("the hook file reads");
     assert!(
@@ -11177,8 +11264,12 @@ fn init_defaults_to_the_worktree_workflow() {
         "the worktree mode lands the location guard: {hooks}"
     );
     assert!(
-        hooks.contains("SKIP=no-commit-to-branch,rk-worktree-location"),
-        "the sweep comment names the skip pair: {hooks}"
+        hooks.contains("SKIP=rk-worktree-location"),
+        "the sweep comment names the one hook a trunk checkout meets: {hooks}"
+    );
+    assert!(
+        !hooks.contains("no-commit-to-branch"),
+        "local integration writes the trunk commit, so nothing refuses it: {hooks}"
     );
     let agents = std::fs::read_to_string(target.path().join("AGENTS.md")).expect("AGENTS.md reads");
     assert!(
@@ -11357,7 +11448,7 @@ fn an_upgrade_migrates_a_schema_1_record_to_the_current_schema() {
         .assert()
         .success();
     let migrated = read_manifest(target.path());
-    assert_eq!(migrated["schema_version"], 9);
+    assert_eq!(migrated["schema_version"], 10);
     assert_eq!(migrated["git"]["checkout_mode"], "main-worktree");
     assert_eq!(migrated["profile"]["release"]["style"], "trunk");
     let hooks = std::fs::read_to_string(target.path().join(".pre-commit-config.yaml"))
@@ -11439,7 +11530,7 @@ fn an_upgrade_drops_the_recorded_scope_vocabulary() {
         );
 
     let migrated = read_manifest(target.path());
-    assert_eq!(migrated["schema_version"], 9);
+    assert_eq!(migrated["schema_version"], 10);
     assert!(
         migrated["parameters"]["scopes"].is_null(),
         "the vocabulary leaves the record: {migrated}"
@@ -12144,7 +12235,7 @@ fn worktree_prune_preview_is_offline_and_keeps_the_guarded() {
         .stdout
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["schema"], "rk.worktree-prune/1");
+    assert_eq!(report["schema"], "rk.worktree-prune/2");
     assert_eq!(report["mode"], "preview");
     let rows = report["worktrees"].as_array().expect("rows");
     let named = |branch: &str| {
@@ -12411,7 +12502,8 @@ fn worktree_prune_verify_confirms_against_the_forge() {
     assert_eq!(report["mode"], "verify");
     let row = &report["worktrees"][0];
     assert_eq!(row["status"], "confirmed");
-    assert_eq!(row["request"], "#8");
+    assert_eq!(row["proof"], "#8");
+    assert_eq!(row["proof_kind"], "request");
     assert!(
         repo.parent()
             .expect("a parent")
@@ -12461,7 +12553,8 @@ fn worktree_prune_apply_removes_the_tree_then_cas_deletes_the_branch() {
     let out = run(&["--apply"]).success().get_output().stdout.clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
     assert_eq!(report["worktrees"][0]["status"], "pruned", "{report}");
-    assert_eq!(report["worktrees"][0]["request"], "#8");
+    assert_eq!(report["worktrees"][0]["proof"], "#8");
+    assert_eq!(report["worktrees"][0]["proof_kind"], "request");
     assert!(!path.exists(), "the worktree is removed");
     assert!(
         !branch_names(&repo).contains("feat/merged"),
@@ -12618,9 +12711,11 @@ fn worktree_json_failure_is_one_diagnostic_line() {
 fn guard_script() -> String {
     // The guard names the trunk, so the block carries a token and the
     // script under test is the rendered form a landing writes.
-    let template =
-        release_kit::projection::hooks_block(release_kit::landing::CheckoutMode::LinkedWorktree)
-            .expect("the binary embeds the block");
+    let template = release_kit::projection::hooks_block(
+        release_kit::landing::CheckoutMode::LinkedWorktree,
+        release_kit::landing::Integration::Forge,
+    )
+    .expect("the binary embeds the block");
     let block = String::from_utf8(release_kit::landing::render(
         template.as_bytes(),
         &render_params("acme/widget", Some(release_kit::landing::Style::Trunk)),
@@ -21923,7 +22018,7 @@ fn private_reporting_policy_adoption_and_parameter_replay() {
         if mode == "matching" {
             out.success();
             let manifest = read_manifest(target.path());
-            assert_eq!(manifest["schema_version"], 9);
+            assert_eq!(manifest["schema_version"], 10);
             assert_eq!(manifest_file(&manifest, "SECURITY.md")["kind"], "rendered");
             assert_eq!(
                 std::fs::read(target.path().join("SECURITY.md")).unwrap(),
@@ -21955,7 +22050,7 @@ fn private_reporting_policy_adoption_and_parameter_replay() {
             )
         )
     );
-    assert_eq!(manifest["schema_version"], 9);
+    assert_eq!(manifest["schema_version"], 10);
     assert_eq!(manifest["profile"]["release"]["style"], "trunk");
 }
 
@@ -22194,7 +22289,7 @@ fn a_pre_policy_record_upgrades_without_touching_the_policy() {
         .success();
     assert_eq!(landed_policy(target.path()), policy);
     let manifest = read_manifest(target.path());
-    assert_eq!(manifest["schema_version"], 9);
+    assert_eq!(manifest["schema_version"], 10);
     assert_eq!(manifest["parameters"]["security_contact"], "");
     assert_eq!(manifest["parameters"]["security_response"], "best-effort");
 }
@@ -22590,6 +22685,10 @@ fn the_trunk_branch_comes_from_the_config() {
     rk().args(["upgrade", "--target"])
         .arg(target.path())
         .arg("--apply")
+        // Forge integration, because the two guards this test reads are
+        // what that mode renders; the trunk's name reaches them either
+        // way, and the local-mode block carries neither.
+        .args(["--integration", "forge"])
         .assert()
         .success();
 
@@ -24323,6 +24422,7 @@ fn opt_in_signature_lines() -> Vec<String> {
             driver,
             forge,
             CheckoutMode::LinkedWorktree,
+            release_kit::landing::Integration::Forge,
             Some(Style::Trunk),
             "acme/widget",
             CapabilityRequests {
@@ -24384,6 +24484,7 @@ fn occupied_target_signature_lines() -> Vec<String> {
         "rust",
         "github",
         CheckoutMode::LinkedWorktree,
+        release_kit::landing::Integration::Forge,
         Style::Trunk,
         false,
     );
@@ -24509,9 +24610,9 @@ fn every_current_landing_fixture_keeps_its_destinations_kinds_placement_and_dige
     use release_kit::projection::{Projection, ProjectionInput};
 
     let mut lines = Vec::new();
-    for (tech, forge, workflow, style, nix) in projection_fixture_combinations() {
+    for (tech, forge, workflow, integration, style, nix) in projection_fixture_combinations() {
         let shape = nix.unwrap_or(NixShape::Supported);
-        let params = projection_params(&tech, &forge, workflow, style, nix.is_some());
+        let params = projection_params(&tech, &forge, workflow, integration, style, nix.is_some());
         let projection = Projection::compute(&ProjectionInput {
             params: params.clone(),
             evidence: shape.evidence(),
@@ -24524,8 +24625,9 @@ fn every_current_landing_fixture_keeps_its_destinations_kinds_placement_and_dige
         );
 
         let label = format!(
-            "{tech} {forge} {} {} {}",
+            "{tech} {forge} {} {} {} {}",
             workflow.as_str(),
+            integration.as_str(),
             style.as_str(),
             nix.map_or("false", NixShape::column)
         );
@@ -24594,9 +24696,9 @@ fn every_selected_embedded_source_belongs_to_the_one_distribution_root_inventory
     use release_kit::projection::{Projection, ProjectionInput};
 
     let mut seen = 0;
-    for (tech, forge, workflow, style, nix) in projection_fixture_combinations() {
+    for (tech, forge, workflow, integration, style, nix) in projection_fixture_combinations() {
         let projection = Projection::compute(&ProjectionInput {
-            params: projection_params(&tech, &forge, workflow, style, nix.is_some()),
+            params: projection_params(&tech, &forge, workflow, integration, style, nix.is_some()),
             evidence: nix.unwrap_or(NixShape::Supported).evidence(),
         })
         .expect("the pair projects");
@@ -24629,11 +24731,13 @@ fn every_selected_embedded_source_belongs_to_the_one_distribution_root_inventory
 
 /// The flags every staging in this section runs under, so a target with
 /// no remote resolves the same parameters a landing does.
-const STAGE_FLAGS: [&str; 6] = [
+const STAGE_FLAGS: [&str; 8] = [
     "--tech",
     "rust",
     "--forge",
     "github",
+    "--integration",
+    "forge",
     "--repo",
     "acme/widget",
 ];
@@ -24968,7 +25072,7 @@ fn stage_writes_only_below_the_resolved_stage_root() {
         "an explicit --output leaves the state root without a stage"
     );
     assert!(resolved.join("stage.json").is_file());
-    assert_eq!(report["receipt_schema_version"], 9);
+    assert_eq!(report["receipt_schema_version"], 10);
 }
 
 /// SATISFIES staging:the-output-path-has-one-precedence
@@ -25544,7 +25648,7 @@ fn the_stage_receipt_and_human_output_snapshot_hold() {
         format!("stage: {}", stage.display()),
         "output: from --output".to_owned(),
         format!("target: {}", canonical_target.display()),
-        "parameters: technologies rust; forge github; repo acme/widget; release automatic (driver rust, style trunk, line prefix release/); trunk master; checkout mode linked-worktree; requests reporting_policy".to_owned(),
+        "parameters: technologies rust; forge github; repo acme/widget; release automatic (driver rust, style trunk, line prefix release/); trunk master; checkout mode linked-worktree; integration forge; requests reporting_policy".to_owned(),
         "landing record: none".to_owned(),
         "  artifacts/AGENTS.md (rendered, region)".to_owned(),
         "  artifacts/release-plz.toml (seeded, whole)".to_owned(),
@@ -25641,7 +25745,7 @@ fn the_stage_receipt_and_human_output_snapshot_hold() {
         .clone();
     let human = String::from_utf8_lossy(&human);
     assert!(
-        human.contains("landing record: schema_version 9"),
+        human.contains("landing record: schema_version 10"),
         "{human}"
     );
     assert!(
@@ -25653,7 +25757,7 @@ fn the_stage_receipt_and_human_output_snapshot_hold() {
         "{human}"
     );
     let receipt = stage_receipt(&landed_out);
-    assert_eq!(receipt["receipt_schema_version"], 9);
+    assert_eq!(receipt["receipt_schema_version"], 10);
     assert_eq!(receipt["retired"], serde_json::json!(["old-workflow.yml"]));
     assert!(
         receipt["seeded_present"]
@@ -26590,7 +26694,7 @@ fn staged_candidates(target: &Path, flags: &[&str]) -> std::collections::BTreeMa
 
 /// SATISFIES landing:a-landing-leaves-a-record
 #[test]
-fn fresh_init_preview_is_read_only_and_apply_writes_the_schema_8_receipt() {
+fn fresh_init_preview_is_read_only_and_apply_writes_the_schema_10_receipt() {
     let target = plan_target();
     let before = tree_digests(target.path());
     let preview = rk()
@@ -26640,7 +26744,7 @@ fn fresh_init_preview_is_read_only_and_apply_writes_the_schema_8_receipt() {
         ]
     );
     let receipt = read_manifest(target.path());
-    assert_eq!(receipt["schema_version"], 9);
+    assert_eq!(receipt["schema_version"], 10);
     assert_eq!(receipt["rk_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(receipt["origin"], "init");
     for file in receipt["files"].as_array().expect("files") {
@@ -26723,7 +26827,7 @@ fn every_unattributed_collision_and_malformed_marker_is_collected_before_the_fir
 
 /// SATISFIES landing:a-record-states-its-schema
 #[test]
-fn receipt_schemas_1_through_7_load_without_a_release_source_and_rewrite_as_schema_8() {
+fn receipt_schemas_1_through_7_load_without_a_release_source_and_rewrite_as_schema_10() {
     let curl = OfflineCurl::new();
     for schema in 1..=7u64 {
         let target = plan_target();
@@ -26772,7 +26876,7 @@ fn receipt_schemas_1_through_7_load_without_a_release_source_and_rewrite_as_sche
         );
         assert!(!text.contains("scopes"), "schema {schema}: {text}");
         let rewritten = read_manifest(target.path());
-        assert_eq!(rewritten["schema_version"], 9, "schema {schema}");
+        assert_eq!(rewritten["schema_version"], 10, "schema {schema}");
         assert_eq!(rewritten["profile"]["release"]["style"], "trunk");
         assert_eq!(
             rewritten["capabilities"]["scorecard"], false,
@@ -26893,6 +26997,38 @@ fn assert_no_release_selection_flag(target: &Path) {
 /// Every production output is free of plan, bundle, and release-selection
 /// vocabulary, and every retired flag is refused as an argument nobody
 /// declares.
+/// The landing this sweep runs, with the integration axis stated so the
+/// adoption below verifies what the landing wrote rather than an
+/// adoption's own default.
+const PRODUCTION_INIT: [&str; 9] = [
+    "init",
+    "--tech",
+    "rust",
+    "--forge",
+    "github",
+    "--repo",
+    "acme/widget",
+    "--integration",
+    "forge",
+];
+
+/// The adoption that follows it.
+const PRODUCTION_ADOPT: [&str; 13] = [
+    "adopt",
+    "--tech",
+    "rust",
+    "--forge",
+    "github",
+    "--repo",
+    "acme/widget",
+    "--style",
+    "trunk",
+    "--workflow",
+    "worktree",
+    "--integration",
+    "forge",
+];
+
 #[test]
 fn production_outputs_carry_no_plan_bundle_or_release_selection_field() {
     let forbidden: Vec<&str> = [
@@ -26935,37 +27071,23 @@ fn production_outputs_carry_no_plan_bundle_or_release_selection_field() {
             serde_json::from_slice(&out).unwrap_or_else(|_| panic!("{label}: one JSON object"));
         documents.push((label.to_owned(), value));
     };
-    let init = [
-        "init",
-        "--tech",
-        "rust",
-        "--forge",
-        "github",
-        "--repo",
-        "acme/widget",
-    ];
-    collect("init preview", &init, 0);
+    collect("init preview", &PRODUCTION_INIT, 0);
     collect("assess", &["assess"], 0);
-    collect("init apply", &[&init[..], &["--apply"]].concat(), 0);
+    collect(
+        "init apply",
+        &[&PRODUCTION_INIT[..], &["--apply"]].concat(),
+        0,
+    );
     collect("status", &["status"], 0);
     collect("upgrade preview", &["upgrade"], 0);
     collect("upgrade apply", &["upgrade", "--apply"], 0);
     std::fs::remove_dir_all(target.path().join(".release-kit")).expect("the receipt removes");
-    let adopt = [
-        "adopt",
-        "--tech",
-        "rust",
-        "--forge",
-        "github",
-        "--repo",
-        "acme/widget",
-        "--style",
-        "trunk",
-        "--workflow",
-        "worktree",
-    ];
-    collect("adopt preview", &adopt, 0);
-    collect("adopt apply", &[&adopt[..], &["--apply"]].concat(), 0);
+    collect("adopt preview", &PRODUCTION_ADOPT, 0);
+    collect(
+        "adopt apply",
+        &[&PRODUCTION_ADOPT[..], &["--apply"]].concat(),
+        0,
+    );
     for (label, document) in &documents {
         let mut keys = std::collections::BTreeSet::new();
         all_keys(document, &mut keys);
@@ -27281,7 +27403,7 @@ fn a_failpoint_at_every_write_boundary_leaves_whole_files_and_the_previous_recei
             .arg(target.path())
             .assert()
             .success();
-        assert_eq!(read_manifest(target.path())["schema_version"], 9);
+        assert_eq!(read_manifest(target.path())["schema_version"], 10);
         assert_eq!(
             std::fs::read_to_string(target.path().join("release-plz.toml")).expect("reads"),
             tuned
@@ -27577,6 +27699,8 @@ fn stage_and_landing_need_no_release_resolution_network_access() {
             "rust",
             "--forge",
             "github",
+            "--integration",
+            "forge",
             "--repo",
             "acme/widget",
         ])
@@ -27616,6 +27740,8 @@ fn stage_and_landing_need_no_release_resolution_network_access() {
             "trunk",
             "--workflow",
             "worktree",
+            "--integration",
+            "forge",
             "--apply",
             "--target",
         ])
@@ -28986,13 +29112,14 @@ fn the_landed_state_bytes_are_pinned_in_the_signature() {
         "rust",
         "github",
         CheckoutMode::LinkedWorktree,
+        release_kit::landing::Integration::Forge,
         Style::Trunk,
         false,
     );
     let plan = release_kit::config::Plan::compose(None, &params, None, None)
         .expect("the configuration composes");
     let configuration = format!(
-        "rust github linked-worktree trunk false {} {}",
+        "rust github linked-worktree forge trunk false {} {}",
         release_kit::config::CONFIG_PATH,
         release_kit::digest::Digest::of(plan.content.as_bytes())
     );
@@ -29007,7 +29134,7 @@ fn the_landed_state_bytes_are_pinned_in_the_signature() {
         })
         .expect("the representative pair projects");
     let record = record_signature_line(
-        "rust github linked-worktree trunk false",
+        "rust github linked-worktree forge trunk false",
         &params,
         &projection.capabilities,
     );
@@ -29315,7 +29442,7 @@ fn a_public_v0_4_0_target_upgrades_from_its_receipt_alone() {
     }
 
     let manifest = read_manifest(target);
-    assert_eq!(manifest["schema_version"], 9);
+    assert_eq!(manifest["schema_version"], 10);
     assert_eq!(manifest["rk_version"], env!("CARGO_PKG_VERSION"));
     let text = std::fs::read_to_string(target.join(".release-kit/manifest.json"))
         .expect("the receipt reads");
@@ -29934,6 +30061,10 @@ fn the_checkout_mode_rename_reaches_no_landed_byte() {
         for (target, mode) in [(&old_target, older), (&new_target, canonical)] {
             rk().args(["init", "--tech", "rust", "--forge", "github"])
                 .args(["--repo", "acme/widget", "--checkout-mode", mode])
+                // The integration axis is held: this test is about the
+                // checkout-mode spelling alone, and the other axis
+                // decides whether the trunk guards render at all.
+                .args(["--integration", "forge"])
                 .args(["--apply", "--target"])
                 .arg(target.path())
                 .assert()
@@ -30290,4 +30421,906 @@ fn a_local_step_runs_without_the_forge_cli() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("RK_GH_BIN"));
+}
+
+// ---------------------------------------------------------------------
+// rk integrate
+// ---------------------------------------------------------------------
+
+/// A repository whose integration authority is the local checkout, with
+/// one branch seated in its own worktree and one commit on it.
+///
+/// The hook file carries no `manual` hook, so the gate runs and passes
+/// with nothing to do: this fixture's subject is the transaction, not the
+/// project's own checks.
+fn integrate_fixture() -> (tempfile::TempDir, PathBuf) {
+    let (parent, repo) = seatable_fixture();
+    std::fs::write(repo.join(".pre-commit-config.yaml"), "repos: []\n")
+        .expect("the hook file writes");
+    std::fs::create_dir_all(repo.join(".release-kit")).expect("the record dir creates");
+    std::fs::write(
+        repo.join(".release-kit/config.toml"),
+        "schema_version = 2\n[git]\ntrunk = \"master\"\ncheckout_mode = \"linked-worktree\"\nintegration = \"local\"\n",
+    )
+    .expect("the config writes");
+    // The record, not the configuration, is what `rk integrate` reads:
+    // the record is what landed, and an edited configuration is pending
+    // input to the next landing rather than a runtime override.
+    std::fs::write(
+        repo.join(".release-kit/manifest.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "schema_version": 10,
+            "rk_version": "0.0.0",
+            "origin": "init",
+            "landed_at": "2026-09-15T00:00:00Z",
+            "profile": { "technologies": [], "release": { "mode": "none" } },
+            "git": {
+                "trunk": "master",
+                "checkout_mode": "linked-worktree",
+                "integration": "local",
+            },
+            "capabilities": {
+                "nix_packaging": false,
+                "reporting_policy": false,
+                "scorecard": false,
+            },
+            "parameters": {
+                "repo": "",
+                "security_contact": "",
+                "security_response": "best-effort",
+            },
+            "files": [],
+            "pins": {},
+        }))
+        .expect("the record serializes"),
+    )
+    .expect("the record writes");
+    git_in(&repo, &["add", "-A"]);
+    git_in(&repo, &["commit", "-qm", "chore(rk): seed the local mode"]);
+    git_in(&repo, &["push", "-q", "origin", "master"]);
+    git_in(&repo, &["branch", "feat/greeting"]);
+    let seat = seat(&repo, "feat/greeting");
+    std::fs::write(seat.join("greeting.txt"), "hi\n").expect("the file writes");
+    git_in(&seat, &["add", "-A"]);
+    git_in(&seat, &["commit", "-qm", "feat(greeting): add it"]);
+    (parent, repo)
+}
+
+/// Whether `pre-commit` is on this host's PATH. The gate is one command
+/// against the project's own hooks, and a host without it cannot run the
+/// success path at all.
+fn pre_commit_present() -> bool {
+    std::process::Command::new("pre-commit")
+        .arg("--version")
+        .output()
+        .is_ok_and(|out| out.status.success())
+}
+
+/// One local integration end to end: one squash commit on the trunk whose
+/// tree matches the branch tip, the trunk's own worktree moved with it,
+/// and the evidence recorded for the prune verbs to read.
+///
+/// SATISFIES git:a-local-integration-is-a-transaction
+#[test]
+fn integrate_writes_one_squash_commit_and_records_it() {
+    if !pre_commit_present() {
+        return;
+    }
+    let (_parent, repo) = integrate_fixture();
+    let before = rev_parse(&repo, "master");
+    let branch_tip = rev_parse(&repo, "feat/greeting");
+    let out = rk_scrubbed()
+        .args(["integrate", "feat/greeting", "--apply", "--json"])
+        .args(["-m", "feat(greeting): add the greeting file"])
+        .args(["--target"])
+        .arg(&repo)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["schema"], "rk.integrate/1");
+    assert_eq!(report["integration"], "local");
+    assert_eq!(report["mode"], "apply");
+    assert_eq!(report["trunk_before"], before);
+
+    // Exactly one commit arrived, it has one parent, and its tree is the
+    // branch's: that is what makes it a squash.
+    let after = rev_parse(&repo, "master");
+    assert_ne!(after, before);
+    assert_eq!(
+        git_out(
+            &repo,
+            &["rev-list", "--count", &format!("{before}..{after}")]
+        ),
+        "1"
+    );
+    assert_eq!(git_out(&repo, &["rev-parse", "master^"]), before);
+    assert_eq!(
+        git_out(&repo, &["rev-parse", "master^{tree}"]),
+        git_out(&repo, &["rev-parse", "feat/greeting^{tree}"])
+    );
+    assert_eq!(
+        git_out(&repo, &["log", "-1", "--format=%s", "master"]),
+        "feat(greeting): add the greeting file"
+    );
+    // The trunk's own worktree moved with its HEAD rather than being left
+    // behind it, so the checkout is not reporting phantom deletions.
+    assert!(repo.join("greeting.txt").is_file());
+    assert_eq!(git_out(&repo, &["status", "--porcelain"]), "");
+
+    let ledger: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(repo.join(".git/rk/integrations.json")).expect("the ledger reads"),
+    )
+    .expect("the ledger parses");
+    assert_eq!(ledger["schema"], "rk.integrations/1");
+    let entry = &ledger["entries"][0];
+    assert_eq!(entry["branch"], "feat/greeting");
+    assert_eq!(entry["branch_tip"], branch_tip);
+    assert_eq!(entry["trunk_commit"], after);
+    // The command never pushes: the trunk push is a separate act.
+    assert_ne!(
+        git_out(&repo, &["rev-parse", "refs/remotes/origin/master"]),
+        after
+    );
+}
+
+/// The preview writes nothing at all.
+#[test]
+fn integrate_preview_leaves_the_trunk_and_the_ledger_alone() {
+    let (_parent, repo) = integrate_fixture();
+    let before = rev_parse(&repo, "master");
+    rk_scrubbed()
+        .args(["integrate", "feat/greeting", "--target"])
+        .arg(&repo)
+        .args(["-m", "feat(greeting): add it"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("would write one squash commit"));
+    assert_eq!(rev_parse(&repo, "master"), before);
+    assert!(!repo.join(".git/rk/integrations.json").exists());
+}
+
+/// Every judgment that stops the transaction leaves the trunk where it
+/// stood, and each names its own cause.
+#[test]
+fn integrate_refuses_by_name_and_leaves_the_trunk_alone() {
+    let (_parent, repo) = integrate_fixture();
+    let before = rev_parse(&repo, "master");
+    let cases: [(&[&str], &str); 4] = [
+        (&["master"], "is the trunk"),
+        (&["wip"], "<type>/<slug>"),
+        (&["feat/unseated"], "no worktree"),
+        (&["feat/greeting"], "--message is required"),
+    ];
+    for (args, expected) in cases {
+        let mut command = rk_scrubbed();
+        command.arg("integrate").args(args);
+        if !expected.contains("--message") {
+            command.args(["-m", "feat(x): y"]);
+        }
+        command
+            .args(["--apply", "--target"])
+            .arg(&repo)
+            .assert()
+            .code(73)
+            .stderr(predicate::str::contains(expected));
+        assert_eq!(rev_parse(&repo, "master"), before, "{args:?}");
+    }
+    // A dirty seat refuses before the gate: the gate would otherwise
+    // judge a tree nobody reviewed.
+    let seat = repo
+        .parent()
+        .expect("a parent")
+        .join("widget@feat-greeting");
+    std::fs::write(seat.join("scratch"), "x\n").expect("the dirt writes");
+    rk_scrubbed()
+        .args(["integrate", "feat/greeting", "--apply"])
+        .args(["-m", "feat(greeting): add it", "--target"])
+        .arg(&repo)
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("uncommitted changes"));
+    assert_eq!(rev_parse(&repo, "master"), before);
+}
+
+/// A message the landed commit-msg stage would refuse is refused here,
+/// because `git commit-tree` fires no hook.
+#[test]
+fn integrate_holds_the_trunk_message_to_the_landed_convention() {
+    let (_parent, repo) = integrate_fixture();
+    let before = rev_parse(&repo, "master");
+    for message in ["add the greeting", "feat: add the greeting"] {
+        rk_scrubbed()
+            .args(["integrate", "feat/greeting", "--apply", "-m", message])
+            .args(["--target"])
+            .arg(&repo)
+            .assert()
+            .code(73)
+            .stderr(predicate::str::contains("Conventional Commit"));
+        assert_eq!(rev_parse(&repo, "master"), before);
+    }
+}
+
+/// A failing `manual` stage refuses, names the stage, and leaves the
+/// trunk at its prior tip.
+///
+/// SATISFIES git:the-manual-stage-is-the-pre-integrate-contract
+#[test]
+fn integrate_refuses_when_the_manual_stage_fails() {
+    if !pre_commit_present() {
+        return;
+    }
+    let (_parent, repo) = integrate_fixture();
+    let seat = repo
+        .parent()
+        .expect("a parent")
+        .join("widget@feat-greeting");
+    // The project's own hook, on the project's own stage. release-kit
+    // reads no identifier from it and invokes the stage alone.
+    std::fs::write(
+        seat.join(".pre-commit-config.yaml"),
+        "repos:\n  - repo: local\n    hooks:\n      - id: refuse\n        name: refuse\n        stages: [manual]\n        language: system\n        always_run: true\n        pass_filenames: false\n        entry: sh -c 'exit 1'\n",
+    )
+    .expect("the hook file writes");
+    git_in(&seat, &["add", "-A"]);
+    git_in(&seat, &["commit", "-qm", "ci(hooks): refuse at the gate"]);
+    let before = rev_parse(&repo, "master");
+    rk_scrubbed()
+        .args(["integrate", "feat/greeting", "--apply"])
+        .args(["-m", "feat(greeting): add it", "--target"])
+        .arg(&repo)
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("the manual stage failed"));
+    assert_eq!(rev_parse(&repo, "master"), before);
+    assert!(!repo.join(".git/rk/integrations.json").exists());
+}
+
+/// The forge path pushes and names the request command, and opens no
+/// request itself: opening one is an operator-named action.
+#[test]
+fn integrate_forge_pushes_and_names_the_request_command() {
+    let (_parent, repo) = integrate_fixture();
+    let before = rev_parse(&repo, "master");
+    rk_scrubbed()
+        .args(["integrate", "feat/greeting", "--forge", "--apply"])
+        .args(["--target"])
+        .arg(&repo)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("pushed feat/greeting to origin"));
+    assert_eq!(
+        git_out(&repo, &["rev-parse", "refs/remotes/origin/feat/greeting"]),
+        rev_parse(&repo, "feat/greeting")
+    );
+    assert_eq!(rev_parse(&repo, "master"), before);
+    assert!(!repo.join(".git/rk/integrations.json").exists());
+}
+
+/// Both prune verbs take a local integration as proof, name which proof
+/// retired each resource, and still refuse a branch that advanced after
+/// its integration.
+///
+/// SATISFIES maintenance:gone-is-a-candidate-not-proof
+/// SATISFIES maintenance:one-merge-proof-authorizes-both-removals
+#[test]
+fn a_local_integration_is_the_second_admissible_prune_proof() {
+    if !pre_commit_present() {
+        return;
+    }
+    let (_parent, repo) = integrate_fixture();
+    // A second implementation, so the advanced case and the confirmed
+    // case are two branches rather than one branch rewound.
+    git_in(&repo, &["branch", "feat/other"]);
+    let other = seat(&repo, "feat/other");
+    std::fs::write(other.join("other.txt"), "x\n").expect("the file writes");
+    git_in(&other, &["add", "-A"]);
+    git_in(&other, &["commit", "-qm", "feat(other): add it"]);
+
+    for (branch, message) in [
+        ("feat/greeting", "feat(greeting): add it"),
+        ("feat/other", "feat(other): add it"),
+    ] {
+        rk_scrubbed()
+            .args(["integrate", branch, "--apply", "-m", message, "--target"])
+            .arg(&repo)
+            .assert()
+            .success();
+    }
+
+    // One more commit after its integration: that work is not on the
+    // trunk, so the branch is no candidate at all.
+    std::fs::write(other.join("later.txt"), "x\n").expect("the file writes");
+    git_in(&other, &["add", "-A"]);
+    git_in(&other, &["commit", "-qm", "feat(other): more"]);
+
+    let out = rk_scrubbed()
+        .args(["worktree", "prune", "--verify", "--json", "--target"])
+        .arg(&repo)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    let rows = report["worktrees"].as_array().expect("rows");
+    assert_eq!(rows.len(), 1, "only the untouched branch reports: {report}");
+    assert_eq!(rows[0]["branch"], "feat/greeting", "{report}");
+    assert_eq!(rows[0]["status"], "confirmed", "{report}");
+    assert_eq!(rows[0]["proof_kind"], "local-integration", "{report}");
+
+    rk_scrubbed()
+        .args(["worktree", "prune", "--apply", "--target"])
+        .arg(&repo)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("locally integrated"));
+    assert!(
+        !repo
+            .parent()
+            .expect("a parent")
+            .join("widget@feat-greeting")
+            .exists(),
+        "the seat is removed"
+    );
+    assert!(other.exists(), "the advanced branch keeps everything");
+    let names = branch_names(&repo);
+    assert!(!names.contains("feat/greeting"), "the branch went with it");
+    assert!(names.contains("feat/other"), "{names:?}");
+
+    // The retired branch leaves no entry behind; the advanced one keeps
+    // its evidence, because its branch still stands.
+    let ledger: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(repo.join(".git/rk/integrations.json")).expect("the ledger reads"),
+    )
+    .expect("the ledger parses");
+    let entries = ledger["entries"].as_array().expect("entries");
+    assert_eq!(entries.len(), 1, "{ledger}");
+    assert_eq!(entries[0]["branch"], "feat/other", "{ledger}");
+}
+
+/// The verb reaches the command surface, and the target report names
+/// the authority that target records.
+#[test]
+fn the_integrate_verb_reaches_usage_and_status() {
+    rk().arg("usage")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "rk integrate \u{2014} Move one implementation onto the trunk",
+        ));
+    // `rk doctor` reports the host and takes no target, so a target's
+    // resolved authority is `rk profile`'s to report, and `rk status`
+    // reports it beside the checkout mode once a landing has recorded it.
+    let (_parent, repo) = integrate_fixture();
+    rk_scrubbed()
+        .args(["profile", "--target"])
+        .arg(&repo)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("integration local"));
+}
+
+/// The runbook is served and its variants resolve from the record.
+#[test]
+fn the_integration_runbook_resolves_its_mode_variants() {
+    rk().args(["guide", "integration", "--integration", "local"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("rk integrate <type>/<slug>"))
+        .stdout(predicate::str::contains("On local:").not());
+    rk().args(["guide", "integration", "--integration", "forge"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--forge --apply"))
+        .stdout(predicate::str::contains("rk integrate <type>/<slug>\n").not());
+}
+
+/// One revision's full object name, for the integrate fixtures.
+fn rev_parse(repo: &Path, revision: &str) -> String {
+    git_out(repo, &["rev-parse", revision])
+}
+
+/// One git command's trimmed stdout.
+fn git_out(dir: &Path, args: &[&str]) -> String {
+    let mut command = std::process::Command::new("git");
+    for var in GIT_HOOK_VARS {
+        command.env_remove(var);
+    }
+    let out = command
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .expect("git runs");
+    assert!(out.status.success(), "git {args:?}: {out:?}");
+    String::from_utf8_lossy(&out.stdout).trim().to_owned()
+}
+
+/// A local-mode landing renders the block that admits the two writes
+/// `rk integrate` needs, and a mode change rewrites the block and the
+/// record together and restores the original bytes on the way back.
+///
+/// SATISFIES git:integration-mode-selects-the-authority-that-squashes
+#[test]
+fn the_integration_mode_round_trips_through_the_landing() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+    let forge_bytes =
+        std::fs::read(target.path().join(".pre-commit-config.yaml")).expect("the hooks read");
+    assert_eq!(read_manifest(target.path())["git"]["integration"], "forge");
+
+    rk().args(["upgrade", "--integration", "local", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let hooks =
+        std::fs::read_to_string(target.path().join(".pre-commit-config.yaml")).expect("reads");
+    assert!(!hooks.contains("no-commit-to-branch"), "{hooks}");
+    assert!(!hooks.contains("rk-no-push-to-trunk"), "{hooks}");
+    assert!(
+        hooks.contains("pre-commit run --hook-stage manual --all-files"),
+        "the block names the pre-integrate contract: {hooks}"
+    );
+    assert!(hooks.contains("- id: rk-worktree-location"), "{hooks}");
+    assert_eq!(read_manifest(target.path())["git"]["integration"], "local");
+    let agents = std::fs::read_to_string(target.path().join("AGENTS.md")).expect("reads");
+    assert!(agents.contains("`rk integrate <branch>`"), "{agents}");
+
+    // Back again: the block is what it was, byte for byte.
+    rk().args(["upgrade", "--integration", "forge", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    assert_eq!(
+        std::fs::read(target.path().join(".pre-commit-config.yaml")).expect("reads"),
+        forge_bytes
+    );
+    assert_eq!(read_manifest(target.path())["git"]["integration"], "forge");
+}
+
+/// A fresh landing with no flag takes the local authority, and its block
+/// is the one that mode renders.
+#[test]
+fn a_fresh_landing_takes_the_local_authority() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust_locally(target.path()).success();
+    let recorded = read_manifest(target.path());
+    assert_eq!(recorded["git"]["integration"], "local");
+    assert_eq!(recorded["git"]["checkout_mode"], "linked-worktree");
+    let config = std::fs::read_to_string(target.path().join(".release-kit/config.toml"))
+        .expect("the config reads");
+    assert!(
+        config.contains("integration = \"local\" # P: local or forge"),
+        "the key lands with its template comment: {config}"
+    );
+}
+
+/// An unreadable evidence ledger refuses before anything is built, so the
+/// trunk still stands where it stood. Reading it after publishing would
+/// leave a squash on the trunk with no evidence and a report claiming the
+/// target was untouched.
+///
+/// SATISFIES git:a-local-integration-is-a-transaction
+#[test]
+fn integrate_judges_its_ledger_before_it_builds_anything() {
+    let (_parent, repo) = integrate_fixture();
+    std::fs::create_dir_all(repo.join(".git/rk")).expect("the dir creates");
+    std::fs::write(repo.join(".git/rk/integrations.json"), "{ not json")
+        .expect("the ledger writes");
+    let before = rev_parse(&repo, "master");
+    rk_scrubbed()
+        .args(["integrate", "feat/greeting", "--apply"])
+        .args(["-m", "feat(greeting): add it", "--target"])
+        .arg(&repo)
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("integration ledger"));
+    assert_eq!(rev_parse(&repo, "master"), before);
+}
+
+/// A preview refreshes nothing: no lock, no fetch, no ref moved. A dry
+/// run that wrote `FETCH_HEAD` and advanced remote-tracking refs would
+/// make its own promise false.
+#[test]
+fn integrate_preview_refreshes_nothing() {
+    let (_parent, repo) = integrate_fixture();
+    // Advance origin behind the checkout's back, so a fetch would be
+    // visible in the remote-tracking ref.
+    let other = repo.parent().expect("a parent").join("other");
+    git_in(
+        repo.parent().expect("a parent"),
+        &[
+            "clone",
+            "-q",
+            repo.join(".git").to_str().expect("utf-8"),
+            other.to_str().expect("utf-8"),
+        ],
+    );
+    let tracking_before = rev_parse(&repo, "refs/remotes/origin/master");
+    let fetch_head = repo.join(".git/FETCH_HEAD");
+    let fetch_head_before = fetch_head.exists();
+
+    rk_scrubbed()
+        .args(["integrate", "feat/greeting", "--target"])
+        .arg(&repo)
+        .args(["-m", "feat(greeting): add it"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("a preview refreshes nothing"));
+
+    assert_eq!(
+        rev_parse(&repo, "refs/remotes/origin/master"),
+        tracking_before,
+        "a preview moved a remote-tracking ref"
+    );
+    assert_eq!(
+        fetch_head.exists(),
+        fetch_head_before,
+        "a preview wrote FETCH_HEAD"
+    );
+}
+
+/// An origin that is configured and will not answer refuses, because a
+/// newer or divergent trunk may sit behind that failure. An origin that
+/// is genuinely absent is a different fact and proceeds.
+#[test]
+fn integrate_refuses_a_configured_origin_that_will_not_answer() {
+    if !pre_commit_present() {
+        return;
+    }
+    let (_parent, repo) = integrate_fixture();
+    git_in(
+        &repo,
+        &["remote", "set-url", "origin", "/nonexistent/origin.git"],
+    );
+    let before = rev_parse(&repo, "master");
+    rk_scrubbed()
+        .args(["integrate", "feat/greeting", "--apply"])
+        .args(["-m", "feat(greeting): add it", "--target"])
+        .arg(&repo)
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("did not answer"));
+    assert_eq!(rev_parse(&repo, "master"), before);
+
+    // With no origin at all the local trunk stands alone and the
+    // integration proceeds.
+    git_in(&repo, &["remote", "remove", "origin"]);
+    rk_scrubbed()
+        .args(["integrate", "feat/greeting", "--apply"])
+        .args(["-m", "feat(greeting): add it", "--target"])
+        .arg(&repo)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("no origin remote"));
+    assert_ne!(rev_parse(&repo, "master"), before);
+}
+
+/// The record is the operational answer. An edited configuration is
+/// pending input to the next landing, so taking it here would integrate
+/// locally in a target whose landed hooks and forge protections still say
+/// forge.
+#[test]
+fn integrate_reads_the_record_and_not_the_pending_configuration() {
+    let (_parent, repo) = integrate_fixture();
+    let record = repo.join(".release-kit/manifest.json");
+    let mut held: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&record).expect("reads"))
+            .expect("the record parses");
+    held["git"]["integration"] = serde_json::json!("forge");
+    std::fs::write(&record, held.to_string()).expect("the record writes");
+    // The configuration still says local, and is ignored.
+    let out = rk_scrubbed()
+        .args(["integrate", "feat/greeting", "--json", "--target"])
+        .arg(&repo)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["integration"], "forge", "{report}");
+    assert_eq!(report["authority_source"], "record", "{report}");
+
+    // A flag still overrides one execution, and says so.
+    let out = rk_scrubbed()
+        .args(["integrate", "feat/greeting", "--local", "--json"])
+        .args(["-m", "feat(greeting): add it", "--target"])
+        .arg(&repo)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["integration"], "local", "{report}");
+    assert_eq!(report["authority_source"], "flag", "{report}");
+}
+
+/// The evidence certifies the object the squash was built from. A tree
+/// that matches proves the two observations are one: evidence for a tip
+/// whose work the trunk does not carry is what would let a prune delete
+/// that work.
+#[test]
+fn the_recorded_tip_is_the_object_the_squash_was_built_from() {
+    if !pre_commit_present() {
+        return;
+    }
+    let (_parent, repo) = integrate_fixture();
+    rk_scrubbed()
+        .args(["integrate", "feat/greeting", "--apply"])
+        .args(["-m", "feat(greeting): add it", "--target"])
+        .arg(&repo)
+        .assert()
+        .success();
+    let ledger: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(repo.join(".git/rk/integrations.json")).expect("the ledger reads"),
+    )
+    .expect("the ledger parses");
+    let entry = &ledger["entries"][0];
+    let recorded = entry["branch_tip"].as_str().expect("a tip");
+    let trunk_commit = entry["trunk_commit"].as_str().expect("a commit");
+    assert_eq!(
+        git_out(&repo, &["rev-parse", &format!("{recorded}^{{tree}}")]),
+        git_out(&repo, &["rev-parse", &format!("{trunk_commit}^{{tree}}")]),
+        "the evidence certifies the tree that reached the trunk"
+    );
+}
+
+/// The gate judges the tree that reaches the trunk. A commit landing in
+/// the seat while the gate runs would otherwise be squashed without
+/// having passed it, so the branch is observed before the gate and
+/// re-observed after it.
+///
+/// SATISFIES git:the-manual-stage-is-the-pre-integrate-contract
+#[test]
+fn integrate_refuses_a_branch_that_moved_while_the_gate_ran() {
+    if !pre_commit_present() {
+        return;
+    }
+    let (_parent, repo) = integrate_fixture();
+    let seat = repo
+        .parent()
+        .expect("a parent")
+        .join("widget@feat-greeting");
+    // The project's own manual hook commits in the seat, which is the
+    // hand at the desk the lock cannot bound.
+    std::fs::write(
+        seat.join("sneak.sh"),
+        "#!/bin/sh\nset -eu\necho late > late.txt\ngit add late.txt\ngit -c core.hooksPath=/dev/null commit -qm 'feat(greeting): late'\n",
+    )
+    .expect("the hook script writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(
+            seat.join("sneak.sh"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .expect("the script is executable");
+    }
+    std::fs::write(
+        seat.join(".pre-commit-config.yaml"),
+        "repos:\n  - repo: local\n    hooks:\n      - id: sneak\n        name: sneak\n        stages: [manual]\n        language: script\n        always_run: true\n        pass_filenames: false\n        entry: sneak.sh\n",
+    )
+    .expect("the hook file writes");
+    git_in(&seat, &["add", "-A"]);
+    git_in(
+        &seat,
+        &["commit", "-qm", "ci(hooks): commit under the gate"],
+    );
+    let before = rev_parse(&repo, "master");
+    rk_scrubbed()
+        .args(["integrate", "feat/greeting", "--apply"])
+        .args(["-m", "feat(greeting): add it", "--target"])
+        .arg(&repo)
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("while the gate ran"));
+    assert_eq!(rev_parse(&repo, "master"), before);
+    assert!(!repo.join(".git/rk/integrations.json").exists());
+}
+
+/// The ignore rules that judge a trunk message are the seat's, because a
+/// branch can add one and the landed commit-msg stage would have judged
+/// it there.
+#[test]
+fn integrate_judges_the_message_against_the_seats_ignore_rules() {
+    let (_parent, repo) = integrate_fixture();
+    let seat = repo
+        .parent()
+        .expect("a parent")
+        .join("widget@feat-greeting");
+    // The pattern exists on the branch alone; the trunk checkout has it
+    // nowhere, so judging there would let the reference through.
+    std::fs::write(seat.join(".gitignore"), "private-notes/\n").expect("the ignore writes");
+    git_in(&seat, &["add", "-A"]);
+    git_in(&seat, &["commit", "-qm", "chore(git): ignore the notes"]);
+    let before = rev_parse(&repo, "master");
+    rk_scrubbed()
+        .args(["integrate", "feat/greeting", "--apply"])
+        .args([
+            "-m",
+            "feat(greeting): add it\n\nSee private-notes/plan.md for the rest.\n",
+            "--target",
+        ])
+        .arg(&repo)
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("internal-path"));
+    assert_eq!(rev_parse(&repo, "master"), before);
+}
+
+/// Evidence naming a commit the trunk does not reach proves nothing. The
+/// evidence is staged before its publication, so a publication that fails
+/// leaves residue rather than a deletion proof, and a trunk someone reset
+/// stops confirming what it no longer carries.
+///
+/// SATISFIES maintenance:gone-is-a-candidate-not-proof
+#[test]
+fn unreachable_evidence_confirms_nothing() {
+    if !pre_commit_present() {
+        return;
+    }
+    let (_parent, repo) = integrate_fixture();
+    rk_scrubbed()
+        .args(["integrate", "feat/greeting", "--apply"])
+        .args(["-m", "feat(greeting): add it", "--target"])
+        .arg(&repo)
+        .assert()
+        .success();
+    let integrated = rev_parse(&repo, "master");
+
+    // Confirmed while the trunk carries it.
+    let report = |repo: &Path| -> serde_json::Value {
+        let out = rk_scrubbed()
+            .args(["worktree", "prune", "--verify", "--json", "--target"])
+            .arg(repo)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        serde_json::from_slice(&out).expect("one JSON object")
+    };
+    assert_eq!(report(&repo)["worktrees"][0]["status"], "confirmed");
+
+    // The trunk moves off the integration; the evidence still names it.
+    git_in(
+        &repo,
+        &["update-ref", "refs/heads/master", &format!("{integrated}^")],
+    );
+    let held = report(&repo);
+    assert!(
+        held["worktrees"].as_array().expect("rows").is_empty(),
+        "a commit the trunk does not reach proves nothing: {held}"
+    );
+}
+
+/// The two floored keys the integration authority decides travel with it.
+/// A fresh local landing writes the rules that hold against a push, and a
+/// mode change rewrites both directions, so the committed configuration
+/// never states a policy its own floor table refuses.
+///
+/// SATISFIES target-config:an-invariant-bearing-key-carries-a-floor
+#[test]
+fn the_protection_the_authority_decides_travels_with_it() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust_locally(target.path()).success();
+    let read = || {
+        std::fs::read_to_string(target.path().join(".release-kit/config.toml"))
+            .expect("the config reads")
+    };
+    let config = read();
+    assert!(
+        config.contains(r#"owned_trunk_rules = ["deletion", "non_fast_forward"]"#),
+        "a local trunk installs the rules that hold against a push: {config}"
+    );
+    assert!(
+        config.contains("push_access_level = 40"),
+        "zero would close the trunk to the push this mode ends in: {config}"
+    );
+    // The comment beside a key the authority decides names the authority,
+    // never one mode's value: a local target told that its own level
+    // violates an invariant of zero would restore zero and close its
+    // trunk to the push its integrations end in.
+    assert!(
+        !config.contains("push_access_level = 40 # F: invariant, zero"),
+        "the rendered comment contradicts the rendered value: {config}"
+    );
+    for key in ["owned_trunk_rules", "push_access_level"] {
+        let line = config
+            .lines()
+            .find(|line| line.starts_with(key))
+            .unwrap_or_else(|| panic!("{key}: {config}"));
+        assert!(
+            line.contains("git.integration names"),
+            "{key} names the authority that decides it: {line}"
+        );
+    }
+
+    rk().args(["upgrade", "--integration", "forge", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let config = read();
+    assert!(
+        config.contains(
+            r#"owned_trunk_rules = ["deletion", "non_fast_forward", "pull_request", "required_status_checks"]"#
+        ),
+        "{config}"
+    );
+    assert!(config.contains("push_access_level = 0"), "{config}");
+
+    // And back, which is the direction an existing target takes.
+    rk().args(["upgrade", "--integration", "local", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let config = read();
+    assert!(
+        config.contains(r#"owned_trunk_rules = ["deletion", "non_fast_forward"]"#),
+        "{config}"
+    );
+    assert!(config.contains("push_access_level = 40"), "{config}");
+
+    // A policy the operator narrowed is theirs: the authority decides the
+    // pair only where the target never diverged from one mode's own.
+    let stated = read().replace(
+        r#"owned_trunk_rules = ["deletion", "non_fast_forward"]"#,
+        r#"owned_trunk_rules = ["deletion", "non_fast_forward", "required_signatures"]"#,
+    );
+    std::fs::write(target.path().join(".release-kit/config.toml"), stated)
+        .expect("the config writes");
+    rk().args(["upgrade", "--integration", "forge", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("owned_trunk_rules"));
+}
+
+/// A policy an operator narrowed within its floor converges: the status
+/// reports it aligned rather than routing an upgrade that would change
+/// nothing. The two protection keys a write-back carries are derived
+/// companions of the authority, and the record holds no baseline for
+/// them, so judging them as recorded parameters would never settle.
+///
+/// SATISFIES target-config:an-untaken-config-is-reported-and-not-judged
+#[test]
+fn a_narrowed_protection_policy_settles_rather_than_pending_forever() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+    let path = target.path().join(".release-kit/config.toml");
+    let narrowed = std::fs::read_to_string(&path)
+        .expect("the config reads")
+        .replace(
+            r#"owned_trunk_rules = ["deletion", "non_fast_forward", "pull_request", "required_status_checks"]"#,
+            r#"owned_trunk_rules = ["deletion", "non_fast_forward", "pull_request", "required_status_checks", "required_signatures"]"#,
+        );
+    std::fs::write(&path, narrowed).expect("the config writes");
+
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let held = std::fs::read_to_string(&path).expect("the config reads");
+    assert!(
+        held.contains("required_signatures"),
+        "the stricter rule survives the landing: {held}"
+    );
+    let out = rk()
+        .args(["status", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(
+        report["config"]["state"], "aligned",
+        "a floored policy the operator narrowed is not untaken configuration: {report}"
+    );
 }

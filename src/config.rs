@@ -13,7 +13,7 @@ use std::path::Path;
 
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
-use crate::landing::{CheckoutMode, Style};
+use crate::landing::{CheckoutMode, Integration, Style};
 use crate::profile::ReleaseMode;
 use serde::Deserialize;
 
@@ -108,6 +108,9 @@ pub struct Git {
     pub trunk: Option<String>,
     /// P: linked-worktree or main-worktree.
     pub checkout_mode: Option<CheckoutMode>,
+    /// P: local or forge, the authority that moves an implementation
+    /// onto the trunk.
+    pub integration: Option<Integration>,
 }
 
 /// The `capabilities` table: the optional products the target requests.
@@ -283,7 +286,9 @@ pub struct Protection {
     pub allowed_merge_methods: Vec<String>,
     /// F: invariant, true.
     pub strict_required_status_checks: bool,
-    /// F: invariant, contains all four rules.
+    /// F: invariant, the rules `git.integration` names. A landing writes
+    /// this key with the authority, and a target that narrowed or
+    /// widened it keeps what it stated.
     pub owned_trunk_rules: Vec<String>,
     /// F: floor zero; higher is stricter.
     pub required_approving_review_count: i64,
@@ -366,7 +371,10 @@ pub struct Gitlab {
     pub squash_option: String,
     /// F: invariant, references title and description.
     pub squash_commit_template: String,
-    /// F: invariant, zero.
+    /// F: invariant, the level `git.integration` names: zero under forge
+    /// integration, which takes no push at all, and the narrowest level
+    /// that admits one under local integration, whose integrations end in
+    /// that push.
     pub push_access_level: i64,
     /// F: floor thirty.
     pub merge_access_level: i64,
@@ -663,6 +671,17 @@ fn fields(config: &Config) -> Result<Vec<(&'static str, Option<toml_edit::Value>
             ),
         ),
         (
+            "RK_CONFIG_GIT_INTEGRATION",
+            Some(
+                config
+                    .git
+                    .integration
+                    .ok_or_else(|| invalid("git.integration is unresolved"))?
+                    .as_str()
+                    .into(),
+            ),
+        ),
+        (
             "RK_CONFIG_CAPABILITIES_NIX_PACKAGING",
             Some(
                 config
@@ -903,8 +922,22 @@ fn protection_fields(
     ]
 }
 
+/// The two floored keys a write-back carries beside `git.integration`.
+///
+/// They are derived companions of the authority rather than recorded
+/// parameters: the record holds no baseline for them, so a target that
+/// narrowed either within its floor would read as pending forever and
+/// route an upgrade that changes nothing.
+/// `target-config:a-flag-overrides-and-a-landing-writes-back` leaves
+/// class F policy with its use-time readers, and excluding these from
+/// what status judges keeps that true.
+const DERIVED_POLICY_KEYS: [&str; 2] = [
+    "protection.owned_trunk_rules",
+    "protection.gitlab.push_access_level",
+];
+
 /// The keys a landing writes back: every class P answer.
-const PARAMETER_KEYS: [&str; 16] = [
+const PARAMETER_KEYS: [&str; 19] = [
     "project.repo",
     "profile.technologies",
     "profile.forge",
@@ -914,6 +947,12 @@ const PARAMETER_KEYS: [&str; 16] = [
     "profile.release.line_prefix",
     "git.trunk",
     "git.checkout_mode",
+    "git.integration",
+    // The two floored keys the integration authority decides. They are
+    // written back with it, because changing the authority without them
+    // leaves a configuration whose own floor table refuses it.
+    "protection.owned_trunk_rules",
+    "protection.gitlab.push_access_level",
     "capabilities.nix_packaging",
     "capabilities.reporting_policy",
     "capabilities.scorecard",
@@ -1263,6 +1302,13 @@ fn apply_key(
             return Ok(false);
         }
         *value.decor_mut() = old.decor().clone();
+    } else if let Some(comment) = migrate::template_comment(&segments) {
+        // A key this writer is adding rather than changing carries no
+        // decor of the operator's, so it takes the template's own
+        // comment. Without this a parameter that arrives in a later
+        // release lands bare in every existing target's configuration,
+        // beside keys that all state their class and their meaning.
+        value.decor_mut().set_suffix(comment);
     }
     item[last] = toml_edit::Item::Value(value);
     Ok(true)
@@ -1324,7 +1370,13 @@ impl Plan {
         resolved.git = Git {
             trunk: Some(params.trunk().to_owned()),
             checkout_mode: Some(params.checkout_mode()),
+            integration: Some(params.integration()),
         };
+        resolved.protection = protection_for(
+            &resolved.protection,
+            params.integration(),
+            existing.is_none(),
+        );
         resolved.capabilities = Capabilities {
             nix_packaging: Some(params.nix_packaging()),
             reporting_policy: Some(params.reporting_policy()),
@@ -1412,6 +1464,24 @@ fn parameter_values(config: &Config) -> Vec<(&'static str, Option<toml_edit::Val
     if let Some(mode) = config.git.checkout_mode {
         values.push(("git.checkout_mode", Some(mode.as_str().into())));
     }
+    if let Some(mode) = config.git.integration {
+        values.push(("git.integration", Some(mode.as_str().into())));
+        // The pair that authority decides travels with it: a write-back
+        // that moved the mode alone would leave a configuration the
+        // floor table refuses on the next read.
+        let mut rules = toml_edit::Array::new();
+        for rule in &config.protection.owned_trunk_rules {
+            rules.push(rule.as_str());
+        }
+        values.push((
+            "protection.owned_trunk_rules",
+            Some(toml_edit::Value::Array(rules)),
+        ));
+        values.push((
+            "protection.gitlab.push_access_level",
+            Some(config.protection.gitlab.push_access_level.into()),
+        ));
+    }
     if let Some(value) = config.capabilities.nix_packaging {
         values.push(("capabilities.nix_packaging", Some(value.into())));
     }
@@ -1455,10 +1525,12 @@ pub fn pending(config: &Config, record: &crate::landing::manifest::Manifest) -> 
     };
     let baseline: Vec<(&str, String)> = parameter_values(&recorded)
         .iter()
+        .filter(|(key, _)| !DERIVED_POLICY_KEYS.contains(key))
         .map(|(key, value)| (*key, render(value)))
         .collect();
     parameter_values(config)
         .into_iter()
+        .filter(|(key, _)| !DERIVED_POLICY_KEYS.contains(key))
         .map(|(key, value)| (key, render(&value)))
         .filter(|(key, value)| {
             baseline
@@ -1467,6 +1539,69 @@ pub fn pending(config: &Config, record: &crate::landing::manifest::Manifest) -> 
         })
         .map(|(key, _)| key.to_owned())
         .collect()
+}
+
+/// The compiled protection floors a locally integrated trunk carries.
+///
+/// The ordinary defaults describe forge integration, because that is the
+/// shape this convention had before the authority became an axis. A
+/// locally integrated trunk drops the two rules no forge can apply to a
+/// push, and takes the narrowest GitLab level that still admits the push
+/// its integrations end in.
+#[must_use]
+fn local_protection() -> Protection {
+    /// The narrowest GitLab access level that still admits a push.
+    const MAINTAINER: i64 = 40;
+    let mut policy = Protection::default();
+    policy
+        .owned_trunk_rules
+        .retain(|rule| rule != "pull_request" && rule != "required_status_checks");
+    policy.gitlab.push_access_level = MAINTAINER;
+    policy
+}
+
+/// The protection values a landing writes, for one integration authority.
+///
+/// Exactly two keys differ between the authorities, and they are the two
+/// this looks at: the owned trunk rules, and the GitLab push access
+/// level. A target whose pair matches one authority's compiled defaults
+/// never stated them; it took them, so a landing that resolves the other
+/// authority writes that authority's pair instead, and a fresh landing
+/// writes its own. A target whose pair matches neither is one an operator
+/// narrowed or widened, and it keeps every value it stated: the floor
+/// table already judged it under the same mode, and an operator who
+/// changed a protection meant it.
+///
+/// The pair alone, never the whole policy: every other key here is a name
+/// or a review policy the authority does not decide, and a target that
+/// renamed its ruleset would otherwise read as having stated the pair.
+///
+/// This is what makes the committed configuration the one source: the
+/// floors judge these values, the setup installs them, and its check
+/// reads them back, so a local-integration target is never handed a trunk
+/// its own integrations cannot push.
+#[must_use]
+fn protection_for(held: &Protection, integration: Integration, fresh: bool) -> Protection {
+    let forge = Protection::default();
+    let local = local_protection();
+    let pair = |policy: &Protection| {
+        (
+            policy.owned_trunk_rules.clone(),
+            policy.gitlab.push_access_level,
+        )
+    };
+    let taken = fresh || pair(held) == pair(&forge) || pair(held) == pair(&local);
+    if !taken {
+        return held.clone();
+    }
+    let mut next = held.clone();
+    let source = match integration {
+        Integration::Forge => forge,
+        Integration::Local => local,
+    };
+    next.owned_trunk_rules = source.owned_trunk_rules;
+    next.gitlab.push_access_level = source.gitlab.push_access_level;
+    next
 }
 
 /// The trunk accessor for callers without a setup context.
@@ -1492,7 +1627,7 @@ pub fn line_prefix_of(target: &Path) -> Result<String, RkError> {
 #[cfg(test)]
 mod tests {
     use super::{CONFIG_PATH, Config, load, parse, rewrite_key, trunk_of, write};
-    use crate::landing::{CheckoutMode, Style};
+    use crate::landing::{CheckoutMode, Integration, Style};
     use crate::profile::ReleaseMode;
 
     /// The resolved defaults a landing writes for an automatic rust
@@ -1515,6 +1650,7 @@ mod tests {
             git: super::Git {
                 trunk: Some(super::TRUNK_DEFAULT.into()),
                 checkout_mode: Some(CheckoutMode::LinkedWorktree),
+                integration: Some(Integration::Local),
             },
             capabilities: super::Capabilities {
                 nix_packaging: Some(false),
@@ -1644,6 +1780,28 @@ mod tests {
         }
     }
 
+    /// A parameter that arrives in a later release lands beside the keys
+    /// that were already there, stating its class and its meaning the way
+    /// they do, rather than bare.
+    #[test]
+    fn a_newly_written_key_takes_the_templates_comment() {
+        let text = "schema_version = 2\n\n[git]\ntrunk = 'main' # mine\n";
+        let next = super::rewrite_text(
+            text,
+            "git.integration",
+            Some(toml_edit::Value::from("local")),
+        )
+        .expect("the key writes");
+        assert!(
+            next.contains("integration = \"local\" # P: local or forge"),
+            "{next}"
+        );
+        // A key the operator already commented keeps their words.
+        let next = super::rewrite_text(&next, "git.trunk", Some(toml_edit::Value::from("master")))
+            .expect("the key writes");
+        assert!(next.contains("trunk = \"master\" # mine"), "{next}");
+    }
+
     #[test]
     fn the_landed_config_template_round_trips() {
         let dir = tempfile::tempdir().expect("a target exists");
@@ -1659,6 +1817,7 @@ mod tests {
         };
         config.git.trunk = Some("main".into());
         config.git.checkout_mode = Some(CheckoutMode::MainWorktree);
+        config.git.integration = Some(Integration::Forge);
         config.capabilities.nix_packaging = Some(true);
         config.capabilities.reporting_policy = Some(false);
         config.capabilities.scorecard = Some(true);

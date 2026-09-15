@@ -349,7 +349,7 @@ fn verify(
             checkout_mode.as_str()
         ))
         .action(format!(
-            "align first: rk stage --target {} stages the candidate for a byte comparison, and the rk-setup skill carries the migration that brings each destination to it; then re-run, or select the other candidate with --checkout-mode or --release-style{}",
+            "align first: rk stage --target {} stages the candidate for a byte comparison, and the rk-setup skill carries the migration that brings each destination to it; then re-run, or select the other candidate with --checkout-mode, --integration, or --release-style{}",
             target,
             // A policy the target wrote its own contact into is the one
             // mismatch a committed answer resolves rather than an edit:
@@ -367,7 +367,7 @@ fn verify(
 #[cfg(test)]
 mod tests {
     use super::{FileEntry, Report};
-    use crate::landing::CheckoutMode;
+    use crate::landing::{CheckoutMode, Integration};
     use crate::profile::{
         CapabilityRequests, GitWorkflow, ProfileSnapshot, ReleaseIntent, ReleaseMode,
     };
@@ -397,6 +397,7 @@ mod tests {
             git: GitWorkflow {
                 trunk: "master".into(),
                 checkout_mode: CheckoutMode::MainWorktree,
+                integration: Integration::Local,
             },
             capabilities: CapabilityRequests {
                 nix_packaging: false,
@@ -418,7 +419,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.adopt/10","mode":"apply","target":"/tmp/t","profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"main-worktree"},"capabilities":{"nix_packaging":false,"reporting_policy":true,"scorecard":false,"code_scanning":"semgrep"},"repo":"acme/widget","selection":[],"config":{"action":"added","changes":[],"content":"schema_version = 2\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"differs"}],"next":["commit the config and the receipt"]}"#
+            r#"{"schema":"rk.adopt/10","mode":"apply","target":"/tmp/t","profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"main-worktree","integration":"local"},"capabilities":{"nix_packaging":false,"reporting_policy":true,"scorecard":false,"code_scanning":"semgrep"},"repo":"acme/widget","selection":[],"config":{"action":"added","changes":[],"content":"schema_version = 2\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"differs"}],"next":["commit the config and the receipt"]}"#
         );
     }
 }

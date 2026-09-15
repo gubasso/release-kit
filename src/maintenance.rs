@@ -121,6 +121,84 @@ fn git(target: &Utf8Path, args: &[&str]) -> Result<std::process::Output, String>
         .map_err(|source| format!("git did not run: {source}"))
 }
 
+/// The clone's local integration ledger, keeping only the entries the
+/// trunk actually carries.
+///
+/// Both prune verbs read this, so the read has one owner beside the
+/// deletion discipline they already share. A clone that never integrated
+/// locally, a git that cannot answer, and a ledger this binary cannot
+/// parse all read as empty here: an empty ledger authorizes no deletion,
+/// which is the safe direction, and `rk integrate` is what refuses on an
+/// unreadable ledger, where refusing costs nothing.
+///
+/// An entry whose commit the trunk does not reach is dropped. Evidence is
+/// staged before its publication, so an integration whose publication
+/// failed leaves an entry naming a commit no ref carries, and an entry
+/// can also outlive a trunk someone reset. Reading reachability here is
+/// what makes that residue inert: the proof is the trunk carrying the
+/// work, never the ledger saying so.
+#[must_use]
+pub fn integration_ledger(target: &Utf8Path, trunk: &str) -> crate::integrate::Ledger {
+    let Some(path) = ledger_path(target) else {
+        return crate::integrate::Ledger::default();
+    };
+    let mut ledger: crate::integrate::Ledger = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| crate::integrate::Ledger::parse(&text).ok())
+        .unwrap_or_default();
+    ledger
+        .entries
+        .retain(|entry| trunk_reaches(target, trunk, &entry.trunk_commit));
+    ledger
+}
+
+/// Whether the trunk reaches one commit.
+///
+/// A git that cannot answer reads as unreachable, which keeps the branch
+/// rather than deleting it.
+fn trunk_reaches(target: &Utf8Path, trunk: &str, commit: &str) -> bool {
+    git(target, &["merge-base", "--is-ancestor", commit, trunk])
+        .is_ok_and(|answer| answer.status.success())
+}
+
+/// Drop one branch's entry from the ledger, after the branch is gone.
+///
+/// A retired branch's evidence has nothing left to prove, and a name is
+/// reused: keeping the entry would leave the ledger growing and a stale
+/// answer standing. A failure here is silent, because the deletion it
+/// follows already succeeded and the residue proves nothing.
+pub fn forget_integration(target: &Utf8Path, branch: &str) {
+    let Some(path) = ledger_path(target) else {
+        return;
+    };
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let Ok(mut ledger) = crate::integrate::Ledger::parse(&text) else {
+        return;
+    };
+    if !ledger.names(branch) {
+        return;
+    }
+    ledger.forget(branch);
+    if let Ok(rendered) = ledger.render() {
+        let _ = crate::atomic::write(&path, rendered.as_bytes());
+    }
+}
+
+/// The ledger's path in this clone, where git can name its common
+/// directory.
+fn ledger_path(target: &Utf8Path) -> Option<std::path::PathBuf> {
+    let answer = git(
+        target,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )
+    .ok()
+    .filter(|answer| answer.status.success())?;
+    let dir = String::from_utf8_lossy(&answer.stdout).trim().to_owned();
+    Some(std::path::Path::new(&dir).join(crate::integrate::LEDGER_PATH))
+}
+
 /// The last non-empty stderr line, for a one-line detail.
 pub(crate) fn last_line(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes)

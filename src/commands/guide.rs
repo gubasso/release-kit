@@ -12,7 +12,7 @@ use crate::commands::walk;
 use crate::detect;
 use crate::embedded;
 use crate::error::RkError;
-use crate::landing::manifest::{self, CheckoutMode, Style};
+use crate::landing::manifest::{self, CheckoutMode, Integration, Style};
 use crate::output::Output;
 
 /// Print one runbook, or list them.
@@ -83,6 +83,11 @@ pub fn run(args: &GuideArgs) -> Result<(), RkError> {
         .release_style
         .as_deref()
         .map(Style::parse)
+        .transpose()?;
+    let integration = args
+        .integration
+        .as_deref()
+        .map(Integration::parse)
         .transpose()?;
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
@@ -160,6 +165,13 @@ pub fn run(args: &GuideArgs) -> Result<(), RkError> {
                 .and_then(|record| record.profile.release.style)
         });
 
+    // The integration axis resolves like the other two committed
+    // decisions, and stays open where neither the configuration nor a
+    // record has answered it.
+    let integration = integration
+        .or_else(|| config.as_ref().and_then(|c| c.git.integration))
+        .or_else(|| record.as_ref().map(|record| record.git.integration));
+
     let rendered = render(
         &text,
         &forge,
@@ -167,6 +179,7 @@ pub fn run(args: &GuideArgs) -> Result<(), RkError> {
         repo.as_deref(),
         checkout_mode.map(CheckoutMode::runbook_label),
         style.map(Style::as_str),
+        integration.map(Integration::as_str),
     );
     let unresolved = repo.is_none() && rendered.contains("<repo>");
     out.result_raw(&rendered);
@@ -188,6 +201,7 @@ fn axis_of(selector: &str) -> Option<&'static str> {
         "github" | "gitlab" => Some("forge"),
         "rust" | "python" | "bash" => Some("tech"),
         "worktree" | "branches" => Some("workflow"),
+        "local" | "forge" => Some("integration"),
         "trunk" | "lines" => Some("style"),
         _ => None,
     }
@@ -238,6 +252,7 @@ fn render(
     repo: Option<&str>,
     workflow: Option<&str>,
     style: Option<&str>,
+    integration: Option<&str>,
 ) -> String {
     let lines: Vec<&str> = text.split('\n').collect();
     let mut out: Vec<String> = Vec::with_capacity(lines.len());
@@ -254,6 +269,7 @@ fn render(
             Some("tech") => tech.map(str::to_owned),
             Some("workflow") => workflow.map(str::to_owned),
             Some("style") => style.map(str::to_owned),
+            Some("integration") => integration.map(str::to_owned),
             // A pair resolves only once both halves have: with either axis
             // open, every pair variant stays visible, label and all. A
             // forge the project states it does not have is not an open
@@ -323,7 +339,10 @@ mod tests {
     /// Nothing resolved: the output is byte-identical to the source.
     #[test]
     fn an_unresolved_render_is_byte_identical() {
-        assert_eq!(render(DOC, &Forge::Unresolved, None, None, None, None), DOC);
+        assert_eq!(
+            render(DOC, &Forge::Unresolved, None, None, None, None, None),
+            DOC
+        );
     }
 
     /// A resolved forge keeps its variant, drops the sibling and both
@@ -338,6 +357,7 @@ mod tests {
             Some("acme/widget"),
             None,
             None,
+            None,
         );
         assert!(rendered.contains("gh pr list --repo acme/widget"));
         assert!(!rendered.contains("glab"));
@@ -347,6 +367,7 @@ mod tests {
         let gitlab = render(
             DOC,
             &Forge::Value("gitlab".to_owned()),
+            None,
             None,
             None,
             None,
@@ -363,6 +384,7 @@ mod tests {
         let rendered = render(
             doc,
             &Forge::Value("gitlab".to_owned()),
+            None,
             None,
             None,
             None,
@@ -385,6 +407,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         assert!(matched.contains("cosign verify-blob-attestation"));
         assert!(!matched.contains("no provenance surface"));
@@ -396,12 +419,14 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         assert!(!sibling.contains("cosign"));
         assert!(sibling.contains("no provenance surface."));
         let open_axis = render(
             doc,
             &Forge::Value("gitlab".to_owned()),
+            None,
             None,
             None,
             None,
@@ -416,14 +441,30 @@ mod tests {
     #[test]
     fn a_workflow_variant_selects_on_the_mode() {
         let doc = "On worktree:\n\nrk worktree add release-branch --apply\n\nOn branches:\n\ngh pr checkout 7\n\nend\n";
-        let worktree = render(doc, &Forge::Unresolved, None, None, Some("worktree"), None);
+        let worktree = render(
+            doc,
+            &Forge::Unresolved,
+            None,
+            None,
+            Some("worktree"),
+            None,
+            None,
+        );
         assert!(worktree.contains("rk worktree add"));
         assert!(!worktree.contains("gh pr checkout"));
-        let branches = render(doc, &Forge::Unresolved, None, None, Some("branches"), None);
+        let branches = render(
+            doc,
+            &Forge::Unresolved,
+            None,
+            None,
+            Some("branches"),
+            None,
+            None,
+        );
         assert!(branches.contains("gh pr checkout"));
         assert!(!branches.contains("rk worktree add"));
         assert_eq!(
-            render(doc, &Forge::Unresolved, None, None, None, None),
+            render(doc, &Forge::Unresolved, None, None, None, None, None),
             doc,
             "an unresolved mode keeps every variant, label and all"
         );
@@ -435,14 +476,30 @@ mod tests {
     #[test]
     fn a_style_variant_selects_on_the_style() {
         let doc = "On trunk:\n\nthe request merges itself when the last check passes.\n\nOn lines:\n\nthe merge is yours.\n\nend\n";
-        let trunk = render(doc, &Forge::Unresolved, None, None, None, Some("trunk"));
+        let trunk = render(
+            doc,
+            &Forge::Unresolved,
+            None,
+            None,
+            None,
+            Some("trunk"),
+            None,
+        );
         assert!(trunk.contains("merges itself"));
         assert!(!trunk.contains("the merge is yours"));
-        let lines = render(doc, &Forge::Unresolved, None, None, None, Some("lines"));
+        let lines = render(
+            doc,
+            &Forge::Unresolved,
+            None,
+            None,
+            None,
+            Some("lines"),
+            None,
+        );
         assert!(lines.contains("the merge is yours"));
         assert!(!lines.contains("merges itself"));
         assert_eq!(
-            render(doc, &Forge::Unresolved, None, None, None, None),
+            render(doc, &Forge::Unresolved, None, None, None, None, None),
             doc,
             "an unresolved style keeps every variant, label and all"
         );
@@ -453,9 +510,20 @@ mod tests {
     fn a_resolved_tech_fills_the_placeholder() {
         let doc = "rk init --tech <tech> --target .\n";
         assert_eq!(
-            render(doc, &Forge::Unresolved, Some("rust"), None, None, None),
+            render(
+                doc,
+                &Forge::Unresolved,
+                Some("rust"),
+                None,
+                None,
+                None,
+                None
+            ),
             "rk init --tech rust --target .\n"
         );
-        assert_eq!(render(doc, &Forge::Unresolved, None, None, None, None), doc);
+        assert_eq!(
+            render(doc, &Forge::Unresolved, None, None, None, None, None),
+            doc
+        );
     }
 }

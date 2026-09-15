@@ -63,6 +63,14 @@ pub struct ProfileFlags {
     /// landed blocks.
     #[arg(long, alias = "workflow", value_name = "MODE")]
     pub checkout_mode: Option<String>,
+
+    /// Which authority moves an implementation onto the trunk: local
+    /// (the checkout squashes and records it, through `rk integrate`) or
+    /// forge (a pull request or merge request does, behind its required
+    /// check). Recorded as a Git workflow parameter and rendered into the
+    /// landed blocks. Defaults to local.
+    #[arg(long, value_name = "MODE")]
+    pub integration: Option<String>,
 }
 
 impl ProfileFlags {
@@ -73,7 +81,7 @@ impl ProfileFlags {
     /// Returns [`crate::error::RkError::Usage`] for a value outside its
     /// vocabulary.
     pub fn inputs(&self) -> Result<crate::profile::Inputs<'_>, crate::error::RkError> {
-        use crate::landing::{CheckoutMode, Style};
+        use crate::landing::{CheckoutMode, Integration, Style};
         use crate::profile::ReleaseMode;
         Ok(crate::profile::Inputs {
             technologies: &self.technology,
@@ -95,6 +103,11 @@ impl ProfileFlags {
                 .checkout_mode
                 .as_deref()
                 .map(CheckoutMode::parse)
+                .transpose()?,
+            integration: self
+                .integration
+                .as_deref()
+                .map(Integration::parse)
                 .transpose()?,
             ..crate::profile::Inputs::default()
         })

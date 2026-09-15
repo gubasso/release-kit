@@ -84,10 +84,10 @@ pub enum Class {
         /// The worktree's path, as `for-each-ref` reports it.
         path: String,
     },
-    /// A merged request's recorded head equals this tip.
+    /// One of the two proofs covers this tip.
     Confirmed {
-        /// The request, as the forge names it: `#N` or `!N`.
-        request: String,
+        /// Which proof, and what it names.
+        proof: Proof,
     },
     /// The forge answered and no merged request records this tip.
     Unconfirmed {
@@ -101,6 +101,41 @@ pub enum Class {
     },
 }
 
+/// What authorized a branch's retirement.
+///
+/// Exactly two proofs are admissible, one per integration authority, and
+/// neither stands in for the other. Both rest on the same predicate: the
+/// tip the proof recorded equals the tip observed now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Proof {
+    /// A merged request whose recorded head equals this tip.
+    Request(String),
+    /// A local integration whose recorded branch tip equals this tip.
+    LocalIntegration(String),
+}
+
+impl Proof {
+    /// What the report prints beside the branch.
+    #[must_use]
+    pub fn detail(&self) -> String {
+        match self {
+            Self::Request(request) => request.clone(),
+            Self::LocalIntegration(commit) => {
+                format!("locally integrated as {}", crate::integrate::short(commit))
+            }
+        }
+    }
+
+    /// Which proof this is, for the machine report.
+    #[must_use]
+    pub const fn kind(&self) -> &'static str {
+        match self {
+            Self::Request(_) => "request",
+            Self::LocalIntegration(_) => "local-integration",
+        }
+    }
+}
+
 /// Classify one branch: `None` when its upstream is live or unset — the
 /// branch never reaches the report — and the guard's verdict otherwise.
 ///
@@ -110,8 +145,18 @@ pub enum Class {
 /// verb, then the trunk and the release lines stay kept. What survives
 /// is a candidate.
 #[must_use]
-pub fn classify(branch: &Branch, current: Option<&str>, trunk: &str) -> Option<Class> {
-    if !branch.gone {
+pub fn classify(
+    branch: &Branch,
+    current: Option<&str>,
+    trunk: &str,
+    local: Option<&crate::integrate::Entry>,
+) -> Option<Class> {
+    // A locally integrated branch never reached the forge, so it has no
+    // upstream to go gone. Its own evidence is what puts it in the
+    // report, and a branch that advanced after its integration matches
+    // no evidence and stays invisible, exactly as an advanced
+    // forge-merged branch does.
+    if !branch.gone && local.is_none() {
         return None;
     }
     if current.is_some_and(|name| name == branch.name) {
@@ -127,6 +172,11 @@ pub fn classify(branch: &Branch, current: Option<&str>, trunk: &str) -> Option<C
     if branch.name == trunk || branch.name.starts_with(PROTECTED_PREFIX) {
         return Some(Class::Kept {
             reason: "a protected branch".to_owned(),
+        });
+    }
+    if let Some(entry) = local {
+        return Some(Class::Confirmed {
+            proof: Proof::LocalIntegration(entry.trunk_commit.clone()),
         });
     }
     Some(Class::Candidate)
@@ -162,7 +212,9 @@ pub fn confirmation(forge: Forge, body: &Value, tip: &str) -> Class {
         || Class::Unconfirmed {
             detail: "no merged request records this tip".to_owned(),
         },
-        |request| Class::Confirmed { request },
+        |request| Class::Confirmed {
+            proof: Proof::Request(request),
+        },
     )
 }
 
@@ -232,7 +284,7 @@ fn last_line(bytes: &[u8]) -> String {
 mod tests {
     use serde_json::json;
 
-    use super::{Branch, Class, classify, confirmation, parse_branches};
+    use super::{Branch, Class, Proof, classify, confirmation, parse_branches};
     use crate::detect::Forge;
 
     /// The five tab-separated fields parse, empty ones to `None`, and only
@@ -274,43 +326,43 @@ mod tests {
             worktree: worktree.map(str::to_owned),
         };
         assert_eq!(
-            classify(&gone("feat/x", None), Some("feat/x"), "master"),
+            classify(&gone("feat/x", None), Some("feat/x"), "master", None),
             Some(Class::Kept {
                 reason: "the current branch".into()
             })
         );
         assert_eq!(
-            classify(&gone("feat/x", Some("/wt")), Some("master"), "master"),
+            classify(&gone("feat/x", Some("/wt")), Some("master"), "master", None),
             Some(Class::WorktreeBound { path: "/wt".into() })
         );
         assert_eq!(
-            classify(&gone("feat/x", Some("/wt")), Some("feat/x"), "master"),
+            classify(&gone("feat/x", Some("/wt")), Some("feat/x"), "master", None),
             Some(Class::Kept {
                 reason: "the current branch".into()
             }),
             "the current branch wins over its own worktree"
         );
         assert_eq!(
-            classify(&gone("master", None), None, "master"),
+            classify(&gone("master", None), None, "master", None),
             Some(Class::Kept {
                 reason: "a protected branch".into()
             })
         );
         assert_eq!(
-            classify(&gone("release/1.2", None), None, "master"),
+            classify(&gone("release/1.2", None), None, "master", None),
             Some(Class::Kept {
                 reason: "a protected branch".into()
             })
         );
         assert_eq!(
-            classify(&gone("feat/x", None), Some("master"), "master"),
+            classify(&gone("feat/x", None), Some("master"), "master", None),
             Some(Class::Candidate)
         );
         let live = Branch {
             gone: false,
             ..gone("feat/live", None)
         };
-        assert_eq!(classify(&live, None, "master"), None);
+        assert_eq!(classify(&live, None, "master", None), None);
     }
 
     /// Only a merged request whose recorded head equals the tip confirms;
@@ -324,7 +376,7 @@ mod tests {
         assert_eq!(
             confirmation(Forge::Github, &github, "aaaa"),
             Class::Confirmed {
-                request: "#8".into()
+                proof: Proof::Request("#8".into())
             }
         );
         assert_eq!(
@@ -341,7 +393,7 @@ mod tests {
         assert_eq!(
             confirmation(Forge::Gitlab, &gitlab, "aaaa"),
             Class::Confirmed {
-                request: "!4".into()
+                proof: Proof::Request("!4".into())
             }
         );
         assert!(matches!(

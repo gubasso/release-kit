@@ -21,6 +21,7 @@ line_prefix = RK_CONFIG_PROFILE_RELEASE_LINE_PREFIX # P: release-line branch pre
 [git]
 trunk = RK_CONFIG_GIT_TRUNK # P: the one permanent branch, rendered into every artifact naming it
 checkout_mode = RK_CONFIG_GIT_CHECKOUT_MODE # P: linked-worktree or main-worktree, where a topic branch opens
+integration = RK_CONFIG_GIT_INTEGRATION # P: local or forge, which authority moves an implementation onto the trunk
 
 [capabilities]
 nix_packaging = RK_CONFIG_CAPABILITIES_NIX_PACKAGING # P: opt-in Nix capability
@@ -51,7 +52,7 @@ tag_pattern = RK_CONFIG_PROTECTION_TAG_PATTERN # F: invariant, covers every publ
 bypass_actors = RK_CONFIG_PROTECTION_BYPASS_ACTORS # F: invariant, empty
 allowed_merge_methods = RK_CONFIG_PROTECTION_ALLOWED_MERGE_METHODS # F: invariant, exactly squash
 strict_required_status_checks = RK_CONFIG_PROTECTION_STRICT_REQUIRED_STATUS_CHECKS # F: invariant, true
-owned_trunk_rules = RK_CONFIG_PROTECTION_OWNED_TRUNK_RULES # F: invariant, contains all four rules
+owned_trunk_rules = RK_CONFIG_PROTECTION_OWNED_TRUNK_RULES # F: invariant, the rules git.integration names
 required_approving_review_count = RK_CONFIG_PROTECTION_REQUIRED_APPROVING_REVIEW_COUNT # F: floor zero; higher is stricter
 dismiss_stale_reviews_on_push = RK_CONFIG_PROTECTION_DISMISS_STALE_REVIEWS_ON_PUSH # F: floor false; true is stricter
 require_code_owner_review = RK_CONFIG_PROTECTION_REQUIRE_CODE_OWNER_REVIEW # F: floor false; true is stricter
@@ -65,5 +66,5 @@ squash_body_source = RK_CONFIG_PROTECTION_GITHUB_SQUASH_BODY_SOURCE # F: invaria
 merge_method = RK_CONFIG_PROTECTION_GITLAB_MERGE_METHOD # F: invariant, linear history
 squash_option = RK_CONFIG_PROTECTION_GITLAB_SQUASH_OPTION # F: invariant, always squash
 squash_commit_template = RK_CONFIG_PROTECTION_GITLAB_SQUASH_COMMIT_TEMPLATE # F: invariant, references title and description
-push_access_level = RK_CONFIG_PROTECTION_GITLAB_PUSH_ACCESS_LEVEL # F: invariant, zero
+push_access_level = RK_CONFIG_PROTECTION_GITLAB_PUSH_ACCESS_LEVEL # F: invariant, the level git.integration names
 merge_access_level = RK_CONFIG_PROTECTION_GITLAB_MERGE_ACCESS_LEVEL # F: floor thirty

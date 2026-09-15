@@ -1,0 +1,2 @@
+# A CI sweep needs no SKIP here: no hook in this block refuses a trunk
+# checkout.

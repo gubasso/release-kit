@@ -543,6 +543,7 @@ fn collect_sentinels(
 mod tests {
     use super::{FileEntry, Report, SentinelEntry};
     use crate::landing::CheckoutMode;
+    use crate::landing::Integration;
     use crate::profile::{
         CapabilityRequests, GitWorkflow, ProfileSnapshot, ReleaseIntent, ReleaseMode,
     };
@@ -575,6 +576,7 @@ mod tests {
             git: GitWorkflow {
                 trunk: "master".into(),
                 checkout_mode: CheckoutMode::LinkedWorktree,
+                integration: Integration::Local,
             },
             capabilities: CapabilityRequests {
                 nix_packaging: true,
@@ -611,7 +613,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&apply).expect("a report serializes"),
-            r##"{"schema":"rk.init/10","mode":"apply","target":"/tmp/t","profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"linked-worktree"},"capabilities":{"nix_packaging":true,"reporting_policy":true,"scorecard":true,"code_scanning":"codeql"},"repo":"acme/widget","selection":[{"id":"git.guards","status":"selected","destinations":["AGENTS.md"]}],"withheld":[{"path":"flake.nix","reason":"the target already carries flake.nix"}],"config":{"action":"added","changes":[],"content":"schema_version = 2\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"created"}],"sentinels":[{"path":"/tmp/t/release-plz.toml","line":3,"text":"# TODO(release-kit): keep false for a binary-only crate"}],"next":["commit the landed files, the receipt included"]}"##
+            r##"{"schema":"rk.init/10","mode":"apply","target":"/tmp/t","profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"},"capabilities":{"nix_packaging":true,"reporting_policy":true,"scorecard":true,"code_scanning":"codeql"},"repo":"acme/widget","selection":[{"id":"git.guards","status":"selected","destinations":["AGENTS.md"]}],"withheld":[{"path":"flake.nix","reason":"the target already carries flake.nix"}],"config":{"action":"added","changes":[],"content":"schema_version = 2\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"created"}],"sentinels":[{"path":"/tmp/t/release-plz.toml","line":3,"text":"# TODO(release-kit): keep false for a binary-only crate"}],"next":["commit the landed files, the receipt included"]}"##
         );
         let preview = Report {
             sentinels: None,
@@ -637,7 +639,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&preview).expect("a report serializes"),
-            r#"{"schema":"rk.init/10","mode":"preview","target":"/tmp/t","profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"linked-worktree"},"capabilities":{"nix_packaging":false,"reporting_policy":false,"scorecard":false},"selection":[],"release_unavailable":"the release automation at (python, gitlab) has no landable files","licence_refusal":"the target's Cargo.toml declares no license field","collisions":[{"path":"SECURITY.md","reason":"exists, and no receipt attributes it to release-kit"}],"config":{"action":"added","changes":[],"content":"schema_version = 2\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"created"}],"next":["commit the landed files, the receipt included"]}"#,
+            r#"{"schema":"rk.init/10","mode":"preview","target":"/tmp/t","profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"},"capabilities":{"nix_packaging":false,"reporting_policy":false,"scorecard":false},"selection":[],"release_unavailable":"the release automation at (python, gitlab) has no landable files","licence_refusal":"the target's Cargo.toml declares no license field","collisions":[{"path":"SECURITY.md","reason":"exists, and no receipt attributes it to release-kit"}],"config":{"action":"added","changes":[],"content":"schema_version = 2\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"created"}],"next":["commit the landed files, the receipt included"]}"#,
             "a preview omits the sentinels, the unresolved repo, and an empty withheld list rather than serializing null"
         );
     }
