@@ -28902,6 +28902,44 @@ fn a_release_less_gitlab_target_lands_a_complete_title_gate() {
         .arg(target.path())
         .assert()
         .success();
+
+    // On GitHub the gate is one workflow, complete on its own, so a
+    // release-less landing needs no root pipeline of any kind.
+    let github = bare_target();
+    rk().args([
+        "init",
+        "--forge",
+        "github",
+        "--repo",
+        "acme/widget",
+        "--release-mode",
+        "none",
+        "--apply",
+        "--target",
+    ])
+    .arg(github.path())
+    .assert()
+    .success()
+    .stdout(predicate::str::contains(
+        "capability git.title-check: selected",
+    ));
+    assert!(
+        github
+            .path()
+            .join(".github/workflows/pr-title.yml")
+            .is_file()
+    );
+    assert!(
+        !github
+            .path()
+            .join(".github/workflows/release-plz.yml")
+            .exists(),
+        "a release-less landing writes no release automation"
+    );
+    rk().args(["status", "--check", "--target"])
+        .arg(github.path())
+        .assert()
+        .success();
 }
 
 /// SATISFIES project-profile:a-capability-is-available-only-when-complete
