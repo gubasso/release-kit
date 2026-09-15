@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2](https://github.com/gubasso/release-kit/compare/v0.6.1...v0.6.2) - 2026-09-15
+
+### Added
+
+- *(landing)* land the scorecard and code scanning capabilities as recorded opt-ins ([#226](https://github.com/gubasso/release-kit/pull/226))
+
+### Other
+
+- *(guidance)* name the file for the version the release mints ([#228](https://github.com/gubasso/release-kit/pull/228))
+
 ## [0.6.1](https://github.com/gubasso/release-kit/compare/v0.6.0...v0.6.1) - 2026-09-15
 
 ### Added
