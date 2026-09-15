@@ -147,10 +147,35 @@ fn record_params(
     nix: bool,
     repo: &str,
 ) -> release_kit::landing::Params {
+    use release_kit::profile::CapabilityRequests;
+    params_requesting(
+        driver,
+        forge,
+        checkout_mode,
+        style,
+        repo,
+        CapabilityRequests {
+            nix_packaging: nix,
+            reporting_policy: true,
+            scorecard: false,
+            code_scanning: None,
+        },
+    )
+}
+
+/// The same parameter set, with the capability requests stated rather
+/// than defaulted, so a fixture can project an opt-in capability no
+/// ordinary combination requests.
+fn params_requesting(
+    driver: &str,
+    forge: &str,
+    checkout_mode: release_kit::landing::CheckoutMode,
+    style: Option<release_kit::landing::Style>,
+    repo: &str,
+    capabilities: release_kit::profile::CapabilityRequests,
+) -> release_kit::landing::Params {
     use release_kit::landing::manifest::{Manifest, Parameters, SCHEMA_VERSION};
-    use release_kit::profile::{
-        CapabilityRequests, GitWorkflow, ProfileSnapshot, ReleaseIntent, ReleaseMode,
-    };
+    use release_kit::profile::{GitWorkflow, ProfileSnapshot, ReleaseIntent, ReleaseMode};
     release_kit::landing::Params::from_record(&Manifest {
         schema_version: SCHEMA_VERSION,
         rk_version: "0.0.0".to_owned(),
@@ -170,12 +195,7 @@ fn record_params(
             trunk: release_kit::config::TRUNK_DEFAULT.to_owned(),
             checkout_mode,
         },
-        capabilities: CapabilityRequests {
-            nix_packaging: nix,
-            reporting_policy: true,
-            scorecard: false,
-            code_scanning: None,
-        },
+        capabilities,
         parameters: Parameters {
             repo: repo.to_owned(),
             security_contact: String::new(),
@@ -24236,6 +24256,247 @@ fn a_fresh_rust_landing_advertises_only_x86_64_linux() {
     );
 }
 
+/// One candidate's signature line, once its kind, its placement, and its
+/// sources answer for themselves.
+fn candidate_signature_line(candidate: &release_kit::projection::Candidate, label: &str) -> String {
+    use release_kit::landing;
+    use release_kit::projection::Placement;
+
+    let at = format!("{label} {}", candidate.destination);
+    assert_eq!(
+        Some(candidate.kind),
+        landing::kind_of(&candidate.destination),
+        "{at}: kind"
+    );
+    match candidate.placement {
+        Placement::Whole => {
+            assert!(
+                candidate.region.is_none(),
+                "{at}: a whole file has no region"
+            );
+            assert!(
+                landing::block_markers(&candidate.destination).is_none(),
+                "{at}: a whole file at a marked destination"
+            );
+        }
+        Placement::Region { begin, end } => {
+            let region = candidate.region.as_deref().expect("a region renders");
+            let text = String::from_utf8_lossy(&candidate.bytes);
+            assert_eq!(
+                landing::extract_block(&text, begin, end).map(str::as_bytes),
+                Some(region),
+                "{at}: the document carries the region"
+            );
+            assert_eq!(
+                landing::block_markers(&candidate.destination),
+                Some((begin, end)),
+                "{at}: markers"
+            );
+        }
+    }
+    assert!(!candidate.sources.is_empty(), "{at}: no source");
+    format!(
+        "{label} {} {}",
+        candidate.destination,
+        release_kit::digest::Digest::of(&candidate.bytes)
+    )
+}
+
+/// The signature lines of the opt-in capabilities, which no ordinary
+/// fixture combination requests. Each row states one request, and the
+/// fifth column names it where an ordinary line names the Nix shape, so
+/// every line in the fixture keeps one shape.
+fn opt_in_signature_lines() -> Vec<String> {
+    use release_kit::landing::manifest::Provider;
+    use release_kit::landing::{CheckoutMode, Style};
+    use release_kit::profile::CapabilityRequests;
+    use release_kit::projection::{Projection, ProjectionInput};
+
+    let mut out = Vec::new();
+    for (driver, forge, column, scorecard, code_scanning) in [
+        ("rust", "github", "scorecard", true, None),
+        ("rust", "github", "codeql", false, Some(Provider::CodeQl)),
+        ("rust", "github", "semgrep", false, Some(Provider::Semgrep)),
+        ("rust", "gitlab", "semgrep", false, Some(Provider::Semgrep)),
+    ] {
+        let params = params_requesting(
+            driver,
+            forge,
+            CheckoutMode::LinkedWorktree,
+            Some(Style::Trunk),
+            "acme/widget",
+            CapabilityRequests {
+                nix_packaging: false,
+                reporting_policy: true,
+                scorecard,
+                code_scanning,
+            },
+        );
+        let params_again = params.clone();
+        let projection = Projection::compute(&ProjectionInput {
+            params,
+            evidence: NixShape::Supported.evidence(),
+        })
+        .expect("the opt-in pair projects");
+        let selected: Vec<&release_kit::projection::Candidate> = projection
+            .candidates
+            .iter()
+            .filter(|candidate| {
+                candidate.destination.contains("scorecard")
+                    || candidate.destination.contains("code-scanning")
+            })
+            .collect();
+        assert!(
+            !selected.is_empty(),
+            "{driver} {forge} {column}: the request selected no destination"
+        );
+        for candidate in selected {
+            out.push(format!(
+                "{driver} {forge} linked-worktree trunk {column} {} {}",
+                candidate.destination,
+                release_kit::digest::Digest::of(&candidate.bytes)
+            ));
+        }
+        // The record an opted-in target receives carries the pins its own
+        // selection asks for, so each request signs its own record. The
+        // ordinary record alone would let a pin selected for one of these
+        // capabilities change every opted-in target's record silently.
+        out.push(record_signature_line(
+            &format!("{driver} {forge} linked-worktree trunk {column}-record"),
+            &params_again,
+            &projection.capabilities,
+        ));
+    }
+    out
+}
+
+/// The signature lines of the two paths a target that already holds
+/// something takes: a block spliced into a document the target owns, and
+/// a configuration composed over authored text. The ordinary lines sign
+/// the empty-target path alone, so a change confined to either of these
+/// would move no digest.
+fn occupied_target_signature_lines() -> Vec<String> {
+    use release_kit::landing::{CheckoutMode, Style};
+    use release_kit::projection::{Projection, ProjectionInput, TargetEvidence};
+
+    let label = "rust github linked-worktree trunk occupied";
+    let params = projection_params(
+        "rust",
+        "github",
+        CheckoutMode::LinkedWorktree,
+        Style::Trunk,
+        false,
+    );
+    let documents = release_kit::projection::destinations()
+        .filter(|destination| release_kit::landing::block_markers(destination).is_some())
+        .map(|destination| {
+            // The hook file's splice is line-based and lands under the
+            // target's own `repos:` key, so its document states one.
+            let existing = if destination == release_kit::projection::HOOKS_DESTINATION {
+                "repos:\n  - repo: local\n    hooks: []\n".to_owned()
+            } else {
+                format!("# {destination}\n\nText the target wrote and keeps.\n")
+            };
+            (destination.to_owned(), existing.into_bytes())
+        })
+        .collect();
+    let projection = Projection::compute(&ProjectionInput {
+        params: params.clone(),
+        evidence: TargetEvidence {
+            documents,
+            ..NixShape::Supported.evidence()
+        },
+    })
+    .expect("the occupied target projects");
+    let mut out: Vec<String> = projection
+        .candidates
+        .iter()
+        .filter(|candidate| release_kit::landing::block_markers(&candidate.destination).is_some())
+        .map(|candidate| candidate_signature_line(candidate, label))
+        .collect();
+    assert!(
+        !out.is_empty(),
+        "the occupied target projected no spliced destination"
+    );
+    let authored =
+        "# a comment the target wrote\nschema_version = 2\n\n[project]\nrepo = \"acme/widget\"\n";
+    let plan = release_kit::config::Plan::compose(
+        Some(authored),
+        &params,
+        Some(&release_kit::config::Config::default()),
+        None,
+    )
+    .expect("the configuration composes over authored text");
+    out.push(format!(
+        "{label} {} {}",
+        release_kit::config::CONFIG_PATH,
+        release_kit::digest::Digest::of(plan.content.as_bytes())
+    ));
+    out
+}
+
+/// The signature line of the landed record. The record carries the
+/// producing version and the landing instant, so the fixture fixes both
+/// by construction: what it pins is the renderer's shape, which a schema
+/// number can stand still through.
+fn record_signature_line(
+    label: &str,
+    params: &release_kit::landing::Params,
+    capabilities: &[release_kit::profile::catalog::Selection],
+) -> String {
+    use release_kit::digest::Digest;
+    use release_kit::landing::Kind;
+    use release_kit::landing::manifest::{
+        FileRecord, MANIFEST_PATH, Manifest, Parameters, Placement, SCHEMA_VERSION, render,
+    };
+
+    // The domains come from the parameters, the way the landing's own
+    // receipt takes them, so a change to what a target records reaches
+    // this row. The two values production reads from the running binary
+    // and the clock are fixed here, and the file list is a constant: what
+    // this row signs is the record's shape and its resolved answers.
+    let manifest = Manifest {
+        schema_version: SCHEMA_VERSION,
+        rk_version: "0.0.0".to_owned(),
+        origin: "init".to_owned(),
+        landed_at: "2026-08-29T00:00:00Z".to_owned(),
+        profile: params.profile().clone(),
+        git: params.git().clone(),
+        capabilities: params.capabilities().clone(),
+        parameters: Parameters {
+            repo: params.repo().to_owned(),
+            security_contact: params.security_contact().to_owned(),
+            security_response: params.security_response().to_owned(),
+        },
+        files: vec![
+            FileRecord {
+                destination: "AGENTS.md".to_owned(),
+                kind: Kind::Rendered,
+                sha256: Digest::of(b"a region"),
+                placement: Placement::Region,
+            },
+            FileRecord {
+                destination: "release-plz.toml".to_owned(),
+                kind: Kind::Seeded,
+                sha256: Digest::of(b"a seed"),
+                placement: Placement::Whole,
+            },
+        ],
+        // Through the production helper, not a hand-written map: the
+        // pins a target records come from the registry and the selected
+        // capabilities, so a pin bump or a selection change moves the
+        // record at every target and must move the signature with it.
+        pins: release_kit::registry::pins_for(capabilities)
+            .into_iter()
+            .map(|pin| (pin.name, pin.version))
+            .collect(),
+    };
+    format!(
+        "{label} {MANIFEST_PATH} {}",
+        Digest::of(&render(&manifest).expect("the record renders"))
+    )
+}
+
 /// Every current fixture combination projects, with no collision over an
 /// empty target, whole-file candidates carrying no region, region
 /// candidates carrying the markers their destination declares, and every
@@ -24245,14 +24506,14 @@ fn a_fresh_rust_landing_advertises_only_x86_64_linux() {
 /// bytes updates the fixture deliberately.
 #[test]
 fn every_current_landing_fixture_keeps_its_destinations_kinds_placement_and_digests() {
-    use release_kit::landing;
-    use release_kit::projection::{Placement, Projection, ProjectionInput};
+    use release_kit::projection::{Projection, ProjectionInput};
 
     let mut lines = Vec::new();
     for (tech, forge, workflow, style, nix) in projection_fixture_combinations() {
         let shape = nix.unwrap_or(NixShape::Supported);
+        let params = projection_params(&tech, &forge, workflow, style, nix.is_some());
         let projection = Projection::compute(&ProjectionInput {
-            params: projection_params(&tech, &forge, workflow, style, nix.is_some()),
+            params: params.clone(),
             evidence: shape.evidence(),
         })
         .expect("the pair projects");
@@ -24280,46 +24541,30 @@ fn every_current_landing_fixture_keeps_its_destinations_kinds_placement_and_dige
             "{label}: candidates sort by destination"
         );
         for candidate in &projection.candidates {
-            let at = format!("{label} {}", candidate.destination);
-            assert_eq!(
-                Some(candidate.kind),
-                landing::kind_of(&candidate.destination),
-                "{at}: kind"
-            );
-            match candidate.placement {
-                Placement::Whole => {
-                    assert!(
-                        candidate.region.is_none(),
-                        "{at}: a whole file has no region"
-                    );
-                    assert!(
-                        landing::block_markers(&candidate.destination).is_none(),
-                        "{at}: a whole file at a marked destination"
-                    );
-                }
-                Placement::Region { begin, end } => {
-                    let region = candidate.region.as_deref().expect("a region renders");
-                    let text = String::from_utf8_lossy(&candidate.bytes);
-                    assert_eq!(
-                        landing::extract_block(&text, begin, end).map(str::as_bytes),
-                        Some(region),
-                        "{at}: the document carries the region"
-                    );
-                    assert_eq!(
-                        landing::block_markers(&candidate.destination),
-                        Some((begin, end)),
-                        "{at}: markers"
-                    );
-                }
-            }
-            assert!(!candidate.sources.is_empty(), "{at}: no source");
-            lines.push(format!(
-                "{label} {} {}",
-                candidate.destination,
-                release_kit::digest::Digest::of(&candidate.bytes)
-            ));
+            lines.push(candidate_signature_line(candidate, &label));
         }
+        // The configuration is a landed file the projection does not
+        // carry: the landing composes it from the parameters alone. Its
+        // bytes belong to the signature for the same reason a candidate's
+        // do, so a renderer change moves the fixture.
+        let plan = release_kit::config::Plan::compose(None, &params, None, None)
+            .expect("the configuration composes from the parameters alone");
+        lines.push(format!(
+            "{label} {} {}",
+            release_kit::config::CONFIG_PATH,
+            release_kit::digest::Digest::of(plan.content.as_bytes())
+        ));
+        // The record is the other landed file no candidate carries, and
+        // its pins are selected per capability, so every combination
+        // signs the record its own selection produces.
+        lines.push(record_signature_line(
+            &label,
+            &params,
+            &projection.capabilities,
+        ));
     }
+    lines.extend(opt_in_signature_lines());
+    lines.extend(occupied_target_signature_lines());
     let text = format!("{}\n", lines.join("\n"));
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/projection-digests.txt");
@@ -28439,17 +28684,120 @@ fn guidance_index() -> (String, Vec<String>) {
     (since, no_steps)
 }
 
-/// `a` is a lower version than `b`, both dotted digit triples.
-fn version_below(a: &str, b: &str) -> bool {
-    let parse = |v: &str| -> Vec<u64> {
-        v.split('.')
-            .map(|part| {
-                part.parse::<u64>()
-                    .unwrap_or_else(|_| panic!("{v}: not a version"))
-            })
-            .collect()
+/// A version as exactly three dotted unsigned integers, or why the text
+/// is none. Every version this file compares goes through it: a guidance
+/// filename, `since`, a `no_steps` entry, the last release tag, and the
+/// committed package version. A looser parser accepts `0.7` and `1` and
+/// then orders them against a triple, which no caller means.
+///
+/// A leading zero is refused, as semantic versioning refuses it and the
+/// Cargo manifest requires. Without that refusal `00.6.2` parses to the value `0.6.2`
+/// parses to, and a guidance file under that name would satisfy the
+/// exact-name proof while naming a release nothing mints.
+fn parse_version(value: &str) -> Result<[u64; 3], String> {
+    let parts: Vec<&str> = value.split('.').collect();
+    let [major, minor, patch] = parts[..] else {
+        return Err(format!(
+            "{value:?} is no version; a version is three dotted integers"
+        ));
     };
-    parse(a) < parse(b)
+    let mut out = [0_u64; 3];
+    for (slot, part) in out.iter_mut().zip([major, minor, patch]) {
+        if part.is_empty() || !part.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(format!(
+                "{value:?} is no version; a version is three dotted integers"
+            ));
+        }
+        if part.len() > 1 && part.starts_with('0') {
+            return Err(format!(
+                "{value:?} is no version; {part:?} carries a leading zero, which no version part has"
+            ));
+        }
+        *slot = part.parse::<u64>().map_err(|_| {
+            format!("{value:?} is no version; {part:?} is outside the range of a version part")
+        })?;
+    }
+    Ok(out)
+}
+
+/// The version `value` states, failing by the name of the file or the key
+/// it came from.
+fn version_at(value: &str, at: &str) -> [u64; 3] {
+    parse_version(value).unwrap_or_else(|why| panic!("{at}: {why}"))
+}
+
+/// The signature of everything a landing writes into a target: one line
+/// per destination per fixture combination, carrying the digest of the
+/// bytes that destination receives.
+const LANDED_SIGNATURE: &str = "tests/fixtures/projection-digests.txt";
+
+/// The rule the authoring gate holds, cited in every failure it prints.
+const GUIDANCE_RULE: &str = "distribution:guidance-names-the-version-the-release-mints";
+
+/// What one run of the authoring gate proved. There are two proof modes
+/// and no third: a state that fits neither is a failure rather than a
+/// weaker proof.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CoverageProof {
+    /// The checkout carries a release candidate, and coverage names that
+    /// exact version.
+    CandidateExact(String),
+    /// No candidate is readable, and coverage names some version above the
+    /// last tag. This is the authoring fallback.
+    AboveLastTag(String),
+}
+
+/// Judge the coverage of a release that changed a landed destination.
+///
+/// `tag` is the last release tag's version, `candidate` the committed
+/// package version, `coverage` every version a guidance file or a
+/// `no_steps` entry names with the place it came from, and `changed` the
+/// landed surface that moved. Nothing here reads the network or the
+/// filesystem, so the table tests drive it directly.
+fn coverage_proof(
+    tag: &str,
+    candidate: &str,
+    coverage: &[(String, String)],
+    changed: &[String],
+) -> Result<CoverageProof, String> {
+    let tag_version =
+        parse_version(tag).map_err(|why| format!("the last release tag v{tag}: {why}"))?;
+    let candidate_version = parse_version(candidate)
+        .map_err(|why| format!("the package version in Cargo.toml: {why}"))?;
+    let mut named = Vec::new();
+    for (version, at) in coverage {
+        named.push((
+            parse_version(version).map_err(|why| format!("{at}: {why}"))?,
+            version.clone(),
+        ));
+    }
+    let paths = changed.join(", ");
+    match candidate_version.cmp(&tag_version) {
+        std::cmp::Ordering::Greater => {
+            // The exact proof compares the name, not the value it parses
+            // to. Two names that differ are two names, and only the name
+            // the release mints selects guidance at a target.
+            if named.iter().any(|(_, version)| version == candidate) {
+                Ok(CoverageProof::CandidateExact(candidate.to_owned()))
+            } else {
+                Err(format!(
+                    "the release mints {candidate}, which changes a landed destination ({paths}), and no guidance file or no_steps entry names {candidate}; add guidance/{candidate}.md, or record {candidate} under no_steps in guidance/index.toml ({GUIDANCE_RULE})"
+                ))
+            }
+        }
+        std::cmp::Ordering::Equal => named
+            .iter()
+            .find(|(version, _)| *version > tag_version)
+            .map(|(_, version)| CoverageProof::AboveLastTag(version.clone()))
+            .ok_or_else(|| {
+                format!(
+                    "a landed destination changed since v{tag} ({paths}) and no guidance file or no_steps entry names a release above it; this checkout carries no release candidate, so only the weaker above-the-tag proof ran ({GUIDANCE_RULE})"
+                )
+            }),
+        std::cmp::Ordering::Less => Err(format!(
+            "the package version {candidate} is below the last release tag v{tag}; Cargo.toml is this repository's release source of truth and a tag mirrors it, so this checkout is broken repository state rather than a release candidate ({GUIDANCE_RULE})"
+        )),
+    }
 }
 
 /// Every guidance file the binary ships names at least one landed
@@ -28482,7 +28830,8 @@ fn every_guidance_file_names_its_destinations() {
             "{version}: the heading names another release"
         );
         assert!(
-            version_below(&since, version),
+            version_at(&since, "guidance/index.toml since")
+                < version_at(version, &format!("guidance/{version}.md")),
             "{version}: a guidance file below since {since} describes a release the index claims not to cover"
         );
         assert!(
@@ -28492,7 +28841,8 @@ fn every_guidance_file_names_its_destinations() {
     }
     for version in &no_steps {
         assert!(
-            version_below(&since, version),
+            version_at(&since, "guidance/index.toml since")
+                < version_at(version, "guidance/index.toml no_steps"),
             "{version}: no_steps names a release below since"
         );
     }
@@ -28517,6 +28867,13 @@ fn a_release_changing_a_destination_without_guidance_is_named() {
     };
     let describe = git(&["describe", "--tags", "--abbrev=0", "--match", "v*"]);
     if !describe.status.success() {
+        // A source archive and a fresh shallow clone keep the note and the
+        // pass. A runner that lost its tags fails: the required check would
+        // otherwise report success over a gate that compared nothing.
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "no release tag is reachable in CI; the authoring gate cannot prove anything. The test job checks out with fetch-depth: 0 for this reason."
+        );
         eprintln!(
             "no release tag is reachable from this checkout; the authoring gate has nothing to compare against"
         );
@@ -28524,22 +28881,27 @@ fn a_release_changing_a_destination_without_guidance_is_named() {
     }
     let tag = String::from_utf8_lossy(&describe.stdout).trim().to_owned();
     let tag_version = tag.trim_start_matches('v').to_owned();
-    // What lands in a target: the snippets, and the blocks the landing
-    // splices or writes. A fragment a verb prints and a skill root land
-    // nowhere.
+    // The landed surface, as one observable signature rather than a list
+    // of the sources that feed it. Every destination a landing writes has
+    // a digest in the fixture, the state files included, and the fixture
+    // regenerates only under RK_UPDATE_FIXTURES=1. So the fixture moves
+    // when a target would receive different bytes, whichever source
+    // produced them: a snippet, a block, the projection, the
+    // configuration renderer, or the record renderer. A path list walks
+    // past all but the first two.
+    //
+    // What the signature does not cover, stated rather than claimed: the
+    // apply itself. Which values the receipt copies from the parameters
+    // and the previous record is decided in src/landing/apply.rs, and the
+    // fixture signs the rendered shape rather than that assembly, so the
+    // module stays a second trigger beside the signature.
     let diff = git(&[
         "diff",
         "--name-only",
         &format!("{tag}..HEAD"),
         "--",
-        "snippets",
-        "blocks/agents-block.md.in",
-        "blocks/agents-line-worktree.md.in",
-        "blocks/agents-line-branches.md.in",
-        "blocks/glossary.md.in",
-        "blocks/pre-commit-block.yaml.in",
-        "blocks/pre-commit-worktree-guard.yaml.in",
-        "blocks/target-config.toml.in",
+        LANDED_SIGNATURE,
+        "src/landing/apply.rs",
     ]);
     assert!(
         diff.status.success(),
@@ -28553,15 +28915,301 @@ fn a_release_changing_a_destination_without_guidance_is_named() {
     if changed.is_empty() {
         return;
     }
+    let coverage = guidance_coverage();
+    match coverage_proof(&tag_version, env!("CARGO_PKG_VERSION"), &coverage, &changed) {
+        Ok(CoverageProof::CandidateExact(version)) => {
+            eprintln!("the release candidate is {version} and coverage names it");
+        }
+        Ok(CoverageProof::AboveLastTag(version)) => {
+            eprintln!(
+                "no release candidate is readable, so the authoring fallback ran: coverage names {version}, above {tag}"
+            );
+        }
+        Err(why) => panic!("{why}"),
+    }
+}
+
+/// Every version the guidance coverage names, each with the file or the
+/// key it came from. Both channels take the same judgment, so a
+/// deliberate silence is held to the standard a file is held to.
+fn guidance_coverage() -> Vec<(String, String)> {
     let (_, no_steps) = guidance_index();
-    let described = guidance_files()
+    guidance_files()
         .iter()
-        .map(|(version, ..)| version.clone())
-        .chain(no_steps)
-        .any(|version| version_below(&tag_version, &version));
+        .map(|(version, ..)| (version.clone(), format!("guidance/{version}.md")))
+        .chain(
+            no_steps
+                .into_iter()
+                .map(|version| (version, "guidance/index.toml no_steps".to_owned())),
+        )
+        .collect()
+}
+
+/// The signature covers every destination a landing declares, the two
+/// state files included. A destination missing from it is one whose bytes
+/// can change without the authoring gate ever asking for guidance.
+#[test]
+fn the_signature_covers_every_landed_destination() {
+    let fixture =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(LANDED_SIGNATURE))
+            .expect("the landed surface signature reads");
+    let covered: std::collections::BTreeSet<&str> = fixture
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace().rev();
+            fields.next();
+            fields.next()
+        })
+        .collect();
+    for destination in release_kit::projection::destinations().chain([
+        release_kit::config::CONFIG_PATH,
+        release_kit::landing::manifest::MANIFEST_PATH,
+    ]) {
+        assert!(
+            covered.contains(destination),
+            "{destination}: the landed surface signature does not cover it, so a release could change its bytes and the authoring gate would ask for no guidance"
+        );
+    }
+}
+
+/// The two landed state files the projection does not carry are pinned by
+/// their bytes rather than by their schema number, because a renderer can
+/// change what a target receives while the number stands still.
+#[test]
+fn the_landed_state_bytes_are_pinned_in_the_signature() {
+    use release_kit::landing::{CheckoutMode, Style};
+
+    let fixture =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(LANDED_SIGNATURE))
+            .expect("the landed surface signature reads");
+    let params = projection_params(
+        "rust",
+        "github",
+        CheckoutMode::LinkedWorktree,
+        Style::Trunk,
+        false,
+    );
+    let plan = release_kit::config::Plan::compose(None, &params, None, None)
+        .expect("the configuration composes");
+    let configuration = format!(
+        "rust github linked-worktree trunk false {} {}",
+        release_kit::config::CONFIG_PATH,
+        release_kit::digest::Digest::of(plan.content.as_bytes())
+    );
     assert!(
-        described,
-        "a landed destination changed since {tag} ({changed:?}) and no guidance file names a release above it; add guidance/<next version>.md, or record the release under no_steps in guidance/index.toml"
+        fixture.lines().any(|line| line == configuration),
+        "the rendered configuration is not the bytes the signature pins; a deliberate change reruns with RK_UPDATE_FIXTURES=1"
+    );
+    let projection =
+        release_kit::projection::Projection::compute(&release_kit::projection::ProjectionInput {
+            params: params.clone(),
+            evidence: NixShape::Supported.evidence(),
+        })
+        .expect("the representative pair projects");
+    let record = record_signature_line(
+        "rust github linked-worktree trunk false",
+        &params,
+        &projection.capabilities,
+    );
+    assert!(
+        fixture.lines().any(|line| line == record),
+        "the rendered record is not the bytes the signature pins; a deliberate change reruns with RK_UPDATE_FIXTURES=1"
+    );
+}
+
+/// The landed surface one table test states as changed.
+fn changed_surface() -> Vec<String> {
+    vec!["tests/fixtures/projection-digests.txt".to_owned()]
+}
+
+/// Coverage naming `versions`, as guidance files.
+fn files_naming(versions: &[&str]) -> Vec<(String, String)> {
+    versions
+        .iter()
+        .map(|version| ((*version).to_owned(), format!("guidance/{version}.md")))
+        .collect()
+}
+
+/// Coverage naming `versions`, as `no_steps` entries.
+fn no_steps_naming(versions: &[&str]) -> Vec<(String, String)> {
+    versions
+        .iter()
+        .map(|version| {
+            (
+                (*version).to_owned(),
+                "guidance/index.toml no_steps".to_owned(),
+            )
+        })
+        .collect()
+}
+
+/// A checkout whose package version leads the last tag carries the
+/// release candidate, and coverage satisfies the gate only by naming that
+/// exact version.
+#[test]
+fn a_candidate_release_needs_coverage_naming_its_exact_version() {
+    assert_eq!(
+        coverage_proof(
+            "0.6.1",
+            "0.6.2",
+            &files_naming(&["0.6.2"]),
+            &changed_surface()
+        ),
+        Ok(CoverageProof::CandidateExact("0.6.2".to_owned()))
+    );
+}
+
+/// The defect this gate removes: a guidance file named for a version the
+/// release will not mint satisfied the old check because it sat above the
+/// last tag. Under a readable candidate it no longer does.
+#[test]
+fn a_candidate_release_rejects_coverage_naming_another_version() {
+    let why = coverage_proof(
+        "0.6.1",
+        "0.6.2",
+        &files_naming(&["0.7.0"]),
+        &changed_surface(),
+    )
+    .expect_err("0.7.0 is no coverage for the release that mints 0.6.2");
+    assert!(why.contains("the release mints 0.6.2"), "{why}");
+    assert!(why.contains("add guidance/0.6.2.md"), "{why}");
+    assert!(why.contains(GUIDANCE_RULE), "{why}");
+    // A name that parses to the candidate's value is still another name.
+    // The file an agent selects is named for the minted version exactly.
+    for padded in ["00.6.2", "0.06.2", "0.6.02"] {
+        let why = coverage_proof(
+            "0.6.1",
+            "0.6.2",
+            &files_naming(&[padded]),
+            &changed_surface(),
+        )
+        .expect_err("a padded name is no coverage for the release that mints 0.6.2");
+        assert!(why.contains("leading zero"), "{padded}: {why}");
+    }
+}
+
+/// An ordinary branch carries no candidate, because release-plz writes the
+/// proposed version only on the release branch. The gate then proves what
+/// authoring can prove: some version above the last tag.
+#[test]
+fn no_candidate_falls_back_to_the_above_the_tag_proof() {
+    assert_eq!(
+        coverage_proof(
+            "0.6.1",
+            "0.6.1",
+            &files_naming(&["0.7.0"]),
+            &changed_surface()
+        ),
+        Ok(CoverageProof::AboveLastTag("0.7.0".to_owned()))
+    );
+    let why = coverage_proof(
+        "0.6.1",
+        "0.6.1",
+        &files_naming(&["0.6.0"]),
+        &changed_surface(),
+    )
+    .expect_err("coverage below the tag proves nothing about what changed since it");
+    assert!(why.contains("names a release above it"), "{why}");
+    assert!(why.contains(GUIDANCE_RULE), "{why}");
+}
+
+/// A package version under its own latest tag is broken repository state,
+/// not a weaker proof mode. The committed version leads and the tag
+/// mirrors it, so the gate names both rather than falling back.
+#[test]
+fn a_package_version_below_its_own_tag_fails() {
+    let why = coverage_proof(
+        "0.6.1",
+        "0.6.0",
+        &files_naming(&["0.7.0"]),
+        &changed_surface(),
+    )
+    .expect_err("a version below its own tag reaches no proof mode");
+    assert!(why.contains("the package version 0.6.0 is below"), "{why}");
+    assert!(why.contains("v0.6.1"), "{why}");
+    assert!(why.contains(GUIDANCE_RULE), "{why}");
+}
+
+/// A deliberate silence is coverage, and it is held to the standard a
+/// guidance file is held to: both channels pass and fail identically
+/// under each proof mode.
+#[test]
+fn a_no_steps_entry_takes_the_same_judgment_as_a_guidance_file() {
+    let changed = changed_surface();
+    for (tag, candidate, names, expected) in [
+        ("0.6.1", "0.6.2", "0.6.2", true),
+        ("0.6.1", "0.6.2", "0.7.0", false),
+        ("0.6.1", "0.6.1", "0.7.0", true),
+        ("0.6.1", "0.6.1", "0.6.0", false),
+    ] {
+        let by_file = coverage_proof(tag, candidate, &files_naming(&[names]), &changed);
+        let by_entry = coverage_proof(tag, candidate, &no_steps_naming(&[names]), &changed);
+        assert_eq!(
+            by_file.is_ok(),
+            expected,
+            "a guidance file naming {names} under tag {tag} and candidate {candidate}"
+        );
+        assert_eq!(
+            by_file.is_ok(),
+            by_entry.is_ok(),
+            "the two coverage channels disagree over {names}"
+        );
+    }
+}
+
+/// Every version this gate compares is three dotted integers. The older
+/// parser accepted `0.7` and `0.7.0.1` and ordered them against a triple,
+/// so a `no_steps` entry could record a silence against a version no
+/// other reader accepts.
+#[test]
+fn a_version_is_three_dotted_integers() {
+    for value in ["0.7", "1", "0.7.0.1", "", "0.x.1", "0..1", "v0.7.0"] {
+        let why = parse_version(value).expect_err("the value is no version");
+        assert!(why.contains("three dotted integers"), "{value}: {why}");
+    }
+    for value in ["00.6.2", "0.06.2", "0.6.02"] {
+        let why = parse_version(value).expect_err("a padded part is no version part");
+        assert!(why.contains("leading zero"), "{value}: {why}");
+    }
+    assert_eq!(parse_version("0.7.0"), Ok([0, 7, 0]));
+    assert_eq!(parse_version("10.20.30"), Ok([10, 20, 30]));
+    let why = coverage_proof(
+        "0.6.1",
+        "0.6.2",
+        &no_steps_naming(&["0.7"]),
+        &changed_surface(),
+    )
+    .expect_err("a malformed entry fails by the key it came from");
+    assert!(why.contains("guidance/index.toml no_steps"), "{why}");
+}
+
+/// The job that runs the authoring gate checks out the release tags. The
+/// gate reads the last tag with `git describe`, and `actions/checkout`
+/// fetches one commit and no tag by default, so a shallow checkout turns
+/// a required check into a note that proves nothing.
+#[test]
+fn the_test_job_checks_out_the_release_tags() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let ci = std::fs::read_to_string(root.join(".github/workflows/ci.yml")).expect("ci.yml reads");
+    let test_job = ci
+        .split("\n  test:\n")
+        .nth(1)
+        .expect("ci.yml has a test job");
+    let test_job = test_job
+        .split("\n  flake:\n")
+        .next()
+        .expect("the test job ends");
+    let checkout = test_job
+        .split("- uses: actions/checkout@")
+        .nth(1)
+        .expect("the test job checks out");
+    let checkout = checkout
+        .split("\n      - ")
+        .next()
+        .expect("the checkout step ends");
+    assert!(
+        checkout.contains("fetch-depth: 0"),
+        "the test job's checkout carries no fetch-depth: 0, so the authoring gate has no tag to describe"
     );
 }
 

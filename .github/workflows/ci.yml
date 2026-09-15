@@ -17,7 +17,13 @@ jobs:
     permissions:
       contents: read
     steps:
+      # The guidance gate reads the last release tag through git describe.
+      # The default checkout is one commit deep and carries no tag, so the
+      # gate would find nothing to compare against and prove nothing. The
+      # full history is this job's alone: flake and dist-plan read no tag.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: DeterminateSystems/nix-installer-action@v19
       # No FlakeHub account stands behind this repository, so the cache
       # names its one backend outright instead of probing FlakeHub first
