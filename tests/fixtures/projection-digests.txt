@@ -742,4 +742,4 @@ rust github linked-worktree trunk occupied .pre-commit-config.yaml dd36703f56941
 rust github linked-worktree trunk occupied AGENTS.md 0a6aa803810f708bf3393d521e85859873e9e3bac382e894f3bf23581f0fa45a
 rust github linked-worktree trunk occupied GLOSSARY.md 37479f3bb21e0fd7775e70b52e1b4c09cecd045a061b074b87dec59b753652a7
 rust github linked-worktree trunk occupied .release-kit/config.toml a54c05209d601c6a56489330f156b02674ff73d2638673c980064b4a432439bb
-rust github linked-worktree trunk record-schema-9 .release-kit/manifest.json b58aaabd75f78f9a1a919cc9e025b78f594ec59bcf5039da6e95bb2a665e0b9f
+rust github linked-worktree trunk record-schema-9 .release-kit/manifest.json 79dbae75b89731bcef548d510f71dc3265bfad88f8e4a0e309d919e65e38c6e9

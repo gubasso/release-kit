@@ -24425,6 +24425,26 @@ fn occupied_target_signature_lines() -> Vec<String> {
     out
 }
 
+/// The capabilities the representative record's pins are selected from:
+/// the same projection an ordinary fixture line signs.
+fn record_capabilities() -> Vec<release_kit::profile::catalog::Selection> {
+    use release_kit::landing::{CheckoutMode, Style};
+    use release_kit::projection::{Projection, ProjectionInput};
+
+    Projection::compute(&ProjectionInput {
+        params: projection_params(
+            "rust",
+            "github",
+            CheckoutMode::LinkedWorktree,
+            Style::Trunk,
+            false,
+        ),
+        evidence: NixShape::Supported.evidence(),
+    })
+    .expect("the representative pair projects")
+    .capabilities
+}
+
 /// The signature line of the landed record. The record carries the
 /// producing version and the landing instant, so the fixture fixes both
 /// by construction: what it pins is the renderer's shape, which a schema
@@ -24483,7 +24503,14 @@ fn landed_record_signature_line() -> String {
                 placement: Placement::Whole,
             },
         ],
-        pins: std::collections::BTreeMap::from([("pre-commit".to_owned(), "4.5.1".to_owned())]),
+        // Through the production helper, not a hand-written map: the
+        // pins a target records come from the registry and the selected
+        // capabilities, so a pin bump or a selection change moves the
+        // record at every target and must move the signature with it.
+        pins: release_kit::registry::pins_for(&record_capabilities())
+            .into_iter()
+            .map(|pin| (pin.name, pin.version))
+            .collect(),
     };
     format!(
         "rust github linked-worktree trunk record-schema-{SCHEMA_VERSION} {MANIFEST_PATH} {}",
