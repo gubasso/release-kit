@@ -823,14 +823,14 @@ mod tests {
             }]),
             warnings: Some(vec![super::Warning {
                 code: super::CODE_SCANNING_LICENCE,
-                reason: "the target's license, LicenseRef-proprietary, is not one this release recognizes as OSI-approved".into(),
+                reason: "the target's license, LicenseRef-proprietary, does not state a codebase this release recognizes as open source".into(),
             }]),
             pending: Some(2),
             violations: None,
         };
         assert_eq!(
             serde_json::to_string(&landed).expect("a report serializes"),
-            r#"{"schema":"rk.status/12","landed":true,"config":{"state":"pending","pending":["profile.release.style"]},"profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"},"capabilities":{"nix_packaging":true,"reporting_policy":true,"scorecard":false,"code_scanning":"semgrep"},"selection":[],"rk_version":"0.1.0","binary_version":"0.2.0","alignment":"binary-newer","drift":{"rendered":0,"seeded":1},"missing":[],"stale_pins":[{"tool":"release-plz","landed":"0.3.160","available":"0.3.170"}],"sentinels":1,"record_drift":0,"invariant_failures":[{"code":"attestations-disabled","destination":"dist-workspace.toml","reason":"github-attestations is not effectively true","remediation":"set github-attestations = true in [dist]"}],"warnings":[{"code":"code-scanning-licence","reason":"the target's license, LicenseRef-proprietary, is not one this release recognizes as OSI-approved"}],"pending":2}"#
+            r#"{"schema":"rk.status/12","landed":true,"config":{"state":"pending","pending":["profile.release.style"]},"profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"},"capabilities":{"nix_packaging":true,"reporting_policy":true,"scorecard":false,"code_scanning":"semgrep"},"selection":[],"rk_version":"0.1.0","binary_version":"0.2.0","alignment":"binary-newer","drift":{"rendered":0,"seeded":1},"missing":[],"stale_pins":[{"tool":"release-plz","landed":"0.3.160","available":"0.3.170"}],"sentinels":1,"record_drift":0,"invariant_failures":[{"code":"attestations-disabled","destination":"dist-workspace.toml","reason":"github-attestations is not effectively true","remediation":"set github-attestations = true in [dist]"}],"warnings":[{"code":"code-scanning-licence","reason":"the target's license, LicenseRef-proprietary, does not state a codebase this release recognizes as open source"}],"pending":2}"#
         );
         let absent = Report {
             landed: false,

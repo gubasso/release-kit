@@ -233,7 +233,7 @@ impl Style {
 pub enum Provider {
     /// GitHub's own analyzer. Free under terms that cover an open-source
     /// codebase alone, so a landing reads the binding's declared licence
-    /// first and refuses the pair where it is not OSI-approved.
+    /// first and refuses the pair where it states no such codebase.
     CodeQl,
     /// Semgrep Community Edition, which carries no licence condition on the
     /// codebase it scans and runs on either forge.

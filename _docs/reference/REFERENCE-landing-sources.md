@@ -180,7 +180,9 @@ Bearing: `landing:a-landing-classifies-its-target-first`. The marker catalog `rk
 
 ## SPDX, on the licence expression the code scanning condition reads
 
-Checked 2026-09-15. The SPDX 2.3 license-expression annex settles three things the reader depends on. Identifiers: "License identifiers (including license exception identifiers) used in SPDX documents or source code files should be matched in a _case-insensitive_ manner." Operators: "License expression operators (`AND`, `OR` and `WITH`) should be matched in a _case-sensitive_ manner." And the shape of `WITH`: "A valid `<license-expression>` is where the left operand is a `<simple-expression>` value and the right operand is a `<license-exception-id>` that represents the special exception terms."
+Checked 2026-09-15. The SPDX 2.3 license-expression annex settles four things the reader depends on. Identifiers: "License identifiers (including license exception identifiers) used in SPDX documents or source code files should be matched in a _case-insensitive_ manner." Operators: "License expression operators (`AND`, `OR` and `WITH`) should be matched in a _case-sensitive_ manner." The shape of `WITH`: "A valid `<license-expression>` is where the left operand is a `<simple-expression>` value and the right operand is a `<license-exception-id>` that represents the special exception terms." And precedence: "The default operator order of precedence of a `<license-expression>` is: `+ WITH AND OR`", with a lower-order operator applying before a higher-order one, and parentheses available "when required to express an order of precedence that is different from the default order".
+
+Precedence is load-bearing rather than decorative, because `AND` and `OR` are judged by different rules. `CC-BY-4.0 OR CC-BY-SA-4.0 AND MIT` groups as `CC-BY-4.0 OR (CC-BY-SA-4.0 AND MIT)` and offers its reader a term over prose alone. Read as one flat left fold it would pass. The unit test carries that expression as its witness.
 
 Cargo defines `package.license` as an SPDX expression and does not hold it to that casing: a crate declaring `license = "mit"` packages without complaint, checked by running `cargo package` over a scratch crate. So a real crate can carry any casing of an identifier, and a case-sensitive comparison would refuse a licence the reader recognizes.
 
@@ -191,4 +193,15 @@ The exception register is carried whole rather than sampled: 86 identifiers from
 - <https://github.com/spdx/license-list-data/blob/main/json/exceptions.json>
 - <https://doc.rust-lang.org/cargo/reference/manifest.html#the-license-and-license-file-fields>
 
-Bearing: the licence arm of `landing:the-nix-capability-is-a-recorded-opt-in`. The reader answers two questions in one pass and both must hold: the expression is well formed, and every licence identifier in it is OSI-approved. An exception grants permission rather than withdrawing it, so it changes no verdict; it is validated because a reader that cannot parse the expression has not read the licence.
+Bearing: the licence arm of `landing:the-nix-capability-is-a-recorded-opt-in`. The reader answers three questions in one pass and all three must hold: the expression is well formed, every reader of it obtains an OSI-approved grant, and every licence identifier in it is one this release recognizes. An exception grants permission rather than withdrawing it, so it changes no verdict; it is validated because a reader that cannot parse the expression has not read the licence.
+
+## CodeQL, on the codebase its terms cover
+
+Checked 2026-09-15. The CodeQL CLI terms define the codebase they cover in one sentence. An Open Source Codebase is "a codebase that is released under an OSI-approved License." Under that definition the terms permit a holder to "Perform analysis on the Open Source Codebase", and to generate databases for automated analysis, CI, or CD where that codebase is hosted on GitHub.com. They prohibit a holder without a paid GitHub Advanced Security seat from generating "any CodeQL database for or during automated analysis, CI or CD" over anything else, and from using the software "in connection with any codebase that is not an Open Source Codebase (e.g., code in a private repo in GitHub)."
+
+The definition asks what the codebase is released under, not what every identifier beside it names. A project that releases its source under an OSI-approved licence and its prose under Creative Commons terms hands every reader the OSI-approved grant, so it is released under an OSI-approved licence and the terms cover it. A project that offers a reader the choice between an OSI-approved licence and a term over prose alone does not, because the reader may hold only the second.
+
+- <https://github.com/github/codeql-cli-binaries/blob/main/LICENSE.md>
+- <https://docs.github.com/en/code-security/codeql-cli/getting-started-with-the-codeql-cli/about-the-codeql-cli>
+
+Bearing: the licence arm of `landing:the-nix-capability-is-a-recorded-opt-in`. The judgment is `grants` in `src/projection.rs`: a conjunction grants where any operand does, and a disjunction grants only where every arm does. The Creative Commons identifiers the reader recognizes beside the OSI-approved ones are the attribution and share-alike families, which license material that is not code and which no conjunction lets a reader escape. `CC0-1.0` is deliberately absent, because it dedicates code as readily as prose and belongs to a question this list does not answer.

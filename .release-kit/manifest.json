@@ -1,6 +1,6 @@
 {
   "schema_version": 10,
-  "rk_version": "0.7.0",
+  "rk_version": "0.8.0",
   "origin": "adopt",
   "landed_at": "2026-08-30T00:14:29Z",
   "profile": {
@@ -18,12 +18,13 @@
   "git": {
     "trunk": "master",
     "checkout_mode": "linked-worktree",
-    "integration": "forge"
+    "integration": "local"
   },
   "capabilities": {
     "nix_packaging": false,
     "reporting_policy": true,
-    "scorecard": false
+    "scorecard": true,
+    "code_scanning": "codeql"
   },
   "parameters": {
     "repo": "gubasso/release-kit",
@@ -31,6 +32,11 @@
     "security_response": "best-effort"
   },
   "files": [
+    {
+      "destination": ".github/workflows/code-scanning-codeql.yml",
+      "kind": "rendered",
+      "sha256": "3fd38dd485e2e40486144a3cc605e91730c18c1265cd27d7a07767b5b256a485"
+    },
     {
       "destination": ".github/workflows/pr-title.yml",
       "kind": "rendered",
@@ -42,15 +48,20 @@
       "sha256": "dae0bfc1282b30535df0a13562b0b3ea5b4ff59af63009301f5ee86a9406c968"
     },
     {
+      "destination": ".github/workflows/scorecard.yml",
+      "kind": "rendered",
+      "sha256": "de2668b9c620470dc5ec596e8c4c001072b4fbd84ef50a68094af6ab1d84ce37"
+    },
+    {
       "destination": ".pre-commit-config.yaml",
       "kind": "rendered",
-      "sha256": "78149baea10341037a25dd728b31ae014c9d391a1c75375076d494663783e6f1",
+      "sha256": "041da3df3b121062768e246827a53ff94a6aade235dceccf098f646235a5ccd5",
       "placement": "region"
     },
     {
       "destination": "AGENTS.md",
       "kind": "rendered",
-      "sha256": "51be7a598918fd6604c4dcf3134f9b799a3c5ee72568f8221a27119b78fc3ae4",
+      "sha256": "c9a4efa8ba9f9d393e0e7a48f8263bb1f6cbe7e4714aac845af9ae345d8b4fb1",
       "placement": "region"
     },
     {
@@ -79,6 +90,9 @@
     "attest": "4",
     "cargo-dist": "0.32.0",
     "checkout": "4",
+    "codeql-analyze": "4",
+    "codeql-init": "4",
+    "codeql-upload-sarif": "4",
     "conventional-pre-commit": "4.4.0",
     "create-github-app-token": "3",
     "dist-checkout": "6",
@@ -86,6 +100,8 @@
     "dist-upload-artifact": "7",
     "pre-commit-hooks": "6.0.0",
     "release-plz": "0.3.160",
-    "rust-toolchain": "stable"
+    "rust-toolchain": "stable",
+    "scorecard-action": "2.4.4",
+    "semgrep-image": "1.177.0"
   }
 }

@@ -21,13 +21,13 @@ line_prefix = "release/" # P: release-line branch prefix, rendered into the rele
 [git]
 trunk = "master" # P: the one permanent branch, rendered into every artifact naming it
 checkout_mode = "linked-worktree" # P: linked-worktree or main-worktree, where a topic branch opens
-integration = "forge" # P: local or forge, which authority moves an implementation onto the trunk
+integration = "local" # P: local or forge, which authority moves an implementation onto the trunk
 
 [capabilities]
 nix_packaging = false # P: opt-in Nix capability
 reporting_policy = true # P: the landed vulnerability reporting policy
-scorecard = false # P: opt-in OpenSSF Scorecard workflow, github only
-code_scanning = "off" # P: opt-in code scanning provider: codeql, semgrep, or off
+scorecard = true # P: opt-in OpenSSF Scorecard workflow, github only
+code_scanning = "codeql" # P: opt-in code scanning provider: codeql, semgrep, or off
 
 [security]
 advisories = "" # N: project receiving vulnerability reports
@@ -51,7 +51,7 @@ tag_pattern = "refs/tags/v*" # F: invariant, covers every published version
 bypass_actors = [] # F: invariant, empty
 allowed_merge_methods = ["squash"] # F: invariant, exactly squash
 strict_required_status_checks = true # F: invariant, true
-owned_trunk_rules = ["deletion", "non_fast_forward", "pull_request", "required_status_checks"] # F: invariant, contains all four rules
+owned_trunk_rules = ["deletion", "non_fast_forward"] # F: invariant, contains all four rules
 required_approving_review_count = 0 # F: floor zero; higher is stricter
 dismiss_stale_reviews_on_push = false # F: floor false; true is stricter
 require_code_owner_review = false # F: floor false; true is stricter
@@ -65,5 +65,5 @@ squash_body_source = "PR_BODY" # F: invariant, PR_BODY
 merge_method = "ff" # F: invariant, linear history
 squash_option = "always" # F: invariant, always squash
 squash_commit_template = "%{title}" # F: invariant, references title
-push_access_level = 0 # F: invariant, zero
+push_access_level = 40 # F: invariant, zero
 merge_access_level = 40 # F: floor thirty

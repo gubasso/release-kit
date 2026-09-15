@@ -684,6 +684,25 @@ const OSI_APPROVED: [&str; 18] = [
     "mpl-2.0",
 ];
 
+/// The SPDX identifiers this convention recognizes as terms over material
+/// that is not code, sorted.
+///
+/// Lowercase, for the reason [`OSI_APPROVED`] is.
+///
+/// None of these is OSI-approved, and none of them grants a licence over
+/// code, so none of them states an open-source codebase on its own. They are
+/// recognized because a project that licenses its prose apart from its source
+/// declares both in one expression, and a conjunction naming one of these
+/// beside an OSI-approved licence still hands every reader the approved
+/// terms. The entries are the attribution and share-alike families at the two
+/// versions still in use, which is what a crate shipping documentation beside
+/// its source declares.
+///
+/// `CC0-1.0` is deliberately absent. It dedicates any material to the public
+/// domain, code included, so it is not a term over material that is not code
+/// and it belongs to a question this list does not answer.
+const CONTENT_LICENCES: [&str; 4] = ["cc-by-3.0", "cc-by-4.0", "cc-by-sa-3.0", "cc-by-sa-4.0"];
+
 /// Every SPDX exception identifier, lowercase.
 ///
 /// SPDX requires the right operand of `WITH` to be a `<license-exception-id>`,
@@ -869,11 +888,26 @@ fn tokenize(expression: &str) -> Option<Vec<Token<'_>>> {
     Some(tokens)
 }
 
+/// What one node of an SPDX expression states.
+///
+/// Two facts rather than one, because a single bit cannot answer the
+/// question. `MIT AND (CC-BY-4.0 OR CC-BY-SA-4.0)` needs an inner node that
+/// states no open-source codebase on its own and still leaves the conjunction
+/// around it stating one.
+#[derive(Debug, Clone, Copy)]
+struct Verdict {
+    /// Every reader of this node obtains an OSI-approved grant.
+    grants: bool,
+    /// Every licence this node names is one this release recognizes.
+    clean: bool,
+}
+
 /// A recursive-descent reader over one tokenized SPDX expression.
 ///
-/// It answers two questions in one pass, and both must hold: whether the
-/// expression is well formed, and whether every licence identifier in it is
-/// OSI-approved. A malformed expression answers `None` rather than falling
+/// It answers three questions in one pass, and all three must hold: whether
+/// the expression is well formed, whether every reader of it obtains an
+/// OSI-approved grant, and whether every licence it names is one this release
+/// recognizes. A malformed expression answers `None` rather than falling
 /// back on the identifiers it happened to contain, because an expression
 /// nobody can parse states no terms at all.
 struct Spdx<'a> {
@@ -894,19 +928,48 @@ impl<'a> Spdx<'a> {
         Some(token)
     }
 
-    /// One expression: operands joined by `AND` and `OR`, each operand a
+    /// One expression: conjunctions joined by `OR`.
+    ///
+    /// `OR` binds loosest, which is what SPDX states, and the precedence is
+    /// load-bearing here rather than decorative. A disjunction offers the
+    /// reader a choice, so it grants the approved terms only where every arm
+    /// does: one unapproved arm is an arm the reader may take. Read with the
+    /// operators flattened instead, `CC-BY-4.0 OR CC-BY-SA-4.0 AND MIT` would
+    /// state an open-source codebase, and its reader may hold a term over
+    /// prose alone.
+    fn expression(&mut self) -> Option<Verdict> {
+        let mut verdict = self.conjunction()?;
+        while self.peek() == Some(Token::Or) {
+            self.bump();
+            let right = self.conjunction()?;
+            verdict = Verdict {
+                grants: verdict.grants && right.grants,
+                clean: verdict.clean && right.clean,
+            };
+        }
+        Some(verdict)
+    }
+
+    /// One conjunction: operands joined by `AND`, each operand a
     /// parenthesized expression or a simple licence.
     ///
-    /// Both operators require every operand to be approved. A disjunction
-    /// offers the reader a choice, so one unapproved term is a term the
-    /// reader may take.
-    fn expression(&mut self) -> Option<bool> {
-        let mut approved = self.operand()?;
-        while matches!(self.peek(), Some(Token::And | Token::Or)) {
+    /// `AND` binds tighter than `OR`. A conjunction offers every term at
+    /// once, so it grants the approved terms where any operand does: a reader
+    /// who must accept both terms has accepted the approved one. What the
+    /// other operand may be is held by `clean` rather than by this field,
+    /// because a licence nobody here can read establishes nothing, while a
+    /// Creative Commons term over prose withdraws no grant over code.
+    fn conjunction(&mut self) -> Option<Verdict> {
+        let mut verdict = self.operand()?;
+        while self.peek() == Some(Token::And) {
             self.bump();
-            approved = self.operand()? && approved;
+            let right = self.operand()?;
+            verdict = Verdict {
+                grants: verdict.grants || right.grants,
+                clean: verdict.clean && right.clean,
+            };
         }
-        Some(approved)
+        Some(verdict)
     }
 
     /// One operand: a parenthesized expression, or a licence identifier
@@ -918,15 +981,21 @@ impl<'a> Spdx<'a> {
     /// verdict: an exception grants permission rather than withdrawing it, so
     /// which licence the codebase is offered under is answered by the left
     /// operand alone.
-    fn operand(&mut self) -> Option<bool> {
+    fn operand(&mut self) -> Option<Verdict> {
         match self.bump()? {
             Token::Open => {
+                // A parenthesis restarts the whole grammar, so the loosest
+                // operator binds inside it too.
                 let inner = self.expression()?;
                 (self.bump()? == Token::Close).then_some(inner)
             }
             Token::Identifier(name) => {
                 let identifier = name.strip_suffix('+').unwrap_or(name);
                 let approved = listed(&OSI_APPROVED, identifier);
+                let verdict = Verdict {
+                    grants: approved,
+                    clean: approved || listed(&CONTENT_LICENCES, identifier),
+                };
                 if self.peek() == Some(Token::With) {
                     self.bump();
                     // SPDX requires an exception identifier here, so an
@@ -937,22 +1006,30 @@ impl<'a> Spdx<'a> {
                         _ => return None,
                     }
                 }
-                Some(approved)
+                Some(verdict)
             }
             Token::And | Token::Or | Token::With | Token::Close => None,
         }
     }
 }
 
-/// Whether one SPDX expression is well formed and every licence in it is
-/// OSI-approved.
+/// Whether one SPDX expression is well formed and states an open-source
+/// codebase.
 ///
-/// Both conditions, and the pair is the point. A malformed expression is
-/// refused rather than read for the identifiers it contains, because
-/// `MIT OR` names one licence and no complete offer, and accepting it would
-/// land a workflow whose provider's terms nothing established.
+/// Three conditions, and the trio is the point. The expression must parse,
+/// because `MIT OR` names one licence and no complete offer, and accepting it
+/// would land a workflow whose provider's terms nothing established. Every
+/// reader of it must obtain an OSI-approved grant, which makes a disjunction
+/// strict and a conjunction permissive. And every identifier in it must be
+/// one this release recognizes, either OSI-approved or a Creative Commons
+/// term over material that is not code.
+///
+/// The conjunction is the case this answers. A project that offers its source
+/// under an OSI-approved licence and its prose under Creative Commons terms
+/// declares both in one expression, and the second adds an obligation over
+/// prose rather than withdrawing the grant over code.
 #[must_use]
-pub fn licence_is_osi_approved(expression: &str) -> bool {
+pub fn licence_states_an_open_source_codebase(expression: &str) -> bool {
     let Some(tokens) = tokenize(expression) else {
         return false;
     };
@@ -960,10 +1037,10 @@ pub fn licence_is_osi_approved(expression: &str) -> bool {
         tokens: &tokens,
         at: 0,
     };
-    let Some(approved) = reader.expression() else {
+    let Some(verdict) = reader.expression() else {
         return false;
     };
-    approved && reader.at == tokens.len()
+    verdict.grants && verdict.clean && reader.at == tokens.len()
 }
 
 /// Why the code scanning capability's licence condition refuses this
@@ -1014,8 +1091,8 @@ pub fn code_scanning_licence_refusal(
         None => Some(format!(
             "the target's Cargo.toml declares no license field, and codeql's terms cover an open-source codebase alone; declare one, or {fallback}"
         )),
-        Some(expression) if !licence_is_osi_approved(expression) => Some(format!(
-            "the target's license, {expression}, is not one this release recognizes as OSI-approved, and codeql's terms cover an open-source codebase alone; {fallback}"
+        Some(expression) if !licence_states_an_open_source_codebase(expression) => Some(format!(
+            "the target's license, {expression}, does not state a codebase this release recognizes as open source, and codeql's terms cover an open-source codebase alone; {fallback}"
         )),
         Some(_) => None,
     }
@@ -2046,11 +2123,12 @@ mod tests {
     }
 
     /// The licence judgment over the expression forms a crate manifest
-    /// uses: every operand must be recognized, a disjunction of approved
-    /// terms passes, and one unapproved operand anywhere fails.
+    /// uses: every reader must obtain an OSI-approved grant, every licence
+    /// named must be one this release recognizes, and a malformed expression
+    /// states no terms at all.
     #[test]
-    fn the_licence_judgment_reads_every_operand() {
-        use super::licence_is_osi_approved as approved;
+    fn the_licence_judgment_reads_what_every_reader_obtains() {
+        use super::licence_states_an_open_source_codebase as approved;
         for expression in [
             "MIT",
             "Apache-2.0",
@@ -2061,6 +2139,20 @@ mod tests {
             "GPL-3.0+",
         ] {
             assert!(approved(expression), "{expression} is OSI-approved");
+        }
+        // A conjunction hands the reader every term at once, so a Creative
+        // Commons term beside an OSI-approved licence adds an obligation over
+        // prose and withdraws no grant over code. This is what a project that
+        // licenses its source apart from its documentation declares.
+        for expression in [
+            "MIT AND CC-BY-4.0",
+            "CC-BY-4.0 AND MIT",
+            "MIT AND (CC-BY-4.0 OR CC-BY-SA-4.0)",
+            "(MIT OR CC-BY-4.0) AND MIT",
+            "MIT OR Apache-2.0 AND CC-BY-4.0",
+            "Apache-2.0 WITH LLVM-exception AND CC-BY-SA-3.0",
+        ] {
+            assert!(approved(expression), "{expression} states open source");
         }
         for expression in [
             "",
@@ -2073,6 +2165,37 @@ mod tests {
         ] {
             assert!(!approved(expression), "{expression} is not recognized");
         }
+        // A disjunction offers the reader a choice, so an arm that grants no
+        // code licence is an arm the reader may take. `CC0-1.0` is refused
+        // outright: it is absent from both lists, and its own case belongs to
+        // a question these lists do not answer.
+        for expression in [
+            "MIT OR CC-BY-4.0",
+            "CC-BY-4.0 AND CC-BY-SA-4.0",
+            "CC-BY-4.0 AND LicenseRef-proprietary",
+            "CC0-1.0",
+            "MIT AND CC-BY-4.0 AND LicenseRef-proprietary",
+        ] {
+            assert!(!approved(expression), "{expression} grants no code terms");
+        }
+        // The precedence witness. SPDX binds AND tighter than OR, so this
+        // offers the reader `CC-BY-4.0` alone. Read with the operators
+        // flattened into one left fold it would pass, which is why the
+        // grammar carries the two levels rather than one.
+        assert!(
+            !approved("CC-BY-4.0 OR CC-BY-SA-4.0 AND MIT"),
+            "AND binds tighter than OR"
+        );
+    }
+
+    /// The same judgment against the SPDX grammar and its matching rules:
+    /// what parses, what does not, which casing an identifier may carry,
+    /// which casing an operator may not, and which operand `WITH` takes. An
+    /// expression that states no complete offer is refused rather than read
+    /// for the identifiers it happens to carry.
+    #[test]
+    fn the_licence_judgment_holds_the_expression_to_the_spdx_grammar() {
+        use super::licence_states_an_open_source_codebase as approved;
         // A malformed expression is refused rather than read for the
         // identifiers it happens to carry. Each of these names at least one
         // approved licence and states no complete offer, and accepting any

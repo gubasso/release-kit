@@ -36,13 +36,14 @@ jobs:
       # devshell carries, so this job installs it nowhere: the shell that runs
       # just check is the shell that has it, and flake.lock is what pins it.
       #
-      # CI sweeps a detached checkout and commits nothing, so the two
-      # commit-time guards are out of scope here — the skip pair the
-      # landed block's comment names for a worktree-mode target; every
-      # other hook still runs.
+      # CI checks out detached in a plain clone, which the worktree guard
+      # refuses by design — the one skip the landed block's comment names
+      # for a worktree-mode target. Under local integration the guard that
+      # refuses a trunk commit is not in the block at all, so nothing else
+      # is skipped and every other hook still runs.
       - run: nix develop --command just check
         env:
-          SKIP: no-commit-to-branch,rk-worktree-location
+          SKIP: rk-worktree-location
 
   # The one system the flake advertises is the one this job natively
   # builds and smokes. A cross-evaluated check is not the same proof, so

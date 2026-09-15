@@ -43,7 +43,7 @@ pub struct InitArgs {
     /// Opt the landing into code scanning, naming the provider: codeql,
     /// GitHub's own analyzer, whose terms cover an open-source codebase so
     /// the landing reads the driver's declared licence and refuses the pair
-    /// where it is not OSI-approved; or semgrep, which carries no licence
+    /// where it states no such codebase; or semgrep, which carries no licence
     /// condition and runs on either forge. Recorded as a capability
     /// request; off by default, because a scanning surface is a decision.
     #[arg(long, value_name = "PROVIDER")]

@@ -11185,25 +11185,27 @@ fn the_gitlab_snippets_include_no_catalog_component() {
 }
 
 /// This repository's own landing record carries every pin the registry
-/// declares for its technology: a record refreshed by an older binary
-/// would silently lose the newer pins' offline staleness baseline, and
-/// status iterates the record, not the registry.
+/// declares for the capabilities that record selects: a record refreshed by
+/// an older binary would silently lose the newer pins' offline staleness
+/// baseline, and status iterates the record, not the registry.
+///
+/// The expectation comes from the record itself rather than from a stated
+/// parameter set. This repository is a target like any other and it changes
+/// its own answers, so a hand-written parameter list here would assert the
+/// answers of whoever last edited this test.
 #[test]
 fn this_repos_own_record_carries_every_rust_pin() {
     let manifest =
         std::fs::read_to_string(repo_path(".release-kit/manifest.json")).expect("the record reads");
     let manifest: serde_json::Value = serde_json::from_str(&manifest).expect("the record parses");
     let recorded = manifest["pins"].as_object().expect("a pin map");
+    let root =
+        Utf8PathBuf::from_path_buf(repo_path("")).expect("the repository root is a utf-8 path");
+    let record = release_kit::landing::manifest::load(&root)
+        .expect("the record loads")
+        .expect("this repository carries a landing record");
     let selected = release_kit::profile::catalog::select(
-        &record_params(
-            "rust",
-            "github",
-            release_kit::landing::CheckoutMode::LinkedWorktree,
-            release_kit::landing::Integration::Forge,
-            Some(release_kit::landing::Style::Trunk),
-            false,
-            "gubasso/release-kit",
-        ),
+        &release_kit::landing::Params::from_record(&record),
         &release_kit::profile::catalog::Availability::embedded(),
     );
     let expected: std::collections::BTreeMap<String, String> =
@@ -14713,11 +14715,44 @@ fn an_osi_licensed_rust_target_lands_the_codeql_workflow() {
     );
 }
 
-/// A licence this release does not recognize as OSI-approved refuses the
-/// codeql pair by name, names the fallback, and lands nothing.
+/// A crate that licenses its source apart from its prose still states an
+/// open-source codebase, so the pair lands. The conjunction adds an
+/// obligation over the prose and withdraws no grant over the code, and this
+/// is the shape release-kit's own manifest declares.
+#[test]
+fn a_crate_licensing_its_prose_apart_from_its_source_lands_the_codeql_workflow() {
+    for licence in [
+        "MIT AND CC-BY-4.0",
+        "MIT AND (CC-BY-4.0 OR CC-BY-SA-4.0)",
+        "Apache-2.0 WITH LLVM-exception AND CC-BY-4.0",
+    ] {
+        let target = tempfile::tempdir().expect("a scratch dir exists");
+        seed_licensed_crate(target.path(), licence);
+        land_code_scanning(target.path(), "github", "codeql")
+            .assert()
+            .success();
+        assert!(
+            target.path().join(CODEQL_WORKFLOW).is_file(),
+            "{licence}: the codeql workflow lands"
+        );
+        let manifest = read_manifest(target.path());
+        assert_eq!(manifest["capabilities"]["code_scanning"], "codeql");
+    }
+}
+
+/// A licence that states no open-source codebase refuses the codeql pair by
+/// name, names the fallback, and lands nothing. A term over prose alone does
+/// it as surely as a proprietary reference, and so does a disjunction that
+/// offers the reader either.
 #[test]
 fn a_licence_codeql_does_not_permit_refuses_the_pair_and_lands_nothing() {
-    for licence in ["LicenseRef-proprietary", "MIT AND LicenseRef-proprietary"] {
+    for licence in [
+        "LicenseRef-proprietary",
+        "MIT AND LicenseRef-proprietary",
+        "CC-BY-4.0",
+        "MIT OR CC-BY-4.0",
+        "CC-BY-4.0 OR CC-BY-SA-4.0 AND MIT",
+    ] {
         let target = tempfile::tempdir().expect("a scratch dir exists");
         seed_licensed_crate(target.path(), licence);
         land_code_scanning(target.path(), "github", "codeql")
@@ -14725,7 +14760,7 @@ fn a_licence_codeql_does_not_permit_refuses_the_pair_and_lands_nothing() {
             .code(73)
             .stderr(
                 predicate::str::contains(licence)
-                    .and(predicate::str::contains("OSI-approved"))
+                    .and(predicate::str::contains("open source"))
                     .and(predicate::str::contains("--code-scanning semgrep")),
             );
         assert!(

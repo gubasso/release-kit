@@ -262,17 +262,21 @@ fn tool(
 fn registry() -> ProbeResult {
     let id = "registry";
     let curl = std::env::var_os("RK_CURL_BIN").unwrap_or_else(|| "curl".into());
+    // Captured rather than inherited, which is what every other probe in
+    // this file does. `curl -S` writes its own message to the stderr it is
+    // handed, so a probe that inherits this process's stream puts a line
+    // like `curl: (28) Resolving timed out` in front of whatever rk writes
+    // there next. On a verb emitting a JSON diagnostic that is a corrupted
+    // machine stream, and the probe already states its verdict in prose.
     let answered = Command::new(curl)
         .args([
             "-fsSL",
             "--max-time",
             "5",
-            "-o",
-            "/dev/null",
             "https://index.crates.io/config.json",
         ])
-        .status()
-        .is_ok_and(|status| status.success());
+        .output()
+        .is_ok_and(|answer| answer.status.success());
     if answered {
         ProbeResult::ok(id, ProbeClass::Soft, "the crates.io index answers")
     } else {

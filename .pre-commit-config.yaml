@@ -5,7 +5,10 @@ repos:
 # The release convention's hooks. Install every stage they run at:
 # pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push
 # A CI sweep commits nothing, so a job running pre-commit against a trunk
-# checkout sets SKIP=no-commit-to-branch,rk-worktree-location in its environment.
+# checkout sets SKIP=rk-worktree-location in its environment.
+# rk integrate runs this project's pre-integrate suite as
+# `pre-commit run --hook-stage manual --all-files`. Assign to the manual
+# stage every check that must pass before work reaches the trunk.
   - repo: https://github.com/compilerla/conventional-pre-commit
     rev: v4.4.0
     hooks:
@@ -19,11 +22,6 @@ repos:
         stages: [commit-msg]
         language: system
         entry: rk message --check
-  - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v6.0.0
-    hooks:
-      - id: no-commit-to-branch
-        args: [--branch, master]
   - repo: local
     hooks:
       - id: rk-branch-name
@@ -38,13 +36,6 @@ repos:
         always_run: true
         pass_filenames: false
         entry: sh -c '[ "$(git rev-parse --git-dir)" = "$(git rev-parse --git-common-dir)" ] || exit 0; branch=$(git symbolic-ref --quiet --short HEAD) || { echo "this project works in worktrees — the main checkout takes no commit, detached included; rk worktree add <branch> seats work in its own worktree" >&2; exit 1; }; [ "$branch" = master ] && exit 0; echo "this project works in worktrees — the main checkout takes no branch commit, as the forge trunk takes no direct push; rk worktree add $branch gives this branch its own worktree" >&2; exit 1'
-      - id: rk-no-push-to-trunk
-        name: rk no push to trunk
-        stages: [pre-push]
-        language: system
-        always_run: true
-        pass_filenames: false
-        entry: sh -c '[ "$PRE_COMMIT_REMOTE_BRANCH" != refs/heads/master ] || { echo "the trunk takes no direct push; it is written through squash-merged pull requests alone" >&2; exit 1; }'
       - id: rk-no-hand-authored-tag
         name: rk no hand-authored tag
         stages: [pre-push]
