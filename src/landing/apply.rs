@@ -404,6 +404,24 @@ fn locate(root: &File, destination: &str) -> std::io::Result<Located> {
     }
 }
 
+/// The refusal a licence condition answers, before any write.
+///
+/// A landing that guessed past it would write a workflow whose provider's
+/// terms the target's own licence does not permit, which is a licence
+/// violation this convention does not commit on a target's behalf.
+#[must_use]
+pub fn licence_refusal(reason: &str) -> RkError {
+    RkError::refusal(
+        Diagnostic::new(
+            Reason::StateDrift,
+            format!("the code scanning provider's licence condition is not satisfied, and nothing was written: {reason}"),
+        )
+        .expected("a provider whose terms the target's declared licence permits")
+        .action("pass --code-scanning semgrep, which carries no licence condition, or --code-scanning off")
+        .target_state("unchanged"),
+    )
+}
+
 /// The one refusal for every collision, before any write.
 ///
 /// The verbs offer no force flag: an unattributed file becomes landable
@@ -479,6 +497,9 @@ pub fn land(
     origin: Origin,
     _lock: &lock::TargetLock,
 ) -> Result<Landed, RkError> {
+    if let Some(reason) = prepared.projection.licence_refusal.as_deref() {
+        return Err(licence_refusal(reason));
+    }
     if !prepared.collisions.is_empty() {
         return Err(refusal(target.display(), &prepared.collisions));
     }
@@ -649,6 +670,8 @@ fn receipt(
             workflow: params.workflow(),
             style: params.style(),
             nix: params.nix(),
+            scorecard: params.scorecard(),
+            code_scanning: params.code_scanning(),
             trunk: params.trunk().to_owned(),
             line_prefix: params.line_prefix().to_owned(),
             security_contact: params.security_contact().to_owned(),
@@ -798,7 +821,7 @@ mod tests {
             outcome.completed.last().map(String::as_str),
             Some(manifest::MANIFEST_PATH)
         );
-        assert_eq!(outcome.receipt.schema_version, 7);
+        assert_eq!(outcome.receipt.schema_version, 8);
         let record = manifest::load(&target).expect("loads").expect("exists");
         let again = prepared(&target, Some(&record));
         for decision in &again.decisions {

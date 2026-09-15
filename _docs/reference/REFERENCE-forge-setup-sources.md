@@ -364,10 +364,14 @@ Pinned-Dependencies "works by looking for unpinned dependencies in Dockerfiles, 
 
 The action that publishes a result restricts the workflow carrying it. With `publish_results: true` the workflow "can't contain top level env vars or defaults", takes "No workflow level write permissions", and "Only the job with `ossf/scorecard-action` can use `id-token: write` permissions". The job takes "No job level env vars or defaults" and "No containers or services", runs on a hosted Ubuntu runner, and "The steps running in this job must belong to this approved list of GitHub actions", which names `actions/checkout`, `actions/upload-artifact`, `github/codeql-action/upload-sarif`, `ossf/scorecard-action`, and `step-security/harden-runner`. Breaking one of these means the API "may reject the results and cause the Scorecard Action run to fail".
 
+Checked 2026-09-15 for the pin. `ossf/scorecard-action` publishes exact release tags and no moving major tag: the tag list runs `v0.0.1` through `v2.4.4` with no bare `v2`, and a request for the `v2` tag ref answers 404. So the discovery ref this convention records is the release tag itself, classified `exact-tag`, and the pinned commit for `v2.4.4` is `2d1146689b8cda280b9bc96326124645441f03bc`. The upstream project's own workflow pins the same commit with the same comment form.
+
 - <https://github.com/ossf/scorecard/blob/main/docs/checks.md#branch-protection>
 - <https://github.com/ossf/scorecard/blob/main/docs/checks.md#pinned-dependencies>
 - <https://github.com/ossf/scorecard/blob/main/checker/raw_result.go>
 - <https://github.com/ossf/scorecard/blob/main/checks/evaluation/pinned_dependencies.go>
 - <https://github.com/ossf/scorecard-action#workflow-restrictions>
+- <https://github.com/ossf/scorecard/blob/main/.github/workflows/scorecard-analysis.yml>
+- <https://github.com/ossf/scorecard-action/tags>
 
 Two claims in release-kit issue 117 do not survive these sources, and the forge paragraph states neither. Branch-Protection does not need a long-lived classic personal access token: a non-admin run is scored as though every administrator requirement is met, so the short-lived App token this convention uses costs the check nothing. And Pinned-Dependencies is no longer capped by tag-referenced actions, because `ADR-pin-every-action-by-commit.md` pins every action in the snippets by commit. What remains is the generated release workflow's two piped installers, which `KI-dist-generates-an-unhardened-workflow.md` already owns.

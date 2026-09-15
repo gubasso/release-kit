@@ -15,6 +15,8 @@ trunk = RK_CONFIG_PROJECT_TRUNK # P: the one permanent branch, rendered into eve
 workflow = RK_CONFIG_LANDING_WORKFLOW # P: worktree or branches
 style = RK_CONFIG_LANDING_STYLE # P: trunk or lines
 nix = RK_CONFIG_LANDING_NIX # P: opt-in Nix capability
+scorecard = RK_CONFIG_LANDING_SCORECARD # P: opt-in OpenSSF Scorecard workflow, github only
+code_scanning = RK_CONFIG_LANDING_CODE_SCANNING # P: opt-in code scanning provider: codeql, semgrep, or off
 
 [security]
 advisories = RK_CONFIG_SECURITY_ADVISORIES # N: project receiving vulnerability reports

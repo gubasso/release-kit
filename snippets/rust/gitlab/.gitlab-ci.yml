@@ -18,6 +18,13 @@
 
 include:
   - local: .gitlab/ci/mr-title.yml
+  # The opt-in code scanning job, included only where the landing wrote
+  # it: a local include naming an absent file fails the whole pipeline,
+  # and a target that did not opt in has no such file.
+  - local: .gitlab/ci/code-scanning-semgrep.yml
+    rules:
+      - exists:
+          - .gitlab/ci/code-scanning-semgrep.yml
 
 stages:
   - release

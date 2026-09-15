@@ -25,7 +25,7 @@ use crate::embedded;
 use crate::error::RkError;
 use crate::held;
 use crate::landing::apply::{self, Action, Collision, Prepared};
-use crate::landing::manifest::{self, Alignment, Manifest, Style, Workflow};
+use crate::landing::manifest::{self, Alignment, Manifest, Provider, Style, Workflow};
 use crate::landing::{self, lock};
 use crate::output::Output;
 
@@ -64,6 +64,17 @@ struct Report {
     style: &'static str,
     /// Whether the rewritten receipt carries the Nix capability.
     nix: bool,
+    /// Whether the landing carries the Scorecard capability.
+    scorecard: bool,
+    /// The code scanning provider the landing carries, absent where the
+    /// project did not opt in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code_scanning: Option<&'static str>,
+    /// Why the provider's licence condition refuses this target, absent
+    /// where no condition applies or the licence satisfies it. A preview
+    /// reports it and exits 0; the apply refuses on it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    licence_refusal: Option<String>,
     /// The Nix destinations this target could not take, each with why;
     /// absent where nothing was withheld.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -130,32 +141,7 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
         )
     };
 
-    for key in &prepared.config.changes {
-        out.result_line(format!("configuration changes {key}"));
-    }
-    out.result_line(format!(
-        "{} {}",
-        prepared.config.action,
-        crate::config::CONFIG_PATH
-    ));
-    let mut sentinels: Vec<String> = Vec::new();
-    for decision in &prepared.decisions {
-        if landed.is_some() && matches!(decision.action, Action::Created | Action::Replaced) {
-            let bytes =
-                landing::read_recorded(held.base(), &decision.destination)?.unwrap_or_default();
-            collect_sentinels(&decision.destination, &bytes, &mut sentinels);
-        }
-        out.result_line(crate::commands::init::describe(decision));
-    }
-    for collision in &prepared.collisions {
-        out.result_line(format!(
-            "collision {}: {}",
-            collision.path, collision.reason
-        ));
-    }
-    for entry in &prepared.projection.omissions {
-        out.result_line(format!("withheld {}: {}", entry.destination, entry.reason));
-    }
+    let sentinels = report_decisions(out, &held, &prepared, landed.is_some())?;
     if landed.is_some() {
         out.result_line(format!("rewrote {}", manifest::MANIFEST_PATH));
         for sentinel in &sentinels {
@@ -163,10 +149,10 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
         }
     }
 
-    let next = next_lines(args, prepared.collisions.is_empty());
+    let next = next_lines(args, &params, prepared.collisions.is_empty());
     out.next(&next);
     out.emit(&Report {
-        schema: "rk.upgrade/7",
+        schema: "rk.upgrade/9",
         config: prepared.config.clone(),
         mode: if args.apply { "apply" } else { "preview" },
         target: args.target.to_string(),
@@ -177,6 +163,9 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
         workflow: params.workflow().as_str(),
         style: style.as_str(),
         nix: params.nix(),
+        scorecard: params.scorecard(),
+        code_scanning: params.code_scanning().map(Provider::as_str),
+        licence_refusal: prepared.projection.licence_refusal.clone(),
         withheld: withheld_of(&prepared),
         collisions: (!prepared.collisions.is_empty()).then(|| prepared.collisions.clone()),
         files: prepared
@@ -211,22 +200,82 @@ fn withheld_of(prepared: &Prepared) -> Option<Vec<landing::Withheld>> {
     (!withheld.is_empty()).then_some(withheld)
 }
 
+/// Every human line one upgrade prints about its own decisions, and the
+/// sentinels a landed run found while it read them back.
+///
+/// `landed` says whether the run wrote: only then is a created or replaced
+/// destination read back for its unfilled sentinels, because a preview has
+/// nothing on disk to read.
+///
+/// # Errors
+///
+/// A read failure at a destination the run just wrote.
+fn report_decisions(
+    out: Output,
+    held: &apply::Held,
+    prepared: &Prepared,
+    landed: bool,
+) -> Result<Vec<String>, RkError> {
+    for key in &prepared.config.changes {
+        out.result_line(format!("configuration changes {key}"));
+    }
+    out.result_line(format!(
+        "{} {}",
+        prepared.config.action,
+        crate::config::CONFIG_PATH
+    ));
+    let mut sentinels: Vec<String> = Vec::new();
+    for decision in &prepared.decisions {
+        if landed && matches!(decision.action, Action::Created | Action::Replaced) {
+            let bytes =
+                landing::read_recorded(held.base(), &decision.destination)?.unwrap_or_default();
+            collect_sentinels(&decision.destination, &bytes, &mut sentinels);
+        }
+        out.result_line(crate::commands::init::describe(decision));
+    }
+    for collision in &prepared.collisions {
+        out.result_line(format!(
+            "collision {}: {}",
+            collision.path, collision.reason
+        ));
+    }
+    for entry in &prepared.projection.omissions {
+        out.result_line(format!("withheld {}: {}", entry.destination, entry.reason));
+    }
+    if let Some(reason) = prepared.projection.licence_refusal.as_deref() {
+        out.result_line(format!("licence refusal: {reason}"));
+    }
+    Ok(sentinels)
+}
+
+/// One capability flag's answer: `on`, `off`, or unanswered.
+///
+/// Every opt-in capability reads its flag the same way, so the refusal
+/// names the flag and the two values from one place.
+fn toggle(flag: &str, value: Option<&str>) -> Result<Option<bool>, RkError> {
+    match value {
+        None => Ok(None),
+        Some("on") => Ok(Some(true)),
+        Some("off") => Ok(Some(false)),
+        Some(other) => Err(RkError::Usage(format!(
+            "unknown --{flag} value '{other}'; the values are: on, off"
+        ))),
+    }
+}
+
 fn resolve_params(
     args: &UpgradeArgs,
     held: &apply::Held,
     recorded: &Manifest,
     existing: Option<&crate::config::Config>,
 ) -> Result<landing::Params, RkError> {
-    let nix = match args.nix.as_deref() {
-        None => None,
-        Some("on") => Some(true),
-        Some("off") => Some(false),
-        Some(other) => {
-            return Err(RkError::Usage(format!(
-                "unknown --nix value '{other}'; the values are: on, off"
-            )));
-        }
-    };
+    let nix = toggle("nix", args.nix.as_deref())?;
+    let scorecard = toggle("scorecard", args.scorecard.as_deref())?;
+    let code_scanning = args
+        .code_scanning
+        .as_deref()
+        .map(Provider::parse)
+        .transpose()?;
     landing::Params::resolve(
         held.base(),
         &landing::Inputs {
@@ -236,6 +285,8 @@ fn resolve_params(
             workflow: args.workflow.as_deref().map(Workflow::parse).transpose()?,
             style: args.style.as_deref().map(Style::parse).transpose()?,
             nix,
+            scorecard,
+            code_scanning,
         },
         existing,
         Some(recorded),
@@ -246,7 +297,7 @@ fn resolve_params(
 /// The `Next:` lines for each outcome. A behavior-defining flag the
 /// preview was run with rides into the follow-up command, so following
 /// it applies the decision that was previewed, never a different one.
-fn next_lines(args: &UpgradeArgs, clean: bool) -> Vec<String> {
+fn next_lines(args: &UpgradeArgs, params: &landing::Params, clean: bool) -> Vec<String> {
     let identity_flags: String = [
         ("tech", args.tech.as_deref()),
         ("forge", args.forge.as_deref()),
@@ -263,10 +314,7 @@ fn next_lines(args: &UpgradeArgs, clean: bool) -> Vec<String> {
         .style
         .as_deref()
         .map_or_else(String::new, |style| format!(" --style {style}"));
-    let nix_flag = args
-        .nix
-        .as_deref()
-        .map_or_else(String::new, |value| format!(" --nix {value}"));
+    let capabilities = params.capability_toggles();
     if args.apply {
         vec![
             "commit the upgraded files, the receipt included".to_owned(),
@@ -275,7 +323,7 @@ fn next_lines(args: &UpgradeArgs, clean: bool) -> Vec<String> {
     } else if clean {
         vec![
             format!(
-                "rk upgrade{identity_flags}{workflow_flag}{style_flag}{nix_flag} --target {} --apply writes",
+                "rk upgrade{identity_flags}{workflow_flag}{style_flag}{capabilities} --target {} --apply writes",
                 args.target
             ),
             format!(
@@ -286,7 +334,7 @@ fn next_lines(args: &UpgradeArgs, clean: bool) -> Vec<String> {
     } else {
         vec![
             format!(
-                "resolve each collision above through the rk-setup skill; rk upgrade{identity_flags}{workflow_flag}{style_flag}{nix_flag} --target {} --apply refuses until then",
+                "resolve each collision above through the rk-setup skill; rk upgrade{identity_flags}{workflow_flag}{style_flag}{capabilities} --target {} --apply refuses until then",
                 args.target
             ),
             format!(
@@ -351,11 +399,11 @@ fn collect_sentinels(destination: &str, bytes: &[u8], found: &mut Vec<String>) {
 mod tests {
     use super::{FileEntry, Report};
 
-    /// The complete `rk.upgrade/7` shape, held by snapshot.
+    /// The complete `rk.upgrade/9` shape, held by snapshot.
     #[test]
     fn the_upgrade_report_schema_snapshot_holds() {
         let report = Report {
-            schema: "rk.upgrade/7",
+            schema: "rk.upgrade/9",
             config: crate::config::Plan {
                 action: "added",
                 changes: vec![],
@@ -370,6 +418,9 @@ mod tests {
             workflow: "branches",
             style: "trunk",
             nix: false,
+            scorecard: false,
+            code_scanning: None,
+            licence_refusal: None,
             withheld: None,
             collisions: None,
             files: vec![
@@ -388,7 +439,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.upgrade/7","mode":"preview","target":"/tmp/t","tech":"rust","forge":"github","from_version":"0.1.0","to_version":"0.2.0","workflow":"branches","style":"trunk","nix":false,"config":{"action":"added","changes":[],"content":"schema_version = 1\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"drift"},{"path":"legacy.yml","kind":"rendered","action":"released"}],"next":["rk upgrade --target /tmp/t --apply writes"]}"#
+            r#"{"schema":"rk.upgrade/9","mode":"preview","target":"/tmp/t","tech":"rust","forge":"github","from_version":"0.1.0","to_version":"0.2.0","workflow":"branches","style":"trunk","nix":false,"scorecard":false,"config":{"action":"added","changes":[],"content":"schema_version = 1\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"drift"},{"path":"legacy.yml","kind":"rendered","action":"released"}],"next":["rk upgrade --target /tmp/t --apply writes"]}"#
         );
     }
 }

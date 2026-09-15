@@ -26,7 +26,7 @@
   - [`landing:the-arming-identity-is-the-bot` — The arming identity is the bot](#landingthe-arming-identity-is-the-bot--the-arming-identity-is-the-bot)
   - [`landing:the-changelog-quality-gate-is-the-squash-message` — The changelog quality gate is the squash message](#landingthe-changelog-quality-gate-is-the-squash-message--the-changelog-quality-gate-is-the-squash-message)
   - [`landing:the-routing-block-bounds-the-agents-initiative` — The routing block bounds the agent's initiative and reads as plain prose](#landingthe-routing-block-bounds-the-agents-initiative--the-routing-block-bounds-the-agents-initiative-and-reads-as-plain-prose)
-  - [`landing:the-nix-capability-is-a-recorded-opt-in` — The Nix capability is a recorded opt-in](#landingthe-nix-capability-is-a-recorded-opt-in--the-nix-capability-is-a-recorded-opt-in)
+  - [`landing:the-nix-capability-is-a-recorded-opt-in` — An opt-in capability is a recorded landing parameter](#landingthe-nix-capability-is-a-recorded-opt-in--an-opt-in-capability-is-a-recorded-landing-parameter)
   - [`landing:the-flake-pair-lands-all-or-nothing` — The flake pair lands all-or-nothing](#landingthe-flake-pair-lands-all-or-nothing--the-flake-pair-lands-all-or-nothing)
 
 <!--TOC-->
@@ -47,19 +47,19 @@ A successful `rk init --apply` MUST render every candidate afresh from this bina
 - WHEN `rk init --apply` runs
 - THEN it exits 73 naming the collision, no file lands, and no `.release-kit/` directory appears
 
-Verify: `cargo nextest run -E 'test(fresh_init_preview_is_read_only_and_apply_writes_the_schema_7_receipt) or test(every_unattributed_collision_and_malformed_marker_is_collected_before_the_first_write)'`
+Verify: `cargo nextest run -E 'test(fresh_init_preview_is_read_only_and_apply_writes_the_schema_8_receipt) or test(every_unattributed_collision_and_malformed_marker_is_collected_before_the_first_write)'`
 
 ### `landing:a-record-states-its-schema` — A record states its schema
 
-The receipt MUST carry an integer `schema_version`, and a receipt at a version this binary does not know MUST refuse by that record schema alone, naming the record and independent of any other schema, never a best-effort read, because commands make decisions from it and must be able to say when they cannot, and at schema 7 the receipt MUST name the producing `rk_version`, the origin, the resolved parameters, and per destination the path, the kind, the placement where the destination is a marked region, and the digest of the bytes or region now present, and this binary MUST read a receipt at schemas 1 through 6 through one bounded conversion that ignores the two retired digest fields and write schema 7 at the next successful landing.
+The receipt MUST carry an integer `schema_version`, and a receipt at a version this binary does not know MUST refuse by that record schema alone, naming the record and independent of any other schema, never a best-effort read, because commands make decisions from it and must be able to say when they cannot, and at schema 8 the receipt MUST name the producing `rk_version`, the origin, the resolved parameters, and per destination the path, the kind, the placement where the destination is a marked region, and the digest of the bytes or region now present, and this binary MUST read a receipt at schemas 1 through 7 through one bounded conversion that ignores the two retired digest fields and write schema 8 at the next successful landing.
 
 #### Scenario: A schema 3 receipt and a schema 999 receipt meet this binary
 
 - GIVEN one target whose receipt declares `schema_version: 3` with `payload_sha256` and per-file `baseline_sha256`, and another declaring `schema_version: 999`
 - WHEN `rk upgrade --apply` runs against each
-- THEN the first loads with no other release resolved and rewrites as schema 7 carrying neither retired field, and the second exits 73 naming the record and the version it found with nothing written
+- THEN the first loads with no other release resolved and rewrites as schema 8 carrying neither retired field, and the second exits 73 naming the record and the version it found with nothing written
 
-Verify: `cargo nextest run -E 'test(receipt_schemas_1_through_6_load_without_a_release_source_and_rewrite_as_schema_7) or test(a_receipt_newer_than_the_binary_refuses_by_record_schema) or test(production_outputs_carry_no_plan_bundle_or_release_selection_field)'`
+Verify: `cargo nextest run -E 'test(receipt_schemas_1_through_7_load_without_a_release_source_and_rewrite_as_schema_8) or test(a_receipt_newer_than_the_binary_refuses_by_record_schema) or test(production_outputs_carry_no_plan_bundle_or_release_selection_field)'`
 
 ### `landing:a-rendered-file-is-reproducible` — A rendered file is reproducible
 
@@ -301,17 +301,17 @@ The routing block MUST state that an agent acting in the target guides and never
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 
-### `landing:the-nix-capability-is-a-recorded-opt-in` — The Nix capability is a recorded opt-in
+### `landing:the-nix-capability-is-a-recorded-opt-in` — An opt-in capability is a recorded landing parameter
 
-A landing MUST include the Nix destinations only under an explicit opt-in recorded as a landing parameter, defaulting off, with a record predating the parameter reading as opt-out, because the projection must stay reproducible from the record: without the parameter, `status` cannot tell an absent-because-not-wanted file from a drifted one, and `upgrade` cannot decide whether to add the files.
+A landing MUST include an opt-in capability's destinations only under an explicit opt-in recorded as a landing parameter, defaulting off, with a record predating the parameter reading as opt-out, because the projection must stay reproducible from the record: without the parameter, `status` cannot tell an absent-because-not-wanted file from a drifted one, and `upgrade` cannot decide whether to add the files. Three capabilities are bound by this rule: the Nix destinations, the OpenSSF Scorecard workflow, which posts to a public API and reads repository metadata, and the code scanning workflow, whose parameter names the analyzer. Each stays a target's choice rather than a guard this method requires. A capability whose files are technology-independent and which one forge alone can run MUST ship them in that forge's shared zone, so the parameter records the target's answer on either forge and the projection lands nothing the forge cannot execute; a capability whose files read one language MUST ship them in that binding's own pair instead, and a landing for a binding that ships none MUST refuse the capability by name rather than record a parameter and write nothing. A capability whose parameter names a provider MUST land exactly the destination that provider owns, and where that provider's terms bind the codebase it runs over, the landing MUST read the licence the binding declares and refuse the pair by name, writing nothing and naming a provider that carries no such condition, because a workflow whose terms the codebase does not satisfy is a licence violation this convention does not commit on a target's behalf; a licence that lapses after the landing MUST report as a warning under a stable code that `rk status --check` exits 0 on, because the target is not broken and the licensing decision is the operator's.
 
 #### Scenario: An old record meets a newer binary
 
-- GIVEN a landed target whose record predates the parameter
+- GIVEN a landed target whose record predates either parameter
 - WHEN `rk upgrade` runs
-- THEN no Nix destination joins the landing, and the rewritten record states the opt-out explicitly
+- THEN no destination of that capability joins the landing, and the rewritten record states the opt-out explicitly
 
-Verify: `cargo nextest run -E 'test(a_pre_nix_record_upgrades_to_nothing_unrequested)'`
+Verify: `cargo nextest run -E 'test(a_pre_nix_record_upgrades_to_nothing_unrequested) or test(/scorecard/)'`
 
 ### `landing:the-flake-pair-lands-all-or-nothing` — The flake pair lands all-or-nothing
 

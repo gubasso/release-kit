@@ -177,3 +177,18 @@ semantic-release reads its configuration from `.releaserc` with no extension or 
 - <https://goreleaser.com/customization/>
 
 Bearing: `landing:a-landing-classifies-its-target-first`. The marker catalog `rk assess` reads, `RELEASE_MARKERS` in `src/assess.rs`, carries every documented name, and `package.json` counts only with the `release` key, because an ordinary Node manifest is not a release mechanism.
+
+## SPDX, on the licence expression the code scanning condition reads
+
+Checked 2026-09-15. The SPDX 2.3 license-expression annex settles three things the reader depends on. Identifiers: "License identifiers (including license exception identifiers) used in SPDX documents or source code files should be matched in a _case-insensitive_ manner." Operators: "License expression operators (`AND`, `OR` and `WITH`) should be matched in a _case-sensitive_ manner." And the shape of `WITH`: "A valid `<license-expression>` is where the left operand is a `<simple-expression>` value and the right operand is a `<license-exception-id>` that represents the special exception terms."
+
+Cargo defines `package.license` as an SPDX expression and does not hold it to that casing: a crate declaring `license = "mit"` packages without complaint, checked by running `cargo package` over a scratch crate. So a real crate can carry any casing of an identifier, and a case-sensitive comparison would refuse a licence the reader recognizes.
+
+The exception register is carried whole rather than sampled: 86 identifiers from the SPDX license-list-data repository. A subset refuses a legitimate crate, because an exception older than the newest of its family is still valid — `GPL-2.0-only WITH GCC-exception-2.0` names a real exception a list carrying only `GCC-exception-3.1` would reject.
+
+- <https://spdx.github.io/spdx-spec/v2.3/SPDX-license-expressions/>
+- <https://spdx.org/licenses/exceptions-index.html>
+- <https://github.com/spdx/license-list-data/blob/main/json/exceptions.json>
+- <https://doc.rust-lang.org/cargo/reference/manifest.html#the-license-and-license-file-fields>
+
+Bearing: the licence arm of `landing:the-nix-capability-is-a-recorded-opt-in`. The reader answers two questions in one pass and both must hold: the expression is well formed, and every licence identifier in it is OSI-approved. An exception grants permission rather than withdrawing it, so it changes no verdict; it is validated because a reader that cannot parse the expression has not read the licence.

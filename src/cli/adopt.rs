@@ -9,6 +9,10 @@ use clap::Args;
 /// Strict: every rendered file must match what this binary would
 /// render, and no target file is ever changed.
 #[derive(Debug, Clone, Args)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each field is one clap flag, and an opt-in capability's flag is a boolean by design; a state machine would hide the command line this struct describes"
+)]
 pub struct AdoptArgs {
     /// The repository to adopt.
     #[arg(long, default_value = ".")]
@@ -50,6 +54,17 @@ pub struct AdoptArgs {
     /// exactly as a landing would have withheld them.
     #[arg(long)]
     pub nix: bool,
+
+    /// The target runs the Scorecard capability: the candidate includes its
+    /// workflow, and the record carries the parameter.
+    #[arg(long)]
+    pub scorecard: bool,
+
+    /// The target runs code scanning under this provider: codeql or
+    /// semgrep. The candidate includes its workflow and the record carries
+    /// the parameter.
+    #[arg(long, value_name = "PROVIDER")]
+    pub code_scanning: Option<String>,
 
     /// Write the config and record; without it verification runs and nothing is
     /// touched.

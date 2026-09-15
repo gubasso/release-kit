@@ -23,6 +23,8 @@ The create response is the only time the forge shows the token's value, so the s
 
 Rotation is two commands: create a replacement token through the same step once the old one nears expiry, or export a value as `RK_BOT_TOKEN` and run `rk setup step bot-secrets --target . --apply` to overwrite the stored variable, the value travelling on standard input.
 
+`rk init --code-scanning semgrep` lands `.gitlab/ci/code-scanning-semgrep.yml`, and the rendered `.gitlab-ci.yml` includes it under `rules: - exists:` naming the same path, because a local include of an absent file fails the whole pipeline and a target that did not opt in has no such file. Semgrep Community Edition rather than this forge's own SAST template: GitLab SAST is free at every tier, and it ships no GitLab-managed Rust ruleset, so the template would run and scan nothing. The job runs on the trunk and the release lines and never on a merge request, because this forge's merge check is the whole pipeline and a scan that blocked a merge would block it on a finding the author cannot triage in the request. Its result is a CI artifact rather than a merge-request widget: the vulnerability report that reads a SAST artifact is an Ultimate-tier feature, so on every other tier the artifact is what a reader opens. `codeql` is GitHub's own analyzer and this forge refuses that pair by name rather than recording an answer and writing nothing, and so does a binding that ships no scanner. The capability adds no setup step.
+
 ## Project jobs
 
 The rendered pipeline triggers a child pipeline from `.gitlab/ci/project.yml`. That file is the project's, created by the project and named by convention, and it is where a project declares jobs of its own.

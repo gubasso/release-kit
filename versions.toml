@@ -7,8 +7,9 @@
 # An entry with an action carries two refs with two jobs: commit is the
 # immutable execution reference the workflows run, and the tag or branch in
 # action is the discovery ref a freshness check reads for reviewed updates,
-# classified by ref_class as a moving-major-tag, moving-minor-tag, or
-# maintained-branch. Those refs exist to move — movement is an update
+# classified by ref_class as a moving-major-tag, moving-minor-tag,
+# maintained-branch, or exact-tag, the last for a project that publishes no
+# moving ref at all. Those refs exist to move — movement is an update
 # signal, never evidence of an attack — and the pinned commit is what keeps
 # that movement from changing what executes before someone reviews it.
 
@@ -215,3 +216,68 @@ used_by = ["rust"]
 purpose = "runs the nix build proof in the child pipeline the gitlab pair triggers"
 check = "https://api.github.com/repos/NixOS/nix/tags?per_page=100"
 checked = 2026-09-08
+
+# ossf/scorecard-action publishes exact release tags and no moving major tag,
+# so the discovery ref is the release tag itself: only a retag moves it, and
+# the check URL is what reports a newer release.
+[[tool]]
+name = "scorecard-action"
+version = "2.4.4"
+action = "ossf/scorecard-action@v2.4.4"
+commit = "2d1146689b8cda280b9bc96326124645441f03bc"
+ref_class = "exact-tag"
+used_by = ["rust", "python", "bash"]
+purpose = "computes the OpenSSF Scorecard result and publishes it in the opt-in scorecard workflow"
+check = "https://api.github.com/repos/ossf/scorecard-action/releases/latest"
+checked = 2026-09-15
+
+# The three codeql-action entry points the two code scanning workflows run.
+# Each is its own action path, so each carries its own registry entry; they
+# share one repository, one moving major tag, and one pinned commit.
+#
+# No check URL. github/codeql-action names its releases for the CodeQL bundle
+# they carry, codeql-bundle-v2.27.0 and the like, so no endpoint answers the
+# action's own version and a comparison against the major would read every
+# release as an update. The discovery ref is the whole freshness signal here:
+# rk versions --check reports ref-moved when v4 advances, which is when the
+# pin earns a review.
+[[tool]]
+name = "codeql-init"
+version = "4"
+action = "github/codeql-action/init@v4"
+commit = "b96794f015dfd88f77b49b1c93e0fa7110f94c63"
+ref_class = "moving-major-tag"
+used_by = ["rust"]
+purpose = "builds the CodeQL database in the opt-in code scanning workflow"
+checked = 2026-09-15
+
+[[tool]]
+name = "codeql-analyze"
+version = "4"
+action = "github/codeql-action/analyze@v4"
+commit = "b96794f015dfd88f77b49b1c93e0fa7110f94c63"
+ref_class = "moving-major-tag"
+used_by = ["rust"]
+purpose = "runs the queries and uploads the result in the opt-in code scanning workflow"
+checked = 2026-09-15
+
+[[tool]]
+name = "codeql-upload-sarif"
+version = "4"
+action = "github/codeql-action/upload-sarif@v4"
+commit = "b96794f015dfd88f77b49b1c93e0fa7110f94c63"
+ref_class = "moving-major-tag"
+used_by = ["rust"]
+purpose = "uploads the Semgrep result to code scanning in the opt-in code scanning workflow"
+checked = 2026-09-15
+
+# The Semgrep CE image the opt-in code scanning workflow runs in. An image is
+# the execution environment rather than a fetched step, so it is pinned by
+# version tag per ADR-pin-every-action-by-commit's stated boundary.
+[[tool]]
+name = "semgrep-image"
+version = "1.177.0"
+used_by = ["rust"]
+purpose = "runs the Semgrep CE rules in the opt-in code scanning workflow on either forge"
+check = "https://api.github.com/repos/semgrep/semgrep/releases/latest"
+checked = 2026-09-15

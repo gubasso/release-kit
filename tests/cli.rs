@@ -139,6 +139,8 @@ fn projection_params(
             workflow,
             style: Some(style),
             nix,
+            scorecard: false,
+            code_scanning: None,
             trunk: release_kit::config::TRUNK_DEFAULT.to_owned(),
             line_prefix: release_kit::config::LINE_PREFIX_DEFAULT.to_owned(),
             security_contact: String::new(),
@@ -257,6 +259,8 @@ fn render_params(
             workflow: release_kit::landing::Workflow::Worktree,
             style,
             nix: false,
+            scorecard: false,
+            code_scanning: None,
             trunk: release_kit::config::TRUNK_DEFAULT.to_owned(),
             line_prefix: release_kit::config::LINE_PREFIX_DEFAULT.to_owned(),
             security_contact: String::new(),
@@ -743,7 +747,7 @@ fn init_preview_human_lines_are_snapshot_held() {
          created SECURITY.md\n\
          created dist-workspace.toml\n\
          created release-plz.toml\n\
-         Next:\n  rk init --tech rust --forge github --repo <owner/name> --workflow worktree --style trunk --target {path} --apply\n\
+         Next:\n  rk init --tech rust --forge github --repo <owner/name> --workflow worktree --style trunk --code-scanning off --target {path} --apply\n\
          \x20 rk stage --target {path} stages the complete candidate for a byte comparison\n"
     );
     let output = rk()
@@ -784,7 +788,7 @@ fn init_json_emits_one_object_and_nothing_else() {
             .stdout
             .clone();
         let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-        assert_eq!(report["schema"], "rk.init/7");
+        assert_eq!(report["schema"], "rk.init/9");
         assert_eq!(report["mode"], mode);
         assert!(
             report["files"].as_array().is_some_and(|f| !f.is_empty()),
@@ -6891,7 +6895,7 @@ fn a_landing_writes_the_record_with_its_identity() {
         .success()
         .stdout(predicate::str::contains("wrote .release-kit/manifest.json"));
     let manifest = read_manifest(target.path());
-    assert_eq!(manifest["schema_version"], 7);
+    assert_eq!(manifest["schema_version"], 8);
     assert_eq!(manifest["rk_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(manifest["origin"], "init");
     assert_eq!(manifest["tech"], "rust");
@@ -7394,7 +7398,7 @@ fn status_json_is_one_object_over_a_fresh_landing() {
         .stdout
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["schema"], "rk.status/9");
+    assert_eq!(report["schema"], "rk.status/11");
     assert_eq!(report["landed"], true);
     assert_eq!(report["tech"], "rust");
     assert_eq!(report["style"], "trunk");
@@ -7897,7 +7901,7 @@ fn an_upgrade_replaces_a_recorded_generated_file_whose_bytes_differ() {
         "semver_check = true\n"
     );
     let receipt = read_manifest(target.path());
-    assert_eq!(receipt["schema_version"], 7);
+    assert_eq!(receipt["schema_version"], 8);
     assert_eq!(
         manifest_file(&receipt, ".github/workflows/release-plz.yml")["sha256"],
         Digest::of(landed.as_bytes()).to_string()
@@ -8209,6 +8213,117 @@ fn tree_digests(root: &Path) -> Vec<(String, String)> {
     walk(root, root, &mut out);
     out.sort();
     out
+}
+
+/// A discovery ref belongs to the action's repository, not to its path. An
+/// action below the repository root — `owner/repo/init` — resolves against
+/// `owner/repo`, because the URL a path built would name no repository at all
+/// and every such pin would read unreachable.
+#[test]
+fn a_sub_path_actions_discovery_ref_resolves_against_its_repository() {
+    let mock = tempfile::tempdir().expect("a scratch dir exists");
+    let curl = mock.path().join("curl");
+    // The mock answers exactly one URL, the repository-rooted one, and fails
+    // every other: a resolver that kept the entry-point segment would ask for
+    // /repos/github/codeql-action/init/commits/v4 and read unreachable.
+    std::fs::write(
+        &curl,
+        r#"#!/usr/bin/env bash
+url="${@: -1}"
+case "$url" in
+  "https://api.github.com/repos/github/codeql-action/commits/v4")
+    printf '%s' '{"sha":"b96794f015dfd88f77b49b1c93e0fa7110f94c63"}';;
+  */commits/*) exit 22;;
+  *) printf '%s' '{"tag_name":"v0.0.0"}';;
+esac
+"#,
+    )
+    .expect("the mock writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&curl, std::fs::Permissions::from_mode(0o755))
+            .expect("the mock is executable");
+    }
+    let out = rk()
+        .args(["versions", "--check", "--json"])
+        .env("RK_CURL_BIN", &curl)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    let pins = report["pins"].as_array().expect("a pin list");
+    let mut seen = 0;
+    for pin in pins {
+        let Some(tool) = pin["tool"].as_str() else {
+            continue;
+        };
+        if !tool.starts_with("codeql-") {
+            continue;
+        }
+        seen += 1;
+        assert_eq!(
+            pin["ref_result"], "ref-unmoved",
+            "{tool}: the ref resolves against the repository: {pin}"
+        );
+        assert_eq!(
+            pin["ref_commit"],
+            "b96794f015dfd88f77b49b1c93e0fa7110f94c63"
+        );
+    }
+    assert_eq!(seen, 3, "every codeql entry point is judged: {report}");
+}
+
+/// A discovery ref is one path segment, so a `/` inside it is encoded. The
+/// registry already carries `pypa/gh-action-pypi-publish@release/v1`, and the
+/// documented contract for a path parameter is the encoded form.
+#[test]
+fn a_discovery_ref_carrying_a_slash_is_encoded_as_one_segment() {
+    let mock = tempfile::tempdir().expect("a scratch dir exists");
+    let curl = mock.path().join("curl");
+    // The mock answers the encoded URL alone. A resolver that passed the raw
+    // slash through would ask for /commits/release/v1 and read unreachable.
+    std::fs::write(
+        &curl,
+        r#"#!/usr/bin/env bash
+url="${@: -1}"
+case "$url" in
+  "https://api.github.com/repos/pypa/gh-action-pypi-publish/commits/release%2Fv1")
+    printf '%s' '{"sha":"dc37677b2e1c63e2034f94d8a5b11f265b73ba33"}';;
+  */commits/*) exit 22;;
+  *) printf '%s' '{"tag_name":"v0.0.0"}';;
+esac
+"#,
+    )
+    .expect("the mock writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&curl, std::fs::Permissions::from_mode(0o755))
+            .expect("the mock is executable");
+    }
+    let out = rk()
+        .args(["versions", "--check", "--json"])
+        .env("RK_CURL_BIN", &curl)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    let pin = report["pins"]
+        .as_array()
+        .expect("a pin list")
+        .iter()
+        .find(|pin| pin["tool"] == "gh-action-pypi-publish")
+        .expect("the slash-bearing pin is judged");
+    assert_eq!(pin["ref_result"], "ref-unmoved", "{pin}");
+    assert_eq!(
+        pin["ref_commit"], "dc37677b2e1c63e2034f94d8a5b11f265b73ba33",
+        "{pin}"
+    );
 }
 
 /// `rk versions --check` against a mocked fetch: all four per-pin results
@@ -11086,7 +11201,7 @@ fn an_upgrade_migrates_a_schema_1_record_to_the_current_schema() {
         .assert()
         .success();
     let migrated = read_manifest(target.path());
-    assert_eq!(migrated["schema_version"], 7);
+    assert_eq!(migrated["schema_version"], 8);
     assert_eq!(migrated["parameters"]["workflow"], "branches");
     assert_eq!(migrated["parameters"]["style"], "trunk");
     let hooks = std::fs::read_to_string(target.path().join(".pre-commit-config.yaml"))
@@ -11168,7 +11283,7 @@ fn an_upgrade_drops_the_recorded_scope_vocabulary() {
         );
 
     let migrated = read_manifest(target.path());
-    assert_eq!(migrated["schema_version"], 7);
+    assert_eq!(migrated["schema_version"], 8);
     assert!(
         migrated["parameters"]["scopes"].is_null(),
         "the vocabulary leaves the record: {migrated}"
@@ -12741,11 +12856,83 @@ fn a_preview_follow_up_keeps_the_previewed_decision() {
         .get_output()
         .stdout
         .clone();
+    // Every capability's resolved value rides along, stated rather than
+    // implied: an upgrade can turn one off as well as on, so absence is no
+    // answer there and a follow-up that omitted it would re-resolve the
+    // configured value and apply a decision the preview did not show.
     assert!(
-        String::from_utf8_lossy(&out).contains("rk upgrade --workflow branches --target"),
-        "the upgrade follow-up carries the mode change: {}",
+        String::from_utf8_lossy(&out).contains(
+            "rk upgrade --workflow branches --nix off --scorecard off --code-scanning off --target"
+        ),
+        "the upgrade follow-up carries the mode change and every capability: {}",
         String::from_utf8_lossy(&out)
     );
+
+    // The case that made this necessary: a capability turned off previews its
+    // removal, and following the printed command must remove it rather than
+    // re-resolve the recorded value and keep it.
+    let opted = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust_scorecard(opted.path()).success();
+    let out = rk()
+        .args(["upgrade", "--scorecard", "off", "--target"])
+        .arg(opted.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let printed = String::from_utf8_lossy(&out);
+    let follow = printed
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("rk upgrade") && line.contains("--apply"))
+        .expect("the preview prints a follow-up command")
+        .to_owned();
+    assert!(follow.contains("--scorecard off"), "{follow}");
+    let arguments: Vec<&str> = follow
+        .split_whitespace()
+        .skip(1)
+        .take_while(|word| *word != "writes")
+        .collect();
+    rk().args(&arguments).assert().success();
+    assert_eq!(
+        read_manifest(opted.path())["parameters"]["scorecard"],
+        false,
+        "the printed command applied the previewed decision"
+    );
+
+    // The init and adopt form: the presence flags, where off is the default
+    // and an unwanted capability renders nothing.
+    let fresh = tempfile::tempdir().expect("a scratch dir exists");
+    seed_licensed_crate(fresh.path(), "MIT");
+    let out = rk()
+        .args(["init", "--tech", "rust", "--forge", "github"])
+        .args(["--repo", "acme/widget", "--scorecard"])
+        .args(["--code-scanning", "codeql", "--target"])
+        .arg(fresh.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let printed = String::from_utf8_lossy(&out);
+    let follow = printed
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("rk init"))
+        .expect("the preview prints a follow-up command")
+        .to_owned();
+    assert!(follow.contains(" --scorecard"), "{follow}");
+    assert!(follow.contains(" --code-scanning codeql"), "{follow}");
+    assert!(
+        !follow.contains(" --nix"),
+        "an unwanted capability is absent: {follow}"
+    );
+    let arguments: Vec<&str> = follow.split_whitespace().skip(1).collect();
+    rk().args(&arguments).assert().success();
+    let manifest = read_manifest(fresh.path());
+    assert_eq!(manifest["parameters"]["scorecard"], true);
+    assert_eq!(manifest["parameters"]["code_scanning"], "codeql");
 }
 
 /// A scratch repository ignoring `.draft/`, for the message content guard.
@@ -14036,6 +14223,813 @@ fn an_adoption_records_the_nix_parameter() {
             .all(|file| file["destination"] != "flake.nix"),
         "a pair no record vouches for stays the target's own"
     );
+}
+
+/// The Scorecard destination, named once for the tests below.
+const SCORECARD_WORKFLOW: &str = ".github/workflows/scorecard.yml";
+
+/// Land the rust files with the Scorecard capability opted in.
+fn land_rust_scorecard(target: &Path) -> assert_cmd::assert::Assert {
+    rk().args(["init", "--tech", "rust", "--forge", "github"])
+        .args(["--repo", "acme/widget", "--scorecard"])
+        .arg("--target")
+        .arg(target)
+        .arg("--apply")
+        .assert()
+}
+
+/// SATISFIES landing:the-nix-capability-is-a-recorded-opt-in
+///
+/// The opt-in lands the workflow, records the parameter, and names the
+/// destination in the receipt with the kind release-kit owns.
+#[test]
+fn the_scorecard_opt_in_lands_the_workflow_and_records_the_parameter() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust_scorecard(target.path()).success();
+    let landed = target.path().join(SCORECARD_WORKFLOW);
+    assert!(landed.is_file(), "the workflow lands");
+    let text = std::fs::read_to_string(&landed).expect("the workflow reads");
+    assert!(
+        text.contains("branches: [master]"),
+        "the recorded trunk renders: {text}"
+    );
+    assert!(
+        !text.contains("RK_TRUNK_BRANCH"),
+        "a token survived: {text}"
+    );
+    assert!(
+        text.contains("ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc"),
+        "the action is pinned by commit: {text}"
+    );
+    let manifest = read_manifest(target.path());
+    assert_eq!(manifest["parameters"]["scorecard"], true);
+    assert_eq!(
+        manifest_file(&manifest, SCORECARD_WORKFLOW)["kind"],
+        "rendered"
+    );
+    assert_eq!(
+        manifest["pins"]["scorecard-action"], "2.4.4",
+        "the capability's pin enters the receipt"
+    );
+}
+
+/// Without the flag the workflow stays out, and a target that did not ask
+/// for it is clean: an absent file under the recorded opt-out is not
+/// wanted, never drifted.
+#[test]
+fn a_landing_without_the_scorecard_flag_lands_nothing_and_judges_clean() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+    assert!(
+        !target.path().join(SCORECARD_WORKFLOW).exists(),
+        "off by default"
+    );
+    let manifest = read_manifest(target.path());
+    assert_eq!(manifest["parameters"]["scorecard"], false);
+    assert!(
+        manifest["files"]
+            .as_array()
+            .expect("a file list")
+            .iter()
+            .all(|file| file["destination"] != SCORECARD_WORKFLOW)
+    );
+    // The fresh landing's own unfilled sentinel is what --check reports,
+    // so the assertion is that the absent workflow adds nothing: no
+    // violation and no pending destination names it.
+    let out = rk()
+        .args(["status", "--check", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["scorecard"], false);
+    assert_eq!(report["drift"]["rendered"], 0);
+    assert_eq!(report["record_drift"], 0);
+    assert_eq!(report["pending"], 0);
+    assert_eq!(
+        report["violations"]
+            .as_array()
+            .expect("a violation list")
+            .iter()
+            .filter(|line| line.as_str().is_some_and(|line| line.contains("scorecard")))
+            .count(),
+        0,
+        "an absent file under the opt-out is not wanted, never drifted: {report}"
+    );
+}
+
+/// SATISFIES landing:the-nix-capability-is-a-recorded-opt-in
+///
+/// A receipt predating the parameter upgrades to the opt-out, and no
+/// workflow sprouts.
+#[test]
+fn a_pre_scorecard_record_upgrades_to_nothing_unrequested() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+    let mut manifest = read_manifest(target.path());
+    manifest["schema_version"] = serde_json::json!(7);
+    manifest["parameters"]
+        .as_object_mut()
+        .expect("parameters is an object")
+        .remove("scorecard");
+    write_manifest(target.path(), &manifest);
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    assert!(
+        !target.path().join(SCORECARD_WORKFLOW).exists(),
+        "no workflow joins an upgrade nobody opted into"
+    );
+    assert_eq!(
+        read_manifest(target.path())["parameters"]["scorecard"],
+        false
+    );
+}
+
+/// The capability is GitHub's alone, so a GitLab landing projects nothing
+/// for it even under the flag, and the record still states the answer.
+#[test]
+fn the_scorecard_opt_in_lands_no_file_on_gitlab() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    rk().args(["init", "--tech", "rust", "--forge", "gitlab"])
+        .args(["--repo", "acme/widget", "--scorecard"])
+        .arg("--target")
+        .arg(target.path())
+        .arg("--apply")
+        .assert()
+        .success();
+    assert!(!target.path().join(SCORECARD_WORKFLOW).exists());
+    assert_eq!(
+        read_manifest(target.path())["parameters"]["scorecard"],
+        true
+    );
+}
+
+/// The workflow is `rendered`, so an edit is a violation `--check` reports
+/// and an upgrade replaces from the projection.
+#[test]
+fn an_edited_scorecard_workflow_is_rendered_drift_an_upgrade_replaces() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust_scorecard(target.path()).success();
+    let landed = target.path().join(SCORECARD_WORKFLOW);
+    let projected = std::fs::read(&landed).expect("the workflow reads");
+    std::fs::write(&landed, b"name: mine\n").expect("the edit writes");
+    rk().args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains(format!(
+            "DRIFT {SCORECARD_WORKFLOW} (rendered, release-kit-owned)"
+        )));
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    assert_eq!(
+        std::fs::read(&landed).expect("the workflow reads"),
+        projected,
+        "an upgrade replaces a rendered file from the projection"
+    );
+}
+
+/// The code scanning destinations, named once for the tests below.
+const CODEQL_WORKFLOW: &str = ".github/workflows/code-scanning-codeql.yml";
+const SEMGREP_WORKFLOW_GITHUB: &str = ".github/workflows/code-scanning-semgrep.yml";
+const SEMGREP_WORKFLOW_GITLAB: &str = ".gitlab/ci/code-scanning-semgrep.yml";
+
+/// A crate seeded with one declared licence, so the codeql condition has
+/// something to read.
+fn seed_licensed_crate(target: &Path, licence: &str) {
+    std::fs::write(
+        target.join("Cargo.toml"),
+        // The dist profile too: a landed rust/github target without it fails
+        // the seeded-file invariant, and this fixture is used where the exit
+        // code must answer the licence question alone.
+        format!(
+            "[package]\nname = \"widget\"\nversion = \"0.1.0\"\nlicense = \"{licence}\"\n\n[profile.dist]\ninherits = \"release\"\n"
+        ),
+    )
+    .expect("the crate manifest writes");
+    std::fs::create_dir_all(target.join("src")).expect("the src dir exists");
+    std::fs::write(target.join("src/main.rs"), "fn main() {}\n").expect("the main writes");
+    std::fs::write(target.join("Cargo.lock"), "version = 4\n").expect("the lock writes");
+}
+
+/// Land with the code scanning capability under one provider on one forge.
+fn land_code_scanning(target: &Path, forge: &str, provider: &str) -> Command {
+    let mut command = rk();
+    command
+        .args(["init", "--tech", "rust", "--forge", forge])
+        .args(["--repo", "acme/widget", "--code-scanning", provider])
+        .arg("--target")
+        .arg(target)
+        .arg("--apply");
+    command
+}
+
+/// A rust target whose declared licence is OSI-approved gets the `CodeQL`
+/// workflow, with its provider recorded.
+#[test]
+fn an_osi_licensed_rust_target_lands_the_codeql_workflow() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    seed_licensed_crate(target.path(), "MIT OR Apache-2.0");
+    land_code_scanning(target.path(), "github", "codeql")
+        .assert()
+        .success();
+    let landed = target.path().join(CODEQL_WORKFLOW);
+    assert!(landed.is_file(), "the codeql workflow lands");
+    let text = std::fs::read_to_string(&landed).expect("the workflow reads");
+    assert!(text.contains("languages: rust"), "{text}");
+    assert!(text.contains("build-mode: none"), "{text}");
+    assert!(
+        !text.contains("pull_request"),
+        "a second request-reporting workflow gates nothing: {text}"
+    );
+    assert!(
+        !target.path().join(SEMGREP_WORKFLOW_GITHUB).exists(),
+        "one provider, one destination"
+    );
+    let manifest = read_manifest(target.path());
+    assert_eq!(manifest["parameters"]["code_scanning"], "codeql");
+    assert_eq!(
+        manifest_file(&manifest, CODEQL_WORKFLOW)["kind"],
+        "rendered"
+    );
+}
+
+/// A licence this release does not recognize as OSI-approved refuses the
+/// codeql pair by name, names the fallback, and lands nothing.
+#[test]
+fn a_licence_codeql_does_not_permit_refuses_the_pair_and_lands_nothing() {
+    for licence in ["LicenseRef-proprietary", "MIT AND LicenseRef-proprietary"] {
+        let target = tempfile::tempdir().expect("a scratch dir exists");
+        seed_licensed_crate(target.path(), licence);
+        land_code_scanning(target.path(), "github", "codeql")
+            .assert()
+            .code(73)
+            .stderr(
+                predicate::str::contains(licence)
+                    .and(predicate::str::contains("OSI-approved"))
+                    .and(predicate::str::contains("--code-scanning semgrep")),
+            );
+        assert!(
+            !target.path().join(CODEQL_WORKFLOW).exists(),
+            "{licence}: nothing lands"
+        );
+        assert!(
+            !target.path().join(".release-kit").exists(),
+            "{licence}: no receipt appears"
+        );
+    }
+}
+
+/// A crate that declares no licence at all refuses the same way: the
+/// condition is unread rather than unsatisfied, and a landing never guesses.
+#[test]
+fn a_crate_declaring_no_licence_refuses_the_codeql_pair() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    seed_crate(target.path());
+    land_code_scanning(target.path(), "github", "codeql")
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("declares no license field"));
+    assert!(!target.path().join(CODEQL_WORKFLOW).exists());
+}
+
+/// Semgrep carries no licence condition, so it lands on either forge over a
+/// licence `codeql` refuses.
+#[test]
+fn semgrep_lands_on_both_forges_with_no_licence_condition() {
+    for (forge, destination) in [
+        ("github", SEMGREP_WORKFLOW_GITHUB),
+        ("gitlab", SEMGREP_WORKFLOW_GITLAB),
+    ] {
+        let target = tempfile::tempdir().expect("a scratch dir exists");
+        seed_licensed_crate(target.path(), "LicenseRef-proprietary");
+        land_code_scanning(target.path(), forge, "semgrep")
+            .assert()
+            .success();
+        assert!(
+            target.path().join(destination).is_file(),
+            "{forge}: {destination} lands"
+        );
+        let manifest = read_manifest(target.path());
+        assert_eq!(manifest["parameters"]["code_scanning"], "semgrep");
+        assert_eq!(manifest_file(&manifest, destination)["kind"], "rendered");
+    }
+}
+
+/// codeql is GitHub's own analyzer, so the gitlab pair refuses it by name
+/// rather than recording an answer and writing nothing.
+#[test]
+fn the_gitlab_pair_refuses_codeql_by_name() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    seed_licensed_crate(target.path(), "MIT");
+    land_code_scanning(target.path(), "gitlab", "codeql")
+        .assert()
+        .code(64)
+        .stderr(
+            predicate::str::contains("codeql is GitHub's own analyzer")
+                .and(predicate::str::contains("--code-scanning semgrep")),
+        );
+    assert!(!target.path().join(".release-kit").exists());
+}
+
+/// A licence that lapses after the landing is a warning with its stable
+/// reason code, not a fault: the target is not broken and the licensing
+/// decision is the operator's.
+#[test]
+fn a_lapsed_licence_is_a_warning_and_check_still_exits_zero() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    seed_licensed_crate(target.path(), "MIT");
+    land_code_scanning(target.path(), "github", "codeql")
+        .assert()
+        .success();
+    // The sentinel a fresh landing leaves is the only violation, so filling
+    // it is what makes the exit code answer the licence question alone.
+    let seeded = target.path().join("release-plz.toml");
+    let text = std::fs::read_to_string(&seeded).expect("the seed reads");
+    let mut filled = String::new();
+    for line in text
+        .lines()
+        .filter(|line| !line.contains("TODO(release-kit)"))
+    {
+        filled.push_str(line);
+        filled.push('\n');
+    }
+    std::fs::write(&seeded, filled).expect("the seed writes");
+    rk().args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    seed_licensed_crate(target.path(), "LicenseRef-proprietary");
+    let out = rk()
+        .args(["status", "--check", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    let warnings = report["warnings"].as_array().expect("a warning list");
+    assert_eq!(warnings.len(), 1, "{report}");
+    assert_eq!(warnings[0]["code"], "code-scanning-licence");
+    assert!(
+        warnings[0]["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("LicenseRef-proprietary")),
+        "{report}"
+    );
+    assert_eq!(
+        report["violations"].as_array().expect("a list").len(),
+        0,
+        "a lapsed licence is no violation: {report}"
+    );
+    rk().args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("WARNING (code-scanning-licence)"));
+}
+
+/// Without the flag neither workflow lands on either forge, and nothing
+/// about the capability reaches the report.
+#[test]
+fn a_landing_without_the_code_scanning_flag_lands_neither_workflow() {
+    for forge in ["github", "gitlab"] {
+        let target = tempfile::tempdir().expect("a scratch dir exists");
+        seed_licensed_crate(target.path(), "MIT");
+        rk().args(["init", "--tech", "rust", "--forge", forge])
+            .args(["--repo", "acme/widget", "--target"])
+            .arg(target.path())
+            .arg("--apply")
+            .assert()
+            .success();
+        for destination in [
+            CODEQL_WORKFLOW,
+            SEMGREP_WORKFLOW_GITHUB,
+            SEMGREP_WORKFLOW_GITLAB,
+        ] {
+            assert!(
+                !target.path().join(destination).exists(),
+                "{forge}: {destination} must stay out"
+            );
+        }
+        let manifest = read_manifest(target.path());
+        assert!(
+            manifest["parameters"]["code_scanning"].is_null(),
+            "{forge}: {manifest}"
+        );
+    }
+}
+
+/// Switching provider retires one destination and adds the other: the
+/// retired file stays on disk as the target's own, exactly as any file this
+/// binary stops shipping does.
+#[test]
+fn switching_the_code_scanning_provider_retires_the_other_destination() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    seed_licensed_crate(target.path(), "MIT");
+    land_code_scanning(target.path(), "github", "codeql")
+        .assert()
+        .success();
+    rk().args([
+        "upgrade",
+        "--code-scanning",
+        "semgrep",
+        "--apply",
+        "--target",
+    ])
+    .arg(target.path())
+    .assert()
+    .success();
+    assert!(
+        target.path().join(SEMGREP_WORKFLOW_GITHUB).is_file(),
+        "the new provider's workflow lands"
+    );
+    assert!(
+        target.path().join(CODEQL_WORKFLOW).is_file(),
+        "a released destination stays on disk"
+    );
+    let manifest = read_manifest(target.path());
+    assert_eq!(manifest["parameters"]["code_scanning"], "semgrep");
+    assert!(
+        manifest["files"]
+            .as_array()
+            .expect("a file list")
+            .iter()
+            .all(|file| file["destination"] != CODEQL_WORKFLOW),
+        "the retired destination leaves the receipt"
+    );
+    rk().args(["upgrade", "--code-scanning", "off", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    assert!(read_manifest(target.path())["parameters"]["code_scanning"].is_null());
+    rk().args(["upgrade", "--code-scanning", "sonar", "--target"])
+        .arg(target.path())
+        .assert()
+        .code(64)
+        .stderr(predicate::str::contains(
+            "the providers are: codeql, semgrep",
+        ));
+}
+
+/// Both GitHub scanners upload SARIF, and the upload fails on a private
+/// repository without `actions: read`. The landing does not know whether a
+/// target is private, so both jobs carry it, and neither takes a write
+/// permission at workflow level.
+#[test]
+fn both_github_scanners_carry_the_permissions_the_upload_needs() {
+    for (name, destination) in [
+        ("code-scanning-codeql.yml", CODEQL_WORKFLOW),
+        ("code-scanning-semgrep.yml", SEMGREP_WORKFLOW_GITHUB),
+    ] {
+        let source = repo_path("snippets/rust/github/.github/workflows").join(name);
+        let text = std::fs::read_to_string(&source).expect("the snippet reads");
+        assert!(text.contains("security-events: write"), "{name}: {text}");
+        assert!(
+            text.contains("actions: read"),
+            "{name}: a private target's upload needs it: {text}"
+        );
+        assert!(
+            text.contains("permissions: {}"),
+            "{name}: the workflow level takes nothing: {text}"
+        );
+        assert!(
+            !text.contains("pull_request"),
+            "{name}: a second request-reporting workflow gates nothing: {text}"
+        );
+        assert_eq!(
+            destination,
+            format!(".github/workflows/{name}"),
+            "the source's name is its destination"
+        );
+    }
+}
+
+/// A scanner reads one language, so the workflows live in the rust pairs and
+/// every other binding refuses the capability by name. A landing that
+/// recorded a provider and wrote nothing would be the dishonest answer.
+#[test]
+fn a_binding_with_no_scanner_refuses_the_capability_by_name() {
+    for (tech, forge) in [("bash", "github"), ("bash", "gitlab"), ("python", "github")] {
+        let target = tempfile::tempdir().expect("a scratch dir exists");
+        rk().args(["init", "--tech", tech, "--forge", forge])
+            .args(["--repo", "acme/widget", "--code-scanning", "semgrep"])
+            .arg("--target")
+            .arg(target.path())
+            .arg("--apply")
+            .assert()
+            .code(64)
+            .stderr(
+                predicate::str::contains(format!("the {tech} binding ships no code scanning"))
+                    .and(predicate::str::contains("rust")),
+            );
+        assert!(
+            !target.path().join(".release-kit").exists(),
+            "{tech} {forge}: nothing lands"
+        );
+    }
+    // The bash GitLab pipeline names no scanning include, because no bash
+    // scanner ships and a local include of an absent file fails the pipeline.
+    let pipeline = std::fs::read_to_string(repo_path("snippets/bash/gitlab/.gitlab-ci.yml"))
+        .expect("the pipeline reads");
+    assert!(!pipeline.contains("code-scanning"), "{pipeline}");
+}
+
+/// The preview says what the apply will refuse, on every verb that previews.
+/// An operator who reads only the human output must not follow a command that
+/// cannot run.
+#[test]
+fn every_preview_names_the_licence_refusal_the_apply_will_answer() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    seed_licensed_crate(target.path(), "LicenseRef-proprietary");
+    let names_it = predicate::str::contains("the apply refuses until the licence condition");
+    rk().args(["init", "--tech", "rust", "--forge", "github"])
+        .args([
+            "--repo",
+            "acme/widget",
+            "--code-scanning",
+            "codeql",
+            "--target",
+        ])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(names_it.clone());
+    // Adoption needs a target that already runs the convention, so this one
+    // lands under a licence codeql permits, loses its receipt, and then meets
+    // a licence it does not: the pre-record target running a workflow its own
+    // terms forbid, which is the case the line exists for.
+    let adopted = tempfile::tempdir().expect("a scratch dir exists");
+    seed_licensed_crate(adopted.path(), "MIT");
+    rk().args(["init", "--tech", "rust", "--forge", "github"])
+        .args(["--repo", "acme/widget", "--workflow", "branches"])
+        .args(["--code-scanning", "codeql", "--target"])
+        .arg(adopted.path())
+        .arg("--apply")
+        .assert()
+        .success();
+    std::fs::remove_file(adopted.path().join(".release-kit/manifest.json"))
+        .expect("the receipt removes");
+    seed_licensed_crate(adopted.path(), "LicenseRef-proprietary");
+    rk().args(["adopt", "--tech", "rust", "--forge", "github"])
+        .args(["--repo", "acme/widget", "--style", "trunk"])
+        .args(["--code-scanning", "codeql", "--target"])
+        .arg(adopted.path())
+        .assert()
+        .success()
+        .stdout(names_it);
+    // The upgrade preview needs a record, so it lands under a licence codeql
+    // permits and then meets one it does not.
+    let landed = tempfile::tempdir().expect("a scratch dir exists");
+    seed_licensed_crate(landed.path(), "MIT");
+    land_code_scanning(landed.path(), "github", "codeql")
+        .assert()
+        .success();
+    seed_licensed_crate(landed.path(), "LicenseRef-proprietary");
+    rk().args(["upgrade", "--target"])
+        .arg(landed.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("licence refusal:"));
+    // And the apply refuses, so the preview told the truth.
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(landed.path())
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains(
+            "licence condition is not satisfied",
+        ));
+}
+
+/// A receipt naming a provider its own pair cannot run is a receipt nothing
+/// can honour. It reaches `rk status` through `from_record`, which cannot
+/// fail, so the projection reports it and `--check` counts it.
+#[test]
+fn a_recorded_provider_the_pair_cannot_run_is_reported_and_judged() {
+    for (tech, forge, provider, named) in [
+        ("bash", "github", "semgrep", "bash binding"),
+        ("rust", "gitlab", "codeql", "codeql"),
+    ] {
+        let target = tempfile::tempdir().expect("a scratch dir exists");
+        seed_licensed_crate(target.path(), "MIT");
+        rk().args(["init", "--tech", tech, "--forge", forge])
+            .args(["--repo", "acme/widget", "--target"])
+            .arg(target.path())
+            .arg("--apply")
+            .assert()
+            .success();
+        // The receipt is edited past what resolution would ever have written,
+        // which is the only way this state arises: a hand edit, or a landing
+        // from a binary whose pairs differed.
+        let mut manifest = read_manifest(target.path());
+        manifest["parameters"]
+            .as_object_mut()
+            .expect("parameters is an object")
+            .insert("code_scanning".into(), serde_json::json!(provider));
+        write_manifest(target.path(), &manifest);
+        let out = rk()
+            .args(["status", "--check", "--json", "--target"])
+            .arg(target.path())
+            .assert()
+            .code(1)
+            .get_output()
+            .stdout
+            .clone();
+        let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+        assert_eq!(report["code_scanning"], provider);
+        assert!(
+            report["record_drift"].as_u64().unwrap_or(0) >= 1,
+            "{tech} {forge}: the incompatible record is drift: {report}"
+        );
+        assert!(
+            report["violations"]
+                .as_array()
+                .expect("a violation list")
+                .iter()
+                .any(|line| line.as_str().is_some_and(|line| line.contains(named))),
+            "{tech} {forge}: the violation names the reason: {report}"
+        );
+        // The advertised remedy must actually run. A plain upgrade reads the
+        // same recorded provider and refuses, so status names the override, and
+        // executing it repairs the receipt.
+        let human = rk()
+            .args(["status", "--check", "--target"])
+            .arg(target.path())
+            .assert()
+            .code(1)
+            .get_output()
+            .stdout
+            .clone();
+        let printed = String::from_utf8_lossy(&human);
+        let follow = printed
+            .lines()
+            .map(str::trim)
+            .find(|line| line.starts_with("rk upgrade --code-scanning off"))
+            .unwrap_or_else(|| panic!("{tech} {forge}: status names a usable remedy: {printed}"))
+            .to_owned();
+        let arguments: Vec<&str> = follow
+            .split_whitespace()
+            .skip(1)
+            .take_while(|word| *word != "drops")
+            .collect();
+        let mut repair = rk();
+        repair.args(&arguments).arg("--apply");
+        repair.assert().success();
+        assert!(
+            read_manifest(target.path())["parameters"]["code_scanning"].is_null(),
+            "{tech} {forge}: the remedy dropped the capability"
+        );
+        // The incompatibility is gone. A fresh landing's own unfilled sentinel
+        // is what any remaining violation is, so the assertion is on this
+        // condition rather than on the exit code.
+        let out = rk()
+            .args(["status", "--json", "--target"])
+            .arg(target.path())
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+        assert_eq!(report["record_drift"], 0, "{tech} {forge}: {report}");
+        assert!(
+            report["code_scanning"].is_null(),
+            "{tech} {forge}: {report}"
+        );
+    }
+}
+
+/// A committed answer must not re-enable on replay what a preview turned off.
+/// The provider flag takes a value, so the follow-up states `off` rather than
+/// omitting the flag and letting resolution read the configuration again.
+#[test]
+fn an_explicit_off_survives_into_the_init_follow_up_command() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    seed_licensed_crate(target.path(), "MIT");
+    land_code_scanning(target.path(), "github", "semgrep")
+        .assert()
+        .success();
+    // The configuration now answers semgrep, which is the precedence this
+    // guards: a preview that turns it off must print a command that keeps it
+    // off.
+    let configured = std::fs::read_to_string(target.path().join(".release-kit/config.toml"))
+        .expect("the config reads");
+    assert!(
+        configured.contains("code_scanning = \"semgrep\""),
+        "{configured}"
+    );
+    std::fs::remove_dir_all(target.path().join(".github")).expect("the workflow removes");
+    std::fs::remove_file(target.path().join(".release-kit/manifest.json"))
+        .expect("the receipt removes");
+    for name in [
+        ".pre-commit-config.yaml",
+        "AGENTS.md",
+        "GLOSSARY.md",
+        "SECURITY.md",
+        "dist-workspace.toml",
+        "release-plz.toml",
+    ] {
+        std::fs::remove_file(target.path().join(name)).expect("the destination removes");
+    }
+    let out = rk()
+        .args(["init", "--tech", "rust", "--forge", "github"])
+        .args([
+            "--repo",
+            "acme/widget",
+            "--code-scanning",
+            "off",
+            "--target",
+        ])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let printed = String::from_utf8_lossy(&out);
+    let follow = printed
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("rk init"))
+        .expect("the preview prints a follow-up command")
+        .to_owned();
+    assert!(
+        follow.contains("--code-scanning off"),
+        "the follow-up states the answer the preview resolved: {follow}"
+    );
+    let arguments: Vec<&str> = follow.split_whitespace().skip(1).collect();
+    rk().args(&arguments).assert().success();
+    assert!(
+        read_manifest(target.path())["parameters"]["code_scanning"].is_null(),
+        "the printed command kept the capability off"
+    );
+    assert!(
+        !target.path().join(SEMGREP_WORKFLOW_GITHUB).exists(),
+        "no scanner landed"
+    );
+}
+
+/// A receipt predating the parameter upgrades to no provider, and no
+/// workflow sprouts.
+#[test]
+fn a_pre_code_scanning_record_upgrades_to_nothing_unrequested() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    seed_licensed_crate(target.path(), "MIT");
+    land_rust(target.path()).success();
+    let mut manifest = read_manifest(target.path());
+    manifest["schema_version"] = serde_json::json!(7);
+    manifest["parameters"]
+        .as_object_mut()
+        .expect("parameters is an object")
+        .remove("code_scanning");
+    write_manifest(target.path(), &manifest);
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    for destination in [CODEQL_WORKFLOW, SEMGREP_WORKFLOW_GITHUB] {
+        assert!(!target.path().join(destination).exists(), "{destination}");
+    }
+    assert!(read_manifest(target.path())["parameters"]["code_scanning"].is_null());
+}
+
+/// Turning the capability off drops the destination from the receipt and
+/// leaves the file on disk as the target's own, like any file this binary
+/// stops shipping.
+#[test]
+fn an_upgrade_can_turn_the_scorecard_capability_off() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust_scorecard(target.path()).success();
+    rk().args(["upgrade", "--scorecard", "off", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    assert!(
+        target.path().join(SCORECARD_WORKFLOW).is_file(),
+        "a released destination stays on disk"
+    );
+    let manifest = read_manifest(target.path());
+    assert_eq!(manifest["parameters"]["scorecard"], false);
+    assert!(
+        manifest["files"]
+            .as_array()
+            .expect("a file list")
+            .iter()
+            .all(|file| file["destination"] != SCORECARD_WORKFLOW)
+    );
+    rk().args(["upgrade", "--scorecard", "sometimes", "--target"])
+        .arg(target.path())
+        .assert()
+        .code(64)
+        .stderr(predicate::str::contains("the values are: on, off"));
 }
 
 /// The generated workflow must be tracked before it is regenerated and
@@ -20749,7 +21743,7 @@ fn private_reporting_policy_adoption_and_parameter_replay() {
         if mode == "matching" {
             out.success();
             let manifest = read_manifest(target.path());
-            assert_eq!(manifest["schema_version"], 7);
+            assert_eq!(manifest["schema_version"], 8);
             assert_eq!(manifest_file(&manifest, "SECURITY.md")["kind"], "rendered");
             assert_eq!(
                 std::fs::read(target.path().join("SECURITY.md")).unwrap(),
@@ -20781,7 +21775,7 @@ fn private_reporting_policy_adoption_and_parameter_replay() {
             )
         )
     );
-    assert_eq!(manifest["schema_version"], 7);
+    assert_eq!(manifest["schema_version"], 8);
     assert_eq!(manifest["parameters"]["style"], "trunk");
 }
 
@@ -21020,7 +22014,7 @@ fn a_pre_policy_record_upgrades_without_touching_the_policy() {
         .success();
     assert_eq!(landed_policy(target.path()), policy);
     let manifest = read_manifest(target.path());
-    assert_eq!(manifest["schema_version"], 7);
+    assert_eq!(manifest["schema_version"], 8);
     assert_eq!(manifest["parameters"]["security_contact"], "");
     assert_eq!(manifest["parameters"]["security_response"], "best-effort");
 }
@@ -22380,7 +23374,7 @@ fn the_landing_runbook_names_the_real_stage_fields() {
     let scratch = tempfile::tempdir().expect("a scratch dir exists");
     let target = stage_target();
     let report = stage_json(target.path(), &scratch.path().join("stage"));
-    assert_eq!(report["schema"], "rk.stage/1");
+    assert_eq!(report["schema"], "rk.stage/3");
     for top in [
         "schema",
         "rk_version",
@@ -22721,7 +23715,7 @@ fn the_landing_runbooks_changelog_selector_prints_the_interval() {
     std::fs::write(stage.join("reference").join("CHANGELOG.md"), &changelog).expect("writes");
     std::fs::write(
         target.join(".release-kit").join("manifest.json"),
-        "{\n  \"schema_version\": 7,\n  \"rk_version\": \"0.1.0\",\n  \"origin\": \"init\"\n}\n",
+        "{\n  \"schema_version\": 8,\n  \"rk_version\": \"0.1.0\",\n  \"origin\": \"init\"\n}\n",
     )
     .expect("writes");
     let (ok, printed) = run_fragment(
@@ -23536,7 +24530,7 @@ fn stage_writes_only_below_the_resolved_stage_root() {
         "an explicit --output leaves the state root without a stage"
     );
     assert!(resolved.join("stage.json").is_file());
-    assert_eq!(report["receipt_schema_version"], 7);
+    assert_eq!(report["receipt_schema_version"], 8);
 }
 
 /// SATISFIES staging:the-output-path-has-one-precedence
@@ -23623,6 +24617,74 @@ fn stage_output_precedence_is_flag_then_env_then_state_root() {
     assert_eq!(report["stage_root"], expected.display().to_string());
     assert_eq!(report["output_source"], "state root");
     assert!(expected.join("stage.json").is_file());
+}
+
+/// SATISFIES staging:a-stage-is-one-target-specific-candidate
+///
+/// The code scanning arm of the same rule, on the forge whose file a
+/// GitLab landing writes under a pipeline include.
+#[test]
+fn a_staged_semgrep_workflow_equals_the_landed_one() {
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let target = tempfile::tempdir().expect("a scratch target exists");
+    std::fs::create_dir_all(target.path().join(".git")).expect("the target is a repository");
+    seed_licensed_crate(target.path(), "MIT");
+    let output = scratch.path().join("stage");
+    rk().env_remove("RK_STAGE_ROOT")
+        .args(["stage", "--tech", "rust", "--forge", "gitlab"])
+        .args(["--repo", "acme/widget", "--code-scanning", "semgrep"])
+        .arg("--target")
+        .arg(target.path())
+        .arg("--output")
+        .arg(&output)
+        .assert()
+        .success();
+    let staged = std::fs::read(output.join("artifacts").join(SEMGREP_WORKFLOW_GITLAB))
+        .expect("the stage carries the candidate");
+    land_code_scanning(target.path(), "gitlab", "semgrep")
+        .assert()
+        .success();
+    let landed =
+        std::fs::read(target.path().join(SEMGREP_WORKFLOW_GITLAB)).expect("the landing wrote it");
+    assert_eq!(
+        staged, landed,
+        "the stage and the production landing render one projection"
+    );
+    // The rendered pipeline includes the job only where the file exists, so
+    // a target that did not opt in runs a pipeline that never names it.
+    let pipeline =
+        std::fs::read_to_string(target.path().join(".gitlab-ci.yml")).expect("the pipeline reads");
+    assert!(
+        pipeline.contains("- local: .gitlab/ci/code-scanning-semgrep.yml"),
+        "{pipeline}"
+    );
+    assert!(pipeline.contains("- exists:"), "{pipeline}");
+}
+
+/// SATISFIES staging:a-stage-is-one-target-specific-candidate
+///
+/// One capability, one projection: the workflow an agent studies in a
+/// stage is byte for byte the workflow the production landing writes.
+#[test]
+fn a_staged_scorecard_workflow_equals_the_landed_one() {
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let target = stage_target();
+    let output = scratch.path().join("stage");
+    stage_cmd(target.path())
+        .arg("--scorecard")
+        .arg("--output")
+        .arg(&output)
+        .assert()
+        .success();
+    let staged = std::fs::read(output.join("artifacts").join(SCORECARD_WORKFLOW))
+        .expect("the stage carries the candidate");
+    land_rust_scorecard(target.path()).success();
+    let landed =
+        std::fs::read(target.path().join(SCORECARD_WORKFLOW)).expect("the landing wrote it");
+    assert_eq!(
+        staged, landed,
+        "the stage and the production landing render one projection"
+    );
 }
 
 /// SATISFIES staging:a-stage-is-one-target-specific-candidate
@@ -24074,7 +25136,7 @@ fn the_stage_receipt_and_human_output_snapshot_hold() {
     ];
     assert_eq!(top_level_keys(&receipt_text), receipt_keys);
     let receipt = stage_receipt(&stage);
-    assert_eq!(receipt["schema"], "rk.stage/1");
+    assert_eq!(receipt["schema"], "rk.stage/3");
     assert_eq!(receipt["rk_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(receipt["target"], canonical_target.display().to_string());
     assert_eq!(receipt["stage_root"], stage.display().to_string());
@@ -24131,7 +25193,7 @@ fn the_stage_receipt_and_human_output_snapshot_hold() {
         .clone();
     let human = String::from_utf8_lossy(&human);
     assert!(
-        human.contains("landing record: schema_version 7"),
+        human.contains("landing record: schema_version 8"),
         "{human}"
     );
     assert!(
@@ -24143,7 +25205,7 @@ fn the_stage_receipt_and_human_output_snapshot_hold() {
         "{human}"
     );
     let receipt = stage_receipt(&landed_out);
-    assert_eq!(receipt["receipt_schema_version"], 7);
+    assert_eq!(receipt["receipt_schema_version"], 8);
     assert_eq!(receipt["retired"], serde_json::json!(["old-workflow.yml"]));
     assert!(
         receipt["seeded_present"]
@@ -24245,7 +25307,7 @@ fn stage_clean_refuses_every_protected_or_ambiguous_path_and_deletes_one_valid_s
     std::fs::write(
         ancestor.join("stage.json"),
         format!(
-            r#"{{"schema":"rk.stage/1","stage_root":"{}","target":"{}"}}"#,
+            r#"{{"schema":"rk.stage/3","stage_root":"{}","target":"{}"}}"#,
             ancestor.display(),
             ancestor.join("inner").display()
         ),
@@ -24279,7 +25341,7 @@ fn stage_clean_refuses_every_protected_or_ambiguous_path_and_deletes_one_valid_s
     // A receipt at another schema.
     let other = canonical.join("other");
     std::fs::create_dir(&other).expect("creates");
-    std::fs::write(other.join("stage.json"), r#"{"schema":"rk.stage/2"}"#).expect("writes");
+    std::fs::write(other.join("stage.json"), r#"{"schema":"rk.stage/4"}"#).expect("writes");
     let json = clean(&other)
         .arg("--json")
         .assert()
@@ -24988,7 +26050,7 @@ fn a_parent_replaced_after_it_was_opened_receives_no_stage() {
 
 // ---------------------------------------------------------------------
 // The direct landing: fresh projection, elementary ownership, one lock,
-// held-directory writes, and the schema 7 receipt.
+// held-directory writes, and the schema 8 receipt.
 // ---------------------------------------------------------------------
 
 /// A `curl` that records every call and fails, on `PATH` and as
@@ -25080,7 +26142,7 @@ fn staged_candidates(target: &Path, flags: &[&str]) -> std::collections::BTreeMa
 
 /// SATISFIES landing:a-landing-leaves-a-record
 #[test]
-fn fresh_init_preview_is_read_only_and_apply_writes_the_schema_7_receipt() {
+fn fresh_init_preview_is_read_only_and_apply_writes_the_schema_8_receipt() {
     let target = plan_target();
     let before = tree_digests(target.path());
     let preview = rk()
@@ -25129,7 +26191,7 @@ fn fresh_init_preview_is_read_only_and_apply_writes_the_schema_7_receipt() {
         ]
     );
     let receipt = read_manifest(target.path());
-    assert_eq!(receipt["schema_version"], 7);
+    assert_eq!(receipt["schema_version"], 8);
     assert_eq!(receipt["rk_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(receipt["origin"], "init");
     for file in receipt["files"].as_array().expect("files") {
@@ -25212,9 +26274,9 @@ fn every_unattributed_collision_and_malformed_marker_is_collected_before_the_fir
 
 /// SATISFIES landing:a-record-states-its-schema
 #[test]
-fn receipt_schemas_1_through_6_load_without_a_release_source_and_rewrite_as_schema_7() {
+fn receipt_schemas_1_through_7_load_without_a_release_source_and_rewrite_as_schema_8() {
     let curl = OfflineCurl::new();
-    for schema in 1..=6u64 {
+    for schema in 1..=7u64 {
         let target = plan_target();
         land_rust(target.path()).success();
         let mut manifest = read_manifest(target.path());
@@ -25233,7 +26295,11 @@ fn receipt_schemas_1_through_6_load_without_a_release_source_and_rewrite_as_sche
         }
         for file in manifest["files"].as_array_mut().expect("files") {
             file[LEGACY_BASELINE_FIELD] = serde_json::json!(Digest::of(b"baseline").to_string());
-            file.as_object_mut().expect("a file").remove("placement");
+            // A receipt at the placement schema or above always states it,
+            // so only an older fixture is written without one.
+            if schema < 7 {
+                file.as_object_mut().expect("a file").remove("placement");
+            }
         }
         write_manifest(target.path(), &manifest);
 
@@ -25257,8 +26323,12 @@ fn receipt_schemas_1_through_6_load_without_a_release_source_and_rewrite_as_sche
         );
         assert!(!text.contains("scopes"), "schema {schema}: {text}");
         let rewritten = read_manifest(target.path());
-        assert_eq!(rewritten["schema_version"], 7, "schema {schema}");
+        assert_eq!(rewritten["schema_version"], 8, "schema {schema}");
         assert_eq!(rewritten["parameters"]["style"], "trunk");
+        assert_eq!(
+            rewritten["parameters"]["scorecard"], false,
+            "schema {schema}: a receipt predating the parameter upgrades to the opt-out"
+        );
         assert_eq!(
             manifest_file(&rewritten, "AGENTS.md")["placement"],
             "region"
@@ -25451,11 +26521,11 @@ fn production_outputs_carry_no_plan_bundle_or_release_selection_field() {
         .map(|(_, document)| document["schema"].as_str().expect("a schema"))
         .collect();
     for expected in [
-        "rk.init/7",
+        "rk.init/9",
         "rk.assess/3",
-        "rk.status/9",
-        "rk.upgrade/7",
-        "rk.adopt/7",
+        "rk.status/11",
+        "rk.upgrade/9",
+        "rk.adopt/9",
     ] {
         assert!(
             schemas.contains(&expected),
@@ -25751,7 +26821,7 @@ fn a_failpoint_at_every_write_boundary_leaves_whole_files_and_the_previous_recei
             .arg(target.path())
             .assert()
             .success();
-        assert_eq!(read_manifest(target.path())["schema_version"], 7);
+        assert_eq!(read_manifest(target.path())["schema_version"], 8);
         assert_eq!(
             std::fs::read_to_string(target.path().join("release-plz.toml")).expect("reads"),
             tuned
@@ -27329,7 +28399,7 @@ fn a_public_v0_4_0_target_upgrades_from_its_receipt_alone() {
         .stdout
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["schema"], "rk.upgrade/7", "{report}");
+    assert_eq!(report["schema"], "rk.upgrade/9", "{report}");
     assert_eq!(report["from_version"], "0.4.0", "{report}");
     let action_of = |destination: &str| -> String {
         report["files"]
@@ -27374,7 +28444,7 @@ fn a_public_v0_4_0_target_upgrades_from_its_receipt_alone() {
     }
 
     let manifest = read_manifest(target);
-    assert_eq!(manifest["schema_version"], 7);
+    assert_eq!(manifest["schema_version"], 8);
     assert_eq!(manifest["rk_version"], env!("CARGO_PKG_VERSION"));
     let text = std::fs::read_to_string(target.join(".release-kit/manifest.json"))
         .expect("the receipt reads");

@@ -46,6 +46,22 @@ struct StalePin {
     available: String,
 }
 
+/// One reportable condition that is not a violation: the target is not
+/// broken and the decision behind it is the operator's.
+///
+/// The `code` is stable, so a machine reader branches on it rather than on
+/// the prose.
+#[derive(Debug, Serialize)]
+struct Warning {
+    /// The stable reason code.
+    code: &'static str,
+    /// What the condition is, in the target's own terms.
+    reason: String,
+}
+
+/// The code a lapsed code scanning licence reports under.
+const CODE_SCANNING_LICENCE: &str = "code-scanning-licence";
+
 /// Configuration is informational, independent of every drift comparison.
 #[derive(Debug, serde::Serialize)]
 struct ConfigState {
@@ -93,6 +109,14 @@ struct Report {
     /// the parameter reads as opt-out.
     #[serde(skip_serializing_if = "Option::is_none")]
     nix: Option<bool>,
+    /// Whether the landing carries the Scorecard capability; a record
+    /// predating the parameter reads as opt-out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scorecard: Option<bool>,
+    /// The recorded code scanning provider; absent where the project did
+    /// not opt in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code_scanning: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     rk_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -118,6 +142,11 @@ struct Report {
     /// judged, never rewritten, because the file stays the target's.
     #[serde(skip_serializing_if = "Option::is_none")]
     invariant_failures: Option<Vec<InvariantFailure>>,
+    /// Conditions that are reportable and not violations: `--check` exits 0
+    /// on them, because the target is not broken and the decision is the
+    /// operator's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    warnings: Option<Vec<Warning>>,
     /// How many destinations an upgrade would change: the count this
     /// binary's sources project under the recorded parameters against
     /// what the record names. Zero means nothing to take, whatever the two
@@ -152,7 +181,7 @@ fn report_absent(
         ),
     ]);
     out.emit(&Report {
-        schema: "rk.status/9",
+        schema: "rk.status/11",
         landed: false,
         config: config_state(config, None),
         tech: None,
@@ -160,6 +189,8 @@ fn report_absent(
         workflow: None,
         style: None,
         nix: None,
+        scorecard: None,
+        code_scanning: None,
         rk_version: None,
         binary_version: None,
         alignment: None,
@@ -169,6 +200,7 @@ fn report_absent(
         sentinels: None,
         record_drift: None,
         invariant_failures: None,
+        warnings: None,
         pending: None,
         violations: args.check.then(|| vec!["no landing".to_owned()]),
     })?;
@@ -201,6 +233,12 @@ struct Observed {
     stale: Vec<StalePin>,
     sentinels: Vec<(String, usize, String)>,
     invariants: Vec<InvariantFailure>,
+    /// Reportable conditions that are not violations.
+    warnings: Vec<Warning>,
+    /// Recorded capabilities this target cannot run, counted in
+    /// `record_drift` and kept separately because a plain upgrade cannot
+    /// repair them: it re-reads the same recorded answer and refuses.
+    incompatible: Vec<String>,
     /// The destinations an upgrade would change, or `None` where this
     /// binary carries no projection for the recorded pair and so cannot
     /// say.
@@ -244,7 +282,7 @@ pub fn run(args: &StatusArgs) -> Result<(), RkError> {
 
     let violations = violations_of(&observed);
     out.emit(&Report {
-        schema: "rk.status/9",
+        schema: "rk.status/11",
         landed: true,
         config,
         tech: Some(manifest.tech),
@@ -252,6 +290,11 @@ pub fn run(args: &StatusArgs) -> Result<(), RkError> {
         workflow: Some(manifest.parameters.workflow.as_str()),
         style: manifest.parameters.style.map(manifest::Style::as_str),
         nix: Some(manifest.parameters.nix),
+        scorecard: Some(manifest.parameters.scorecard),
+        code_scanning: manifest
+            .parameters
+            .code_scanning
+            .map(manifest::Provider::as_str),
         rk_version: Some(manifest.rk_version),
         binary_version: Some(env!("CARGO_PKG_VERSION")),
         alignment: Some(alignment),
@@ -264,6 +307,7 @@ pub fn run(args: &StatusArgs) -> Result<(), RkError> {
         stale_pins: Some(observed.stale),
         sentinels: Some(observed.sentinels.len()),
         invariant_failures: Some(observed.invariants),
+        warnings: Some(observed.warnings),
         pending: observed.pending.as_ref().map(Vec::len),
         violations: args.check.then(|| violations.clone()),
     })?;
@@ -339,6 +383,8 @@ fn observe(args: &StatusArgs, manifest: &Manifest) -> Result<Observed, RkError> 
         stale: Vec::new(),
         sentinels: Vec::new(),
         invariants: Vec::new(),
+        warnings: Vec::new(),
+        incompatible: Vec::new(),
         pending: None,
     };
     // One projection serves every reader below, because each asks what
@@ -404,6 +450,24 @@ fn observe(args: &StatusArgs, manifest: &Manifest) -> Result<Observed, RkError> 
         &manifest.forge,
         &args.target,
     ));
+    if let Some(reason) = projected
+        .as_ref()
+        .and_then(|projection| projection.licence_refusal.clone())
+    {
+        observed.warnings.push(Warning {
+            code: CODE_SCANNING_LICENCE,
+            reason,
+        });
+    }
+    // A receipt naming a capability its pair cannot run is a receipt nothing
+    // can honour, whichever binary wrote it, so this is judged at every
+    // alignment rather than only where this binary wrote the record.
+    if let Some(projection) = projected.as_ref() {
+        observed.incompatible.clone_from(&projection.record_defects);
+        observed
+            .record_drift
+            .extend(projection.record_defects.iter().cloned());
+    }
     if aligned && let Some(projection) = projected.as_ref() {
         observe_parameter_drift(manifest, projection, &mut observed);
         observe_record_set(manifest, projection, &mut observed.record_drift);
@@ -626,11 +690,23 @@ fn render_human(
             failure.destination, failure.code, failure.reason
         ));
     }
+    for warning in &observed.warnings {
+        out.result_line(format!("WARNING ({}): {}", warning.code, warning.reason));
+    }
     let mut next = Vec::new();
     for failure in &observed.invariants {
         next.push(format!("{}: {}", failure.destination, failure.remediation));
     }
-    if !observed.record_drift.is_empty() {
+    // The incompatible ones first, and with the override: a plain upgrade
+    // reads the same recorded provider and refuses, so advertising it alone
+    // would send the operator into a loop.
+    if !observed.incompatible.is_empty() {
+        next.push(format!(
+            "rk upgrade --code-scanning off --target {} drops the capability this target cannot run; name a provider its pair ships to keep one",
+            args.target
+        ));
+    }
+    if observed.record_drift.len() > observed.incompatible.len() {
         next.push(format!(
             "rk upgrade --target {} rewrites the receipt from its parameters",
             args.target
@@ -658,12 +734,12 @@ fn render_human(
 mod tests {
     use super::{Drift, InvariantFailure, Report, StalePin};
 
-    /// The complete `rk.status/9` shape, held by snapshot in both the
+    /// The complete `rk.status/11` shape, held by snapshot in both the
     /// landed and absent forms.
     #[test]
     fn the_status_report_schema_snapshot_holds() {
         let landed = Report {
-            schema: "rk.status/9",
+            schema: "rk.status/11",
             landed: true,
             config: super::ConfigState {
                 state: "pending",
@@ -674,6 +750,8 @@ mod tests {
             workflow: Some("worktree"),
             style: Some("trunk"),
             nix: Some(true),
+            scorecard: Some(false),
+            code_scanning: Some("semgrep"),
             rk_version: Some("0.1.0".into()),
             binary_version: Some("0.2.0"),
             alignment: Some(crate::landing::manifest::Alignment::BinaryNewer),
@@ -695,12 +773,16 @@ mod tests {
                 reason: "github-attestations is not effectively true".into(),
                 remediation: "set github-attestations = true in [dist]",
             }]),
+            warnings: Some(vec![super::Warning {
+                code: super::CODE_SCANNING_LICENCE,
+                reason: "the target's license, LicenseRef-proprietary, is not one this release recognizes as OSI-approved".into(),
+            }]),
             pending: Some(2),
             violations: None,
         };
         assert_eq!(
             serde_json::to_string(&landed).expect("a report serializes"),
-            r#"{"schema":"rk.status/9","landed":true,"config":{"state":"pending","pending":["landing.style"]},"tech":"rust","forge":"github","workflow":"worktree","style":"trunk","nix":true,"rk_version":"0.1.0","binary_version":"0.2.0","alignment":"binary-newer","drift":{"rendered":0,"seeded":1},"missing":[],"stale_pins":[{"tool":"release-plz","landed":"0.3.160","available":"0.3.170"}],"sentinels":1,"record_drift":0,"invariant_failures":[{"code":"attestations-disabled","destination":"dist-workspace.toml","reason":"github-attestations is not effectively true","remediation":"set github-attestations = true in [dist]"}],"pending":2}"#
+            r#"{"schema":"rk.status/11","landed":true,"config":{"state":"pending","pending":["landing.style"]},"tech":"rust","forge":"github","workflow":"worktree","style":"trunk","nix":true,"scorecard":false,"code_scanning":"semgrep","rk_version":"0.1.0","binary_version":"0.2.0","alignment":"binary-newer","drift":{"rendered":0,"seeded":1},"missing":[],"stale_pins":[{"tool":"release-plz","landed":"0.3.160","available":"0.3.170"}],"sentinels":1,"record_drift":0,"invariant_failures":[{"code":"attestations-disabled","destination":"dist-workspace.toml","reason":"github-attestations is not effectively true","remediation":"set github-attestations = true in [dist]"}],"warnings":[{"code":"code-scanning-licence","reason":"the target's license, LicenseRef-proprietary, is not one this release recognizes as OSI-approved"}],"pending":2}"#
         );
         let absent = Report {
             landed: false,
@@ -713,6 +795,8 @@ mod tests {
             workflow: None,
             style: None,
             nix: None,
+            scorecard: None,
+            code_scanning: None,
             rk_version: None,
             binary_version: None,
             alignment: None,
@@ -722,13 +806,14 @@ mod tests {
             sentinels: None,
             record_drift: None,
             invariant_failures: None,
+            warnings: None,
             pending: None,
             violations: None,
             ..landed
         };
         assert_eq!(
             serde_json::to_string(&absent).expect("a report serializes"),
-            r#"{"schema":"rk.status/9","landed":false,"config":{"state":"absent","pending":[]}}"#,
+            r#"{"schema":"rk.status/11","landed":false,"config":{"state":"absent","pending":[]}}"#,
             "an absent landing reports one field a caller can branch on"
         );
     }

@@ -96,7 +96,7 @@ Verify: `cargo nextest run -E 'test(a_stage_holds_every_projected_artifact_byte_
 
 ### `staging:the-stage-receipt-is-explanatory-metadata` — The stage receipt is explanatory metadata
 
-`stage.json` MUST declare `schema: "rk.stage/1"` and carry the installed `rk` version, the canonical target identity, the resolved `stage_root`, the resolved parameters, the current receipt version where readable, and one entry per candidate or omission, and every landing command MUST refuse it as input.
+`stage.json` MUST declare `schema: "rk.stage/3"` and carry the installed `rk` version, the canonical target identity, the resolved `stage_root`, the resolved parameters, the current receipt version where readable, and one entry per candidate or omission, and every landing command MUST refuse it as input.
 
 #### Scenario: A stage receipt is offered to a landing verb
 
@@ -108,7 +108,7 @@ Verify: `cargo nextest run -E 'test(the_stage_receipt_and_human_output_snapshot_
 
 ### `staging:cleanup-removes-only-a-stage-that-names-itself` — Cleanup removes only a stage that names itself
 
-`rk stage clean <path>` MUST resolve its argument without following a final symlink, and MUST refuse the filesystem root, a home directory, the target repository root, any ancestor of the target, a symlink, a directory without `stage.json`, a receipt outside `rk.stage/1`, and a receipt whose canonical `stage_root` differs from the argument.
+`rk stage clean <path>` MUST resolve its argument without following a final symlink, and MUST refuse the filesystem root, a home directory, the target repository root, any ancestor of the target, a symlink, a directory without `stage.json`, a receipt outside `rk.stage/3`, and a receipt whose canonical `stage_root` differs from the argument.
 
 #### Scenario: A symlink points at a real stage
 

@@ -34,6 +34,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::embedded;
 use crate::error::RkError;
+pub use crate::landing::manifest::Provider;
 use crate::landing::{Params, Workflow};
 
 /// The complete input to one projection: the resolved landing parameters
@@ -101,6 +102,17 @@ pub struct Projection {
     /// The block destinations whose existing document offers the block no
     /// place, a target-side defect staging explains and landing refuses.
     pub collisions: Vec<Collision>,
+    /// Why the recorded code scanning provider's licence condition refuses
+    /// this target, or `None` where no condition applies or the licence
+    /// satisfies it. A landing verb refuses on it and writes nothing; `rk
+    /// status` reports it as a warning and still exits 0, because the
+    /// target is not broken and the operator owns the licensing decision.
+    pub licence_refusal: Option<String>,
+    /// Why a recorded capability cannot run at this target at all, which is a
+    /// receipt nothing can honour rather than a decision anyone made. Empty on
+    /// every target whose parameters came through resolution, because
+    /// resolution refuses these before they are recorded.
+    pub record_defects: Vec<String>,
 }
 
 /// One proposed destination.
@@ -182,6 +194,14 @@ impl Projection {
             if !params.nix() && NIX_DESTINATIONS.contains(&selected.destination.as_str()) {
                 continue;
             }
+            if !params.scorecard()
+                && SCORECARD_DESTINATIONS.contains(&selected.destination.as_str())
+            {
+                continue;
+            }
+            if code_scanning_withheld(&selected.destination, params.code_scanning()) {
+                continue;
+            }
             let kind = kind_of(&selected.destination).ok_or_else(|| {
                 anyhow::anyhow!(
                     "the embedded sources do not classify {}; the kind table is stale",
@@ -250,10 +270,21 @@ impl Projection {
         }
         candidates.sort_by(|a, b| a.destination.cmp(&b.destination));
         omissions.sort_by(|a, b| a.destination.cmp(&b.destination));
+        let licence_refusal = code_scanning_licence_refusal(
+            params.code_scanning(),
+            params.tech(),
+            &evidence.crate_shape,
+        );
+        let record_defects =
+            code_scanning_incompatibility(params.code_scanning(), params.tech(), params.forge())
+                .into_iter()
+                .collect();
         Ok(Self {
             candidates,
             omissions,
             collisions,
+            licence_refusal,
+            record_defects,
         })
     }
 }
@@ -427,11 +458,18 @@ impl Kind {
 /// OIDC permission, so release-kit owns them; the tool configurations are
 /// per-project judgment; the two state files are rewritten by the release
 /// automation itself.
-const KINDS: [(&str, Kind); 16] = [
+const KINDS: [(&str, Kind); 20] = [
     (".github/workflows/release-plz.yml", Kind::Rendered),
     (".github/workflows/release-please.yml", Kind::Rendered),
     (".github/workflows/release.yml", Kind::Rendered),
     (".github/workflows/pr-title.yml", Kind::Rendered),
+    (".github/workflows/scorecard.yml", Kind::Rendered),
+    (".github/workflows/code-scanning-codeql.yml", Kind::Rendered),
+    (
+        ".github/workflows/code-scanning-semgrep.yml",
+        Kind::Rendered,
+    ),
+    (".gitlab/ci/code-scanning-semgrep.yml", Kind::Rendered),
     (".gitlab-ci.yml", Kind::Rendered),
     ("SECURITY.md", Kind::Rendered),
     (".gitlab/ci/mr-title.yml", Kind::Rendered),
@@ -467,6 +505,461 @@ pub const NIX_DESTINATIONS: [&str; 3] = ["nix/package.nix", "flake.nix", "flake.
 /// The seeded package expression is not in it: it lands either way, as
 /// the starting point the target integrates by hand.
 pub const NIX_WITHHOLDABLE: [&str; 2] = ["flake.nix", "flake.lock"];
+
+/// The destinations of the opt-in Scorecard capability, present in a
+/// projection only where the landing's `scorecard` parameter is on.
+///
+/// The parameter is recorded for the reason [`NIX_DESTINATIONS`] states:
+/// an absent file under `scorecard = false` is not wanted, never drifted.
+/// The capability is GitHub's alone, so the shared GitLab zone ships no
+/// counterpart and a GitLab landing projects nothing for it, whatever the
+/// parameter says. A Scorecard run needs no forge setting on a public
+/// repository, so the capability adds no setup step and cannot conflict
+/// with `forge-setup:every-supported-forge-runs-every-step`.
+///
+/// The file is `rendered`: its bytes carry the recorded trunk and nothing a
+/// target is expected to tune, so release-kit owns them and an edit is
+/// drift.
+pub const SCORECARD_DESTINATIONS: [&str; 1] = [".github/workflows/scorecard.yml"];
+
+/// Every destination the opt-in code scanning capability can land, against
+/// the provider that lands it.
+///
+/// One source owns one destination, so the provider is in the name: a
+/// landing writes exactly the entry its recorded provider names and the
+/// forge ships. Switching provider retires one destination and adds
+/// another, which `landing:a-dropped-file-stays` already answers.
+///
+/// `codeql` is GitHub's own analyzer and has no GitLab entry, so a GitLab
+/// landing that names it lands nothing; the parameter resolution refuses
+/// that pair by name before it gets here, as it refuses a binding outside
+/// [`CODE_SCANNING_TECHS`].
+pub const CODE_SCANNING_DESTINATIONS: [(&str, Provider); 3] = [
+    (
+        ".github/workflows/code-scanning-codeql.yml",
+        Provider::CodeQl,
+    ),
+    (
+        ".github/workflows/code-scanning-semgrep.yml",
+        Provider::Semgrep,
+    ),
+    (".gitlab/ci/code-scanning-semgrep.yml", Provider::Semgrep),
+];
+
+/// The bindings that ship a code scanning workflow.
+///
+/// A scanner reads one language: the `CodeQL` arm fixes `languages: rust` and
+/// both Semgrep arms name the `p/rust` ruleset, so the sources live in the
+/// rust pairs rather than in a forge's technology-independent shared zone.
+/// A landing for any other binding refuses the capability by name instead of
+/// recording a provider and writing nothing.
+pub const CODE_SCANNING_TECHS: [&str; 1] = ["rust"];
+
+/// Why the named code scanning provider cannot run at this
+/// `(technology, forge)`, or `None` where it can or none is named.
+///
+/// One owner for the question, because two callers ask it and they must not
+/// disagree. Parameter resolution turns a reason into a refusal, so `init`,
+/// `upgrade`, `adopt`, and `stage` never record an answer they cannot honour.
+/// The projection reports the same reason as a record defect, because
+/// `Params::from_record` cannot fail and a hand-edited or foreign receipt
+/// reaches `rk status` through it: without this, a receipt naming a provider
+/// whose pair ships nothing would project nothing, name nothing, and read as
+/// clean.
+#[must_use]
+pub fn code_scanning_incompatibility(
+    provider: Option<Provider>,
+    tech: &str,
+    forge: &str,
+) -> Option<String> {
+    let named = provider?;
+    if !CODE_SCANNING_TECHS.contains(&tech) {
+        return Some(format!(
+            "the {tech} binding ships no code scanning workflow; a scanner reads one language, and the bindings that carry one are: {}",
+            CODE_SCANNING_TECHS.join(", ")
+        ));
+    }
+    if named == Provider::CodeQl && forge != "github" {
+        return Some(format!(
+            "codeql is GitHub's own analyzer and the {forge} pair ships no workflow for it; pass --code-scanning semgrep"
+        ));
+    }
+    None
+}
+
+/// Whether `destination` belongs to the code scanning capability, and
+/// whether `provider` is the answer that lands it.
+fn code_scanning_withheld(destination: &str, provider: Option<Provider>) -> bool {
+    CODE_SCANNING_DESTINATIONS
+        .iter()
+        .any(|(name, owner)| *name == destination && provider != Some(*owner))
+}
+
+/// The SPDX identifiers this convention recognizes as OSI-approved, sorted.
+///
+/// Lowercase, because the comparison is case-insensitive: SPDX asks for that
+/// and cargo accepts any casing.
+///
+/// A closed list rather than a parse of the OSI register: the register moves
+/// and this binary reads no network, so an identifier absent here is
+/// unrecognized rather than rejected, and the refusal says so. Every entry
+/// is an OSI-approved licence that appears on published Rust crates.
+const OSI_APPROVED: [&str; 18] = [
+    "0bsd",
+    "agpl-3.0",
+    "agpl-3.0-only",
+    "agpl-3.0-or-later",
+    "apache-2.0",
+    "bsd-2-clause",
+    "bsd-3-clause",
+    "bsl-1.0",
+    "epl-2.0",
+    "gpl-2.0",
+    "gpl-2.0-only",
+    "gpl-2.0-or-later",
+    "gpl-3.0",
+    "gpl-3.0-only",
+    "gpl-3.0-or-later",
+    "isc",
+    "mit",
+    "mpl-2.0",
+];
+
+/// Every SPDX exception identifier, lowercase.
+///
+/// SPDX requires the right operand of `WITH` to be a `<license-exception-id>`,
+/// so an operand outside this list makes the expression malformed and the
+/// licence unread. The whole register rather than a subset, because a subset
+/// refuses a legitimate crate: `GPL-2.0-only WITH GCC-exception-2.0` names a
+/// real exception, and a reader carrying only the newer `GCC-exception-3.1`
+/// would refuse it.
+///
+/// An exception grants permission rather than withdrawing it, so none of these
+/// changes whether the left operand is OSI-approved. It is validated because a
+/// reader that cannot parse the expression has not read the licence.
+///
+/// Taken from the SPDX license-list-data exception register, 86 identifiers, on
+/// 2026-09-15. A later addition upstream is a patch here, and the refusal names
+/// the operand it did not recognize.
+const SPDX_EXCEPTIONS: [&str; 86] = [
+    "389-exception",
+    "asterisk-exception",
+    "asterisk-linking-protocols-exception",
+    "autoconf-exception-2.0",
+    "autoconf-exception-3.0",
+    "autoconf-exception-generic",
+    "autoconf-exception-generic-3.0",
+    "autoconf-exception-macro",
+    "bison-exception-1.24",
+    "bison-exception-2.2",
+    "bootloader-exception",
+    "cgal-linking-exception",
+    "classpath-exception-2.0",
+    "classpath-exception-2.0-short",
+    "clisp-exception-2.0",
+    "cryptsetup-openssl-exception",
+    "digia-qt-lgpl-exception-1.1",
+    "digirule-foss-exception",
+    "ecos-exception-2.0",
+    "erlang-otp-linking-exception",
+    "fawkes-runtime-exception",
+    "fltk-exception",
+    "fmt-exception",
+    "font-exception-2.0",
+    "freertos-exception-2.0",
+    "gcc-exception-2.0",
+    "gcc-exception-2.0-note",
+    "gcc-exception-3.1",
+    "gmsh-exception",
+    "gnat-exception",
+    "gnome-examples-exception",
+    "gnu-compiler-exception",
+    "gnu-javamail-exception",
+    "google-patent-webm",
+    "gpl-3.0-389-ds-base-exception",
+    "gpl-3.0-interface-exception",
+    "gpl-3.0-linking-exception",
+    "gpl-3.0-linking-source-exception",
+    "gpl-cc-1.0",
+    "gstreamer-exception-2005",
+    "gstreamer-exception-2008",
+    "harbour-exception",
+    "i2p-gpl-java-exception",
+    "independent-modules-exception",
+    "kicad-libraries-exception",
+    "kvirc-openssl-exception",
+    "lgpl-3.0-linking-exception",
+    "libpri-openh323-exception",
+    "libtool-exception",
+    "linux-syscall-note",
+    "llgpl",
+    "llvm-exception",
+    "lzma-exception",
+    "mif-exception",
+    "mxml-exception",
+    "nokia-qt-exception-1.1",
+    "ocaml-lgpl-linking-exception",
+    "occt-exception-1.0",
+    "openjdk-assembly-exception-1.0",
+    "openvpn-openssl-exception",
+    "pcre2-exception",
+    "polyparse-exception",
+    "ps-or-pdf-font-exception-20170817",
+    "qpl-1.0-inria-2004-exception",
+    "qt-gpl-exception-1.0",
+    "qt-lgpl-exception-1.1",
+    "qwt-exception-1.0",
+    "romic-exception",
+    "rrdtool-floss-exception-2.0",
+    "rsync-linking-exception",
+    "sane-exception",
+    "shl-2.0",
+    "shl-2.1",
+    "simple-library-usage-exception",
+    "spelling-provider-lgpl-exception",
+    "sqlitestudio-openssl-exception",
+    "stunnel-exception",
+    "swi-exception",
+    "swift-exception",
+    "texinfo-exception",
+    "u-boot-exception-2.0",
+    "ubdl-exception",
+    "universal-foss-exception-1.0",
+    "vsftpd-openssl-exception",
+    "wxwindows-exception-3.1",
+    "x11vnc-openssl-exception",
+];
+
+/// Whether `identifier` is in `list`, matched the way SPDX asks for it.
+///
+/// Without regard to case: SPDX states that an identifier "should be matched
+/// in a case-insensitive manner", and cargo accepts `license = "mit"` without
+/// complaint, so a real crate can carry any casing and a case-sensitive
+/// comparison would refuse a licence it recognizes.
+fn listed(list: &[&str], identifier: &str) -> bool {
+    let lowered = identifier.to_ascii_lowercase();
+    list.contains(&lowered.as_str())
+}
+
+/// One token of an SPDX licence expression.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Token<'a> {
+    /// An opening parenthesis.
+    Open,
+    /// A closing parenthesis.
+    Close,
+    /// The conjunction: the codebase is offered under both terms at once.
+    And,
+    /// The disjunction: the reader chooses one term.
+    Or,
+    /// The exception operator, whose right side names an exception rather
+    /// than a licence.
+    With,
+    /// A licence identifier, a licence reference, or an exception
+    /// identifier. Which one it is depends on its position.
+    Identifier(&'a str),
+}
+
+/// The tokens of one SPDX expression, or `None` where a character can begin
+/// no token.
+///
+/// The identifier alphabet is SPDX's own plus `:`, which a
+/// `DocumentRef-...:LicenseRef-...` reference carries. A reference
+/// tokenizes and then simply matches no approved identifier, which is the
+/// honest answer: it names a licence whose text lives outside the register.
+fn tokenize(expression: &str) -> Option<Vec<Token<'_>>> {
+    let mut tokens = Vec::new();
+    let bytes = expression.as_bytes();
+    let mut at = 0;
+    while at < bytes.len() {
+        let byte = bytes[at];
+        if byte.is_ascii_whitespace() {
+            at += 1;
+            continue;
+        }
+        if byte == b'(' {
+            tokens.push(Token::Open);
+            at += 1;
+            continue;
+        }
+        if byte == b')' {
+            tokens.push(Token::Close);
+            at += 1;
+            continue;
+        }
+        let start = at;
+        while at < bytes.len() {
+            let byte = bytes[at];
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'+' | b':') {
+                at += 1;
+            } else {
+                break;
+            }
+        }
+        if at == start {
+            return None;
+        }
+        let word = &expression[start..at];
+        tokens.push(match word {
+            "AND" => Token::And,
+            "OR" => Token::Or,
+            "WITH" => Token::With,
+            other => Token::Identifier(other),
+        });
+    }
+    Some(tokens)
+}
+
+/// A recursive-descent reader over one tokenized SPDX expression.
+///
+/// It answers two questions in one pass, and both must hold: whether the
+/// expression is well formed, and whether every licence identifier in it is
+/// OSI-approved. A malformed expression answers `None` rather than falling
+/// back on the identifiers it happened to contain, because an expression
+/// nobody can parse states no terms at all.
+struct Spdx<'a> {
+    tokens: &'a [Token<'a>],
+    at: usize,
+}
+
+impl<'a> Spdx<'a> {
+    /// The token at the cursor, without consuming it.
+    fn peek(&self) -> Option<Token<'a>> {
+        self.tokens.get(self.at).copied()
+    }
+
+    /// The token at the cursor, consumed.
+    fn bump(&mut self) -> Option<Token<'a>> {
+        let token = self.peek()?;
+        self.at += 1;
+        Some(token)
+    }
+
+    /// One expression: operands joined by `AND` and `OR`, each operand a
+    /// parenthesized expression or a simple licence.
+    ///
+    /// Both operators require every operand to be approved. A disjunction
+    /// offers the reader a choice, so one unapproved term is a term the
+    /// reader may take.
+    fn expression(&mut self) -> Option<bool> {
+        let mut approved = self.operand()?;
+        while matches!(self.peek(), Some(Token::And | Token::Or)) {
+            self.bump();
+            approved = self.operand()? && approved;
+        }
+        Some(approved)
+    }
+
+    /// One operand: a parenthesized expression, or a licence identifier
+    /// optionally carrying `WITH` and an exception identifier.
+    ///
+    /// A `+` suffix reads as the bare identifier, which is what the
+    /// deprecated `GPL-3.0+` form means. The operand after `WITH` must be an
+    /// exception identifier this release recognizes, and it changes no
+    /// verdict: an exception grants permission rather than withdrawing it, so
+    /// which licence the codebase is offered under is answered by the left
+    /// operand alone.
+    fn operand(&mut self) -> Option<bool> {
+        match self.bump()? {
+            Token::Open => {
+                let inner = self.expression()?;
+                (self.bump()? == Token::Close).then_some(inner)
+            }
+            Token::Identifier(name) => {
+                let identifier = name.strip_suffix('+').unwrap_or(name);
+                let approved = listed(&OSI_APPROVED, identifier);
+                if self.peek() == Some(Token::With) {
+                    self.bump();
+                    // SPDX requires an exception identifier here, so an
+                    // operand this release does not recognize leaves the
+                    // expression malformed and the licence unread.
+                    match self.bump()? {
+                        Token::Identifier(exception) if listed(&SPDX_EXCEPTIONS, exception) => {}
+                        _ => return None,
+                    }
+                }
+                Some(approved)
+            }
+            Token::And | Token::Or | Token::With | Token::Close => None,
+        }
+    }
+}
+
+/// Whether one SPDX expression is well formed and every licence in it is
+/// OSI-approved.
+///
+/// Both conditions, and the pair is the point. A malformed expression is
+/// refused rather than read for the identifiers it contains, because
+/// `MIT OR` names one licence and no complete offer, and accepting it would
+/// land a workflow whose provider's terms nothing established.
+#[must_use]
+pub fn licence_is_osi_approved(expression: &str) -> bool {
+    let Some(tokens) = tokenize(expression) else {
+        return false;
+    };
+    let mut reader = Spdx {
+        tokens: &tokens,
+        at: 0,
+    };
+    let Some(approved) = reader.expression() else {
+        return false;
+    };
+    approved && reader.at == tokens.len()
+}
+
+/// Why the code scanning capability's licence condition refuses this
+/// target, or `None` where no condition applies or the licence satisfies
+/// it.
+///
+/// Only `codeql` carries a condition: its terms cover an open-source
+/// codebase, and a run over anything else needs a paid seat, so a landing
+/// that guessed would write a licence violation. Semgrep CE carries none,
+/// and is the fallback the refusal names.
+///
+/// The licence is read where the binding declares it. For `rust` that is
+/// the `license` field of `Cargo.toml`. A manifest that names a
+/// `license-file` instead states no identifier this judgment can read, so
+/// the pair refuses rather than guessing at the file's contents.
+#[must_use]
+pub fn code_scanning_licence_refusal(
+    provider: Option<Provider>,
+    tech: &str,
+    shape: &CrateShape,
+) -> Option<String> {
+    if provider != Some(Provider::CodeQl) {
+        return None;
+    }
+    if tech != "rust" {
+        return Some(format!(
+            "the {tech} binding declares no licence field this release reads, and codeql's terms cover an open-source codebase alone; land --code-scanning semgrep, which carries no licence condition"
+        ));
+    }
+    let fallback = "land --code-scanning semgrep, which carries no licence condition";
+    let Some(text) = shape.cargo_toml.as_deref() else {
+        return Some(format!(
+            "the target has no readable Cargo.toml, so the licence codeql's terms depend on cannot be read; {fallback}"
+        ));
+    };
+    let Ok(table) = text.parse::<toml::Table>() else {
+        return Some(format!(
+            "the target's Cargo.toml does not parse, so the licence codeql's terms depend on cannot be read; {fallback}"
+        ));
+    };
+    let licence = table
+        .get("package")
+        .and_then(toml::Value::as_table)
+        .and_then(|package| package.get("license"))
+        .and_then(toml::Value::as_str);
+    match licence {
+        None => Some(format!(
+            "the target's Cargo.toml declares no license field, and codeql's terms cover an open-source codebase alone; declare one, or {fallback}"
+        )),
+        Some(expression) if !licence_is_osi_approved(expression) => Some(format!(
+            "the target's license, {expression}, is not one this release recognizes as OSI-approved, and codeql's terms cover an open-source codebase alone; {fallback}"
+        )),
+        Some(_) => None,
+    }
+}
 
 /// The declared kind of a destination, or `None` for a file the sources
 /// does not classify.
@@ -1340,6 +1833,270 @@ mod tests {
         assert_eq!(destinations, sorted, "candidates sort by destination");
         assert!(a.omissions.is_empty(), "{:?}", a.omissions);
         assert!(a.collisions.is_empty(), "{:?}", a.collisions);
+    }
+
+    /// The Scorecard destination is classified, gated by its parameter
+    /// alone, and rendered: the pure projection answers the capability
+    /// with no target read and no forge call.
+    #[test]
+    fn the_scorecard_destination_projects_only_under_the_opt_in() {
+        use super::{Kind, SCORECARD_DESTINATIONS, kind_of};
+        let destination = SCORECARD_DESTINATIONS[0];
+        assert_eq!(kind_of(destination), Some(Kind::Rendered));
+
+        let project = |scorecard: bool| {
+            let mut params = Params::for_test("acme/widget", Some(Style::Trunk));
+            params.set_scorecard_for_test(scorecard);
+            Projection::compute(&ProjectionInput {
+                params,
+                evidence: TargetEvidence::default(),
+            })
+            .expect("the embedded pair projects")
+        };
+
+        let off = project(false);
+        assert!(
+            !off.candidates
+                .iter()
+                .any(|candidate| candidate.destination == destination),
+            "off by default, and an absent candidate is no omission"
+        );
+        assert!(off.omissions.is_empty(), "{:?}", off.omissions);
+
+        let on = project(true);
+        let candidate = candidate(&on, destination);
+        assert_eq!(candidate.kind, Kind::Rendered);
+        assert_eq!(candidate.placement, Placement::Whole);
+        let text = String::from_utf8_lossy(&candidate.bytes);
+        assert!(!text.contains("RK_"), "a token survived: {text}");
+    }
+
+    /// The licence judgment over the expression forms a crate manifest
+    /// uses: every operand must be recognized, a disjunction of approved
+    /// terms passes, and one unapproved operand anywhere fails.
+    #[test]
+    fn the_licence_judgment_reads_every_operand() {
+        use super::licence_is_osi_approved as approved;
+        for expression in [
+            "MIT",
+            "Apache-2.0",
+            "MIT OR Apache-2.0",
+            "MIT AND Apache-2.0",
+            "(MIT OR Apache-2.0) AND ISC",
+            "Apache-2.0 WITH LLVM-exception OR MIT",
+            "GPL-3.0+",
+        ] {
+            assert!(approved(expression), "{expression} is OSI-approved");
+        }
+        for expression in [
+            "",
+            "   ",
+            "LicenseRef-proprietary",
+            "MIT AND LicenseRef-proprietary",
+            "SEE LICENSE IN COPYING",
+            "CC-BY-4.0",
+            "DocumentRef-spdx:LicenseRef-proprietary",
+        ] {
+            assert!(!approved(expression), "{expression} is not recognized");
+        }
+        // A malformed expression is refused rather than read for the
+        // identifiers it happens to carry. Each of these names at least one
+        // approved licence and states no complete offer, and accepting any
+        // of them would land a workflow whose terms nothing established.
+        for expression in [
+            "MIT OR",
+            "OR MIT",
+            "MIT AND",
+            "MIT WITH",
+            "WITH LLVM-exception",
+            "(MIT",
+            "MIT)",
+            "MIT Apache-2.0",
+            "()",
+            "(MIT OR Apache-2.0",
+            "MIT OR (Apache-2.0",
+            "MIT OR ()",
+            "AND",
+            "(",
+            ")",
+            "MIT WITH AND ISC",
+            "MIT OR OR ISC",
+            "MIT @ Apache-2.0",
+        ] {
+            assert!(!approved(expression), "{expression} is malformed");
+        }
+        // Well-formed nesting and a nested exception still read.
+        for expression in [
+            "MIT AND (Apache-2.0 OR ISC)",
+            "((MIT))",
+            "Apache-2.0 WITH LLVM-exception AND ISC",
+            "(Apache-2.0 WITH LLVM-exception)",
+        ] {
+            assert!(approved(expression), "{expression} is well formed");
+        }
+        // SPDX states an identifier "should be matched in a case-insensitive
+        // manner", and cargo accepts `license = "mit"` without complaint, so a
+        // real crate can carry any casing and none of these may read as
+        // unrecognized.
+        for expression in [
+            "mit",
+            "MiT",
+            "apache-2.0 OR mit",
+            "APACHE-2.0 WITH llvm-exception",
+        ] {
+            assert!(
+                approved(expression),
+                "{expression} names an approved licence"
+            );
+        }
+        // The operators are the other half of the same sentence: SPDX matches
+        // them case-sensitively, so a lowercase one is not an operator and the
+        // expression it appears in is malformed.
+        for expression in [
+            "MIT or Apache-2.0",
+            "MIT and Apache-2.0",
+            "MIT with LLVM-exception",
+        ] {
+            assert!(!approved(expression), "{expression} carries no operator");
+        }
+        // The operand after WITH must be an exception identifier. One this
+        // release does not recognize leaves the expression malformed, so the
+        // licence goes unread rather than being taken from the left operand.
+        for expression in [
+            "MIT WITH definitely-not-an-spdx-exception",
+            "MIT WITH MIT",
+            "MIT WITH Apache-2.0",
+        ] {
+            assert!(!approved(expression), "{expression} names no exception");
+        }
+        // The register is carried whole, not sampled. A subset refuses a real
+        // crate: this one names an exception older than the version a sampled
+        // list would have kept.
+        for expression in [
+            "GPL-2.0-only WITH GCC-exception-2.0",
+            "GPL-2.0-or-later WITH Classpath-exception-2.0",
+            "Apache-2.0 WITH Swift-exception",
+            "GPL-3.0-only WITH Autoconf-exception-generic",
+        ] {
+            assert!(approved(expression), "{expression} names a real exception");
+        }
+    }
+
+    /// The compatibility question has one owner, and the projection reports
+    /// its answer as a record defect: a receipt reaches `rk status` through
+    /// `from_record`, which cannot fail, so a provider whose pair ships
+    /// nothing must be named rather than read as clean.
+    #[test]
+    fn a_recorded_provider_its_pair_cannot_run_is_a_record_defect() {
+        use super::{Provider, code_scanning_incompatibility};
+
+        assert!(code_scanning_incompatibility(None, "bash", "gitlab").is_none());
+        assert!(code_scanning_incompatibility(Some(Provider::Semgrep), "rust", "gitlab").is_none());
+        assert!(code_scanning_incompatibility(Some(Provider::CodeQl), "rust", "github").is_none());
+
+        let bash = code_scanning_incompatibility(Some(Provider::Semgrep), "bash", "github")
+            .expect("a binding with no scanner is named");
+        assert!(bash.contains("bash binding"), "{bash}");
+        let gitlab = code_scanning_incompatibility(Some(Provider::CodeQl), "rust", "gitlab")
+            .expect("codeql on gitlab is named");
+        assert!(gitlab.contains("codeql"), "{gitlab}");
+
+        // The projection carries the same reason, so a record-only reader sees
+        // it without going through resolution.
+        let mut params = Params::for_test("acme/widget", Some(Style::Trunk));
+        params.set_code_scanning_for_test(Some(Provider::Semgrep));
+        let clean = Projection::compute(&ProjectionInput {
+            params: params.clone(),
+            evidence: TargetEvidence::default(),
+        })
+        .expect("the pair projects");
+        assert!(
+            clean.record_defects.is_empty(),
+            "{:?}",
+            clean.record_defects
+        );
+    }
+
+    /// The code scanning capability: the provider gates its own destination,
+    /// semgrep carries no licence condition, and codeql's condition reads the
+    /// crate's declared licence without touching the filesystem.
+    #[test]
+    fn the_code_scanning_destinations_follow_the_recorded_provider() {
+        use super::{
+            CODE_SCANNING_DESTINATIONS, Kind, Provider, code_scanning_licence_refusal, kind_of,
+        };
+        for (destination, _) in CODE_SCANNING_DESTINATIONS {
+            assert_eq!(kind_of(destination), Some(Kind::Rendered), "{destination}");
+        }
+
+        let project = |provider: Option<Provider>| {
+            let mut params = Params::for_test("acme/widget", Some(Style::Trunk));
+            params.set_code_scanning_for_test(provider);
+            Projection::compute(&ProjectionInput {
+                params,
+                evidence: TargetEvidence {
+                    crate_shape: CrateShape {
+                        cargo_toml: Some(
+                            "[package]\nname = \"widget\"\nlicense = \"MIT\"\n".to_owned(),
+                        ),
+                        ..CrateShape::default()
+                    },
+                    ..TargetEvidence::default()
+                },
+            })
+            .expect("the embedded pair projects")
+        };
+        let landed = |projection: &Projection, destination: &str| {
+            projection
+                .candidates
+                .iter()
+                .any(|candidate| candidate.destination == destination)
+        };
+
+        let off = project(None);
+        for (destination, _) in CODE_SCANNING_DESTINATIONS {
+            assert!(!landed(&off, destination), "{destination}");
+        }
+        assert!(off.licence_refusal.is_none());
+
+        let codeql = project(Some(Provider::CodeQl));
+        assert!(landed(
+            &codeql,
+            ".github/workflows/code-scanning-codeql.yml"
+        ));
+        assert!(!landed(
+            &codeql,
+            ".github/workflows/code-scanning-semgrep.yml"
+        ));
+        assert!(codeql.licence_refusal.is_none(), "MIT satisfies the terms");
+
+        let semgrep = project(Some(Provider::Semgrep));
+        assert!(landed(
+            &semgrep,
+            ".github/workflows/code-scanning-semgrep.yml"
+        ));
+        assert!(!landed(
+            &semgrep,
+            ".github/workflows/code-scanning-codeql.yml"
+        ));
+
+        // Semgrep carries no condition, whatever the licence says.
+        let proprietary = CrateShape {
+            cargo_toml: Some("[package]\nlicense = \"LicenseRef-proprietary\"\n".to_owned()),
+            ..CrateShape::default()
+        };
+        assert!(
+            code_scanning_licence_refusal(Some(Provider::Semgrep), "rust", &proprietary).is_none()
+        );
+        let refusal = code_scanning_licence_refusal(Some(Provider::CodeQl), "rust", &proprietary)
+            .expect("codeql refuses a licence its terms do not cover");
+        assert!(refusal.contains("LicenseRef-proprietary"), "{refusal}");
+        assert!(refusal.contains("semgrep"), "{refusal}");
+        // A binding whose licence field this release does not read refuses
+        // rather than assuming the terms are met.
+        let bash = code_scanning_licence_refusal(Some(Provider::CodeQl), "bash", &proprietary)
+            .expect("an unread binding refuses");
+        assert!(bash.contains("bash binding"), "{bash}");
     }
 
     /// The pure boundary, held by a source scan over this file's

@@ -23,7 +23,7 @@ use crate::embedded;
 use crate::error::RkError;
 use crate::held;
 use crate::landing::apply::{self, Action, Collision, Prepared};
-use crate::landing::manifest::{self, Style, Workflow};
+use crate::landing::manifest::{self, Provider, Style, Workflow};
 use crate::landing::{self, lock};
 use crate::output::Output;
 
@@ -71,6 +71,17 @@ struct Report {
     style: &'static str,
     /// Whether the landing carries the Nix capability.
     nix: bool,
+    /// Whether the landing carries the Scorecard capability.
+    scorecard: bool,
+    /// The code scanning provider the landing carries, absent where the
+    /// project did not opt in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code_scanning: Option<&'static str>,
+    /// Why the provider's licence condition refuses this target, absent
+    /// where no condition applies or the licence satisfies it. A preview
+    /// reports it and exits 0; the apply refuses on it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    licence_refusal: Option<String>,
     /// The Nix destinations this target could not take, each with why;
     /// absent where nothing was withheld.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -154,6 +165,12 @@ pub fn run(args: &InitArgs) -> Result<(), RkError> {
             workflow: args.workflow.as_deref().map(Workflow::parse).transpose()?,
             style: args.style.as_deref().map(Style::parse).transpose()?,
             nix: args.nix.then_some(true),
+            scorecard: args.scorecard.then_some(true),
+            code_scanning: args
+                .code_scanning
+                .as_deref()
+                .map(Provider::parse)
+                .transpose()?,
         },
         config.as_ref(),
         None,
@@ -195,9 +212,9 @@ fn preview(
     prepared: &Prepared,
 ) -> Result<(), RkError> {
     let repo_argument = repo.as_deref().unwrap_or("<owner/name>");
-    let nix_flag = if params.nix() { " --nix" } else { "" };
+    let capabilities = params.capability_flags();
     let mut next = vec![format!(
-        "rk init --tech {} --forge {} --repo {repo_argument} --workflow {} --style {}{nix_flag} --target {} --apply",
+        "rk init --tech {} --forge {} --repo {repo_argument} --workflow {} --style {}{capabilities} --target {} --apply",
         params.tech(),
         params.forge(),
         params.workflow().as_str(),
@@ -209,6 +226,12 @@ fn preview(
             0,
             "resolve each collision above through the rk-setup skill; the apply refuses until then"
                 .to_owned(),
+        );
+    }
+    if let Some(reason) = prepared.projection.licence_refusal.as_deref() {
+        next.insert(
+            0,
+            format!("the apply refuses until the licence condition is answered: {reason}"),
         );
     }
     next.push(format!(
@@ -243,7 +266,7 @@ fn preview(
     }
     out.next(&next);
     out.emit(&Report {
-        schema: "rk.init/7",
+        schema: "rk.init/9",
         config: prepared.config.clone(),
         mode: "preview",
         tech: params.tech().to_owned(),
@@ -253,6 +276,9 @@ fn preview(
         workflow: params.workflow().as_str(),
         style: style.as_str(),
         nix: params.nix(),
+        scorecard: params.scorecard(),
+        code_scanning: params.code_scanning().map(Provider::as_str),
+        licence_refusal: prepared.projection.licence_refusal.clone(),
         withheld: withheld_of(prepared),
         collisions: (!prepared.collisions.is_empty()).then(|| prepared.collisions.clone()),
         files: prepared
@@ -364,7 +390,7 @@ fn report_apply(
     ];
     out.next(&next);
     out.emit(&Report {
-        schema: "rk.init/7",
+        schema: "rk.init/9",
         config: prepared.config.clone(),
         mode: "apply",
         tech: params.tech().to_owned(),
@@ -374,6 +400,9 @@ fn report_apply(
         workflow: params.workflow().as_str(),
         style: style.as_str(),
         nix: params.nix(),
+        scorecard: params.scorecard(),
+        code_scanning: params.code_scanning().map(Provider::as_str),
+        licence_refusal: prepared.projection.licence_refusal.clone(),
         withheld: withheld_of(prepared),
         collisions: None,
         files: file_entries,
@@ -452,13 +481,13 @@ fn collect_sentinels(
 mod tests {
     use super::{FileEntry, Report, SentinelEntry};
 
-    /// The complete `rk.init/7` shape, held by snapshot in both modes: a
+    /// The complete `rk.init/9` shape, held by snapshot in both modes: a
     /// field rename or removal fails here and becomes a schema-version
     /// bump instead of a silent parser break at some agent.
     #[test]
     fn the_init_report_schema_snapshot_holds() {
         let apply = Report {
-            schema: "rk.init/7",
+            schema: "rk.init/9",
             config: crate::config::Plan {
                 action: "added",
                 changes: vec![],
@@ -472,6 +501,9 @@ mod tests {
             workflow: "worktree",
             style: "trunk",
             nix: true,
+            scorecard: true,
+            code_scanning: Some("codeql"),
+            licence_refusal: None,
             withheld: Some(vec![crate::landing::Withheld {
                 path: "flake.nix".into(),
                 reason: "the target already carries flake.nix".into(),
@@ -491,13 +523,16 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&apply).expect("a report serializes"),
-            r##"{"schema":"rk.init/7","mode":"apply","tech":"rust","forge":"github","target":"/tmp/t","repo":"acme/widget","workflow":"worktree","style":"trunk","nix":true,"withheld":[{"path":"flake.nix","reason":"the target already carries flake.nix"}],"config":{"action":"added","changes":[],"content":"schema_version = 1\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"created"}],"sentinels":[{"path":"/tmp/t/release-plz.toml","line":3,"text":"# TODO(release-kit): keep false for a binary-only crate"}],"next":["commit the landed files, the receipt included"]}"##
+            r##"{"schema":"rk.init/9","mode":"apply","tech":"rust","forge":"github","target":"/tmp/t","repo":"acme/widget","workflow":"worktree","style":"trunk","nix":true,"scorecard":true,"code_scanning":"codeql","withheld":[{"path":"flake.nix","reason":"the target already carries flake.nix"}],"config":{"action":"added","changes":[],"content":"schema_version = 1\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"created"}],"sentinels":[{"path":"/tmp/t/release-plz.toml","line":3,"text":"# TODO(release-kit): keep false for a binary-only crate"}],"next":["commit the landed files, the receipt included"]}"##
         );
         let preview = Report {
             sentinels: None,
             repo: None,
             mode: "preview",
             nix: false,
+            scorecard: false,
+            code_scanning: None,
+            licence_refusal: Some("the target's Cargo.toml declares no license field".to_owned()),
             withheld: None,
             collisions: Some(vec![super::Collision {
                 path: "SECURITY.md".into(),
@@ -507,7 +542,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&preview).expect("a report serializes"),
-            r#"{"schema":"rk.init/7","mode":"preview","tech":"rust","forge":"github","target":"/tmp/t","workflow":"worktree","style":"trunk","nix":false,"collisions":[{"path":"SECURITY.md","reason":"exists, and no receipt attributes it to release-kit"}],"config":{"action":"added","changes":[],"content":"schema_version = 1\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"created"}],"next":["commit the landed files, the receipt included"]}"#,
+            r#"{"schema":"rk.init/9","mode":"preview","tech":"rust","forge":"github","target":"/tmp/t","workflow":"worktree","style":"trunk","nix":false,"scorecard":false,"licence_refusal":"the target's Cargo.toml declares no license field","collisions":[{"path":"SECURITY.md","reason":"exists, and no receipt attributes it to release-kit"}],"config":{"action":"added","changes":[],"content":"schema_version = 1\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"created"}],"next":["commit the landed files, the receipt included"]}"#,
             "a preview omits the sentinels, the unresolved repo, and an empty withheld list rather than serializing null"
         );
     }

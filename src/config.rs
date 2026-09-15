@@ -80,6 +80,12 @@ pub struct Landing {
     pub style: Option<Style>,
     /// P: opt-in Nix capability.
     pub nix: Option<bool>,
+    /// P: opt-in Scorecard capability.
+    pub scorecard: Option<bool>,
+    /// P: opt-in code scanning provider, as `codeql`, `semgrep`, or `off`.
+    /// The value stays a string here so an absent key and an explicit `off`
+    /// stay distinguishable; the landing parses it.
+    pub code_scanning: Option<String>,
 }
 
 /// The `security` table.
@@ -526,6 +532,23 @@ fn render(config: &Config) -> Result<Vec<u8>, RkError> {
                 .into(),
         ),
         (
+            "RK_CONFIG_LANDING_SCORECARD",
+            config
+                .landing
+                .scorecard
+                .ok_or_else(|| invalid("landing.scorecard is unresolved"))?
+                .into(),
+        ),
+        (
+            "RK_CONFIG_LANDING_CODE_SCANNING",
+            config
+                .landing
+                .code_scanning
+                .clone()
+                .ok_or_else(|| invalid("landing.code_scanning is unresolved"))?
+                .into(),
+        ),
+        (
             "RK_CONFIG_SECURITY_ADVISORIES",
             config.security.advisories.clone().into(),
         ),
@@ -703,6 +726,8 @@ fn rewrite_text(text: &str, key: &str, mut value: toml_edit::Value) -> Result<St
         "landing.workflow",
         "landing.style",
         "landing.nix",
+        "landing.scorecard",
+        "landing.code_scanning",
         "security.contact",
         "security.response",
         "setup.line_prefix",
@@ -787,6 +812,13 @@ impl Plan {
             workflow: Some(params.workflow()),
             style: params.style(),
             nix: Some(params.nix()),
+            scorecard: Some(params.scorecard()),
+            code_scanning: Some(
+                params
+                    .code_scanning()
+                    .map_or("off", crate::landing::Provider::as_str)
+                    .to_owned(),
+            ),
         };
         resolved.project.trunk = Some(params.trunk().to_owned());
         resolved.setup.line_prefix = Some(params.line_prefix().to_owned());
@@ -843,6 +875,12 @@ fn parameter_values(config: &Config) -> Vec<(&'static str, toml_edit::Value)> {
     if let Some(value) = config.landing.nix {
         values.push(("landing.nix", value.into()));
     }
+    if let Some(value) = config.landing.scorecard {
+        values.push(("landing.scorecard", value.into()));
+    }
+    if let Some(value) = config.landing.code_scanning.clone() {
+        values.push(("landing.code_scanning", value.into()));
+    }
     if let Some(value) = config.project.trunk.clone() {
         values.push(("project.trunk", value.into()));
     }
@@ -871,6 +909,14 @@ pub fn pending(config: &Config, record: &crate::landing::manifest::Manifest) -> 
         workflow: Some(record.parameters.workflow),
         style: record.parameters.style,
         nix: Some(record.parameters.nix),
+        scorecard: Some(record.parameters.scorecard),
+        code_scanning: Some(
+            record
+                .parameters
+                .code_scanning
+                .map_or("off", crate::landing::Provider::as_str)
+                .to_owned(),
+        ),
     };
     recorded.project.trunk = Some(record.parameters.trunk.clone());
     recorded.setup.line_prefix = Some(record.parameters.line_prefix.clone());
@@ -917,13 +963,15 @@ mod tests {
     fn an_omitted_landing_key_is_distinguishable_from_an_explicit_default() {
         let omitted = parse("schema_version = 1\n").expect("omitted answers parse");
         let explicit = parse(
-            "schema_version = 1\n[landing]\nworkflow = 'worktree'\nstyle = 'trunk'\nnix = false\n",
+            "schema_version = 1\n[landing]\nworkflow = 'worktree'\nstyle = 'trunk'\nnix = false\nscorecard = false\ncode_scanning = 'off'\n",
         )
         .expect("explicit defaults parse");
         assert_eq!(omitted.landing, super::Landing::default());
         assert_eq!(explicit.landing.workflow, Some(Workflow::Worktree));
         assert_eq!(explicit.landing.style, Some(Style::Trunk));
         assert_eq!(explicit.landing.nix, Some(false));
+        assert_eq!(explicit.landing.scorecard, Some(false));
+        assert_eq!(explicit.landing.code_scanning.as_deref(), Some("off"));
         assert_ne!(omitted, explicit);
     }
 
@@ -961,6 +1009,8 @@ mod tests {
         config.landing.workflow = Some(Workflow::Branches);
         config.landing.style = Some(Style::Lines);
         config.landing.nix = Some(true);
+        config.landing.scorecard = Some(true);
+        config.landing.code_scanning = Some("semgrep".to_owned());
         // The escaping subject moved to the one unrestricted string in this
         // table: `contact` is now a class P value the reader holds to a
         // single control-free line, so it can carry neither.
@@ -1006,6 +1056,8 @@ mod tests {
                 workflow: Some(Workflow::Worktree),
                 style: Some(Style::Trunk),
                 nix: Some(false),
+                scorecard: Some(false),
+                code_scanning: Some("off".to_owned()),
             },
             project: super::Project {
                 trunk: Some(super::TRUNK_DEFAULT.into()),

@@ -25,25 +25,30 @@ pub const MANIFEST_PATH: &str = ".release-kit/manifest.json";
 
 /// The schema this binary writes.
 ///
-/// Schema 7 is the receipt of a direct landing: the producing
+/// Schema 8 is the receipt of a direct landing: the producing
 /// `rk_version`, the origin, the resolved parameters, and per destination
 /// the path, the kind, the placement where the destination is a marked
 /// region, and the digest of the bytes or region now present. It carries
 /// no bundle digest and no baseline digest, because the landing renders
 /// afresh from this binary and compares against no earlier release.
 ///
-/// Schemas 1 through 6 read through one bounded conversion in
+/// Schemas 1 through 7 read through one bounded conversion in
 /// [`legacy`]: the retired `payload_sha256`, per-file `baseline_sha256`,
 /// and `parameters.scopes` fields are dropped, and the parameters a
 /// record predates take the defaults such a landing wrote. The next
-/// successful landing rewrites schema 7. Anything past this schema
+/// successful landing rewrites schema 8. Anything past this schema
 /// refuses by name.
 ///
 /// SATISFIES landing:a-record-states-its-schema
-pub const SCHEMA_VERSION: u64 = 7;
+pub const SCHEMA_VERSION: u64 = 8;
 
 /// The oldest schema this binary still reads.
 const OLDEST_READABLE_SCHEMA: u64 = 1;
+
+/// The first schema that states a destination's placement. A record below
+/// it carried none, and the block destinations were regions by their names
+/// alone.
+const PLACEMENT_SCHEMA: u64 = 7;
 
 /// The working-copy mode a landing records: a project decision, rendered
 /// into the landed blocks and changed only through the landing verbs.
@@ -131,6 +136,50 @@ impl Style {
     }
 }
 
+/// The code scanning provider a landing records.
+///
+/// A project decision: which analyzer the landed workflow runs, and with it
+/// whether the landing carries a licence condition at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Provider {
+    /// GitHub's own analyzer. Free under terms that cover an open-source
+    /// codebase alone, so a landing reads the binding's declared licence
+    /// first and refuses the pair where it is not OSI-approved.
+    CodeQl,
+    /// Semgrep Community Edition, which carries no licence condition on the
+    /// codebase it scans and runs on either forge.
+    Semgrep,
+}
+
+impl Provider {
+    /// The flag, wire, and report form.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CodeQl => "codeql",
+            Self::Semgrep => "semgrep",
+        }
+    }
+
+    /// Parse a `--code-scanning` flag value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RkError::Usage`] naming the providers and the word that
+    /// turns the capability off.
+    pub fn parse(raw: &str) -> Result<Option<Self>, RkError> {
+        match raw {
+            "codeql" => Ok(Some(Self::CodeQl)),
+            "semgrep" => Ok(Some(Self::Semgrep)),
+            "off" => Ok(None),
+            other => Err(RkError::Usage(format!(
+                "unknown code scanning provider '{other}'; the providers are: codeql, semgrep, and off turns the capability off"
+            ))),
+        }
+    }
+}
+
 /// The record a landing writes and every target-side verb reads.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Manifest {
@@ -184,6 +233,18 @@ pub struct Parameters {
     /// it.
     #[serde(default)]
     pub nix: bool,
+    /// Whether the landing carries the Scorecard capability: the workflow
+    /// that computes an `OpenSSF` Scorecard result and publishes it. A record
+    /// predating the field reads as opt-out, so an upgrade adds nothing
+    /// unrequested; the projection stays reproducible from the record
+    /// because this field is part of it.
+    #[serde(default)]
+    pub scorecard: bool,
+    /// The code scanning provider the landing carries, or none where the
+    /// project did not opt in. A record predating the field carries none,
+    /// so an upgrade adds no workflow unrequested.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_scanning: Option<Provider>,
     /// The one permanent branch, rendered into every landed artifact that
     /// names it. A record predating the field reads as `master`, which is
     /// what such a landing wrote, so the projection stays reproducible.
@@ -304,7 +365,7 @@ impl Placement {
     }
 }
 
-/// The one bounded conversion from a record at schemas 1 through 6 to the
+/// The one bounded conversion from a record at schemas 1 through 7 to the
 /// current shape.
 ///
 /// It reads no other release and interprets no other release's sources: it drops the
@@ -405,10 +466,12 @@ pub fn load(target: &Utf8Path) -> Result<Option<Manifest>, RkError> {
     };
     let mut manifest: Manifest = serde_json::from_value(value)
         .map_err(|e| anyhow::anyhow!("{path} does not parse at schema_version {declared}: {e}"))?;
-    // A record before schema 7 stated no placement: the block destinations
-    // were regions by their names alone, and the loaded shape says so.
+    // A record below the placement schema stated none: the block
+    // destinations were regions by their names alone, and the loaded shape
+    // says so.
     for file in &mut manifest.files {
-        if declared < SCHEMA_VERSION && crate::landing::block_markers(&file.destination).is_some() {
+        if declared < PLACEMENT_SCHEMA && crate::landing::block_markers(&file.destination).is_some()
+        {
             file.placement = Placement::Region;
         }
     }
@@ -551,18 +614,19 @@ fn numeric_core(version: &str) -> Vec<u64> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Alignment, FileRecord, Manifest, Parameters, Placement, Style, Workflow, alignment,
+        Alignment, FileRecord, Manifest, Parameters, Placement, Provider, Style, Workflow,
+        alignment,
     };
     use crate::digest::Digest;
     use crate::landing::Kind;
 
-    /// The complete record shape at schema 7, held by snapshot: a field
+    /// The complete record shape at schema 8, held by snapshot: a field
     /// rename or removal fails here and becomes a schema-version bump
     /// instead of a silent break at every reader.
     #[test]
     fn the_manifest_schema_snapshot_holds() {
         let manifest = Manifest {
-            schema_version: 7,
+            schema_version: 8,
             rk_version: "0.1.0".into(),
             origin: "init".into(),
             tech: "rust".into(),
@@ -573,6 +637,8 @@ mod tests {
                 workflow: Workflow::Worktree,
                 style: Some(Style::Trunk),
                 nix: true,
+                scorecard: true,
+                code_scanning: Some(Provider::Semgrep),
                 trunk: crate::config::TRUNK_DEFAULT.to_owned(),
                 line_prefix: crate::config::LINE_PREFIX_DEFAULT.to_owned(),
                 security_contact: String::new(),
@@ -599,7 +665,7 @@ mod tests {
         assert_eq!(
             text,
             format!(
-                r#"{{"schema_version":7,"rk_version":"0.1.0","origin":"init","tech":"rust","forge":"github","landed_at":"2026-08-29T00:00:00Z","parameters":{{"repo":"acme/widget","workflow":"worktree","style":"trunk","nix":true,"trunk":"master","line_prefix":"release/","security_contact":"","security_response":"best-effort"}},"files":[{{"destination":"release-plz.toml","kind":"seeded","sha256":"{empty}"}},{{"destination":"AGENTS.md","kind":"rendered","sha256":"{empty}","placement":"region"}}],"pins":{{"release-plz":"0.3.160"}}}}"#
+                r#"{{"schema_version":8,"rk_version":"0.1.0","origin":"init","tech":"rust","forge":"github","landed_at":"2026-08-29T00:00:00Z","parameters":{{"repo":"acme/widget","workflow":"worktree","style":"trunk","nix":true,"scorecard":true,"code_scanning":"semgrep","trunk":"master","line_prefix":"release/","security_contact":"","security_response":"best-effort"}},"files":[{{"destination":"release-plz.toml","kind":"seeded","sha256":"{empty}"}},{{"destination":"AGENTS.md","kind":"rendered","sha256":"{empty}","placement":"region"}}],"pins":{{"release-plz":"0.3.160"}}}}"#
             ),
             "a whole file omits its placement, and no retired digest field survives"
         );
@@ -702,7 +768,7 @@ mod tests {
             ("security_response", ""),
         ] {
             let record = format!(
-                r#"{{"schema_version":7,"rk_version":"0.1.0","origin":"init","tech":"rust","forge":"github","landed_at":"2026-08-29T00:00:00Z","parameters":{{"repo":"acme/widget","{field}":"{value}"}},"files":[],"pins":{{}}}}"#
+                r#"{{"schema_version":8,"rk_version":"0.1.0","origin":"init","tech":"rust","forge":"github","landed_at":"2026-08-29T00:00:00Z","parameters":{{"repo":"acme/widget","{field}":"{value}"}},"files":[],"pins":{{}}}}"#
             );
             std::fs::write(target.join(super::MANIFEST_PATH), record).expect("the record writes");
             let refused = super::load(target).expect_err("an uncanonical record refuses");

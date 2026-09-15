@@ -1,0 +1,57 @@
+# Static analysis, Semgrep CE. A landing writes this file only under the
+# recorded code-scanning opt-in with semgrep chosen. Semgrep CE carries no
+# licence condition on the codebase it scans, so this is the provider a
+# target reaches for where its own licence is not OSI-approved.
+#
+# The image is pinned by version tag rather than by commit. It is the
+# execution environment rather than a fetched step, which is the boundary
+# ADR-pin-every-action-by-commit draws.
+#
+# This workflow does not trigger on a pull request, for the reason the
+# CodeQL arm states: the forge resolves a job's needs inside one workflow
+# file, so a second request-reporting workflow holds no merge.
+
+name: code-scanning
+
+on:
+  push:
+    branches: [RK_TRUNK_BRANCH]
+  schedule:
+    - cron: '17 3 * * 1'
+
+permissions: {}
+
+jobs:
+  code-scanning:
+    name: code-scanning
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep:1.177.0
+    permissions:
+      contents: read
+      # The scan uploads its SARIF to this repository's code scanning.
+      security-events: write
+      # Only a private repository needs this, and the upload fails without it
+      # there: the action reads the workflow run it is reporting against. It is
+      # granted unconditionally because the landing does not know whether the
+      # target is private, and read access to this repository's own runs costs a
+      # public target nothing. A private target fetching private CodeQL packs
+      # adds `packages: read` beside it; the default query packs need none.
+      actions: read
+    steps:
+      - name: check out the trunk
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: the rules run
+        # The public rust ruleset, named rather than resolved: --config auto
+        # asks the registry which rules apply and needs an account token,
+        # which this convention does not ask a target to hold.
+        run: semgrep scan --config p/rust --sarif --output semgrep.sarif --error
+      - name: the result uploads
+        # Runs even where the scan found a finding and exited non-zero: a
+        # result nobody uploaded is a scan nobody can read.
+        if: always()
+        uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4
+        with:
+          sarif_file: semgrep.sarif
