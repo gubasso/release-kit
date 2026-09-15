@@ -155,6 +155,7 @@ fn record_params(
         driver,
         forge,
         checkout_mode,
+        integration,
         style,
         repo,
         CapabilityRequests {
@@ -173,6 +174,7 @@ fn params_requesting(
     driver: &str,
     forge: &str,
     checkout_mode: release_kit::landing::CheckoutMode,
+    integration: release_kit::landing::Integration,
     style: Option<release_kit::landing::Style>,
     repo: &str,
     capabilities: release_kit::profile::CapabilityRequests,
@@ -24420,6 +24422,7 @@ fn opt_in_signature_lines() -> Vec<String> {
             driver,
             forge,
             CheckoutMode::LinkedWorktree,
+            release_kit::landing::Integration::Forge,
             Some(Style::Trunk),
             "acme/widget",
             CapabilityRequests {
@@ -24481,6 +24484,7 @@ fn occupied_target_signature_lines() -> Vec<String> {
         "rust",
         "github",
         CheckoutMode::LinkedWorktree,
+        release_kit::landing::Integration::Forge,
         Style::Trunk,
         false,
     );
@@ -29108,13 +29112,14 @@ fn the_landed_state_bytes_are_pinned_in_the_signature() {
         "rust",
         "github",
         CheckoutMode::LinkedWorktree,
+        release_kit::landing::Integration::Forge,
         Style::Trunk,
         false,
     );
     let plan = release_kit::config::Plan::compose(None, &params, None, None)
         .expect("the configuration composes");
     let configuration = format!(
-        "rust github linked-worktree trunk false {} {}",
+        "rust github linked-worktree forge trunk false {} {}",
         release_kit::config::CONFIG_PATH,
         release_kit::digest::Digest::of(plan.content.as_bytes())
     );
@@ -29129,7 +29134,7 @@ fn the_landed_state_bytes_are_pinned_in_the_signature() {
         })
         .expect("the representative pair projects");
     let record = record_signature_line(
-        "rust github linked-worktree trunk false",
+        "rust github linked-worktree forge trunk false",
         &params,
         &projection.capabilities,
     );
