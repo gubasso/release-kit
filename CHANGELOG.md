@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1](https://github.com/gubasso/release-kit/compare/v0.7.0...v0.7.1) - 2026-09-15
+
+### Fixed
+
+- *(distribution/guidance)* make the authoring gate prove the release about to ship carries its guidance ([#231](https://github.com/gubasso/release-kit/pull/231))
+
 ## [0.7.0](https://github.com/gubasso/release-kit/compare/v0.6.2...v0.7.0) - 2026-09-15
 
 ### Added
