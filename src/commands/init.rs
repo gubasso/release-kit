@@ -212,14 +212,9 @@ fn preview(
     prepared: &Prepared,
 ) -> Result<(), RkError> {
     let repo_argument = repo.as_deref().unwrap_or("<owner/name>");
-    let nix_flag = if params.nix() { " --nix" } else { "" };
-    let scorecard_flag = if params.scorecard() {
-        " --scorecard"
-    } else {
-        ""
-    };
+    let capabilities = params.capability_flags();
     let mut next = vec![format!(
-        "rk init --tech {} --forge {} --repo {repo_argument} --workflow {} --style {}{nix_flag}{scorecard_flag} --target {} --apply",
+        "rk init --tech {} --forge {} --repo {repo_argument} --workflow {} --style {}{capabilities} --target {} --apply",
         params.tech(),
         params.forge(),
         params.workflow().as_str(),
@@ -231,6 +226,12 @@ fn preview(
             0,
             "resolve each collision above through the rk-setup skill; the apply refuses until then"
                 .to_owned(),
+        );
+    }
+    if let Some(reason) = prepared.projection.licence_refusal.as_deref() {
+        next.insert(
+            0,
+            format!("the apply refuses until the licence condition is answered: {reason}"),
         );
     }
     next.push(format!(

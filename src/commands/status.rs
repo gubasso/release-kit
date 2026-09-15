@@ -235,6 +235,10 @@ struct Observed {
     invariants: Vec<InvariantFailure>,
     /// Reportable conditions that are not violations.
     warnings: Vec<Warning>,
+    /// Recorded capabilities this target cannot run, counted in
+    /// `record_drift` and kept separately because a plain upgrade cannot
+    /// repair them: it re-reads the same recorded answer and refuses.
+    incompatible: Vec<String>,
     /// The destinations an upgrade would change, or `None` where this
     /// binary carries no projection for the recorded pair and so cannot
     /// say.
@@ -380,6 +384,7 @@ fn observe(args: &StatusArgs, manifest: &Manifest) -> Result<Observed, RkError> 
         sentinels: Vec::new(),
         invariants: Vec::new(),
         warnings: Vec::new(),
+        incompatible: Vec::new(),
         pending: None,
     };
     // One projection serves every reader below, because each asks what
@@ -453,6 +458,15 @@ fn observe(args: &StatusArgs, manifest: &Manifest) -> Result<Observed, RkError> 
             code: CODE_SCANNING_LICENCE,
             reason,
         });
+    }
+    // A receipt naming a capability its pair cannot run is a receipt nothing
+    // can honour, whichever binary wrote it, so this is judged at every
+    // alignment rather than only where this binary wrote the record.
+    if let Some(projection) = projected.as_ref() {
+        observed.incompatible.clone_from(&projection.record_defects);
+        observed
+            .record_drift
+            .extend(projection.record_defects.iter().cloned());
     }
     if aligned && let Some(projection) = projected.as_ref() {
         observe_parameter_drift(manifest, projection, &mut observed);
@@ -683,7 +697,16 @@ fn render_human(
     for failure in &observed.invariants {
         next.push(format!("{}: {}", failure.destination, failure.remediation));
     }
-    if !observed.record_drift.is_empty() {
+    // The incompatible ones first, and with the override: a plain upgrade
+    // reads the same recorded provider and refuses, so advertising it alone
+    // would send the operator into a loop.
+    if !observed.incompatible.is_empty() {
+        next.push(format!(
+            "rk upgrade --code-scanning off --target {} drops the capability this target cannot run; name a provider its pair ships to keep one",
+            args.target
+        ));
+    }
+    if observed.record_drift.len() > observed.incompatible.len() {
         next.push(format!(
             "rk upgrade --target {} rewrites the receipt from its parameters",
             args.target

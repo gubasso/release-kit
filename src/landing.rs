@@ -24,12 +24,12 @@ use camino::Utf8Path;
 
 pub use crate::projection::{
     AGENTS_DESTINATION, BLOCK_BEGIN, BLOCK_DESTINATIONS, BLOCK_END, BRANCH_GRAMMAR,
-    CODE_SCANNING_DESTINATIONS, GLOSSARY_DESTINATION, HOOK_TYPES_LINE, HOOKS_BEGIN,
-    HOOKS_DESTINATION, HOOKS_END, Kind, LINE_PREFIX_RE_TOKEN, LINE_PREFIX_TOKEN, NIX_DESTINATIONS,
-    NIX_WITHHOLDABLE, OWNER_TOKEN, REPO_PLACEHOLDER, REPO_TOKEN, SCOPE_SHAPE, SCOPE_SHAPE_TOKEN,
-    SCORECARD_DESTINATIONS, SECURITY_SPANS, STYLE_TOKEN, TRUNK_BRANCH_TOKEN, authored,
-    block_markers, destinations, extract_block, hooks_marker_defect, kind_of, marker_defect,
-    render, scope_is_shaped, splice_hooks_block, splice_marked_block, substitute,
+    CODE_SCANNING_DESTINATIONS, CODE_SCANNING_TECHS, GLOSSARY_DESTINATION, HOOK_TYPES_LINE,
+    HOOKS_BEGIN, HOOKS_DESTINATION, HOOKS_END, Kind, LINE_PREFIX_RE_TOKEN, LINE_PREFIX_TOKEN,
+    NIX_DESTINATIONS, NIX_WITHHOLDABLE, OWNER_TOKEN, REPO_PLACEHOLDER, REPO_TOKEN, SCOPE_SHAPE,
+    SCOPE_SHAPE_TOKEN, SCORECARD_DESTINATIONS, SECURITY_SPANS, STYLE_TOKEN, TRUNK_BRANCH_TOKEN,
+    authored, block_markers, destinations, extract_block, hooks_marker_defect, kind_of,
+    marker_defect, render, scope_is_shaped, splice_hooks_block, splice_marked_block, substitute,
 };
 pub use manifest::{Provider, Style, Workflow};
 use serde::Serialize;
@@ -200,7 +200,7 @@ impl Params {
             .unwrap_or_else(|| crate::config::RESPONSE_DEFAULT.to_owned());
         let security_response = crate::config::canonical_response(&security_response)
             .map_err(crate::config::invalid)?;
-        let code_scanning = resolve_code_scanning(flags, config, record, &resolved.forge)?;
+        let code_scanning = resolve_code_scanning(flags, config, record, &tech, &resolved.forge)?;
         Ok(Self {
             tech,
             forge: resolved.forge,
@@ -253,6 +253,47 @@ impl Params {
     #[must_use]
     pub const fn code_scanning(&self) -> Option<Provider> {
         self.code_scanning
+    }
+
+    /// Every opt-in capability's flag, as `rk init` and `rk adopt` take it.
+    ///
+    /// The resolved answers, not the flags the caller typed: a follow-up
+    /// command a preview prints must apply the decision that was previewed,
+    /// and the preview's decision is what resolution produced.
+    #[must_use]
+    pub fn capability_flags(&self) -> String {
+        let mut out = String::new();
+        if self.nix {
+            out.push_str(" --nix");
+        }
+        if self.scorecard {
+            out.push_str(" --scorecard");
+        }
+        // The provider flag takes a value, so `off` is a statable answer and
+        // is stated: a committed `landing.code_scanning` would otherwise
+        // re-enable on replay exactly what this preview turned off. The two
+        // boolean flags above have no off form, so absence is their only
+        // honest rendering and no committed value can contradict it.
+        out.push_str(" --code-scanning ");
+        out.push_str(self.code_scanning.map_or("off", Provider::as_str));
+        out
+    }
+
+    /// The same answers as `rk upgrade` takes them, every one stated.
+    ///
+    /// An upgrade can turn a capability off as well as on, so absence is no
+    /// answer there and each value is rendered explicitly. That is what makes
+    /// a printed follow-up command reproduce the previewed decision rather
+    /// than re-resolve the configured one.
+    #[must_use]
+    pub fn capability_toggles(&self) -> String {
+        let word = |on: bool| if on { "on" } else { "off" };
+        format!(
+            " --nix {} --scorecard {} --code-scanning {}",
+            word(self.nix),
+            word(self.scorecard),
+            self.code_scanning.map_or("off", Provider::as_str)
+        )
     }
 
     /// The project path used by parameter-bearing blocks.
@@ -353,18 +394,22 @@ impl Params {
 /// configuration, then the record. A configured key answers as the string it
 /// carries, so `off` is an answer and an absent key is not.
 ///
-/// `codeql` is GitHub's own analyzer and no other forge's zone ships a
-/// workflow for it, so the pair refuses here rather than recording an answer
-/// and landing nothing.
+/// Two pairs refuse here rather than recording an answer and landing
+/// nothing. A scanner scans one language, so the workflows live in the
+/// binding that owns that language and a technology shipping none refuses
+/// the whole capability. And `codeql` is GitHub's own analyzer, so no other
+/// forge's zone ships a workflow for it.
 ///
 /// # Errors
 ///
 /// [`RkError::Usage`] for a configured provider name that is not one of the
-/// two, and for `codeql` on any forge but GitHub.
+/// two, for a technology that ships no scanner, and for `codeql` on any
+/// forge but GitHub.
 fn resolve_code_scanning(
     flags: &Inputs<'_>,
     config: Option<&crate::config::Config>,
     record: Option<&manifest::Manifest>,
+    tech: &str,
     forge: &str,
 ) -> Result<Option<Provider>, RkError> {
     let configured = config
@@ -376,10 +421,8 @@ fn resolve_code_scanning(
         .or(configured)
         .or_else(|| record.map(|r| r.parameters.code_scanning))
         .unwrap_or(None);
-    if provider == Some(Provider::CodeQl) && forge != "github" {
-        return Err(RkError::Usage(format!(
-            "codeql is GitHub's own analyzer and the {forge} pair ships no workflow for it; pass --code-scanning semgrep"
-        )));
+    if let Some(reason) = crate::projection::code_scanning_incompatibility(provider, tech, forge) {
+        return Err(RkError::Usage(reason));
     }
     Ok(provider)
 }

@@ -1,6 +1,6 @@
 {
   "schema_version": 8,
-  "rk_version": "0.6.0",
+  "rk_version": "0.6.1",
   "origin": "adopt",
   "tech": "rust",
   "forge": "github",

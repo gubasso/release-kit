@@ -67,7 +67,7 @@ Add `<stage>` to the inventory of stage paths, and hold it for every step below.
 
 ```bash
 cat <stage>/stage.json
-# check: schema is rk.stage/1, rk_version is the binary's, and target is this repository
+# check: schema is rk.stage/3, rk_version is the binary's, and target is this repository
 # check: each candidates entry carries destination, kind, placement, sha256, sources, and region_sha256 where the placement is region
 # check: each omissions and collisions entry carries destination and reason, and each retired entry is a destination alone
 ls -R <stage>/artifacts <stage>/reference

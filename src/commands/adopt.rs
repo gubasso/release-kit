@@ -199,7 +199,7 @@ fn report(
     let tech = params.tech().to_owned();
     let repo = params.repo().to_owned();
     let workflow = params.workflow();
-    let next = if args.apply {
+    let mut next = if args.apply {
         vec![
             "commit the config and the receipt".to_owned(),
             format!("rk status --target {} reports this landing", args.target),
@@ -210,10 +210,16 @@ fn report(
             params.forge(),
             workflow.as_str(),
             style.as_str(),
-            if params.nix() { " --nix" } else { "" },
+            params.capability_flags(),
             args.target
         )]
     };
+    if let Some(reason) = prepared.projection.licence_refusal.as_deref() {
+        next.insert(
+            0,
+            format!("the apply refuses until the licence condition is answered: {reason}"),
+        );
+    }
     out.result_line(format!(
         "{} {}\n{}",
         prepared.config.action,

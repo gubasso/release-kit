@@ -747,7 +747,7 @@ fn init_preview_human_lines_are_snapshot_held() {
          created SECURITY.md\n\
          created dist-workspace.toml\n\
          created release-plz.toml\n\
-         Next:\n  rk init --tech rust --forge github --repo <owner/name> --workflow worktree --style trunk --target {path} --apply\n\
+         Next:\n  rk init --tech rust --forge github --repo <owner/name> --workflow worktree --style trunk --code-scanning off --target {path} --apply\n\
          \x20 rk stage --target {path} stages the complete candidate for a byte comparison\n"
     );
     let output = rk()
@@ -8276,6 +8276,56 @@ esac
     assert_eq!(seen, 3, "every codeql entry point is judged: {report}");
 }
 
+/// A discovery ref is one path segment, so a `/` inside it is encoded. The
+/// registry already carries `pypa/gh-action-pypi-publish@release/v1`, and the
+/// documented contract for a path parameter is the encoded form.
+#[test]
+fn a_discovery_ref_carrying_a_slash_is_encoded_as_one_segment() {
+    let mock = tempfile::tempdir().expect("a scratch dir exists");
+    let curl = mock.path().join("curl");
+    // The mock answers the encoded URL alone. A resolver that passed the raw
+    // slash through would ask for /commits/release/v1 and read unreachable.
+    std::fs::write(
+        &curl,
+        r#"#!/usr/bin/env bash
+url="${@: -1}"
+case "$url" in
+  "https://api.github.com/repos/pypa/gh-action-pypi-publish/commits/release%2Fv1")
+    printf '%s' '{"sha":"dc37677b2e1c63e2034f94d8a5b11f265b73ba33"}';;
+  */commits/*) exit 22;;
+  *) printf '%s' '{"tag_name":"v0.0.0"}';;
+esac
+"#,
+    )
+    .expect("the mock writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&curl, std::fs::Permissions::from_mode(0o755))
+            .expect("the mock is executable");
+    }
+    let out = rk()
+        .args(["versions", "--check", "--json"])
+        .env("RK_CURL_BIN", &curl)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    let pin = report["pins"]
+        .as_array()
+        .expect("a pin list")
+        .iter()
+        .find(|pin| pin["tool"] == "gh-action-pypi-publish")
+        .expect("the slash-bearing pin is judged");
+    assert_eq!(pin["ref_result"], "ref-unmoved", "{pin}");
+    assert_eq!(
+        pin["ref_commit"], "dc37677b2e1c63e2034f94d8a5b11f265b73ba33",
+        "{pin}"
+    );
+}
+
 /// `rk versions --check` against a mocked fetch: all four per-pin results
 /// render, an unreachable source is a reported result at exit 0, and the
 /// registry file is untouched.
@@ -12806,11 +12856,83 @@ fn a_preview_follow_up_keeps_the_previewed_decision() {
         .get_output()
         .stdout
         .clone();
+    // Every capability's resolved value rides along, stated rather than
+    // implied: an upgrade can turn one off as well as on, so absence is no
+    // answer there and a follow-up that omitted it would re-resolve the
+    // configured value and apply a decision the preview did not show.
     assert!(
-        String::from_utf8_lossy(&out).contains("rk upgrade --workflow branches --target"),
-        "the upgrade follow-up carries the mode change: {}",
+        String::from_utf8_lossy(&out).contains(
+            "rk upgrade --workflow branches --nix off --scorecard off --code-scanning off --target"
+        ),
+        "the upgrade follow-up carries the mode change and every capability: {}",
         String::from_utf8_lossy(&out)
     );
+
+    // The case that made this necessary: a capability turned off previews its
+    // removal, and following the printed command must remove it rather than
+    // re-resolve the recorded value and keep it.
+    let opted = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust_scorecard(opted.path()).success();
+    let out = rk()
+        .args(["upgrade", "--scorecard", "off", "--target"])
+        .arg(opted.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let printed = String::from_utf8_lossy(&out);
+    let follow = printed
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("rk upgrade") && line.contains("--apply"))
+        .expect("the preview prints a follow-up command")
+        .to_owned();
+    assert!(follow.contains("--scorecard off"), "{follow}");
+    let arguments: Vec<&str> = follow
+        .split_whitespace()
+        .skip(1)
+        .take_while(|word| *word != "writes")
+        .collect();
+    rk().args(&arguments).assert().success();
+    assert_eq!(
+        read_manifest(opted.path())["parameters"]["scorecard"],
+        false,
+        "the printed command applied the previewed decision"
+    );
+
+    // The init and adopt form: the presence flags, where off is the default
+    // and an unwanted capability renders nothing.
+    let fresh = tempfile::tempdir().expect("a scratch dir exists");
+    seed_licensed_crate(fresh.path(), "MIT");
+    let out = rk()
+        .args(["init", "--tech", "rust", "--forge", "github"])
+        .args(["--repo", "acme/widget", "--scorecard"])
+        .args(["--code-scanning", "codeql", "--target"])
+        .arg(fresh.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let printed = String::from_utf8_lossy(&out);
+    let follow = printed
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("rk init"))
+        .expect("the preview prints a follow-up command")
+        .to_owned();
+    assert!(follow.contains(" --scorecard"), "{follow}");
+    assert!(follow.contains(" --code-scanning codeql"), "{follow}");
+    assert!(
+        !follow.contains(" --nix"),
+        "an unwanted capability is absent: {follow}"
+    );
+    let arguments: Vec<&str> = follow.split_whitespace().skip(1).collect();
+    rk().args(&arguments).assert().success();
+    let manifest = read_manifest(fresh.path());
+    assert_eq!(manifest["parameters"]["scorecard"], true);
+    assert_eq!(manifest["parameters"]["code_scanning"], "codeql");
 }
 
 /// A scratch repository ignoring `.draft/`, for the message content guard.
@@ -14556,6 +14678,303 @@ fn switching_the_code_scanning_provider_retires_the_other_destination() {
         .stderr(predicate::str::contains(
             "the providers are: codeql, semgrep",
         ));
+}
+
+/// Both GitHub scanners upload SARIF, and the upload fails on a private
+/// repository without `actions: read`. The landing does not know whether a
+/// target is private, so both jobs carry it, and neither takes a write
+/// permission at workflow level.
+#[test]
+fn both_github_scanners_carry_the_permissions_the_upload_needs() {
+    for (name, destination) in [
+        ("code-scanning-codeql.yml", CODEQL_WORKFLOW),
+        ("code-scanning-semgrep.yml", SEMGREP_WORKFLOW_GITHUB),
+    ] {
+        let source = repo_path("snippets/rust/github/.github/workflows").join(name);
+        let text = std::fs::read_to_string(&source).expect("the snippet reads");
+        assert!(text.contains("security-events: write"), "{name}: {text}");
+        assert!(
+            text.contains("actions: read"),
+            "{name}: a private target's upload needs it: {text}"
+        );
+        assert!(
+            text.contains("permissions: {}"),
+            "{name}: the workflow level takes nothing: {text}"
+        );
+        assert!(
+            !text.contains("pull_request"),
+            "{name}: a second request-reporting workflow gates nothing: {text}"
+        );
+        assert_eq!(
+            destination,
+            format!(".github/workflows/{name}"),
+            "the source's name is its destination"
+        );
+    }
+}
+
+/// A scanner reads one language, so the workflows live in the rust pairs and
+/// every other binding refuses the capability by name. A landing that
+/// recorded a provider and wrote nothing would be the dishonest answer.
+#[test]
+fn a_binding_with_no_scanner_refuses_the_capability_by_name() {
+    for (tech, forge) in [("bash", "github"), ("bash", "gitlab"), ("python", "github")] {
+        let target = tempfile::tempdir().expect("a scratch dir exists");
+        rk().args(["init", "--tech", tech, "--forge", forge])
+            .args(["--repo", "acme/widget", "--code-scanning", "semgrep"])
+            .arg("--target")
+            .arg(target.path())
+            .arg("--apply")
+            .assert()
+            .code(64)
+            .stderr(
+                predicate::str::contains(format!("the {tech} binding ships no code scanning"))
+                    .and(predicate::str::contains("rust")),
+            );
+        assert!(
+            !target.path().join(".release-kit").exists(),
+            "{tech} {forge}: nothing lands"
+        );
+    }
+    // The bash GitLab pipeline names no scanning include, because no bash
+    // scanner ships and a local include of an absent file fails the pipeline.
+    let pipeline = std::fs::read_to_string(repo_path("snippets/bash/gitlab/.gitlab-ci.yml"))
+        .expect("the pipeline reads");
+    assert!(!pipeline.contains("code-scanning"), "{pipeline}");
+}
+
+/// The preview says what the apply will refuse, on every verb that previews.
+/// An operator who reads only the human output must not follow a command that
+/// cannot run.
+#[test]
+fn every_preview_names_the_licence_refusal_the_apply_will_answer() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    seed_licensed_crate(target.path(), "LicenseRef-proprietary");
+    let names_it = predicate::str::contains("the apply refuses until the licence condition");
+    rk().args(["init", "--tech", "rust", "--forge", "github"])
+        .args([
+            "--repo",
+            "acme/widget",
+            "--code-scanning",
+            "codeql",
+            "--target",
+        ])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(names_it.clone());
+    // Adoption needs a target that already runs the convention, so this one
+    // lands under a licence codeql permits, loses its receipt, and then meets
+    // a licence it does not: the pre-record target running a workflow its own
+    // terms forbid, which is the case the line exists for.
+    let adopted = tempfile::tempdir().expect("a scratch dir exists");
+    seed_licensed_crate(adopted.path(), "MIT");
+    rk().args(["init", "--tech", "rust", "--forge", "github"])
+        .args(["--repo", "acme/widget", "--workflow", "branches"])
+        .args(["--code-scanning", "codeql", "--target"])
+        .arg(adopted.path())
+        .arg("--apply")
+        .assert()
+        .success();
+    std::fs::remove_file(adopted.path().join(".release-kit/manifest.json"))
+        .expect("the receipt removes");
+    seed_licensed_crate(adopted.path(), "LicenseRef-proprietary");
+    rk().args(["adopt", "--tech", "rust", "--forge", "github"])
+        .args(["--repo", "acme/widget", "--style", "trunk"])
+        .args(["--code-scanning", "codeql", "--target"])
+        .arg(adopted.path())
+        .assert()
+        .success()
+        .stdout(names_it);
+    // The upgrade preview needs a record, so it lands under a licence codeql
+    // permits and then meets one it does not.
+    let landed = tempfile::tempdir().expect("a scratch dir exists");
+    seed_licensed_crate(landed.path(), "MIT");
+    land_code_scanning(landed.path(), "github", "codeql")
+        .assert()
+        .success();
+    seed_licensed_crate(landed.path(), "LicenseRef-proprietary");
+    rk().args(["upgrade", "--target"])
+        .arg(landed.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("licence refusal:"));
+    // And the apply refuses, so the preview told the truth.
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(landed.path())
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains(
+            "licence condition is not satisfied",
+        ));
+}
+
+/// A receipt naming a provider its own pair cannot run is a receipt nothing
+/// can honour. It reaches `rk status` through `from_record`, which cannot
+/// fail, so the projection reports it and `--check` counts it.
+#[test]
+fn a_recorded_provider_the_pair_cannot_run_is_reported_and_judged() {
+    for (tech, forge, provider, named) in [
+        ("bash", "github", "semgrep", "bash binding"),
+        ("rust", "gitlab", "codeql", "codeql"),
+    ] {
+        let target = tempfile::tempdir().expect("a scratch dir exists");
+        seed_licensed_crate(target.path(), "MIT");
+        rk().args(["init", "--tech", tech, "--forge", forge])
+            .args(["--repo", "acme/widget", "--target"])
+            .arg(target.path())
+            .arg("--apply")
+            .assert()
+            .success();
+        // The receipt is edited past what resolution would ever have written,
+        // which is the only way this state arises: a hand edit, or a landing
+        // from a binary whose pairs differed.
+        let mut manifest = read_manifest(target.path());
+        manifest["parameters"]
+            .as_object_mut()
+            .expect("parameters is an object")
+            .insert("code_scanning".into(), serde_json::json!(provider));
+        write_manifest(target.path(), &manifest);
+        let out = rk()
+            .args(["status", "--check", "--json", "--target"])
+            .arg(target.path())
+            .assert()
+            .code(1)
+            .get_output()
+            .stdout
+            .clone();
+        let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+        assert_eq!(report["code_scanning"], provider);
+        assert!(
+            report["record_drift"].as_u64().unwrap_or(0) >= 1,
+            "{tech} {forge}: the incompatible record is drift: {report}"
+        );
+        assert!(
+            report["violations"]
+                .as_array()
+                .expect("a violation list")
+                .iter()
+                .any(|line| line.as_str().is_some_and(|line| line.contains(named))),
+            "{tech} {forge}: the violation names the reason: {report}"
+        );
+        // The advertised remedy must actually run. A plain upgrade reads the
+        // same recorded provider and refuses, so status names the override, and
+        // executing it repairs the receipt.
+        let human = rk()
+            .args(["status", "--check", "--target"])
+            .arg(target.path())
+            .assert()
+            .code(1)
+            .get_output()
+            .stdout
+            .clone();
+        let printed = String::from_utf8_lossy(&human);
+        let follow = printed
+            .lines()
+            .map(str::trim)
+            .find(|line| line.starts_with("rk upgrade --code-scanning off"))
+            .unwrap_or_else(|| panic!("{tech} {forge}: status names a usable remedy: {printed}"))
+            .to_owned();
+        let arguments: Vec<&str> = follow
+            .split_whitespace()
+            .skip(1)
+            .take_while(|word| *word != "drops")
+            .collect();
+        let mut repair = rk();
+        repair.args(&arguments).arg("--apply");
+        repair.assert().success();
+        assert!(
+            read_manifest(target.path())["parameters"]["code_scanning"].is_null(),
+            "{tech} {forge}: the remedy dropped the capability"
+        );
+        // The incompatibility is gone. A fresh landing's own unfilled sentinel
+        // is what any remaining violation is, so the assertion is on this
+        // condition rather than on the exit code.
+        let out = rk()
+            .args(["status", "--json", "--target"])
+            .arg(target.path())
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+        assert_eq!(report["record_drift"], 0, "{tech} {forge}: {report}");
+        assert!(
+            report["code_scanning"].is_null(),
+            "{tech} {forge}: {report}"
+        );
+    }
+}
+
+/// A committed answer must not re-enable on replay what a preview turned off.
+/// The provider flag takes a value, so the follow-up states `off` rather than
+/// omitting the flag and letting resolution read the configuration again.
+#[test]
+fn an_explicit_off_survives_into_the_init_follow_up_command() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    seed_licensed_crate(target.path(), "MIT");
+    land_code_scanning(target.path(), "github", "semgrep")
+        .assert()
+        .success();
+    // The configuration now answers semgrep, which is the precedence this
+    // guards: a preview that turns it off must print a command that keeps it
+    // off.
+    let configured = std::fs::read_to_string(target.path().join(".release-kit/config.toml"))
+        .expect("the config reads");
+    assert!(
+        configured.contains("code_scanning = \"semgrep\""),
+        "{configured}"
+    );
+    std::fs::remove_dir_all(target.path().join(".github")).expect("the workflow removes");
+    std::fs::remove_file(target.path().join(".release-kit/manifest.json"))
+        .expect("the receipt removes");
+    for name in [
+        ".pre-commit-config.yaml",
+        "AGENTS.md",
+        "GLOSSARY.md",
+        "SECURITY.md",
+        "dist-workspace.toml",
+        "release-plz.toml",
+    ] {
+        std::fs::remove_file(target.path().join(name)).expect("the destination removes");
+    }
+    let out = rk()
+        .args(["init", "--tech", "rust", "--forge", "github"])
+        .args([
+            "--repo",
+            "acme/widget",
+            "--code-scanning",
+            "off",
+            "--target",
+        ])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let printed = String::from_utf8_lossy(&out);
+    let follow = printed
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("rk init"))
+        .expect("the preview prints a follow-up command")
+        .to_owned();
+    assert!(
+        follow.contains("--code-scanning off"),
+        "the follow-up states the answer the preview resolved: {follow}"
+    );
+    let arguments: Vec<&str> = follow.split_whitespace().skip(1).collect();
+    rk().args(&arguments).assert().success();
+    assert!(
+        read_manifest(target.path())["parameters"]["code_scanning"].is_null(),
+        "the printed command kept the capability off"
+    );
+    assert!(
+        !target.path().join(SEMGREP_WORKFLOW_GITHUB).exists(),
+        "no scanner landed"
+    );
 }
 
 /// A receipt predating the parameter upgrades to no provider, and no

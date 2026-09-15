@@ -148,7 +148,21 @@ fn resolve_ref(action: &str, pinned_commit: &str) -> (&'static str, Option<Strin
     let (Some(owner), Some(repo)) = (segments.next(), segments.next()) else {
         return ("ref-unparsable", None);
     };
-    let url = format!("https://api.github.com/repos/{owner}/{repo}/commits/{reference}");
+    // The ref is one path segment, so a `/` inside it is encoded rather than
+    // passed through. This endpoint happens to accept the raw form too, but
+    // the documented contract is the encoded one and a maintained-branch ref
+    // like `release/v1` is exactly the case that relies on it.
+    let encoded: String = reference
+        .bytes()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b'~') {
+                char::from(byte).to_string()
+            } else {
+                format!("%{byte:02X}")
+            }
+        })
+        .collect();
+    let url = format!("https://api.github.com/repos/{owner}/{repo}/commits/{encoded}");
     let curl = std::env::var_os("RK_CURL_BIN").unwrap_or_else(|| "curl".into());
     let fetched = std::process::Command::new(curl)
         .args(["-fsSL", "--max-time", "10", &url])

@@ -37,6 +37,13 @@ jobs:
       contents: read
       # The scan uploads its SARIF to this repository's code scanning.
       security-events: write
+      # Only a private repository needs this, and the upload fails without it
+      # there: the action reads the workflow run it is reporting against. It is
+      # granted unconditionally because the landing does not know whether the
+      # target is private, and read access to this repository's own runs costs a
+      # public target nothing. A private target fetching private CodeQL packs
+      # adds `packages: read` beside it; the default query packs need none.
+      actions: read
     steps:
       - name: check out the trunk
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

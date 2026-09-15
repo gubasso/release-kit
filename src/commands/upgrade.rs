@@ -149,7 +149,7 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
         }
     }
 
-    let next = next_lines(args, prepared.collisions.is_empty());
+    let next = next_lines(args, &params, prepared.collisions.is_empty());
     out.next(&next);
     out.emit(&Report {
         schema: "rk.upgrade/9",
@@ -297,7 +297,7 @@ fn resolve_params(
 /// The `Next:` lines for each outcome. A behavior-defining flag the
 /// preview was run with rides into the follow-up command, so following
 /// it applies the decision that was previewed, never a different one.
-fn next_lines(args: &UpgradeArgs, clean: bool) -> Vec<String> {
+fn next_lines(args: &UpgradeArgs, params: &landing::Params, clean: bool) -> Vec<String> {
     let identity_flags: String = [
         ("tech", args.tech.as_deref()),
         ("forge", args.forge.as_deref()),
@@ -314,10 +314,7 @@ fn next_lines(args: &UpgradeArgs, clean: bool) -> Vec<String> {
         .style
         .as_deref()
         .map_or_else(String::new, |style| format!(" --style {style}"));
-    let nix_flag = args
-        .nix
-        .as_deref()
-        .map_or_else(String::new, |value| format!(" --nix {value}"));
+    let capabilities = params.capability_toggles();
     if args.apply {
         vec![
             "commit the upgraded files, the receipt included".to_owned(),
@@ -326,7 +323,7 @@ fn next_lines(args: &UpgradeArgs, clean: bool) -> Vec<String> {
     } else if clean {
         vec![
             format!(
-                "rk upgrade{identity_flags}{workflow_flag}{style_flag}{nix_flag} --target {} --apply writes",
+                "rk upgrade{identity_flags}{workflow_flag}{style_flag}{capabilities} --target {} --apply writes",
                 args.target
             ),
             format!(
@@ -337,7 +334,7 @@ fn next_lines(args: &UpgradeArgs, clean: bool) -> Vec<String> {
     } else {
         vec![
             format!(
-                "resolve each collision above through the rk-setup skill; rk upgrade{identity_flags}{workflow_flag}{style_flag}{nix_flag} --target {} --apply refuses until then",
+                "resolve each collision above through the rk-setup skill; rk upgrade{identity_flags}{workflow_flag}{style_flag}{capabilities} --target {} --apply refuses until then",
                 args.target
             ),
             format!(

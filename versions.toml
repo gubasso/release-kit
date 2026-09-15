@@ -247,7 +247,7 @@ version = "4"
 action = "github/codeql-action/init@v4"
 commit = "b96794f015dfd88f77b49b1c93e0fa7110f94c63"
 ref_class = "moving-major-tag"
-used_by = ["rust", "python", "bash"]
+used_by = ["rust"]
 purpose = "builds the CodeQL database in the opt-in code scanning workflow"
 checked = 2026-09-15
 
@@ -257,7 +257,7 @@ version = "4"
 action = "github/codeql-action/analyze@v4"
 commit = "b96794f015dfd88f77b49b1c93e0fa7110f94c63"
 ref_class = "moving-major-tag"
-used_by = ["rust", "python", "bash"]
+used_by = ["rust"]
 purpose = "runs the queries and uploads the result in the opt-in code scanning workflow"
 checked = 2026-09-15
 
@@ -267,7 +267,7 @@ version = "4"
 action = "github/codeql-action/upload-sarif@v4"
 commit = "b96794f015dfd88f77b49b1c93e0fa7110f94c63"
 ref_class = "moving-major-tag"
-used_by = ["rust", "python", "bash"]
+used_by = ["rust"]
 purpose = "uploads the Semgrep result to code scanning in the opt-in code scanning workflow"
 checked = 2026-09-15
 
@@ -277,7 +277,7 @@ checked = 2026-09-15
 [[tool]]
 name = "semgrep-image"
 version = "1.177.0"
-used_by = ["rust", "python", "bash"]
+used_by = ["rust"]
 purpose = "runs the Semgrep CE rules in the opt-in code scanning workflow on either forge"
 check = "https://api.github.com/repos/semgrep/semgrep/releases/latest"
 checked = 2026-09-15

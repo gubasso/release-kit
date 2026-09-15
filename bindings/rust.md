@@ -184,7 +184,7 @@ Three things the shape rests on. The official `nixos/nix` image enables neither 
 
 A licence that lapses after the landing is a warning in `rk status`, under the code `code-scanning-licence`, and `rk status --check` still exits 0. The target is not broken, and the licensing decision is the operator's.
 
-The scan reads this binding's own language and no other. The `actions` language is left out: the exclusion that would spare the generated release workflow is undocumented for it, so a scan there reports findings on a file this convention does not write.
+The scan reads this binding's own language and no other. The CodeQL arm fixes `languages: rust` and both Semgrep arms name the `p/rust` ruleset, so the workflows live in this binding's own pairs rather than in a forge's technology-independent shared zone, and a landing for a binding that ships no scanner refuses `--code-scanning` by name. The `actions` language is left out: the exclusion that would spare the generated release workflow is undocumented for it, so a scan there reports findings on a file this convention does not write.
 
 Three providers were considered and refused, named here rather than left for each target to rediscover.
 
