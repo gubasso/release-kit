@@ -94,7 +94,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `forge-setup:applicability-follows-the-target-configuration` — Applicability follows the target configuration
 
-Which steps a run acts on MUST follow the resolved target configuration through one pure predicate per step: a step that calls a forge applies only where the profile names a forge this release drives, the release half applies only to an automatic release, the packaging gate applies only where that release names a driver, and the reporting channel applies only where the target requested the landed policy. A step that does not apply MUST report as not applicable with the profile value that decided it and MUST carry no operator reason, a declared exclusion MUST report with the reason the target stated, an exclusion declared for a step that does not apply MUST report as redundant, and only the applicable steps MUST count toward a check's verdict. Naming an inapplicable step by hand MUST refuse rather than apply it, because changing the configuration is the auditable act.
+Which steps a run acts on MUST follow the resolved target configuration through one pure predicate per step: a step that calls a forge applies only where the profile names a forge this release drives, the release half applies only to an automatic release, the packaging gate applies only where that release names a driver, and the reporting channel applies only where the target requested the landed policy. A step that does not apply MUST report as not applicable with the profile value that decided it and MUST carry no operator reason, a declared exclusion MUST report with the reason the target stated, an exclusion declared for a step that does not apply MUST report as redundant, and only the applicable steps MUST count toward a check's verdict. Naming an inapplicable step by hand MUST refuse rather than apply it, because changing the configuration is the auditable act. A run MUST require the forge CLI only where a step it will act on reaches the forge through it at this target's forge, because a step that is local work alone, one the configuration does not select, one the target excluded, and one the forge answers without a call are all callers of nothing, and refusing over any of them would withdraw an advertised step from a target whose operator has no reason to need the CLI.
 
 #### Scenario: A repository with no forge and no release is set up
 
@@ -102,7 +102,7 @@ Which steps a run acts on MUST follow the resolved target configuration through 
 - WHEN `rk setup` previews and `rk setup step protect-trunk --apply` runs
 - THEN the preview reports the local steps and every forge step as not applicable, the run does not fail, and the named step refuses saying the profile names no forge
 
-Verify: `cargo nextest run -E 'test(the_applicability_matrix_follows_the_profile) or test(detection_selects_the_tree_and_refuses_an_unknown_host)'`
+Verify: `cargo nextest run -E 'test(the_applicability_matrix_follows_the_profile) or test(detection_selects_the_tree_and_refuses_an_unknown_host) or test(a_local_step_runs_without_the_forge_cli)'`
 
 ### `forge-setup:every-supported-forge-runs-every-step` — Every supported forge runs every step
 

@@ -143,7 +143,7 @@ gh api "repos/<repo>" -q .delete_branch_on_merge
 
 ### 1d. Remind this clone after a pull
 
-Automated: `rk setup step branch-reminder --apply`. 1c deletes the remote copy; this clone's own copy survives with its upstream marked gone, and no forge can reach it. The step writes a post-merge hook that runs `rk branches prune --quiet` and `rk worktree prune --quiet` after every pull: silent when the clone is clean, a report naming the retired branches and worktrees otherwise, and never a deletion — the `--apply` forms are the operator's own call. Each call sits behind a capability probe on its own verb, `rk <verb> --help`, so an `rk` that is missing or too old for a verb keeps the hook silent while a genuine refusal still reaches the operator. The step refuses over an existing post-merge hook it did not write; merge by hand there, guarding each call behind its probe as below. Like every setup step it resolves the forge, so it runs where the forge CLI is installed.
+Automated: `rk setup step branch-reminder --apply`. 1c deletes the remote copy; this clone's own copy survives with its upstream marked gone, and no forge can reach it. The step writes a post-merge hook that runs `rk branches prune --quiet` and `rk worktree prune --quiet` after every pull: silent when the clone is clean, a report naming the retired branches and worktrees otherwise, and never a deletion — the `--apply` forms are the operator's own call. Each call sits behind a capability probe on its own verb, `rk <verb> --help`, so an `rk` that is missing or too old for a verb keeps the hook silent while a genuine refusal still reaches the operator. The step refuses over an existing post-merge hook it did not write; merge by hand there, guarding each call behind its probe as below. It is local work alone and calls no forge, so it runs whether or not the forge CLI is installed.
 
 ```bash
 hook="$(git rev-parse --git-path hooks)/post-merge"
@@ -274,9 +274,13 @@ Prove the gate once, by making one child job fail on purpose: the parent pipelin
 
 Automated: `rk setup step forge-version --apply`. It reads and writes nothing.
 
-On github: satisfied without a call. github.com is a rolling service and declares no version floor.
+On github:
 
-On gitlab: one `GET /version`, compared against the minimum [the forge document](../forges/gitlab.md) names and gives the reason for. An instance below it is refused here, before 3c installs a merge check its pipeline cannot feed. A version that cannot be read blocks the same as one that is too old; where the reading is unknown, run `glab auth login` and rerun.
+Satisfied without a call. github.com is a rolling service and declares no version floor.
+
+On gitlab:
+
+One `GET /version`, compared against the minimum [the forge document](../forges/gitlab.md) names and gives the reason for. An instance below it is refused here, before 3c installs a merge check its pipeline cannot feed. A version that cannot be read blocks the same as one that is too old; where the reading is unknown, run `glab auth login` and rerun.
 
 ```bash
 rk setup step forge-version --target . --apply

@@ -180,12 +180,10 @@ impl Ctx {
         } else {
             repo
         };
-        // A forge step spawns the forge CLI, so the run resolves it where
-        // an adapter exists and never where none does.
-        let cli = match forge {
-            Some(forge) => resolve_cli(forge)?,
-            None => PathBuf::new(),
-        };
+        // The forge CLI is not a prerequisite of building a context: it is
+        // a prerequisite of the steps a run actually calls the forge for,
+        // which `require_cli` resolves at that point.
+        let cli = PathBuf::new();
         let answers = config
             .as_ref()
             .map_or_else(crate::config::Setup::default, |held| held.setup.clone());
@@ -230,6 +228,33 @@ impl Ctx {
             excluded_steps: answers.excluded_steps,
             bot_app_id,
         })
+    }
+
+    /// Resolve the forge CLI where this run will call the forge for one of
+    /// `steps`, and refuse where it cannot be found.
+    ///
+    /// The prerequisite belongs to the call, not to the command. A step is
+    /// only a caller when the target's configuration selects it, the
+    /// target has not excluded it, and the step reaches the forge at this
+    /// particular forge. A preview writes nothing, and asks anyway for the
+    /// steps it would act on, because it names the command it would run
+    /// and a CLI nothing could find is worth saying then.
+    ///
+    /// # Errors
+    /// Propagates the refusal when the forge CLI cannot be resolved.
+    ///
+    /// SATISFIES forge-setup:applicability-follows-the-target-configuration
+    pub fn require_cli(&mut self, steps: &[&crate::setup::steps::StepSpec]) -> Result<(), RkError> {
+        let Some(forge) = self.forge else {
+            return Ok(());
+        };
+        let calls = steps.iter().any(|step| {
+            step.forge_cli.contains(&forge) && crate::commands::setup::stance(self, step).acts()
+        });
+        if calls && self.cli.as_os_str().is_empty() {
+            self.cli = resolve_cli(forge)?;
+        }
+        Ok(())
     }
 
     /// A context the integration tests build directly, for an observer
@@ -633,7 +658,7 @@ pub fn resolve_cli(forge: Forge) -> Result<PathBuf, RkError> {
             Diagnostic::new(
                 Reason::PrerequisiteUnmet,
                 format!(
-                    "{name} is not on PATH, and every {} step calls it",
+                    "{name} is not on PATH, and a step this run acts on calls it on {}",
                     forge.as_str()
                 ),
             )

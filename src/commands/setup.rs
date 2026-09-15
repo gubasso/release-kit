@@ -46,13 +46,17 @@ pub fn run(args: &SetupArgs) -> Result<(), RkError> {
             required_check,
             json,
         }) => {
-            let ctx = Ctx::resolve(
+            let mut ctx = Ctx::resolve(
                 target,
                 repo.as_deref(),
                 forge.as_deref(),
                 required_check.as_deref(),
             )?;
             reject_check_flag_on_gitlab(&ctx)?;
+            // A check observes every step the target runs, so it needs the
+            // forge CLI for each one that asks the forge a question.
+            let all: Vec<&StepSpec> = STEPS.iter().collect();
+            ctx.require_cli(&all)?;
             check(Output::new(*json), ctx)
         }
         Some(SetupAction::Step {
@@ -67,7 +71,7 @@ pub fn run(args: &SetupArgs) -> Result<(), RkError> {
             let selected = spec(name).ok_or_else(|| {
                 RkError::Usage(format!("unknown step '{name}'; rk setup --list names them"))
             })?;
-            let ctx = Ctx::resolve(
+            let mut ctx = Ctx::resolve(
                 target,
                 repo.as_deref(),
                 forge.as_deref(),
@@ -77,8 +81,15 @@ pub fn run(args: &SetupArgs) -> Result<(), RkError> {
             if *apply {
                 refuse_an_excluded_step(&ctx, selected)?;
                 require_check_for(&ctx, &[selected])?;
+                // Every argument refusal has been given, so what remains
+                // is the call itself and its one prerequisite.
+                ctx.require_cli(&[selected])?;
                 execute(Output::new(*json), ctx, &[selected], "setup step")
             } else {
+                // A preview writes nothing, but it names the command it
+                // would run, so a forge CLI it could never find is worth
+                // saying now rather than at the apply.
+                ctx.require_cli(&[selected])?;
                 preview(Output::new(*json), &ctx, &[selected])
             }
         }
@@ -87,18 +98,32 @@ pub fn run(args: &SetupArgs) -> Result<(), RkError> {
             let target = args.target.clone().ok_or_else(|| {
                 RkError::Usage("name a --target, or pass --list to see the steps".into())
             })?;
-            let ctx = Ctx::resolve(
+            let all: Vec<&StepSpec> = STEPS.iter().collect();
+            let mut ctx = Ctx::resolve(
                 &target,
                 args.repo.as_deref(),
                 args.forge.as_deref(),
                 args.required_check.as_deref(),
             )?;
             reject_check_flag_on_gitlab(&ctx)?;
-            let all: Vec<&StepSpec> = STEPS.iter().collect();
             if args.apply {
                 require_check_for(&ctx, &all)?;
+                // The full run skips its optional steps, so the callers
+                // are what the run will actually reach.
+                let acted: Vec<&StepSpec> = all
+                    .iter()
+                    .copied()
+                    .filter(|step| !skipped_by_a_full_run(&ctx, step, all.len()))
+                    .collect();
+                ctx.require_cli(&acted)?;
                 execute(Output::new(args.json), ctx, &all, "setup")
             } else {
+                let acted: Vec<&StepSpec> = all
+                    .iter()
+                    .copied()
+                    .filter(|step| !skipped_by_a_full_run(&ctx, step, all.len()))
+                    .collect();
+                ctx.require_cli(&acted)?;
                 preview(Output::new(args.json), &ctx, &all)
             }
         }
@@ -114,7 +139,7 @@ pub fn run(args: &SetupArgs) -> Result<(), RkError> {
 ///
 /// SATISFIES forge-setup:applicability-follows-the-target-configuration
 #[derive(Debug, Clone)]
-enum Stance {
+pub(crate) enum Stance {
     /// The step applies and the run acts on it.
     Applies,
     /// The target configuration does not select it, with the value that
@@ -143,7 +168,7 @@ impl Stance {
     }
 
     /// Whether the run acts on the step.
-    const fn acts(&self) -> bool {
+    pub(crate) const fn acts(&self) -> bool {
         matches!(self, Self::Applies)
     }
 
@@ -178,7 +203,7 @@ impl Stance {
 }
 
 /// Where `step` stands at this target.
-fn stance(ctx: &Ctx, step: &StepSpec) -> Stance {
+pub(crate) fn stance(ctx: &Ctx, step: &StepSpec) -> Stance {
     let inapplicable = (step.applies)(ctx);
     match (ctx.excluded(step.name).map(str::to_owned), inapplicable) {
         (Some(reason), Some(inapplicable)) => Stance::Redundant {

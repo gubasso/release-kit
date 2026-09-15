@@ -13,6 +13,8 @@
 //!
 //! SATISFIES forge-setup:applicability-follows-the-target-configuration
 
+use crate::detect::Forge;
+
 use super::context::Ctx;
 
 /// What a step touches when it applies.
@@ -102,6 +104,15 @@ pub struct StepSpec {
     /// Whether a full run skips the step: an optional step applies only
     /// where its condition holds, by name, through `rk setup step`.
     pub optional: bool,
+    /// The forges at which the step reaches the forge through its CLI.
+    ///
+    /// Empty where the step is local work alone. A forge absent from the
+    /// list is one this step answers without a call, which `forge-version`
+    /// does on GitHub: a rolling service declares no version floor, so
+    /// there is nothing to read. A run that reaches the CLI for a step
+    /// that never calls it refuses an operator who has no reason to need
+    /// one.
+    pub forge_cli: &'static [Forge],
     /// Steps that must be observed satisfied before this one applies.
     pub prereqs: &'static [&'static str],
     /// Why this step does not apply to a target, or `None` where it does.
@@ -136,6 +147,7 @@ pub const STEPS: [StepSpec; 15] = [
         proves: "the package is publishable with no credentials, and carries the reporting policy where the binding can list it",
         destructive: false,
         optional: false,
+        forge_cli: &[],
         prereqs: &[],
         applies: needs_driver,
     },
@@ -146,6 +158,7 @@ pub const STEPS: [StepSpec; 15] = [
         proves: "the trunk is the default branch",
         destructive: false,
         optional: false,
+        forge_cli: &[Forge::Github, Forge::Gitlab],
         prereqs: &[],
         applies: needs_adapter,
     },
@@ -156,6 +169,7 @@ pub const STEPS: [StepSpec; 15] = [
         proves: "no long-lived branch besides the trunk remains",
         destructive: true,
         optional: false,
+        forge_cli: &[Forge::Github, Forge::Gitlab],
         prereqs: &["default-branch"],
         applies: needs_adapter,
     },
@@ -166,6 +180,7 @@ pub const STEPS: [StepSpec; 15] = [
         proves: "the forge deletes a branch when its merge lands",
         destructive: false,
         optional: false,
+        forge_cli: &[Forge::Github, Forge::Gitlab],
         prereqs: &["default-branch"],
         applies: needs_adapter,
     },
@@ -176,6 +191,7 @@ pub const STEPS: [StepSpec; 15] = [
         proves: "a pull reminds the operator when a merged branch lingers locally",
         destructive: false,
         optional: false,
+        forge_cli: &[],
         prereqs: &[],
         applies: always,
     },
@@ -186,6 +202,7 @@ pub const STEPS: [StepSpec; 15] = [
         proves: "CI may write and open requests",
         destructive: false,
         optional: false,
+        forge_cli: &[Forge::Github, Forge::Gitlab],
         prereqs: &[],
         applies: needs_release,
     },
@@ -196,6 +213,7 @@ pub const STEPS: [StepSpec; 15] = [
         proves: "the bot identity can act on this project",
         destructive: false,
         optional: false,
+        forge_cli: &[Forge::Github, Forge::Gitlab],
         prereqs: &[],
         applies: needs_release,
     },
@@ -206,6 +224,7 @@ pub const STEPS: [StepSpec; 15] = [
         proves: "the bot credentials are stored on the project",
         destructive: false,
         optional: false,
+        forge_cli: &[Forge::Github, Forge::Gitlab],
         prereqs: &[],
         applies: needs_release,
     },
@@ -216,6 +235,7 @@ pub const STEPS: [StepSpec; 15] = [
         proves: "the forge meets the convention's minimum version",
         destructive: false,
         optional: false,
+        forge_cli: &[Forge::Gitlab],
         prereqs: &[],
         applies: needs_adapter,
     },
@@ -226,6 +246,7 @@ pub const STEPS: [StepSpec; 15] = [
         proves: "the trunk takes no direct push, merges only by squash with the request's title and body as the message, and requires the named check",
         destructive: false,
         optional: false,
+        forge_cli: &[Forge::Github, Forge::Gitlab],
         prereqs: &["default-branch", "forge-version"],
         applies: needs_adapter,
     },
@@ -236,6 +257,7 @@ pub const STEPS: [StepSpec; 15] = [
         proves: "v* is protected as far as the forge allows",
         destructive: false,
         optional: false,
+        forge_cli: &[Forge::Github, Forge::Gitlab],
         prereqs: &[],
         applies: needs_adapter,
     },
@@ -246,6 +268,7 @@ pub const STEPS: [StepSpec; 15] = [
         proves: "release/* cannot be force-pushed or deleted",
         destructive: false,
         optional: true,
+        forge_cli: &[Forge::Github, Forge::Gitlab],
         prereqs: &[],
         applies: needs_release,
     },
@@ -256,6 +279,7 @@ pub const STEPS: [StepSpec; 15] = [
         proves: "a request may merge itself once its required checks pass",
         destructive: false,
         optional: false,
+        forge_cli: &[Forge::Github, Forge::Gitlab],
         prereqs: &["default-branch"],
         applies: needs_release,
     },
@@ -266,6 +290,7 @@ pub const STEPS: [StepSpec; 15] = [
         proves: "exactly the owned protections, with those rules",
         destructive: false,
         optional: false,
+        forge_cli: &[Forge::Github, Forge::Gitlab],
         prereqs: &[],
         applies: needs_adapter,
     },
@@ -276,6 +301,7 @@ pub const STEPS: [StepSpec; 15] = [
         proves: "a vulnerability report has a private intake path, with the forge's limits named",
         destructive: false,
         optional: false,
+        forge_cli: &[Forge::Github, Forge::Gitlab],
         prereqs: &[],
         applies: needs_reporting_policy,
     },
