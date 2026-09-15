@@ -738,4 +738,8 @@ rust github linked-worktree trunk scorecard .github/workflows/scorecard.yml de26
 rust github linked-worktree trunk codeql .github/workflows/code-scanning-codeql.yml 3fd38dd485e2e40486144a3cc605e91730c18c1265cd27d7a07767b5b256a485
 rust github linked-worktree trunk semgrep .github/workflows/code-scanning-semgrep.yml 2fccce241660a76b61c4c438ab746352d1da78b01d6f81582871daa436c501bc
 rust gitlab linked-worktree trunk semgrep .gitlab/ci/code-scanning-semgrep.yml 90071cc03bce02d8625b45ad49192b067a502eec580808e1c0baec0ba35259d4
+rust github linked-worktree trunk occupied .pre-commit-config.yaml dd36703f5694107bf1cac856a8b713a35982388c7e15cb15ae902979fc5073e8
+rust github linked-worktree trunk occupied AGENTS.md 0a6aa803810f708bf3393d521e85859873e9e3bac382e894f3bf23581f0fa45a
+rust github linked-worktree trunk occupied GLOSSARY.md 37479f3bb21e0fd7775e70b52e1b4c09cecd045a061b074b87dec59b753652a7
+rust github linked-worktree trunk occupied .release-kit/config.toml a54c05209d601c6a56489330f156b02674ff73d2638673c980064b4a432439bb
 rust github linked-worktree trunk record-schema-9 .release-kit/manifest.json b58aaabd75f78f9a1a919cc9e025b78f594ec59bcf5039da6e95bb2a665e0b9f

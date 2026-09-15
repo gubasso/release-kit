@@ -24360,6 +24360,71 @@ fn opt_in_signature_lines() -> Vec<String> {
     out
 }
 
+/// The signature lines of the two paths a target that already holds
+/// something takes: a block spliced into a document the target owns, and
+/// a configuration composed over authored text. The ordinary lines sign
+/// the empty-target path alone, so a change confined to either of these
+/// would move no digest.
+fn occupied_target_signature_lines() -> Vec<String> {
+    use release_kit::landing::{CheckoutMode, Style};
+    use release_kit::projection::{Projection, ProjectionInput, TargetEvidence};
+
+    let label = "rust github linked-worktree trunk occupied";
+    let params = projection_params(
+        "rust",
+        "github",
+        CheckoutMode::LinkedWorktree,
+        Style::Trunk,
+        false,
+    );
+    let documents = release_kit::projection::destinations()
+        .filter(|destination| release_kit::landing::block_markers(destination).is_some())
+        .map(|destination| {
+            // The hook file's splice is line-based and lands under the
+            // target's own `repos:` key, so its document states one.
+            let existing = if destination == release_kit::projection::HOOKS_DESTINATION {
+                "repos:\n  - repo: local\n    hooks: []\n".to_owned()
+            } else {
+                format!("# {destination}\n\nText the target wrote and keeps.\n")
+            };
+            (destination.to_owned(), existing.into_bytes())
+        })
+        .collect();
+    let projection = Projection::compute(&ProjectionInput {
+        params: params.clone(),
+        evidence: TargetEvidence {
+            documents,
+            ..NixShape::Supported.evidence()
+        },
+    })
+    .expect("the occupied target projects");
+    let mut out: Vec<String> = projection
+        .candidates
+        .iter()
+        .filter(|candidate| release_kit::landing::block_markers(&candidate.destination).is_some())
+        .map(|candidate| candidate_signature_line(candidate, label))
+        .collect();
+    assert!(
+        !out.is_empty(),
+        "the occupied target projected no spliced destination"
+    );
+    let authored =
+        "# a comment the target wrote\nschema_version = 2\n\n[project]\nrepo = \"acme/widget\"\n";
+    let plan = release_kit::config::Plan::compose(
+        Some(authored),
+        &params,
+        Some(&release_kit::config::Config::default()),
+        None,
+    )
+    .expect("the configuration composes over authored text");
+    out.push(format!(
+        "{label} {} {}",
+        release_kit::config::CONFIG_PATH,
+        release_kit::digest::Digest::of(plan.content.as_bytes())
+    ));
+    out
+}
+
 /// The signature line of the landed record. The record carries the
 /// producing version and the landing instant, so the fixture fixes both
 /// by construction: what it pins is the renderer's shape, which a schema
@@ -24485,6 +24550,7 @@ fn every_current_landing_fixture_keeps_its_destinations_kinds_placement_and_dige
         ));
     }
     lines.extend(opt_in_signature_lines());
+    lines.extend(occupied_target_signature_lines());
     lines.push(landed_record_signature_line());
     let text = format!("{}\n", lines.join("\n"));
     let fixture =
@@ -28610,6 +28676,11 @@ fn guidance_index() -> (String, Vec<String>) {
 /// filename, `since`, a `no_steps` entry, the last release tag, and the
 /// committed package version. A looser parser accepts `0.7` and `1` and
 /// then orders them against a triple, which no caller means.
+///
+/// A leading zero is refused, as semantic versioning refuses it and the
+/// Cargo manifest requires. Without that refusal `00.6.2` parses to the value `0.6.2`
+/// parses to, and a guidance file under that name would satisfy the
+/// exact-name proof while naming a release nothing mints.
 fn parse_version(value: &str) -> Result<[u64; 3], String> {
     let parts: Vec<&str> = value.split('.').collect();
     let [major, minor, patch] = parts[..] else {
@@ -28622,6 +28693,11 @@ fn parse_version(value: &str) -> Result<[u64; 3], String> {
         if part.is_empty() || !part.bytes().all(|b| b.is_ascii_digit()) {
             return Err(format!(
                 "{value:?} is no version; a version is three dotted integers"
+            ));
+        }
+        if part.len() > 1 && part.starts_with('0') {
+            return Err(format!(
+                "{value:?} is no version; {part:?} carries a leading zero, which no version part has"
             ));
         }
         *slot = part.parse::<u64>().map_err(|_| {
@@ -28685,7 +28761,10 @@ fn coverage_proof(
     let paths = changed.join(", ");
     match candidate_version.cmp(&tag_version) {
         std::cmp::Ordering::Greater => {
-            if named.iter().any(|(version, _)| *version == candidate_version) {
+            // The exact proof compares the name, not the value it parses
+            // to. Two names that differ are two names, and only the name
+            // the release mints selects guidance at a target.
+            if named.iter().any(|(_, version)| version == candidate) {
                 Ok(CoverageProof::CandidateExact(candidate.to_owned()))
             } else {
                 Err(format!(
@@ -28793,16 +28872,23 @@ fn a_release_changing_a_destination_without_guidance_is_named() {
     // of the sources that feed it. Every destination a landing writes has
     // a digest in the fixture, the state files included, and the fixture
     // regenerates only under RK_UPDATE_FIXTURES=1. So the fixture moves
-    // exactly when a target would receive different bytes, whichever
-    // source produced them: a snippet, a block, the projection, the
+    // when a target would receive different bytes, whichever source
+    // produced them: a snippet, a block, the projection, the
     // configuration renderer, or the record renderer. A path list walks
     // past all but the first two.
+    //
+    // What the signature does not cover, stated rather than claimed: the
+    // apply itself. Which values the receipt copies from the parameters
+    // and the previous record is decided in src/landing/apply.rs, and the
+    // fixture signs the rendered shape rather than that assembly, so the
+    // module stays a second trigger beside the signature.
     let diff = git(&[
         "diff",
         "--name-only",
         &format!("{tag}..HEAD"),
         "--",
         LANDED_SIGNATURE,
+        "src/landing/apply.rs",
     ]);
     assert!(
         diff.status.success(),
@@ -28965,6 +29051,18 @@ fn a_candidate_release_rejects_coverage_naming_another_version() {
     assert!(why.contains("the release mints 0.6.2"), "{why}");
     assert!(why.contains("add guidance/0.6.2.md"), "{why}");
     assert!(why.contains(GUIDANCE_RULE), "{why}");
+    // A name that parses to the candidate's value is still another name.
+    // The file an agent selects is named for the minted version exactly.
+    for padded in ["00.6.2", "0.06.2", "0.6.02"] {
+        let why = coverage_proof(
+            "0.6.1",
+            "0.6.2",
+            &files_naming(&[padded]),
+            &changed_surface(),
+        )
+        .expect_err("a padded name is no coverage for the release that mints 0.6.2");
+        assert!(why.contains("leading zero"), "{padded}: {why}");
+    }
 }
 
 /// An ordinary branch carries no candidate, because release-plz writes the
@@ -29045,6 +29143,10 @@ fn a_version_is_three_dotted_integers() {
     for value in ["0.7", "1", "0.7.0.1", "", "0.x.1", "0..1", "v0.7.0"] {
         let why = parse_version(value).expect_err("the value is no version");
         assert!(why.contains("three dotted integers"), "{value}: {why}");
+    }
+    for value in ["00.6.2", "0.06.2", "0.6.02"] {
+        let why = parse_version(value).expect_err("a padded part is no version part");
+        assert!(why.contains("leading zero"), "{value}: {why}");
     }
     assert_eq!(parse_version("0.7.0"), Ok([0, 7, 0]));
     assert_eq!(parse_version("10.20.30"), Ok([10, 20, 30]));
