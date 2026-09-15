@@ -25,7 +25,7 @@ The branch dies at the squash merge and its name never enters history, so the na
 - The type prefix, `<type>/<slug>`, with the type mirroring the Conventional Commit type the squash title will carry: `feat/oauth-login`, `fix/empty-csv-upload`.
 - The issue-linked name, `<issue-id>-<slug>`, the shape both supported forges mint when they generate the branch from an issue. Work an issue already names takes that name, and no other: `rk issue start <issue>` mints the branch at the forge, seats it, and links it, so the branch, its pull request, and the issue's closing hang together. [The issue runbook](../runbooks/issue.md) is the procedure and the forge documents carry each forge's mechanism.
 
-A tracker outside the forge, Jira being the common case, matches its issue keys anywhere in a branch name, so its key rides inside either form: `fix/PROJ-412-empty-csv`. Where the branch is checked out is the project's workflow mode, worktree by default; [worktrees](./08-worktrees.md) owns it. Whichever form a project picks, the branch name binds nothing downstream: the squash title, not the branch name, is what the bot and the history read. The landed branch-name hook holds the routing to these two forms while the branch lives — it changes nothing about what the name binds.
+A tracker outside the forge, Jira being the common case, matches its issue keys anywhere in a branch name, so its key rides inside either form: `fix/PROJ-412-empty-csv`. Where the branch is checked out is the project's checkout mode, a linked worktree by default; [worktrees](./08-worktrees.md) owns it. Whichever form a project picks, the branch name binds nothing downstream: the squash title, not the branch name, is what the bot and the history read. The landed branch-name hook holds the routing to these two forms while the branch lives — it changes nothing about what the name binds.
 
 ## The one pull request
 
@@ -45,13 +45,28 @@ Branching for a release exists for older lines. A `release/<major>.<minor>` bran
 | Do you owe someone a patch-only release?       | Branch for release |
 | Does a sign-off gate stand before a ship?      | Branch for release |
 
-Which style a project runs is a recorded landing parameter: `rk status` reports it, the runbooks resolve their `On trunk:` and `On lines:` variants from it, and `landing.style` in `.release-kit/config.toml` states the next landing’s answer, taken up by `rk upgrade --apply` or overridden by `--style <style>` — the same axis the workflow mode already rides. [Release lines](./09-release-lines.md) owns the second style's whole life.
+Which style a project runs is a recorded landing parameter: `rk status` reports it, the runbooks resolve their `On trunk:` and `On lines:` variants from it, and `profile.release.style` in `.release-kit/config.toml` states the next landing’s answer, taken up by `rk upgrade --apply` or overridden by `--release-style <style>` — the same axis the checkout mode already rides. [Release lines](./09-release-lines.md) owns the second style's whole life.
 
 Default to the trunk. Cut the first release branch the day someone actually needs a backport — retroactively, from the tag — never ahead of the need.
 
-## The committed answers
+## The target configuration
 
-`.release-kit/config.toml` is the input a person edits. The landing verbs resolve invocation flags, configured answers, detection and compiled defaults in that order; an existing record supplies compatibility answers where the config is silent. They write the resolved config before the manifest. The manifest records what landed, and every comparison re-renders from its parameters alone. Editing the config makes an input pending: `rk status` reports it in both modes, and `--check` keeps it informational until a landing takes it up.
+`.release-kit/config.toml` is the target configuration: the input a person edits, typed by the domain that owns each answer. The landing verbs resolve an invocation flag, then the configured answer, then a compatible record, then observation, then a compiled default, per field. They write the resolved configuration before the manifest. The manifest records what landed, source-free, and every comparison re-renders from its values alone. Editing the configuration makes an input pending: `rk status` reports it in both modes, and `--check` keeps it informational until a landing takes it up.
+
+| Domain              | The question it answers                                                  | Owner                            |
+| ------------------- | ------------------------------------------------------------------------ | -------------------------------- |
+| project identity    | Which repository is this?                                                | `[project]`                      |
+| project profile     | What technologies, forge, and release intent does it have?               | `[profile]`, `[profile.release]` |
+| Git workflow        | How are topic branches opened and carried into the configured trunk?     | `[git]`                          |
+| capability requests | Which optional release-kit products does the target request?             | `[capabilities]`                 |
+| security policy     | Where do reports go, and what response does the project promise?         | `[security]`                     |
+| setup declaration   | Which otherwise applicable setup steps does the target exclude, and why? | `[setup]`                        |
+| protection policy   | Which protected branch and tag patterns apply?                           | `[protection]`                   |
+| landing state       | What did release-kit resolve and write?                                  | `.release-kit/manifest.json`     |
+
+The project profile states what the project is: zero or many technologies, an optional forge, and a release intent of `automatic`, `external`, or `none`. `automatic` names the driver among the technologies, the style, and the line prefix. `external` names a release the project runs through a process release-kit does not drive, so no bot-operate chapter applies to it. `none` states that nothing releases. The profile is not the setup declaration, not the Git workflow, and not the landing state: a setup exclusion, a checkout mode, and a recorded destination are answers of their own domains.
+
+A capability is one complete release-kit product selected from the profile's dimensions and the explicit requests: `git.guards` for every target, `git.title-check` where a forge is present, `security.reporting-policy` where requested, `release.automation` at one driver and one forge where the release is automatic, and `packaging.nix`, `supply-chain.scorecard`, and `supply-chain.code-scanning` where requested. Availability belongs to a capability at its dimensions, never to a category alone. A capability whose activation a target-owned file blocks is withheld with its reason and the one edit the operator makes. [The project profile specification](../_docs/specs/SPEC-project-profile.md) binds the vocabulary, and `rk profile` reports what a target resolves to and what the catalog selects.
 
 ## What a technology changes
 
