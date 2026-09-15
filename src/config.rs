@@ -1017,6 +1017,13 @@ fn rewrite_all(
         }
     }
     changed |= prune_empty_tables(&mut document, &emptied);
+    // A value this writer rewrites keeps the comment the file already
+    // carried, so the template's own sentence about a key outlives the
+    // answer it describes: a target moving to local integration would read
+    // `# F: invariant, contains all four rules` beside two of them. The
+    // refresh replaces the template's comments alone and leaves every one
+    // the operator wrote.
+    changed |= migrate::refresh_comments(&mut document);
     if !changed {
         return Ok(text);
     }

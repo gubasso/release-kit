@@ -611,9 +611,20 @@ fn preview(out: Output, ctx: &Ctx, steps: &[&StepSpec]) -> Result<(), RkError> {
             secrets::resolve_key_file(&engine.ctx.target)?;
         }
         out.result_line(format!("  {}", render_invocation(&engine.ctx, step)));
+        // The name is asked for only where a rule consumes it. It feeds the
+        // required-status-checks rule alone, and local integration owns no
+        // such rule, because no forge can require a check before the push
+        // that starts it. Asking there would name a flag whose value reaches
+        // nothing the run installs.
         if step.name == "protect-trunk"
             && engine.ctx.forge == Some(Forge::Github)
             && engine.ctx.required_check.is_none()
+            && engine
+                .ctx
+                .protection()
+                .owned_trunk_rules
+                .iter()
+                .any(|rule| rule == "required_status_checks")
         {
             out.result_line("  needs: --required-check <name> before apply");
         }

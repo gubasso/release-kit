@@ -72,25 +72,71 @@ pub(crate) fn template_comment(path: &[&str]) -> Option<String> {
 }
 
 /// Give the value at `path` the template's own comment, where the comment
-/// it carries is the template's rather than the operator's.
-fn refresh_comment(document: &mut DocumentMut, path: &[&str]) {
+/// it carries is the template's rather than the operator's, answering
+/// whether the text changed.
+///
+/// `add_missing` decides what a value carrying no comment at all takes. A
+/// migration gives it the template's, because the key it describes is new
+/// to that value. An ordinary rewrite does not, because a comment the
+/// operator deleted is a comment the operator deleted.
+fn refresh_comment(document: &mut DocumentMut, path: &[&str], add_missing: bool) -> bool {
     let Some(comment) = template_comment(path) else {
-        return;
+        return false;
     };
     let mut item = document.as_item_mut();
     for segment in path {
         if item.get(segment).is_none() {
-            return;
+            return false;
         }
         item = &mut item[segment];
     }
     let Some(value) = item.as_value_mut() else {
-        return;
+        return false;
     };
-    let current = value.decor().suffix().and_then(|s| s.as_str());
-    if current.is_none() || templated(current) {
-        value.decor_mut().set_suffix(comment);
+    let current = value.decor().suffix().and_then(|raw| raw.as_str());
+    if current == Some(comment.as_str()) {
+        return false;
     }
+    if (current.is_none() && add_missing) || templated(current) {
+        value.decor_mut().set_suffix(comment);
+        return true;
+    }
+    false
+}
+
+/// Give every value in `document` the template's own comment, answering
+/// whether any changed.
+///
+/// A target keeps its configuration across upgrades while this binary
+/// keeps rewriting the values in it, so a comment left alone outlives the
+/// text it explains. A target that moves to local integration reads
+/// `# F: invariant, contains all four rules` beside two of them, which is
+/// the binary stating something false about its own file.
+///
+/// Only the template's own comments, marked by [`CLASS_MARKERS`]. The
+/// operator's carry no marker and are never touched.
+pub(crate) fn refresh_comments(document: &mut DocumentMut) -> bool {
+    let mut changed = false;
+    for path in value_paths(document.as_table(), &[]) {
+        let borrowed: Vec<&str> = path.iter().map(String::as_str).collect();
+        changed |= refresh_comment(document, &borrowed, false);
+    }
+    changed
+}
+
+/// Every path to a value under `table`, each carrying `prefix` ahead of it.
+fn value_paths(table: &Table, prefix: &[String]) -> Vec<Vec<String>> {
+    let mut paths = Vec::new();
+    for (key, item) in table {
+        let mut path = prefix.to_vec();
+        path.push(key.to_owned());
+        match item {
+            Item::Table(inner) => paths.extend(value_paths(inner, &path)),
+            Item::Value(_) => paths.push(path),
+            _ => {}
+        }
+    }
+    paths
 }
 
 /// Move `key` out of `from` into `to` under `name`, decor and all, where
@@ -327,23 +373,12 @@ pub fn to_schema_2(text: &str) -> Result<String, RkError> {
         document.insert(&name, item);
     }
     // Every key the migration writes states what it means now: a comment
-    // the operator wrote stays, and the template's own is refreshed.
-    for path in [
-        &["project", "repo"][..],
-        &["profile", "technologies"],
-        &["profile", "forge"],
-        &["profile", "release", "mode"],
-        &["profile", "release", "driver"],
-        &["profile", "release", "style"],
-        &["profile", "release", "line_prefix"],
-        &["git", "trunk"],
-        &["git", "checkout_mode"],
-        &["capabilities", "nix_packaging"],
-        &["capabilities", "reporting_policy"],
-        &["capabilities", "scorecard"],
-        &["capabilities", "code_scanning"],
-    ] {
-        refresh_comment(&mut document, path);
+    // the operator wrote stays, and the template's own is refreshed. Every
+    // value the document carries rather than a named list, because a list
+    // is one more place a key added later must be remembered.
+    for path in value_paths(document.as_table(), &[]) {
+        let borrowed: Vec<&str> = path.iter().map(String::as_str).collect();
+        refresh_comment(&mut document, &borrowed, true);
     }
     // A schema 1 file whose project keys all moved or dropped leaves an
     // empty table, which

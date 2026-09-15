@@ -32,9 +32,12 @@ pub struct Pin {
     /// never evidence of an attack.
     #[serde(default)]
     pub ref_class: Option<String>,
-    /// The capabilities that use the tool: a capability id, or the id
+    /// The capabilities that use the tool: a capability id, the id
     /// qualified by the release driver as `release.automation/rust` where
-    /// the capability has that dimension.
+    /// the capability has that dimension, or that qualified again by the
+    /// provider as `supply-chain.code-scanning/rust/codeql` where its
+    /// parameter names one. A pin declares the narrowest of the three it
+    /// can, so a target records the tools its own landing runs.
     #[serde(default)]
     pub used_by: Vec<String>,
     /// The URL a freshness check queries, where one exists.
@@ -59,9 +62,11 @@ pub fn pins() -> Vec<Pin> {
     parse(embedded::VERSIONS)
 }
 
-/// The pins the selected capabilities use, keyed for a landing record:
-/// every pin whose `used_by` names a selected capability's id, bare or
-/// qualified by its driver, in authored order and each once.
+/// The pins the selected capabilities use, keyed for a landing record.
+///
+/// Every pin whose `used_by` names a selected capability's id, bare or
+/// qualified by its driver and its provider, in authored order and each
+/// once.
 #[must_use]
 pub fn pins_for(selected: &[crate::profile::catalog::Selection]) -> Vec<Pin> {
     let keys: Vec<String> = selected
@@ -113,15 +118,22 @@ mod tests {
     }
 
     /// Every `used_by` entry names a capability this binary catalogs,
-    /// qualified by a driver the sources know where it carries one.
+    /// qualified by a driver the sources know and a provider the landing
+    /// parameter admits, where it carries either.
     #[test]
     fn every_used_by_entry_names_a_catalogued_capability() {
         let drivers = crate::profile::catalog::known_drivers();
         for pin in pins() {
             for user in &pin.used_by {
-                let (id, driver) = user
-                    .split_once('/')
-                    .map_or((user.as_str(), None), |(id, driver)| (id, Some(driver)));
+                let mut parts = user.split('/');
+                let id = parts.next().unwrap_or_default();
+                let driver = parts.next();
+                let provider = parts.next();
+                assert!(
+                    parts.next().is_none(),
+                    "{}: used_by names {user}, which carries more than a capability, a driver, and a provider",
+                    pin.name
+                );
                 assert!(
                     crate::profile::catalog::ALL.contains(&id),
                     "{}: used_by names {user}, which is no capability",
@@ -134,7 +146,58 @@ mod tests {
                         pin.name
                     );
                 }
+                if let Some(provider) = provider {
+                    assert!(
+                        crate::landing::manifest::Provider::parse(provider)
+                            .is_ok_and(|parsed| parsed.is_some()),
+                        "{}: used_by names the provider {provider}, which no parameter admits",
+                        pin.name
+                    );
+                }
             }
+        }
+    }
+
+    /// A pin keyed on one provider reaches that provider's landing and no
+    /// other, so a target records the tools its own workflow runs.
+    #[test]
+    fn a_provider_keyed_pin_reaches_that_provider_alone() {
+        let names = |provider| {
+            let mut params =
+                crate::landing::Params::for_test("acme/widget", Some(crate::landing::Style::Trunk));
+            params.set_code_scanning_for_test(Some(provider));
+            let selected = crate::profile::catalog::select(
+                &params,
+                &crate::profile::catalog::Availability::embedded(),
+            );
+            pins_for(&selected)
+                .into_iter()
+                .map(|pin| pin.name)
+                .collect::<Vec<String>>()
+        };
+        let codeql = names(crate::landing::manifest::Provider::CodeQl);
+        let semgrep = names(crate::landing::manifest::Provider::Semgrep);
+        assert!(
+            codeql.iter().any(|name| name == "codeql-analyze"),
+            "{codeql:?}"
+        );
+        assert!(
+            !codeql.iter().any(|name| name == "semgrep-image"),
+            "a codeql landing records no semgrep tool: {codeql:?}"
+        );
+        assert!(
+            semgrep.iter().any(|name| name == "semgrep-image"),
+            "{semgrep:?}"
+        );
+        assert!(
+            !semgrep.iter().any(|name| name == "codeql-init"),
+            "a semgrep landing records no codeql tool: {semgrep:?}"
+        );
+        for pins in [&codeql, &semgrep] {
+            assert!(
+                pins.iter().any(|name| name == "checkout"),
+                "either provider checks out: {pins:?}"
+            );
         }
     }
 

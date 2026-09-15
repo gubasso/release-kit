@@ -31,13 +31,13 @@ code_scanning = "codeql" # P: opt-in code scanning provider: codeql, semgrep, or
 
 [security]
 advisories = "" # N: project receiving vulnerability reports
-contact = "" # N: contact when the form is unavailable
-response = "best-effort" # N: best-effort or a response window
+contact = "" # P: one line naming who receives a report when the forge channel is unavailable; empty keeps the forge's own wording
+response = "best-effort" # P: the acknowledgment window the policy promises: best-effort, 1 day, <n> days, 1 business day, or <n> business days
 
 [setup]
-required_check = "" # N: the check the merge must pass
+required_check = "" # N: the check the merge must pass; empty asks for --required-check
 retired_branches = ["main", "develop"] # N: long-lived branches retired by the trunk
-release_lines = false # N: run release-line protection in a full apply
+release_lines = false # N: true runs protect-release-lines in a full apply
 
 [setup.bot]
 app_id = "" # N: public App identifier; private credentials stay outside this file
@@ -51,7 +51,7 @@ tag_pattern = "refs/tags/v*" # F: invariant, covers every published version
 bypass_actors = [] # F: invariant, empty
 allowed_merge_methods = ["squash"] # F: invariant, exactly squash
 strict_required_status_checks = true # F: invariant, true
-owned_trunk_rules = ["deletion", "non_fast_forward"] # F: invariant, contains all four rules
+owned_trunk_rules = ["deletion", "non_fast_forward"] # F: invariant, the rules git.integration names
 required_approving_review_count = 0 # F: floor zero; higher is stricter
 dismiss_stale_reviews_on_push = false # F: floor false; true is stricter
 require_code_owner_review = false # F: floor false; true is stricter
@@ -64,6 +64,6 @@ squash_body_source = "PR_BODY" # F: invariant, PR_BODY
 [protection.gitlab]
 merge_method = "ff" # F: invariant, linear history
 squash_option = "always" # F: invariant, always squash
-squash_commit_template = "%{title}" # F: invariant, references title
-push_access_level = 40 # F: invariant, zero
+squash_commit_template = "%{title}" # F: invariant, references title and description
+push_access_level = 40 # F: invariant, the level git.integration names
 merge_access_level = 40 # F: floor thirty

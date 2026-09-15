@@ -119,7 +119,7 @@ version = "4"
 action = "actions/checkout@v4"
 commit = "11d5960a326750d5838078e36cf38b85af677262"
 ref_class = "moving-major-tag"
-used_by = ["release.automation/rust", "release.automation/python", "release.automation/bash", "supply-chain.scorecard"]
+used_by = ["release.automation/rust", "release.automation/python", "release.automation/bash", "supply-chain.scorecard", "supply-chain.code-scanning"]
 purpose = "checks out the repository in every workflow job"
 check = "https://api.github.com/repos/actions/checkout/releases/latest"
 checked = 2026-09-02
@@ -250,7 +250,7 @@ version = "4"
 action = "github/codeql-action/init@v4"
 commit = "b96794f015dfd88f77b49b1c93e0fa7110f94c63"
 ref_class = "moving-major-tag"
-used_by = ["supply-chain.code-scanning/rust"]
+used_by = ["supply-chain.code-scanning/rust/codeql"]
 purpose = "builds the CodeQL database in the opt-in code scanning workflow"
 checked = 2026-09-15
 
@@ -260,7 +260,7 @@ version = "4"
 action = "github/codeql-action/analyze@v4"
 commit = "b96794f015dfd88f77b49b1c93e0fa7110f94c63"
 ref_class = "moving-major-tag"
-used_by = ["supply-chain.code-scanning/rust"]
+used_by = ["supply-chain.code-scanning/rust/codeql"]
 purpose = "runs the queries and uploads the result in the opt-in code scanning workflow"
 checked = 2026-09-15
 
@@ -270,7 +270,7 @@ version = "4"
 action = "github/codeql-action/upload-sarif@v4"
 commit = "b96794f015dfd88f77b49b1c93e0fa7110f94c63"
 ref_class = "moving-major-tag"
-used_by = ["supply-chain.code-scanning/rust"]
+used_by = ["supply-chain.code-scanning/rust/semgrep"]
 purpose = "uploads the Semgrep result to code scanning in the opt-in code scanning workflow"
 checked = 2026-09-15
 
@@ -280,7 +280,7 @@ checked = 2026-09-15
 [[tool]]
 name = "semgrep-image"
 version = "1.177.0"
-used_by = ["supply-chain.code-scanning/rust"]
+used_by = ["supply-chain.code-scanning/rust/semgrep"]
 purpose = "runs the Semgrep CE rules in the opt-in code scanning workflow on either forge"
 check = "https://api.github.com/repos/semgrep/semgrep/releases/latest"
 checked = 2026-09-15

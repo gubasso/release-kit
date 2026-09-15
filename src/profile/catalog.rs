@@ -147,6 +147,12 @@ pub struct Selection {
     /// has that dimension; the registry pins are keyed on it too.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub driver: Option<String>,
+    /// The provider the selection is keyed on, where the capability's
+    /// parameter names one. Two providers of one capability land different
+    /// files and run different tools, so the registry pins are keyed on it
+    /// too and a target records the pins of the provider it landed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
 }
 
 impl Selection {
@@ -164,7 +170,14 @@ impl Selection {
             action: None,
             sources,
             driver: driver.map(str::to_owned),
+            provider: None,
         }
+    }
+
+    /// The same selection, keyed on the provider its parameter named.
+    fn keyed_on(mut self, provider: &str) -> Self {
+        self.provider = Some(provider.to_owned());
+        self
     }
 
     fn omitted(id: &'static str, status: Status, reason: impl Into<String>) -> Self {
@@ -175,6 +188,7 @@ impl Selection {
             action: None,
             sources: Vec::new(),
             driver: None,
+            provider: None,
         }
     }
 }
@@ -542,6 +556,7 @@ pub fn select(params: &Params, availability: &Availability) -> Vec<Selection> {
                     )
                 } else {
                     Selection::selected(CODE_SCANNING, sources, Some(driver))
+                        .keyed_on(provider.as_str())
                 }
             }
         }
@@ -550,14 +565,24 @@ pub fn select(params: &Params, availability: &Availability) -> Vec<Selection> {
     out
 }
 
-/// The pin keys one selection matches in the registry's `used_by`: the
-/// bare capability id, and the id qualified by the driver where the
-/// capability has that dimension.
+/// The pin keys one selection matches in the registry's `used_by`.
+///
+/// Three of them: the bare capability id, the id qualified by the driver
+/// where the capability has that dimension, and that qualified again by
+/// the provider where its parameter names one.
+///
+/// Three widths rather than one, so a pin declares the narrowest truth it
+/// can. A tool every provider runs takes the bare id; one a single
+/// provider runs takes the widest key, and a target that landed the other
+/// provider records neither the tool nor its staleness baseline.
 #[must_use]
 pub fn pin_keys(selection: &Selection) -> Vec<String> {
     let mut keys = vec![selection.id.to_owned()];
     if let Some(driver) = &selection.driver {
         keys.push(format!("{}/{driver}", selection.id));
+        if let Some(provider) = &selection.provider {
+            keys.push(format!("{}/{driver}/{provider}", selection.id));
+        }
     }
     keys
 }
