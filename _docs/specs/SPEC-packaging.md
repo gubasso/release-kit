@@ -23,6 +23,7 @@
   - [`packaging:a-wired-target-runs-one-bump-mechanism` — A wired target runs one bump mechanism](#packaginga-wired-target-runs-one-bump-mechanism--a-wired-target-runs-one-bump-mechanism)
   - [`packaging:the-cleanup-removes-only-what-it-can-judge` — The cleanup removes only what it can judge](#packagingthe-cleanup-removes-only-what-it-can-judge--the-cleanup-removes-only-what-it-can-judge)
   - [`packaging:the-setup-offers-the-freshness-wire` — The setup offers the freshness wire](#packagingthe-setup-offers-the-freshness-wire--the-setup-offers-the-freshness-wire)
+  - [`packaging:the-setup-offers-the-acquisition-route` — The setup offers the acquisition route](#packagingthe-setup-offers-the-acquisition-route--the-setup-offers-the-acquisition-route)
 
 <!--TOC-->
 
@@ -259,3 +260,15 @@ Where a landing records a target for the first time and that target is wired to 
 - THEN the skill states what the line does and asks the operator, and a refusal closes the landing as a recorded answer
 
 Verify: `cargo nextest run -E 'test(the_setup_skill_offers_the_freshness_wire_to_a_wired_target)'`
+
+### `packaging:the-setup-offers-the-acquisition-route` — The setup offers the acquisition route
+
+Where a landing records a target for the first time and `rk self-depend status` reports no manager, the setup skill MUST raise how the project obtains `rk` as a decision the operator answers before the task closes, and MUST record the answer, because the same refusal that leaves the sync line unplaceable leaves the manager file unchosen: the binary seeds only a file the target lacks, so nothing but the skill can ask which manager the project runs. The decision MUST offer a manager the binary can wire, a host install, and an answer for an operator who wires it themselves, and MUST state that a host install serves one version to every project on that machine. The skill MUST ask once per landing and MUST NOT repeat a question an answer already closed.
+
+#### Scenario: A first landing leaves the target on a host install
+
+- GIVEN a target with no record and no manager file, whose operator opted the Nix capability in
+- WHEN the landing reaches its last step
+- THEN the skill asks how the project obtains `rk`, states what each answer costs, and records the answer it receives
+
+Verify: `cargo nextest run -E 'test(the_setup_skill_offers_the_acquisition_route_to_an_unwired_target) or test(an_unwired_target_takes_the_chosen_manager_and_reports_it_back)'`

@@ -2872,7 +2872,8 @@ fn the_setup_skill_offers_the_freshness_wire_to_a_wired_target() {
     // The negative branch, stated by a fixture rather than inferred: the
     // bare tree names no wired manager, so this phase raises nothing. The
     // acquisition route for such a target is the case this phase refuses
-    // to own.
+    // to own. The acquisition question it raises instead is the other
+    // requirement's, asserted below.
     let bare = setup_evals()
         .into_iter()
         .find(|(stem, _)| stem == "greenfield")
@@ -2899,6 +2900,215 @@ fn the_setup_skill_offers_the_freshness_wire_to_a_wired_target() {
             assert!(
                 !text.contains("freshness"),
                 "{stem}: a recorded target carries the offer"
+            );
+        }
+    }
+}
+
+/// An operator working without an agent meets the same two decisions,
+/// and the runbook serves the refusal too: the flake apply places the
+/// sync line whatever the operator answered, so the refusal is an edit.
+#[test]
+fn the_setup_runbook_carries_the_acquisition_decision_and_its_refusal() {
+    let runbook =
+        std::fs::read_to_string(repo_path("runbooks/setup.md")).expect("the setup runbook reads");
+    for phrase in [
+        "Decide the wire before a first landing closes",
+        "`state no-manager`",
+        "pass `--manager` to `add` with the manager chosen",
+        "Decide the wire before running it",
+        "drop the sync line from the seeded `.envrc`",
+        "`envrc_sync` false, which is the refusal recorded in the tree",
+    ] {
+        assert!(
+            runbook.contains(phrase),
+            "the runbook leaves the decision unserved, dropping '{phrase}'"
+        );
+    }
+}
+
+/// The acquisition instruction, run: an unwired target takes the manager
+/// the operator chose and reports it back under `wired`. The preview the
+/// skill asks for first writes nothing, so the apply is what wires it.
+#[test]
+fn an_unwired_target_takes_the_chosen_manager_and_reports_it_back() {
+    let fixture = SelfDependFixture::new();
+    let chosen = ["--manager", "mise", "--tag", "v0.2.15"];
+    let previewed = fixture.json(&[&["self-depend", "add"], &chosen[..]].concat());
+    assert_eq!(previewed["written"], serde_json::json!([]));
+    assert_eq!(
+        fixture.json(&["self-depend", "status"])["state"],
+        "no-manager",
+        "a preview wired the target"
+    );
+    let applied = fixture.json(&[&["self-depend", "add", "--apply"], &chosen[..]].concat());
+    assert_ne!(applied["support"], "manual");
+    let wired = fixture.json(&["self-depend", "status"]);
+    assert_eq!(
+        wired["wired"], "mise",
+        "the read-back the skill requires does not name the chosen manager"
+    );
+    assert_eq!(
+        wired["envrc_sync"], false,
+        "this manager answered the freshness question the skill asks separately"
+    );
+
+    // One candidate answers both questions in one move, which is why the
+    // skill discloses it before the apply rather than after.
+    let flake = SelfDependFixture::new();
+    flake.json(&[
+        "self-depend",
+        "add",
+        "--apply",
+        "--manager",
+        "flake",
+        "--tag",
+        "v0.2.15",
+    ]);
+    let seeded = flake.json(&["self-depend", "status"]);
+    assert_eq!(seeded["wired"], "flake");
+    assert_eq!(
+        seeded["envrc_sync"], true,
+        "the flake apply left the sync line unplaced, so the disclosure is wrong"
+    );
+
+    // The operator who wants that pin and refuses the line drops it, and
+    // the two decisions come apart again.
+    let envrc = flake.target().join(".envrc");
+    let seeded_envrc = std::fs::read_to_string(&envrc).expect("the seeded .envrc reads");
+    let kept: Vec<&str> = seeded_envrc
+        .lines()
+        .filter(|line| !line.contains("self-depend"))
+        .collect();
+    std::fs::write(&envrc, kept.join("\n") + "\n").expect("the trimmed .envrc writes");
+    let refused = flake.json(&["self-depend", "status"]);
+    assert_eq!(
+        refused["wired"], "flake",
+        "dropping the line dropped the pin"
+    );
+    assert_eq!(
+        refused["envrc_sync"], false,
+        "the refusal the skill offers leaves the status unchanged"
+    );
+}
+
+/// A first landing cannot close over a target nothing pins, per
+/// `packaging:the-setup-offers-the-acquisition-route`. The skill reads
+/// `state` from the status report, offers three answers with what each
+/// costs, records the one it gets, and asks once.
+#[test]
+fn the_setup_skill_offers_the_acquisition_route_to_an_unwired_target() {
+    let skill = setup_skill();
+    let start = skill
+        .find("## How the target obtains `rk`")
+        .expect("the acquisition section");
+    let section = &skill[start..];
+    let end = section[1..]
+        .find("\n## ")
+        .map_or(section.len(), |offset| offset + 1);
+    let section = &section[..end];
+    for phrase in [
+        "Where `state` is `no-manager`",
+        "rk self-depend add --manager <candidate> --target . --json",
+        "a host install, which serves one version to every project on that machine",
+        "the operator wiring it themselves",
+        "Say what each costs before the operator picks",
+        "Ask once",
+    ] {
+        assert!(
+            section.contains(phrase),
+            "the acquisition section drops '{phrase}': {section}"
+        );
+    }
+    // A pair the matrix cannot wire is a refusal, so it is never one of
+    // the answers. The skill reads that from the add report, not from a
+    // list of its own.
+    assert!(
+        section.contains("keep the ones whose `support` is not `manual`"),
+        "the section offers a manual pair as an answer: {section}"
+    );
+    // The chosen manager is the operator's answer. A no-manager report
+    // carries no `wired` value to reuse, so the apply takes the answer.
+    assert!(
+        section.contains("rk self-depend add --manager <chosen> --target . --json")
+            && section.contains("not with `wired`"),
+        "the acceptance path reuses a manager the report does not carry: {section}"
+    );
+    // A preview writes nothing, so the accepted answer needs the apply
+    // and the read-back that proves it landed.
+    for phrase in [
+        "Then run the same call with `--apply` as a gated step",
+        "it names the chosen manager under `wired`, or the wiring did not happen",
+        "The flake pair's apply seeds an `.envrc` carrying the sync line",
+        "ask the freshness question before that apply rather than after it",
+    ] {
+        assert!(
+            section.contains(phrase),
+            "the acceptance path stops at the preview, dropping '{phrase}': {section}"
+        );
+    }
+    // The preview is not ceremony: the status lists every manager in the
+    // enum for a target that carries none, and at least one of them is
+    // manual at its own default venue. Offering the status list whole
+    // would offer a refusal.
+    let manual = release_kit::self_depend::manager::Manager::ALL
+        .into_iter()
+        .filter(|manager| {
+            matches!(
+                release_kit::self_depend::matrix::support(
+                    *manager,
+                    release_kit::self_depend::matrix::default_venue(*manager),
+                ),
+                release_kit::self_depend::matrix::Support::Manual(_)
+            )
+        })
+        .count();
+    assert!(
+        manual > 0,
+        "no manager is manual, so the preview the skill requires proves nothing"
+    );
+
+    // A reader following the classification reaches the section that
+    // answers it, which is the runbook's prerequisites and no numbered
+    // step of it.
+    let greenfield = skill
+        .lines()
+        .find(|line| line.starts_with("- `greenfield`"))
+        .expect("the greenfield route");
+    assert!(
+        greenfield.contains("`rk guide setup` carries it in the Prerequisites"),
+        "the classification cites the section that answers it: {greenfield}"
+    );
+
+    // The bare tree raises the question, takes an answer, and asks no
+    // second time.
+    let bare = setup_evals()
+        .into_iter()
+        .find(|(stem, _)| stem == "greenfield")
+        .expect("the greenfield fixture");
+    let route = eval_section(&bare.1, "Route");
+    let asked = route
+        .find("Ask the operator how the project obtains it")
+        .expect("the acquisition question");
+    let landed = route.find("--apply").expect("the landing");
+    assert!(landed < asked, "the question follows the landing: {route}");
+    for phrase in [
+        "The operator answers that they wire it themselves",
+        "Record that answer in the report",
+        "an answer already recorded is not asked again",
+    ] {
+        assert!(
+            route.contains(phrase),
+            "the bare route drops '{phrase}': {route}"
+        );
+    }
+
+    // An upgrade of a recorded target asks neither question.
+    for (stem, text) in setup_evals() {
+        if eval_field(&text, "receipt") == "present" {
+            assert!(
+                !text.contains("how the project obtains"),
+                "{stem}: a recorded target carries the acquisition offer"
             );
         }
     }
