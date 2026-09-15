@@ -66,5 +66,5 @@ squash_body_source = RK_CONFIG_PROTECTION_GITHUB_SQUASH_BODY_SOURCE # F: invaria
 merge_method = RK_CONFIG_PROTECTION_GITLAB_MERGE_METHOD # F: invariant, linear history
 squash_option = RK_CONFIG_PROTECTION_GITLAB_SQUASH_OPTION # F: invariant, always squash
 squash_commit_template = RK_CONFIG_PROTECTION_GITLAB_SQUASH_COMMIT_TEMPLATE # F: invariant, references title and description
-push_access_level = RK_CONFIG_PROTECTION_GITLAB_PUSH_ACCESS_LEVEL # F: invariant, zero
+push_access_level = RK_CONFIG_PROTECTION_GITLAB_PUSH_ACCESS_LEVEL # F: invariant, the level git.integration names
 merge_access_level = RK_CONFIG_PROTECTION_GITLAB_MERGE_ACCESS_LEVEL # F: floor thirty

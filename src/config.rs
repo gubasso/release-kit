@@ -286,7 +286,9 @@ pub struct Protection {
     pub allowed_merge_methods: Vec<String>,
     /// F: invariant, true.
     pub strict_required_status_checks: bool,
-    /// F: invariant, contains all four rules.
+    /// F: invariant, the rules `git.integration` names. A landing writes
+    /// this key with the authority, and a target that narrowed or
+    /// widened it keeps what it stated.
     pub owned_trunk_rules: Vec<String>,
     /// F: floor zero; higher is stricter.
     pub required_approving_review_count: i64,
@@ -369,7 +371,10 @@ pub struct Gitlab {
     pub squash_option: String,
     /// F: invariant, references title and description.
     pub squash_commit_template: String,
-    /// F: invariant, zero.
+    /// F: invariant, the level `git.integration` names: zero under forge
+    /// integration, which takes no push at all, and the narrowest level
+    /// that admits one under local integration, whose integrations end in
+    /// that push.
     pub push_access_level: i64,
     /// F: floor thirty.
     pub merge_access_level: i64,

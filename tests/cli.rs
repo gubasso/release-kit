@@ -31222,6 +31222,24 @@ fn the_protection_the_authority_decides_travels_with_it() {
         config.contains("push_access_level = 40"),
         "zero would close the trunk to the push this mode ends in: {config}"
     );
+    // The comment beside a key the authority decides names the authority,
+    // never one mode's value: a local target told that its own level
+    // violates an invariant of zero would restore zero and close its
+    // trunk to the push its integrations end in.
+    assert!(
+        !config.contains("push_access_level = 40 # F: invariant, zero"),
+        "the rendered comment contradicts the rendered value: {config}"
+    );
+    for key in ["owned_trunk_rules", "push_access_level"] {
+        let line = config
+            .lines()
+            .find(|line| line.starts_with(key))
+            .unwrap_or_else(|| panic!("{key}: {config}"));
+        assert!(
+            line.contains("git.integration names"),
+            "{key} names the authority that decides it: {line}"
+        );
+    }
 
     rk().args(["upgrade", "--integration", "forge", "--apply", "--target"])
         .arg(target.path())

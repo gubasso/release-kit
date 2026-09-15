@@ -62,7 +62,13 @@ Verify: `cargo nextest run -E 'test(config) or test(params_from_a_record) or tes
 
 ### `target-config:a-flag-overrides-and-a-landing-writes-back` — A flag overrides and a landing writes back
 
-When a landing applies a class P invocation flag, the verb MUST write that key back through the comment-preserving editor, with class N names and class F policy left to their use-time readers.
+When a landing applies a class P invocation flag, the verb MUST write that key back through the comment-preserving editor, with class N names and class F policy left to their use-time readers. Exactly two class F keys are excepted, because `git.integration` decides them and a configuration carrying one authority's key beside the other's mode is one its own floor table refuses: `protection.owned_trunk_rules` and `protection.gitlab.push_access_level` travel with that parameter where they still match a compiled authority's pair, keep whatever a target narrowed or widened them to otherwise, and are excluded from the comparison that reports untaken configuration, because the record holds no baseline for a floored policy.
+
+#### Scenario: The integration authority changes
+
+- GIVEN a landed target whose protection keys are one authority's compiled pair
+- WHEN a landing resolves the other authority
+- THEN both keys are written to that authority's pair, the configuration passes its own floor table, and status reports it aligned
 
 #### Scenario: A style flag overrides a commented key
 
