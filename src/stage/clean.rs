@@ -78,7 +78,7 @@ fn refuse(message: String, expected: &str) -> RkError {
 /// # Errors
 ///
 /// Returns [`RkError::Missing`] for a path that does not exist, an
-/// `unsupported-schema` refusal for a receipt outside `rk.stage/1`, and a
+/// `unsupported-schema` refusal for a receipt outside `rk.stage/2`, and a
 /// `destructive-refusal` for the filesystem root, a home directory, a
 /// repository root, the receipt's target or any ancestor of it, a
 /// symlink, a directory without a receipt, and a receipt whose
@@ -531,7 +531,7 @@ mod tests {
         std::fs::write(
             moved.join("stage.json"),
             format!(
-                r#"{{"schema":"rk.stage/1","stage_root":"{}","target":"/nowhere"}}"#,
+                r#"{{"schema":"rk.stage/2","stage_root":"{}","target":"/nowhere"}}"#,
                 other.display()
             ),
         )
@@ -556,28 +556,28 @@ mod tests {
         let receipt = candidate.join("stage.json");
         for body in [
             format!(
-                r#"{{"schema":"rk.stage/1","stage_root":"{}"}}"#,
+                r#"{{"schema":"rk.stage/2","stage_root":"{}"}}"#,
                 candidate.display()
             ),
             format!(
-                r#"{{"schema":"rk.stage/1","stage_root":"{}","target":null}}"#,
+                r#"{{"schema":"rk.stage/2","stage_root":"{}","target":null}}"#,
                 candidate.display()
             ),
             format!(
-                r#"{{"schema":"rk.stage/1","stage_root":"{}","target":""}}"#,
+                r#"{{"schema":"rk.stage/2","stage_root":"{}","target":""}}"#,
                 candidate.display()
             ),
             format!(
-                r#"{{"schema":"rk.stage/1","stage_root":"{}","target":"repo"}}"#,
+                r#"{{"schema":"rk.stage/2","stage_root":"{}","target":"repo"}}"#,
                 candidate.display()
             ),
             format!(
-                r#"{{"schema":"rk.stage/1","stage_root":"{}","target":"{}/../candidate/repo"}}"#,
+                r#"{{"schema":"rk.stage/2","stage_root":"{}","target":"{}/../candidate/repo"}}"#,
                 candidate.display(),
                 candidate.display()
             ),
             format!(
-                r#"{{"schema":"rk.stage/1","stage_root":"{}","target":"{}/repo/"}}"#,
+                r#"{{"schema":"rk.stage/2","stage_root":"{}","target":"{}/repo/"}}"#,
                 candidate.display(),
                 candidate.display()
             ),
@@ -598,7 +598,7 @@ mod tests {
         std::fs::write(
             &receipt,
             format!(
-                r#"{{"schema":"rk.stage/1","stage_root":"{}","target":"{}"}}"#,
+                r#"{{"schema":"rk.stage/2","stage_root":"{}","target":"{}"}}"#,
                 candidate.display(),
                 link.display()
             ),
@@ -623,7 +623,7 @@ mod tests {
         std::fs::write(
             stage.join("stage.json"),
             format!(
-                r#"{{"schema":"rk.stage/1","stage_root":"{}","target":"/nowhere"}}"#,
+                r#"{{"schema":"rk.stage/2","stage_root":"{}","target":"/nowhere"}}"#,
                 stage.display()
             ),
         )

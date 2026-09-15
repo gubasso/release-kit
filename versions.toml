@@ -7,8 +7,9 @@
 # An entry with an action carries two refs with two jobs: commit is the
 # immutable execution reference the workflows run, and the tag or branch in
 # action is the discovery ref a freshness check reads for reviewed updates,
-# classified by ref_class as a moving-major-tag, moving-minor-tag, or
-# maintained-branch. Those refs exist to move — movement is an update
+# classified by ref_class as a moving-major-tag, moving-minor-tag,
+# maintained-branch, or exact-tag, the last for a project that publishes no
+# moving ref at all. Those refs exist to move — movement is an update
 # signal, never evidence of an attack — and the pinned commit is what keeps
 # that movement from changing what executes before someone reviews it.
 
@@ -215,3 +216,17 @@ used_by = ["rust"]
 purpose = "runs the nix build proof in the child pipeline the gitlab pair triggers"
 check = "https://api.github.com/repos/NixOS/nix/tags?per_page=100"
 checked = 2026-09-08
+
+# ossf/scorecard-action publishes exact release tags and no moving major tag,
+# so the discovery ref is the release tag itself: only a retag moves it, and
+# the check URL is what reports a newer release.
+[[tool]]
+name = "scorecard-action"
+version = "2.4.4"
+action = "ossf/scorecard-action@v2.4.4"
+commit = "2d1146689b8cda280b9bc96326124645441f03bc"
+ref_class = "exact-tag"
+used_by = ["rust", "python", "bash"]
+purpose = "computes the OpenSSF Scorecard result and publishes it in the opt-in scorecard workflow"
+check = "https://api.github.com/repos/ossf/scorecard-action/releases/latest"
+checked = 2026-09-15

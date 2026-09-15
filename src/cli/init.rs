@@ -5,6 +5,10 @@ use clap::Args;
 
 /// Land a technology's deterministic files into a target repository.
 #[derive(Debug, Clone, Args)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each field is one clap flag, and an opt-in capability's flag is a boolean by design; a state machine would hide the command line this struct describes"
+)]
 pub struct InitArgs {
     /// The technology whose files land; one of the bindings.
     #[arg(long)]
@@ -48,6 +52,13 @@ pub struct InitArgs {
     /// default.
     #[arg(long)]
     pub nix: bool,
+
+    /// Opt the landing into the Scorecard capability: a workflow that
+    /// computes an `OpenSSF` Scorecard result and publishes it to the public
+    /// Scorecard API. GitHub only. Recorded as a landing parameter; off by
+    /// default, because publishing a score is a decision, not a default.
+    #[arg(long)]
+    pub scorecard: bool,
 
     /// Write the files; without it the destinations are listed and nothing
     /// is touched.

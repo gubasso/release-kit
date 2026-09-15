@@ -649,6 +649,7 @@ fn receipt(
             workflow: params.workflow(),
             style: params.style(),
             nix: params.nix(),
+            scorecard: params.scorecard(),
             trunk: params.trunk().to_owned(),
             line_prefix: params.line_prefix().to_owned(),
             security_contact: params.security_contact().to_owned(),
@@ -798,7 +799,7 @@ mod tests {
             outcome.completed.last().map(String::as_str),
             Some(manifest::MANIFEST_PATH)
         );
-        assert_eq!(outcome.receipt.schema_version, 7);
+        assert_eq!(outcome.receipt.schema_version, 8);
         let record = manifest::load(&target).expect("loads").expect("exists");
         let again = prepared(&target, Some(&record));
         for decision in &again.decisions {

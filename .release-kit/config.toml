@@ -15,6 +15,7 @@ trunk = "master" # N: the one permanent branch
 workflow = "worktree" # P: worktree or branches
 style = "trunk" # P: trunk or lines
 nix = false # P: opt-in Nix capability
+scorecard = false # P: opt-in OpenSSF Scorecard workflow, github only
 
 [security]
 advisories = "" # N: project receiving vulnerability reports

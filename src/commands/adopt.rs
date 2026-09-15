@@ -57,6 +57,8 @@ struct Report {
     style: &'static str,
     /// Whether the receipt carries the Nix capability.
     nix: bool,
+    /// Whether the target runs the Scorecard capability.
+    scorecard: bool,
     /// The Nix destinations excluded from the candidate, each with why;
     /// absent where nothing was withheld.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -134,6 +136,7 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
             workflow: args.workflow.as_deref().map(Workflow::parse).transpose()?,
             style: args.style.as_deref().map(Style::parse).transpose()?,
             nix: args.nix.then_some(true),
+            scorecard: args.scorecard.then_some(true),
         },
         config.as_ref(),
         None,
@@ -205,7 +208,7 @@ fn report(
     ));
     out.next(&next);
     out.emit(&Report {
-        schema: "rk.adopt/7",
+        schema: "rk.adopt/8",
         config: prepared.config.clone(),
         mode: if args.apply { "apply" } else { "preview" },
         target: args.target.to_string(),
@@ -215,6 +218,7 @@ fn report(
         workflow: workflow.as_str(),
         style: style.as_str(),
         nix: params.nix(),
+        scorecard: params.scorecard(),
         withheld: {
             let withheld: Vec<landing::Withheld> = prepared
                 .projection
@@ -336,11 +340,11 @@ fn verify(
 mod tests {
     use super::{FileEntry, Report};
 
-    /// The complete `rk.adopt/7` shape, held by snapshot.
+    /// The complete `rk.adopt/8` shape, held by snapshot.
     #[test]
     fn the_adopt_report_schema_snapshot_holds() {
         let report = Report {
-            schema: "rk.adopt/7",
+            schema: "rk.adopt/8",
             config: crate::config::Plan {
                 action: "added",
                 changes: vec![],
@@ -354,6 +358,7 @@ mod tests {
             workflow: "branches",
             style: "trunk",
             nix: false,
+            scorecard: false,
             withheld: None,
             files: vec![FileEntry {
                 path: "release-plz.toml".into(),
@@ -364,7 +369,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.adopt/7","mode":"apply","target":"/tmp/t","tech":"rust","forge":"github","repo":"acme/widget","workflow":"branches","style":"trunk","nix":false,"config":{"action":"added","changes":[],"content":"schema_version = 1\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"differs"}],"next":["commit the config and the receipt"]}"#
+            r#"{"schema":"rk.adopt/8","mode":"apply","target":"/tmp/t","tech":"rust","forge":"github","repo":"acme/widget","workflow":"branches","style":"trunk","nix":false,"scorecard":false,"config":{"action":"added","changes":[],"content":"schema_version = 1\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"differs"}],"next":["commit the config and the receipt"]}"#
         );
     }
 }

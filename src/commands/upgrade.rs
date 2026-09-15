@@ -64,6 +64,8 @@ struct Report {
     style: &'static str,
     /// Whether the rewritten receipt carries the Nix capability.
     nix: bool,
+    /// Whether the landing carries the Scorecard capability.
+    scorecard: bool,
     /// The Nix destinations this target could not take, each with why;
     /// absent where nothing was withheld.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -166,7 +168,7 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
     let next = next_lines(args, prepared.collisions.is_empty());
     out.next(&next);
     out.emit(&Report {
-        schema: "rk.upgrade/7",
+        schema: "rk.upgrade/8",
         config: prepared.config.clone(),
         mode: if args.apply { "apply" } else { "preview" },
         target: args.target.to_string(),
@@ -177,6 +179,7 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
         workflow: params.workflow().as_str(),
         style: style.as_str(),
         nix: params.nix(),
+        scorecard: params.scorecard(),
         withheld: withheld_of(&prepared),
         collisions: (!prepared.collisions.is_empty()).then(|| prepared.collisions.clone()),
         files: prepared
@@ -211,22 +214,29 @@ fn withheld_of(prepared: &Prepared) -> Option<Vec<landing::Withheld>> {
     (!withheld.is_empty()).then_some(withheld)
 }
 
+/// One capability flag's answer: `on`, `off`, or unanswered.
+///
+/// Every opt-in capability reads its flag the same way, so the refusal
+/// names the flag and the two values from one place.
+fn toggle(flag: &str, value: Option<&str>) -> Result<Option<bool>, RkError> {
+    match value {
+        None => Ok(None),
+        Some("on") => Ok(Some(true)),
+        Some("off") => Ok(Some(false)),
+        Some(other) => Err(RkError::Usage(format!(
+            "unknown --{flag} value '{other}'; the values are: on, off"
+        ))),
+    }
+}
+
 fn resolve_params(
     args: &UpgradeArgs,
     held: &apply::Held,
     recorded: &Manifest,
     existing: Option<&crate::config::Config>,
 ) -> Result<landing::Params, RkError> {
-    let nix = match args.nix.as_deref() {
-        None => None,
-        Some("on") => Some(true),
-        Some("off") => Some(false),
-        Some(other) => {
-            return Err(RkError::Usage(format!(
-                "unknown --nix value '{other}'; the values are: on, off"
-            )));
-        }
-    };
+    let nix = toggle("nix", args.nix.as_deref())?;
+    let scorecard = toggle("scorecard", args.scorecard.as_deref())?;
     landing::Params::resolve(
         held.base(),
         &landing::Inputs {
@@ -236,6 +246,7 @@ fn resolve_params(
             workflow: args.workflow.as_deref().map(Workflow::parse).transpose()?,
             style: args.style.as_deref().map(Style::parse).transpose()?,
             nix,
+            scorecard,
         },
         existing,
         Some(recorded),
@@ -351,11 +362,11 @@ fn collect_sentinels(destination: &str, bytes: &[u8], found: &mut Vec<String>) {
 mod tests {
     use super::{FileEntry, Report};
 
-    /// The complete `rk.upgrade/7` shape, held by snapshot.
+    /// The complete `rk.upgrade/8` shape, held by snapshot.
     #[test]
     fn the_upgrade_report_schema_snapshot_holds() {
         let report = Report {
-            schema: "rk.upgrade/7",
+            schema: "rk.upgrade/8",
             config: crate::config::Plan {
                 action: "added",
                 changes: vec![],
@@ -370,6 +381,7 @@ mod tests {
             workflow: "branches",
             style: "trunk",
             nix: false,
+            scorecard: false,
             withheld: None,
             collisions: None,
             files: vec![
@@ -388,7 +400,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.upgrade/7","mode":"preview","target":"/tmp/t","tech":"rust","forge":"github","from_version":"0.1.0","to_version":"0.2.0","workflow":"branches","style":"trunk","nix":false,"config":{"action":"added","changes":[],"content":"schema_version = 1\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"drift"},{"path":"legacy.yml","kind":"rendered","action":"released"}],"next":["rk upgrade --target /tmp/t --apply writes"]}"#
+            r#"{"schema":"rk.upgrade/8","mode":"preview","target":"/tmp/t","tech":"rust","forge":"github","from_version":"0.1.0","to_version":"0.2.0","workflow":"branches","style":"trunk","nix":false,"scorecard":false,"config":{"action":"added","changes":[],"content":"schema_version = 1\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"drift"},{"path":"legacy.yml","kind":"rendered","action":"released"}],"next":["rk upgrade --target /tmp/t --apply writes"]}"#
         );
     }
 }

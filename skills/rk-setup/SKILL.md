@@ -104,6 +104,15 @@ State one class from `rk method landing` before the first edit, and let it bound
 
 Under every class: never copy the stage tree into the target, and never offer `stage.json` or the stage path to `rk init`, `rk upgrade`, or `rk adopt`. Candidate documentation the stage lists under `artifacts/` is an ordinary destination. The `reference/` tree teaches this skill and is copied into no project.
 
+## The opt-in capabilities
+
+Each one is a recorded landing parameter, off by default. Offer the ones the target's forge can run, with the consequence named, and let the operator answer before the plan is approved. A capability nobody asked for lands nothing and reports nothing.
+
+- `--scorecard`, GitHub only: `.github/workflows/scorecard.yml`, which publishes an OpenSSF Scorecard result to a public API. Read out what `rk forge github` says a run scores under this convention, so the operator hears the ceiling before the workflow lands.
+- `--nix`: the seeded package expression and the seed flake pair. `rk method model` and `rk binding <tech>` own the consequence.
+
+Where the target already runs a workflow of its own for a capability, compare the staged candidate with the working tree before the production landing and settle the collision there. The stage names the file; the diff says whether the target's copy is the same proof under another name. Bring it to the candidate, or leave the capability out and say the target keeps its own. Never land beside it: two workflows computing one score is a collision the receipt cannot describe.
+
 ## Legacy operation state, from a 0.4.x release
 
 - Before the update, with the installed binary: finish every active stored operation, or record the operator's decision to abandon it, per `rk guide landing` step 1b. Abandonment is that decision and no command. An active operation stops the update.

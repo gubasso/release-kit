@@ -93,6 +93,10 @@ struct Report {
     /// the parameter reads as opt-out.
     #[serde(skip_serializing_if = "Option::is_none")]
     nix: Option<bool>,
+    /// Whether the landing carries the Scorecard capability; a record
+    /// predating the parameter reads as opt-out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scorecard: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     rk_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -152,7 +156,7 @@ fn report_absent(
         ),
     ]);
     out.emit(&Report {
-        schema: "rk.status/9",
+        schema: "rk.status/10",
         landed: false,
         config: config_state(config, None),
         tech: None,
@@ -160,6 +164,7 @@ fn report_absent(
         workflow: None,
         style: None,
         nix: None,
+        scorecard: None,
         rk_version: None,
         binary_version: None,
         alignment: None,
@@ -244,7 +249,7 @@ pub fn run(args: &StatusArgs) -> Result<(), RkError> {
 
     let violations = violations_of(&observed);
     out.emit(&Report {
-        schema: "rk.status/9",
+        schema: "rk.status/10",
         landed: true,
         config,
         tech: Some(manifest.tech),
@@ -252,6 +257,7 @@ pub fn run(args: &StatusArgs) -> Result<(), RkError> {
         workflow: Some(manifest.parameters.workflow.as_str()),
         style: manifest.parameters.style.map(manifest::Style::as_str),
         nix: Some(manifest.parameters.nix),
+        scorecard: Some(manifest.parameters.scorecard),
         rk_version: Some(manifest.rk_version),
         binary_version: Some(env!("CARGO_PKG_VERSION")),
         alignment: Some(alignment),
@@ -658,12 +664,12 @@ fn render_human(
 mod tests {
     use super::{Drift, InvariantFailure, Report, StalePin};
 
-    /// The complete `rk.status/9` shape, held by snapshot in both the
+    /// The complete `rk.status/10` shape, held by snapshot in both the
     /// landed and absent forms.
     #[test]
     fn the_status_report_schema_snapshot_holds() {
         let landed = Report {
-            schema: "rk.status/9",
+            schema: "rk.status/10",
             landed: true,
             config: super::ConfigState {
                 state: "pending",
@@ -674,6 +680,7 @@ mod tests {
             workflow: Some("worktree"),
             style: Some("trunk"),
             nix: Some(true),
+            scorecard: Some(false),
             rk_version: Some("0.1.0".into()),
             binary_version: Some("0.2.0"),
             alignment: Some(crate::landing::manifest::Alignment::BinaryNewer),
@@ -700,7 +707,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&landed).expect("a report serializes"),
-            r#"{"schema":"rk.status/9","landed":true,"config":{"state":"pending","pending":["landing.style"]},"tech":"rust","forge":"github","workflow":"worktree","style":"trunk","nix":true,"rk_version":"0.1.0","binary_version":"0.2.0","alignment":"binary-newer","drift":{"rendered":0,"seeded":1},"missing":[],"stale_pins":[{"tool":"release-plz","landed":"0.3.160","available":"0.3.170"}],"sentinels":1,"record_drift":0,"invariant_failures":[{"code":"attestations-disabled","destination":"dist-workspace.toml","reason":"github-attestations is not effectively true","remediation":"set github-attestations = true in [dist]"}],"pending":2}"#
+            r#"{"schema":"rk.status/10","landed":true,"config":{"state":"pending","pending":["landing.style"]},"tech":"rust","forge":"github","workflow":"worktree","style":"trunk","nix":true,"scorecard":false,"rk_version":"0.1.0","binary_version":"0.2.0","alignment":"binary-newer","drift":{"rendered":0,"seeded":1},"missing":[],"stale_pins":[{"tool":"release-plz","landed":"0.3.160","available":"0.3.170"}],"sentinels":1,"record_drift":0,"invariant_failures":[{"code":"attestations-disabled","destination":"dist-workspace.toml","reason":"github-attestations is not effectively true","remediation":"set github-attestations = true in [dist]"}],"pending":2}"#
         );
         let absent = Report {
             landed: false,
@@ -713,6 +720,7 @@ mod tests {
             workflow: None,
             style: None,
             nix: None,
+            scorecard: None,
             rk_version: None,
             binary_version: None,
             alignment: None,
@@ -728,7 +736,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&absent).expect("a report serializes"),
-            r#"{"schema":"rk.status/9","landed":false,"config":{"state":"absent","pending":[]}}"#,
+            r#"{"schema":"rk.status/10","landed":false,"config":{"state":"absent","pending":[]}}"#,
             "an absent landing reports one field a caller can branch on"
         );
     }

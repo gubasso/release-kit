@@ -139,6 +139,7 @@ fn projection_params(
             workflow,
             style: Some(style),
             nix,
+            scorecard: false,
             trunk: release_kit::config::TRUNK_DEFAULT.to_owned(),
             line_prefix: release_kit::config::LINE_PREFIX_DEFAULT.to_owned(),
             security_contact: String::new(),
@@ -257,6 +258,7 @@ fn render_params(
             workflow: release_kit::landing::Workflow::Worktree,
             style,
             nix: false,
+            scorecard: false,
             trunk: release_kit::config::TRUNK_DEFAULT.to_owned(),
             line_prefix: release_kit::config::LINE_PREFIX_DEFAULT.to_owned(),
             security_contact: String::new(),
@@ -784,7 +786,7 @@ fn init_json_emits_one_object_and_nothing_else() {
             .stdout
             .clone();
         let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-        assert_eq!(report["schema"], "rk.init/7");
+        assert_eq!(report["schema"], "rk.init/8");
         assert_eq!(report["mode"], mode);
         assert!(
             report["files"].as_array().is_some_and(|f| !f.is_empty()),
@@ -6891,7 +6893,7 @@ fn a_landing_writes_the_record_with_its_identity() {
         .success()
         .stdout(predicate::str::contains("wrote .release-kit/manifest.json"));
     let manifest = read_manifest(target.path());
-    assert_eq!(manifest["schema_version"], 7);
+    assert_eq!(manifest["schema_version"], 8);
     assert_eq!(manifest["rk_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(manifest["origin"], "init");
     assert_eq!(manifest["tech"], "rust");
@@ -7394,7 +7396,7 @@ fn status_json_is_one_object_over_a_fresh_landing() {
         .stdout
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["schema"], "rk.status/9");
+    assert_eq!(report["schema"], "rk.status/10");
     assert_eq!(report["landed"], true);
     assert_eq!(report["tech"], "rust");
     assert_eq!(report["style"], "trunk");
@@ -7897,7 +7899,7 @@ fn an_upgrade_replaces_a_recorded_generated_file_whose_bytes_differ() {
         "semver_check = true\n"
     );
     let receipt = read_manifest(target.path());
-    assert_eq!(receipt["schema_version"], 7);
+    assert_eq!(receipt["schema_version"], 8);
     assert_eq!(
         manifest_file(&receipt, ".github/workflows/release-plz.yml")["sha256"],
         Digest::of(landed.as_bytes()).to_string()
@@ -11086,7 +11088,7 @@ fn an_upgrade_migrates_a_schema_1_record_to_the_current_schema() {
         .assert()
         .success();
     let migrated = read_manifest(target.path());
-    assert_eq!(migrated["schema_version"], 7);
+    assert_eq!(migrated["schema_version"], 8);
     assert_eq!(migrated["parameters"]["workflow"], "branches");
     assert_eq!(migrated["parameters"]["style"], "trunk");
     let hooks = std::fs::read_to_string(target.path().join(".pre-commit-config.yaml"))
@@ -11168,7 +11170,7 @@ fn an_upgrade_drops_the_recorded_scope_vocabulary() {
         );
 
     let migrated = read_manifest(target.path());
-    assert_eq!(migrated["schema_version"], 7);
+    assert_eq!(migrated["schema_version"], 8);
     assert!(
         migrated["parameters"]["scopes"].is_null(),
         "the vocabulary leaves the record: {migrated}"
@@ -14036,6 +14038,208 @@ fn an_adoption_records_the_nix_parameter() {
             .all(|file| file["destination"] != "flake.nix"),
         "a pair no record vouches for stays the target's own"
     );
+}
+
+/// The Scorecard destination, named once for the tests below.
+const SCORECARD_WORKFLOW: &str = ".github/workflows/scorecard.yml";
+
+/// Land the rust files with the Scorecard capability opted in.
+fn land_rust_scorecard(target: &Path) -> assert_cmd::assert::Assert {
+    rk().args(["init", "--tech", "rust", "--forge", "github"])
+        .args(["--repo", "acme/widget", "--scorecard"])
+        .arg("--target")
+        .arg(target)
+        .arg("--apply")
+        .assert()
+}
+
+/// SATISFIES landing:the-nix-capability-is-a-recorded-opt-in
+///
+/// The opt-in lands the workflow, records the parameter, and names the
+/// destination in the receipt with the kind release-kit owns.
+#[test]
+fn the_scorecard_opt_in_lands_the_workflow_and_records_the_parameter() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust_scorecard(target.path()).success();
+    let landed = target.path().join(SCORECARD_WORKFLOW);
+    assert!(landed.is_file(), "the workflow lands");
+    let text = std::fs::read_to_string(&landed).expect("the workflow reads");
+    assert!(
+        text.contains("branches: [master]"),
+        "the recorded trunk renders: {text}"
+    );
+    assert!(
+        !text.contains("RK_TRUNK_BRANCH"),
+        "a token survived: {text}"
+    );
+    assert!(
+        text.contains("ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc"),
+        "the action is pinned by commit: {text}"
+    );
+    let manifest = read_manifest(target.path());
+    assert_eq!(manifest["parameters"]["scorecard"], true);
+    assert_eq!(
+        manifest_file(&manifest, SCORECARD_WORKFLOW)["kind"],
+        "rendered"
+    );
+    assert_eq!(
+        manifest["pins"]["scorecard-action"], "2.4.4",
+        "the capability's pin enters the receipt"
+    );
+}
+
+/// Without the flag the workflow stays out, and a target that did not ask
+/// for it is clean: an absent file under the recorded opt-out is not
+/// wanted, never drifted.
+#[test]
+fn a_landing_without_the_scorecard_flag_lands_nothing_and_judges_clean() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+    assert!(
+        !target.path().join(SCORECARD_WORKFLOW).exists(),
+        "off by default"
+    );
+    let manifest = read_manifest(target.path());
+    assert_eq!(manifest["parameters"]["scorecard"], false);
+    assert!(
+        manifest["files"]
+            .as_array()
+            .expect("a file list")
+            .iter()
+            .all(|file| file["destination"] != SCORECARD_WORKFLOW)
+    );
+    // The fresh landing's own unfilled sentinel is what --check reports,
+    // so the assertion is that the absent workflow adds nothing: no
+    // violation and no pending destination names it.
+    let out = rk()
+        .args(["status", "--check", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["scorecard"], false);
+    assert_eq!(report["drift"]["rendered"], 0);
+    assert_eq!(report["record_drift"], 0);
+    assert_eq!(report["pending"], 0);
+    assert_eq!(
+        report["violations"]
+            .as_array()
+            .expect("a violation list")
+            .iter()
+            .filter(|line| line.as_str().is_some_and(|line| line.contains("scorecard")))
+            .count(),
+        0,
+        "an absent file under the opt-out is not wanted, never drifted: {report}"
+    );
+}
+
+/// SATISFIES landing:the-nix-capability-is-a-recorded-opt-in
+///
+/// A receipt predating the parameter upgrades to the opt-out, and no
+/// workflow sprouts.
+#[test]
+fn a_pre_scorecard_record_upgrades_to_nothing_unrequested() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+    let mut manifest = read_manifest(target.path());
+    manifest["schema_version"] = serde_json::json!(7);
+    manifest["parameters"]
+        .as_object_mut()
+        .expect("parameters is an object")
+        .remove("scorecard");
+    write_manifest(target.path(), &manifest);
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    assert!(
+        !target.path().join(SCORECARD_WORKFLOW).exists(),
+        "no workflow joins an upgrade nobody opted into"
+    );
+    assert_eq!(
+        read_manifest(target.path())["parameters"]["scorecard"],
+        false
+    );
+}
+
+/// The capability is GitHub's alone, so a GitLab landing projects nothing
+/// for it even under the flag, and the record still states the answer.
+#[test]
+fn the_scorecard_opt_in_lands_no_file_on_gitlab() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    rk().args(["init", "--tech", "rust", "--forge", "gitlab"])
+        .args(["--repo", "acme/widget", "--scorecard"])
+        .arg("--target")
+        .arg(target.path())
+        .arg("--apply")
+        .assert()
+        .success();
+    assert!(!target.path().join(SCORECARD_WORKFLOW).exists());
+    assert_eq!(
+        read_manifest(target.path())["parameters"]["scorecard"],
+        true
+    );
+}
+
+/// The workflow is `rendered`, so an edit is a violation `--check` reports
+/// and an upgrade replaces from the projection.
+#[test]
+fn an_edited_scorecard_workflow_is_rendered_drift_an_upgrade_replaces() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust_scorecard(target.path()).success();
+    let landed = target.path().join(SCORECARD_WORKFLOW);
+    let projected = std::fs::read(&landed).expect("the workflow reads");
+    std::fs::write(&landed, b"name: mine\n").expect("the edit writes");
+    rk().args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains(format!(
+            "DRIFT {SCORECARD_WORKFLOW} (rendered, release-kit-owned)"
+        )));
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    assert_eq!(
+        std::fs::read(&landed).expect("the workflow reads"),
+        projected,
+        "an upgrade replaces a rendered file from the projection"
+    );
+}
+
+/// Turning the capability off drops the destination from the receipt and
+/// leaves the file on disk as the target's own, like any file this binary
+/// stops shipping.
+#[test]
+fn an_upgrade_can_turn_the_scorecard_capability_off() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust_scorecard(target.path()).success();
+    rk().args(["upgrade", "--scorecard", "off", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    assert!(
+        target.path().join(SCORECARD_WORKFLOW).is_file(),
+        "a released destination stays on disk"
+    );
+    let manifest = read_manifest(target.path());
+    assert_eq!(manifest["parameters"]["scorecard"], false);
+    assert!(
+        manifest["files"]
+            .as_array()
+            .expect("a file list")
+            .iter()
+            .all(|file| file["destination"] != SCORECARD_WORKFLOW)
+    );
+    rk().args(["upgrade", "--scorecard", "sometimes", "--target"])
+        .arg(target.path())
+        .assert()
+        .code(64)
+        .stderr(predicate::str::contains("the values are: on, off"));
 }
 
 /// The generated workflow must be tracked before it is regenerated and
@@ -20749,7 +20953,7 @@ fn private_reporting_policy_adoption_and_parameter_replay() {
         if mode == "matching" {
             out.success();
             let manifest = read_manifest(target.path());
-            assert_eq!(manifest["schema_version"], 7);
+            assert_eq!(manifest["schema_version"], 8);
             assert_eq!(manifest_file(&manifest, "SECURITY.md")["kind"], "rendered");
             assert_eq!(
                 std::fs::read(target.path().join("SECURITY.md")).unwrap(),
@@ -20781,7 +20985,7 @@ fn private_reporting_policy_adoption_and_parameter_replay() {
             )
         )
     );
-    assert_eq!(manifest["schema_version"], 7);
+    assert_eq!(manifest["schema_version"], 8);
     assert_eq!(manifest["parameters"]["style"], "trunk");
 }
 
@@ -21020,7 +21224,7 @@ fn a_pre_policy_record_upgrades_without_touching_the_policy() {
         .success();
     assert_eq!(landed_policy(target.path()), policy);
     let manifest = read_manifest(target.path());
-    assert_eq!(manifest["schema_version"], 7);
+    assert_eq!(manifest["schema_version"], 8);
     assert_eq!(manifest["parameters"]["security_contact"], "");
     assert_eq!(manifest["parameters"]["security_response"], "best-effort");
 }
@@ -22380,7 +22584,7 @@ fn the_landing_runbook_names_the_real_stage_fields() {
     let scratch = tempfile::tempdir().expect("a scratch dir exists");
     let target = stage_target();
     let report = stage_json(target.path(), &scratch.path().join("stage"));
-    assert_eq!(report["schema"], "rk.stage/1");
+    assert_eq!(report["schema"], "rk.stage/2");
     for top in [
         "schema",
         "rk_version",
@@ -22721,7 +22925,7 @@ fn the_landing_runbooks_changelog_selector_prints_the_interval() {
     std::fs::write(stage.join("reference").join("CHANGELOG.md"), &changelog).expect("writes");
     std::fs::write(
         target.join(".release-kit").join("manifest.json"),
-        "{\n  \"schema_version\": 7,\n  \"rk_version\": \"0.1.0\",\n  \"origin\": \"init\"\n}\n",
+        "{\n  \"schema_version\": 8,\n  \"rk_version\": \"0.1.0\",\n  \"origin\": \"init\"\n}\n",
     )
     .expect("writes");
     let (ok, printed) = run_fragment(
@@ -23536,7 +23740,7 @@ fn stage_writes_only_below_the_resolved_stage_root() {
         "an explicit --output leaves the state root without a stage"
     );
     assert!(resolved.join("stage.json").is_file());
-    assert_eq!(report["receipt_schema_version"], 7);
+    assert_eq!(report["receipt_schema_version"], 8);
 }
 
 /// SATISFIES staging:the-output-path-has-one-precedence
@@ -23623,6 +23827,32 @@ fn stage_output_precedence_is_flag_then_env_then_state_root() {
     assert_eq!(report["stage_root"], expected.display().to_string());
     assert_eq!(report["output_source"], "state root");
     assert!(expected.join("stage.json").is_file());
+}
+
+/// SATISFIES staging:a-stage-is-one-target-specific-candidate
+///
+/// One capability, one projection: the workflow an agent studies in a
+/// stage is byte for byte the workflow the production landing writes.
+#[test]
+fn a_staged_scorecard_workflow_equals_the_landed_one() {
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let target = stage_target();
+    let output = scratch.path().join("stage");
+    stage_cmd(target.path())
+        .arg("--scorecard")
+        .arg("--output")
+        .arg(&output)
+        .assert()
+        .success();
+    let staged = std::fs::read(output.join("artifacts").join(SCORECARD_WORKFLOW))
+        .expect("the stage carries the candidate");
+    land_rust_scorecard(target.path()).success();
+    let landed =
+        std::fs::read(target.path().join(SCORECARD_WORKFLOW)).expect("the landing wrote it");
+    assert_eq!(
+        staged, landed,
+        "the stage and the production landing render one projection"
+    );
 }
 
 /// SATISFIES staging:a-stage-is-one-target-specific-candidate
@@ -24074,7 +24304,7 @@ fn the_stage_receipt_and_human_output_snapshot_hold() {
     ];
     assert_eq!(top_level_keys(&receipt_text), receipt_keys);
     let receipt = stage_receipt(&stage);
-    assert_eq!(receipt["schema"], "rk.stage/1");
+    assert_eq!(receipt["schema"], "rk.stage/2");
     assert_eq!(receipt["rk_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(receipt["target"], canonical_target.display().to_string());
     assert_eq!(receipt["stage_root"], stage.display().to_string());
@@ -24131,7 +24361,7 @@ fn the_stage_receipt_and_human_output_snapshot_hold() {
         .clone();
     let human = String::from_utf8_lossy(&human);
     assert!(
-        human.contains("landing record: schema_version 7"),
+        human.contains("landing record: schema_version 8"),
         "{human}"
     );
     assert!(
@@ -24143,7 +24373,7 @@ fn the_stage_receipt_and_human_output_snapshot_hold() {
         "{human}"
     );
     let receipt = stage_receipt(&landed_out);
-    assert_eq!(receipt["receipt_schema_version"], 7);
+    assert_eq!(receipt["receipt_schema_version"], 8);
     assert_eq!(receipt["retired"], serde_json::json!(["old-workflow.yml"]));
     assert!(
         receipt["seeded_present"]
@@ -24245,7 +24475,7 @@ fn stage_clean_refuses_every_protected_or_ambiguous_path_and_deletes_one_valid_s
     std::fs::write(
         ancestor.join("stage.json"),
         format!(
-            r#"{{"schema":"rk.stage/1","stage_root":"{}","target":"{}"}}"#,
+            r#"{{"schema":"rk.stage/2","stage_root":"{}","target":"{}"}}"#,
             ancestor.display(),
             ancestor.join("inner").display()
         ),
@@ -24279,7 +24509,7 @@ fn stage_clean_refuses_every_protected_or_ambiguous_path_and_deletes_one_valid_s
     // A receipt at another schema.
     let other = canonical.join("other");
     std::fs::create_dir(&other).expect("creates");
-    std::fs::write(other.join("stage.json"), r#"{"schema":"rk.stage/2"}"#).expect("writes");
+    std::fs::write(other.join("stage.json"), r#"{"schema":"rk.stage/3"}"#).expect("writes");
     let json = clean(&other)
         .arg("--json")
         .assert()
@@ -24988,7 +25218,7 @@ fn a_parent_replaced_after_it_was_opened_receives_no_stage() {
 
 // ---------------------------------------------------------------------
 // The direct landing: fresh projection, elementary ownership, one lock,
-// held-directory writes, and the schema 7 receipt.
+// held-directory writes, and the schema 8 receipt.
 // ---------------------------------------------------------------------
 
 /// A `curl` that records every call and fails, on `PATH` and as
@@ -25080,7 +25310,7 @@ fn staged_candidates(target: &Path, flags: &[&str]) -> std::collections::BTreeMa
 
 /// SATISFIES landing:a-landing-leaves-a-record
 #[test]
-fn fresh_init_preview_is_read_only_and_apply_writes_the_schema_7_receipt() {
+fn fresh_init_preview_is_read_only_and_apply_writes_the_schema_8_receipt() {
     let target = plan_target();
     let before = tree_digests(target.path());
     let preview = rk()
@@ -25129,7 +25359,7 @@ fn fresh_init_preview_is_read_only_and_apply_writes_the_schema_7_receipt() {
         ]
     );
     let receipt = read_manifest(target.path());
-    assert_eq!(receipt["schema_version"], 7);
+    assert_eq!(receipt["schema_version"], 8);
     assert_eq!(receipt["rk_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(receipt["origin"], "init");
     for file in receipt["files"].as_array().expect("files") {
@@ -25212,9 +25442,9 @@ fn every_unattributed_collision_and_malformed_marker_is_collected_before_the_fir
 
 /// SATISFIES landing:a-record-states-its-schema
 #[test]
-fn receipt_schemas_1_through_6_load_without_a_release_source_and_rewrite_as_schema_7() {
+fn receipt_schemas_1_through_7_load_without_a_release_source_and_rewrite_as_schema_8() {
     let curl = OfflineCurl::new();
-    for schema in 1..=6u64 {
+    for schema in 1..=7u64 {
         let target = plan_target();
         land_rust(target.path()).success();
         let mut manifest = read_manifest(target.path());
@@ -25233,7 +25463,11 @@ fn receipt_schemas_1_through_6_load_without_a_release_source_and_rewrite_as_sche
         }
         for file in manifest["files"].as_array_mut().expect("files") {
             file[LEGACY_BASELINE_FIELD] = serde_json::json!(Digest::of(b"baseline").to_string());
-            file.as_object_mut().expect("a file").remove("placement");
+            // A receipt at the placement schema or above always states it,
+            // so only an older fixture is written without one.
+            if schema < 7 {
+                file.as_object_mut().expect("a file").remove("placement");
+            }
         }
         write_manifest(target.path(), &manifest);
 
@@ -25257,8 +25491,12 @@ fn receipt_schemas_1_through_6_load_without_a_release_source_and_rewrite_as_sche
         );
         assert!(!text.contains("scopes"), "schema {schema}: {text}");
         let rewritten = read_manifest(target.path());
-        assert_eq!(rewritten["schema_version"], 7, "schema {schema}");
+        assert_eq!(rewritten["schema_version"], 8, "schema {schema}");
         assert_eq!(rewritten["parameters"]["style"], "trunk");
+        assert_eq!(
+            rewritten["parameters"]["scorecard"], false,
+            "schema {schema}: a receipt predating the parameter upgrades to the opt-out"
+        );
         assert_eq!(
             manifest_file(&rewritten, "AGENTS.md")["placement"],
             "region"
@@ -25451,11 +25689,11 @@ fn production_outputs_carry_no_plan_bundle_or_release_selection_field() {
         .map(|(_, document)| document["schema"].as_str().expect("a schema"))
         .collect();
     for expected in [
-        "rk.init/7",
+        "rk.init/8",
         "rk.assess/3",
-        "rk.status/9",
-        "rk.upgrade/7",
-        "rk.adopt/7",
+        "rk.status/10",
+        "rk.upgrade/8",
+        "rk.adopt/8",
     ] {
         assert!(
             schemas.contains(&expected),
@@ -25751,7 +25989,7 @@ fn a_failpoint_at_every_write_boundary_leaves_whole_files_and_the_previous_recei
             .arg(target.path())
             .assert()
             .success();
-        assert_eq!(read_manifest(target.path())["schema_version"], 7);
+        assert_eq!(read_manifest(target.path())["schema_version"], 8);
         assert_eq!(
             std::fs::read_to_string(target.path().join("release-plz.toml")).expect("reads"),
             tuned
@@ -27329,7 +27567,7 @@ fn a_public_v0_4_0_target_upgrades_from_its_receipt_alone() {
         .stdout
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["schema"], "rk.upgrade/7", "{report}");
+    assert_eq!(report["schema"], "rk.upgrade/8", "{report}");
     assert_eq!(report["from_version"], "0.4.0", "{report}");
     let action_of = |destination: &str| -> String {
         report["files"]
@@ -27374,7 +27612,7 @@ fn a_public_v0_4_0_target_upgrades_from_its_receipt_alone() {
     }
 
     let manifest = read_manifest(target);
-    assert_eq!(manifest["schema_version"], 7);
+    assert_eq!(manifest["schema_version"], 8);
     assert_eq!(manifest["rk_version"], env!("CARGO_PKG_VERSION"));
     let text = std::fs::read_to_string(target.join(".release-kit/manifest.json"))
         .expect("the receipt reads");

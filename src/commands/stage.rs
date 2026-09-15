@@ -102,6 +102,7 @@ fn create(args: &StageArgs) -> Result<(), RkError> {
             workflow: args.workflow.as_deref().map(Workflow::parse).transpose()?,
             style: args.style.as_deref().map(Style::parse).transpose()?,
             nix: args.nix.then_some(true),
+            scorecard: args.scorecard.then_some(true),
         },
         config.as_ref(),
         record.as_ref(),
@@ -265,6 +266,7 @@ mod tests {
                 workflow: crate::landing::Workflow::Branches,
                 style: None,
                 nix: true,
+                scorecard: false,
                 trunk: "main".into(),
                 line_prefix: "release/".into(),
                 security_contact: String::new(),
@@ -288,7 +290,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.stage/1","rk_version":"0.0.0","target":"/tmp/t","stage_root":"/tmp/s","parameters":{"tech":"rust","forge":"github","repo":"acme/widget","workflow":"branches","style":null,"nix":true,"trunk":"main","line_prefix":"release/","security_contact":"","security_response":"best-effort"},"receipt_schema_version":null,"candidates":[],"omissions":[],"collisions":[],"retired":[],"seeded_present":[],"state_present":[],"reference":["CHANGELOG.md"],"output_source":"--output","next":["rk stage clean /tmp/s removes the stage once the landing is verified"]}"#
+            r#"{"schema":"rk.stage/2","rk_version":"0.0.0","target":"/tmp/t","stage_root":"/tmp/s","parameters":{"tech":"rust","forge":"github","repo":"acme/widget","workflow":"branches","style":null,"nix":true,"scorecard":false,"trunk":"main","line_prefix":"release/","security_contact":"","security_response":"best-effort"},"receipt_schema_version":null,"candidates":[],"omissions":[],"collisions":[],"retired":[],"seeded_present":[],"state_present":[],"reference":["CHANGELOG.md"],"output_source":"--output","next":["rk stage clean /tmp/s removes the stage once the landing is verified"]}"#
         );
     }
 

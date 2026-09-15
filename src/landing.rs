@@ -26,10 +26,10 @@ pub use crate::projection::{
     AGENTS_DESTINATION, BLOCK_BEGIN, BLOCK_DESTINATIONS, BLOCK_END, BRANCH_GRAMMAR,
     GLOSSARY_DESTINATION, HOOK_TYPES_LINE, HOOKS_BEGIN, HOOKS_DESTINATION, HOOKS_END, Kind,
     LINE_PREFIX_RE_TOKEN, LINE_PREFIX_TOKEN, NIX_DESTINATIONS, NIX_WITHHOLDABLE, OWNER_TOKEN,
-    REPO_PLACEHOLDER, REPO_TOKEN, SCOPE_SHAPE, SCOPE_SHAPE_TOKEN, SECURITY_SPANS, STYLE_TOKEN,
-    TRUNK_BRANCH_TOKEN, authored, block_markers, destinations, extract_block, hooks_marker_defect,
-    kind_of, marker_defect, render, scope_is_shaped, splice_hooks_block, splice_marked_block,
-    substitute,
+    REPO_PLACEHOLDER, REPO_TOKEN, SCOPE_SHAPE, SCOPE_SHAPE_TOKEN, SCORECARD_DESTINATIONS,
+    SECURITY_SPANS, STYLE_TOKEN, TRUNK_BRANCH_TOKEN, authored, block_markers, destinations,
+    extract_block, hooks_marker_defect, kind_of, marker_defect, render, scope_is_shaped,
+    splice_hooks_block, splice_marked_block, substitute,
 };
 pub use manifest::{Style, Workflow};
 use serde::Serialize;
@@ -47,6 +47,7 @@ pub struct Params {
     workflow: Workflow,
     style: Option<Style>,
     nix: bool,
+    scorecard: bool,
     trunk: String,
     line_prefix: String,
     security_contact: String,
@@ -68,6 +69,8 @@ pub struct Inputs<'a> {
     pub style: Option<Style>,
     /// Nix capability override.
     pub nix: Option<bool>,
+    /// Scorecard capability override.
+    pub scorecard: Option<bool>,
 }
 
 /// Compatibility policy for a landing candidate.
@@ -95,6 +98,7 @@ impl Params {
             workflow: record.parameters.workflow,
             style: record.parameters.style,
             nix: record.parameters.nix,
+            scorecard: record.parameters.scorecard,
             trunk: record.parameters.trunk.clone(),
             line_prefix: record.parameters.line_prefix.clone(),
             security_contact: record.parameters.security_contact.clone(),
@@ -202,6 +206,11 @@ impl Params {
                 .or_else(|| config.and_then(|c| c.landing.nix))
                 .or_else(|| record.map(|r| r.parameters.nix))
                 .unwrap_or(false),
+            scorecard: flags
+                .scorecard
+                .or_else(|| config.and_then(|c| c.landing.scorecard))
+                .or_else(|| record.map(|r| r.parameters.scorecard))
+                .unwrap_or(false),
             trunk,
             line_prefix,
             security_contact,
@@ -225,6 +234,12 @@ impl Params {
     #[must_use]
     pub const fn nix(&self) -> bool {
         self.nix
+    }
+
+    /// Whether this landing opted into the Scorecard capability.
+    #[must_use]
+    pub const fn scorecard(&self) -> bool {
+        self.scorecard
     }
 
     /// The project path used by parameter-bearing blocks.
@@ -284,6 +299,7 @@ impl Params {
             workflow: Workflow::Worktree,
             style,
             nix: false,
+            scorecard: false,
             trunk: crate::config::TRUNK_DEFAULT.to_owned(),
             line_prefix: crate::config::LINE_PREFIX_DEFAULT.to_owned(),
             security_contact: String::new(),
@@ -303,6 +319,11 @@ impl Params {
     /// The same set with the Nix opt-in answered.
     pub(crate) fn set_nix_for_test(&mut self, nix: bool) {
         self.nix = nix;
+    }
+
+    /// The same set with the Scorecard opt-in answered.
+    pub(crate) fn set_scorecard_for_test(&mut self, scorecard: bool) {
+        self.scorecard = scorecard;
     }
 }
 
@@ -721,7 +742,9 @@ mod tests {
             for forge in ["github", "gitlab"] {
                 for workflow in [Workflow::Branches, Workflow::Worktree] {
                     for style in [None, Some(Style::Trunk), Some(Style::Lines)] {
-                        for nix in [false, true] {
+                        for (nix, scorecard) in
+                            [(false, false), (false, true), (true, false), (true, true)]
+                        {
                             let record = manifest::Manifest {
                                 schema_version: manifest::SCHEMA_VERSION,
                                 rk_version: "0.1.0".to_owned(),
@@ -734,6 +757,7 @@ mod tests {
                                     workflow,
                                     style,
                                     nix,
+                                    scorecard,
                                     trunk: crate::config::TRUNK_DEFAULT.to_owned(),
                                     line_prefix: crate::config::LINE_PREFIX_DEFAULT.to_owned(),
                                     security_contact: String::new(),
@@ -753,6 +777,7 @@ mod tests {
                             assert_eq!(params.workflow(), workflow);
                             assert_eq!(params.style(), style);
                             assert_eq!(params.nix, nix);
+                            assert_eq!(params.scorecard, scorecard);
                             // The loaded record and the same answers given
                             // directly project the same candidate tree.
                             let mut direct = super::Params::for_test("acme/team/widget", style);
@@ -760,6 +785,7 @@ mod tests {
                             direct.forge = forge.to_owned();
                             direct.workflow = workflow;
                             direct.nix = nix;
+                            direct.scorecard = scorecard;
                             assert_eq!(params, direct);
                             let projected = destinations(&params);
                             for block in
@@ -772,6 +798,16 @@ mod tests {
                                     projected.contains(&destination.to_owned()),
                                     nix && tech == "rust",
                                     "{tech} {forge} nix={nix}: {destination}"
+                                );
+                            }
+                            // The Scorecard workflow ships in the shared
+                            // GitHub zone alone, so the parameter reaches
+                            // every binding and no GitLab landing.
+                            for destination in super::SCORECARD_DESTINATIONS {
+                                assert_eq!(
+                                    projected.contains(&destination.to_owned()),
+                                    scorecard && forge == "github",
+                                    "{tech} {forge} scorecard={scorecard}: {destination}"
                                 );
                             }
                         }
@@ -787,6 +823,7 @@ mod tests {
         workflow: Workflow,
         style: Option<Style>,
         nix: bool,
+        scorecard: bool,
     ) -> Result<super::Params, crate::error::RkError> {
         super::Params::resolve(
             camino::Utf8Path::new("."),
@@ -797,6 +834,7 @@ mod tests {
                 workflow: Some(workflow),
                 style,
                 nix: Some(nix),
+                scorecard: Some(scorecard),
             },
             None,
             None,
@@ -817,6 +855,7 @@ mod tests {
             },
             Workflow::Branches,
             Some(Style::Trunk),
+            false,
             false,
         )
         .expect("the parameters resolve");
@@ -887,6 +926,7 @@ mod tests {
                     Workflow::Worktree,
                     Some(Style::Trunk),
                     nix,
+                    false,
                 )
                 .expect("the parameters resolve"),
             )
@@ -920,6 +960,7 @@ mod tests {
                 Workflow::Worktree,
                 Some(Style::Trunk),
                 true,
+                false,
             )
             .expect("the parameters resolve"),
         );
@@ -967,6 +1008,7 @@ mod tests {
                 Workflow::Worktree,
                 Some(Style::Trunk),
                 nix,
+                false,
             )
             .expect("the parameters resolve");
             let evidence = TargetEvidence::gather(target, None).expect("the evidence reads");

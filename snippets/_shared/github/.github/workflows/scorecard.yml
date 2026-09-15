@@ -1,0 +1,49 @@
+# The supply-chain score. An OpenSSF Scorecard run reads this repository's
+# own practices and publishes the result to the public Scorecard API, which
+# is what makes the badge and the site entry resolve. A landing writes this
+# file only under the recorded scorecard opt-in: the run posts to a public
+# API and reads repository metadata, which is the target's choice rather
+# than a guard this method requires.
+#
+# The shape is not free. With publish_results on, the publishing API
+# rejects a result from a workflow that declares a top-level env or
+# defaults, takes a workflow-level write permission, grants id-token: write
+# to a second job, or runs a step outside the action's approved list, and
+# the run then fails. forges/github.md states what a run scores under this
+# convention and REFERENCE-forge-setup-sources.md carries the citations.
+# Read both before adding a step here.
+#
+# This workflow reports on no pull request, so it holds no merge and
+# belongs in no gate's needs list.
+
+name: scorecard
+
+on:
+  push:
+    branches: [RK_TRUNK_BRANCH]
+  schedule:
+    # Weekly. A score moves when a practice changes, not when a commit lands.
+    - cron: '30 1 * * 6'
+
+# Read alone at workflow level, which the publishing restriction requires.
+permissions: read-all
+
+jobs:
+  scorecard:
+    name: scorecard
+    runs-on: ubuntu-latest
+    permissions:
+      # The OIDC token the publishing step exchanges. The action's own
+      # restriction is that this job alone carries it.
+      id-token: write
+    steps:
+      - name: check out the trunk
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: the score is computed and published
+        uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true

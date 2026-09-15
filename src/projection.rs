@@ -182,6 +182,11 @@ impl Projection {
             if !params.nix() && NIX_DESTINATIONS.contains(&selected.destination.as_str()) {
                 continue;
             }
+            if !params.scorecard()
+                && SCORECARD_DESTINATIONS.contains(&selected.destination.as_str())
+            {
+                continue;
+            }
             let kind = kind_of(&selected.destination).ok_or_else(|| {
                 anyhow::anyhow!(
                     "the embedded sources do not classify {}; the kind table is stale",
@@ -427,11 +432,12 @@ impl Kind {
 /// OIDC permission, so release-kit owns them; the tool configurations are
 /// per-project judgment; the two state files are rewritten by the release
 /// automation itself.
-const KINDS: [(&str, Kind); 16] = [
+const KINDS: [(&str, Kind); 17] = [
     (".github/workflows/release-plz.yml", Kind::Rendered),
     (".github/workflows/release-please.yml", Kind::Rendered),
     (".github/workflows/release.yml", Kind::Rendered),
     (".github/workflows/pr-title.yml", Kind::Rendered),
+    (".github/workflows/scorecard.yml", Kind::Rendered),
     (".gitlab-ci.yml", Kind::Rendered),
     ("SECURITY.md", Kind::Rendered),
     (".gitlab/ci/mr-title.yml", Kind::Rendered),
@@ -467,6 +473,22 @@ pub const NIX_DESTINATIONS: [&str; 3] = ["nix/package.nix", "flake.nix", "flake.
 /// The seeded package expression is not in it: it lands either way, as
 /// the starting point the target integrates by hand.
 pub const NIX_WITHHOLDABLE: [&str; 2] = ["flake.nix", "flake.lock"];
+
+/// The destinations of the opt-in Scorecard capability, present in a
+/// projection only where the landing's `scorecard` parameter is on.
+///
+/// The parameter is recorded for the reason [`NIX_DESTINATIONS`] states:
+/// an absent file under `scorecard = false` is not wanted, never drifted.
+/// The capability is GitHub's alone, so the shared GitLab zone ships no
+/// counterpart and a GitLab landing projects nothing for it, whatever the
+/// parameter says. A Scorecard run needs no forge setting on a public
+/// repository, so the capability adds no setup step and cannot conflict
+/// with `forge-setup:every-supported-forge-runs-every-step`.
+///
+/// The file is `rendered`: its bytes carry the recorded trunk and nothing a
+/// target is expected to tune, so release-kit owns them and an edit is
+/// drift.
+pub const SCORECARD_DESTINATIONS: [&str; 1] = [".github/workflows/scorecard.yml"];
 
 /// The declared kind of a destination, or `None` for a file the sources
 /// does not classify.
@@ -1340,6 +1362,42 @@ mod tests {
         assert_eq!(destinations, sorted, "candidates sort by destination");
         assert!(a.omissions.is_empty(), "{:?}", a.omissions);
         assert!(a.collisions.is_empty(), "{:?}", a.collisions);
+    }
+
+    /// The Scorecard destination is classified, gated by its parameter
+    /// alone, and rendered: the pure projection answers the capability
+    /// with no target read and no forge call.
+    #[test]
+    fn the_scorecard_destination_projects_only_under_the_opt_in() {
+        use super::{Kind, SCORECARD_DESTINATIONS, kind_of};
+        let destination = SCORECARD_DESTINATIONS[0];
+        assert_eq!(kind_of(destination), Some(Kind::Rendered));
+
+        let project = |scorecard: bool| {
+            let mut params = Params::for_test("acme/widget", Some(Style::Trunk));
+            params.set_scorecard_for_test(scorecard);
+            Projection::compute(&ProjectionInput {
+                params,
+                evidence: TargetEvidence::default(),
+            })
+            .expect("the embedded pair projects")
+        };
+
+        let off = project(false);
+        assert!(
+            !off.candidates
+                .iter()
+                .any(|candidate| candidate.destination == destination),
+            "off by default, and an absent candidate is no omission"
+        );
+        assert!(off.omissions.is_empty(), "{:?}", off.omissions);
+
+        let on = project(true);
+        let candidate = candidate(&on, destination);
+        assert_eq!(candidate.kind, Kind::Rendered);
+        assert_eq!(candidate.placement, Placement::Whole);
+        let text = String::from_utf8_lossy(&candidate.bytes);
+        assert!(!text.contains("RK_"), "a token survived: {text}");
     }
 
     /// The pure boundary, held by a source scan over this file's

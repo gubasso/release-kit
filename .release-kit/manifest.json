@@ -1,6 +1,6 @@
 {
-  "schema_version": 7,
-  "rk_version": "0.5.0",
+  "schema_version": 8,
+  "rk_version": "0.6.0",
   "origin": "adopt",
   "tech": "rust",
   "forge": "github",
@@ -10,6 +10,7 @@
     "workflow": "worktree",
     "style": "trunk",
     "nix": false,
+    "scorecard": false,
     "trunk": "master",
     "line_prefix": "release/",
     "security_contact": "",
@@ -74,6 +75,7 @@
     "nix-installer-action": "19",
     "pre-commit-hooks": "6.0.0",
     "release-plz": "0.3.160",
-    "rust-toolchain": "stable"
+    "rust-toolchain": "stable",
+    "scorecard-action": "2.4.4"
   }
 }

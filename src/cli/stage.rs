@@ -48,6 +48,10 @@ pub struct StageArgs {
     #[arg(long)]
     pub nix: bool,
 
+    /// Stage the Scorecard capability too.
+    #[arg(long)]
+    pub scorecard: bool,
+
     /// The exact directory to stage into; it must be absent or empty.
     /// Without it, a target and version directory below `RK_STAGE_ROOT`,
     /// else below the private state root.
