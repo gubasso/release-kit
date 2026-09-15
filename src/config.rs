@@ -938,19 +938,316 @@ pub fn rewrite_key(target: &Path, key: &str, value: toml_edit::Value) -> Result<
 /// The text with `key` set to `value`, or removed where `value` is
 /// `None`, every other byte kept. A schema 1 text migrates first.
 fn rewrite_text(text: &str, key: &str, value: Option<toml_edit::Value>) -> Result<String, RkError> {
-    if !PARAMETER_KEYS.contains(&key) {
-        return Err(invalid(format!("{key} is not a landing parameter")));
+    rewrite_all(text, vec![(key, value)])
+}
+
+/// The text with every named key set or removed in one document, every
+/// other byte kept. A schema 1 text migrates first.
+///
+/// One document rather than one per key, because the answers are one
+/// decision: writing `profile.release.mode = "none"` before removing the
+/// driver it retires would make an intermediate text the reader rejects,
+/// and an operator would have no command that performs the transition.
+fn rewrite_all(
+    text: &str,
+    values: Vec<(&str, Option<toml_edit::Value>)>,
+) -> Result<String, RkError> {
+    for (key, _) in &values {
+        if !PARAMETER_KEYS.contains(key) {
+            return Err(invalid(format!("{key} is not a landing parameter")));
+        }
     }
     parse(text)?;
     let text = current_text(text)?;
     let mut document = text
         .parse::<toml_edit::DocumentMut>()
         .map_err(|error| invalid(error.to_string()))?;
+    let mut changed = false;
+    // Only a table this call emptied may be pruned, so the names come from
+    // the removals rather than from the whole key list.
+    let mut emptied: Vec<&str> = Vec::new();
+    for (key, value) in values {
+        let removing = value.is_none();
+        let applied = apply_key(&mut document, key, value)?;
+        changed |= applied;
+        if applied
+            && removing
+            && let Some(parent) = key.split('.').next()
+        {
+            emptied.push(parent);
+        }
+    }
+    changed |= prune_empty_tables(&mut document, &emptied);
+    if !changed {
+        return Ok(text);
+    }
+    let next = document.to_string();
+    parse(&next)?;
+    Ok(next)
+}
+
+/// Drop the named tables that are now empty, answering whether the
+/// document changed.
+///
+/// `target-config:an-unanswered-key-is-absent-and-not-empty` asks the
+/// writer to leave out a table every one of whose keys it omitted, and the
+/// fresh render already does. This is the same rule on the update path,
+/// which edits authored text instead: without it a target that drops its
+/// forge keeps a bare `[project]` header, and the two writers disagree
+/// about one resolved answer.
+///
+/// Only the named tables, because a table the operator authored empty is
+/// theirs and this writer emptied nothing in it.
+///
+/// Every comment the removed header carried, standing above it or inline
+/// beside it, moves to the next table, or to the end of the file where the
+/// removed table was last. The header is this binary's; the comment may be
+/// the operator's, and an upgrade that silently deleted one would be
+/// losing authored text.
+pub(crate) fn prune_empty_tables(document: &mut toml_edit::DocumentMut, names: &[&str]) -> bool {
+    let order: Vec<String> = document
+        .as_table()
+        .iter()
+        .map(|(key, _)| key.to_owned())
+        .collect();
+    let mut changed = false;
+    for (index, name) in order.iter().enumerate() {
+        if !names.contains(&name.as_str())
+            || !document
+                .get(name)
+                .and_then(toml_edit::Item::as_table)
+                .is_some_and(toml_edit::Table::is_empty)
+        {
+            continue;
+        }
+        let carried = document
+            .get(name)
+            .and_then(toml_edit::Item::as_table)
+            .and_then(|table| carried_comment(table.decor()));
+        document.remove(name);
+        changed = true;
+        let Some(carried) = carried else { continue };
+        // The next header the file actually prints: an implicit table
+        // emits no header of its own, so its decor would take the comment
+        // out of the rendered text with it.
+        let next = order
+            .iter()
+            .skip(index + 1)
+            .find(|name| {
+                document
+                    .get(name)
+                    .and_then(toml_edit::Item::as_table)
+                    .is_some_and(|table| !table.is_implicit())
+            })
+            .cloned();
+        if let Some(next) = next
+            && let Some(table) = document
+                .get_mut(&next)
+                .and_then(toml_edit::Item::as_table_mut)
+        {
+            let existing = table
+                .decor()
+                .prefix()
+                .and_then(toml_edit::RawString::as_str)
+                .unwrap_or_default()
+                .trim_start_matches('\n')
+                .to_owned();
+            table
+                .decor_mut()
+                .set_prefix(format!("\n{carried}{existing}"));
+        } else {
+            let mut trailing = document.trailing().as_str().unwrap_or_default().to_owned();
+            if !trailing.is_empty() && !trailing.ends_with('\n') {
+                trailing.push('\n');
+            }
+            trailing.push_str(&carried);
+            document.set_trailing(trailing);
+        }
+    }
+    changed
+}
+
+/// Every comment in a decor, one per line, or `None` where it carries
+/// none.
+///
+/// An inline comment beside a header becomes a free-standing line, because
+/// the header it sat beside is going and a comment needs a line of its own
+/// to survive.
+fn carried_comment(decor: &toml_edit::Decor) -> Option<String> {
+    let mut lines = String::new();
+    for raw in [decor.prefix(), decor.suffix()] {
+        let Some(text) = raw.and_then(toml_edit::RawString::as_str) else {
+            continue;
+        };
+        for line in text
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.starts_with('#'))
+            .filter(|line| !is_template_comment(line))
+        {
+            lines.push_str(line);
+            lines.push('\n');
+        }
+    }
+    (!lines.is_empty()).then_some(lines)
+}
+
+/// Whether the comment is the template's own rather than the operator's.
+///
+/// The template marks every comment it writes with the class of the key it
+/// sits beside: `# P:` a landing parameter, `# N:` a free name, `# F:` an
+/// invariant floor. A comment for a key that is going describes nothing
+/// once the key is gone, so it goes too, while anything the operator wrote
+/// is carried. `refresh_comment` owns the same three markers on the
+/// migration path.
+fn is_template_comment(line: &str) -> bool {
+    let rest = line.trim_start_matches('#').trim_start();
+    ["P:", "N:", "F:"]
+        .iter()
+        .any(|marker| rest.starts_with(marker))
+}
+
+/// Put carried comment lines where the rendered file will still show
+/// them: above the first header it prints, or at its end where it prints
+/// none.
+///
+/// The last resort for text whose own domain is not rendered. A comment
+/// with no home is still the operator's, and the end of the file is where
+/// it survives.
+pub(crate) fn place_carried(document: &mut toml_edit::DocumentMut, carried: &str) {
+    let first = document
+        .as_table()
+        .iter()
+        .find(|(_, item)| item.as_table().is_some_and(|table| !table.is_implicit()))
+        .map(|(name, _)| name.to_owned());
+    if let Some(first) = first
+        && let Some(table) = document
+            .get_mut(&first)
+            .and_then(toml_edit::Item::as_table_mut)
+    {
+        let existing = table
+            .decor()
+            .prefix()
+            .and_then(toml_edit::RawString::as_str)
+            .unwrap_or_default()
+            .trim_start_matches('\n')
+            .to_owned();
+        table
+            .decor_mut()
+            .set_prefix(format!("\n{carried}{existing}"));
+        return;
+    }
+    let mut trailing = document.trailing().as_str().unwrap_or_default().to_owned();
+    if !trailing.is_empty() && !trailing.ends_with('\n') {
+        trailing.push('\n');
+    }
+    trailing.push_str(carried);
+    document.set_trailing(trailing);
+}
+
+/// The operator's comments standing above `key`, or `None` where it
+/// carries none.
+///
+/// Read before a move, so the comment travels with the value it describes
+/// rather than staying beside a key that is gone.
+pub(crate) fn key_comments(table: &toml_edit::Table, key: &str) -> Option<String> {
+    let (name, _) = table.get_key_value(key)?;
+    carried_comment(name.leaf_decor())
+}
+
+/// Put `carried` above `key`, keeping whatever decor it already has.
+pub(crate) fn set_key_comments(table: &mut toml_edit::Table, key: &str, carried: &str) {
+    let Some(mut name) = table.key_mut(key) else {
+        return;
+    };
+    let decor = name.leaf_decor_mut();
+    let existing = decor
+        .prefix()
+        .and_then(toml_edit::RawString::as_str)
+        .unwrap_or_default()
+        .trim_start_matches('\n')
+        .to_owned();
+    decor.set_prefix(format!("\n{carried}{existing}"));
+}
+
+/// The nearest known name to `unknown`, for a refusal that helps.
+#[must_use]
+pub(crate) fn nearest_known<'a>(unknown: &str, known: &[&'a str]) -> Option<&'a str> {
+    known
+        .iter()
+        .min_by_key(|name| distance(unknown, name))
+        .copied()
+}
+
+/// The operator's comments standing on a table's own header, removed from
+/// it.
+pub(crate) fn take_header_comments(table: &mut toml_edit::Table) -> Option<String> {
+    let carried = carried_comment(table.decor())?;
+    table.decor_mut().set_prefix("\n");
+    Some(carried)
+}
+
+/// Remove `key` from `table`, answering the operator's comments it
+/// carried.
+///
+/// A comment the operator wrote above or beside a key outlives the answer
+/// it described: `project-profile:a-schema-one-configuration-migrates-in-place`
+/// asks for every free-standing comment to survive, and an upgrade that
+/// retires a key is the same promise on the other writer. The comments
+/// move to the table's own header, where they read as a note on the domain
+/// the key belonged to, and travel further with that header if the table
+/// itself empties.
+pub(crate) fn take_comments(table: &mut toml_edit::Table, key: &str) -> bool {
+    let carried = table.get_key_value(key).and_then(|(name, item)| {
+        let mut lines = carried_comment(name.leaf_decor()).unwrap_or_default();
+        if let Some(value) = item.as_value()
+            && let Some(more) = carried_comment(value.decor())
+        {
+            lines.push_str(&more);
+        }
+        (!lines.is_empty()).then_some(lines)
+    });
+    let removed = table.remove(key).is_some();
+    if let Some(carried) = carried {
+        let existing = table
+            .decor()
+            .prefix()
+            .and_then(toml_edit::RawString::as_str)
+            .unwrap_or_default()
+            .trim_start_matches('\n')
+            .to_owned();
+        table
+            .decor_mut()
+            .set_prefix(format!("\n{carried}{existing}"));
+    }
+    removed
+}
+
+/// Set or remove one key in an open document, answering whether the
+/// document changed. No validation: the caller validates the whole.
+fn apply_key(
+    document: &mut toml_edit::DocumentMut,
+    key: &str,
+    value: Option<toml_edit::Value>,
+) -> Result<bool, RkError> {
     let segments: Vec<&str> = key.split('.').collect();
     // Every key in `PARAMETER_KEYS` has at least one segment, so the split
     // answers; a key that did not would have refused above.
     let Some((last, parents)) = segments.split_last() else {
         return Err(invalid(format!("{key} names no key")));
+    };
+    let Some(mut value) = value else {
+        let mut item = document.as_item_mut();
+        for segment in parents {
+            if item.get(segment).is_none() {
+                return Ok(false);
+            }
+            item = &mut item[segment];
+        }
+        let removed = item
+            .as_table_mut()
+            .is_some_and(|table| take_comments(table, last));
+        return Ok(removed);
     };
     let mut item = document.as_item_mut();
     for segment in parents {
@@ -961,24 +1258,14 @@ fn rewrite_text(text: &str, key: &str, value: Option<toml_edit::Value>) -> Resul
         }
         item = &mut item[segment];
     }
-    let Some(mut value) = value else {
-        if let Some(table) = item.as_table_like_mut() {
-            table.remove(last);
-        }
-        let next = document.to_string();
-        parse(&next)?;
-        return Ok(next);
-    };
     if let Some(old) = item.get(last).and_then(toml_edit::Item::as_value) {
         if old.to_string().trim() == value.to_string().trim() {
-            return Ok(text);
+            return Ok(false);
         }
         *value.decor_mut() = old.decor().clone();
     }
     item[last] = toml_edit::Item::Value(value);
-    let next = document.to_string();
-    parse(&next)?;
-    Ok(next)
+    Ok(true)
 }
 
 /// Resolved landing input, including every key a preview would write.
@@ -1052,11 +1339,7 @@ impl Plan {
         resolved.security.contact = Some(params.security_contact().to_owned());
         resolved.security.response = Some(params.security_response().to_owned());
         let content = if let Some(text) = text.filter(|_| existing.is_some()) {
-            let mut text = current_text(text)?;
-            for (key, value) in parameter_values(&resolved) {
-                text = rewrite_text(&text, key, value)?;
-            }
-            text
+            rewrite_all(text, parameter_values(&resolved))?
         } else {
             String::from_utf8(render(&resolved)?).map_err(|e| invalid(e.to_string()))?
         };
@@ -1688,5 +1971,87 @@ mod tests {
             .expect_err("the reader refuses it too")
             .to_string();
         assert!(refusal.contains("security.response"), "{refusal}");
+    }
+
+    /// SATISFIES target-config:an-unanswered-key-is-absent-and-not-empty
+    /// A header whose every key the writer omitted goes, and every comment
+    /// it carried survives: standing above it, standing beside it, and in
+    /// either position when the emptied table is the file's last.
+    #[test]
+    fn a_pruned_header_leaves_no_comment_behind() {
+        let cases = [
+            (
+                "a middle table, comment above",
+                "schema_version = 2\n\n# the operator's note\n[project]\nrepo = \"acme/widget\"\n\n[git]\ntrunk = \"main\"\n",
+            ),
+            (
+                "a middle table, comment inline",
+                "schema_version = 2\n\n[project] # the operator's note\nrepo = \"acme/widget\"\n\n[git]\ntrunk = \"main\"\n",
+            ),
+            (
+                "the last table, comment above",
+                "schema_version = 2\n\n[git]\ntrunk = \"main\"\n\n# the operator's note\n[project]\nrepo = \"acme/widget\"\n",
+            ),
+            (
+                "the last table, comment inline",
+                "schema_version = 2\n\n[git]\ntrunk = \"main\"\n\n[project] # the operator's note\nrepo = \"acme/widget\"\n",
+            ),
+        ];
+        for (case, text) in cases {
+            let next = super::rewrite_text(text, "project.repo", None).expect("the key removes");
+            assert!(!next.contains("repo ="), "{case}: {next}");
+            assert!(
+                !next.contains("[project]"),
+                "{case}: a table every one of whose keys dropped goes with them: {next}"
+            );
+            assert!(
+                next.contains("# the operator's note"),
+                "{case}: the comment the header carried survives: {next}"
+            );
+            parse(&next).unwrap_or_else(|error| panic!("{case}: {error}"));
+        }
+    }
+
+    /// SATISFIES target-config:a-flag-overrides-and-a-landing-writes-back
+    /// A key the writer retires takes the template's own comment with it
+    /// and leaves the operator's behind, on the header of the domain the
+    /// key belonged to. The template comment describes a key that is gone;
+    /// the operator's comment is authored text this writer does not delete.
+    #[test]
+    fn a_retired_key_drops_the_template_comment_and_keeps_the_operators() {
+        let text = concat!(
+            "schema_version = 2\n\n[project]\n",
+            "# the operator's note\n",
+            "repo = \"acme/widget\" # P: project path on the forge\n\n",
+            "[git]\ntrunk = \"main\"\n"
+        );
+        let next = super::rewrite_text(text, "project.repo", None).expect("the key removes");
+        assert!(!next.contains("repo ="), "{next}");
+        assert!(!next.contains("[project]"), "{next}");
+        assert!(
+            next.contains("# the operator's note"),
+            "authored text survives: {next}"
+        );
+        assert!(
+            !next.contains("# P:"),
+            "the template's comment describes a key that is gone: {next}"
+        );
+        parse(&next).expect("the result parses");
+
+        // A domain that keeps other keys keeps the note on its own header.
+        let text = concat!(
+            "schema_version = 2\n\n[profile]\ntechnologies = [\"rust\"]\n\n",
+            "[profile.release]\nmode = \"automatic\"\ndriver = \"rust\"\n",
+            "# why this project names its own prefix\n",
+            "line_prefix = \"stable/\"\n"
+        );
+        let next = super::rewrite_text(text, "profile.release.line_prefix", None)
+            .expect("the key removes");
+        assert!(!next.contains("line_prefix ="), "{next}");
+        assert!(next.contains("[profile.release]"), "{next}");
+        assert!(
+            next.contains("# why this project names its own prefix"),
+            "authored text survives: {next}"
+        );
     }
 }
