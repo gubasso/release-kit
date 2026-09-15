@@ -8,4 +8,4 @@
 # a forgotten file.
 
 since = "0.3.18"
-no_steps = []
+no_steps = ["0.7.1"]

@@ -147,10 +147,35 @@ fn record_params(
     nix: bool,
     repo: &str,
 ) -> release_kit::landing::Params {
+    use release_kit::profile::CapabilityRequests;
+    params_requesting(
+        driver,
+        forge,
+        checkout_mode,
+        style,
+        repo,
+        CapabilityRequests {
+            nix_packaging: nix,
+            reporting_policy: true,
+            scorecard: false,
+            code_scanning: None,
+        },
+    )
+}
+
+/// The same parameter set, with the capability requests stated rather
+/// than defaulted, so a fixture can project an opt-in capability no
+/// ordinary combination requests.
+fn params_requesting(
+    driver: &str,
+    forge: &str,
+    checkout_mode: release_kit::landing::CheckoutMode,
+    style: Option<release_kit::landing::Style>,
+    repo: &str,
+    capabilities: release_kit::profile::CapabilityRequests,
+) -> release_kit::landing::Params {
     use release_kit::landing::manifest::{Manifest, Parameters, SCHEMA_VERSION};
-    use release_kit::profile::{
-        CapabilityRequests, GitWorkflow, ProfileSnapshot, ReleaseIntent, ReleaseMode,
-    };
+    use release_kit::profile::{GitWorkflow, ProfileSnapshot, ReleaseIntent, ReleaseMode};
     release_kit::landing::Params::from_record(&Manifest {
         schema_version: SCHEMA_VERSION,
         rk_version: "0.0.0".to_owned(),
@@ -170,12 +195,7 @@ fn record_params(
             trunk: release_kit::config::TRUNK_DEFAULT.to_owned(),
             checkout_mode,
         },
-        capabilities: CapabilityRequests {
-            nix_packaging: nix,
-            reporting_policy: true,
-            scorecard: false,
-            code_scanning: None,
-        },
+        capabilities,
         parameters: Parameters {
             repo: repo.to_owned(),
             security_contact: String::new(),
@@ -24236,6 +24256,176 @@ fn a_fresh_rust_landing_advertises_only_x86_64_linux() {
     );
 }
 
+/// One candidate's signature line, once its kind, its placement, and its
+/// sources answer for themselves.
+fn candidate_signature_line(candidate: &release_kit::projection::Candidate, label: &str) -> String {
+    use release_kit::landing;
+    use release_kit::projection::Placement;
+
+    let at = format!("{label} {}", candidate.destination);
+    assert_eq!(
+        Some(candidate.kind),
+        landing::kind_of(&candidate.destination),
+        "{at}: kind"
+    );
+    match candidate.placement {
+        Placement::Whole => {
+            assert!(
+                candidate.region.is_none(),
+                "{at}: a whole file has no region"
+            );
+            assert!(
+                landing::block_markers(&candidate.destination).is_none(),
+                "{at}: a whole file at a marked destination"
+            );
+        }
+        Placement::Region { begin, end } => {
+            let region = candidate.region.as_deref().expect("a region renders");
+            let text = String::from_utf8_lossy(&candidate.bytes);
+            assert_eq!(
+                landing::extract_block(&text, begin, end).map(str::as_bytes),
+                Some(region),
+                "{at}: the document carries the region"
+            );
+            assert_eq!(
+                landing::block_markers(&candidate.destination),
+                Some((begin, end)),
+                "{at}: markers"
+            );
+        }
+    }
+    assert!(!candidate.sources.is_empty(), "{at}: no source");
+    format!(
+        "{label} {} {}",
+        candidate.destination,
+        release_kit::digest::Digest::of(&candidate.bytes)
+    )
+}
+
+/// The signature lines of the opt-in capabilities, which no ordinary
+/// fixture combination requests. Each row states one request, and the
+/// fifth column names it where an ordinary line names the Nix shape, so
+/// every line in the fixture keeps one shape.
+fn opt_in_signature_lines() -> Vec<String> {
+    use release_kit::landing::manifest::Provider;
+    use release_kit::landing::{CheckoutMode, Style};
+    use release_kit::profile::CapabilityRequests;
+    use release_kit::projection::{Projection, ProjectionInput};
+
+    let mut out = Vec::new();
+    for (driver, forge, column, scorecard, code_scanning) in [
+        ("rust", "github", "scorecard", true, None),
+        ("rust", "github", "codeql", false, Some(Provider::CodeQl)),
+        ("rust", "github", "semgrep", false, Some(Provider::Semgrep)),
+        ("rust", "gitlab", "semgrep", false, Some(Provider::Semgrep)),
+    ] {
+        let params = params_requesting(
+            driver,
+            forge,
+            CheckoutMode::LinkedWorktree,
+            Some(Style::Trunk),
+            "acme/widget",
+            CapabilityRequests {
+                nix_packaging: false,
+                reporting_policy: true,
+                scorecard,
+                code_scanning,
+            },
+        );
+        let projection = Projection::compute(&ProjectionInput {
+            params,
+            evidence: NixShape::Supported.evidence(),
+        })
+        .expect("the opt-in pair projects");
+        let selected: Vec<&release_kit::projection::Candidate> = projection
+            .candidates
+            .iter()
+            .filter(|candidate| {
+                candidate.destination.contains("scorecard")
+                    || candidate.destination.contains("code-scanning")
+            })
+            .collect();
+        assert!(
+            !selected.is_empty(),
+            "{driver} {forge} {column}: the request selected no destination"
+        );
+        for candidate in selected {
+            out.push(format!(
+                "{driver} {forge} linked-worktree trunk {column} {} {}",
+                candidate.destination,
+                release_kit::digest::Digest::of(&candidate.bytes)
+            ));
+        }
+    }
+    out
+}
+
+/// The signature line of the landed record. The record carries the
+/// producing version and the landing instant, so the fixture fixes both
+/// by construction: what it pins is the renderer's shape, which a schema
+/// number can stand still through.
+fn landed_record_signature_line() -> String {
+    use release_kit::digest::Digest;
+    use release_kit::landing::manifest::{
+        FileRecord, MANIFEST_PATH, Manifest, Parameters, Placement, SCHEMA_VERSION, render,
+    };
+    use release_kit::landing::{CheckoutMode, Kind, Style};
+    use release_kit::profile::{
+        CapabilityRequests, GitWorkflow, ProfileSnapshot, ReleaseIntent, ReleaseMode,
+    };
+
+    let manifest = Manifest {
+        schema_version: SCHEMA_VERSION,
+        rk_version: "0.0.0".to_owned(),
+        origin: "init".to_owned(),
+        landed_at: "2026-08-29T00:00:00Z".to_owned(),
+        profile: ProfileSnapshot {
+            technologies: vec!["rust".to_owned()],
+            forge: Some("github".to_owned()),
+            release: ReleaseIntent {
+                mode: ReleaseMode::Automatic,
+                driver: Some("rust".to_owned()),
+                style: Some(Style::Trunk),
+                line_prefix: Some(release_kit::config::LINE_PREFIX_DEFAULT.to_owned()),
+            },
+        },
+        git: GitWorkflow {
+            trunk: release_kit::config::TRUNK_DEFAULT.to_owned(),
+            checkout_mode: CheckoutMode::LinkedWorktree,
+        },
+        capabilities: CapabilityRequests {
+            nix_packaging: false,
+            reporting_policy: true,
+            scorecard: false,
+            code_scanning: None,
+        },
+        parameters: Parameters {
+            repo: "acme/widget".to_owned(),
+            security_contact: String::new(),
+            security_response: release_kit::config::RESPONSE_DEFAULT.to_owned(),
+        },
+        files: vec![
+            FileRecord {
+                destination: "AGENTS.md".to_owned(),
+                kind: Kind::Rendered,
+                sha256: Digest::of(b"a region"),
+                placement: Placement::Region,
+            },
+            FileRecord {
+                destination: "release-plz.toml".to_owned(),
+                kind: Kind::Seeded,
+                sha256: Digest::of(b"a seed"),
+                placement: Placement::Whole,
+            },
+        ],
+        pins: std::collections::BTreeMap::from([("pre-commit".to_owned(), "4.5.1".to_owned())]),
+    };
+    format!(
+        "rust github linked-worktree trunk record-schema-{SCHEMA_VERSION} {MANIFEST_PATH} {}",
+        Digest::of(&render(&manifest).expect("the record renders"))
+    )
+}
+
 /// Every current fixture combination projects, with no collision over an
 /// empty target, whole-file candidates carrying no region, region
 /// candidates carrying the markers their destination declares, and every
@@ -24245,14 +24435,14 @@ fn a_fresh_rust_landing_advertises_only_x86_64_linux() {
 /// bytes updates the fixture deliberately.
 #[test]
 fn every_current_landing_fixture_keeps_its_destinations_kinds_placement_and_digests() {
-    use release_kit::landing;
-    use release_kit::projection::{Placement, Projection, ProjectionInput};
+    use release_kit::projection::{Projection, ProjectionInput};
 
     let mut lines = Vec::new();
     for (tech, forge, workflow, style, nix) in projection_fixture_combinations() {
         let shape = nix.unwrap_or(NixShape::Supported);
+        let params = projection_params(&tech, &forge, workflow, style, nix.is_some());
         let projection = Projection::compute(&ProjectionInput {
-            params: projection_params(&tech, &forge, workflow, style, nix.is_some()),
+            params: params.clone(),
             evidence: shape.evidence(),
         })
         .expect("the pair projects");
@@ -24280,46 +24470,22 @@ fn every_current_landing_fixture_keeps_its_destinations_kinds_placement_and_dige
             "{label}: candidates sort by destination"
         );
         for candidate in &projection.candidates {
-            let at = format!("{label} {}", candidate.destination);
-            assert_eq!(
-                Some(candidate.kind),
-                landing::kind_of(&candidate.destination),
-                "{at}: kind"
-            );
-            match candidate.placement {
-                Placement::Whole => {
-                    assert!(
-                        candidate.region.is_none(),
-                        "{at}: a whole file has no region"
-                    );
-                    assert!(
-                        landing::block_markers(&candidate.destination).is_none(),
-                        "{at}: a whole file at a marked destination"
-                    );
-                }
-                Placement::Region { begin, end } => {
-                    let region = candidate.region.as_deref().expect("a region renders");
-                    let text = String::from_utf8_lossy(&candidate.bytes);
-                    assert_eq!(
-                        landing::extract_block(&text, begin, end).map(str::as_bytes),
-                        Some(region),
-                        "{at}: the document carries the region"
-                    );
-                    assert_eq!(
-                        landing::block_markers(&candidate.destination),
-                        Some((begin, end)),
-                        "{at}: markers"
-                    );
-                }
-            }
-            assert!(!candidate.sources.is_empty(), "{at}: no source");
-            lines.push(format!(
-                "{label} {} {}",
-                candidate.destination,
-                release_kit::digest::Digest::of(&candidate.bytes)
-            ));
+            lines.push(candidate_signature_line(candidate, &label));
         }
+        // The configuration is a landed file the projection does not
+        // carry: the landing composes it from the parameters alone. Its
+        // bytes belong to the signature for the same reason a candidate's
+        // do, so a renderer change moves the fixture.
+        let plan = release_kit::config::Plan::compose(None, &params, None, None)
+            .expect("the configuration composes from the parameters alone");
+        lines.push(format!(
+            "{label} {} {}",
+            release_kit::config::CONFIG_PATH,
+            release_kit::digest::Digest::of(plan.content.as_bytes())
+        ));
     }
+    lines.extend(opt_in_signature_lines());
+    lines.push(landed_record_signature_line());
     let text = format!("{}\n", lines.join("\n"));
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/projection-digests.txt");
@@ -28471,6 +28637,11 @@ fn version_at(value: &str, at: &str) -> [u64; 3] {
     parse_version(value).unwrap_or_else(|why| panic!("{at}: {why}"))
 }
 
+/// The signature of everything a landing writes into a target: one line
+/// per destination per fixture combination, carrying the digest of the
+/// bytes that destination receives.
+const LANDED_SIGNATURE: &str = "tests/fixtures/projection-digests.txt";
+
 /// The rule the authoring gate holds, cited in every failure it prints.
 const GUIDANCE_RULE: &str = "distribution:guidance-names-the-version-the-release-mints";
 
@@ -28618,22 +28789,20 @@ fn a_release_changing_a_destination_without_guidance_is_named() {
     }
     let tag = String::from_utf8_lossy(&describe.stdout).trim().to_owned();
     let tag_version = tag.trim_start_matches('v').to_owned();
-    // What lands in a target: the snippets, and the blocks the landing
-    // splices or writes. A fragment a verb prints and a skill root land
-    // nowhere.
+    // The landed surface, as one observable signature rather than a list
+    // of the sources that feed it. Every destination a landing writes has
+    // a digest in the fixture, the state files included, and the fixture
+    // regenerates only under RK_UPDATE_FIXTURES=1. So the fixture moves
+    // exactly when a target would receive different bytes, whichever
+    // source produced them: a snippet, a block, the projection, the
+    // configuration renderer, or the record renderer. A path list walks
+    // past all but the first two.
     let diff = git(&[
         "diff",
         "--name-only",
         &format!("{tag}..HEAD"),
         "--",
-        "snippets",
-        "blocks/agents-block.md.in",
-        "blocks/agents-line-worktree.md.in",
-        "blocks/agents-line-branches.md.in",
-        "blocks/glossary.md.in",
-        "blocks/pre-commit-block.yaml.in",
-        "blocks/pre-commit-worktree-guard.yaml.in",
-        "blocks/target-config.toml.in",
+        LANDED_SIGNATURE,
     ]);
     assert!(
         diff.status.success(),
@@ -28675,6 +28844,68 @@ fn guidance_coverage() -> Vec<(String, String)> {
                 .map(|version| (version, "guidance/index.toml no_steps".to_owned())),
         )
         .collect()
+}
+
+/// The signature covers every destination a landing declares, the two
+/// state files included. A destination missing from it is one whose bytes
+/// can change without the authoring gate ever asking for guidance.
+#[test]
+fn the_signature_covers_every_landed_destination() {
+    let fixture =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(LANDED_SIGNATURE))
+            .expect("the landed surface signature reads");
+    let covered: std::collections::BTreeSet<&str> = fixture
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace().rev();
+            fields.next();
+            fields.next()
+        })
+        .collect();
+    for destination in release_kit::projection::destinations().chain([
+        release_kit::config::CONFIG_PATH,
+        release_kit::landing::manifest::MANIFEST_PATH,
+    ]) {
+        assert!(
+            covered.contains(destination),
+            "{destination}: the landed surface signature does not cover it, so a release could change its bytes and the authoring gate would ask for no guidance"
+        );
+    }
+}
+
+/// The two landed state files the projection does not carry are pinned by
+/// their bytes rather than by their schema number, because a renderer can
+/// change what a target receives while the number stands still.
+#[test]
+fn the_landed_state_bytes_are_pinned_in_the_signature() {
+    use release_kit::landing::{CheckoutMode, Style};
+
+    let fixture =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(LANDED_SIGNATURE))
+            .expect("the landed surface signature reads");
+    let params = projection_params(
+        "rust",
+        "github",
+        CheckoutMode::LinkedWorktree,
+        Style::Trunk,
+        false,
+    );
+    let plan = release_kit::config::Plan::compose(None, &params, None, None)
+        .expect("the configuration composes");
+    let configuration = format!(
+        "rust github linked-worktree trunk false {} {}",
+        release_kit::config::CONFIG_PATH,
+        release_kit::digest::Digest::of(plan.content.as_bytes())
+    );
+    assert!(
+        fixture.lines().any(|line| line == configuration),
+        "the rendered configuration is not the bytes the signature pins; a deliberate change reruns with RK_UPDATE_FIXTURES=1"
+    );
+    let record = landed_record_signature_line();
+    assert!(
+        fixture.lines().any(|line| line == record),
+        "the rendered record is not the bytes the signature pins; a deliberate change reruns with RK_UPDATE_FIXTURES=1"
+    );
 }
 
 /// The landed surface one table test states as changed.
