@@ -735,9 +735,13 @@ rust gitlab main-worktree lines withheld-flake nix/package.nix bd1537cc2c4ef5e46
 rust gitlab main-worktree lines withheld-flake release-plz.toml e935bc983876f765525d4f2e098e0d87b72086e2f85c9ecd46325ad2883d6b41
 rust gitlab main-worktree lines withheld-flake .release-kit/config.toml df9fcfb709de43d06deb10dbc0107182dc1c0645db1b754d743075bd1109dc0e
 rust github linked-worktree trunk scorecard .github/workflows/scorecard.yml de2668b9c620470dc5ec596e8c4c001072b4fbd84ef50a68094af6ab1d84ce37
+rust github linked-worktree trunk scorecard-record .release-kit/manifest.json 139d5bd26f05f36acc13322c5e3b4df46f868949e6729fefeb11cb9ded7afb92
 rust github linked-worktree trunk codeql .github/workflows/code-scanning-codeql.yml 3fd38dd485e2e40486144a3cc605e91730c18c1265cd27d7a07767b5b256a485
+rust github linked-worktree trunk codeql-record .release-kit/manifest.json 417c63c212db6cb5bd497fe7caa78a5b688dcb13ac2d3065f7adf163f8e3093c
 rust github linked-worktree trunk semgrep .github/workflows/code-scanning-semgrep.yml 2fccce241660a76b61c4c438ab746352d1da78b01d6f81582871daa436c501bc
+rust github linked-worktree trunk semgrep-record .release-kit/manifest.json 6a90b31f6c55730d638a1cc3967ef33b1ef23fd04456ef842c215e1934c01934
 rust gitlab linked-worktree trunk semgrep .gitlab/ci/code-scanning-semgrep.yml 90071cc03bce02d8625b45ad49192b067a502eec580808e1c0baec0ba35259d4
+rust gitlab linked-worktree trunk semgrep-record .release-kit/manifest.json 0ed84bbb5cec9f9c697ba4032a99d562b204cd909a7b23ebf78e6a34caed8c16
 rust github linked-worktree trunk occupied .pre-commit-config.yaml dd36703f5694107bf1cac856a8b713a35982388c7e15cb15ae902979fc5073e8
 rust github linked-worktree trunk occupied AGENTS.md 0a6aa803810f708bf3393d521e85859873e9e3bac382e894f3bf23581f0fa45a
 rust github linked-worktree trunk occupied GLOSSARY.md 37479f3bb21e0fd7775e70b52e1b4c09cecd045a061b074b87dec59b753652a7

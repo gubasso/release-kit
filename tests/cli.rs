@@ -24356,6 +24356,22 @@ fn opt_in_signature_lines() -> Vec<String> {
                 release_kit::digest::Digest::of(&candidate.bytes)
             ));
         }
+        // The record an opted-in target receives carries the pins its own
+        // selection asks for, so each request signs its own record. The
+        // ordinary record alone would let a pin selected for one of these
+        // capabilities change every opted-in target's record silently.
+        out.push(record_signature_line(
+            &format!("{driver} {forge} linked-worktree trunk {column}-record"),
+            driver,
+            forge,
+            CapabilityRequests {
+                nix_packaging: false,
+                reporting_policy: true,
+                scorecard,
+                code_scanning,
+            },
+            &projection.capabilities,
+        ));
     }
     out
 }
@@ -24425,13 +24441,19 @@ fn occupied_target_signature_lines() -> Vec<String> {
     out
 }
 
-/// The capabilities the representative record's pins are selected from:
-/// the same projection an ordinary fixture line signs.
-fn record_capabilities() -> Vec<release_kit::profile::catalog::Selection> {
+/// The signature line of the record an ordinary target receives.
+fn landed_record_signature_line() -> String {
     use release_kit::landing::{CheckoutMode, Style};
+    use release_kit::profile::CapabilityRequests;
     use release_kit::projection::{Projection, ProjectionInput};
 
-    Projection::compute(&ProjectionInput {
+    let requests = CapabilityRequests {
+        nix_packaging: false,
+        reporting_policy: true,
+        scorecard: false,
+        code_scanning: None,
+    };
+    let projection = Projection::compute(&ProjectionInput {
         params: projection_params(
             "rust",
             "github",
@@ -24441,23 +24463,36 @@ fn record_capabilities() -> Vec<release_kit::profile::catalog::Selection> {
         ),
         evidence: NixShape::Supported.evidence(),
     })
-    .expect("the representative pair projects")
-    .capabilities
+    .expect("the representative pair projects");
+    record_signature_line(
+        &format!(
+            "rust github linked-worktree trunk record-schema-{}",
+            release_kit::landing::manifest::SCHEMA_VERSION
+        ),
+        "rust",
+        "github",
+        requests,
+        &projection.capabilities,
+    )
 }
 
 /// The signature line of the landed record. The record carries the
 /// producing version and the landing instant, so the fixture fixes both
 /// by construction: what it pins is the renderer's shape, which a schema
 /// number can stand still through.
-fn landed_record_signature_line() -> String {
+fn record_signature_line(
+    label: &str,
+    driver: &str,
+    forge: &str,
+    requests: release_kit::profile::CapabilityRequests,
+    capabilities: &[release_kit::profile::catalog::Selection],
+) -> String {
     use release_kit::digest::Digest;
     use release_kit::landing::manifest::{
         FileRecord, MANIFEST_PATH, Manifest, Parameters, Placement, SCHEMA_VERSION, render,
     };
     use release_kit::landing::{CheckoutMode, Kind, Style};
-    use release_kit::profile::{
-        CapabilityRequests, GitWorkflow, ProfileSnapshot, ReleaseIntent, ReleaseMode,
-    };
+    use release_kit::profile::{GitWorkflow, ProfileSnapshot, ReleaseIntent, ReleaseMode};
 
     let manifest = Manifest {
         schema_version: SCHEMA_VERSION,
@@ -24465,11 +24500,11 @@ fn landed_record_signature_line() -> String {
         origin: "init".to_owned(),
         landed_at: "2026-08-29T00:00:00Z".to_owned(),
         profile: ProfileSnapshot {
-            technologies: vec!["rust".to_owned()],
-            forge: Some("github".to_owned()),
+            technologies: vec![driver.to_owned()],
+            forge: Some(forge.to_owned()),
             release: ReleaseIntent {
                 mode: ReleaseMode::Automatic,
-                driver: Some("rust".to_owned()),
+                driver: Some(driver.to_owned()),
                 style: Some(Style::Trunk),
                 line_prefix: Some(release_kit::config::LINE_PREFIX_DEFAULT.to_owned()),
             },
@@ -24478,12 +24513,7 @@ fn landed_record_signature_line() -> String {
             trunk: release_kit::config::TRUNK_DEFAULT.to_owned(),
             checkout_mode: CheckoutMode::LinkedWorktree,
         },
-        capabilities: CapabilityRequests {
-            nix_packaging: false,
-            reporting_policy: true,
-            scorecard: false,
-            code_scanning: None,
-        },
+        capabilities: requests,
         parameters: Parameters {
             repo: "acme/widget".to_owned(),
             security_contact: String::new(),
@@ -24507,13 +24537,13 @@ fn landed_record_signature_line() -> String {
         // pins a target records come from the registry and the selected
         // capabilities, so a pin bump or a selection change moves the
         // record at every target and must move the signature with it.
-        pins: release_kit::registry::pins_for(&record_capabilities())
+        pins: release_kit::registry::pins_for(capabilities)
             .into_iter()
             .map(|pin| (pin.name, pin.version))
             .collect(),
     };
     format!(
-        "rust github linked-worktree trunk record-schema-{SCHEMA_VERSION} {MANIFEST_PATH} {}",
+        "{label} {MANIFEST_PATH} {}",
         Digest::of(&render(&manifest).expect("the record renders"))
     )
 }
