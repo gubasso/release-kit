@@ -122,7 +122,7 @@ Verify: `cargo nextest run -E 'test(the_gate_invokes_the_manual_stage)'`
 
 ### `git:a-local-integration-is-a-transaction` — A local integration is a transaction
 
-A local integration MUST leave the trunk where it stood unless every check passed, and MUST reach that by publishing late rather than by undoing: it MUST gate before it builds, MUST build the squash commit as an object no ref names, and MUST publish it with one compare-and-swap carrying the trunk tip observed before the gate ran, so a trunk that moved under the gate refuses with nothing written and no tip to restore. It MUST observe the branch exactly once and use that one object for both the tree it integrates and the tip its evidence certifies. It MUST read and judge its evidence ledger before it builds anything. It MUST apply the whole landed `commit-msg` judgment to the trunk message, because the command that writes the commit fires no hook. It MUST take a lock so a second integration in the same clone refuses rather than waits, and it MUST never push and never force-push.
+A local integration MUST leave the trunk where it stood unless every check passed, and MUST reach that by publishing late rather than by undoing: it MUST gate before it builds, MUST build the squash commit as an object no ref names, and MUST publish it with one compare-and-swap carrying the trunk tip observed before the gate ran, so a trunk that moved under the gate refuses with nothing written and no tip to restore. It MUST observe the branch before the gate, use that one object for both the tree it integrates and the tip its evidence certifies, and re-observe it after the gate, refusing on any movement, so the tree the gate judged is the tree that reaches the trunk. It MUST read and judge its evidence ledger before it builds anything, and MUST stage that evidence before the publication, so every fallible part of writing it happens with the trunk unmoved. It MUST apply the whole landed `commit-msg` judgment to the trunk message, because the command that writes the commit fires no hook. It MUST take a lock so a second integration in the same clone refuses rather than waits, and it MUST never push and never force-push.
 
 #### Scenario: The trunk moves while the gate runs
 
@@ -130,11 +130,17 @@ A local integration MUST leave the trunk where it stood unless every check passe
 - WHEN the compare-and-swap runs
 - THEN it refuses naming both tips, no ref moved, and no evidence was written
 
-#### Scenario: The branch advances while the commit is built
+#### Scenario: The branch advances while the gate runs
 
 - GIVEN a local integration whose branch takes another commit after the gate passed
-- WHEN the evidence is written
-- THEN it certifies the one object the squash was built from, never the newer tip, so no prune reads it as proof of work the trunk does not carry
+- WHEN the branch is re-observed
+- THEN it refuses naming both tips, because the gate judged a tree that is no longer the branch's, and nothing reached the trunk
+
+#### Scenario: The publication fails after the evidence is staged
+
+- GIVEN a local integration whose compare-and-swap refuses after its evidence was written
+- WHEN a prune verb reads that evidence
+- THEN it ignores the entry, because the trunk does not reach the commit it names, and the branch keeps everything
 
 Verify: `cargo nextest run -E 'test(integrate)'`
 

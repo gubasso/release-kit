@@ -35,7 +35,7 @@ Rules governing the local-repository housekeeping the release convention leaves 
 
 ### `maintenance:gone-is-a-candidate-not-proof` — Gone is a candidate, not proof
 
-When `rk branches prune --apply` deletes a branch, the deletion MUST rest on one of exactly two proofs, never on the gone upstream alone: a merged request whose recorded head equals the branch's tip, or a locally recorded integration whose recorded branch tip equals it. A branch carrying neither proof MUST be kept, and a report MUST name which proof retired each branch. Under `local` integration no branch reaches the forge, so the gone-upstream signal is absent and the report MUST say that rather than present an empty candidate set.
+When `rk branches prune --apply` deletes a branch, the deletion MUST rest on one of exactly two proofs, never on the gone upstream alone: a merged request whose recorded head equals the branch's tip, or a locally recorded integration whose recorded branch tip equals it and whose recorded commit the trunk reaches. A branch carrying neither proof MUST be kept, and a report MUST name which proof retired each branch. Under `local` integration no branch reaches the forge, so the gone-upstream signal is absent and the report MUST say that rather than present an empty candidate set.
 
 #### Scenario: A branch advanced after its local integration
 
@@ -167,7 +167,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `maintenance:one-merge-proof-authorizes-both-removals` — One merge proof authorizes both removals
 
-The worktree prune MUST rest on the same predicate as the branch prune — a merged request whose recorded head equals the branch's tip, or a locally recorded integration whose recorded branch tip equals it — and MUST re-observe at the moment of action: a tip, a lock, or dirt that arrived after verification keeps the worktree, and a forge that cannot answer keeps everything. A proof of one kind MUST NOT stand in for the other, and evidence recorded for one branch MUST NOT confirm another.
+The worktree prune MUST rest on the same predicate as the branch prune — a merged request whose recorded head equals the branch's tip, or a locally recorded integration whose recorded branch tip equals it and whose recorded commit the trunk reaches — and MUST re-observe at the moment of action: a tip, a lock, or dirt that arrived after verification keeps the worktree, and a forge that cannot answer keeps everything. A proof of one kind MUST NOT stand in for the other, and evidence recorded for one branch MUST NOT confirm another.
 
 #### Scenario: The tip moves between verification and the apply
 

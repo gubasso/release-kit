@@ -918,7 +918,7 @@ fn protection_fields(
 }
 
 /// The keys a landing writes back: every class P answer.
-const PARAMETER_KEYS: [&str; 17] = [
+const PARAMETER_KEYS: [&str; 19] = [
     "project.repo",
     "profile.technologies",
     "profile.forge",
@@ -929,6 +929,11 @@ const PARAMETER_KEYS: [&str; 17] = [
     "git.trunk",
     "git.checkout_mode",
     "git.integration",
+    // The two floored keys the integration authority decides. They are
+    // written back with it, because changing the authority without them
+    // leaves a configuration whose own floor table refuses it.
+    "protection.owned_trunk_rules",
+    "protection.gitlab.push_access_level",
     "capabilities.nix_packaging",
     "capabilities.reporting_policy",
     "capabilities.scorecard",
@@ -1348,6 +1353,11 @@ impl Plan {
             checkout_mode: Some(params.checkout_mode()),
             integration: Some(params.integration()),
         };
+        resolved.protection = protection_for(
+            &resolved.protection,
+            params.integration(),
+            existing.is_none(),
+        );
         resolved.capabilities = Capabilities {
             nix_packaging: Some(params.nix_packaging()),
             reporting_policy: Some(params.reporting_policy()),
@@ -1437,6 +1447,21 @@ fn parameter_values(config: &Config) -> Vec<(&'static str, Option<toml_edit::Val
     }
     if let Some(mode) = config.git.integration {
         values.push(("git.integration", Some(mode.as_str().into())));
+        // The pair that authority decides travels with it: a write-back
+        // that moved the mode alone would leave a configuration the
+        // floor table refuses on the next read.
+        let mut rules = toml_edit::Array::new();
+        for rule in &config.protection.owned_trunk_rules {
+            rules.push(rule.as_str());
+        }
+        values.push((
+            "protection.owned_trunk_rules",
+            Some(toml_edit::Value::Array(rules)),
+        ));
+        values.push((
+            "protection.gitlab.push_access_level",
+            Some(config.protection.gitlab.push_access_level.into()),
+        ));
     }
     if let Some(value) = config.capabilities.nix_packaging {
         values.push(("capabilities.nix_packaging", Some(value.into())));
@@ -1493,6 +1518,69 @@ pub fn pending(config: &Config, record: &crate::landing::manifest::Manifest) -> 
         })
         .map(|(key, _)| key.to_owned())
         .collect()
+}
+
+/// The compiled protection floors a locally integrated trunk carries.
+///
+/// The ordinary defaults describe forge integration, because that is the
+/// shape this convention had before the authority became an axis. A
+/// locally integrated trunk drops the two rules no forge can apply to a
+/// push, and takes the narrowest GitLab level that still admits the push
+/// its integrations end in.
+#[must_use]
+fn local_protection() -> Protection {
+    /// The narrowest GitLab access level that still admits a push.
+    const MAINTAINER: i64 = 40;
+    let mut policy = Protection::default();
+    policy
+        .owned_trunk_rules
+        .retain(|rule| rule != "pull_request" && rule != "required_status_checks");
+    policy.gitlab.push_access_level = MAINTAINER;
+    policy
+}
+
+/// The protection values a landing writes, for one integration authority.
+///
+/// Exactly two keys differ between the authorities, and they are the two
+/// this looks at: the owned trunk rules, and the GitLab push access
+/// level. A target whose pair matches one authority's compiled defaults
+/// never stated them; it took them, so a landing that resolves the other
+/// authority writes that authority's pair instead, and a fresh landing
+/// writes its own. A target whose pair matches neither is one an operator
+/// narrowed or widened, and it keeps every value it stated: the floor
+/// table already judged it under the same mode, and an operator who
+/// changed a protection meant it.
+///
+/// The pair alone, never the whole policy: every other key here is a name
+/// or a review policy the authority does not decide, and a target that
+/// renamed its ruleset would otherwise read as having stated the pair.
+///
+/// This is what makes the committed configuration the one source: the
+/// floors judge these values, the setup installs them, and its check
+/// reads them back, so a local-integration target is never handed a trunk
+/// its own integrations cannot push.
+#[must_use]
+fn protection_for(held: &Protection, integration: Integration, fresh: bool) -> Protection {
+    let forge = Protection::default();
+    let local = local_protection();
+    let pair = |policy: &Protection| {
+        (
+            policy.owned_trunk_rules.clone(),
+            policy.gitlab.push_access_level,
+        )
+    };
+    let taken = fresh || pair(held) == pair(&forge) || pair(held) == pair(&local);
+    if !taken {
+        return held.clone();
+    }
+    let mut next = held.clone();
+    let source = match integration {
+        Integration::Forge => forge,
+        Integration::Local => local,
+    };
+    next.owned_trunk_rules = source.owned_trunk_rules;
+    next.gitlab.push_access_level = source.gitlab.push_access_level;
+    next
 }
 
 /// The trunk accessor for callers without a setup context.

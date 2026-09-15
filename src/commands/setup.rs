@@ -277,10 +277,18 @@ fn reject_check_flag_on_gitlab(ctx: &Ctx) -> Result<(), RkError> {
 /// runs: a wrong or missing one does not fail, it hangs the merge button,
 /// so a full apply refuses up front rather than writing eight steps and
 /// stopping. A target that excludes the protection is asked for nothing,
-/// because the value would answer a step this run never reaches.
+/// because the value would answer a step this run never reaches, and so
+/// is one whose effective policy carries no required-check rule: a
+/// locally integrated trunk installs no such rule, and refusing for a
+/// name nothing would read is a prerequisite nobody can satisfy.
 fn require_check_for(ctx: &Ctx, steps: &[&StepSpec]) -> Result<(), RkError> {
     let needs = ctx.forge == Some(Forge::Github)
         && ctx.required_check.is_none()
+        && ctx
+            .protection()
+            .owned_trunk_rules
+            .iter()
+            .any(|rule| rule == "required_status_checks")
         && steps
             .iter()
             .any(|step| step.name == "protect-trunk" && stance(ctx, step).acts());

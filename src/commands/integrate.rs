@@ -532,15 +532,25 @@ fn trunk_move(run: &LocalRun<'_>, to: &str, expected: &str, what: &str) -> Resul
 }
 
 /// The refusal for a trunk that moved between the observation and the write.
+///
+/// This one refusal comes after the evidence was staged, so it says what
+/// is actually on disk rather than repeating the general claim: the trunk
+/// stands where it stood, and the staged entry names a commit the trunk
+/// does not reach, which both prune verbs ignore.
 fn moved(trunk: &str, expected: &str, now: &str) -> RkError {
-    refuse(
-        Reason::StateDrift,
-        integrate::refuse_moved_trunk(expected, now).unwrap_or_else(|| {
-            format!(
-                "{trunk} could not be moved and stands at {}",
-                integrate::short(now)
-            )
-        }),
+    RkError::refusal(
+        Diagnostic::new(
+            Reason::StateDrift,
+            integrate::refuse_moved_trunk(expected, now).unwrap_or_else(|| {
+                format!(
+                    "{trunk} could not be moved and stands at {}",
+                    integrate::short(now)
+                )
+            }),
+        )
+        .target_state(format!(
+            "{trunk} stands where it stood; the staged evidence names a commit it does not reach, which every prune ignores"
+        )),
     )
 }
 

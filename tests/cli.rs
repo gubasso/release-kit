@@ -31198,3 +31198,67 @@ fn unreachable_evidence_confirms_nothing() {
         "a commit the trunk does not reach proves nothing: {held}"
     );
 }
+
+/// The two floored keys the integration authority decides travel with it.
+/// A fresh local landing writes the rules that hold against a push, and a
+/// mode change rewrites both directions, so the committed configuration
+/// never states a policy its own floor table refuses.
+///
+/// SATISFIES target-config:an-invariant-bearing-key-carries-a-floor
+#[test]
+fn the_protection_the_authority_decides_travels_with_it() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust_locally(target.path()).success();
+    let read = || {
+        std::fs::read_to_string(target.path().join(".release-kit/config.toml"))
+            .expect("the config reads")
+    };
+    let config = read();
+    assert!(
+        config.contains(r#"owned_trunk_rules = ["deletion", "non_fast_forward"]"#),
+        "a local trunk installs the rules that hold against a push: {config}"
+    );
+    assert!(
+        config.contains("push_access_level = 40"),
+        "zero would close the trunk to the push this mode ends in: {config}"
+    );
+
+    rk().args(["upgrade", "--integration", "forge", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let config = read();
+    assert!(
+        config.contains(
+            r#"owned_trunk_rules = ["deletion", "non_fast_forward", "pull_request", "required_status_checks"]"#
+        ),
+        "{config}"
+    );
+    assert!(config.contains("push_access_level = 0"), "{config}");
+
+    // And back, which is the direction an existing target takes.
+    rk().args(["upgrade", "--integration", "local", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let config = read();
+    assert!(
+        config.contains(r#"owned_trunk_rules = ["deletion", "non_fast_forward"]"#),
+        "{config}"
+    );
+    assert!(config.contains("push_access_level = 40"), "{config}");
+
+    // A policy the operator narrowed is theirs: the authority decides the
+    // pair only where the target never diverged from one mode's own.
+    let stated = read().replace(
+        r#"owned_trunk_rules = ["deletion", "non_fast_forward"]"#,
+        r#"owned_trunk_rules = ["deletion", "non_fast_forward", "required_signatures"]"#,
+    );
+    std::fs::write(target.path().join(".release-kit/config.toml"), stated)
+        .expect("the config writes");
+    rk().args(["upgrade", "--integration", "forge", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("owned_trunk_rules"));
+}
