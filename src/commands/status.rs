@@ -226,9 +226,11 @@ struct Observed {
     invariants: Vec<InvariantFailure>,
     /// Reportable conditions that are not violations.
     warnings: Vec<Warning>,
-    /// Recorded capabilities this target cannot run, counted in
+    /// Recorded intents this target cannot honour, counted in
     /// `record_drift` and kept separately because a plain upgrade cannot
-    /// repair them: it re-reads the same recorded answer and refuses.
+    /// repair them: it re-reads the same recorded answer and refuses. An
+    /// unavailable optional capability is not one of these; it is reported
+    /// in `selection` and omitted, and an upgrade runs over it unharmed.
     incompatible: Vec<String>,
     /// The destinations an upgrade would change, or `None` where this
     /// binary carries no projection for the recorded pair and so cannot
@@ -458,9 +460,10 @@ fn observe(args: &StatusArgs, manifest: &Manifest) -> Result<Observed, RkError> 
             reason,
         });
     }
-    // A receipt naming a capability its pair cannot run is a receipt nothing
-    // can honour, whichever binary wrote it, so this is judged at every
-    // alignment rather than only where this binary wrote the record.
+    // A receipt naming a release intent nothing can honour is judged at
+    // every alignment rather than only where this binary wrote the record.
+    // An unavailable optional capability is not one of these: it reports
+    // through `selection` and lands nothing, and no verb refuses on it.
     if let Some(projection) = projected.as_ref() {
         observed.incompatible.clone_from(&projection.record_defects);
         observed
@@ -720,11 +723,11 @@ fn render_human(
         next.push(format!("{}: {}", failure.destination, failure.remediation));
     }
     // The incompatible ones first, and with the override: a plain upgrade
-    // reads the same recorded provider and refuses, so advertising it alone
+    // reads the same recorded intent and refuses, so advertising it alone
     // would send the operator into a loop.
     if !observed.incompatible.is_empty() {
         next.push(format!(
-            "rk upgrade --code-scanning off --target {} drops the capability this target cannot run; name a provider its pair ships to keep one",
+            "rk upgrade --release-mode none --target {} retires the release intent this target cannot run; name a driver and forge this release carries to keep one",
             args.target
         ));
     }

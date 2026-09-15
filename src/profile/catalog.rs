@@ -687,8 +687,9 @@ mod tests {
         assert_eq!(status_of(&selections, SCORECARD), Status::Unknown);
     }
 
-    /// The scanner follows the provider and the pair, and the reasons
-    /// stay the ones resolution refuses with.
+    /// The scanner follows the provider and the pair, and a request the
+    /// pair cannot run reports `Unavailable` with the reason the landing
+    /// then omits it by. Nothing refuses on it.
     #[test]
     fn code_scanning_selects_the_providers_own_file() {
         let availability = Availability::embedded();

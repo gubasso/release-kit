@@ -154,7 +154,7 @@ Where the resolved answers omit a class P key — the repository of a project wi
 - WHEN the landing writes the configuration
 - THEN the file carries no `repo`, no `driver`, no `style`, no `line_prefix`, and no empty `[project]` header
 
-Verify: `cargo nextest run -E 'test(the_landed_config_template_round_trips) or test(a_target_with_no_technology_and_no_forge_lands_the_guards)'`
+Verify: `cargo nextest run -E 'test(the_landed_config_template_round_trips) or test(a_target_with_no_technology_and_no_forge_lands_the_guards) or test(a_committed_empty_forge_outranks_the_record_and_the_remote) or test(a_pruned_header_leaves_no_comment_behind) or test(a_retired_key_drops_the_template_comment_and_keeps_the_operators)'`
 
 ### `target-config:an-untaken-config-is-reported-and-not-judged` — An untaken config is reported and not judged
 

@@ -146,6 +146,22 @@ pub enum Source {
 }
 
 impl Source {
+    /// Where this source sits in the one precedence, lowest first.
+    ///
+    /// The comparison a resolution needs when one field's answer has to be
+    /// weighed against another's: a value only contradicts a decision that
+    /// its own tier or a lower one made.
+    #[must_use]
+    pub const fn rank(self) -> u8 {
+        match self {
+            Self::Flag => 0,
+            Self::Config => 1,
+            Self::Record => 2,
+            Self::Observation => 3,
+            Self::Default => 4,
+        }
+    }
+
     /// The report form.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -762,13 +778,15 @@ pub fn resolve(
             drivers: many.to_vec(),
         },
     };
-    // The proposal names what the version files showed. Whether it can be
-    // an automatic release also needs a forge, so a target with a crate
-    // and no forge proposes none and the report still names the driver it
-    // saw: an observation is never a refusal.
-    let proposed_mode = match (&proposal, forge.is_some()) {
-        (Proposal::Automatic { .. } | Proposal::Ambiguous { .. }, true) => ReleaseMode::Automatic,
-        _ => ReleaseMode::None,
+    // The proposal reads the version files alone. A missing forge is not
+    // an answer about the release intent: it is a separate refusal the
+    // automatic branch below raises, naming the remote it did not find and
+    // the two ways out. Folding it in here would silently land a
+    // release-less target for a crate whose author simply has no remote
+    // yet, and the record would then claim a release intent nobody stated.
+    let proposed_mode = match &proposal {
+        Proposal::Automatic { .. } | Proposal::Ambiguous { .. } => ReleaseMode::Automatic,
+        Proposal::None => ReleaseMode::None,
     };
     let (mode, source) = answered([
         (flags.release_mode, Source::Flag),
@@ -778,8 +796,9 @@ pub fn resolve(
         (None, Source::Default),
     ])
     .unwrap_or((ReleaseMode::None, Source::Default));
-    sources.insert("profile.release.mode", source);
-    let mode_answered_above = source != Source::Observation;
+    let mode_source = source;
+    sources.insert("profile.release.mode", mode_source);
+    let mode_answered_above = mode_source != Source::Observation;
     let proposal = (!mode_answered_above).then_some(proposal);
 
     // The driver, style, and line prefix belong to an automatic release
@@ -916,7 +935,13 @@ pub fn resolve(
             }
         }
         ReleaseMode::External | ReleaseMode::None => {
-            for (key, present, source) in [
+            // A stated value under a mode that has no room for it is a
+            // malformed intent. A value the mode outranks is not: that is
+            // ordinary precedence, and `--release-mode none` over a
+            // configured automatic release is the one command that retires
+            // it. So the refusal fires only where the subordinate value
+            // speaks at or above the tier that chose the mode.
+            for (key, present, value_source) in [
                 ("profile.release.driver", driver.is_some(), driver_source),
                 ("profile.release.style", style.is_some(), style_source),
                 (
@@ -925,7 +950,10 @@ pub fn resolve(
                     prefix_source,
                 ),
             ] {
-                if present && matches!(source, Source::Flag | Source::Config) {
+                if present
+                    && matches!(value_source, Source::Flag | Source::Config)
+                    && value_source.rank() <= mode_source.rank()
+                {
                     return Err(invalid_release(format!(
                         "{key} is set while profile.release.mode is {}",
                         mode.as_str()
@@ -947,13 +975,16 @@ pub fn resolve(
     let adapter_known = forge
         .as_deref()
         .is_some_and(|name| crate::detect::Forge::parse(name).is_some());
-    let repo = match (adapter_known, repo) {
-        (false, repo) => repo.unwrap_or_default(),
-        (true, Some(repo)) => repo,
-        (true, None) if purpose == Purpose::Preview => {
+    let repo = match (forge.is_some(), adapter_known, repo) {
+        // No forge at all: the identity has nowhere to point, so a lower
+        // tier's remote or record must not survive into `[project]`.
+        (false, _, _) => String::new(),
+        (true, false, repo) => repo.unwrap_or_default(),
+        (true, true, Some(repo)) => repo,
+        (true, true, None) if purpose == Purpose::Preview => {
             crate::projection::REPO_PLACEHOLDER.to_owned()
         }
-        (true, None) => return Err(crate::landing::repo_unresolved()),
+        (true, true, None) => return Err(crate::landing::repo_unresolved()),
     };
 
     // The Git workflow.
@@ -1044,13 +1075,11 @@ pub fn resolve(
     ])
     .unwrap_or((None, Source::Default));
     sources.insert("capabilities.code_scanning", source);
-    if let Some(reason) = crate::projection::code_scanning_incompatibility(
-        code_scanning,
-        release.driver.as_deref(),
-        forge.as_deref(),
-    ) {
-        return Err(RkError::Usage(reason));
-    }
+    // A requested scanner this release cannot land at these dimensions is
+    // an unavailable optional capability, not a malformed request. The
+    // catalog reports it and the landing omits it, which is what
+    // `project-profile:an-operation-refuses-only-what-it-requires` says
+    // must happen: only the selected release automation blocks an apply.
 
     // The security policy's two answers.
     let (security_contact, source) = answered([

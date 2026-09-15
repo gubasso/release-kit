@@ -368,15 +368,28 @@ impl Projection {
         }
         candidates.sort_by(|a, b| a.destination.cmp(&b.destination));
         omissions.sort_by(|a, b| a.destination.cmp(&b.destination));
-        let licence_refusal = code_scanning_licence_refusal(
-            params.code_scanning(),
-            params.driver(),
-            &evidence.crate_shape,
-        );
-        let mut record_defects: Vec<String> =
-            code_scanning_incompatibility(params.code_scanning(), params.driver(), params.forge())
-                .into_iter()
-                .collect();
+        // The licence judgment belongs to a workflow this landing will
+        // actually write. A provider the target's dimensions cannot run is
+        // already an unavailable optional capability, reported and omitted,
+        // and refusing it on its terms would refuse a landing over a file
+        // that was never going to land.
+        let scanning_selected = capabilities.iter().any(|selection| {
+            selection.id == catalog::CODE_SCANNING && selection.status == Status::Selected
+        });
+        let licence_refusal = scanning_selected
+            .then(|| {
+                code_scanning_licence_refusal(
+                    params.code_scanning(),
+                    params.driver(),
+                    &evidence.crate_shape,
+                )
+            })
+            .flatten();
+        // A scanner the target's dimensions cannot run is an unavailable
+        // optional capability, which the catalog already reports and this
+        // projection already omits. Naming it a record defect too would
+        // make a landing this binary itself wrote fail its own check.
+        let mut record_defects: Vec<String> = Vec::new();
         // A recorded automatic release whose automation this release cannot
         // land is a receipt nothing can honour: named here, so a
         // record-only reader sees it.
@@ -567,9 +580,10 @@ pub const SCORECARD_DESTINATIONS: [&str; 1] = [".github/workflows/scorecard.yml"
 /// another, which `landing:a-dropped-file-stays` already answers.
 ///
 /// `codeql` is GitHub's own analyzer and has no GitLab entry, so a GitLab
-/// landing that names it lands nothing; the parameter resolution refuses
-/// that pair by name before it gets here, as it refuses a binding outside
-/// [`CODE_SCANNING_TECHS`].
+/// landing that names it lands nothing; the catalog reports that pair
+/// unavailable by name, as it reports a binding outside
+/// [`CODE_SCANNING_TECHS`], and the landing omits the destination and
+/// proceeds.
 pub const CODE_SCANNING_DESTINATIONS: [(&str, Provider); 3] = [
     (
         ".github/workflows/code-scanning-codeql.yml",
@@ -587,21 +601,26 @@ pub const CODE_SCANNING_DESTINATIONS: [(&str, Provider); 3] = [
 /// A scanner reads one language: the `CodeQL` arm fixes `languages: rust` and
 /// both Semgrep arms name the `p/rust` ruleset, so the sources live in the
 /// rust pairs rather than in a forge's technology-independent shared zone.
-/// A landing for any other binding refuses the capability by name instead of
-/// recording a provider and writing nothing.
+/// A landing for any other binding reports the capability unavailable by
+/// name and omits its destinations, rather than writing nothing silently.
 pub const CODE_SCANNING_TECHS: [&str; 1] = ["rust"];
 
 /// Why the named code scanning provider cannot run at this
 /// `(technology, forge)`, or `None` where it can or none is named.
 ///
 /// One owner for the question, because two callers ask it and they must not
-/// disagree. Parameter resolution turns a reason into a refusal, so `init`,
-/// `upgrade`, `adopt`, and `stage` never record an answer they cannot honour.
-/// The projection reports the same reason as a record defect, because
+/// disagree. The reason is informational: it becomes the catalog's
+/// `Unavailable` status, and nothing refuses on it. An optional capability
+/// this release cannot build at the target's dimensions is reported and
+/// omitted, which is what
+/// `project-profile:an-operation-refuses-only-what-it-requires` states.
+///
+/// A receipt asks the same question and gets the same answer, because
 /// `Params::from_record` cannot fail and a hand-edited or foreign receipt
 /// reaches `rk status` through it: without this, a receipt naming a provider
 /// whose pair ships nothing would project nothing, name nothing, and read as
-/// clean.
+/// clean. It is a report about the pair, not a record defect, so a landing
+/// this binary wrote still answers its own check.
 #[must_use]
 pub fn code_scanning_incompatibility(
     provider: Option<Provider>,
@@ -2021,12 +2040,13 @@ mod tests {
         }
     }
 
-    /// The compatibility question has one owner, and the projection reports
-    /// its answer as a record defect: a receipt reaches `rk status` through
+    /// The compatibility question has one owner, and its answer is the
+    /// catalog's unavailable reason: a receipt reaches `rk status` through
     /// `from_record`, which cannot fail, so a provider whose pair ships
-    /// nothing must be named rather than read as clean.
+    /// nothing is named rather than read as clean. It is a report about the
+    /// pair, not a fault in the target, so nothing refuses on it.
     #[test]
-    fn a_recorded_provider_its_pair_cannot_run_is_a_record_defect() {
+    fn a_recorded_provider_its_pair_cannot_run_is_named() {
         use super::{Provider, code_scanning_incompatibility};
 
         assert!(code_scanning_incompatibility(None, Some("bash"), Some("gitlab")).is_none());

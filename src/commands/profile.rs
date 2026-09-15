@@ -252,11 +252,17 @@ pub fn run(args: &ProfileArgs) -> Result<(), RkError> {
     for note in &collisions {
         out.result_line(format!("collision {}: {}", note.destination, note.reason));
     }
-    let verb = if record.is_some() { "upgrade" } else { "init" };
+    // `rk upgrade` takes each capability as `on|off`, and `rk init` takes
+    // the boolean ones as bare flags. The follow-up command must parse, so
+    // it renders the verb's own spelling rather than one of them twice.
+    let (verb, capabilities) = if record.is_some() {
+        ("upgrade", params.capability_toggles())
+    } else {
+        ("init", params.capability_flags())
+    };
     let mut next = vec![format!(
-        "rk {verb}{}{} --target {} previews the landing under these answers",
+        "rk {verb}{}{capabilities} --target {} previews the landing under these answers",
         params.canonical_flags(),
-        params.capability_flags(),
         args.target
     )];
     if let Some(Proposal::Ambiguous { drivers }) = &resolved.proposal {

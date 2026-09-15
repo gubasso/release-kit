@@ -14660,20 +14660,45 @@ fn semgrep_lands_on_both_forges_with_no_licence_condition() {
     }
 }
 
-/// codeql is GitHub's own analyzer, so the gitlab pair refuses it by name
-/// rather than recording an answer and writing nothing.
+/// SATISFIES project-profile:an-operation-refuses-only-what-it-requires
+/// codeql is GitHub's own analyzer, so the gitlab pair reports it
+/// unavailable by name and names the provider that pair does carry. The
+/// release itself still lands, because nothing about it is unavailable.
 #[test]
-fn the_gitlab_pair_refuses_codeql_by_name() {
+fn the_gitlab_pair_reports_codeql_unavailable_by_name() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
     seed_licensed_crate(target.path(), "MIT");
     land_code_scanning(target.path(), "gitlab", "codeql")
         .assert()
-        .code(64)
-        .stderr(
-            predicate::str::contains("codeql is GitHub's own analyzer")
+        .success()
+        .stdout(
+            predicate::str::contains("capability supply-chain.code-scanning: unavailable")
+                .and(predicate::str::contains("codeql is GitHub's own analyzer"))
                 .and(predicate::str::contains("--code-scanning semgrep")),
         );
-    assert!(!target.path().join(".release-kit").exists());
+    assert!(
+        !target.path().join(".gitlab/code-scanning.yml").exists(),
+        "the unavailable capability writes nothing"
+    );
+    // The landing this binary wrote names no record defect: an unavailable
+    // optional capability is a report, never a receipt nothing can honour.
+    // The fresh landing's own sentinel is the only thing a check faults
+    // here, which is a different subject.
+    let out = rk()
+        .args(["status", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert!(
+        report["incompatible"]
+            .as_array()
+            .is_none_or(std::vec::Vec::is_empty),
+        "the request is unavailable, not incompatible: {report}"
+    );
 }
 
 /// A licence that lapses after the landing is a warning with its stable
@@ -14850,11 +14875,13 @@ fn both_github_scanners_carry_the_permissions_the_upload_needs() {
     }
 }
 
-/// A scanner reads one language, so the workflows live in the rust pairs and
-/// every other binding refuses the capability by name. A landing that
-/// recorded a provider and wrote nothing would be the dishonest answer.
+/// SATISFIES project-profile:an-operation-refuses-only-what-it-requires
+/// A scanner reads one language, so the workflows live in the rust pairs.
+/// Every other binding reports the capability unavailable by name and lands
+/// everything else: an optional product this release cannot build at the
+/// target's dimensions is no reason to refuse the release it can.
 #[test]
-fn a_binding_with_no_scanner_refuses_the_capability_by_name() {
+fn a_binding_with_no_scanner_reports_the_capability_unavailable() {
     for (tech, forge) in [("bash", "github"), ("bash", "gitlab"), ("python", "github")] {
         let target = tempfile::tempdir().expect("a scratch dir exists");
         rk().args(["init", "--tech", tech, "--forge", forge])
@@ -14863,15 +14890,29 @@ fn a_binding_with_no_scanner_refuses_the_capability_by_name() {
             .arg(target.path())
             .arg("--apply")
             .assert()
-            .code(64)
-            .stderr(
-                predicate::str::contains(format!("the {tech} binding ships no code scanning"))
+            .success()
+            .stdout(
+                predicate::str::contains("capability supply-chain.code-scanning: unavailable")
+                    .and(predicate::str::contains(format!(
+                        "the {tech} binding ships no code scanning"
+                    )))
                     .and(predicate::str::contains("rust")),
             );
-        assert!(
-            !target.path().join(".release-kit").exists(),
-            "{tech} {forge}: nothing lands"
-        );
+        for destination in [
+            ".github/workflows/code-scanning.yml",
+            ".github/workflows/semgrep.yml",
+        ] {
+            assert!(
+                !target.path().join(destination).exists(),
+                "{tech} {forge}: the unavailable capability writes nothing"
+            );
+        }
+        // The landing this binary wrote answers its own check: an
+        // unavailable optional capability is a report, never a defect.
+        rk().args(["status", "--check", "--target"])
+            .arg(target.path())
+            .assert()
+            .success();
     }
     // The bash GitLab pipeline names no scanning include, because no bash
     // scanner ships and a local include of an absent file fails the pipeline.
@@ -14946,11 +14987,15 @@ fn every_preview_names_the_licence_refusal_the_apply_will_answer() {
         ));
 }
 
-/// A receipt naming a provider its own pair cannot run is a receipt nothing
-/// can honour. It reaches `rk status` through `from_record`, which cannot
-/// fail, so the projection reports it and `--check` counts it.
+/// SATISFIES project-profile:an-operation-refuses-only-what-it-requires
+/// A receipt naming a provider its own pair cannot run reaches `rk status`
+/// through `from_record`, which cannot fail. The projection reports the
+/// capability unavailable with its reason and omits its destinations, the
+/// same answer the command line gets for the same request, and `--check`
+/// does not count it: an optional product this release cannot build is a
+/// report about the pair, not a fault in the target.
 #[test]
-fn a_recorded_provider_the_pair_cannot_run_is_reported_and_judged() {
+fn a_recorded_provider_the_pair_cannot_run_is_reported_and_omitted() {
     for (tech, forge, provider, named) in [
         ("bash", "github", "semgrep", "bash binding"),
         ("rust", "gitlab", "codeql", "codeql"),
@@ -14973,61 +15018,6 @@ fn a_recorded_provider_the_pair_cannot_run_is_reported_and_judged() {
             .insert("code_scanning".into(), serde_json::json!(provider));
         write_manifest(target.path(), &manifest);
         let out = rk()
-            .args(["status", "--check", "--json", "--target"])
-            .arg(target.path())
-            .assert()
-            .code(1)
-            .get_output()
-            .stdout
-            .clone();
-        let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-        assert_eq!(report["capabilities"]["code_scanning"], provider);
-        assert!(
-            report["record_drift"].as_u64().unwrap_or(0) >= 1,
-            "{tech} {forge}: the incompatible record is drift: {report}"
-        );
-        assert!(
-            report["violations"]
-                .as_array()
-                .expect("a violation list")
-                .iter()
-                .any(|line| line.as_str().is_some_and(|line| line.contains(named))),
-            "{tech} {forge}: the violation names the reason: {report}"
-        );
-        // The advertised remedy must actually run. A plain upgrade reads the
-        // same recorded provider and refuses, so status names the override, and
-        // executing it repairs the receipt.
-        let human = rk()
-            .args(["status", "--check", "--target"])
-            .arg(target.path())
-            .assert()
-            .code(1)
-            .get_output()
-            .stdout
-            .clone();
-        let printed = String::from_utf8_lossy(&human);
-        let follow = printed
-            .lines()
-            .map(str::trim)
-            .find(|line| line.starts_with("rk upgrade --code-scanning off"))
-            .unwrap_or_else(|| panic!("{tech} {forge}: status names a usable remedy: {printed}"))
-            .to_owned();
-        let arguments: Vec<&str> = follow
-            .split_whitespace()
-            .skip(1)
-            .take_while(|word| *word != "drops")
-            .collect();
-        let mut repair = rk();
-        repair.args(&arguments).arg("--apply");
-        repair.assert().success();
-        assert!(
-            read_manifest(target.path())["capabilities"]["code_scanning"].is_null(),
-            "{tech} {forge}: the remedy dropped the capability"
-        );
-        // The incompatibility is gone. A fresh landing's own unfilled sentinel
-        // is what any remaining violation is, so the assertion is on this
-        // condition rather than on the exit code.
-        let out = rk()
             .args(["status", "--json", "--target"])
             .arg(target.path())
             .assert()
@@ -15036,10 +15026,34 @@ fn a_recorded_provider_the_pair_cannot_run_is_reported_and_judged() {
             .stdout
             .clone();
         let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-        assert_eq!(report["record_drift"], 0, "{tech} {forge}: {report}");
+        assert_eq!(report["capabilities"]["code_scanning"], provider);
         assert!(
-            report["capabilities"]["code_scanning"].is_null(),
+            report["incompatible"]
+                .as_array()
+                .is_none_or(std::vec::Vec::is_empty),
+            "{tech} {forge}: the request is unavailable, not incompatible: {report}"
+        );
+        let selection = report["selection"]
+            .as_array()
+            .expect("a capability list")
+            .iter()
+            .find(|selection| selection["id"] == "supply-chain.code-scanning")
+            .expect("the scanning capability is selected on")
+            .clone();
+        assert_eq!(
+            selection["status"], "unavailable",
             "{tech} {forge}: {report}"
+        );
+        assert!(
+            selection["reason"]
+                .as_str()
+                .is_some_and(|reason| reason.contains(named)),
+            "{tech} {forge}: the report names the reason: {report}"
+        );
+        assert_eq!(
+            selection["destinations"],
+            serde_json::json!([]),
+            "{tech} {forge}: an unavailable capability writes nothing: {report}"
         );
     }
 }
@@ -29297,4 +29311,335 @@ fn the_checkout_mode_rename_reaches_no_landed_byte() {
             "the sweep pair renders unchanged: {hooks}"
         );
     }
+}
+
+/// SATISFIES project-profile:the-observation-proposes-a-release-mode
+/// The proposal reads the version files alone. A crate whose author has no
+/// origin remote yet still proposes an automatic release, so the apply
+/// refuses and names the two ways out, instead of quietly landing a
+/// release-less target and recording an intent nobody stated.
+#[test]
+fn an_observed_release_survives_a_missing_forge_and_the_apply_names_the_choice() {
+    let target = bare_target();
+    seed_licensed_crate(target.path(), "MIT");
+    rk().args(["init", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("release automatic"));
+    rk().args(["init", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("no forge detected")
+                .and(predicate::str::contains("--release-mode none")),
+        );
+    assert!(
+        !target.path().join(".release-kit").exists(),
+        "the refusal comes before the first write"
+    );
+    // The way out the refusal names actually runs.
+    rk().args(["init", "--release-mode", "none", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let record = read_manifest(target.path());
+    assert_eq!(record["profile"]["release"]["mode"], "none");
+}
+
+/// SATISFIES project-profile:every-field-resolves-by-one-precedence
+/// A flag outranks the configuration, so `--release-mode none` retires a
+/// configured automatic release rather than colliding with the driver and
+/// style that release left behind. Without this the advertised transition
+/// has no command that performs it.
+#[test]
+fn a_release_mode_flag_retires_the_configured_automatic_release() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    seed_licensed_crate(target.path(), "MIT");
+    rk().args(["init", "--tech", "rust", "--forge", "github"])
+        .args(["--repo", "acme/widget", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let configured = std::fs::read_to_string(target.path().join(".release-kit/config.toml"))
+        .expect("the config reads");
+    assert!(configured.contains("driver = \"rust\""), "{configured}");
+    rk().args(["upgrade", "--release-mode", "none", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let configured = std::fs::read_to_string(target.path().join(".release-kit/config.toml"))
+        .expect("the config reads");
+    assert!(configured.contains("mode = \"none\""), "{configured}");
+    for key in ["driver =", "style =", "line_prefix ="] {
+        assert!(
+            !configured.contains(key),
+            "{key} belongs to an automatic release alone: {configured}"
+        );
+    }
+    let record = read_manifest(target.path());
+    assert_eq!(record["profile"]["release"]["mode"], "none");
+    assert!(record["profile"]["release"]["driver"].is_null());
+    // A configured value the flag outranks is superseded, so the same
+    // command runs twice without the second reading a contradiction.
+    rk().args(["upgrade", "--release-mode", "none", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+}
+
+/// SATISFIES project-profile:the-profile-is-typed-and-the-forge-is-optional
+/// An empty `profile.forge` is the committed statement that the project has
+/// no forge. It answers the axis, so no record and no origin remote below
+/// it re-introduces a forge, and no repository identity survives into
+/// `[project]` for an identity that points nowhere.
+#[test]
+fn a_committed_empty_forge_outranks_the_record_and_the_remote() {
+    let target = bare_target();
+    rk().args(["init", "--forge", "github", "--repo", "acme/widget"])
+        .args(["--release-mode", "none", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let path = target.path().join(".release-kit/config.toml");
+    let configured = std::fs::read_to_string(&path).expect("the config reads");
+    let edited = configured.replace("forge = \"github\"", "forge = \"\"");
+    assert_ne!(edited, configured, "{configured}");
+    std::fs::write(&path, edited).expect("the config writes");
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "capability git.title-check: not-applicable",
+        ));
+    let record = read_manifest(target.path());
+    assert!(
+        record["profile"]["forge"].is_null(),
+        "the committed answer holds: {record}"
+    );
+    assert_eq!(
+        record["parameters"]["repo"], "",
+        "no forge, no identity: {record}"
+    );
+    let configured = std::fs::read_to_string(&path).expect("the config reads");
+    assert!(
+        !configured.contains("repo ="),
+        "an unanswered key is absent, not empty: {configured}"
+    );
+    // A file this binary stops shipping stays on disk as the target's own,
+    // so the proof is the receipt: no forge capability is recorded any
+    // more.
+    assert!(
+        !record["files"]
+            .as_array()
+            .expect("the record names its files")
+            .iter()
+            .any(|file| file["destination"]
+                .as_str()
+                .is_some_and(|path| path.starts_with(".github/"))),
+        "no forge capability is recorded: {record}"
+    );
+    assert!(
+        !configured.contains("[project]"),
+        "a table every one of whose keys dropped goes with them: {configured}"
+    );
+}
+
+/// SATISFIES project-profile:an-operation-refuses-only-what-it-requires
+/// The licence judgment belongs to a workflow the landing will write. A
+/// provider the target's dimensions cannot run is already unavailable, so
+/// refusing it on its own terms would refuse a landing over a file that was
+/// never going to land.
+#[test]
+fn an_unavailable_provider_is_not_judged_on_its_licence() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    rk().args(["init", "--technology", "bash", "--forge", "github"])
+        .args(["--repo", "acme/widget", "--code-scanning", "codeql"])
+        .args(["--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "capability supply-chain.code-scanning: unavailable",
+        ));
+    // A rust target that can run codeql is still judged on its licence.
+    let judged = tempfile::tempdir().expect("a scratch dir exists");
+    seed_licensed_crate(judged.path(), "LicenseRef-proprietary");
+    land_code_scanning(judged.path(), "github", "codeql")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("licence"));
+}
+
+/// SATISFIES project-profile:the-profile-command-writes-nothing
+/// The follow-up command `rk profile` prints must parse. `rk upgrade` takes
+/// every capability as `on|off` while `rk init` takes the boolean ones
+/// bare, so the line renders the verb it actually names.
+#[test]
+fn the_profile_follow_up_command_runs_on_a_landed_target() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    seed_licensed_crate(target.path(), "MIT");
+    rk().args(["init", "--tech", "rust", "--forge", "github"])
+        .args(["--repo", "acme/widget", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let printed = rk()
+        .args(["profile", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let printed = String::from_utf8_lossy(&printed);
+    let line = printed
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("rk upgrade "))
+        .unwrap_or_else(|| panic!("the follow-up names the verb the record implies: {printed}"))
+        .to_owned();
+    let arguments: Vec<&str> = line
+        .split_whitespace()
+        .skip(1)
+        .take_while(|word| *word != "previews")
+        .collect();
+    rk().args(&arguments).assert().success();
+}
+
+/// The forge-version explanation is two variants, so each resolved forge
+/// keeps its own and drops the sibling's. Written as ordinary prose the
+/// renderer cannot see them, and every operator reads both answers about
+/// one version floor.
+#[test]
+fn a_resolved_forge_keeps_one_version_floor_answer() {
+    let bare = tempfile::tempdir().expect("a bare dir exists");
+    for (forge, kept, dropped) in [
+        ("github", "rolling service", "GET /version"),
+        ("gitlab", "GET /version", "rolling service"),
+    ] {
+        let out = rk()
+            .args(["guide", "setup", "--forge", forge, "--repo", "acme/widget"])
+            .current_dir(bare.path())
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let text = String::from_utf8_lossy(&out);
+        assert!(text.contains(kept), "{forge}: its own answer stays");
+        assert!(
+            !text.contains(dropped),
+            "{forge}: the sibling forge's answer goes"
+        );
+    }
+}
+
+/// SATISFIES project-profile:the-profile-is-typed-and-the-forge-is-optional
+/// A project that states it has no forge has answered the axis. The guide
+/// drops every forge variant rather than printing both, which is what an
+/// unanswered axis gets.
+#[test]
+fn a_committed_empty_forge_drops_every_forge_variant_from_the_guide() {
+    let target = bare_target();
+    rk().args(["init", "--release-mode", "none", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    // The landing already committed the empty forge: this target states it
+    // has no forge, which is the answer the guide must read.
+    let text = std::fs::read_to_string(target.path().join(".release-kit/config.toml"))
+        .expect("the config reads");
+    assert!(text.contains("forge = \"\""), "{text}");
+    let out = rk()
+        .args(["guide", "setup"])
+        .current_dir(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8_lossy(&out);
+    // Every labelled variant of the forge axis goes, label and body. The
+    // runbook's whole forge-specific sections are a different structure
+    // and are not this axis.
+    for absent in [
+        "On github:",
+        "On gitlab:",
+        "rolling service",
+        "GET /version",
+    ] {
+        assert!(
+            !text.contains(absent),
+            "a project with no forge reads no forge variant: {absent}"
+        );
+    }
+}
+
+/// SATISFIES forge-setup:applicability-follows-the-target-configuration
+/// A step that is local work alone needs no forge CLI. Demanding one for
+/// every run at a driven forge makes an advertised independent step
+/// unavailable on a target whose operator never installed it.
+#[test]
+fn a_local_step_runs_without_the_forge_cli() {
+    // The step writes a post-merge hook, so the target is a real
+    // repository rather than a bare directory.
+    let target = tempfile::tempdir().expect("a scratch repo exists");
+    git_in(target.path(), &["init", "-q", "-b", "master"]);
+    rk().args(["init", "--forge", "github", "--repo", "acme/widget"])
+        .args(["--release-mode", "none", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    for apply in [false, true] {
+        let mut command = rk();
+        command
+            .args(["setup", "step", "branch-reminder", "--target"])
+            .arg(target.path())
+            .env("RK_GH_BIN", "/no/such/gh");
+        if apply {
+            command.arg("--apply");
+        }
+        command.assert().success();
+    }
+    // A forge step the target does not run calls nothing either, and its
+    // stance is the answer the operator asked for. This target's release
+    // mode is none, so the release steps do not apply here.
+    rk().args(["setup", "step", "ci-permissions", "--target"])
+        .arg(target.path())
+        .env("RK_GH_BIN", "/no/such/gh")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("not applicable"));
+    // The same for a step the target declared it does not run.
+    let path = target.path().join(".release-kit/config.toml");
+    let text = std::fs::read_to_string(&path).expect("the config reads");
+    let edited = text.replace(
+        "excluded_steps = {}",
+        "excluded_steps = { default-branch = \"we set it by hand\" }",
+    );
+    assert_ne!(edited, text, "{text}");
+    std::fs::write(&path, edited).expect("the config writes");
+    rk().args(["setup", "step", "default-branch", "--target"])
+        .arg(target.path())
+        .env("RK_GH_BIN", "/no/such/gh")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("we set it by hand"));
+    // A forge with no version floor is answered without a call, so that
+    // step needs no CLI at that forge even though it needs one elsewhere.
+    rk().args(["setup", "step", "forge-version", "--target"])
+        .arg(target.path())
+        .env("RK_GH_BIN", "/no/such/gh")
+        .assert()
+        .success();
+    // A step that does apply and does call the forge still refuses.
+    rk().args(["setup", "step", "merge-cleanup", "--target"])
+        .arg(target.path())
+        .env("RK_GH_BIN", "/no/such/gh")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("RK_GH_BIN"));
 }

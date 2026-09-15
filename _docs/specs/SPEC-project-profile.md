@@ -48,7 +48,7 @@ The profile MUST carry zero or many technologies in `profile.technologies` and a
 - WHEN `rk init --release-mode none --apply` runs
 - THEN the local Git workflow guards land, the configuration records no forge and no technology, and `rk status --check` exits 0
 
-Verify: `cargo nextest run -E 'test(a_target_with_no_technology_and_no_forge_lands_the_guards)'`
+Verify: `cargo nextest run -E 'test(a_target_with_no_technology_and_no_forge_lands_the_guards) or test(a_committed_empty_forge_outranks_the_record_and_the_remote) or test(a_committed_empty_forge_drops_every_forge_variant_from_the_guide)'`
 
 ### `project-profile:release-intent-has-three-modes` — Release intent has three modes
 
@@ -120,7 +120,7 @@ The configuration and the landing record MUST carry resolved values alone and no
 - WHEN its record is parsed
 - THEN no field names a flag, a configuration, or an observation as the value's source, and the style appears once
 
-Verify: `cargo nextest run -E 'test(runtime_sources_never_reach_the_config_or_the_record)'`
+Verify: `cargo nextest run -E 'test(runtime_sources_never_reach_the_config_or_the_record) or test(a_release_mode_flag_retires_the_configured_automatic_release)'`
 
 ### `project-profile:the-observation-proposes-a-release-mode` — The observation proposes a release mode
 
@@ -132,7 +132,7 @@ Where no flag and no configuration answer the release mode, the observation MUST
 - WHEN `rk init` previews and then applies
 - THEN the preview names both drivers and the ambiguity, and the apply refuses until `--release-driver` answers it
 
-Verify: `cargo nextest run -E 'test(the_observation_proposes_a_release_mode)'`
+Verify: `cargo nextest run -E 'test(the_observation_proposes_a_release_mode) or test(an_observed_release_survives_a_missing_forge_and_the_apply_names_the_choice)'`
 
 ### `project-profile:an-operation-refuses-only-what-it-requires` — An operation refuses only what it requires
 
@@ -144,7 +144,7 @@ A valid profile MAY request an unavailable capability, and an apply MUST refuse 
 - WHEN `rk init` previews and then applies
 - THEN the preview reports the automation unavailable with the available tuples, and the apply refuses before any write
 
-Verify: `cargo nextest run -E 'test(python_on_gitlab_reports_unavailable_and_apply_refuses)'`
+Verify: `cargo nextest run -E 'test(python_on_gitlab_reports_unavailable_and_apply_refuses) or test(a_binding_with_no_scanner_reports_the_capability_unavailable) or test(a_recorded_provider_the_pair_cannot_run_is_reported_and_omitted) or test(an_unavailable_provider_is_not_judged_on_its_licence)'`
 
 ### `project-profile:the-profile-command-writes-nothing` — The profile command writes nothing
 
@@ -156,7 +156,7 @@ Verify: `cargo nextest run -E 'test(python_on_gitlab_reports_unavailable_and_app
 - WHEN `rk profile --json` runs
 - THEN one `rk.profile/1` object reports the values, sources, capabilities, and destinations, and the tree is unchanged
 
-Verify: `cargo nextest run -E 'test(profile_reports_values_sources_and_the_selection_and_writes_nothing)'`
+Verify: `cargo nextest run -E 'test(profile_reports_values_sources_and_the_selection_and_writes_nothing) or test(the_profile_follow_up_command_runs_on_a_landed_target)'`
 
 ### `project-profile:a-schema-one-configuration-migrates-in-place` — A schema one configuration migrates in place
 
@@ -168,7 +168,7 @@ The configuration reader MUST read a schema 1 file through one bounded migration
 - WHEN `rk upgrade --apply` runs
 - THEN the written file states `schema_version = 2`, the style stands under `[profile.release]` with its comment, and `landing.workflow`'s value reads as `linked-worktree` under `[git]`
 
-Verify: `cargo nextest run -E 'test(a_schema_1_config_migrates_into_its_domains)'`
+Verify: `cargo nextest run -E 'test(a_schema_1_config_migrates_into_its_domains) or test(an_empty_technology_still_clears_the_automatic_release_keys) or test(an_emptied_project_header_goes_and_its_comment_stays) or test(a_dropped_schema_1_key_keeps_the_operators_comment) or test(a_moved_key_takes_the_comment_above_it)'`
 
 ### `project-profile:a-destination-has-one-capability-owner` — A destination has one capability owner
 
