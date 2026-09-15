@@ -9,6 +9,10 @@
   - [`git:one-trunk-receives-pull-and-merge-requests` — One trunk receives pull and merge requests](#gitone-trunk-receives-pull-and-merge-requests--one-trunk-receives-pull-and-merge-requests)
   - [`git:the-trunk-name-is-a-parameter` — The trunk name is a parameter](#gitthe-trunk-name-is-a-parameter--the-trunk-name-is-a-parameter)
   - [`git:checkout-mode-selects-where-a-topic-branch-opens` — Checkout mode selects where a topic branch opens](#gitcheckout-mode-selects-where-a-topic-branch-opens--checkout-mode-selects-where-a-topic-branch-opens)
+  - [`git:integration-mode-selects-the-authority-that-squashes` — Integration mode selects the authority that squashes](#gitintegration-mode-selects-the-authority-that-squashes--integration-mode-selects-the-authority-that-squashes)
+  - [`git:the-release-request-integrates-at-the-forge` — The release request integrates at the forge](#gitthe-release-request-integrates-at-the-forge--the-release-request-integrates-at-the-forge)
+  - [`git:the-manual-stage-is-the-pre-integrate-contract` — The manual stage is the pre-integrate contract](#gitthe-manual-stage-is-the-pre-integrate-contract--the-manual-stage-is-the-pre-integrate-contract)
+  - [`git:a-local-integration-is-a-transaction` — A local integration is a transaction](#gita-local-integration-is-a-transaction--a-local-integration-is-a-transaction)
   - [`git:git-and-forge-terms-stay-explicit` — Git and forge terms stay explicit](#gitgit-and-forge-terms-stay-explicit--git-and-forge-terms-stay-explicit)
   - [`git:concurrent-pull-and-merge-requests-carry-the-tested-trunk` — Concurrent pull and merge requests carry the tested trunk](#gitconcurrent-pull-and-merge-requests-carry-the-tested-trunk--concurrent-pull-and-merge-requests-carry-the-tested-trunk)
 
@@ -16,7 +20,7 @@
 
 ## Purpose
 
-Rules governing the Git shape every target must have and the Git workflow parameters a target records: the non-bare repository, trunk-based development as the one development method, the trunk's name, the checkout mode a topic branch opens under, and the words shared prose uses for the two forges' review units. The protection domain in [the target configuration specification](./SPEC-target-config.md) and [the forge setup specification](./SPEC-forge-setup.md) owns how each forge enforces these rules. The project profile in [the project profile specification](./SPEC-project-profile.md) owns what the project is. This spec owns how changes reach its trunk.
+Rules governing the Git shape every target must have and the Git workflow parameters a target records: the non-bare repository, trunk-based development as the one development method, the trunk's name, the checkout mode a topic branch opens under, the integration mode that says which authority carries it onto the trunk, and the words shared prose uses for the two forges' review units. The protection domain in [the target configuration specification](./SPEC-target-config.md) and [the forge setup specification](./SPEC-forge-setup.md) owns how each forge enforces these rules. The project profile in [the project profile specification](./SPEC-project-profile.md) owns what the project is. This spec owns how changes reach its trunk.
 
 ## Requirements
 
@@ -46,11 +50,11 @@ Verify: `rg -n 'development_method' src blocks && exit 1 || exit 0`
 
 ### `git:one-trunk-receives-pull-and-merge-requests` — One trunk receives pull and merge requests
 
-One configured trunk MUST receive every change through a short-lived topic branch and one guarded pull request or merge request, squash-merged, so one request is one commit and the history stays linear.
+One configured trunk MUST receive every change through a short-lived topic branch, as one squash commit that passed every gate the project declared, so one implementation is one commit and the history stays linear. Where the recorded integration mode is `forge`, that squash MUST be a guarded pull request or merge request and the trunk MUST take no direct push.
 
 #### Scenario: A change arrives outside a request
 
-- GIVEN a landed target whose trunk protection the setup owns
+- GIVEN a landed forge-integration target whose trunk protection the setup owns
 - WHEN a direct push to the trunk is attempted
 - THEN the forge refuses it, and the landed hooks refuse the commit at the desk first
 
@@ -79,6 +83,54 @@ The checkout mode, `git.checkout_mode`, MUST be one of `linked-worktree` and `ma
 - THEN the rendered routing block, the hook block, and the hook id are byte-identical to the landed ones
 
 Verify: `cargo nextest run -E 'test(the_checkout_mode_rename_reaches_no_landed_byte)'`
+
+### `git:integration-mode-selects-the-authority-that-squashes` — Integration mode selects the authority that squashes
+
+The integration mode, `git.integration`, MUST be one of `local` and `forge`, MUST be a recorded landing parameter resolved from a flag, the committed configuration, a compatible record, and a compiled default of `local` in that order, and MUST change only through a landing verb. It MUST decide only which authority performs the squash onto the trunk and MUST change no branch semantics and no checkout mode. A per-execution override MUST select the other authority for one integration without writing the record. A record predating this parameter MUST resolve to `forge`, because that is the authority such a target landed.
+
+#### Scenario: A target landed before the axis existed
+
+- GIVEN a record at a schema below the one that carries `git.integration`
+- WHEN a landing verb resolves the parameter with no flag and no configured value
+- THEN it resolves `forge`, and a fresh landing with the same silence resolves `local`
+
+Verify: `cargo nextest run -E 'test(integration) or test(params_from_a_record)'`
+
+### `git:the-release-request-integrates-at-the-forge` — The release request integrates at the forge
+
+The release request MUST integrate at the forge in both integration modes, because merging it is the one event that authorizes the tag, the publish, the provenance, and the artifacts. The tag protections and the release-request protections MUST be identical under both modes, and no verb MAY offer a local path to a release.
+
+#### Scenario: A local-integration target reaches a release
+
+- GIVEN a landed target whose recorded integration mode is `local`
+- WHEN the release-bearing protections are resolved for it
+- THEN they match a forge-integration target's, and the release still merges at the forge
+
+Verify: `cargo nextest run -E 'test(the_tag_floors_hold_under_both_integration_modes)'`
+
+### `git:the-manual-stage-is-the-pre-integrate-contract` — The manual stage is the pre-integrate contract
+
+Release-kit MUST express the pre-integrate gate as one `pre-commit` run over the `manual` stage across all files, and MUST read no hook identifier, revision, language, or test category from the target's own hook configuration, because `pre-commit` admits no custom stage and the project owns everything outside the marked block. Release-kit MUST land no continuous-integration workflow for the project's own checks and MUST judge no parity between those checks and the hook stages.
+
+#### Scenario: A project assigns its own checks to stages
+
+- GIVEN a target whose hook configuration puts an expensive suite on the `manual` stage
+- WHEN `rk integrate` runs its gate
+- THEN it invokes the stage as one command and names no hook the project declared
+
+Verify: `cargo nextest run -E 'test(the_gate_invokes_the_manual_stage)'`
+
+### `git:a-local-integration-is-a-transaction` — A local integration is a transaction
+
+A local integration MUST refuse rather than leave a partial result: it MUST record the trunk tip before it acts, MUST refuse when the trunk moved between the gate and the squash, MUST restore that tip when the post-squash trunk gate fails, and MUST write its evidence only after every check passed. It MUST take a lock so a second integration in the same clone refuses rather than waits, and it MUST never push and never force-push.
+
+#### Scenario: The gate fails after the squash commit exists
+
+- GIVEN a local integration whose trunk gate fails against the new tip
+- WHEN the command refuses
+- THEN the trunk is back at the tip recorded before the squash, and no evidence was written
+
+Verify: `cargo nextest run -E 'test(integrate)'`
 
 ### `git:git-and-forge-terms-stay-explicit` — Git and forge terms stay explicit
 

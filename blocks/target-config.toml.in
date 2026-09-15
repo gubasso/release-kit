@@ -21,6 +21,7 @@ line_prefix = RK_CONFIG_PROFILE_RELEASE_LINE_PREFIX # P: release-line branch pre
 [git]
 trunk = RK_CONFIG_GIT_TRUNK # P: the one permanent branch, rendered into every artifact naming it
 checkout_mode = RK_CONFIG_GIT_CHECKOUT_MODE # P: linked-worktree or main-worktree, where a topic branch opens
+integration = RK_CONFIG_GIT_INTEGRATION # P: local or forge, which authority moves an implementation onto the trunk
 
 [capabilities]
 nix_packaging = RK_CONFIG_CAPABILITIES_NIX_PACKAGING # P: opt-in Nix capability

@@ -452,6 +452,7 @@ fn collect_sentinels(destination: &str, bytes: &[u8], found: &mut Vec<String>) {
 mod tests {
     use super::{FileEntry, Report};
     use crate::landing::CheckoutMode;
+    use crate::landing::Integration;
     use crate::profile::{
         CapabilityRequests, GitWorkflow, ProfileSnapshot, ReleaseIntent, ReleaseMode,
     };
@@ -483,6 +484,7 @@ mod tests {
             git: GitWorkflow {
                 trunk: "master".into(),
                 checkout_mode: CheckoutMode::MainWorktree,
+                integration: Integration::Local,
             },
             capabilities: CapabilityRequests {
                 nix_packaging: false,
@@ -511,7 +513,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.upgrade/10","mode":"preview","target":"/tmp/t","from_version":"0.1.0","to_version":"0.2.0","profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"main-worktree"},"capabilities":{"nix_packaging":false,"reporting_policy":true,"scorecard":false},"selection":[],"config":{"action":"added","changes":[],"content":"schema_version = 2\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"drift"},{"path":"legacy.yml","kind":"rendered","action":"released"}],"next":["rk upgrade --target /tmp/t --apply writes"]}"#
+            r#"{"schema":"rk.upgrade/10","mode":"preview","target":"/tmp/t","from_version":"0.1.0","to_version":"0.2.0","profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"main-worktree","integration":"local"},"capabilities":{"nix_packaging":false,"reporting_policy":true,"scorecard":false},"selection":[],"config":{"action":"added","changes":[],"content":"schema_version = 2\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"drift"},{"path":"legacy.yml","kind":"rendered","action":"released"}],"next":["rk upgrade --target /tmp/t --apply writes"]}"#
         );
     }
 }

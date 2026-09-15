@@ -1,0 +1,3 @@
+# rk integrate runs this project's pre-integrate suite as
+# `pre-commit run --hook-stage manual --all-files`. Assign to the manual
+# stage every check that must pass before work reaches the trunk.

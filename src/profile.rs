@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
-use crate::landing::manifest::{self, CheckoutMode, Provider, Style};
+use crate::landing::manifest::{self, CheckoutMode, Integration, Provider, Style};
 
 /// The release intent's mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -110,6 +110,10 @@ pub struct GitWorkflow {
     pub trunk: String,
     /// Where a topic branch opens.
     pub checkout_mode: CheckoutMode,
+    /// Which authority moves an implementation onto the trunk. A record
+    /// predating the parameter carries no key and reads as `forge`.
+    #[serde(default = "crate::landing::manifest::integration_forge")]
+    pub integration: Integration,
 }
 
 /// The optional products the target requested.
@@ -229,6 +233,8 @@ pub struct Inputs<'a> {
     pub trunk: Option<&'a str>,
     /// Checkout mode override.
     pub checkout_mode: Option<CheckoutMode>,
+    /// Integration mode override.
+    pub integration: Option<Integration>,
     /// Nix packaging request override.
     pub nix: Option<bool>,
     /// Reporting policy request override.
@@ -430,6 +436,12 @@ impl Params {
         self.git.checkout_mode
     }
 
+    /// Which authority moves an implementation onto the trunk.
+    #[must_use]
+    pub const fn integration(&self) -> Integration {
+        self.git.integration
+    }
+
     /// The one permanent branch this landing writes into its artifacts.
     #[must_use]
     pub fn trunk(&self) -> &str {
@@ -495,6 +507,8 @@ impl Params {
         out.push_str(&self.git.trunk);
         out.push_str(" --checkout-mode ");
         out.push_str(self.git.checkout_mode.as_str());
+        out.push_str(" --integration ");
+        out.push_str(self.git.integration.as_str());
         out
     }
 
@@ -572,6 +586,7 @@ impl Params {
             git: GitWorkflow {
                 trunk: crate::config::TRUNK_DEFAULT.to_owned(),
                 checkout_mode: CheckoutMode::LinkedWorktree,
+                integration: Integration::Local,
             },
             capabilities: CapabilityRequests {
                 nix_packaging: false,
@@ -627,6 +642,11 @@ impl Params {
     /// The same set with the checkout mode answered.
     pub(crate) const fn set_checkout_mode_for_test(&mut self, mode: CheckoutMode) {
         self.git.checkout_mode = mode;
+    }
+
+    /// The same set with the integration mode answered.
+    pub(crate) const fn set_integration_for_test(&mut self, mode: Integration) {
+        self.git.integration = mode;
     }
 
     /// The same set with the Nix opt-in answered.
@@ -1016,6 +1036,30 @@ pub fn resolve(
     ])
     .unwrap_or((CheckoutMode::LinkedWorktree, Source::Default));
     sources.insert("git.checkout_mode", source);
+    // The compiled default is `local` and the record's absence answers
+    // `forge`. The two differ deliberately: a fresh landing takes the
+    // cheaper authority, and a target that landed before this axis
+    // existed keeps the one whose blocks and protections it carries.
+    let (integration, source) = answered([
+        (flags.integration, Source::Flag),
+        (config.and_then(|c| c.git.integration), Source::Config),
+        (record.map(|r| r.git.integration), Source::Record),
+        (None, Source::Observation),
+        // An adoption defaults to `forge`, the way it defaults to the
+        // main worktree: it is describing a target that already exists,
+        // and every target that landed before this axis carries the
+        // forge blocks. A fresh landing takes `local`.
+        (
+            Some(if purpose == Purpose::Adopt {
+                Integration::Forge
+            } else {
+                Integration::Local
+            }),
+            Source::Default,
+        ),
+    ])
+    .unwrap_or((Integration::Local, Source::Default));
+    sources.insert("git.integration", source);
 
     // The capability requests.
     let (nix_packaging, source) = answered([
@@ -1141,6 +1185,7 @@ pub fn resolve(
             git: GitWorkflow {
                 trunk,
                 checkout_mode,
+                integration,
             },
             capabilities: CapabilityRequests {
                 nix_packaging,

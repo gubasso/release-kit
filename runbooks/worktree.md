@@ -1,6 +1,6 @@
 # Worktree runbook
 
-The four steps of [worktrees](../method/08-worktrees.md) as commands: the chapter owns each step's why, this page owns its how. Mode-free by design — it documents the worktree form, which both workflow modes use; only step 1 notes where the `worktree` mode makes this the only path to a commit. `<project>` is the main checkout's directory name, and `<repo>` is the project path, filled in by `rk guide worktree` where detection resolves it. The commands are the operator's to run: an agent serves a runbook and states the command, and runs one only where the operator's request named that step.
+The four steps of [worktrees](../method/08-worktrees.md) as commands: the chapter owns each step's why, this page owns its how. Mode-free by design — it documents the worktree form, which both checkout modes use; only step 1 notes where the `worktree` mode makes this the only path to a commit, and step 3 hands the integration to its own runbook. `<project>` is the main checkout's directory name, and `<repo>` is the project path, filled in by `rk guide worktree` where detection resolves it. The commands are the operator's to run: an agent serves a runbook and states the command, and runs one only where the operator's request named that step.
 
 ## 1. Create the worktree
 
@@ -54,18 +54,20 @@ On rust:
 
 Each worktree builds into its own `target/` by default. A shared `CARGO_TARGET_DIR` stays correct under cargo's lock and serializes parallel builds; per-worktree targets trade disk for parallelism.
 
-## 3. Land through the one path
+## 3. Integrate
 
-Commit, push, pull request, squash merge — the trunk's one path, unchanged by the seat: `rk guide setup` step 4 owns the path and `rk guide release` step 1 the landing. Nothing is restated here.
+The seat's work reaches the trunk through the authority the record names, and [the integration runbook](./integration.md) owns both paths: `rk guide integration`. Nothing is restated here.
 
-## 4. Prune after the merge
+## 4. Prune after the integration
 
 ```bash
-git fetch --prune origin
-rk worktree prune                        # check: the merged worktree is a candidate
-rk worktree prune --verify               # check: confirmed against the merged request
+git fetch --prune origin                 # forge integration alone; a local integration reached no remote
+rk worktree prune                        # check: the retired worktree is reported
+rk worktree prune --verify               # check: confirmed, and the row names which proof did it
 rk worktree prune --apply                # check: pruned; the branch and its configuration went with it
 ```
+
+The proof the verify names is the merged request under forge integration and the recorded local integration under local integration. [Integration](./integration.md) owns which one a target leaves.
 
 ### 4a. The divergent rerun
 

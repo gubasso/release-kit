@@ -40,4 +40,11 @@ pub struct GuideArgs {
     /// record states; without either, every variant prints with its label.
     #[arg(long, alias = "style", value_name = "STYLE")]
     pub release_style: Option<String>,
+
+    /// Select the integration mode's lines where the runbook branches:
+    /// local or forge. Defaults to the mode the configuration or the
+    /// landing record states; without either, every variant prints with
+    /// its label.
+    #[arg(long, value_name = "MODE")]
+    pub integration: Option<String>,
 }

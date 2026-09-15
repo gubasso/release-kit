@@ -32,7 +32,7 @@ pub use crate::projection::{
     authored, block_markers, destinations, extract_block, hooks_marker_defect, kind_of,
     marker_defect, render, scope_is_shaped, splice_hooks_block, splice_marked_block, substitute,
 };
-pub use manifest::{CheckoutMode, Provider, Style};
+pub use manifest::{CheckoutMode, Integration, Provider, Style};
 use serde::Serialize;
 
 use crate::diagnostic::{Diagnostic, Reason};
@@ -149,7 +149,7 @@ mod tests {
     use super::{
         AGENTS_DESTINATION, BLOCK_BEGIN, BLOCK_DESTINATIONS, BLOCK_END, BRANCH_GRAMMAR,
         CheckoutMode, GLOSSARY_DESTINATION, HOOK_TYPES_LINE, HOOKS_BEGIN, HOOKS_DESTINATION,
-        HOOKS_END, Kind, Provider, SCOPE_SHAPE, Style, extract_block, kind_of, render,
+        HOOKS_END, Integration, Kind, Provider, SCOPE_SHAPE, Style, extract_block, kind_of, render,
         splice_hooks_block, splice_marked_block,
     };
     use crate::embedded;
@@ -157,6 +157,14 @@ mod tests {
         CapabilityRequests, GitWorkflow, ProfileSnapshot, ReleaseIntent, ReleaseMode,
     };
     use crate::projection::{self, Projection, ProjectionInput, TargetEvidence};
+
+    /// Every pairing of the two Git workflow axes, which are orthogonal.
+    const MODE_PAIRS: [(CheckoutMode, Integration); 4] = [
+        (CheckoutMode::MainWorktree, Integration::Forge),
+        (CheckoutMode::LinkedWorktree, Integration::Forge),
+        (CheckoutMode::MainWorktree, Integration::Local),
+        (CheckoutMode::LinkedWorktree, Integration::Local),
+    ];
 
     /// The candidate destinations for `params` over a target that holds
     /// nothing, in destination order.
@@ -182,11 +190,19 @@ mod tests {
     }
 
     fn routing_block(mode: CheckoutMode) -> String {
-        projection::routing_block(mode).expect("the binary embeds the block")
+        projection::routing_block(mode, Integration::Forge).expect("the binary embeds the block")
+    }
+
+    fn routing_block_for(mode: CheckoutMode, integration: Integration) -> String {
+        projection::routing_block(mode, integration).expect("the binary embeds the block")
     }
 
     fn hooks_block(mode: CheckoutMode) -> String {
-        projection::hooks_block(mode).expect("the binary embeds the block")
+        projection::hooks_block(mode, Integration::Forge).expect("the binary embeds the block")
+    }
+
+    fn hooks_block_for(mode: CheckoutMode, integration: Integration) -> String {
+        projection::hooks_block(mode, integration).expect("the binary embeds the block")
     }
 
     fn glossary_block() -> String {
@@ -450,7 +466,7 @@ mod tests {
         let target = camino::Utf8Path::from_path(dir.path()).expect("utf-8 path");
         for tech in ["rust", "bash"] {
             for forge in ["github", "gitlab"] {
-                for checkout_mode in [CheckoutMode::MainWorktree, CheckoutMode::LinkedWorktree] {
+                for (checkout_mode, integration) in MODE_PAIRS {
                     for style in [None, Some(Style::Trunk), Some(Style::Lines)] {
                         for ((nix, scorecard), code_scanning) in [
                             ((false, false), None),
@@ -478,6 +494,7 @@ mod tests {
                                 git: GitWorkflow {
                                     trunk: crate::config::TRUNK_DEFAULT.to_owned(),
                                     checkout_mode,
+                                    integration,
                                 },
                                 capabilities: CapabilityRequests {
                                     nix_packaging: nix,
@@ -501,7 +518,7 @@ mod tests {
                             assert_eq!(params.driver(), Some(tech));
                             assert_eq!(params.forge(), Some(forge));
                             assert_eq!(params.repo(), "acme/team/widget");
-                            assert_eq!(params.checkout_mode(), checkout_mode);
+                            assert_eq!(params.integration(), integration);
                             assert_eq!(params.style(), style);
                             assert_eq!(params.nix_packaging(), nix);
                             assert_eq!(params.scorecard(), scorecard);
@@ -511,6 +528,7 @@ mod tests {
                             let mut direct = super::Params::for_test("acme/team/widget", style);
                             direct.set_pair_for_test(tech, forge);
                             direct.set_checkout_mode_for_test(checkout_mode);
+                            direct.set_integration_for_test(integration);
                             direct.set_nix_for_test(nix);
                             direct.set_scorecard_for_test(scorecard);
                             direct.set_code_scanning_for_test(code_scanning);
@@ -566,6 +584,7 @@ mod tests {
                 style,
                 trunk: None,
                 checkout_mode: Some(checkout_mode),
+                integration: None,
                 nix: Some(nix),
                 reporting_policy: None,
                 scorecard: Some(scorecard),
@@ -1033,7 +1052,14 @@ mod tests {
         assert!(branches_hooks.contains("SKIP=no-commit-to-branch in"));
         for block in [&worktree_hooks, &branches_hooks] {
             assert!(block.contains(BRANCH_GRAMMAR), "the grammar has one owner");
-            for token in ["RK_BRANCH_GRAMMAR", "RK_SWEEP_SKIP", "RK_WORKTREE_GUARD"] {
+            for token in [
+                "RK_BRANCH_GRAMMAR",
+                "RK_SWEEP_SKIP",
+                "RK_SWEEP_NOTE",
+                "RK_WORKTREE_GUARD",
+                "RK_TRUNK_COMMIT_GUARD",
+                "RK_TRUNK_PUSH_GUARD",
+            ] {
                 assert!(!block.contains(token), "{token} survived: {block}");
             }
         }
@@ -1072,6 +1098,7 @@ mod tests {
             assert!(block.contains("Create or remove a worktree"));
             assert!(block.contains("`rk worktree add <branch>`"));
             assert!(!block.contains("RK_WORKFLOW_LINE"), "{block}");
+            assert!(!block.contains("RK_INTEGRATION_LINE"), "{block}");
         }
         let differing: Vec<(&str, &str)> = worktree_routing
             .lines()
@@ -1083,6 +1110,79 @@ mod tests {
             1,
             "exactly one routing line differs per mode: {differing:?}"
         );
+    }
+
+    /// The integration axis decides exactly which trunk guards render,
+    /// and it decides nothing about the checkout axis.
+    ///
+    /// The forge column is what every landed target already carries, so
+    /// the two guards are present there and absent under local
+    /// integration, where `rk integrate` writes the trunk commit and the
+    /// operator pushes the trunk. The location guard is integration-blind
+    /// in both directions, which is the claim the two axes being
+    /// orthogonal rests on.
+    #[test]
+    fn the_integration_mode_decides_which_trunk_guards_render() {
+        for mode in [CheckoutMode::LinkedWorktree, CheckoutMode::MainWorktree] {
+            let forge = hooks_block_for(mode, Integration::Forge);
+            let local = hooks_block_for(mode, Integration::Local);
+            assert!(forge.contains("- id: no-commit-to-branch"), "{forge}");
+            assert!(forge.contains("- id: rk-no-push-to-trunk"), "{forge}");
+            assert!(!local.contains("no-commit-to-branch"), "{local}");
+            assert!(!local.contains("rk-no-push-to-trunk"), "{local}");
+            // Everything the integration axis does not own is unchanged.
+            for kept in [
+                "- id: conventional-pre-commit",
+                "- id: rk-message",
+                "- id: rk-branch-name",
+                "- id: rk-no-hand-authored-tag",
+                "- id: rk-status-check",
+            ] {
+                assert!(forge.contains(kept), "{kept}: {forge}");
+                assert!(local.contains(kept), "{kept}: {local}");
+            }
+            // The checkout axis still decides the location guard, and the
+            // integration axis touches it in neither direction.
+            let located = mode == CheckoutMode::LinkedWorktree;
+            assert_eq!(forge.contains("- id: rk-worktree-location"), located);
+            assert_eq!(local.contains("- id: rk-worktree-location"), located);
+            // Only local integration names the pre-integrate contract.
+            assert!(
+                local.contains("pre-commit run --hook-stage manual --all-files"),
+                "{local}"
+            );
+            assert!(!forge.contains("--hook-stage manual"), "{forge}");
+            for token in [
+                "RK_TRUNK_COMMIT_GUARD",
+                "RK_TRUNK_PUSH_GUARD",
+                "RK_SWEEP_NOTE",
+            ] {
+                assert!(!local.contains(token), "{token} survived: {local}");
+                assert!(!forge.contains(token), "{token} survived: {forge}");
+            }
+        }
+        // The sweep note names exactly the hooks a trunk checkout meets.
+        assert!(
+            hooks_block_for(CheckoutMode::LinkedWorktree, Integration::Local)
+                .contains("SKIP=rk-worktree-location in")
+        );
+        assert!(
+            hooks_block_for(CheckoutMode::MainWorktree, Integration::Local)
+                .contains("A CI sweep needs no SKIP here")
+        );
+        // The routing block differs by exactly the integration line.
+        for mode in [CheckoutMode::LinkedWorktree, CheckoutMode::MainWorktree] {
+            let forge = routing_block_for(mode, Integration::Forge);
+            let local = routing_block_for(mode, Integration::Local);
+            assert!(forge.contains("squash-merged pull request"), "{forge}");
+            assert!(local.contains("`rk integrate <branch>`"), "{local}");
+            let differing = forge
+                .lines()
+                .zip(local.lines())
+                .filter(|(a, b)| a != b)
+                .count();
+            assert_eq!(differing, 1, "exactly one routing line differs per mode");
+        }
     }
 
     /// One definition of an ill-formed hook file, for every reader: the

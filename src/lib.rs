@@ -26,6 +26,7 @@ pub mod embedded;
 pub mod error;
 pub mod events;
 pub(crate) mod held;
+pub mod integrate;
 pub mod issue;
 pub mod landing;
 pub mod maintenance;

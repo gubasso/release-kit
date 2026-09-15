@@ -1,0 +1,2 @@
+# A CI sweep commits nothing, so a job running pre-commit against a trunk
+# checkout sets SKIP=RK_SWEEP_SKIP in its environment.

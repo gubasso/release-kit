@@ -86,13 +86,19 @@ Verify: `cargo nextest run -E 'test(config) or test(params_from_a_record) or tes
 
 ### `target-config:an-invariant-bearing-key-carries-a-floor` — An invariant-bearing key carries a floor
 
-The config reader MUST judge class F values through one floor table naming each key, its minimum and its source heading in `rk method invariants`, accept stricter values, and refuse a weaker value naming all three.
+The config reader MUST judge class F values through a floor table selected by the resolved `git.integration` mode, naming each key, its minimum and its source heading in `rk method invariants`, accept stricter values, and refuse a weaker value naming all three. The forge table MUST carry the request rule and the required-check rule; the local table MUST drop exactly those, because no forge can require a check before the push that starts it, and MUST keep every deletion, force-push, squash, and tag floor, with a restriction naming who may push the trunk in their place. Every heading either table cites MUST exist in the invariants chapter.
 
 #### Scenario: A target permits an additional merge method
 
 - GIVEN a policy allowing squash and merge commits
 - WHEN the config reader checks the policy
 - THEN it refuses naming `protection.allowed_merge_methods`, exactly squash, and `rk method invariants`
+
+#### Scenario: One policy is judged under each mode
+
+- GIVEN a policy whose owned trunk rules name deletion and non-fast-forward alone
+- WHEN the config reader checks it under `forge` and then under `local`
+- THEN the forge check refuses naming the missing request rule, and the local check passes
 
 Verify: `cargo nextest run -E 'test(config) or test(params_from_a_record) or test(a_schema_1_config_migrates_into_its_domains)'`
 

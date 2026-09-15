@@ -27,13 +27,13 @@ No directory suffix is canonical: the workspace's name is the operator's, and `r
 
 1. Create the worktree from its source — an adopted local branch, a remote tip, a base, or the trunk.
 2. Prepare its environment — a worktree is a fresh checkout.
-3. Land through the one path: commit, push, pull request, squash merge.
-4. Prune after the merge: forge-confirmed, worktree before branch.
+3. Integrate through the authority the record names; [integration](./12-integration.md) owns both paths.
+4. Prune after the integration, worktree before branch, on the proof that mode leaves.
 5. Promote to a workspace — optional: a layout move per seat, never required.
 
 `rk worktree add` resolves the source by precedence: an existing local branch is adopted into its worktree, a lone matching remote tip becomes a local tracking branch — which is how a forge-minted issue branch or the release bot's branch is seated from its real tip, never silently recreated from the trunk — and anything else is created from `--base` or the refreshed trunk, with a release line always taking an explicit base because a line is cut from a tag, never the tip.
 
-Pruning rests on the same proof as branch pruning: a merged request whose recorded head equals the branch's tip, re-observed at the moment of action. A tip, a lock, or dirt that moved after verification keeps the worktree; the worktree is removed before its branch, so a failed removal leaves the branch and its work untouched; and a forge that cannot answer keeps everything. The step-by-step form is [the worktree runbook](../runbooks/worktree.md), `rk guide worktree`.
+Pruning rests on the same proof as branch pruning, and the recorded integration mode decides which proof is available: a merged request whose recorded head equals the branch's tip, or a locally recorded integration whose recorded branch tip equals it. Either proof is re-observed at the moment of action. A tip, a lock, or dirt that moved after verification keeps the worktree; the worktree is removed before its branch, so a failed removal leaves the branch and its work untouched; and a forge that cannot answer keeps everything. The step-by-step form is [the worktree runbook](../runbooks/worktree.md), `rk guide worktree`.
 
 ## Changing the mode
 
@@ -51,7 +51,7 @@ A worktree isolates the working tree — HEAD, index, uncommitted files — and 
 
 ## Enforcement distances
 
-The forge protections are the enforcement, identical in both modes and blind to local topology; the mode picks which desk-level mirrors stand. In `linked-worktree` mode the main checkout mirrors the trunk protection locally — the trunk refused by the trunk guard, every other commit by the location guard — and in `main-worktree` mode both forms stay open. The two-distances doctrine of [setup](./02-setup.md) holds unchanged.
+The forge protections are the enforcement, identical in both checkout modes and blind to local topology; the checkout mode picks which desk-level mirrors stand. In `linked-worktree` mode the main checkout mirrors the trunk protection locally — the trunk refused by the trunk guard where the recorded integration mode is `forge`, every other commit by the location guard — and in `main-worktree` mode both forms stay open. The location guard is integration-blind: it exits zero on the trunk in either integration mode, so a local integration's trunk commit passes it and a main-checkout branch commit still refuses. Which guards render at all is [integration](./12-integration.md)'s answer, and the two-distances doctrine of [setup](./02-setup.md) holds unchanged.
 
 ## Harnesses
 
@@ -59,4 +59,4 @@ A coding-agent harness that creates worktrees of its own is pointed at `rk workt
 
 ## Where this connects
 
-The branch forms are [the model](./00-model.md); the mode choice is made in [setup](./02-setup.md); the landing path the seats feed is [operate](./03-operate.md); a release line's worktree follows [branch for release](./07-branch-for-release.md).
+The branch forms are [the model](./00-model.md); the mode choice is made in [setup](./02-setup.md); the integration a seat feeds is [integration](./12-integration.md); the release path from there is [operate](./03-operate.md); a release line's worktree follows [branch for release](./07-branch-for-release.md).

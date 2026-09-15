@@ -10,6 +10,7 @@ pub mod depend;
 pub mod doctor;
 pub mod guide;
 pub mod init;
+pub mod integrate;
 pub mod issue;
 pub mod lines;
 pub mod message;
@@ -72,6 +73,9 @@ pub enum Commands {
     Branches(branches::BranchesArgs),
     /// Open, inventory, and retire the release lines.
     Lines(lines::LinesArgs),
+    /// Move one implementation onto the trunk, through the recorded authority.
+    Integrate(integrate::IntegrateArgs),
+
     /// Judge a commit message, title, or body against the content guards.
     Message(message::MessageArgs),
     /// Inspect, create, and prune the linked worktrees beside a checkout.

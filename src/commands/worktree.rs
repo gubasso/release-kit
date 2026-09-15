@@ -821,9 +821,13 @@ struct PruneRow {
     /// The judgment: kept, candidate, stale, confirmed, unconfirmed,
     /// unknown, pruned, remove-failed, or branch-delete-failed.
     status: &'static str,
-    /// The merged request that proved the tip, where one did.
+    /// What proved the tip, where anything did: a merged request as the
+    /// forge names it, or the local integration that wrote the trunk.
     #[serde(skip_serializing_if = "Option::is_none")]
-    request: Option<String>,
+    proof: Option<String>,
+    /// Which of the two proofs it was: `request` or `local-integration`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    proof_kind: Option<&'static str>,
     /// Why the worktree stays, or what is still owed.
     #[serde(skip_serializing_if = "Option::is_none")]
     detail: Option<String>,
@@ -838,16 +842,16 @@ impl PruneRow {
                 "stale: the registered directory is missing; apply clears the record".to_owned()
             }
             "confirmed" => format!(
-                "confirmed: merged request {} matches this tip",
-                self.request.as_deref().unwrap_or("")
+                "confirmed: {} matches this tip",
+                self.proof.as_deref().unwrap_or("")
             ),
             "unconfirmed" => format!("unconfirmed: {}", self.detail.as_deref().unwrap_or("")),
             "unknown" => format!("unknown: {}", self.detail.as_deref().unwrap_or("")),
             "pruned" => {
-                let mut line = self.request.as_deref().map_or_else(
-                    || "pruned".to_owned(),
-                    |request| format!("pruned (merged request {request})"),
-                );
+                let mut line = self
+                    .proof
+                    .as_deref()
+                    .map_or_else(|| "pruned".to_owned(), |proof| format!("pruned ({proof})"));
                 if let Some(detail) = &self.detail {
                     line.push_str("; ");
                     line.push_str(detail);
@@ -919,6 +923,7 @@ fn prune(
             .target_state("unchanged"),
         ));
     }
+    let ledger = crate::maintenance::integration_ledger(target);
     let seat_paths = seats(target);
     let seat_refs: Vec<&Utf8Path> = seat_paths.iter().map(Utf8PathBuf::as_path).collect();
 
@@ -931,7 +936,11 @@ fn prune(
             .branch
             .as_deref()
             .and_then(|name| branches.iter().find(|branch| branch.name == name));
+        // A locally integrated branch has no upstream to go gone, so
+        // its own evidence is what makes its seat reportable at all.
+        let local = observation.and_then(|branch| ledger.proof(&branch.name, &branch.tip));
         let reportable = worktree.prunable.is_some()
+            || local.is_some()
             || worktree
                 .branch
                 .as_deref()
@@ -940,7 +949,15 @@ fn prune(
             continue;
         }
         let dirty = worktree.prunable.is_none() && is_dirty(&worktree.path);
-        let class = classify(worktree, observation, &layout, &seat_refs, &trunk, dirty);
+        let class = classify(
+            worktree,
+            observation,
+            &layout,
+            &seat_refs,
+            &trunk,
+            dirty,
+            local,
+        );
         judged.push(Judged {
             worktree: worktree.clone(),
             tip: observation.map(|branch| branch.tip.clone()),
@@ -978,12 +995,12 @@ fn prune(
     let mut rows: Vec<PruneRow> = judged
         .iter()
         .map(|row| {
-            let (status, request, detail) = match &row.class {
+            let (status, proof, detail) = match &row.class {
                 WtClass::Kept { reason } => ("kept", None, Some(reason.clone())),
                 WtClass::Candidate => ("candidate", None, None),
                 WtClass::Stale => ("stale", None, None),
-                WtClass::Judged(Class::Confirmed { request }) => {
-                    ("confirmed", Some(request.clone()), None)
+                WtClass::Judged(Class::Confirmed { proof }) => {
+                    ("confirmed", Some(proof.clone()), None)
                 }
                 WtClass::Judged(Class::Unconfirmed { detail }) => {
                     ("unconfirmed", None, Some(detail.clone()))
@@ -998,7 +1015,8 @@ fn prune(
                 branch: row.worktree.branch.clone(),
                 tip: row.tip.clone(),
                 status,
-                request,
+                proof_kind: proof.as_ref().map(crate::branches::Proof::kind),
+                proof: proof.as_ref().map(crate::branches::Proof::detail),
                 detail,
             }
         })
@@ -1027,7 +1045,7 @@ fn prune(
     let next = next_lines(mode);
     render(out, &rows, &next, quiet);
     out.emit(&PruneReport {
-        schema: "rk.worktree-prune/1",
+        schema: "rk.worktree-prune/2",
         mode,
         worktrees: rows,
         next,
@@ -1110,10 +1128,12 @@ fn retire(target: &Utf8Path, row: &mut PruneRow) -> Result<(), usize> {
     }
     match maintenance::delete_branch(target, &branch, &tip) {
         maintenance::Deletion::Deleted => {
+            maintenance::forget_integration(target, &branch);
             row.status = "pruned";
             Ok(())
         }
         maintenance::Deletion::ConfigSurvived { detail } => {
+            maintenance::forget_integration(target, &branch);
             row.status = "pruned";
             row.detail = Some(detail);
             Ok(())
@@ -1206,7 +1226,12 @@ fn render(out: Output, rows: &[PruneRow], next: &[String], quiet: bool) {
     if rows.is_empty() {
         out.result_line("no worktree needs cleanup");
     } else {
-        out.result_line(header(rows.len()));
+        out.result_line(header(
+            rows.len(),
+            rows.iter()
+                .filter(|row| row.proof_kind == Some("local-integration"))
+                .count(),
+        ));
         let width = rows.iter().map(|row| row.path.len()).max().unwrap_or(0);
         for row in rows {
             let tip = row
@@ -1226,11 +1251,22 @@ fn render(out: Output, rows: &[PruneRow], next: &[String], quiet: bool) {
 }
 
 /// The count-bearing first line.
-fn header(count: usize) -> String {
-    if count == 1 {
-        "1 worktree reports cleanup (a candidate, not proof):".to_owned()
+///
+/// As on the branch side, the line names which signal reported each
+/// seat: a gone upstream is a candidate, and a recorded local
+/// integration is proof.
+fn header(count: usize, local: usize) -> String {
+    let (noun, reports, carry) = if count == 1 {
+        ("1 worktree".to_owned(), "reports", "carries")
     } else {
-        format!("{count} worktrees report cleanup (a candidate, not proof):")
+        (format!("{count} worktrees"), "report", "carry")
+    };
+    match (local, count - local) {
+        (0, _) => format!("{noun} {reports} cleanup (a candidate, not proof):"),
+        (_, 0) => format!("{noun} {carry} a local integration this clone recorded:"),
+        (_, other) => {
+            format!("{noun}: {other} reporting cleanup, {local} locally integrated:")
+        }
     }
 }
 
@@ -1345,12 +1381,12 @@ mod tests {
         );
     }
 
-    /// The complete `rk.worktree-prune/1` shape, held by snapshot in the
+    /// The complete `rk.worktree-prune/2` shape, held by snapshot in the
     /// populated and clean forms.
     #[test]
     fn the_worktree_prune_schema_snapshot_holds() {
         let populated = PruneReport {
-            schema: "rk.worktree-prune/1",
+            schema: "rk.worktree-prune/2",
             mode: "verify",
             worktrees: vec![
                 PruneRow {
@@ -1358,7 +1394,8 @@ mod tests {
                     branch: Some("feat/x".into()),
                     tip: Some("aaaabbbbccccddddaaaabbbbccccddddaaaabbbb".into()),
                     status: "confirmed",
-                    request: Some("#8".into()),
+                    proof: Some("#8".into()),
+                    proof_kind: Some("request"),
                     detail: None,
                 },
                 PruneRow {
@@ -1366,7 +1403,8 @@ mod tests {
                     branch: None,
                     tip: None,
                     status: "stale",
-                    request: None,
+                    proof: None,
+                    proof_kind: None,
                     detail: None,
                 },
             ],
@@ -1377,10 +1415,10 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&populated).expect("a report serializes"),
-            r##"{"schema":"rk.worktree-prune/1","mode":"verify","worktrees":[{"path":"/srv/widget@feat-x","branch":"feat/x","tip":"aaaabbbbccccddddaaaabbbbccccddddaaaabbbb","status":"confirmed","request":"#8"},{"path":"/srv/widget@fix-y","status":"stale"}],"next":["rk worktree prune --apply verifies, then removes each worktree before its branch"]}"##
+            r##"{"schema":"rk.worktree-prune/2","mode":"verify","worktrees":[{"path":"/srv/widget@feat-x","branch":"feat/x","tip":"aaaabbbbccccddddaaaabbbbccccddddaaaabbbb","status":"confirmed","proof":"#8","proof_kind":"request"},{"path":"/srv/widget@fix-y","status":"stale"}],"next":["rk worktree prune --apply verifies, then removes each worktree before its branch"]}"##
         );
         let clean = PruneReport {
-            schema: "rk.worktree-prune/1",
+            schema: "rk.worktree-prune/2",
             mode: "preview",
             worktrees: vec![],
             next: vec![
@@ -1389,7 +1427,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&clean).expect("a report serializes"),
-            r#"{"schema":"rk.worktree-prune/1","mode":"preview","worktrees":[],"next":["rk worktree prune --verify confirms each candidate against the forge"]}"#,
+            r#"{"schema":"rk.worktree-prune/2","mode":"preview","worktrees":[],"next":["rk worktree prune --verify confirms each candidate against the forge"]}"#,
             "a clean clone reports one empty list a caller can branch on"
         );
     }

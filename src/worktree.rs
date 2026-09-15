@@ -366,6 +366,7 @@ pub fn classify(
     seats: &[&Utf8Path],
     trunk: &str,
     dirty: bool,
+    local: Option<&crate::integrate::Entry>,
 ) -> WtClass {
     if worktree.path == layout.main {
         return WtClass::Kept {
@@ -412,6 +413,14 @@ pub fn classify(
         return WtClass::Kept {
             reason: "uncommitted changes".to_owned(),
         };
+    }
+    // Local evidence is a proof rather than a candidate signal, so it
+    // resolves here and asks no forge. It sits after every state guard:
+    // a dirty, locked, or in-use seat keeps whatever proved its branch.
+    if let Some(entry) = local {
+        return WtClass::Judged(Class::Confirmed {
+            proof: crate::branches::Proof::LocalIntegration(entry.trunk_commit.clone()),
+        });
     }
     if !branch.gone {
         return WtClass::Kept {
@@ -690,7 +699,7 @@ mod tests {
         let seats: &[&Utf8Path] = &[seat];
         let gone = observation("feat/x", true);
         let keep = |worktree: &Worktree, branch: Option<&Branch>, dirty: bool| {
-            classify(worktree, branch, &layout, seats, "master", dirty)
+            classify(worktree, branch, &layout, seats, "master", dirty, None)
         };
 
         assert_eq!(

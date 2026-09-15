@@ -61,6 +61,7 @@ fn run(cli: &Cli) -> Result<(), RkError> {
         Commands::Setup(args) => commands::setup::run(args),
         Commands::Branches(args) => commands::branches::run(args),
         Commands::Lines(args) => commands::lines::run(args),
+        Commands::Integrate(args) => commands::integrate::run(args),
         Commands::Message(args) => commands::message::run(args),
         Commands::Worktree(args) => commands::worktree::run(args),
         Commands::Issue(args) => commands::issue::run(args),
@@ -125,6 +126,7 @@ const fn name(command: &Commands) -> &'static str {
         Commands::Setup(_) => "setup",
         Commands::Branches(_) => "branches",
         Commands::Lines(_) => "lines",
+        Commands::Integrate(_) => "integrate",
         Commands::Message(_) => "message",
         Commands::Worktree(_) => "worktree",
         Commands::Issue(_) => "issue",
@@ -180,6 +182,7 @@ const fn wants_json(command: &Commands) -> bool {
             | LinesAction::Rc { json, .. }
             | LinesAction::Retire { json, .. } => *json,
         },
+        Commands::Integrate(args) => args.json,
         Commands::Message(args) => args.json,
         // An explicit nested match over all three actions: a `_ => false`
         // arm would silently swallow a new one.
