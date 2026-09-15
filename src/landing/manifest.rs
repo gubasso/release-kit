@@ -735,7 +735,7 @@ mod tests {
     #[test]
     fn the_manifest_schema_snapshot_holds() {
         let manifest = Manifest {
-            schema_version: 9,
+            schema_version: super::SCHEMA_VERSION,
             rk_version: "0.1.0".into(),
             origin: "init".into(),
             landed_at: "2026-08-29T00:00:00Z".into(),
@@ -786,7 +786,7 @@ mod tests {
         assert_eq!(
             text,
             format!(
-                r#"{{"schema_version":9,"rk_version":"0.1.0","origin":"init","landed_at":"2026-08-29T00:00:00Z","profile":{{"technologies":["rust"],"forge":"github","release":{{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}}}},"git":{{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"}},"capabilities":{{"nix_packaging":true,"reporting_policy":true,"scorecard":true,"code_scanning":"semgrep"}},"parameters":{{"repo":"acme/widget","security_contact":"","security_response":"best-effort"}},"files":[{{"destination":"release-plz.toml","kind":"seeded","sha256":"{empty}"}},{{"destination":"AGENTS.md","kind":"rendered","sha256":"{empty}","placement":"region"}}],"pins":{{"release-plz":"0.3.160"}}}}"#
+                r#"{{"schema_version":10,"rk_version":"0.1.0","origin":"init","landed_at":"2026-08-29T00:00:00Z","profile":{{"technologies":["rust"],"forge":"github","release":{{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}}}},"git":{{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"}},"capabilities":{{"nix_packaging":true,"reporting_policy":true,"scorecard":true,"code_scanning":"semgrep"}},"parameters":{{"repo":"acme/widget","security_contact":"","security_response":"best-effort"}},"files":[{{"destination":"release-plz.toml","kind":"seeded","sha256":"{empty}"}},{{"destination":"AGENTS.md","kind":"rendered","sha256":"{empty}","placement":"region"}}],"pins":{{"release-plz":"0.3.160"}}}}"#
             ),
             "a whole file omits its placement, and no retired digest field survives"
         );
@@ -820,7 +820,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&release_less).expect("serializes"),
-            r#"{"schema_version":9,"rk_version":"0.1.0","origin":"init","landed_at":"2026-08-29T00:00:00Z","profile":{"technologies":[],"release":{"mode":"none"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"},"capabilities":{"nix_packaging":false,"reporting_policy":false,"scorecard":false},"parameters":{"repo":"","security_contact":"","security_response":"best-effort"},"files":[],"pins":{}}"#
+            r#"{"schema_version":10,"rk_version":"0.1.0","origin":"init","landed_at":"2026-08-29T00:00:00Z","profile":{"technologies":[],"release":{"mode":"none"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"},"capabilities":{"nix_packaging":false,"reporting_policy":false,"scorecard":false},"parameters":{"repo":"","security_contact":"","security_response":"best-effort"},"files":[],"pins":{}}"#
         );
     }
 
@@ -955,7 +955,7 @@ mod tests {
             ("security_response", ""),
         ] {
             let record = format!(
-                r#"{{"schema_version":9,"rk_version":"0.1.0","origin":"init","landed_at":"2026-08-29T00:00:00Z","profile":{{"technologies":["rust"],"forge":"github","release":{{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}}}},"git":{{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"}},"capabilities":{{"nix_packaging":false,"reporting_policy":true,"scorecard":false}},"parameters":{{"repo":"acme/widget","{field}":"{value}"}},"files":[],"pins":{{}}}}"#
+                r#"{{"schema_version":10,"rk_version":"0.1.0","origin":"init","landed_at":"2026-08-29T00:00:00Z","profile":{{"technologies":["rust"],"forge":"github","release":{{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}}}},"git":{{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"}},"capabilities":{{"nix_packaging":false,"reporting_policy":true,"scorecard":false}},"parameters":{{"repo":"acme/widget","{field}":"{value}"}},"files":[],"pins":{{}}}}"#
             );
             std::fs::write(target.join(super::MANIFEST_PATH), record).expect("the record writes");
             let refused = super::load(target).expect_err("an uncanonical record refuses");

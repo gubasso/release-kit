@@ -923,7 +923,7 @@ fn prune(
             .target_state("unchanged"),
         ));
     }
-    let ledger = crate::maintenance::integration_ledger(target);
+    let ledger = crate::maintenance::integration_ledger(target, &trunk);
     let seat_paths = seats(target);
     let seat_refs: Vec<&Utf8Path> = seat_paths.iter().map(Utf8PathBuf::as_path).collect();
 

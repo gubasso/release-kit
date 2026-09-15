@@ -26,7 +26,6 @@ set -eu
 : "${RK_TRUNK_RULES:?rk sets this; run this script through rk setup}"
 : "${RK_SQUASH_TITLE_SOURCE:?rk sets this; run this script through rk setup}"
 : "${RK_SQUASH_BODY_SOURCE:?rk sets this; run this script through rk setup}"
-: "${RK_REQUIRED_CHECK:?rk sets this from --required-check}"
 
 name="$RK_TRUNK_RULESET"
 id="$(gh api "repos/$RK_REPO/rulesets" -q ".[] | select(.name == \"$name\") | .id" | head -n 1)"

@@ -193,7 +193,7 @@ fn prune(
     // proof. A branch that never reached the forge has no gone upstream
     // to put it in the report, so this read is what makes a locally
     // integrated branch visible at all.
-    let ledger = crate::maintenance::integration_ledger(target);
+    let ledger = crate::maintenance::integration_ledger(target, &trunk);
     let mut judged: Vec<(&Branch, Class)> = branches
         .iter()
         .filter_map(|branch| {

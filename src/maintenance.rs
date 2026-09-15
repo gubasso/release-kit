@@ -121,7 +121,8 @@ fn git(target: &Utf8Path, args: &[&str]) -> Result<std::process::Output, String>
         .map_err(|source| format!("git did not run: {source}"))
 }
 
-/// The clone's local integration ledger, or an empty one.
+/// The clone's local integration ledger, keeping only the entries the
+/// trunk actually carries.
 ///
 /// Both prune verbs read this, so the read has one owner beside the
 /// deletion discipline they already share. A clone that never integrated
@@ -129,15 +130,35 @@ fn git(target: &Utf8Path, args: &[&str]) -> Result<std::process::Output, String>
 /// parse all read as empty here: an empty ledger authorizes no deletion,
 /// which is the safe direction, and `rk integrate` is what refuses on an
 /// unreadable ledger, where refusing costs nothing.
+///
+/// An entry whose commit the trunk does not reach is dropped. Evidence is
+/// staged before its publication, so an integration whose publication
+/// failed leaves an entry naming a commit no ref carries, and an entry
+/// can also outlive a trunk someone reset. Reading reachability here is
+/// what makes that residue inert: the proof is the trunk carrying the
+/// work, never the ledger saying so.
 #[must_use]
-pub fn integration_ledger(target: &Utf8Path) -> crate::integrate::Ledger {
+pub fn integration_ledger(target: &Utf8Path, trunk: &str) -> crate::integrate::Ledger {
     let Some(path) = ledger_path(target) else {
         return crate::integrate::Ledger::default();
     };
-    std::fs::read_to_string(path)
+    let mut ledger: crate::integrate::Ledger = std::fs::read_to_string(path)
         .ok()
         .and_then(|text| crate::integrate::Ledger::parse(&text).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    ledger
+        .entries
+        .retain(|entry| trunk_reaches(target, trunk, &entry.trunk_commit));
+    ledger
+}
+
+/// Whether the trunk reaches one commit.
+///
+/// A git that cannot answer reads as unreachable, which keeps the branch
+/// rather than deleting it.
+fn trunk_reaches(target: &Utf8Path, trunk: &str, commit: &str) -> bool {
+    git(target, &["merge-base", "--is-ancestor", commit, trunk])
+        .is_ok_and(|answer| answer.status.success())
 }
 
 /// Drop one branch's entry from the ledger, after the branch is gone.

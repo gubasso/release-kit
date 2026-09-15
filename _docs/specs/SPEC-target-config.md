@@ -86,7 +86,7 @@ Verify: `cargo nextest run -E 'test(config) or test(params_from_a_record) or tes
 
 ### `target-config:an-invariant-bearing-key-carries-a-floor` — An invariant-bearing key carries a floor
 
-The config reader MUST judge class F values through a floor table selected by the resolved `git.integration` mode, naming each key, its minimum and its source heading in `rk method invariants`, accept stricter values, and refuse a weaker value naming all three. The forge table MUST carry the request rule and the required-check rule; the local table MUST drop exactly those, because no forge can require a check before the push that starts it, and MUST keep every deletion, force-push, squash, and tag floor, with a restriction naming who may push the trunk in their place. Every heading either table cites MUST exist in the invariants chapter.
+The config reader MUST judge class F values through a floor table selected by the resolved `git.integration` mode, naming each key, its minimum and its source heading in `rk method invariants`, accept stricter values, and refuse a weaker value naming all three. The forge table MUST carry the request rule and the required-check rule; the local table MUST drop exactly those, because no forge can require a check before the push that starts it, and MUST keep every deletion, force-push, squash, and tag floor, refusing only a GitLab push access level broad enough to name every writer. Every heading either table cites MUST exist in the invariants chapter.
 
 #### Scenario: A target permits an additional merge method
 

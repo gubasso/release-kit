@@ -155,8 +155,11 @@ const FORGE_ONLY: &[Floor] = &[
 /// The request rule and the required-check rule are gone, because no
 /// forge can require a check before the push that starts it, and the
 /// push is the mechanism this mode uses. What still holds against a
-/// direct push stays: no deletion, no force-push, and a restriction
-/// naming who may write the trunk.
+/// direct push stays: no deletion and no force-push. Who may make the
+/// push is the forge's own answer rather than a rule this table can
+/// floor on both forges — GitLab names a level, and a GitHub ruleset
+/// carries no allowed-pushers list — so the one thing floored here is
+/// that a stated GitLab level is not broad enough to name every writer.
 const LOCAL_ONLY: &[Floor] = &[
     Floor {
         key: "protection.owned_trunk_rules",

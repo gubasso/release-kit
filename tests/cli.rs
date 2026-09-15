@@ -31063,3 +31063,133 @@ fn the_recorded_tip_is_the_object_the_squash_was_built_from() {
         "the evidence certifies the tree that reached the trunk"
     );
 }
+
+/// The gate judges the tree that reaches the trunk. A commit landing in
+/// the seat while the gate runs would otherwise be squashed without
+/// having passed it, so the branch is observed before the gate and
+/// re-observed after it.
+///
+/// SATISFIES git:the-manual-stage-is-the-pre-integrate-contract
+#[test]
+fn integrate_refuses_a_branch_that_moved_while_the_gate_ran() {
+    if !pre_commit_present() {
+        return;
+    }
+    let (_parent, repo) = integrate_fixture();
+    let seat = repo
+        .parent()
+        .expect("a parent")
+        .join("widget@feat-greeting");
+    // The project's own manual hook commits in the seat, which is the
+    // hand at the desk the lock cannot bound.
+    std::fs::write(
+        seat.join("sneak.sh"),
+        "#!/bin/sh\nset -eu\necho late > late.txt\ngit add late.txt\ngit -c core.hooksPath=/dev/null commit -qm 'feat(greeting): late'\n",
+    )
+    .expect("the hook script writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(
+            seat.join("sneak.sh"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .expect("the script is executable");
+    }
+    std::fs::write(
+        seat.join(".pre-commit-config.yaml"),
+        "repos:\n  - repo: local\n    hooks:\n      - id: sneak\n        name: sneak\n        stages: [manual]\n        language: script\n        always_run: true\n        pass_filenames: false\n        entry: sneak.sh\n",
+    )
+    .expect("the hook file writes");
+    git_in(&seat, &["add", "-A"]);
+    git_in(
+        &seat,
+        &["commit", "-qm", "ci(hooks): commit under the gate"],
+    );
+    let before = rev_parse(&repo, "master");
+    rk_scrubbed()
+        .args(["integrate", "feat/greeting", "--apply"])
+        .args(["-m", "feat(greeting): add it", "--target"])
+        .arg(&repo)
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("while the gate ran"));
+    assert_eq!(rev_parse(&repo, "master"), before);
+    assert!(!repo.join(".git/rk/integrations.json").exists());
+}
+
+/// The ignore rules that judge a trunk message are the seat's, because a
+/// branch can add one and the landed commit-msg stage would have judged
+/// it there.
+#[test]
+fn integrate_judges_the_message_against_the_seats_ignore_rules() {
+    let (_parent, repo) = integrate_fixture();
+    let seat = repo
+        .parent()
+        .expect("a parent")
+        .join("widget@feat-greeting");
+    // The pattern exists on the branch alone; the trunk checkout has it
+    // nowhere, so judging there would let the reference through.
+    std::fs::write(seat.join(".gitignore"), "private-notes/\n").expect("the ignore writes");
+    git_in(&seat, &["add", "-A"]);
+    git_in(&seat, &["commit", "-qm", "chore(git): ignore the notes"]);
+    let before = rev_parse(&repo, "master");
+    rk_scrubbed()
+        .args(["integrate", "feat/greeting", "--apply"])
+        .args([
+            "-m",
+            "feat(greeting): add it\n\nSee private-notes/plan.md for the rest.\n",
+            "--target",
+        ])
+        .arg(&repo)
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("internal-path"));
+    assert_eq!(rev_parse(&repo, "master"), before);
+}
+
+/// Evidence naming a commit the trunk does not reach proves nothing. The
+/// evidence is staged before its publication, so a publication that fails
+/// leaves residue rather than a deletion proof, and a trunk someone reset
+/// stops confirming what it no longer carries.
+///
+/// SATISFIES maintenance:gone-is-a-candidate-not-proof
+#[test]
+fn unreachable_evidence_confirms_nothing() {
+    if !pre_commit_present() {
+        return;
+    }
+    let (_parent, repo) = integrate_fixture();
+    rk_scrubbed()
+        .args(["integrate", "feat/greeting", "--apply"])
+        .args(["-m", "feat(greeting): add it", "--target"])
+        .arg(&repo)
+        .assert()
+        .success();
+    let integrated = rev_parse(&repo, "master");
+
+    // Confirmed while the trunk carries it.
+    let report = |repo: &Path| -> serde_json::Value {
+        let out = rk_scrubbed()
+            .args(["worktree", "prune", "--verify", "--json", "--target"])
+            .arg(repo)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        serde_json::from_slice(&out).expect("one JSON object")
+    };
+    assert_eq!(report(&repo)["worktrees"][0]["status"], "confirmed");
+
+    // The trunk moves off the integration; the evidence still names it.
+    git_in(
+        &repo,
+        &["update-ref", "refs/heads/master", &format!("{integrated}^")],
+    );
+    let held = report(&repo);
+    assert!(
+        held["worktrees"].as_array().expect("rows").is_empty(),
+        "a commit the trunk does not reach proves nothing: {held}"
+    );
+}

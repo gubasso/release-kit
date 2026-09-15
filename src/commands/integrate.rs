@@ -215,42 +215,50 @@ fn request_commands(seat: &Utf8Path, trunk: &str, branch: &str) -> Vec<String> {
     ]
 }
 
+/// The dry run, which refreshes nothing.
+///
+/// No lock and no fetch: a preview that moved remote-tracking refs and
+/// wrote `FETCH_HEAD` would make its own promise false, and it would
+/// also report a plan built on state it changed while reporting it.
+fn preview(args: &IntegrateArgs, out: Output, run: &LocalRun<'_>) -> Result<(), RkError> {
+    let mut steps = Vec::new();
+    let trunk_before = rev_parse(run.seat, run.trunk)?;
+    steps.push("no fetch and no lock: a preview refreshes nothing".to_owned());
+    steps.push(format!(
+        "would rebase {} onto {}, or onto whatever the fetch brings",
+        args.branch,
+        integrate::short(&trunk_before)
+    ));
+    steps.push("would run the manual stage in the seat".to_owned());
+    steps.push(format!("would write one squash commit onto {}", run.trunk));
+    report(
+        args,
+        out,
+        run,
+        &trunk_before,
+        None,
+        steps,
+        &[format!(
+            "rk integrate {} --target {} --apply performs it",
+            args.branch, run.target
+        )],
+    )
+}
+
 /// The local transaction.
 ///
-/// The preview comes first and takes no lock, runs no fetch, and touches
-/// no ref: a dry run that refreshed remote-tracking refs and wrote
-/// `FETCH_HEAD` would make its own promise false.
-///
-/// The apply reads its evidence ledger before it builds anything, so a
-/// ledger this binary cannot parse refuses while the trunk still stands
-/// where it stood. Publishing is the last failure point that moves a ref.
+/// It reads its evidence ledger before it builds anything, so a ledger
+/// this binary cannot parse refuses while the trunk still stands where it
+/// stood, and it stages the evidence before it publishes, so every
+/// fallible part of writing it happens with the trunk unmoved. The one
+/// ref this moves is the trunk, through one compare-and-swap.
 fn local_path(args: &IntegrateArgs, out: Output, run: &LocalRun<'_>) -> Result<(), RkError> {
     let message = args.message.as_deref().unwrap_or_default();
-    refuse_message(run.target, message)?;
+    refuse_message(run.seat, message)?;
     let mut steps = Vec::new();
 
     if !args.apply {
-        let trunk_before = rev_parse(run.seat, run.trunk)?;
-        steps.push("no fetch and no lock: a preview refreshes nothing".to_owned());
-        steps.push(format!(
-            "would rebase {} onto {}, or onto whatever the fetch brings",
-            args.branch,
-            integrate::short(&trunk_before)
-        ));
-        steps.push("would run the manual stage in the seat".to_owned());
-        steps.push(format!("would write one squash commit onto {}", run.trunk));
-        return report(
-            args,
-            out,
-            run,
-            &trunk_before,
-            None,
-            steps,
-            &[format!(
-                "rk integrate {} --target {} --apply performs it",
-                args.branch, run.target
-            )],
-        );
+        return preview(args, out, run);
     }
 
     // The lock is the common git directory, so two seats of one clone
@@ -288,6 +296,12 @@ fn local_path(args: &IntegrateArgs, out: Output, run: &LocalRun<'_>) -> Result<(
         integrate::short(&trunk_before)
     ));
 
+    // The authoritative observation of the branch, taken before the gate
+    // so the tree the gate judges is the tree that reaches the trunk. It
+    // is re-observed below: a commit landing in the seat under the gate
+    // would otherwise be squashed without having passed it.
+    let branch_tip = rev_parse(run.seat, &args.branch)?;
+
     // The gate. One line, one stage, no hook identifier read.
     let gate = gate(run.seat)?;
     if !gate.status.success() {
@@ -303,24 +317,33 @@ fn local_path(args: &IntegrateArgs, out: Output, run: &LocalRun<'_>) -> Result<(
     }
     steps.push("the manual stage passed".to_owned());
 
-    // One observation of the branch feeds both the tree that is
-    // integrated and the tip the evidence certifies. Reading them
-    // separately would let a commit landing between the two write
-    // evidence for a tip whose work never reached the trunk, and the
-    // prune predicate would then accept it and delete that work. The
-    // lock bounds this binary's own runs and bounds no hand at the desk.
-    let branch_tip = rev_parse(run.seat, &args.branch)?;
+    // The re-observation. One object feeds the tree that is integrated
+    // and the tip the evidence certifies, and that object is the one the
+    // gate judged. The lock bounds this binary's own runs and bounds no
+    // hand at the desk, so both directions are checked rather than
+    // assumed.
+    let now = rev_parse(run.seat, &args.branch)?;
+    if now != branch_tip {
+        return Err(refuse(
+            Reason::StateDrift,
+            format!(
+                "{} moved from {} to {} while the gate ran, so the gate judged a tree that is no longer the branch's",
+                args.branch,
+                integrate::short(&branch_tip),
+                integrate::short(&now)
+            ),
+        ));
+    }
     let commit = build_squash(run, &branch_tip, &trunk_before, message)?;
     // Publish it with one compare-and-swap carrying the tip observed
     // before the gate ran. A trunk that moved under the gate refuses here
     // and nothing was written.
-    publish(run, &commit, &trunk_before)?;
-    steps.push(format!(
-        "{} now carries {}",
-        run.trunk,
-        integrate::short(&commit)
-    ));
-
+    // The evidence is rendered and staged before the publication, so
+    // every fallible part of writing it happens while the trunk still
+    // stands where it stood. Evidence naming a commit no ref carries
+    // proves nothing: both prune verbs require the trunk to reach the
+    // recorded commit, so a staged entry whose publication then fails is
+    // inert rather than dangerous.
     ledger.record(Entry {
         branch: args.branch.clone(),
         branch_tip,
@@ -328,6 +351,13 @@ fn local_path(args: &IntegrateArgs, out: Output, run: &LocalRun<'_>) -> Result<(
         at: crate::landing::manifest::now(),
     });
     write_ledger(&ledger_path, &ledger)?;
+
+    publish(run, &commit, &trunk_before)?;
+    steps.push(format!(
+        "{} now carries {}",
+        run.trunk,
+        integrate::short(&commit)
+    ));
     steps.push("recorded the integration".to_owned());
 
     report(
@@ -580,6 +610,11 @@ const TYPES: [&str; 11] = [
 ];
 
 /// Refuse a trunk commit message the landed guards would refuse.
+///
+/// `at` is the seat, never the trunk checkout: whether a path is ignored
+/// is answered by the ignore rules standing where the implementation was
+/// written, and a branch that adds one is exactly the case the landed
+/// `commit-msg` stage would have judged there.
 ///
 /// `git commit-tree` fires no hook, so the whole `commit-msg` stage is
 /// applied here instead, and it is applied through the one owner rather
