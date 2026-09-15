@@ -2295,7 +2295,7 @@ fn the_setup_skill_names_the_five_steps() {
     for (step, opening) in steps.iter().zip([
         "1. Run the gates",
         "2. Read the version and stop where no update was authorized",
-        "3. Stage and investigate, `rk guide landing` steps 1c and 2",
+        "3. Read the profile, stage, and investigate",
         "4. Land, `rk guide landing` step 3",
         "5. Verify and clean, `rk guide landing` steps 4 and 5",
     ]) {
@@ -2443,8 +2443,14 @@ fn the_setup_skill_restates_no_procedure() {
 
 /// Every situation the phase names, by file stem. The array's own length
 /// is the count.
-const SETUP_EVALS: [&str; 14] = [
+const SETUP_EVALS: [&str; 20] = [
+    "a-gitlab-project-that-releases-nothing",
+    "a-knowledge-base-with-no-forge",
+    "a-second-technology-without-a-release",
     "active-legacy-operation-before-update",
+    "an-ambiguous-release-observation",
+    "an-external-release",
+    "an-unknown-forge",
     "clean-attributed-upgrade",
     "edited-generated-file",
     "failed-verification-with-stage-retained",
@@ -2573,8 +2579,17 @@ fn no_skill_shared_resource_or_eval_asks_rk_to_install_or_select_a_release() {
     }
     for (name, text) in &texts {
         for retired in ["rk self-depend sync", "--release"] {
+            // The whole flag, not a prefix of one: `--release-style` and
+            // `--release-mode` name the project's own release intent,
+            // which is a different subject from selecting a release of rk.
+            let named = text.match_indices(retired).any(|(at, _)| {
+                text[at + retired.len()..]
+                    .chars()
+                    .next()
+                    .is_none_or(|c| !c.is_ascii_alphanumeric() && c != '-')
+            });
             assert!(
-                !text.contains(retired),
+                !named,
                 "{name} asks rk to select or install a release: {retired}"
             );
         }
@@ -2763,8 +2778,8 @@ fn missing_provenance_produces_a_bounded_heuristic_and_no_automatic_overwrite() 
         }
     }
     assert_eq!(
-        seen, 4,
-        "greenfield, the wired target, and the two missing-receipt cases"
+        seen, 9,
+        "every fixture that lands with no receipt: greenfield, the wired target, the two missing-receipt cases, and the five profile arrivals"
     );
     let skill = setup_skill();
     for class in [

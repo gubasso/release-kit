@@ -20,7 +20,7 @@ A shallow clone with no `.release-kit/manifest.json` and one squashed commit, ho
 5. `rk guide landing` step 2b: diff each artifact against the working tree, read `.release-kit/manifest.json`, and read `git log` and `git diff` for each differing destination. `git log` shows one commit and attributes nothing.
 6. State the evidence class: neither receipt nor history, a best-effort heuristic. Report every collision as an uncertain ownership decision and ask the operator about each one. No automatic overwrite: nothing is brought to the candidate without an answer, and the production verb refuses every unattributed collision until then.
 7. `rk guide landing` step 2d: bring only the files the operator answered for to the candidate's bytes.
-8. `rk guide landing` step 3: preview `rk init --tech <tech> --target .`, then run `rk init --tech <tech> --target . --apply` only for a tree whose every collision the operator answered. Where it still names collisions, it exits 73 with nothing written, and the finding returns to the inventory.
+8. `rk guide landing` step 3: preview `rk init --target .`, then run `rk init --target . --apply` only for a tree whose every collision the operator answered. Where it still names collisions, it exits 73 with nothing written, and the finding returns to the inventory.
 9. `rk guide landing` step 4b: `rk status --check --target .` reports the landing, or reports none where the apply refused, and the report is quoted as it stands.
 10. The task ends with questions open. `rk guide landing` step 5a is not reached. The task leaves the stage in place as recoverable evidence and says so, with its path.
 

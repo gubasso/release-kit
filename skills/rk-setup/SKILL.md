@@ -32,6 +32,7 @@ When the request carries `--no-plan`, skip the plan gate's approval turn only. S
 | The setup procedure around a first landing, as commands         | `rk guide setup`                                    |
 | The migration procedure around a landing, as commands           | `rk guide migration`                                |
 | The installed version, and the state it reports                 | `rk --version`, `rk status --target .`              |
+| What the target resolves to, and what a landing selects         | `rk profile --target .`                             |
 | Classify a target that carries no record                        | `rk assess --target .`                              |
 | Write this binary's candidate and its knowledge into a stage    | `rk stage --target .`                               |
 | Remove one stage that names itself                              | `rk stage clean <path>`                             |
@@ -66,7 +67,7 @@ A request naming an issue — an issue URL, or "fix", "address", "implement", or
 
 1. Run the gates. The pre-flight gate's closing lines hand over the installed version, the record's `rk_version`, and whether the target carries a record.
 2. Read the version and stop where no update was authorized. `rk guide landing` step 1a reads how the project obtains `rk`. This skill never chooses, installs, updates, downgrades, or fetches a version: where the request did not authorize an update, report the installed state and end the task before any migration work. Where the installed binary is a 0.4.x release the operator will replace, `rk guide landing` step 1b runs first, with that binary.
-3. Stage and investigate, `rk guide landing` steps 1c and 2. Keep the stage path for the whole task. Name the evidence class from the section below before proposing any edit, and prepare the target only within the request's authority.
+3. Read the profile, stage, and investigate: `rk profile --target .`, then `rk guide landing` steps 1c and 2. Keep the stage path for the whole task. Name the evidence class from the section below before proposing any edit, and prepare the target only within the request's authority.
 4. Land, `rk guide landing` step 3. The production verb renders again from the binary and the target. Read each word it prints and quote them, and take a refusal back to the investigation, never to a flag.
 5. Verify and clean, `rk guide landing` steps 4 and 5. Compare the real diff with the stage, run the checks, and repair through another fresh production run. Keep an inventory of every stage path the task created. Show the exact `rk stage clean <path>` for each one only after everything passed, and run them only where the request's authority includes cleanup. Then raise the decision below, before the task closes.
 
@@ -85,9 +86,17 @@ A landing that leaves this unasked leaves the pin where it found it. A target wi
 - The binary may serve the line and may not place it, so nothing else in this loop asks. A refusal ends the decision and goes in the report.
 - Ask once. An answer already recorded closes the question for this landing, whichever answer it was.
 
+## What the profile answers, and what to ask
+
+`rk profile --target .` reports every value with the source that answered it, what the observation proposed, and which capabilities the catalog selects with the destinations they land. Explain it by domain — project identity, profile, Git workflow, capability requests, setup declaration, protection policy — and restate no matrix of your own. Ask only what the report leaves open: the technologies and the forge where the observation named none, the release mode and, for an automatic release, its driver and style, the trunk name, the checkout mode, and each capability request. Where the report names an ambiguous proposal, the driver is the one answer an apply refuses without. Render the landing command from that report with the canonical flags alone, and let the apply persist the answers rather than hand-editing the configuration.
+
+Never ask the operator to choose a development method: Git and trunk-based development are prerequisites `rk method invariants` states, and a target that is not a non-bare Git repository is a failed prerequisite reported before any plan. Say pull request or merge request in shared prose and the forge's own term in forge-specific instructions. Say checkout mode for where a topic branch opens — `linked-worktree` gives the branch its own linked working tree, `main-worktree` switches the original one to it — and never call it a branching mode.
+
+Continue on zero technologies, an absent forge, and a category this release does not know: each is a valid profile, and the report says what it selects. Stop on a failed fixed prerequisite, a malformed release intent, a projection conflict, or an operation that requires a capability this release does not carry.
+
 ## Which chapter the arrival loads
 
-- `greenfield`, from `rk assess`: `rk method setup` and `rk guide setup`. The landing is that runbook's step 4a. Steps 1 to 3 surround it on the forge side and steps 5 to 8 on the registry side. How the project obtains `rk` is none of them: `rk guide setup` carries it in the Prerequisites, with the whole pin order. The workflow mode, the release style, and the Nix opt-in are asked with the consequences `rk method model` and `rk method worktrees` state, before the plan is approved. The gate job and the required check are step 3c's decision. A `package-check` limitation is read out, not treated as done; `rk method setup` owns why and `rk binding <tech>` names the inspection.
+- `greenfield`, from `rk assess`: `rk method setup` and `rk guide setup`. The landing is that runbook's step 4a. Steps 1 to 3 surround it on the forge side and steps 5 to 8 on the registry side. How the project obtains `rk` is none of them: `rk guide setup` carries it in the Prerequisites, with the whole pin order. The gate job and the required check are step 3c's decision. A `package-check` limitation is read out, not treated as done; `rk method setup` owns why and `rk binding <tech>` names the inspection.
 - `brownfield`, from `rk assess`: `rk method migration` and `rk guide migration`. The stage's collision, retired, and omitted lines are the inventory's first entries, one per finding with its disposition, and that runbook's step 1 reports the rest. The landing is its step 2, taken through `rk guide landing`, and the migration runbook owns everything around it. Before approval, state that the plan can need the gated steps below, each a `rk setup step` outside the landing.
 - `needs-decision`, from `rk assess`: stop and ask. The operator says what the tags or the second branch are before any plan claims to know, and `rk method migration` owns the verdict.
 - `recorded`, from `rk status`: `rk method landing` alone, through `rk upgrade`. A preview that prints only `matched` and `preserved` words means the target is at this release: stop and say so. The changelog and the guidance in the stage's `reference/` are the operator's reading for the releases between.
@@ -102,17 +111,18 @@ State one class from `rk method landing` before the first edit, and let it bound
 - History without receipt: propose only what the log attributes, and ask about every file it does not.
 - Neither: a best-effort report. Every uncertain ownership decision is a question with `AskUserQuestion`, and no file is brought to the candidate without an answer.
 
-Under every class: never copy the stage tree into the target, and never offer `stage.json` or the stage path to `rk init`, `rk upgrade`, or `rk adopt`. Candidate documentation the stage lists under `artifacts/` is an ordinary destination. The `reference/` tree teaches this skill and is copied into no project.
+Under every class: never copy the stage tree into the target, and never offer `stage.json` or the stage path to `rk init`, `rk upgrade`, or `rk adopt`. Candidate documentation under `artifacts/` is an ordinary destination. The `reference/` tree teaches this skill and is copied into no project.
 
 ## The opt-in capabilities
 
-Each one is a recorded landing parameter, off by default. Offer the ones the target's forge can run, with the consequence named, and let the operator answer before the plan is approved. A capability nobody asked for lands nothing and reports nothing.
+Each one is a recorded request, off by default, and `rk profile` reports which the catalog can select here. Offer those, with the consequence named, and let the operator answer before the plan is approved. A capability nobody asked for lands nothing and reports nothing; one the catalog reports unavailable at this target's driver and forge is not offered at all.
 
-- `--scorecard`, GitHub only: `.github/workflows/scorecard.yml`, which publishes an OpenSSF Scorecard result to a public API. Read out what `rk forge github` says a run scores under this convention, so the operator hears the ceiling before the workflow lands.
-- `--code-scanning <provider>`: one static analysis workflow, `codeql` or `semgrep`. Read out the binding's own paragraph before offering it: `codeql` reads the target's declared licence and refuses the pair where its terms do not cover the codebase, and `semgrep` carries no such condition. Never offer `codeql` on GitLab; that pair refuses by name.
+- `--scorecard`, GitHub only: a workflow that publishes an OpenSSF Scorecard result to a public API. Read out what `rk forge github` says a run scores here, so the operator hears the ceiling before it lands.
+- `--code-scanning <provider>`: one static analysis workflow. Read the binding's own paragraph out first: `codeql` reads the declared licence and refuses a pair its terms do not cover, `semgrep` carries no such condition, and `codeql` is GitHub's alone.
 - `--nix-packaging`: the seeded package expression and the seed flake pair. `rk method model` and `rk binding <driver>` own the consequence.
+- `--reporting-policy`: the landed `SECURITY.md`. An automatic release requests it by default; a release-less profile asks for it here.
 
-Where the target already runs a workflow of its own for a capability, compare the staged candidate with the working tree before the production landing and settle the collision there. The stage names the file; the diff says whether the target's copy is the same proof under another name. Bring it to the candidate, or leave the capability out and say the target keeps its own. Never land beside it: two workflows computing one score is a collision the receipt cannot describe.
+Where the target already runs its own workflow for one of these, settle it at the stage: the diff says whether the target's copy is the same proof under another name. Bring it to the candidate, or leave the capability out and say the target keeps its own. Never land beside it.
 
 ## Legacy operation state, from a 0.4.x release
 
@@ -128,7 +138,7 @@ Gate each of these: print the exact command, say what it changes and why, wait, 
 - `rk setup step single-trunk --apply` — that runbook's step 5b; destructive, and its ancestry guard refusing is a stop, not an obstacle.
 - `install-bot` and `bot-secrets` — the bot identity and its credentials; `rk forge <name>` carries the walkthrough.
 - Registry actions: the first hand publish, registering the trusted publisher, turning on enforcement. `rk guide setup` names each with its reason.
-- The release style, on a record that predates it and whose config leaves it unanswered: `rk upgrade` refuses until `--style` answers it. Ask it the way the greenfield arrival states, because arming an existing project's release request changes what a green trunk does.
+- The release style, on a record that predates it and whose config leaves it unanswered: `rk upgrade` refuses until `--release-style` answers it, and arming an existing project's request changes what a green trunk does.
 - The development environment, where the project obtains `rk` by a host install or a hand-rolled bump — `rk guide migration` step 6, with the replacement as the default; the migration is not done while the cleanup's `leftovers` list is non-empty.
 - Regenerating what a landed configuration generates — `rk guide landing` step 4b names the order, and `rk guide setup` step 4b carries the command.
 - The predecessor's removal itself, a retired destination's removal, and every other removal: what it removes is committed first, per the migration chapter's recoverability section.
@@ -141,8 +151,6 @@ Gate each of these: print the exact command, say what it changes and why, wait, 
 - Never propose a second request-reporting workflow as a gated check; `needs` resolves inside one file, so the gate reaches a job only in its own.
 - Never answer provenance with a signing scheme of your own; take what the channel offers by default, and where it offers nothing, say so.
 - Prefer an rk verb over a raw forge call; where no verb covers the gap, use the forge CLI and say that the loop is outside the convention there.
-- Report every gated step's outcome from observation, never from the operator's word alone.
-- Leave the repository releasable at every stop: a landing interrupted between steps must break no existing flow.
-- Never widen an approved scope inline: a mode or style change, a second branch, a workspace move is its own plan, approved at its own size.
-- A gap the stage reports that the inventory does not name returns to planning before anything runs.
+- Report every gated step's outcome from observation, never from the operator's word alone, and leave the repository releasable at every stop.
+- Never widen an approved scope inline: a mode or style change, a second branch, a workspace move is its own plan, and a gap the stage reports that the inventory does not name returns to planning first.
 - A refusal from `rk init`, `rk upgrade`, or `rk adopt` is a finding for the investigation, never a flag to add.

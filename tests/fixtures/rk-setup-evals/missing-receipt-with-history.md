@@ -20,7 +20,7 @@ A repository running the convention with no `.release-kit/manifest.json`, whose 
 5. `rk guide landing` step 2b: diff each artifact against the working tree, read `.release-kit/manifest.json`, and read `git log` and `git diff` for each differing destination. `git log` attributes each file's arrival and each later edit.
 6. State the evidence class: history without receipt, a history-guided heuristic. Propose bringing to the candidate only the files the log attributes to the convention's landing, and ask about every file it does not. No automatic overwrite: the production verb refuses every unattributed collision, and the plan names each file before the operator answers.
 7. `rk guide landing` step 2d: bring the attributed files to the candidate's bytes by hand, within the request's authority.
-8. `rk guide landing` step 3: preview `rk adopt --target . --workflow <mode> --style <style>`, read `matches` for every rendered destination, then run it with `--apply`. Where a file still differs, `rk init` and `rk adopt` refuse and the finding returns to the inventory.
+8. `rk guide landing` step 3: preview `rk adopt --target . --checkout-mode <mode> --release-style <style>`, read `matches` for every rendered destination, then run it with `--apply`. Where a file still differs, `rk init` and `rk adopt` refuse and the finding returns to the inventory.
 9. `rk guide landing` step 4: compare `git diff --stat` with `<stage>/artifacts/`, then run `rk status --check --target .`, `rk setup check --target .`, and the project's checks.
 10. `rk guide landing` step 5a: show `rk stage clean <stage>`. Run it only because the request's authority includes cleanup.
 
