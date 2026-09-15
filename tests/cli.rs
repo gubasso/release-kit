@@ -24332,6 +24332,7 @@ fn opt_in_signature_lines() -> Vec<String> {
                 code_scanning,
             },
         );
+        let params_again = params.clone();
         let projection = Projection::compute(&ProjectionInput {
             params,
             evidence: NixShape::Supported.evidence(),
@@ -24362,14 +24363,7 @@ fn opt_in_signature_lines() -> Vec<String> {
         // capabilities change every opted-in target's record silently.
         out.push(record_signature_line(
             &format!("{driver} {forge} linked-worktree trunk {column}-record"),
-            driver,
-            forge,
-            CapabilityRequests {
-                nix_packaging: false,
-                reporting_policy: true,
-                scorecard,
-                code_scanning,
-            },
+            &params_again,
             &projection.capabilities,
         ));
     }
@@ -24441,83 +24435,38 @@ fn occupied_target_signature_lines() -> Vec<String> {
     out
 }
 
-/// The signature line of the record an ordinary target receives.
-fn landed_record_signature_line() -> String {
-    use release_kit::landing::{CheckoutMode, Style};
-    use release_kit::profile::CapabilityRequests;
-    use release_kit::projection::{Projection, ProjectionInput};
-
-    let requests = CapabilityRequests {
-        nix_packaging: false,
-        reporting_policy: true,
-        scorecard: false,
-        code_scanning: None,
-    };
-    let projection = Projection::compute(&ProjectionInput {
-        params: projection_params(
-            "rust",
-            "github",
-            CheckoutMode::LinkedWorktree,
-            Style::Trunk,
-            false,
-        ),
-        evidence: NixShape::Supported.evidence(),
-    })
-    .expect("the representative pair projects");
-    record_signature_line(
-        &format!(
-            "rust github linked-worktree trunk record-schema-{}",
-            release_kit::landing::manifest::SCHEMA_VERSION
-        ),
-        "rust",
-        "github",
-        requests,
-        &projection.capabilities,
-    )
-}
-
 /// The signature line of the landed record. The record carries the
 /// producing version and the landing instant, so the fixture fixes both
 /// by construction: what it pins is the renderer's shape, which a schema
 /// number can stand still through.
 fn record_signature_line(
     label: &str,
-    driver: &str,
-    forge: &str,
-    requests: release_kit::profile::CapabilityRequests,
+    params: &release_kit::landing::Params,
     capabilities: &[release_kit::profile::catalog::Selection],
 ) -> String {
     use release_kit::digest::Digest;
+    use release_kit::landing::Kind;
     use release_kit::landing::manifest::{
         FileRecord, MANIFEST_PATH, Manifest, Parameters, Placement, SCHEMA_VERSION, render,
     };
-    use release_kit::landing::{CheckoutMode, Kind, Style};
-    use release_kit::profile::{GitWorkflow, ProfileSnapshot, ReleaseIntent, ReleaseMode};
 
+    // The domains come from the parameters, the way the landing's own
+    // receipt takes them, so a change to what a target records reaches
+    // this row. The two values production reads from the running binary
+    // and the clock are fixed here, and the file list is a constant: what
+    // this row signs is the record's shape and its resolved answers.
     let manifest = Manifest {
         schema_version: SCHEMA_VERSION,
         rk_version: "0.0.0".to_owned(),
         origin: "init".to_owned(),
         landed_at: "2026-08-29T00:00:00Z".to_owned(),
-        profile: ProfileSnapshot {
-            technologies: vec![driver.to_owned()],
-            forge: Some(forge.to_owned()),
-            release: ReleaseIntent {
-                mode: ReleaseMode::Automatic,
-                driver: Some(driver.to_owned()),
-                style: Some(Style::Trunk),
-                line_prefix: Some(release_kit::config::LINE_PREFIX_DEFAULT.to_owned()),
-            },
-        },
-        git: GitWorkflow {
-            trunk: release_kit::config::TRUNK_DEFAULT.to_owned(),
-            checkout_mode: CheckoutMode::LinkedWorktree,
-        },
-        capabilities: requests,
+        profile: params.profile().clone(),
+        git: params.git().clone(),
+        capabilities: params.capabilities().clone(),
         parameters: Parameters {
-            repo: "acme/widget".to_owned(),
-            security_contact: String::new(),
-            security_response: release_kit::config::RESPONSE_DEFAULT.to_owned(),
+            repo: params.repo().to_owned(),
+            security_contact: params.security_contact().to_owned(),
+            security_response: params.security_response().to_owned(),
         },
         files: vec![
             FileRecord {
@@ -24605,10 +24554,17 @@ fn every_current_landing_fixture_keeps_its_destinations_kinds_placement_and_dige
             release_kit::config::CONFIG_PATH,
             release_kit::digest::Digest::of(plan.content.as_bytes())
         ));
+        // The record is the other landed file no candidate carries, and
+        // its pins are selected per capability, so every combination
+        // signs the record its own selection produces.
+        lines.push(record_signature_line(
+            &label,
+            &params,
+            &projection.capabilities,
+        ));
     }
     lines.extend(opt_in_signature_lines());
     lines.extend(occupied_target_signature_lines());
-    lines.push(landed_record_signature_line());
     let text = format!("{}\n", lines.join("\n"));
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/projection-digests.txt");
@@ -29044,7 +29000,17 @@ fn the_landed_state_bytes_are_pinned_in_the_signature() {
         fixture.lines().any(|line| line == configuration),
         "the rendered configuration is not the bytes the signature pins; a deliberate change reruns with RK_UPDATE_FIXTURES=1"
     );
-    let record = landed_record_signature_line();
+    let projection =
+        release_kit::projection::Projection::compute(&release_kit::projection::ProjectionInput {
+            params: params.clone(),
+            evidence: NixShape::Supported.evidence(),
+        })
+        .expect("the representative pair projects");
+    let record = record_signature_line(
+        "rust github linked-worktree trunk false",
+        &params,
+        &projection.capabilities,
+    );
     assert!(
         fixture.lines().any(|line| line == record),
         "the rendered record is not the bytes the signature pins; a deliberate change reruns with RK_UPDATE_FIXTURES=1"
