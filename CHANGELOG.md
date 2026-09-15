@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1](https://github.com/gubasso/release-kit/compare/v0.8.0...v0.8.1) - 2026-09-15
+
+### Fixed
+
+- *(landing/code-scanning)* read a conjunction of code and content terms as an open-source codebase
+
 ## [0.8.0](https://github.com/gubasso/release-kit/compare/v0.7.1...v0.8.0) - 2026-09-15
 
 ### Added
