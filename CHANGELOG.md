@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0](https://github.com/gubasso/release-kit/compare/v0.7.1...v0.8.0) - 2026-09-15
+
+### Added
+
+- *(integrate)* [**breaking**] make the authority that carries an implementation onto the trunk a recorded answer ([#232](https://github.com/gubasso/release-kit/pull/232))
+
 ## [0.7.1](https://github.com/gubasso/release-kit/compare/v0.7.0...v0.7.1) - 2026-09-15
 
 ### Fixed
