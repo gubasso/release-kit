@@ -917,6 +917,20 @@ fn protection_fields(
     ]
 }
 
+/// The two floored keys a write-back carries beside `git.integration`.
+///
+/// They are derived companions of the authority rather than recorded
+/// parameters: the record holds no baseline for them, so a target that
+/// narrowed either within its floor would read as pending forever and
+/// route an upgrade that changes nothing.
+/// `target-config:a-flag-overrides-and-a-landing-writes-back` leaves
+/// class F policy with its use-time readers, and excluding these from
+/// what status judges keeps that true.
+const DERIVED_POLICY_KEYS: [&str; 2] = [
+    "protection.owned_trunk_rules",
+    "protection.gitlab.push_access_level",
+];
+
 /// The keys a landing writes back: every class P answer.
 const PARAMETER_KEYS: [&str; 19] = [
     "project.repo",
@@ -1506,10 +1520,12 @@ pub fn pending(config: &Config, record: &crate::landing::manifest::Manifest) -> 
     };
     let baseline: Vec<(&str, String)> = parameter_values(&recorded)
         .iter()
+        .filter(|(key, _)| !DERIVED_POLICY_KEYS.contains(key))
         .map(|(key, value)| (*key, render(value)))
         .collect();
     parameter_values(config)
         .into_iter()
+        .filter(|(key, _)| !DERIVED_POLICY_KEYS.contains(key))
         .map(|(key, value)| (key, render(&value)))
         .filter(|(key, value)| {
             baseline

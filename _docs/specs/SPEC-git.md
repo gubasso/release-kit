@@ -128,7 +128,7 @@ A local integration MUST leave the trunk where it stood unless every check passe
 
 - GIVEN a local integration whose trunk advanced between the tip it observed and its publication
 - WHEN the compare-and-swap runs
-- THEN it refuses naming both tips, no ref moved, and no evidence was written
+- THEN it refuses naming both tips, no ref moved, and the staged evidence is inert because the trunk does not reach the commit it names
 
 #### Scenario: The branch advances while the gate runs
 
@@ -136,11 +136,11 @@ A local integration MUST leave the trunk where it stood unless every check passe
 - WHEN the branch is re-observed
 - THEN it refuses naming both tips, because the gate judged a tree that is no longer the branch's, and nothing reached the trunk
 
-#### Scenario: The publication fails after the evidence is staged
+#### Scenario: A prune reads the evidence a refused publication staged
 
-- GIVEN a local integration whose compare-and-swap refuses after its evidence was written
-- WHEN a prune verb reads that evidence
-- THEN it ignores the entry, because the trunk does not reach the commit it names, and the branch keeps everything
+- GIVEN the ledger entry that refusal left behind
+- WHEN a prune verb reads it
+- THEN it ignores the entry and the branch keeps everything, because the proof is the trunk carrying the work and never the ledger saying so
 
 Verify: `cargo nextest run -E 'test(integrate)'`
 

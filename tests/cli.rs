@@ -31262,3 +31262,47 @@ fn the_protection_the_authority_decides_travels_with_it() {
         .code(73)
         .stderr(predicate::str::contains("owned_trunk_rules"));
 }
+
+/// A policy an operator narrowed within its floor converges: the status
+/// reports it aligned rather than routing an upgrade that would change
+/// nothing. The two protection keys a write-back carries are derived
+/// companions of the authority, and the record holds no baseline for
+/// them, so judging them as recorded parameters would never settle.
+///
+/// SATISFIES target-config:an-untaken-config-is-reported-and-not-judged
+#[test]
+fn a_narrowed_protection_policy_settles_rather_than_pending_forever() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+    let path = target.path().join(".release-kit/config.toml");
+    let narrowed = std::fs::read_to_string(&path)
+        .expect("the config reads")
+        .replace(
+            r#"owned_trunk_rules = ["deletion", "non_fast_forward", "pull_request", "required_status_checks"]"#,
+            r#"owned_trunk_rules = ["deletion", "non_fast_forward", "pull_request", "required_status_checks", "required_signatures"]"#,
+        );
+    std::fs::write(&path, narrowed).expect("the config writes");
+
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let held = std::fs::read_to_string(&path).expect("the config reads");
+    assert!(
+        held.contains("required_signatures"),
+        "the stricter rule survives the landing: {held}"
+    );
+    let out = rk()
+        .args(["status", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(
+        report["config"]["state"], "aligned",
+        "a floored policy the operator narrowed is not untaken configuration: {report}"
+    );
+}
