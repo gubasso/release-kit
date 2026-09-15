@@ -3,6 +3,8 @@
 use camino::Utf8PathBuf;
 use clap::Args;
 
+use super::profile_flags::ProfileFlags;
+
 /// Take a landed target to this binary's projection.
 ///
 /// Flags resolve over configuration, and recorded answers stand where
@@ -15,42 +17,31 @@ pub struct UpgradeArgs {
     #[arg(long, default_value = ".")]
     pub target: Utf8PathBuf,
 
-    /// Override the configured binding.
-    #[arg(long)]
-    pub tech: Option<String>,
+    /// The project profile and the Git workflow, each flag overriding the
+    /// configured answer; the apply writes the answer back into the
+    /// config. Omitted, the config answers first and the record is the
+    /// fallback.
+    #[command(flatten)]
+    pub profile: ProfileFlags,
 
-    /// Override the configured forge.
-    #[arg(long)]
-    pub forge: Option<String>,
-
-    /// Override the configured project path.
-    #[arg(long)]
-    pub repo: Option<String>,
-
-    /// Change the recorded working-copy mode: worktree or branches. The
-    /// apply writes the answer back into the config. Omitted, the config
-    /// answers first and the recorded mode is the fallback.
-    #[arg(long)]
-    pub workflow: Option<String>,
-
-    /// Change the recorded release style: trunk or lines. A record that
-    /// already carries one needs no flag; a pre-style record needs
-    /// landing.style in the config or this flag to answer it.
-    #[arg(long)]
-    pub style: Option<String>,
-
-    /// Change the recorded Nix opt-in: `on` adds the capability's files
+    /// Change the recorded Nix request: `on` adds the capability's files
     /// and records it; `off` drops them from the record while the files
     /// stay on disk as the target's own, like any file this binary stops
     /// shipping. Omitted, configuration precedes the recorded choice.
-    #[arg(long)]
-    pub nix: Option<String>,
+    #[arg(long, alias = "nix", value_name = "on|off")]
+    pub nix_packaging: Option<String>,
 
-    /// Change the recorded Scorecard opt-in: `on` adds the workflow and
+    /// Change the recorded reporting policy request: `on` lands
+    /// `SECURITY.md` and records it; `off` drops it from the record while
+    /// the file stays on disk as the target's own.
+    #[arg(long, value_name = "on|off")]
+    pub reporting_policy: Option<String>,
+
+    /// Change the recorded Scorecard request: `on` adds the workflow and
     /// records it; `off` drops it from the record while the file stays on
     /// disk as the target's own, like any file this binary stops shipping.
     /// Omitted, configuration precedes the recorded choice.
-    #[arg(long)]
+    #[arg(long, value_name = "on|off")]
     pub scorecard: Option<String>,
 
     /// Change the recorded code scanning provider: `codeql` or `semgrep`

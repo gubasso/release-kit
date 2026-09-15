@@ -19,12 +19,14 @@
 //!
 //! Every pure piece of the landing model has one implementation here: the
 //! kind table, the token substitution, the block templating, the splice
-//! and marker judgments, the pair selection, and the Nix crate-shape
-//! judgment. `src/landing.rs` re-exports them under their old names.
+//! and marker judgments, and the Nix crate-shape judgment. Which embedded
+//! source belongs to which capability, and whether a capability is
+//! available at the target's dimensions, is the catalog's answer in
+//! `crate::profile::catalog`, and this module renders what the catalog
+//! selects. `src/landing.rs` re-exports the pieces under their old names.
 //!
-//! The project-profile work extends [`ProjectionInput`] and the capability
-//! catalog this module selects from. It creates no second projection: one
-//! input type, one compute function, one candidate shape.
+//! One input type, one compute function, one candidate shape: staging and
+//! every landing verb consume this one projection.
 
 pub mod evidence;
 
@@ -35,7 +37,9 @@ use serde::{Deserialize, Serialize};
 use crate::embedded;
 use crate::error::RkError;
 pub use crate::landing::manifest::Provider;
-use crate::landing::{Params, Workflow};
+use crate::landing::{CheckoutMode, Params};
+use crate::profile::ReleaseMode;
+use crate::profile::catalog::{self, Availability, Selection, Status};
 
 /// The complete input to one projection: the resolved landing parameters
 /// and the typed evidence read from the target beforehand.
@@ -50,6 +54,10 @@ pub struct ProjectionInput {
 /// What a projection needs to know about the target, gathered before the
 /// projection runs and carried as values.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "each field is one independent fact read off the target, not a state a smaller type could carry"
+)]
 pub struct TargetEvidence {
     /// The complete existing document at each block destination that
     /// exists on disk, keyed by destination. An absent key is an absent
@@ -64,6 +72,11 @@ pub struct TargetEvidence {
     /// Whether the receipt already records `flake.nix`: a pair release-kit
     /// landed is its own and is never withheld.
     pub flake_recorded: bool,
+    /// Whether `.gitlab-ci.yml` is present at the target, a link included.
+    pub root_pipeline_present: bool,
+    /// Whether the receipt already records `.gitlab-ci.yml`: a root
+    /// pipeline release-kit landed is its own and is never withheld.
+    pub root_pipeline_recorded: bool,
 }
 
 impl TargetEvidence {
@@ -93,10 +106,14 @@ pub struct CrateShape {
 /// from scratch rather than reading a saved copy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Projection {
+    /// Every capability the catalog answered for this target, in catalog
+    /// order: selected, withheld, or omitted with its reason.
+    pub capabilities: Vec<Selection>,
     /// Every candidate, sorted by destination.
     pub candidates: Vec<Candidate>,
     /// The destinations the target's own state withholds, each with its
-    /// one reason. A destination the pair does not ship is absent, never
+    /// one reason and, where one exists, the operator's one edit. A
+    /// destination no selected capability ships is absent, never
     /// omitted.
     pub omissions: Vec<Omission>,
     /// The block destinations whose existing document offers the block no
@@ -118,6 +135,8 @@ pub struct Projection {
 /// One proposed destination.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Candidate {
+    /// The capability that lands it.
+    pub capability: &'static str,
     /// The destination, relative to the target root.
     pub destination: String,
     /// Who owns the bytes after landing.
@@ -158,6 +177,10 @@ pub struct Omission {
     pub destination: String,
     /// The reason, stated once per destination.
     pub reason: String,
+    /// The one edit the operator makes to activate what release-kit could
+    /// not, where the omission is a withheld activation rather than a
+    /// shape the target cannot take.
+    pub action: Option<String>,
 }
 
 /// One block destination the target's document cannot take.
@@ -186,44 +209,80 @@ impl Projection {
     /// [`Self::compute`] over an explicit snippet list, whose paths carry
     /// the `snippets/` root; the embedded tree in production, an injected
     /// one under test.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one pass selects, renders, splices, and withholds; splitting it would separate a withheld destination from the selection that offered it"
+    )]
     fn compute_over(files: &[(String, &[u8])], input: &ProjectionInput) -> Result<Self, RkError> {
         let params = &input.params;
         let evidence = &input.evidence;
-        let mut candidates = Vec::new();
-        for selected in select_pair(files, params.tech(), params.forge())? {
-            if !params.nix() && NIX_DESTINATIONS.contains(&selected.destination.as_str()) {
+        let availability = Availability::over(
+            files
+                .iter()
+                .filter_map(|(path, _)| path.strip_prefix("snippets/").map(str::to_owned))
+                .collect(),
+        );
+        let mut capabilities = catalog::select(params, &availability);
+        let mut candidates: Vec<Candidate> = Vec::new();
+        for selection in &capabilities {
+            if !selection.lands() {
                 continue;
             }
-            if !params.scorecard()
-                && SCORECARD_DESTINATIONS.contains(&selected.destination.as_str())
-            {
-                continue;
+            for source in &selection.sources {
+                let destination = source
+                    .splitn(3, '/')
+                    .nth(2)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "{source}: a snippet path has a zone, a forge, and a destination"
+                        )
+                    })?
+                    .to_owned();
+                let path = format!("snippets/{source}");
+                let bytes = files
+                    .iter()
+                    .find(|(candidate, _)| *candidate == path)
+                    .map(|(_, bytes)| *bytes)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "{path}: the catalog selected a source the tree does not carry"
+                        )
+                    })?;
+                if let Some(existing) = candidates
+                    .iter()
+                    .find(|candidate| candidate.destination == destination)
+                {
+                    return Err(anyhow::anyhow!(
+                        "{} and {} both ship {destination}: {} and {path}; the embedded sources are defective",
+                        existing.capability,
+                        selection.id,
+                        existing.sources.join(", ")
+                    )
+                    .into());
+                }
+                let kind = kind_of(&destination).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "the embedded sources do not classify {destination}; the kind table is stale"
+                    )
+                })?;
+                let rendered = match kind {
+                    Kind::Rendered => render(bytes, params),
+                    Kind::Seeded | Kind::State => bytes.to_vec(),
+                };
+                candidates.push(Candidate {
+                    capability: selection.id,
+                    destination,
+                    kind,
+                    placement: Placement::Whole,
+                    bytes: rendered,
+                    region: None,
+                    sources: vec![path],
+                });
             }
-            if code_scanning_withheld(&selected.destination, params.code_scanning()) {
-                continue;
-            }
-            let kind = kind_of(&selected.destination).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "the embedded sources do not classify {}; the kind table is stale",
-                    selected.destination
-                )
-            })?;
-            let bytes = match kind {
-                Kind::Rendered => render(selected.bytes, params),
-                Kind::Seeded | Kind::State => selected.bytes.to_vec(),
-            };
-            candidates.push(Candidate {
-                destination: selected.destination,
-                kind,
-                placement: Placement::Whole,
-                bytes,
-                region: None,
-                sources: vec![selected.source.to_owned()],
-            });
         }
         let mut collisions = Vec::new();
         for destination in BLOCK_DESTINATIONS {
-            let (template, sources) = block_template(destination, params.workflow())?;
+            let (template, sources) = block_template(destination, params.checkout_mode())?;
             if let Some(whole) = candidates
                 .iter()
                 .find(|candidate| candidate.destination == destination)
@@ -241,6 +300,7 @@ impl Projection {
             })?;
             match propose_document(destination, evidence.document(destination), &region) {
                 Ok(bytes) => candidates.push(Candidate {
+                    capability: catalog::GUARDS,
                     destination: destination.to_owned(),
                     kind: Kind::Rendered,
                     placement: Placement::Region { begin, end },
@@ -255,31 +315,82 @@ impl Projection {
             }
         }
         let mut omissions = Vec::new();
-        if let Some((set, reason)) = nix_withholding(params.nix(), evidence) {
+        if let Some((set, reason)) = nix_withholding(params.nix_packaging(), evidence)
+            && candidates
+                .iter()
+                .any(|candidate| candidate.capability == catalog::PACKAGING_NIX)
+        {
             candidates.retain(|candidate| {
                 if set.contains(&candidate.destination.as_str()) {
                     omissions.push(Omission {
                         destination: candidate.destination.clone(),
                         reason: reason.clone(),
+                        action: None,
                     });
                     false
                 } else {
                     true
                 }
             });
+            withhold(&mut capabilities, catalog::PACKAGING_NIX, &reason, None);
+        }
+        // The release-less GitLab root pipeline: where the target owns a
+        // root pipeline the receipt does not attribute, the fragment still
+        // lands as the gate's prerequisite, and the activation is the
+        // operator's one include line rather than a refusal of the whole
+        // landing.
+        let title_root = candidates.iter().position(|candidate| {
+            candidate.capability == catalog::TITLE_CHECK
+                && candidate.destination == GITLAB_ROOT_PIPELINE
+        });
+        if let Some(index) = title_root
+            && evidence.root_pipeline_present
+            && !evidence.root_pipeline_recorded
+        {
+            let candidate = candidates.remove(index);
+            let reason = format!(
+                "the target owns {GITLAB_ROOT_PIPELINE}, so the release-less root pipeline that would activate the title gate stays out; the fragment lands as the gate's prerequisite"
+            );
+            let action = format!(
+                "add the include to the target's own {GITLAB_ROOT_PIPELINE}: include:\n  - local: {GITLAB_TITLE_FRAGMENT}"
+            );
+            omissions.push(Omission {
+                destination: candidate.destination,
+                reason: reason.clone(),
+                action: Some(action.clone()),
+            });
+            withhold(
+                &mut capabilities,
+                catalog::TITLE_CHECK,
+                &reason,
+                Some(action),
+            );
         }
         candidates.sort_by(|a, b| a.destination.cmp(&b.destination));
         omissions.sort_by(|a, b| a.destination.cmp(&b.destination));
         let licence_refusal = code_scanning_licence_refusal(
             params.code_scanning(),
-            params.tech(),
+            params.driver(),
             &evidence.crate_shape,
         );
-        let record_defects =
-            code_scanning_incompatibility(params.code_scanning(), params.tech(), params.forge())
+        let mut record_defects: Vec<String> =
+            code_scanning_incompatibility(params.code_scanning(), params.driver(), params.forge())
                 .into_iter()
                 .collect();
+        // A recorded automatic release whose automation this release cannot
+        // land is a receipt nothing can honour: named here, so a
+        // record-only reader sees it.
+        if params.release_mode() == ReleaseMode::Automatic
+            && let Some(selection) = capabilities
+                .iter()
+                .find(|selection| selection.id == catalog::RELEASE_AUTOMATION)
+            && matches!(selection.status, Status::Unavailable | Status::Unknown)
+            && let Some(reason) = &selection.reason
+        {
+            record_defects.push(reason.clone());
+        }
         Ok(Self {
+            capabilities,
             candidates,
             omissions,
             collisions,
@@ -287,7 +398,45 @@ impl Projection {
             record_defects,
         })
     }
+
+    /// Why the selected release automation cannot land, where the profile
+    /// asked for one this release does not carry at its dimensions. An
+    /// apply refuses on it before any write; a preview reports it.
+    #[must_use]
+    pub fn release_unavailable(&self) -> Option<&str> {
+        self.capabilities
+            .iter()
+            .find(|selection| {
+                selection.id == catalog::RELEASE_AUTOMATION
+                    && matches!(selection.status, Status::Unavailable | Status::Unknown)
+            })
+            .and_then(|selection| selection.reason.as_deref())
+    }
+
+    /// The one selection for a capability.
+    #[must_use]
+    pub fn capability(&self, id: &str) -> Option<&Selection> {
+        self.capabilities
+            .iter()
+            .find(|selection| selection.id == id)
+    }
 }
+
+/// Mark one capability withheld with its reason and the operator's edit.
+fn withhold(capabilities: &mut [Selection], id: &str, reason: &str, action: Option<String>) {
+    if let Some(selection) = capabilities.iter_mut().find(|selection| selection.id == id) {
+        selection.status = Status::Withheld;
+        selection.reason = Some(reason.to_owned());
+        selection.action = action;
+    }
+}
+
+/// The GitLab root pipeline, the one destination a release-less landing
+/// withholds where the target owns it.
+pub const GITLAB_ROOT_PIPELINE: &str = ".gitlab-ci.yml";
+
+/// The GitLab title fragment the root pipeline includes.
+pub const GITLAB_TITLE_FRAGMENT: &str = ".gitlab/ci/mr-title.yml";
 
 /// Every snippet this binary embeds, as `(path, bytes)` with the path
 /// carrying the `snippets/` root, sorted by path.
@@ -298,132 +447,19 @@ fn embedded_snippets() -> Vec<(String, &'static [u8])> {
         .collect()
 }
 
-/// Whether the embedded snippets ship the `(tech, forge)` pair, with the
-/// same refusals [`select_pair`] answers.
-///
-/// # Errors
-///
-/// Returns [`RkError::Usage`] naming the known bindings for an unknown
-/// technology and the supported pairs for a pair with no files.
-pub fn check_pair(tech: &str, forge: &str) -> Result<(), RkError> {
-    select_pair(&embedded_snippets(), tech, forge).map(|_| ())
-}
-
-/// Every `(technology, forge)` pair the embedded snippets ship, in path
-/// order.
+/// Every `(driver, forge)` pair at which the release automation is
+/// available, in path order.
 #[must_use]
 pub fn supported_pairs() -> Vec<(String, String)> {
-    let mut pairs = Vec::new();
-    for (path, _) in embedded_snippets() {
-        let Some(rest) = path.strip_prefix("snippets/") else {
-            continue;
-        };
-        let mut segments = rest.split('/');
-        let (Some(tech), Some(forge), Some(_)) =
-            (segments.next(), segments.next(), segments.next())
-        else {
-            continue;
-        };
-        if tech.starts_with('_') {
-            continue;
-        }
-        let pair = (tech.to_owned(), forge.to_owned());
-        if !pairs.contains(&pair) {
-            pairs.push(pair);
-        }
-    }
-    pairs
-}
-
-/// One file selected for a pair: where it lands, which source it is, and
-/// what the source carries.
-#[derive(Debug)]
-pub struct Selected<'a, T> {
-    /// The destination, relative to the target root.
-    pub destination: String,
-    /// The source path, carrying its distribution root.
-    pub source: &'a str,
-    /// What the source carries.
-    pub bytes: &'a T,
-}
-
-/// The files one `(technology, forge)` pair lands, selected from `files`,
-/// whose paths carry the `snippets/` root.
-///
-/// The shared zone `snippets/_shared/<forge>` composes into every pair
-/// and lands first. It is not a technology and never names one.
-///
-/// # Errors
-///
-/// Returns [`RkError::Usage`] naming the known bindings for an unknown
-/// technology and the supported pairs for a pair with no files, and
-/// [`RkError::Other`] naming both source paths for a destination two
-/// sources ship, which is a source defect and never one source silently
-/// winning.
-pub fn select_pair<'a, T>(
-    files: &'a [(String, T)],
-    tech: &str,
-    forge: &str,
-) -> Result<Vec<Selected<'a, T>>, RkError> {
-    let mut techs: Vec<&str> = Vec::new();
-    for (path, _) in files {
-        if let Some(rest) = path.strip_prefix("snippets/")
-            && let Some((dir, _)) = rest.split_once('/')
-            && !dir.starts_with('_')
-            && !techs.contains(&dir)
-        {
-            techs.push(dir);
-        }
-    }
-    if tech.starts_with('_') || !techs.contains(&tech) {
-        return Err(RkError::Usage(format!(
-            "unknown tech '{tech}'; the bindings are: {}",
-            techs.join(", ")
-        )));
-    }
-    let pair = format!("snippets/{tech}/{forge}/");
-    if !files.iter().any(|(path, _)| path.starts_with(&pair)) {
-        let mut known: Vec<String> = Vec::new();
-        for tech in &techs {
-            let prefix = format!("snippets/{tech}/");
-            for (path, _) in files {
-                if let Some(rest) = path.strip_prefix(&prefix)
-                    && let Some((forge, _)) = rest.split_once('/')
-                {
-                    let entry = format!("{tech}, {forge}");
-                    if !known.contains(&entry) {
-                        known.push(entry);
-                    }
-                }
-            }
-        }
-        return Err(RkError::Usage(format!(
-            "the pair ({tech}, {forge}) has no landable files; the supported pairs are: {}",
-            known.join("; ")
-        )));
-    }
-    let shared = format!("snippets/_shared/{forge}/");
-    let mut out: Vec<Selected<'a, T>> = Vec::new();
-    for zone in [&shared, &pair] {
-        for (path, bytes) in files {
-            let Some(rel) = path.strip_prefix(zone.as_str()) else {
-                continue;
-            };
-            if let Some(existing) = out.iter().find(|selected| selected.destination == rel) {
-                return Err(anyhow::anyhow!(
-                    "the shared zone and the pair ({tech}, {forge}) both ship {rel}: {} and {path}; the embedded sources are defective",
-                    existing.source
-                )
-                .into());
-            }
-            out.push(Selected {
-                destination: rel.to_owned(),
-                source: path,
-                bytes,
-            });
-        }
-    }
-    Ok(out)
+    Availability::embedded()
+        .automation_tuples()
+        .into_iter()
+        .filter_map(|entry| {
+            entry
+                .split_once(", ")
+                .map(|(driver, forge)| (driver.to_owned(), forge.to_owned()))
+        })
+        .collect()
 }
 
 /// Who owns a landed file's bytes after landing.
@@ -569,30 +605,33 @@ pub const CODE_SCANNING_TECHS: [&str; 1] = ["rust"];
 #[must_use]
 pub fn code_scanning_incompatibility(
     provider: Option<Provider>,
-    tech: &str,
-    forge: &str,
+    driver: Option<&str>,
+    forge: Option<&str>,
 ) -> Option<String> {
     let named = provider?;
-    if !CODE_SCANNING_TECHS.contains(&tech) {
+    let Some(driver) = driver else {
         return Some(format!(
-            "the {tech} binding ships no code scanning workflow; a scanner reads one language, and the bindings that carry one are: {}",
+            "a scanner reads the release driver's language, and the profile names no automatic release driver; the bindings that carry one are: {}",
+            CODE_SCANNING_TECHS.join(", ")
+        ));
+    };
+    if !CODE_SCANNING_TECHS.contains(&driver) {
+        return Some(format!(
+            "the {driver} binding ships no code scanning workflow; a scanner reads one language, and the bindings that carry one are: {}",
             CODE_SCANNING_TECHS.join(", ")
         ));
     }
+    let Some(forge) = forge else {
+        return Some(
+            "a code scanning workflow runs at a forge, and the profile names none".to_owned(),
+        );
+    };
     if named == Provider::CodeQl && forge != "github" {
         return Some(format!(
             "codeql is GitHub's own analyzer and the {forge} pair ships no workflow for it; pass --code-scanning semgrep"
         ));
     }
     None
-}
-
-/// Whether `destination` belongs to the code scanning capability, and
-/// whether `provider` is the answer that lands it.
-fn code_scanning_withheld(destination: &str, provider: Option<Provider>) -> bool {
-    CODE_SCANNING_DESTINATIONS
-        .iter()
-        .any(|(name, owner)| *name == destination && provider != Some(*owner))
 }
 
 /// The SPDX identifiers this convention recognizes as OSI-approved, sorted.
@@ -923,15 +962,16 @@ pub fn licence_is_osi_approved(expression: &str) -> bool {
 #[must_use]
 pub fn code_scanning_licence_refusal(
     provider: Option<Provider>,
-    tech: &str,
+    driver: Option<&str>,
     shape: &CrateShape,
 ) -> Option<String> {
     if provider != Some(Provider::CodeQl) {
         return None;
     }
-    if tech != "rust" {
+    if driver != Some("rust") {
         return Some(format!(
-            "the {tech} binding declares no licence field this release reads, and codeql's terms cover an open-source codebase alone; land --code-scanning semgrep, which carries no licence condition"
+            "the {} binding declares no licence field this release reads, and codeql's terms cover an open-source codebase alone; land --code-scanning semgrep, which carries no licence condition",
+            driver.unwrap_or("release-less")
         ));
     }
     let fallback = "land --code-scanning semgrep, which carries no licence condition";
@@ -1206,12 +1246,12 @@ pub const PRE_COMMIT_BLOCK: &str = "blocks/pre-commit-block.yaml.in";
 /// The worktree mode's guard entry.
 pub const PRE_COMMIT_WORKTREE_GUARD: &str = "blocks/pre-commit-worktree-guard.yaml.in";
 
-/// The routing block's mode line for one workflow.
+/// The routing block's mode line for one checkout mode.
 #[must_use]
-pub const fn routing_line(workflow: Workflow) -> &'static str {
-    match workflow {
-        Workflow::Worktree => AGENTS_LINE_WORKTREE,
-        Workflow::Branches => AGENTS_LINE_BRANCHES,
+pub const fn routing_line(mode: CheckoutMode) -> &'static str {
+    match mode {
+        CheckoutMode::LinkedWorktree => AGENTS_LINE_WORKTREE,
+        CheckoutMode::MainWorktree => AGENTS_LINE_BRANCHES,
     }
 }
 
@@ -1317,16 +1357,16 @@ pub fn compose_hooks(template: &str, guard: Option<&str>) -> String {
         .replacen("RK_WORKTREE_GUARD", &guard, 1)
 }
 
-/// The routing block for one workflow mode, from this binary's embedded
+/// The routing block for one checkout mode, from this binary's embedded
 /// templates.
 ///
 /// # Errors
 ///
 /// A block this binary does not embed, a defect in the binary.
-pub fn routing_block(workflow: Workflow) -> Result<String, RkError> {
+pub fn routing_block(mode: CheckoutMode) -> Result<String, RkError> {
     Ok(compose_routing(
         embedded_block(AGENTS_BLOCK)?,
-        embedded_block(routing_line(workflow))?,
+        embedded_block(routing_line(mode))?,
     ))
 }
 
@@ -1339,35 +1379,35 @@ pub fn glossary_block() -> Result<String, RkError> {
     Ok(compose_glossary(embedded_block(GLOSSARY_BLOCK)?))
 }
 
-/// The hook block for one workflow mode, from this binary's embedded
+/// The hook block for one checkout mode, from this binary's embedded
 /// templates.
 ///
 /// # Errors
 ///
 /// A block this binary does not embed, a defect in the binary.
-pub fn hooks_block(workflow: Workflow) -> Result<String, RkError> {
-    let guard = match workflow {
-        Workflow::Worktree => Some(embedded_block(PRE_COMMIT_WORKTREE_GUARD)?),
-        Workflow::Branches => None,
+pub fn hooks_block(mode: CheckoutMode) -> Result<String, RkError> {
+    let guard = match mode {
+        CheckoutMode::LinkedWorktree => Some(embedded_block(PRE_COMMIT_WORKTREE_GUARD)?),
+        CheckoutMode::MainWorktree => None,
     };
     Ok(compose_hooks(embedded_block(PRE_COMMIT_BLOCK)?, guard))
 }
 
-/// The unrendered block for one block destination under one workflow,
+/// The unrendered block for one block destination under one checkout mode,
 /// with the embedded source paths it was composed from.
-fn block_template(destination: &str, workflow: Workflow) -> Result<(String, Vec<String>), RkError> {
+fn block_template(destination: &str, mode: CheckoutMode) -> Result<(String, Vec<String>), RkError> {
     match destination {
         AGENTS_DESTINATION => Ok((
-            routing_block(workflow)?,
-            vec![AGENTS_BLOCK.to_owned(), routing_line(workflow).to_owned()],
+            routing_block(mode)?,
+            vec![AGENTS_BLOCK.to_owned(), routing_line(mode).to_owned()],
         )),
         GLOSSARY_DESTINATION => Ok((glossary_block()?, vec![GLOSSARY_BLOCK.to_owned()])),
         HOOKS_DESTINATION => {
             let mut sources = vec![PRE_COMMIT_BLOCK.to_owned()];
-            if workflow == Workflow::Worktree {
+            if mode == CheckoutMode::LinkedWorktree {
                 sources.push(PRE_COMMIT_WORKTREE_GUARD.to_owned());
             }
-            Ok((hooks_block(workflow)?, sources))
+            Ok((hooks_block(mode)?, sources))
         }
         other => Err(anyhow::anyhow!("{other} is not a block destination").into()),
     }
@@ -1757,7 +1797,6 @@ mod tests {
         AGENTS_DESTINATION, BLOCK_BEGIN, BLOCK_DESTINATIONS, BLOCK_END, Candidate, Collision,
         CrateShape, GLOSSARY_DESTINATION, HOOK_TYPES_LINE, HOOKS_BEGIN, HOOKS_DESTINATION,
         HOOKS_END, Placement, Projection, ProjectionInput, TargetEvidence, extract_block,
-        select_pair,
     };
     use crate::landing::{Params, Style};
 
@@ -1990,16 +2029,31 @@ mod tests {
     fn a_recorded_provider_its_pair_cannot_run_is_a_record_defect() {
         use super::{Provider, code_scanning_incompatibility};
 
-        assert!(code_scanning_incompatibility(None, "bash", "gitlab").is_none());
-        assert!(code_scanning_incompatibility(Some(Provider::Semgrep), "rust", "gitlab").is_none());
-        assert!(code_scanning_incompatibility(Some(Provider::CodeQl), "rust", "github").is_none());
+        assert!(code_scanning_incompatibility(None, Some("bash"), Some("gitlab")).is_none());
+        assert!(
+            code_scanning_incompatibility(Some(Provider::Semgrep), Some("rust"), Some("gitlab"))
+                .is_none()
+        );
+        assert!(
+            code_scanning_incompatibility(Some(Provider::CodeQl), Some("rust"), Some("github"))
+                .is_none()
+        );
 
-        let bash = code_scanning_incompatibility(Some(Provider::Semgrep), "bash", "github")
-            .expect("a binding with no scanner is named");
+        let bash =
+            code_scanning_incompatibility(Some(Provider::Semgrep), Some("bash"), Some("github"))
+                .expect("a binding with no scanner is named");
         assert!(bash.contains("bash binding"), "{bash}");
-        let gitlab = code_scanning_incompatibility(Some(Provider::CodeQl), "rust", "gitlab")
-            .expect("codeql on gitlab is named");
+        let gitlab =
+            code_scanning_incompatibility(Some(Provider::CodeQl), Some("rust"), Some("gitlab"))
+                .expect("codeql on gitlab is named");
         assert!(gitlab.contains("codeql"), "{gitlab}");
+        let release_less =
+            code_scanning_incompatibility(Some(Provider::Semgrep), None, Some("github"))
+                .expect("no driver is named");
+        assert!(
+            release_less.contains("no automatic release driver"),
+            "{release_less}"
+        );
 
         // The projection carries the same reason, so a record-only reader sees
         // it without going through resolution.
@@ -2086,16 +2140,19 @@ mod tests {
             ..CrateShape::default()
         };
         assert!(
-            code_scanning_licence_refusal(Some(Provider::Semgrep), "rust", &proprietary).is_none()
+            code_scanning_licence_refusal(Some(Provider::Semgrep), Some("rust"), &proprietary)
+                .is_none()
         );
-        let refusal = code_scanning_licence_refusal(Some(Provider::CodeQl), "rust", &proprietary)
-            .expect("codeql refuses a licence its terms do not cover");
+        let refusal =
+            code_scanning_licence_refusal(Some(Provider::CodeQl), Some("rust"), &proprietary)
+                .expect("codeql refuses a licence its terms do not cover");
         assert!(refusal.contains("LicenseRef-proprietary"), "{refusal}");
         assert!(refusal.contains("semgrep"), "{refusal}");
         // A binding whose licence field this release does not read refuses
         // rather than assuming the terms are met.
-        let bash = code_scanning_licence_refusal(Some(Provider::CodeQl), "bash", &proprietary)
-            .expect("an unread binding refuses");
+        let bash =
+            code_scanning_licence_refusal(Some(Provider::CodeQl), Some("bash"), &proprietary)
+                .expect("an unread binding refuses");
         assert!(bash.contains("bash binding"), "{bash}");
     }
 
@@ -2372,12 +2429,15 @@ mod tests {
     #[test]
     fn duplicate_whole_file_destinations_and_overlapping_marked_regions_refuse_with_the_conflicting_source_names()
      {
+        // Two capabilities shipping one destination is a source defect
+        // named by both sides.
         let files: Vec<(String, &[u8])> = vec![
             ("snippets/_shared/github/SECURITY.md".to_owned(), b"shared"),
             ("snippets/rust/github/SECURITY.md".to_owned(), b"pair"),
             ("snippets/rust/github/release-plz.toml".to_owned(), b"seed"),
         ];
-        let err = select_pair(&files, "rust", "github").expect_err("a doubled destination refuses");
+        let err = Projection::compute_over(&files, &input(TargetEvidence::default()))
+            .expect_err("a doubled destination refuses");
         let text = err.to_string();
         assert!(
             text.contains("snippets/_shared/github/SECURITY.md"),
@@ -2390,14 +2450,23 @@ mod tests {
             ("snippets/_shared/github/SECURITY.md".to_owned(), b"shared"),
             ("snippets/rust/github/release-plz.toml".to_owned(), b"seed"),
         ];
-        let selected = select_pair(&clean, "rust", "github").expect("a clean list selects");
-        let destinations: Vec<&str> = selected.iter().map(|s| s.destination.as_str()).collect();
-        assert_eq!(destinations, ["SECURITY.md", "release-plz.toml"]);
-        assert_eq!(selected[0].source, "snippets/_shared/github/SECURITY.md");
-        let err = select_pair(&clean, "_shared", "github").expect_err("the shared zone is no tech");
-        assert!(!err.to_string().contains("bindings are: _shared"), "{err}");
-        let err = select_pair(&clean, "rust", "gitlab").expect_err("an unshipped pair refuses");
-        assert!(err.to_string().contains("rust, github"), "{err}");
+        let projection = Projection::compute_over(&clean, &input(TargetEvidence::default()))
+            .expect("a clean list projects");
+        let whole: Vec<&str> = projection
+            .candidates
+            .iter()
+            .filter(|c| c.placement == Placement::Whole)
+            .map(|c| c.destination.as_str())
+            .collect();
+        assert_eq!(whole, ["SECURITY.md", "release-plz.toml"]);
+        assert_eq!(
+            projection
+                .candidates
+                .iter()
+                .find(|c| c.destination == "SECURITY.md")
+                .map(|c| c.sources.clone()),
+            Some(vec!["snippets/_shared/github/SECURITY.md".to_owned()])
+        );
 
         let doubled = format!("{BLOCK_BEGIN}\na\n{BLOCK_END}\n{BLOCK_BEGIN}\nb\n{BLOCK_END}\n");
         let unmatched = format!("repos:\n{HOOKS_BEGIN}\n  - repo: local\n");

@@ -31,13 +31,14 @@ use crate::diagnostic::{Diagnostic, Reason};
 use crate::digest::Digest;
 use crate::embedded;
 use crate::error::RkError;
-use crate::landing::manifest::{Manifest, Provider, Style, Workflow};
+use crate::landing::manifest::Manifest;
 use crate::landing::{Kind, Params};
+use crate::profile::{CapabilityRequests, GitWorkflow, ProfileSnapshot};
 use crate::projection::{Placement, Projection};
 use crate::skills;
 
 /// The shape version of the stage receipt and of the `rk stage` report.
-pub const STAGE_SCHEMA: &str = "rk.stage/3";
+pub const STAGE_SCHEMA: &str = "rk.stage/4";
 
 /// The receipt's name at the stage root.
 pub const RECEIPT_NAME: &str = "stage.json";
@@ -89,6 +90,8 @@ pub struct Receipt {
     pub stage_root: String,
     /// The resolved landing parameters the projection ran under.
     pub parameters: Parameters,
+    /// Every capability the catalog answered, in catalog order.
+    pub capabilities: Vec<CapabilityNote>,
     /// The `schema_version` the target's landing record declares, where
     /// the record is present and readable as JSON.
     pub receipt_schema_version: Option<u64>,
@@ -114,27 +117,14 @@ pub struct Receipt {
 /// The resolved landing parameters, stated whole.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Parameters {
-    /// The binding selected.
-    pub tech: String,
-    /// The forge selected.
-    pub forge: String,
-    /// The project path on the forge.
+    /// What the project is.
+    pub profile: ProfileSnapshot,
+    /// How topic branches reach the trunk.
+    pub git: GitWorkflow,
+    /// Which optional products the target requested.
+    pub capabilities: CapabilityRequests,
+    /// The project path on the forge, empty where the project has none.
     pub repo: String,
-    /// The working-copy mode.
-    pub workflow: Workflow,
-    /// The release style, where one resolved.
-    pub style: Option<Style>,
-    /// Whether the landing carries the Nix capability.
-    pub nix: bool,
-    /// Whether the landing carries the Scorecard capability.
-    pub scorecard: bool,
-    /// The code scanning provider the landing carries, where one is
-    /// recorded.
-    pub code_scanning: Option<Provider>,
-    /// The one permanent branch.
-    pub trunk: String,
-    /// The release-line prefix.
-    pub line_prefix: String,
     /// The security contact, empty for the forge's own wording.
     pub security_contact: String,
     /// The acknowledgment window.
@@ -144,16 +134,10 @@ pub struct Parameters {
 impl From<&Params> for Parameters {
     fn from(params: &Params) -> Self {
         Self {
-            tech: params.tech().to_owned(),
-            forge: params.forge().to_owned(),
+            profile: params.profile().clone(),
+            git: params.git().clone(),
+            capabilities: params.capabilities().clone(),
             repo: params.repo().to_owned(),
-            workflow: params.workflow(),
-            style: params.style(),
-            nix: params.nix(),
-            scorecard: params.scorecard(),
-            code_scanning: params.code_scanning(),
-            trunk: params.trunk().to_owned(),
-            line_prefix: params.line_prefix().to_owned(),
             security_contact: params.security_contact().to_owned(),
             security_response: params.security_response().to_owned(),
         }
@@ -186,6 +170,48 @@ pub struct Note {
     pub destination: String,
     /// Why it is listed here.
     pub reason: String,
+    /// The one edit the operator makes to activate what the landing
+    /// withheld, where the omission is an activation rather than a shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+}
+
+/// One capability's answer, as the receipt carries it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CapabilityNote {
+    /// The capability id.
+    pub id: String,
+    /// Its status: selected, not-requested, not-applicable, unavailable,
+    /// unknown, or withheld.
+    pub status: String,
+    /// Why, for every status but selected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// The operator's one edit, for a withheld capability.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+    /// The destinations it lands, sorted.
+    pub destinations: Vec<String>,
+}
+
+impl CapabilityNote {
+    /// The note for one selection, with the destinations the projection
+    /// landed under it.
+    #[must_use]
+    pub fn of(selection: &crate::profile::catalog::Selection, projection: &Projection) -> Self {
+        Self {
+            id: selection.id.to_owned(),
+            status: selection.status.as_str().to_owned(),
+            reason: selection.reason.clone(),
+            action: selection.action.clone(),
+            destinations: projection
+                .candidates
+                .iter()
+                .filter(|candidate| candidate.capability == selection.id)
+                .map(|candidate| candidate.destination.clone())
+                .collect(),
+        }
+    }
 }
 
 /// Where the resolved output path came from.
@@ -553,6 +579,11 @@ pub fn compose(
         target: canonical_target.display().to_string(),
         stage_root: stage_root.display().to_string(),
         parameters: Parameters::from(params),
+        capabilities: projection
+            .capabilities
+            .iter()
+            .map(|selection| CapabilityNote::of(selection, projection))
+            .collect(),
         receipt_schema_version,
         candidates,
         omissions: projection
@@ -561,12 +592,14 @@ pub fn compose(
             .map(|omission| Note {
                 destination: omission.destination.clone(),
                 reason: omission.reason.clone(),
+                action: omission.action.clone(),
             })
             .collect(),
         collisions: projection
             .collisions
             .iter()
             .map(|collision| Note {
+                action: None,
                 destination: collision.destination.clone(),
                 reason: collision.reason.clone(),
             })
@@ -886,9 +919,42 @@ mod tests {
     };
     use crate::digest::Digest;
     use crate::landing::Kind;
-    use crate::landing::manifest::{Style, Workflow};
+    use crate::landing::manifest::{CheckoutMode, Style};
+    use crate::profile::{
+        CapabilityRequests, GitWorkflow, ProfileSnapshot, ReleaseIntent, ReleaseMode,
+    };
 
-    /// The complete `rk.stage/3` receipt shape, held by snapshot: a field
+    /// The parameters every stage test renders under: an automatic rust
+    /// release on GitHub, trunk style, in the linked-worktree mode.
+    fn test_parameters() -> Parameters {
+        Parameters {
+            profile: ProfileSnapshot {
+                technologies: vec!["rust".into()],
+                forge: Some("github".into()),
+                release: ReleaseIntent {
+                    mode: ReleaseMode::Automatic,
+                    driver: Some("rust".into()),
+                    style: Some(Style::Trunk),
+                    line_prefix: Some("release/".into()),
+                },
+            },
+            git: GitWorkflow {
+                trunk: "master".into(),
+                checkout_mode: CheckoutMode::LinkedWorktree,
+            },
+            capabilities: CapabilityRequests {
+                nix_packaging: false,
+                reporting_policy: true,
+                scorecard: false,
+                code_scanning: None,
+            },
+            repo: "acme/widget".into(),
+            security_contact: String::new(),
+            security_response: "best-effort".into(),
+        }
+    }
+
+    /// The complete `rk.stage/4` receipt shape, held by snapshot: a field
     /// rename or removal fails here and becomes a schema-version bump.
     #[test]
     fn the_stage_receipt_schema_snapshot_holds() {
@@ -897,20 +963,8 @@ mod tests {
             rk_version: "0.0.0".into(),
             target: "/tmp/t".into(),
             stage_root: "/tmp/s".into(),
-            parameters: Parameters {
-                tech: "rust".into(),
-                forge: "github".into(),
-                repo: "acme/widget".into(),
-                workflow: Workflow::Worktree,
-                style: Some(Style::Trunk),
-                nix: false,
-                scorecard: false,
-                code_scanning: None,
-                trunk: "master".into(),
-                line_prefix: "release/".into(),
-                security_contact: String::new(),
-                security_response: "best-effort".into(),
-            },
+            parameters: test_parameters(),
+            capabilities: vec![],
             receipt_schema_version: Some(6),
             candidates: vec![
                 CandidateEntry {
@@ -933,6 +987,7 @@ mod tests {
             omissions: vec![Note {
                 destination: "flake.nix".into(),
                 reason: "the target already carries flake.nix".into(),
+                action: None,
             }],
             collisions: vec![],
             retired: vec!["old.yml".into()],
@@ -946,7 +1001,7 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&receipt).expect("a receipt serializes"),
             format!(
-                r#"{{"schema":"rk.stage/3","rk_version":"0.0.0","target":"/tmp/t","stage_root":"/tmp/s","parameters":{{"tech":"rust","forge":"github","repo":"acme/widget","workflow":"worktree","style":"trunk","nix":false,"scorecard":false,"code_scanning":null,"trunk":"master","line_prefix":"release/","security_contact":"","security_response":"best-effort"}},"receipt_schema_version":6,"candidates":[{{"destination":"AGENTS.md","kind":"rendered","placement":"region","sha256":"{}","region_sha256":"{}","sources":["blocks/routing.md.in"]}},{{"destination":"release-plz.toml","kind":"seeded","placement":"whole","sha256":"{}","sources":["snippets/rust/github/release-plz.toml"]}}],"omissions":[{{"destination":"flake.nix","reason":"the target already carries flake.nix"}}],"collisions":[],"retired":["old.yml"],"seeded_present":["release-plz.toml"],"state_present":[],"reference":["CHANGELOG.md","guidance","method","bindings","runbooks","forges","skills/rk-setup","skill-shared"]}}"#,
+                r#"{{"schema":"rk.stage/4","rk_version":"0.0.0","target":"/tmp/t","stage_root":"/tmp/s","parameters":{{"profile":{{"technologies":["rust"],"forge":"github","release":{{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}}}},"git":{{"trunk":"master","checkout_mode":"linked-worktree"}},"capabilities":{{"nix_packaging":false,"reporting_policy":true,"scorecard":false}},"repo":"acme/widget","security_contact":"","security_response":"best-effort"}},"capabilities":[],"receipt_schema_version":6,"candidates":[{{"destination":"AGENTS.md","kind":"rendered","placement":"region","sha256":"{}","region_sha256":"{}","sources":["blocks/routing.md.in"]}},{{"destination":"release-plz.toml","kind":"seeded","placement":"whole","sha256":"{}","sources":["snippets/rust/github/release-plz.toml"]}}],"omissions":[{{"destination":"flake.nix","reason":"the target already carries flake.nix"}}],"collisions":[],"retired":["old.yml"],"seeded_present":["release-plz.toml"],"state_present":[],"reference":["CHANGELOG.md","guidance","method","bindings","runbooks","forges","skills/rk-setup","skill-shared"]}}"#,
                 Digest::of(b"a"),
                 Digest::of(b"r"),
                 Digest::of(b"b")
@@ -1100,20 +1155,8 @@ mod tests {
             rk_version: "0.0.0".into(),
             target: "/tmp/t".into(),
             stage_root: "/tmp/s".into(),
-            parameters: Parameters {
-                tech: "rust".into(),
-                forge: "github".into(),
-                repo: "acme/widget".into(),
-                workflow: Workflow::Worktree,
-                style: Some(Style::Trunk),
-                nix: false,
-                scorecard: false,
-                code_scanning: None,
-                trunk: "master".into(),
-                line_prefix: "release/".into(),
-                security_contact: String::new(),
-                security_response: "best-effort".into(),
-            },
+            parameters: test_parameters(),
+            capabilities: vec![],
             receipt_schema_version: None,
             candidates: vec![],
             omissions: vec![],

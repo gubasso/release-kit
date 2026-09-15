@@ -15,7 +15,7 @@ use serde::Serialize;
 use crate::cli::stage::{StageAction, StageArgs};
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
-use crate::landing::manifest::{self, Provider, Style, Workflow};
+use crate::landing::manifest::{self, Provider};
 use crate::landing::{self, Params};
 use crate::output::Output;
 use crate::projection::{Projection, ProjectionInput, TargetEvidence};
@@ -96,18 +96,15 @@ fn create(args: &StageArgs) -> Result<(), RkError> {
     let params = Params::resolve(
         &target,
         &landing::Inputs {
-            tech: args.tech.as_deref(),
-            forge: args.forge.as_deref(),
-            repo: args.repo.as_deref(),
-            workflow: args.workflow.as_deref().map(Workflow::parse).transpose()?,
-            style: args.style.as_deref().map(Style::parse).transpose()?,
-            nix: args.nix.then_some(true),
+            nix: args.nix_packaging.then_some(true),
+            reporting_policy: args.reporting_policy.then_some(true),
             scorecard: args.scorecard.then_some(true),
             code_scanning: args
                 .code_scanning
                 .as_deref()
                 .map(Provider::parse)
                 .transpose()?,
+            ..args.profile.inputs()?
         },
         config.as_ref(),
         record.as_ref(),
@@ -167,14 +164,24 @@ fn render(out: Output, receipt: &Receipt, source: OutputSource) {
     out.result_line(format!("target: {}", receipt.target));
     let parameters = &receipt.parameters;
     out.result_line(format!(
-        "parameters: tech {}, forge {}, repo {}, workflow {}, style {}, nix {}",
-        parameters.tech,
-        parameters.forge,
-        parameters.repo,
-        parameters.workflow.as_str(),
-        parameters.style.map_or("unresolved", Style::as_str),
-        if parameters.nix { "on" } else { "off" }
+        "parameters: {}",
+        crate::commands::profile::describe(
+            &parameters.profile,
+            &parameters.git,
+            &parameters.capabilities,
+            &parameters.repo
+        )
     ));
+    for note in &receipt.capabilities {
+        out.result_line(format!(
+            "capability {}: {}{}",
+            note.id,
+            note.status,
+            note.reason
+                .as_deref()
+                .map_or_else(String::new, |reason| format!(" ({reason})"))
+        ));
+    }
     out.result_line(format!(
         "landing record: {}",
         receipt.receipt_schema_version.map_or_else(
@@ -194,6 +201,9 @@ fn render(out: Output, receipt: &Receipt, source: OutputSource) {
     }
     for note in &receipt.omissions {
         out.result_line(format!("omitted {}: {}", note.destination, note.reason));
+        if let Some(action) = &note.action {
+            out.result_line(format!("  action: {action}"));
+        }
     }
     for note in &receipt.collisions {
         out.result_line(format!("collision {}: {}", note.destination, note.reason));
@@ -265,19 +275,31 @@ mod tests {
             target: "/tmp/t".into(),
             stage_root: "/tmp/s".into(),
             parameters: Parameters {
-                tech: "rust".into(),
-                forge: "github".into(),
+                profile: crate::profile::ProfileSnapshot {
+                    technologies: vec!["rust".into()],
+                    forge: Some("github".into()),
+                    release: crate::profile::ReleaseIntent {
+                        mode: crate::profile::ReleaseMode::Automatic,
+                        driver: Some("rust".into()),
+                        style: None,
+                        line_prefix: Some("release/".into()),
+                    },
+                },
+                git: crate::profile::GitWorkflow {
+                    trunk: "main".into(),
+                    checkout_mode: crate::landing::CheckoutMode::MainWorktree,
+                },
+                capabilities: crate::profile::CapabilityRequests {
+                    nix_packaging: true,
+                    reporting_policy: true,
+                    scorecard: false,
+                    code_scanning: None,
+                },
                 repo: "acme/widget".into(),
-                workflow: crate::landing::Workflow::Branches,
-                style: None,
-                nix: true,
-                scorecard: false,
-                code_scanning: None,
-                trunk: "main".into(),
-                line_prefix: "release/".into(),
                 security_contact: String::new(),
                 security_response: "best-effort".into(),
             },
+            capabilities: vec![],
             receipt_schema_version: None,
             candidates: vec![],
             omissions: vec![],
@@ -296,7 +318,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.stage/3","rk_version":"0.0.0","target":"/tmp/t","stage_root":"/tmp/s","parameters":{"tech":"rust","forge":"github","repo":"acme/widget","workflow":"branches","style":null,"nix":true,"scorecard":false,"code_scanning":null,"trunk":"main","line_prefix":"release/","security_contact":"","security_response":"best-effort"},"receipt_schema_version":null,"candidates":[],"omissions":[],"collisions":[],"retired":[],"seeded_present":[],"state_present":[],"reference":["CHANGELOG.md"],"output_source":"--output","next":["rk stage clean /tmp/s removes the stage once the landing is verified"]}"#
+            r#"{"schema":"rk.stage/4","rk_version":"0.0.0","target":"/tmp/t","stage_root":"/tmp/s","parameters":{"profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","line_prefix":"release/"}},"git":{"trunk":"main","checkout_mode":"main-worktree"},"capabilities":{"nix_packaging":true,"reporting_policy":true,"scorecard":false},"repo":"acme/widget","security_contact":"","security_response":"best-effort"},"capabilities":[],"receipt_schema_version":null,"candidates":[],"omissions":[],"collisions":[],"retired":[],"seeded_present":[],"state_present":[],"reference":["CHANGELOG.md"],"output_source":"--output","next":["rk stage clean /tmp/s removes the stage once the landing is verified"]}"#
         );
     }
 

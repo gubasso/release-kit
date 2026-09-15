@@ -12,7 +12,7 @@ use crate::commands::walk;
 use crate::detect;
 use crate::embedded;
 use crate::error::RkError;
-use crate::landing::manifest::{self, Style, Workflow};
+use crate::landing::manifest::{self, CheckoutMode, Style};
 use crate::output::Output;
 
 /// Print one runbook, or list them.
@@ -22,6 +22,10 @@ use crate::output::Output;
 /// Returns [`RkError::NotFound`] for an unknown runbook and
 /// [`RkError::Usage`] when neither a name nor `--list` is given, or a flag
 /// value is not one of the known axes.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one pass resolves every runbook axis from the same three sources, and splitting it would separate an axis from the precedence it shares"
+)]
 pub fn run(args: &GuideArgs) -> Result<(), RkError> {
     let out = Output::human();
     let entries = walk(&embedded::RUNBOOKS);
@@ -61,35 +65,57 @@ pub fn run(args: &GuideArgs) -> Result<(), RkError> {
         ),
         None => None,
     };
-    let tech = match args.tech.as_deref() {
+    let tech = match args.technology.as_deref() {
         Some(value @ ("rust" | "python" | "bash")) => Some(value.to_owned()),
         Some(other) => {
             return Err(RkError::Usage(format!(
-                "unknown tech '{other}'; the bindings are: rust, python, bash"
+                "unknown technology '{other}'; the bindings are: rust, python, bash"
             )));
         }
         None => None,
     };
-    let workflow = args.workflow.as_deref().map(Workflow::parse).transpose()?;
-    let style = args.style.as_deref().map(Style::parse).transpose()?;
+    let checkout_mode = args
+        .checkout_mode
+        .as_deref()
+        .map(CheckoutMode::parse)
+        .transpose()?;
+    let style = args
+        .release_style
+        .as_deref()
+        .map(Style::parse)
+        .transpose()?;
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let config = crate::config::load(&cwd)?;
     let detected = detect::detect(&cwd);
+    let record =
+        camino::Utf8Path::from_path(&cwd).and_then(|path| manifest::load(path).ok().flatten());
+    let configured_forge = config
+        .as_ref()
+        .and_then(|c| c.profile.forge.clone())
+        .filter(|v| !v.is_empty());
+    let recorded_forge = record.as_ref().and_then(|r| r.profile.forge.clone());
     let forge = forge
-        .or_else(|| {
-            config
-                .as_ref()
-                .map(|c| c.project.forge.as_str())
-                .filter(|v| !v.is_empty())
-        })
-        .or_else(|| detected.forge.map(detect::Forge::as_str));
+        .map(str::to_owned)
+        .or(configured_forge)
+        .or(recorded_forge);
+    let forge = forge
+        .as_deref()
+        .and_then(detect::Forge::parse)
+        .or(detected.forge)
+        .map(detect::Forge::as_str);
+    // The technology axis is the release driver: the configured or
+    // recorded driver, then the first release-bearing version file.
     let tech = tech
         .or_else(|| {
             config
                 .as_ref()
-                .map(|c| c.project.tech.clone())
-                .filter(|v| !v.is_empty())
+                .and_then(|c| c.profile.release.driver.clone())
+        })
+        .or_else(|| {
+            record
+                .as_ref()
+                .and_then(|r| r.profile.release.driver.clone())
         })
         .or_else(|| detect::tech_of(&cwd).map(str::to_owned));
     let repo = args
@@ -101,27 +127,35 @@ pub fn run(args: &GuideArgs) -> Result<(), RkError> {
                 .map(|c| c.project.repo.clone())
                 .filter(|v| !v.is_empty())
         })
+        .or_else(|| {
+            record
+                .as_ref()
+                .map(|r| r.parameters.repo.clone())
+                .filter(|v| !v.is_empty())
+        })
         .or(detected.repo);
-    // The workflow axis resolves from the landing record — the mode is a
-    // committed project decision, not a detection guess — and stays open
-    // where no record exists, the honest pre-landing fallback.
-    let record =
-        camino::Utf8Path::from_path(&cwd).and_then(|path| manifest::load(path).ok().flatten());
-    let workflow = workflow
-        .or_else(|| config.as_ref().and_then(|c| c.landing.workflow))
-        .or_else(|| record.as_ref().map(|record| record.parameters.workflow));
+    // The checkout mode resolves from the configuration and the landing
+    // record — a committed project decision, not a detection guess — and
+    // stays open where neither exists, the honest pre-landing fallback.
+    let checkout_mode = checkout_mode
+        .or_else(|| config.as_ref().and_then(|c| c.git.checkout_mode))
+        .or_else(|| record.as_ref().map(|record| record.git.checkout_mode));
     // The style axis resolves the same way: a committed project decision,
     // open where no record exists.
     let style = style
-        .or_else(|| config.as_ref().and_then(|c| c.landing.style))
-        .or_else(|| record.as_ref().and_then(|record| record.parameters.style));
+        .or_else(|| config.as_ref().and_then(|c| c.profile.release.style))
+        .or_else(|| {
+            record
+                .as_ref()
+                .and_then(|record| record.profile.release.style)
+        });
 
     let rendered = render(
         &text,
         forge,
         tech.as_deref(),
         repo.as_deref(),
-        workflow.map(Workflow::as_str),
+        checkout_mode.map(CheckoutMode::runbook_label),
         style.map(Style::as_str),
     );
     let unresolved = repo.is_none() && rendered.contains("<repo>");

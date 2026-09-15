@@ -26,7 +26,7 @@ test:
 # carries every distribution root and the landed seed actually builds.
 build:
     set -eu; d=$(mktemp -d); trap 'rm -rf "$d"' EXIT; mkdir -p "$d/.git"; \
-    cargo run -q -- init --tech rust --forge github --repo acme/widget --target "$d" --apply >/dev/null; \
+    cargo run -q -- init --technology rust --forge github --repo acme/widget --target "$d" --apply >/dev/null; \
     test -f "$d/release-plz.toml"; test -f "$d/.release-kit/manifest.json"; test -f "$d/.release-kit/config.toml"; \
     sed -i '/TODO(release-kit)/d' "$d/release-plz.toml"; printf 'semver_check = true\n' >> "$d/release-plz.toml"; \
     cargo run -q -- upgrade --target "$d" --apply >/dev/null; \
@@ -35,7 +35,7 @@ build:
     set -eu; n=$(mktemp -d); trap 'rm -rf "$n"' EXIT; mkdir -p "$n/.git" "$n/src"; \
     printf '[package]\nname = "widget"\nversion = "0.1.0"\n' > "$n/Cargo.toml"; \
     printf 'fn main() {}\n' > "$n/src/main.rs"; printf 'version = 4\n' > "$n/Cargo.lock"; \
-    cargo run -q -- init --tech rust --forge github --repo acme/widget --nix --target "$n" --apply >/dev/null; \
+    cargo run -q -- init --technology rust --forge github --repo acme/widget --nix-packaging --target "$n" --apply >/dev/null; \
     test -f "$n/nix/package.nix"; test -f "$n/flake.nix"; test -f "$n/flake.lock"; test ! -e "$n/.github/workflows/nix.yml"; \
     printf '# tuned by the target\n' >> "$n/nix/package.nix"; \
     cargo run -q -- upgrade --target "$n" --apply >/dev/null; \

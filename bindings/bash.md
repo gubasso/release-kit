@@ -7,7 +7,7 @@
 | Registry and auth   | none                                   |
 | Artifact builder    | `make dist` tarball from `git archive` |
 
-`rk init --tech bash` lands `VERSION`, `cliff.toml`, and the release workflow `.github/workflows/release.yml`.
+`rk init --technology bash --release-driver bash` lands `VERSION`, `cliff.toml`, and the release workflow `.github/workflows/release.yml`.
 
 ## The shape
 

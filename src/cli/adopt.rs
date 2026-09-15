@@ -3,6 +3,8 @@
 use camino::Utf8PathBuf;
 use clap::Args;
 
+use super::profile_flags::ProfileFlags;
+
 /// Write the landing record for a repository that already runs the
 /// convention, landed before the record existed.
 ///
@@ -18,51 +20,34 @@ pub struct AdoptArgs {
     #[arg(long, default_value = ".")]
     pub target: Utf8PathBuf,
 
-    /// The technology whose files the target runs. Defaults to
-    /// detection from the version file.
-    #[arg(long)]
-    pub tech: Option<String>,
-
-    /// The forge whose files the target runs: github or gitlab.
-    /// Defaults to detection from the target's git remote.
-    #[arg(long)]
-    pub forge: Option<String>,
-
-    /// The project path on the forge, the parameter the candidate is
-    /// rendered under. Defaults to detection from the target's git
-    /// remote.
-    #[arg(long)]
-    pub repo: Option<String>,
-
-    /// The working-copy mode the candidate is rendered under: worktree or
-    /// branches. It chooses which candidate adoption verifies against and
-    /// never blesses the disk; the default is branches, the
-    /// compatibility-safe reading of a pre-record target.
-    #[arg(long)]
-    pub workflow: Option<String>,
-
-    /// The release style the candidate is rendered under: trunk or lines.
-    /// Required from the config or this flag: the style changes the bytes. An
-    /// adoption verifies bytes against exactly one rendered candidate, so
-    /// neither value is a safe guess.
-    #[arg(long)]
-    pub style: Option<String>,
+    /// The project profile and the Git workflow the candidate is rendered
+    /// under. The checkout mode chooses which candidate adoption verifies
+    /// against and never blesses the disk; its default is main-worktree,
+    /// the compatibility-safe reading of a pre-record target. An automatic
+    /// release requires the style from the config or the flag: the style
+    /// changes the bytes, so neither value is a safe guess.
+    #[command(flatten)]
+    pub profile: ProfileFlags,
 
     /// The target runs the Nix capability: the candidate includes its
-    /// files, and the record carries the parameter. A target whose flake
-    /// pair is its own is verified without the pair and the workflow,
-    /// exactly as a landing would have withheld them.
+    /// files, and the record carries the request. A target whose flake
+    /// pair is its own is verified without the pair, exactly as a landing
+    /// would have withheld it.
+    #[arg(long, alias = "nix")]
+    pub nix_packaging: bool,
+
+    /// The target carries the landed reporting policy.
     #[arg(long)]
-    pub nix: bool,
+    pub reporting_policy: bool,
 
     /// The target runs the Scorecard capability: the candidate includes its
-    /// workflow, and the record carries the parameter.
+    /// workflow, and the record carries the request.
     #[arg(long)]
     pub scorecard: bool,
 
     /// The target runs code scanning under this provider: codeql or
     /// semgrep. The candidate includes its workflow and the record carries
-    /// the parameter.
+    /// the request.
     #[arg(long, value_name = "PROVIDER")]
     pub code_scanning: Option<String>,
 

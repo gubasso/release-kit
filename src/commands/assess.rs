@@ -62,7 +62,14 @@ pub fn run(args: &AssessArgs) -> Result<(), RkError> {
             |version| format!("recorded at release-kit {version}")
         )
     ));
-    out.result_line(format!("tech: {}", evidence.tech.unwrap_or("undetected")));
+    out.result_line(format!(
+        "technologies: {}",
+        if evidence.technologies.is_empty() {
+            "none".to_owned()
+        } else {
+            evidence.technologies.join(", ")
+        }
+    ));
     out.result_line(format!(
         "forge: {}",
         match (evidence.forge, evidence.repo.as_deref()) {
@@ -91,7 +98,7 @@ pub fn run(args: &AssessArgs) -> Result<(), RkError> {
     out.next(&next);
 
     out.emit(&Report {
-        schema: "rk.assess/3",
+        schema: "rk.assess/4",
         target: args.target.to_string(),
         classification,
         evidence: &evidence,
@@ -114,7 +121,7 @@ fn next_lines(args: &AssessArgs, evidence: &Evidence, verdict: Classification) -
     }
     match verdict {
         Classification::Greenfield => vec![
-            format!("rk init --tech <tech> --target {target} lands the workflow; nothing is here to migrate"),
+            format!("rk profile --target {target} reports what a landing selects, and rk init --target {target} lands it; nothing is here to migrate"),
         ],
         Classification::Brownfield => vec![
             "rk guide migration carries the migration procedure".to_owned(),
@@ -149,7 +156,7 @@ mod tests {
                 recorded: false,
                 rk_version: None,
             },
-            tech: Some("rust"),
+            technologies: vec!["rust"],
             forge: Some("github"),
             repo: Some("acme/widget".into()),
             release_markers: vec!["CHANGELOG.md".into()],
@@ -159,7 +166,7 @@ mod tests {
             long_lived_branches: vec!["develop".into()],
         };
         let report = Report {
-            schema: "rk.assess/3",
+            schema: "rk.assess/4",
             target: "/tmp/t".into(),
             classification: Classification::Brownfield,
             evidence: &evidence,
@@ -167,7 +174,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.assess/3","target":"/tmp/t","classification":"brownfield","landing":{"recorded":false},"tech":"rust","forge":"github","repo":"acme/widget","release_markers":["CHANGELOG.md"],"collisions":["release-plz.toml"],"git":true,"tags":3,"long_lived_branches":["develop"],"next":["rk guide migration carries the migration procedure"]}"#
+            r#"{"schema":"rk.assess/4","target":"/tmp/t","classification":"brownfield","landing":{"recorded":false},"technologies":["rust"],"forge":"github","repo":"acme/widget","release_markers":["CHANGELOG.md"],"collisions":["release-plz.toml"],"git":true,"tags":3,"long_lived_branches":["develop"],"next":["rk guide migration carries the migration procedure"]}"#
         );
     }
 }

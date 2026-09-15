@@ -12,10 +12,11 @@ pub struct GuideArgs {
     #[arg(long)]
     pub list: bool,
 
-    /// Select the technology's lines where the runbook branches; defaults
-    /// to detection from the version file.
-    #[arg(long)]
-    pub tech: Option<String>,
+    /// Select the release driver's lines where the runbook branches;
+    /// defaults to the configured or recorded driver, then to detection
+    /// from the version files.
+    #[arg(long, alias = "tech", value_name = "NAME")]
+    pub technology: Option<String>,
 
     /// Select the forge's lines where the runbook branches; defaults to
     /// detection from the git remote.
@@ -27,15 +28,16 @@ pub struct GuideArgs {
     #[arg(long)]
     pub repo: Option<String>,
 
-    /// Select the workflow mode's lines where the runbook branches:
-    /// worktree or branches. Defaults to the mode the landing record
-    /// states; without a record, every variant prints with its label.
-    #[arg(long)]
-    pub workflow: Option<String>,
+    /// Select the checkout mode's lines where the runbook branches:
+    /// linked-worktree or main-worktree. Defaults to the mode the
+    /// configuration or the landing record states; without either, every
+    /// variant prints with its label.
+    #[arg(long, alias = "workflow", value_name = "MODE")]
+    pub checkout_mode: Option<String>,
 
     /// Select the release style's lines where the runbook branches: trunk
-    /// or lines. Defaults to the style the landing record states; without
-    /// one, every variant prints with its label.
-    #[arg(long)]
-    pub style: Option<String>,
+    /// or lines. Defaults to the style the configuration or the landing
+    /// record states; without either, every variant prints with its label.
+    #[arg(long, alias = "style", value_name = "STYLE")]
+    pub release_style: Option<String>,
 }

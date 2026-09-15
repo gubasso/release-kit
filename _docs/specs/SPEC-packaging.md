@@ -135,7 +135,7 @@ The landed Nix capability MUST promise exactly a package expression that evaluat
 
 #### Scenario: An operator asks what the capability shipped
 
-- GIVEN a target that opted in with `rk init --nix`
+- GIVEN a target that opted in with `rk init --nix-packaging`
 - WHEN the operator reads the landing report and the runbook
 - THEN the promise is the build, and the job that proves it in the target's own pipeline on each supported forge, with registry distribution named as the target's own later step
 

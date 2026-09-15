@@ -16,6 +16,7 @@
   - [`project-profile:an-operation-refuses-only-what-it-requires` — An operation refuses only what it requires](#project-profilean-operation-refuses-only-what-it-requires--an-operation-refuses-only-what-it-requires)
   - [`project-profile:the-profile-command-writes-nothing` — The profile command writes nothing](#project-profilethe-profile-command-writes-nothing--the-profile-command-writes-nothing)
   - [`project-profile:a-schema-one-configuration-migrates-in-place` — A schema one configuration migrates in place](#project-profilea-schema-one-configuration-migrates-in-place--a-schema-one-configuration-migrates-in-place)
+  - [`project-profile:a-destination-has-one-capability-owner` — A destination has one capability owner](#project-profilea-destination-has-one-capability-owner--a-destination-has-one-capability-owner)
 
 <!--TOC-->
 
@@ -168,3 +169,15 @@ The configuration reader MUST read a schema 1 file through one bounded migration
 - THEN the written file states `schema_version = 2`, the style stands under `[profile.release]` with its comment, and `landing.workflow`'s value reads as `linked-worktree` under `[git]`
 
 Verify: `cargo nextest run -E 'test(a_schema_1_config_migrates_into_its_domains)'`
+
+### `project-profile:a-destination-has-one-capability-owner` — A destination has one capability owner
+
+Every embedded source MUST belong to exactly one capability, `snippets/_shared/<forge>` MUST hold the forge's technology-independent sources rather than a technology's, no zone whose name begins with an underscore MAY be selectable as a technology, and a destination two capabilities both ship MUST refuse as a projection defect naming both, never one silently winning.
+
+#### Scenario: The shared zone is offered as a technology
+
+- GIVEN the embedded sources carrying `snippets/_shared/`
+- WHEN the catalog reads every embedded source and the drivers are listed
+- THEN each source names one owner, and no listing names `_shared`
+
+Verify: `cargo nextest run -E 'test(every_embedded_snippet_has_one_owner) or test(duplicate_whole_file_destinations_and_overlapping_marked_regions_refuse_with_the_conflicting_source_names)'`

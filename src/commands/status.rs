@@ -23,7 +23,9 @@ use crate::landing::invariants::{self, InvariantFailure};
 use crate::landing::manifest::{self, Alignment, Manifest};
 use crate::landing::{self, Kind};
 use crate::output::Output;
+use crate::profile::{CapabilityRequests, GitWorkflow, ProfileSnapshot, ReleaseMode};
 use crate::projection::{Candidate, Projection, ProjectionInput, TargetEvidence};
+use crate::stage::CapabilityNote;
 use crate::{embedded, registry};
 
 /// Drift counts by owned kind; `state` files are never compared.
@@ -95,28 +97,19 @@ struct Report {
     /// Whether a landing record exists; every other field needs one.
     landed: bool,
     config: ConfigState,
+    /// What the record says the project is.
     #[serde(skip_serializing_if = "Option::is_none")]
-    tech: Option<String>,
+    profile: Option<ProfileSnapshot>,
+    /// The recorded Git workflow.
     #[serde(skip_serializing_if = "Option::is_none")]
-    forge: Option<String>,
-    /// The recorded working-copy mode.
+    git: Option<GitWorkflow>,
+    /// The recorded capability requests.
     #[serde(skip_serializing_if = "Option::is_none")]
-    workflow: Option<&'static str>,
-    /// The recorded release style; absent on a record predating it.
+    capabilities: Option<CapabilityRequests>,
+    /// Every capability the catalog answers for the recorded values, in
+    /// catalog order; absent where this binary cannot project the record.
     #[serde(skip_serializing_if = "Option::is_none")]
-    style: Option<&'static str>,
-    /// Whether the landing carries the Nix capability; a record predating
-    /// the parameter reads as opt-out.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    nix: Option<bool>,
-    /// Whether the landing carries the Scorecard capability; a record
-    /// predating the parameter reads as opt-out.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    scorecard: Option<bool>,
-    /// The recorded code scanning provider; absent where the project did
-    /// not opt in.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    code_scanning: Option<&'static str>,
+    selection: Option<Vec<CapabilityNote>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     rk_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -168,9 +161,10 @@ fn report_absent(
     out.result_line(format!("no landing at {}", args.target));
     out.next(&[
         format!(
-            "rk init --tech <tech> --target {} lands the workflow",
+            "rk profile --target {} reports what a landing would select",
             args.target
         ),
+        format!("rk init --target {} lands the workflow", args.target),
         format!(
             "rk adopt --target {} records a landing made before the receipt existed",
             args.target
@@ -181,16 +175,13 @@ fn report_absent(
         ),
     ]);
     out.emit(&Report {
-        schema: "rk.status/11",
+        schema: "rk.status/12",
         landed: false,
         config: config_state(config, None),
-        tech: None,
-        forge: None,
-        workflow: None,
-        style: None,
-        nix: None,
-        scorecard: None,
-        code_scanning: None,
+        profile: None,
+        git: None,
+        capabilities: None,
+        selection: None,
         rk_version: None,
         binary_version: None,
         alignment: None,
@@ -243,6 +234,8 @@ struct Observed {
     /// binary carries no projection for the recorded pair and so cannot
     /// say.
     pending: Option<Vec<String>>,
+    /// Every capability the catalog answers for the recorded values.
+    selection: Option<Vec<CapabilityNote>>,
 }
 
 /// Report the target's landing.
@@ -282,19 +275,13 @@ pub fn run(args: &StatusArgs) -> Result<(), RkError> {
 
     let violations = violations_of(&observed);
     out.emit(&Report {
-        schema: "rk.status/11",
+        schema: "rk.status/12",
         landed: true,
         config,
-        tech: Some(manifest.tech),
-        forge: Some(manifest.forge),
-        workflow: Some(manifest.parameters.workflow.as_str()),
-        style: manifest.parameters.style.map(manifest::Style::as_str),
-        nix: Some(manifest.parameters.nix),
-        scorecard: Some(manifest.parameters.scorecard),
-        code_scanning: manifest
-            .parameters
-            .code_scanning
-            .map(manifest::Provider::as_str),
+        profile: Some(manifest.profile.clone()),
+        git: Some(manifest.git.clone()),
+        capabilities: Some(manifest.capabilities.clone()),
+        selection: observed.selection.clone(),
         rk_version: Some(manifest.rk_version),
         binary_version: Some(env!("CARGO_PKG_VERSION")),
         alignment: Some(alignment),
@@ -373,6 +360,10 @@ fn violations_of(observed: &Observed) -> Vec<String> {
 
 /// One pass over the record and the disk: drift, missing files, stale
 /// pins, and sentinels.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one pass over the record and the disk answers every comparison the report states"
+)]
 fn observe(args: &StatusArgs, manifest: &Manifest) -> Result<Observed, RkError> {
     let mut observed = Observed {
         drift_rendered: Vec::new(),
@@ -386,6 +377,7 @@ fn observe(args: &StatusArgs, manifest: &Manifest) -> Result<Observed, RkError> 
         warnings: Vec::new(),
         incompatible: Vec::new(),
         pending: None,
+        selection: None,
     };
     // One projection serves every reader below, because each asks what
     // this binary makes of the recorded parameters at this target. A pair
@@ -412,8 +404,8 @@ fn observe(args: &StatusArgs, manifest: &Manifest) -> Result<Observed, RkError> 
             }
         }
         observed.invariants.extend(invariants::failures(
-            &manifest.tech,
-            &manifest.forge,
+            manifest.profile.release.driver.as_deref().unwrap_or(""),
+            manifest.profile.forge.as_deref().unwrap_or(""),
             &file.destination,
             &bytes,
         ));
@@ -446,10 +438,17 @@ fn observe(args: &StatusArgs, manifest: &Manifest) -> Result<Observed, RkError> 
     // recorded digest sees the two disagree. The pair's own rule reads
     // both off the target's disk.
     observed.invariants.extend(invariants::target_failures(
-        &manifest.tech,
-        &manifest.forge,
+        manifest.profile.release.driver.as_deref().unwrap_or(""),
+        manifest.profile.forge.as_deref().unwrap_or(""),
         &args.target,
     ));
+    observed.selection = projected.as_ref().map(|projection| {
+        projection
+            .capabilities
+            .iter()
+            .map(|selection| CapabilityNote::of(selection, projection))
+            .collect()
+    });
     if let Some(reason) = projected
         .as_ref()
         .and_then(|projection| projection.licence_refusal.clone())
@@ -621,6 +620,10 @@ fn observe_record_set(
 }
 
 /// The human lines, identical with and without `--check`.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one pass prints every reportable condition in the order the report states them"
+)]
 fn render_human(
     out: Output,
     args: &StatusArgs,
@@ -629,18 +632,31 @@ fn render_human(
     observed: &Observed,
 ) {
     out.result_line(format!(
-        "release-kit {} ({}, {}, {} workflow, {} style{}) at {}",
+        "release-kit {} at {}: {}",
         manifest.rk_version,
-        manifest.tech,
-        manifest.forge,
-        manifest.parameters.workflow.as_str(),
-        manifest
-            .parameters
-            .style
-            .map_or("unrecorded", manifest::Style::as_str),
-        if manifest.parameters.nix { ", nix" } else { "" },
-        args.target
+        args.target,
+        crate::commands::profile::describe(
+            &manifest.profile,
+            &manifest.git,
+            &manifest.capabilities,
+            &manifest.parameters.repo
+        )
     ));
+    // Every capability the record does not select is information, never
+    // a violation: a product nobody asked for, or one this target's
+    // dimensions cannot take.
+    for note in observed.selection.iter().flatten() {
+        if note.status != "selected" {
+            out.result_line(format!(
+                "capability {}: {}{}",
+                note.id,
+                note.status,
+                note.reason
+                    .as_deref()
+                    .map_or_else(String::new, |reason| format!(" ({reason})"))
+            ));
+        }
+    }
     if alignment == Alignment::TargetNewer {
         out.result_line(format!(
             "binary {} is older than this landing; install the matching rk",
@@ -649,8 +665,14 @@ fn render_human(
     }
     match observed.pending.as_deref() {
         None => out.result_line(format!(
-            "this binary carries no {}/{} projection, so what an upgrade would change is unknown",
-            manifest.tech, manifest.forge
+            "this binary carries no projection for the recorded {} release on {}, so what an upgrade would change is unknown",
+            manifest
+                .profile
+                .release
+                .driver
+                .as_deref()
+                .unwrap_or("release-less"),
+            manifest.profile.forge.as_deref().unwrap_or("no forge")
         )),
         Some(paths) => {
             for path in paths {
@@ -727,31 +749,52 @@ fn render_human(
         "rk status --check --target {} exits 1 on a violation",
         args.target
     ));
+    if manifest.profile.release.mode != ReleaseMode::Automatic {
+        next.retain(|line| !line.contains("rk method operate"));
+    }
     out.next(&next);
 }
 
 #[cfg(test)]
 mod tests {
     use super::{Drift, InvariantFailure, Report, StalePin};
+    use crate::landing::CheckoutMode;
+    use crate::profile::{
+        CapabilityRequests, GitWorkflow, ProfileSnapshot, ReleaseIntent, ReleaseMode,
+    };
 
-    /// The complete `rk.status/11` shape, held by snapshot in both the
+    /// The complete `rk.status/12` shape, held by snapshot in both the
     /// landed and absent forms.
     #[test]
     fn the_status_report_schema_snapshot_holds() {
         let landed = Report {
-            schema: "rk.status/11",
+            schema: "rk.status/12",
             landed: true,
             config: super::ConfigState {
                 state: "pending",
-                pending: vec!["landing.style".into()],
+                pending: vec!["profile.release.style".into()],
             },
-            tech: Some("rust".into()),
-            forge: Some("github".into()),
-            workflow: Some("worktree"),
-            style: Some("trunk"),
-            nix: Some(true),
-            scorecard: Some(false),
-            code_scanning: Some("semgrep"),
+            profile: Some(ProfileSnapshot {
+                technologies: vec!["rust".into()],
+                forge: Some("github".into()),
+                release: ReleaseIntent {
+                    mode: ReleaseMode::Automatic,
+                    driver: Some("rust".into()),
+                    style: Some(crate::landing::Style::Trunk),
+                    line_prefix: Some("release/".into()),
+                },
+            }),
+            git: Some(GitWorkflow {
+                trunk: "master".into(),
+                checkout_mode: CheckoutMode::LinkedWorktree,
+            }),
+            capabilities: Some(CapabilityRequests {
+                nix_packaging: true,
+                reporting_policy: true,
+                scorecard: false,
+                code_scanning: Some(crate::landing::Provider::Semgrep),
+            }),
+            selection: Some(vec![]),
             rk_version: Some("0.1.0".into()),
             binary_version: Some("0.2.0"),
             alignment: Some(crate::landing::manifest::Alignment::BinaryNewer),
@@ -782,7 +825,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&landed).expect("a report serializes"),
-            r#"{"schema":"rk.status/11","landed":true,"config":{"state":"pending","pending":["landing.style"]},"tech":"rust","forge":"github","workflow":"worktree","style":"trunk","nix":true,"scorecard":false,"code_scanning":"semgrep","rk_version":"0.1.0","binary_version":"0.2.0","alignment":"binary-newer","drift":{"rendered":0,"seeded":1},"missing":[],"stale_pins":[{"tool":"release-plz","landed":"0.3.160","available":"0.3.170"}],"sentinels":1,"record_drift":0,"invariant_failures":[{"code":"attestations-disabled","destination":"dist-workspace.toml","reason":"github-attestations is not effectively true","remediation":"set github-attestations = true in [dist]"}],"warnings":[{"code":"code-scanning-licence","reason":"the target's license, LicenseRef-proprietary, is not one this release recognizes as OSI-approved"}],"pending":2}"#
+            r#"{"schema":"rk.status/12","landed":true,"config":{"state":"pending","pending":["profile.release.style"]},"profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"linked-worktree"},"capabilities":{"nix_packaging":true,"reporting_policy":true,"scorecard":false,"code_scanning":"semgrep"},"selection":[],"rk_version":"0.1.0","binary_version":"0.2.0","alignment":"binary-newer","drift":{"rendered":0,"seeded":1},"missing":[],"stale_pins":[{"tool":"release-plz","landed":"0.3.160","available":"0.3.170"}],"sentinels":1,"record_drift":0,"invariant_failures":[{"code":"attestations-disabled","destination":"dist-workspace.toml","reason":"github-attestations is not effectively true","remediation":"set github-attestations = true in [dist]"}],"warnings":[{"code":"code-scanning-licence","reason":"the target's license, LicenseRef-proprietary, is not one this release recognizes as OSI-approved"}],"pending":2}"#
         );
         let absent = Report {
             landed: false,
@@ -790,13 +833,10 @@ mod tests {
                 state: "absent",
                 pending: vec![],
             },
-            tech: None,
-            forge: None,
-            workflow: None,
-            style: None,
-            nix: None,
-            scorecard: None,
-            code_scanning: None,
+            profile: None,
+            git: None,
+            capabilities: None,
+            selection: None,
             rk_version: None,
             binary_version: None,
             alignment: None,
@@ -813,7 +853,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&absent).expect("a report serializes"),
-            r#"{"schema":"rk.status/11","landed":false,"config":{"state":"absent","pending":[]}}"#,
+            r#"{"schema":"rk.status/12","landed":false,"config":{"state":"absent","pending":[]}}"#,
             "an absent landing reports one field a caller can branch on"
         );
     }

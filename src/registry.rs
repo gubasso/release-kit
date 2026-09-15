@@ -32,7 +32,9 @@ pub struct Pin {
     /// never evidence of an attack.
     #[serde(default)]
     pub ref_class: Option<String>,
-    /// The bindings that use the tool.
+    /// The capabilities that use the tool: a capability id, or the id
+    /// qualified by the release driver as `release.automation/rust` where
+    /// the capability has that dimension.
     #[serde(default)]
     pub used_by: Vec<String>,
     /// The URL a freshness check queries, where one exists.
@@ -57,12 +59,19 @@ pub fn pins() -> Vec<Pin> {
     parse(embedded::VERSIONS)
 }
 
-/// The pins a technology's snippets use, keyed for a landing record.
+/// The pins the selected capabilities use, keyed for a landing record:
+/// every pin whose `used_by` names a selected capability's id, bare or
+/// qualified by its driver, in authored order and each once.
 #[must_use]
-pub fn pins_for(tech: &str) -> Vec<Pin> {
+pub fn pins_for(selected: &[crate::profile::catalog::Selection]) -> Vec<Pin> {
+    let keys: Vec<String> = selected
+        .iter()
+        .filter(|selection| selection.lands())
+        .flat_map(crate::profile::catalog::pin_keys)
+        .collect();
     pins()
         .into_iter()
-        .filter(|pin| pin.used_by.iter().any(|user| user == tech))
+        .filter(|pin| pin.used_by.iter().any(|user| keys.contains(user)))
         .collect()
 }
 
@@ -103,11 +112,63 @@ mod tests {
         }
     }
 
+    /// Every `used_by` entry names a capability this binary catalogs,
+    /// qualified by a driver the sources know where it carries one.
     #[test]
-    fn pins_filter_by_technology() {
-        let rust: Vec<String> = pins_for("rust").into_iter().map(|pin| pin.name).collect();
+    fn every_used_by_entry_names_a_catalogued_capability() {
+        let drivers = crate::profile::catalog::known_drivers();
+        for pin in pins() {
+            for user in &pin.used_by {
+                let (id, driver) = user
+                    .split_once('/')
+                    .map_or((user.as_str(), None), |(id, driver)| (id, Some(driver)));
+                assert!(
+                    crate::profile::catalog::ALL.contains(&id),
+                    "{}: used_by names {user}, which is no capability",
+                    pin.name
+                );
+                if let Some(driver) = driver {
+                    assert!(
+                        drivers.iter().any(|known| known == driver),
+                        "{}: used_by names the driver {driver}, which no binding ships",
+                        pin.name
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pins_filter_by_selected_capability() {
+        let params =
+            crate::landing::Params::for_test("acme/widget", Some(crate::landing::Style::Trunk));
+        let selected = crate::profile::catalog::select(
+            &params,
+            &crate::profile::catalog::Availability::embedded(),
+        );
+        let rust: Vec<String> = pins_for(&selected)
+            .into_iter()
+            .map(|pin| pin.name)
+            .collect();
         assert!(rust.contains(&"release-plz".to_owned()));
         assert!(rust.contains(&"cargo-dist".to_owned()));
+        assert!(rust.contains(&"conventional-pre-commit".to_owned()));
         assert!(!rust.contains(&"git-cliff".to_owned()));
+        assert!(!rust.contains(&"scorecard-action".to_owned()));
+        // A guards-only target records the hook pins and nothing else.
+        let guards = crate::landing::Params::for_test_release_less(
+            &[],
+            None,
+            crate::profile::ReleaseMode::None,
+        );
+        let selected = crate::profile::catalog::select(
+            &guards,
+            &crate::profile::catalog::Availability::embedded(),
+        );
+        let names: Vec<String> = pins_for(&selected)
+            .into_iter()
+            .map(|pin| pin.name)
+            .collect();
+        assert_eq!(names, ["conventional-pre-commit", "pre-commit-hooks"]);
     }
 }

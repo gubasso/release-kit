@@ -177,18 +177,59 @@ pub fn split_remote(url: &str) -> Option<(String, String)> {
     (!host.is_empty() && !path.is_empty()).then_some((host, path))
 }
 
-/// The technology of a repository, read from its version file: `Cargo.toml`
-/// means rust, `pyproject.toml` means python, a `VERSION` file means bash.
+/// The technology of a repository, read from its version file.
+///
+/// `Cargo.toml` means rust, `pyproject.toml` means python, a `VERSION`
+/// file means bash. Where several are present the first in that order
+/// answers, which is what the dependency verbs key on; a landing reads
+/// them all through [`technologies_of`].
 #[must_use]
 pub fn tech_of(dir: &Path) -> Option<&'static str> {
-    if dir.join("Cargo.toml").is_file() {
-        Some("rust")
-    } else if dir.join("pyproject.toml").is_file() {
-        Some("python")
-    } else if dir.join("VERSION").is_file() {
-        Some("bash")
-    } else {
-        None
+    technologies_of(dir).first().copied()
+}
+
+/// Every technology the version files name, in the bindings' order:
+/// `Cargo.toml` is rust, `pyproject.toml` is python, and a `VERSION` file
+/// is bash. Zero or many.
+#[must_use]
+pub fn technologies_of(dir: &Path) -> Vec<&'static str> {
+    [
+        ("Cargo.toml", "rust"),
+        ("pyproject.toml", "python"),
+        ("VERSION", "bash"),
+    ]
+    .into_iter()
+    .filter(|(file, _)| dir.join(file).is_file())
+    .map(|(_, technology)| technology)
+    .collect()
+}
+
+/// What one observation of a target found.
+///
+/// Every technology its version files name, and what its origin remote
+/// says. Every field is an observation; deciding on it is the
+/// resolution's job.
+#[derive(Debug, Default)]
+pub struct Observation {
+    /// The technologies present, in the bindings' order.
+    pub technologies: Vec<&'static str>,
+    /// The remote's host, where a remote exists and parses.
+    pub host: Option<String>,
+    /// The project path from the remote.
+    pub repo: Option<String>,
+    /// The forge the host maps to.
+    pub forge: Option<Forge>,
+}
+
+/// Observe `dir` once: its version files and its origin remote.
+#[must_use]
+pub fn observe(dir: &Path) -> Observation {
+    let detected = detect(dir);
+    Observation {
+        technologies: technologies_of(dir),
+        host: detected.host,
+        repo: detected.repo,
+        forge: detected.forge,
     }
 }
 

@@ -23,7 +23,7 @@ rk self-depend clean --target . --apply
 rk self-depend add --target . --json            # the four fragments with their anchors, in application order; the tag is this binary's version
 rk self-depend add --target . --apply
 # check: seeds flake.nix and .envrc where the target has neither; an owned file is refused with the fragments still printed, and takes them by hand
-# a flake of its own plus rk init --nix: run the init first, because a flake this seed wrote is withheld by the landing
+# a flake of its own plus rk init --nix-packaging: run the init first, because a flake this seed wrote is withheld by the landing
 git add flake.nix .envrc && git commit -m 'chore(<scope>): pin rk in the devshell'
 # check: the pair is committed; nix reads only tracked files, and the sync refuses uncommitted edits to flake.nix or flake.lock
 rk self-depend sync --target . --caller operator --apply
@@ -62,6 +62,8 @@ A project that runs part of this convention declares that before its first apply
 Before anything that needs credentials or cannot be undone; the binding names what the registry rejects here.
 
 ```bash
+rk binding <tech>
+# check: what the registry rejects, for the release driver this project runs
 rk setup step package-check --target .
 # check: exits 0; the package is publishable with no token spent
 ```
@@ -330,16 +332,17 @@ Where the forge enforces less than a step claims, the check names the weaker gua
 
 ### 4a. Land the files
 
-The apply names no scope vocabulary. The title check holds a scope to lowercase letters, digits, and `_ . / -`, the commit hook requires that a scope is there, and the landed `AGENTS.md` block tells the author how to pick the word. `--workflow` chooses the working-copy mode and defaults to `worktree` — every code-changing branch in a linked worktree, the main checkout commits nothing; `--workflow branches` leaves branches workable in the main checkout, with worktrees optional beside them. `--style` chooses the release style and defaults to `trunk` — the bot's request carries auto-merge from creation, so a green trunk ships itself; `--style lines` leaves every request unarmed, for a project that keeps older lines and validates a candidate by hand (check: `rk status` prints the mode and the style).
+The apply names no scope vocabulary. The title check holds a scope to lowercase letters, digits, and `_ . / -`, the commit hook requires that a scope is there, and the landed `AGENTS.md` block tells the author how to pick the word. `--checkout-mode` chooses where a topic branch opens and defaults to `linked-worktree` — every code-changing branch in a linked worktree, the main checkout commits nothing; `--checkout-mode main-worktree` leaves branches workable in the original working tree, with worktrees optional beside it. `--release-style` chooses the release style of an automatic release and defaults to `trunk` — the bot's request carries auto-merge from creation, so a green trunk ships itself; `--release-style lines` leaves every request unarmed, for a project that keeps older lines and validates a candidate by hand (check: `rk status` prints the mode and the style).
 
 The landing is staged, investigated, rendered, and verified: [the landing runbook](./landing.md) steps 1 and 2 carry the stage and the investigation before the front below, which is that runbook's step 3, and its steps 4 and 5 carry the verification and the cleanup after it.
 
 ```bash
-rk init --tech <tech> --target .             # preview every destination
-rk init --tech <tech> --target . --apply     # write the files and the landing record
+rk profile --target .                        # what the target resolves to, and what the catalog selects
+rk init --target .                           # preview every destination
+rk init --target . --apply                   # write the files and the landing record
 # check: the apply reports each written file, including SECURITY.md, and every sentinel left to fill
 # already landed: the apply refuses; rk upgrade --target . --apply takes an existing landing to the installed binary's projection
-# a record from before the style parameter: the upgrade refuses until --style names one
+# a record from before the style parameter: the upgrade refuses until --release-style names one
 ```
 
 Check `SECURITY.md` after landing: its project path must name this target and its instructions must describe the intended private reporting channel; return to 4a with the correct repository parameter if it does not. Existing landings receive the policy through `rk upgrade`. This rendered policy is release-kit-owned: an upgrade replaces a hand edit, so the two facts only this project knows are landing parameters instead. Set `security.contact` in `.release-kit/config.toml` to one line naming who receives a report when the forge channel is unavailable — an address, a URL, a person, or a team — and leave it empty to keep the forge's own wording. Set `security.response` to `best-effort`, or to `1 day`, `<n> days`, `1 business day`, or `<n> business days` to promise that the maintainers acknowledge a report within that window; the value promises acknowledgment alone and never remediation or disclosure. Both are class P: `rk status` reports an edited key as pending configuration, and the next `rk upgrade --apply` takes it and records it (check: `rk status` lists the key under pending, and the applied policy states the new wording).

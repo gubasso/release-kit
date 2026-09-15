@@ -16,7 +16,7 @@ use crate::detect::{self, Forge};
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
 use crate::issue::{self, Resolved};
-use crate::landing::manifest::{self, Workflow};
+use crate::landing::manifest::{self, CheckoutMode};
 use crate::output::Output;
 use crate::probes;
 use crate::setup::context::resolve_cli;
@@ -41,8 +41,8 @@ struct StartReport {
     branch: Option<String>,
     /// Where the name came from: `already`, `forge`, or `pending`.
     origin: &'static str,
-    /// The recorded workflow mode this run seated by.
-    workflow: &'static str,
+    /// The recorded checkout mode this run seated by.
+    checkout_mode: &'static str,
     /// The worktree path, under worktree mode.
     #[serde(skip_serializing_if = "Option::is_none")]
     path: Option<String>,
@@ -122,7 +122,7 @@ struct Ground {
     /// correctly from the working directory.
     api_host: Option<String>,
     /// The mode the seat follows.
-    workflow: Workflow,
+    workflow: CheckoutMode,
     /// Where the mode came from, for the report.
     workflow_source: &'static str,
 }
@@ -149,33 +149,39 @@ fn contradicts(what: &str, chosen: Option<&str>, known: Option<&str>) -> Result<
 /// alone, so a runtime flag states it rather than sets it. Where it
 /// disagrees with the record, one clone would work in a mode the
 /// committed project policy does not carry.
-fn mode_of(target: &Utf8Path, named: Option<&str>) -> Result<(Workflow, &'static str), RkError> {
-    let recorded = manifest::load(target)?.map(|held| held.parameters.workflow);
+fn mode_of(
+    target: &Utf8Path,
+    named: Option<&str>,
+) -> Result<(CheckoutMode, &'static str), RkError> {
+    let recorded = manifest::load(target)?.map(|held| held.git.checkout_mode);
     match (named, recorded) {
         (Some(raw), Some(held)) => {
-            if Workflow::parse(raw)? != held {
+            if CheckoutMode::parse(raw)? != held {
                 return Err(RkError::refusal(
                     Diagnostic::new(
                         Reason::StateDrift,
                         format!(
-                            "--workflow {raw} disagrees with the landing record, which states {}",
+                            "--checkout-mode {raw} disagrees with the landing record, which states {}",
                             held.as_str()
                         ),
                     )
                     .expected("a flag that states the recorded mode, or no flag at all")
-                    .action("rk upgrade --workflow <mode> --apply changes the recorded mode")
+                    .action("rk upgrade --checkout-mode <mode> --apply changes the recorded mode")
                     .target_state("unchanged"),
                 ));
             }
-            Ok((held, "the landing record, restated by --workflow"))
+            Ok((held, "the landing record, restated by --checkout-mode"))
         }
-        (Some(raw), None) => Ok((Workflow::parse(raw)?, "the --workflow flag")),
+        (Some(raw), None) => Ok((CheckoutMode::parse(raw)?, "the --checkout-mode flag")),
         (None, Some(held)) => Ok((held, "the landing record")),
         // A target with no record is treated as the convention's own
         // mode rather than as branches: the record's serde default exists
         // for records written before the parameter, not for targets that
         // never landed.
-        (None, None) => Ok((Workflow::Worktree, "the default, with no landing record")),
+        (None, None) => Ok((
+            CheckoutMode::LinkedWorktree,
+            "the default, with no landing record",
+        )),
     }
 }
 
@@ -324,11 +330,11 @@ fn start(
     // local refusal the seat carries runs first.
     let seatable = |branch: &str| -> Result<(), RkError> {
         match ground.workflow {
-            Workflow::Worktree => {
+            CheckoutMode::LinkedWorktree => {
                 crate::commands::worktree::plan_seat(target, branch, overrides.base, false)
                     .map(|_| ())
             }
-            Workflow::Branches => branch_seatable(&main, branch),
+            CheckoutMode::MainWorktree => branch_seatable(&main, branch),
         }
     };
     let resolved = issue::resolve(
@@ -345,8 +351,10 @@ fn start(
         },
     )?;
     match ground.workflow {
-        Workflow::Worktree => seat_worktree(target, &ground, &resolved, overrides.base, apply, out),
-        Workflow::Branches => seat_branch(&main, &ground, &resolved, apply, out),
+        CheckoutMode::LinkedWorktree => {
+            seat_worktree(target, &ground, &resolved, overrides.base, apply, out)
+        }
+        CheckoutMode::MainWorktree => seat_branch(&main, &ground, &resolved, apply, out),
     }
 }
 
@@ -615,7 +623,7 @@ fn report_with(
     let next = next_lines(ground, resolved, path.as_ref(), apply);
     out.next(&next);
     out.emit(&StartReport {
-        schema: "rk.issue-start/1",
+        schema: "rk.issue-start/2",
         mode,
         forge: ground.forge.as_str(),
         repo: ground.repo.clone(),
@@ -623,7 +631,7 @@ fn report_with(
         title: resolved.title.clone(),
         branch: resolved.branch.clone(),
         origin: resolved.origin,
-        workflow: ground.workflow.as_str(),
+        checkout_mode: ground.workflow.as_str(),
         path: path.map(|path| path.to_string()),
         checkout,
         others: resolved.others.clone(),
@@ -646,7 +654,7 @@ fn next_lines(
         )];
     }
     match (ground.workflow, path) {
-        (Workflow::Worktree, Some(path)) => vec![
+        (CheckoutMode::LinkedWorktree, Some(path)) => vec![
             format!("cd {path}"),
             "rk worktree list reports every seat".to_owned(),
         ],

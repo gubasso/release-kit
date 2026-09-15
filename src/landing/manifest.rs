@@ -19,28 +19,32 @@ use crate::diagnostic::{Diagnostic, Reason};
 use crate::digest::Digest;
 use crate::error::RkError;
 use crate::landing::Kind;
+pub use crate::profile::{
+    CapabilityRequests, GitWorkflow, ProfileSnapshot, ReleaseIntent, ReleaseMode,
+};
 
 /// Where the record lives, relative to the target root.
 pub const MANIFEST_PATH: &str = ".release-kit/manifest.json";
 
 /// The schema this binary writes.
 ///
-/// Schema 8 is the receipt of a direct landing: the producing
-/// `rk_version`, the origin, the resolved parameters, and per destination
-/// the path, the kind, the placement where the destination is a marked
-/// region, and the digest of the bytes or region now present. It carries
-/// no bundle digest and no baseline digest, because the landing renders
-/// afresh from this binary and compares against no earlier release.
+/// Schema 9 is the receipt of a direct landing: the producing
+/// `rk_version`, the origin, the resolved target configuration by domain,
+/// and per destination the path, the kind, the placement where the
+/// destination is a marked region, and the digest of the bytes or region
+/// now present. It carries no bundle digest and no baseline digest,
+/// because the landing renders afresh from this binary and compares
+/// against no earlier release.
 ///
-/// Schemas 1 through 7 read through one bounded conversion in
+/// Schemas 1 through 8 read through one bounded conversion in
 /// [`legacy`]: the retired `payload_sha256`, per-file `baseline_sha256`,
-/// and `parameters.scopes` fields are dropped, and the parameters a
-/// record predates take the defaults such a landing wrote. The next
-/// successful landing rewrites schema 8. Anything past this schema
-/// refuses by name.
+/// and `parameters.scopes` fields are dropped, the one technology becomes
+/// the sole technology and the automatic release driver, and the flat
+/// parameters move into their domains. The next successful landing
+/// rewrites schema 9. Anything past this schema refuses by name.
 ///
 /// SATISFIES landing:a-record-states-its-schema
-pub const SCHEMA_VERSION: u64 = 8;
+pub const SCHEMA_VERSION: u64 = 9;
 
 /// The oldest schema this binary still reads.
 const OLDEST_READABLE_SCHEMA: u64 = 1;
@@ -50,48 +54,68 @@ const OLDEST_READABLE_SCHEMA: u64 = 1;
 /// alone.
 const PLACEMENT_SCHEMA: u64 = 7;
 
-/// The working-copy mode a landing records: a project decision, rendered
-/// into the landed blocks and changed only through the landing verbs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Workflow {
-    /// Every code-changing branch lives in a linked worktree and the main
+/// The checkout mode a landing records: where a topic branch opens.
+///
+/// A Git workflow parameter, rendered into the landed blocks and changed
+/// only through the landing verbs. It selects a working tree and nothing
+/// else: no branching method, no rebase policy, no merge policy.
+///
+/// SATISFIES git:checkout-mode-selects-where-a-topic-branch-opens
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CheckoutMode {
+    /// Every code-changing branch opens in a linked worktree and the main
     /// checkout commits nothing.
-    Worktree,
-    /// Branches are worked in the main checkout; worktrees stay available
-    /// beside them and nothing refuses either form.
-    Branches,
+    LinkedWorktree,
+    /// A branch opens in the repository's original working tree, which
+    /// switches to it; worktrees stay available beside it and nothing
+    /// refuses either form.
+    MainWorktree,
 }
 
-impl Workflow {
+impl CheckoutMode {
     /// The flag, wire, and report form.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::Worktree => "worktree",
-            Self::Branches => "branches",
+            Self::LinkedWorktree => "linked-worktree",
+            Self::MainWorktree => "main-worktree",
         }
     }
 
-    /// Parse a `--workflow` flag value.
+    /// The label the runbooks select a variant on.
+    #[must_use]
+    pub const fn runbook_label(self) -> &'static str {
+        match self {
+            Self::LinkedWorktree => "worktree",
+            Self::MainWorktree => "branches",
+        }
+    }
+
+    /// Parse a `--checkout-mode` flag value. The two names a record
+    /// carried before the vocabulary moved, `worktree` and `branches`,
+    /// still read, so an older command line and an older configuration
+    /// keep working.
     ///
     /// # Errors
     ///
     /// Returns [`RkError::Usage`] naming the two values.
     pub fn parse(raw: &str) -> Result<Self, RkError> {
         match raw {
-            "worktree" => Ok(Self::Worktree),
-            "branches" => Ok(Self::Branches),
+            "linked-worktree" | "worktree" => Ok(Self::LinkedWorktree),
+            "main-worktree" | "branches" => Ok(Self::MainWorktree),
             other => Err(RkError::Usage(format!(
-                "unknown workflow '{other}'; the modes are: worktree, branches"
+                "unknown checkout mode '{other}'; the modes are: linked-worktree, main-worktree"
             ))),
         }
     }
 }
 
-/// The serde default for a record from before the parameter existed.
-const fn workflow_branches() -> Workflow {
-    Workflow::Branches
+impl<'de> serde::Deserialize<'de> for CheckoutMode {
+    fn deserialize<D: serde::Deserializer<'de>>(reader: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(reader)?;
+        Self::parse(&raw).map_err(|error| serde::de::Error::custom(error.to_string()))
+    }
 }
 
 /// The release style a landing records.
@@ -181,6 +205,10 @@ impl Provider {
 }
 
 /// The record a landing writes and every target-side verb reads.
+///
+/// Schema 9 records the resolved target configuration by domain: the
+/// source-free profile snapshot, the Git workflow parameters, the
+/// capability requests, and the render parameters no domain owns.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Manifest {
     /// An integer this binary either knows or refuses on.
@@ -189,72 +217,34 @@ pub struct Manifest {
     pub rk_version: String,
     /// `init` or `adopt` — how the record came to exist.
     pub origin: String,
-    /// The technology that selected the files.
-    pub tech: String,
-    /// The forge that selected the files.
-    pub forge: String,
     /// When the first landing happened; an upgrade preserves it.
     pub landed_at: String,
-    /// Every value substituted into a `rendered` file, so a re-render is
-    /// reproducible without asking again.
+    /// What the project is: its technologies, its forge where it has one,
+    /// and its release intent. Values alone, no precedence source.
+    pub profile: ProfileSnapshot,
+    /// How topic branches reach the trunk: the trunk's name and the
+    /// checkout mode.
+    pub git: GitWorkflow,
+    /// Which optional products the target requested.
+    pub capabilities: CapabilityRequests,
+    /// Every remaining value substituted into a `rendered` file, so a
+    /// re-render is reproducible without asking again.
     pub parameters: Parameters,
     /// Every landed destination with its kind and digests.
     pub files: Vec<FileRecord>,
-    /// The registry pins the landed technology uses, copied at landing
+    /// The registry pins the selected capabilities use, copied at landing
     /// time; `rk status` compares them offline.
     pub pins: BTreeMap<String, String>,
 }
 
-/// The landing parameters, recorded whole.
-#[derive(Debug, Serialize, Deserialize)]
+/// The render parameters no domain table owns, recorded whole.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Parameters {
     /// The project path on the forge, recorded whole because a GitLab
-    /// project may nest below its group.
+    /// project may nest below its group. Empty where the target has no
+    /// forge repository.
+    #[serde(default)]
     pub repo: String,
-    /// The working-copy mode the project chose: every code-changing branch
-    /// in a linked worktree (`worktree`), or branches worked in the main
-    /// checkout with worktrees optional beside them (`branches`). A record
-    /// predating the field reads as `branches`, so an upgrade never imposes
-    /// a guard the project did not choose.
-    #[serde(default = "workflow_branches")]
-    pub workflow: Workflow,
-    /// The release style the project chose: the bot's request armed to
-    /// merge itself (`trunk`), or every merge a human's (`lines`). A
-    /// record predating the field carries none, and an upgrade refuses
-    /// until `--style` names one: neither value is a compatibility-safe
-    /// reading of a target nobody asked.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub style: Option<Style>,
-    /// Whether the landing carries the Nix capability: the seeded package
-    /// expression, the flake pair where the target had none, and the
-    /// workflow that proves the build. A record predating the field reads
-    /// as opt-out, so an upgrade adds nothing unrequested; the projection
-    /// stays reproducible from the record because this field is part of
-    /// it.
-    #[serde(default)]
-    pub nix: bool,
-    /// Whether the landing carries the Scorecard capability: the workflow
-    /// that computes an `OpenSSF` Scorecard result and publishes it. A record
-    /// predating the field reads as opt-out, so an upgrade adds nothing
-    /// unrequested; the projection stays reproducible from the record
-    /// because this field is part of it.
-    #[serde(default)]
-    pub scorecard: bool,
-    /// The code scanning provider the landing carries, or none where the
-    /// project did not opt in. A record predating the field carries none,
-    /// so an upgrade adds no workflow unrequested.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub code_scanning: Option<Provider>,
-    /// The one permanent branch, rendered into every landed artifact that
-    /// names it. A record predating the field reads as `master`, which is
-    /// what such a landing wrote, so the projection stays reproducible.
-    #[serde(default = "trunk_master")]
-    pub trunk: String,
-    /// The release-line branch prefix, rendered into the release triggers
-    /// and branch guards. A record predating the field reads as
-    /// `release/`, which is what such a landing wrote.
-    #[serde(default = "line_prefix_release")]
-    pub line_prefix: String,
     /// The contact the landed policy names where the forge's own channel
     /// is unavailable, empty for the forge's authored wording. A record
     /// predating the field reads as empty, which is what such a landing
@@ -266,16 +256,6 @@ pub struct Parameters {
     /// landing wrote.
     #[serde(default = "response_best_effort", deserialize_with = "read_response")]
     pub security_response: String,
-}
-
-/// The trunk a record predating the field carries.
-fn trunk_master() -> String {
-    crate::config::TRUNK_DEFAULT.to_owned()
-}
-
-/// The prefix a record predating the field carries.
-fn line_prefix_release() -> String {
-    crate::config::LINE_PREFIX_DEFAULT.to_owned()
 }
 
 /// The stance a record predating the field carries.
@@ -365,41 +345,105 @@ impl Placement {
     }
 }
 
-/// The one bounded conversion from a record at schemas 1 through 7 to the
+/// The one bounded conversion from a record at schemas 1 through 8 to the
 /// current shape.
 ///
-/// It reads no other release and interprets no other release's sources: it drops the
-/// fields the direct landing retired and lets the serde defaults on
-/// [`Parameters`] answer what an older record left unsaid.
+/// It reads no other release and interprets no other release's sources:
+/// it drops the fields the direct landing retired, and it moves the one
+/// technology, the forge, and the flat parameters an older record carried
+/// into the domains schema 9 states. Every older record described an
+/// automatic release driven by its one technology, with the reporting
+/// policy landed, so that is what the conversion says.
 pub mod legacy {
-    /// Drop every retired field from a record value at a schema before
-    /// this binary's, so it deserializes as the current shape.
+    use serde_json::{Map, Value, json};
+
+    /// Take a field out of a JSON object, where it is one.
+    fn take(object: &mut Map<String, Value>, key: &str) -> Option<Value> {
+        object.remove(key)
+    }
+
+    /// Rewrite a record value at a schema before this binary's so it
+    /// deserializes as the current shape.
     ///
     /// `payload_sha256` named a bundle digest no comparison reads any
     /// more; per-file `baseline_sha256` fed a three-way comparison that
     /// no longer exists; `parameters.scopes` was a vocabulary this binary
-    /// renders nowhere.
-    pub fn convert(mut value: serde_json::Value) -> serde_json::Value {
-        if let Some(record) = value.as_object_mut() {
-            record.remove("payload_sha256");
-            if let Some(parameters) = record
-                .get_mut("parameters")
-                .and_then(serde_json::Value::as_object_mut)
-            {
-                parameters.remove("scopes");
-            }
-            if let Some(files) = record
-                .get_mut("files")
-                .and_then(serde_json::Value::as_array_mut)
-            {
-                for file in files
-                    .iter_mut()
-                    .filter_map(serde_json::Value::as_object_mut)
-                {
-                    file.remove("baseline_sha256");
-                }
+    /// renders nowhere. `tech`, `forge`, and the flat `parameters` become
+    /// the `profile`, `git`, and `capabilities` domains, with the old
+    /// `worktree` and `branches` mode names read as `linked-worktree` and
+    /// `main-worktree`.
+    #[must_use]
+    pub fn convert(mut value: Value) -> Value {
+        let Some(record) = value.as_object_mut() else {
+            return value;
+        };
+        record.remove("payload_sha256");
+        if let Some(files) = record.get_mut("files").and_then(Value::as_array_mut) {
+            for file in files.iter_mut().filter_map(Value::as_object_mut) {
+                file.remove("baseline_sha256");
             }
         }
+        if record.contains_key("profile") {
+            return value;
+        }
+        let tech = take(record, "tech").and_then(|v| v.as_str().map(str::to_owned));
+        let forge = take(record, "forge").and_then(|v| v.as_str().map(str::to_owned));
+        let mut parameters = take(record, "parameters")
+            .and_then(|v| v.as_object().cloned())
+            .unwrap_or_default();
+        parameters.remove("scopes");
+        let checkout_mode = match parameters
+            .remove("workflow")
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .as_deref()
+        {
+            Some("worktree") => "linked-worktree",
+            // A record predating the mode carried none, and such a
+            // landing wrote the blocks without the guard.
+            _ => "main-worktree",
+        };
+        let style = parameters.remove("style").unwrap_or(Value::Null);
+        let trunk = parameters
+            .remove("trunk")
+            .unwrap_or_else(|| json!(crate::config::TRUNK_DEFAULT));
+        let line_prefix = parameters
+            .remove("line_prefix")
+            .unwrap_or_else(|| json!(crate::config::LINE_PREFIX_DEFAULT));
+        let nix = parameters.remove("nix").unwrap_or(json!(false));
+        let scorecard = parameters.remove("scorecard").unwrap_or(json!(false));
+        let code_scanning = parameters.remove("code_scanning").unwrap_or(Value::Null);
+        let mut release = Map::new();
+        release.insert("mode".into(), json!("automatic"));
+        if let Some(tech) = &tech {
+            release.insert("driver".into(), json!(tech));
+        }
+        if !style.is_null() {
+            release.insert("style".into(), style);
+        }
+        release.insert("line_prefix".into(), line_prefix);
+        let technologies: Vec<Value> = tech.iter().map(|t| json!(t)).collect();
+        record.insert(
+            "profile".into(),
+            json!({
+                "technologies": technologies,
+                "forge": forge,
+                "release": Value::Object(release),
+            }),
+        );
+        record.insert(
+            "git".into(),
+            json!({ "trunk": trunk, "checkout_mode": checkout_mode }),
+        );
+        record.insert(
+            "capabilities".into(),
+            json!({
+                "nix_packaging": nix,
+                "reporting_policy": true,
+                "scorecard": scorecard,
+                "code_scanning": code_scanning,
+            }),
+        );
+        record.insert("parameters".into(), Value::Object(parameters));
         value
     }
 }
@@ -614,33 +658,44 @@ fn numeric_core(version: &str) -> Vec<u64> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Alignment, FileRecord, Manifest, Parameters, Placement, Provider, Style, Workflow,
-        alignment,
+        Alignment, CapabilityRequests, CheckoutMode, FileRecord, GitWorkflow, Manifest, Parameters,
+        Placement, ProfileSnapshot, Provider, ReleaseIntent, ReleaseMode, Style, alignment,
     };
     use crate::digest::Digest;
     use crate::landing::Kind;
 
-    /// The complete record shape at schema 8, held by snapshot: a field
+    /// The complete record shape at schema 9, held by snapshot: a field
     /// rename or removal fails here and becomes a schema-version bump
     /// instead of a silent break at every reader.
     #[test]
     fn the_manifest_schema_snapshot_holds() {
         let manifest = Manifest {
-            schema_version: 8,
+            schema_version: 9,
             rk_version: "0.1.0".into(),
             origin: "init".into(),
-            tech: "rust".into(),
-            forge: "github".into(),
             landed_at: "2026-08-29T00:00:00Z".into(),
-            parameters: Parameters {
-                repo: "acme/widget".into(),
-                workflow: Workflow::Worktree,
-                style: Some(Style::Trunk),
-                nix: true,
+            profile: ProfileSnapshot {
+                technologies: vec!["rust".into()],
+                forge: Some("github".into()),
+                release: ReleaseIntent {
+                    mode: ReleaseMode::Automatic,
+                    driver: Some("rust".into()),
+                    style: Some(Style::Trunk),
+                    line_prefix: Some(crate::config::LINE_PREFIX_DEFAULT.to_owned()),
+                },
+            },
+            git: GitWorkflow {
+                trunk: crate::config::TRUNK_DEFAULT.to_owned(),
+                checkout_mode: CheckoutMode::LinkedWorktree,
+            },
+            capabilities: CapabilityRequests {
+                nix_packaging: true,
+                reporting_policy: true,
                 scorecard: true,
                 code_scanning: Some(Provider::Semgrep),
-                trunk: crate::config::TRUNK_DEFAULT.to_owned(),
-                line_prefix: crate::config::LINE_PREFIX_DEFAULT.to_owned(),
+            },
+            parameters: Parameters {
+                repo: "acme/widget".into(),
                 security_contact: String::new(),
                 security_response: crate::config::RESPONSE_DEFAULT.to_owned(),
             },
@@ -665,18 +720,51 @@ mod tests {
         assert_eq!(
             text,
             format!(
-                r#"{{"schema_version":8,"rk_version":"0.1.0","origin":"init","tech":"rust","forge":"github","landed_at":"2026-08-29T00:00:00Z","parameters":{{"repo":"acme/widget","workflow":"worktree","style":"trunk","nix":true,"scorecard":true,"code_scanning":"semgrep","trunk":"master","line_prefix":"release/","security_contact":"","security_response":"best-effort"}},"files":[{{"destination":"release-plz.toml","kind":"seeded","sha256":"{empty}"}},{{"destination":"AGENTS.md","kind":"rendered","sha256":"{empty}","placement":"region"}}],"pins":{{"release-plz":"0.3.160"}}}}"#
+                r#"{{"schema_version":9,"rk_version":"0.1.0","origin":"init","landed_at":"2026-08-29T00:00:00Z","profile":{{"technologies":["rust"],"forge":"github","release":{{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}}}},"git":{{"trunk":"master","checkout_mode":"linked-worktree"}},"capabilities":{{"nix_packaging":true,"reporting_policy":true,"scorecard":true,"code_scanning":"semgrep"}},"parameters":{{"repo":"acme/widget","security_contact":"","security_response":"best-effort"}},"files":[{{"destination":"release-plz.toml","kind":"seeded","sha256":"{empty}"}},{{"destination":"AGENTS.md","kind":"rendered","sha256":"{empty}","placement":"region"}}],"pins":{{"release-plz":"0.3.160"}}}}"#
             ),
             "a whole file omits its placement, and no retired digest field survives"
         );
         assert!(!text.contains("payload_sha256") && !text.contains("baseline_sha256"));
+        // A release-less record omits the automatic-only keys and the forge.
+        let release_less = Manifest {
+            profile: ProfileSnapshot {
+                technologies: vec![],
+                forge: None,
+                release: ReleaseIntent {
+                    mode: ReleaseMode::None,
+                    driver: None,
+                    style: None,
+                    line_prefix: None,
+                },
+            },
+            capabilities: CapabilityRequests {
+                nix_packaging: false,
+                reporting_policy: false,
+                scorecard: false,
+                code_scanning: None,
+            },
+            parameters: Parameters {
+                repo: String::new(),
+                security_contact: String::new(),
+                security_response: crate::config::RESPONSE_DEFAULT.to_owned(),
+            },
+            files: vec![],
+            pins: std::collections::BTreeMap::new(),
+            ..manifest
+        };
+        assert_eq!(
+            serde_json::to_string(&release_less).expect("serializes"),
+            r#"{"schema_version":9,"rk_version":"0.1.0","origin":"init","landed_at":"2026-08-29T00:00:00Z","profile":{"technologies":[],"release":{"mode":"none"}},"git":{"trunk":"master","checkout_mode":"linked-worktree"},"capabilities":{"nix_packaging":false,"reporting_policy":false,"scorecard":false},"parameters":{"repo":"","security_contact":"","security_response":"best-effort"},"files":[],"pins":{}}"#
+        );
     }
 
-    /// A record written before the mode existed reads as `branches`, and
-    /// its scope vocabulary drops, because this binary renders none. Every
-    /// earlier schema converts through the one legacy path with its
-    /// retired digests ignored, and a record past this binary's schema
-    /// refuses by the record schema alone, naming no other schema.
+    /// A record written before the domains existed reads as an automatic
+    /// release driven by its one technology, in the main-worktree mode,
+    /// with the reporting policy it landed, and its scope vocabulary
+    /// drops, because this binary renders none. Every earlier schema
+    /// converts through the one legacy path with its retired digests
+    /// ignored, and a record past this binary's schema refuses by the
+    /// record schema alone, naming no other schema.
     #[test]
     fn a_schema_1_record_reads_as_branches_and_a_newer_schema_refuses() {
         let dir = tempfile::tempdir().expect("a scratch target exists");
@@ -691,14 +779,27 @@ mod tests {
         let manifest = super::load(target)
             .expect("a schema-1 record loads")
             .expect("the record exists");
-        assert_eq!(manifest.parameters.workflow, Workflow::Branches);
+        assert_eq!(manifest.git.checkout_mode, CheckoutMode::MainWorktree);
+        assert_eq!(manifest.profile.technologies, vec!["rust".to_owned()]);
+        assert_eq!(manifest.profile.forge.as_deref(), Some("github"));
+        assert_eq!(manifest.profile.release.mode, ReleaseMode::Automatic);
+        assert_eq!(manifest.profile.release.driver.as_deref(), Some("rust"));
         assert_eq!(
-            manifest.parameters.style, None,
+            manifest.profile.release.style, None,
             "a pre-style record carries no style; the upgrade demands one"
         );
+        assert_eq!(
+            manifest.profile.release.line_prefix.as_deref(),
+            Some(crate::config::LINE_PREFIX_DEFAULT)
+        );
+        assert_eq!(manifest.git.trunk, crate::config::TRUNK_DEFAULT);
         assert!(
-            !manifest.parameters.nix,
+            !manifest.capabilities.nix_packaging,
             "a pre-nix record reads as opt-out, so an upgrade adds nothing unrequested"
+        );
+        assert!(
+            manifest.capabilities.reporting_policy,
+            "an older landing carried the policy, so the record says so"
         );
         assert_eq!(
             manifest.parameters.security_contact, "",
@@ -710,11 +811,11 @@ mod tests {
             "a pre-policy record promises no window, which is what its policy landed"
         );
 
-        for schema in 2..=6 {
+        for schema in 2..=8 {
             std::fs::write(
                 target.join(super::MANIFEST_PATH),
                 format!(
-                    r#"{{"schema_version":{schema},"rk_version":"0.1.0","payload_sha256":"0000000000000000000000000000000000000000000000000000000000000000","origin":"init","tech":"rust","forge":"github","landed_at":"2026-08-29T00:00:00Z","parameters":{{"repo":"acme/widget"}},"files":[{{"destination":"AGENTS.md","kind":"rendered","sha256":"0000000000000000000000000000000000000000000000000000000000000000","baseline_sha256":"0000000000000000000000000000000000000000000000000000000000000000"}}],"pins":{{}}}}"#
+                    r#"{{"schema_version":{schema},"rk_version":"0.1.0","payload_sha256":"0000000000000000000000000000000000000000000000000000000000000000","origin":"init","tech":"rust","forge":"github","landed_at":"2026-08-29T00:00:00Z","parameters":{{"repo":"acme/widget","workflow":"worktree","style":"lines","nix":true,"scorecard":true,"code_scanning":"semgrep","trunk":"main","line_prefix":"stable/"}},"files":[{{"destination":"AGENTS.md","kind":"rendered","sha256":"0000000000000000000000000000000000000000000000000000000000000000","baseline_sha256":"0000000000000000000000000000000000000000000000000000000000000000"}}],"pins":{{}}}}"#
                 ),
             )
             .expect("the record writes");
@@ -722,14 +823,34 @@ mod tests {
                 .expect("an earlier record loads")
                 .expect("the record exists");
             assert_eq!(manifest.schema_version, schema);
+            assert_eq!(manifest.git.checkout_mode, CheckoutMode::LinkedWorktree);
+            // A record below the placement schema stated none, so the
+            // block destinations are regions by their names alone; from
+            // that schema on the record says so itself.
+            assert_eq!(manifest.git.trunk, "main");
+            assert_eq!(manifest.profile.release.style, Some(Style::Lines));
+            assert_eq!(
+                manifest.profile.release.line_prefix.as_deref(),
+                Some("stable/")
+            );
+            assert!(manifest.capabilities.nix_packaging && manifest.capabilities.scorecard);
+            assert_eq!(manifest.capabilities.code_scanning, Some(Provider::Semgrep));
             assert_eq!(
                 manifest.files[0].placement,
-                Placement::Region,
-                "a block destination reads as a region"
+                if schema < super::PLACEMENT_SCHEMA {
+                    Placement::Region
+                } else {
+                    Placement::Whole
+                },
+                "a block destination below the placement schema reads as a region"
             );
             let rewritten = super::render(&manifest).expect("renders");
             let text = String::from_utf8(rewritten).expect("text");
             assert!(!text.contains("baseline_sha256"), "{text}");
+            assert!(
+                !text.contains("\"tech\""),
+                "the flat identity moved: {text}"
+            );
         }
 
         std::fs::write(target.join(super::MANIFEST_PATH), record(999)).expect("the record writes");
@@ -768,7 +889,7 @@ mod tests {
             ("security_response", ""),
         ] {
             let record = format!(
-                r#"{{"schema_version":8,"rk_version":"0.1.0","origin":"init","tech":"rust","forge":"github","landed_at":"2026-08-29T00:00:00Z","parameters":{{"repo":"acme/widget","{field}":"{value}"}},"files":[],"pins":{{}}}}"#
+                r#"{{"schema_version":9,"rk_version":"0.1.0","origin":"init","landed_at":"2026-08-29T00:00:00Z","profile":{{"technologies":["rust"],"forge":"github","release":{{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}}}},"git":{{"trunk":"master","checkout_mode":"linked-worktree"}},"capabilities":{{"nix_packaging":false,"reporting_policy":true,"scorecard":false}},"parameters":{{"repo":"acme/widget","{field}":"{value}"}},"files":[],"pins":{{}}}}"#
             );
             std::fs::write(target.join(super::MANIFEST_PATH), record).expect("the record writes");
             let refused = super::load(target).expect_err("an uncanonical record refuses");

@@ -422,6 +422,24 @@ pub fn licence_refusal(reason: &str) -> RkError {
     )
 }
 
+/// The refusal a selected release automation this release cannot land
+/// answers, before any write: silently omitting the declared release would
+/// write a record that claims an automation nothing landed.
+///
+/// SATISFIES project-profile:an-operation-refuses-only-what-it-requires
+#[must_use]
+pub fn release_unavailable(reason: &str) -> RkError {
+    RkError::refusal(
+        Diagnostic::new(
+            Reason::StateDrift,
+            format!("the selected release automation is not available in this release, and nothing was written: {reason}"),
+        )
+        .expected("a release driver and forge this release ships automation for, or a release mode that selects none")
+        .action("pass --release-driver and --forge at an available tuple, or --release-mode external or none")
+        .target_state("unchanged"),
+    )
+}
+
 /// The one refusal for every collision, before any write.
 ///
 /// The verbs offer no force flag: an unattributed file becomes landable
@@ -500,6 +518,9 @@ pub fn land(
     if let Some(reason) = prepared.projection.licence_refusal.as_deref() {
         return Err(licence_refusal(reason));
     }
+    if let Some(reason) = prepared.projection.release_unavailable() {
+        return Err(release_unavailable(reason));
+    }
     if !prepared.collisions.is_empty() {
         return Err(refusal(target.display(), &prepared.collisions));
     }
@@ -546,7 +567,13 @@ pub fn land(
             },
         });
     }
-    let receipt = receipt(&prepared.params, recorded, origin, files);
+    let receipt = receipt(
+        &prepared.params,
+        &prepared.projection,
+        recorded,
+        origin,
+        files,
+    );
     writer.write(manifest::MANIFEST_PATH, &manifest::render(&receipt)?)?;
     Ok(Landed {
         completed: writer.completed,
@@ -648,6 +675,7 @@ fn candidate_digest(candidate: &Candidate) -> Digest {
 /// The receipt for this landing.
 fn receipt(
     params: &Params,
+    projection: &Projection,
     recorded: Option<&Manifest>,
     origin: Origin,
     files: Vec<FileRecord>,
@@ -662,23 +690,17 @@ fn receipt(
             },
             |record| record.origin.clone(),
         ),
-        tech: params.tech().to_owned(),
-        forge: params.forge().to_owned(),
         landed_at: recorded.map_or_else(manifest::now, |record| record.landed_at.clone()),
+        profile: params.profile().clone(),
+        git: params.git().clone(),
+        capabilities: params.capabilities().clone(),
         parameters: Parameters {
             repo: params.repo().to_owned(),
-            workflow: params.workflow(),
-            style: params.style(),
-            nix: params.nix(),
-            scorecard: params.scorecard(),
-            code_scanning: params.code_scanning(),
-            trunk: params.trunk().to_owned(),
-            line_prefix: params.line_prefix().to_owned(),
             security_contact: params.security_contact().to_owned(),
             security_response: params.security_response().to_owned(),
         },
         files,
-        pins: crate::registry::pins_for(params.tech())
+        pins: crate::registry::pins_for(&projection.capabilities)
             .into_iter()
             .map(|pin| (pin.name, pin.version))
             .collect(),
@@ -821,7 +843,7 @@ mod tests {
             outcome.completed.last().map(String::as_str),
             Some(manifest::MANIFEST_PATH)
         );
-        assert_eq!(outcome.receipt.schema_version, 8);
+        assert_eq!(outcome.receipt.schema_version, manifest::SCHEMA_VERSION);
         let record = manifest::load(&target).expect("loads").expect("exists");
         let again = prepared(&target, Some(&record));
         for decision in &again.decisions {

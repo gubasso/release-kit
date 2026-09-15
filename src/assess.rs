@@ -119,9 +119,8 @@ pub struct Landing {
 pub struct Evidence {
     /// The landing record, present or not.
     pub landing: Landing,
-    /// The technology the version file names, where one is found.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tech: Option<&'static str>,
+    /// The technologies the version files name, zero or many.
+    pub technologies: Vec<&'static str>,
     /// The forge the origin remote maps to, where one is recognized.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub forge: Option<&'static str>,
@@ -158,8 +157,8 @@ pub const fn classify(evidence: &Evidence) -> Classification {
 /// gathers beside its own read of the record.
 #[derive(Debug)]
 pub struct Facts {
-    /// The technology the version file names, where one is found.
-    pub tech: Option<&'static str>,
+    /// The technologies the version files name, zero or many.
+    pub technologies: Vec<&'static str>,
     /// The forge the origin remote maps to, where one is recognized.
     pub forge: Option<&'static str>,
     /// The project path from the origin remote, where one exists.
@@ -195,7 +194,7 @@ pub fn gather(target: &Utf8Path) -> Result<Evidence, RkError> {
     let facts = gather_facts(target)?;
     Ok(Evidence {
         landing,
-        tech: facts.tech,
+        technologies: facts.technologies,
         forge: facts.forge,
         repo: facts.repo,
         release_markers: facts.release_markers,
@@ -233,7 +232,7 @@ pub fn gather_facts(target: &Utf8Path) -> Result<Facts, RkError> {
     collisions.sort();
     let (git, tags, long_lived_branches) = git_evidence(target)?;
     Ok(Facts {
-        tech: crate::detect::tech_of(target.as_std_path()),
+        technologies: crate::detect::technologies_of(target.as_std_path()),
         forge: detected.forge.map(crate::detect::Forge::as_str),
         repo: detected.repo,
         release_markers,
@@ -467,7 +466,7 @@ mod tests {
                 recorded: false,
                 rk_version: None,
             },
-            tech: None,
+            technologies: Vec::new(),
             forge: None,
             repo: None,
             release_markers: Vec::new(),

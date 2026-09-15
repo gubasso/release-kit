@@ -20,7 +20,8 @@ The binary is `rk`.
 
 - Read the method: [method/README.md](./method/README.md), or `rk method --list` anywhere.
 - Read a technology binding: [bindings/](./bindings/README.md), or `rk binding rust`.
-- Land the workflow in a project: `rk init --tech rust --target .` previews; `--apply` writes the files and the landing record.
+- See what a project resolves to and what a landing would select: `rk profile --target .`, which writes nothing.
+- Land the workflow in a project: `rk init --target .` previews; `--apply` writes the files and the landing record.
 - See the candidate before it lands: `rk stage --target .` writes this binary's proposed files and its version-matched knowledge into a disposable stage, kept through the landing and removed only by `rk stage clean <path>`.
 - Ask a landed project about itself: `rk status`, with `--check` for a CI gate; take this binary's projection with `rk upgrade`, which replaces every recorded generated file, preserves every seeded and state file, and rewrites the receipt last; record a pre-record project already at the projection with `rk adopt`; classify a project before anything lands with `rk assess`. Each of these renders afresh from the installed binary and the target, reads no stage and no other release, and refuses an unattributed whole-file collision before its first write.
 - See the pinned tools and their freshness: `rk versions`, and `rk versions --check` to compare each pin upstream.

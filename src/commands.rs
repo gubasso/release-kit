@@ -14,6 +14,7 @@ pub mod issue;
 pub mod license;
 pub mod lines;
 pub mod message;
+pub mod profile;
 pub mod read;
 pub mod runs;
 pub mod self_depend;

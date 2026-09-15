@@ -31,6 +31,7 @@ pub mod landing;
 pub mod maintenance;
 pub mod output;
 pub mod probes;
+pub mod profile;
 pub mod projection;
 pub mod registry;
 pub mod self_depend;

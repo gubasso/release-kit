@@ -18,7 +18,7 @@ export KEY=<absolute path to the App's .pem, outside every repository>
 ## The procedure
 
 ```bash
-rk guide setup --forge github --tech rust --repo "$OWNER/$REPO"
+rk guide setup --forge github --technology rust --repo "$OWNER/$REPO"
 ```
 
 The bot-App walkthrough it routes to is `rk forge github`; the registry forms are in `rk binding rust`. The bot steps read the credentials as `RK_BOT_APP_ID="$APP_ID"` and `RK_BOT_PRIVATE_KEY_FILE="$KEY"`.

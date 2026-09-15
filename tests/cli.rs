@@ -120,29 +120,64 @@ fn utf8(path: &Path) -> Utf8PathBuf {
 /// The landing parameters of one fixture combination, built from a record
 /// the way a comparison rebuilds them, so no target is needed.
 fn projection_params(
-    tech: &str,
+    driver: &str,
     forge: &str,
-    workflow: release_kit::landing::Workflow,
+    checkout_mode: release_kit::landing::CheckoutMode,
     style: release_kit::landing::Style,
     nix: bool,
 ) -> release_kit::landing::Params {
+    record_params(
+        driver,
+        forge,
+        checkout_mode,
+        Some(style),
+        nix,
+        "acme/widget",
+    )
+}
+
+/// A parameter set built the only way production builds one: from a
+/// record, at this binary's schema, with the target configuration stated
+/// by domain.
+fn record_params(
+    driver: &str,
+    forge: &str,
+    checkout_mode: release_kit::landing::CheckoutMode,
+    style: Option<release_kit::landing::Style>,
+    nix: bool,
+    repo: &str,
+) -> release_kit::landing::Params {
     use release_kit::landing::manifest::{Manifest, Parameters, SCHEMA_VERSION};
+    use release_kit::profile::{
+        CapabilityRequests, GitWorkflow, ProfileSnapshot, ReleaseIntent, ReleaseMode,
+    };
     release_kit::landing::Params::from_record(&Manifest {
         schema_version: SCHEMA_VERSION,
         rk_version: "0.0.0".to_owned(),
         origin: "init".to_owned(),
-        tech: tech.to_owned(),
-        forge: forge.to_owned(),
         landed_at: "2026-08-29T00:00:00Z".to_owned(),
-        parameters: Parameters {
-            repo: "acme/widget".to_owned(),
-            workflow,
-            style: Some(style),
-            nix,
+        profile: ProfileSnapshot {
+            technologies: vec![driver.to_owned()],
+            forge: Some(forge.to_owned()),
+            release: ReleaseIntent {
+                mode: ReleaseMode::Automatic,
+                driver: Some(driver.to_owned()),
+                style,
+                line_prefix: Some(release_kit::config::LINE_PREFIX_DEFAULT.to_owned()),
+            },
+        },
+        git: GitWorkflow {
+            trunk: release_kit::config::TRUNK_DEFAULT.to_owned(),
+            checkout_mode,
+        },
+        capabilities: CapabilityRequests {
+            nix_packaging: nix,
+            reporting_policy: true,
             scorecard: false,
             code_scanning: None,
-            trunk: release_kit::config::TRUNK_DEFAULT.to_owned(),
-            line_prefix: release_kit::config::LINE_PREFIX_DEFAULT.to_owned(),
+        },
+        parameters: Parameters {
+            repo: repo.to_owned(),
             security_contact: String::new(),
             security_response: release_kit::config::RESPONSE_DEFAULT.to_owned(),
         },
@@ -206,14 +241,14 @@ const FIXTURE_CARGO_TOML: &str = "[package]\nname = \"widget\"\nversion = \"0.1.
 fn projection_fixture_combinations() -> Vec<(
     String,
     String,
-    release_kit::landing::Workflow,
+    release_kit::landing::CheckoutMode,
     release_kit::landing::Style,
     Option<NixShape>,
 )> {
-    use release_kit::landing::{Style, Workflow};
+    use release_kit::landing::{CheckoutMode, Style};
     let mut out = Vec::new();
     for (tech, forge) in release_kit::projection::supported_pairs() {
-        for workflow in [Workflow::Worktree, Workflow::Branches] {
+        for workflow in [CheckoutMode::LinkedWorktree, CheckoutMode::MainWorktree] {
             for style in [Style::Trunk, Style::Lines] {
                 for nix in [
                     None,
@@ -246,29 +281,14 @@ fn render_params(
     repo: &str,
     style: Option<release_kit::landing::Style>,
 ) -> release_kit::landing::Params {
-    use release_kit::landing::manifest::{Manifest, Parameters};
-    release_kit::landing::Params::from_record(&Manifest {
-        schema_version: release_kit::landing::manifest::SCHEMA_VERSION,
-        rk_version: "0.0.0".to_owned(),
-        origin: "init".to_owned(),
-        tech: "rust".to_owned(),
-        forge: "github".to_owned(),
-        landed_at: "2026-08-29T00:00:00Z".to_owned(),
-        parameters: Parameters {
-            repo: repo.to_owned(),
-            workflow: release_kit::landing::Workflow::Worktree,
-            style,
-            nix: false,
-            scorecard: false,
-            code_scanning: None,
-            trunk: release_kit::config::TRUNK_DEFAULT.to_owned(),
-            line_prefix: release_kit::config::LINE_PREFIX_DEFAULT.to_owned(),
-            security_contact: String::new(),
-            security_response: release_kit::config::RESPONSE_DEFAULT.to_owned(),
-        },
-        files: Vec::new(),
-        pins: std::collections::BTreeMap::new(),
-    })
+    record_params(
+        "rust",
+        "github",
+        release_kit::landing::CheckoutMode::LinkedWorktree,
+        style,
+        false,
+        repo,
+    )
 }
 
 /// The landing record a target carries, parsed.
@@ -739,6 +759,14 @@ fn init_preview_human_lines_are_snapshot_held() {
     let path = target.path().to_string_lossy().into_owned();
     let expected = format!(
         "DRY RUN: rk init writes these files into {path}; re-run with --apply\n\
+         profile: technologies rust; forge github; repo unresolved; release automatic (driver rust, style trunk, line prefix release/); trunk master; checkout mode linked-worktree; requests reporting_policy\n\
+         capability git.guards: selected\n\
+         capability git.title-check: selected\n\
+         capability security.reporting-policy: selected\n\
+         capability release.automation: selected\n\
+         capability packaging.nix: not-requested (capabilities.nix_packaging is false)\n\
+         capability supply-chain.scorecard: not-requested (capabilities.scorecard is false)\n\
+         capability supply-chain.code-scanning: not-requested (capabilities.code_scanning is off)\n\
          created .github/workflows/pr-title.yml\n\
          created .github/workflows/release-plz.yml\n\
          created .pre-commit-config.yaml\n\
@@ -747,7 +775,7 @@ fn init_preview_human_lines_are_snapshot_held() {
          created SECURITY.md\n\
          created dist-workspace.toml\n\
          created release-plz.toml\n\
-         Next:\n  rk init --tech rust --forge github --repo <owner/name> --workflow worktree --style trunk --code-scanning off --target {path} --apply\n\
+         Next:\n  rk init --technology rust --forge github --release-mode automatic --release-driver rust --release-style trunk --trunk master --checkout-mode linked-worktree --repo <owner/name> --reporting-policy --code-scanning off --target {path} --apply\n\
          \x20 rk stage --target {path} stages the complete candidate for a byte comparison\n"
     );
     let output = rk()
@@ -764,7 +792,7 @@ fn init_preview_human_lines_are_snapshot_held() {
         .find("added .release-kit/config.toml\n")
         .expect("config preview");
     let end = text.find("Next:\n").expect("next block");
-    assert!(text[start..end].contains("schema_version = 1"));
+    assert!(text[start..end].contains("schema_version = 2"));
     assert!(text[start..end].contains("required_check = \"\""));
     assert_eq!(format!("{}{}", &text[..start], &text[end..]), expected);
 }
@@ -788,7 +816,7 @@ fn init_json_emits_one_object_and_nothing_else() {
             .stdout
             .clone();
         let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-        assert_eq!(report["schema"], "rk.init/9");
+        assert_eq!(report["schema"], "rk.init/10");
         assert_eq!(report["mode"], mode);
         assert!(
             report["files"].as_array().is_some_and(|f| !f.is_empty()),
@@ -933,12 +961,46 @@ fn init_refuses_an_unattributed_seeded_file_and_routes_to_the_stage() {
 
 #[test]
 fn init_rejects_an_unknown_tech_with_usage() {
+    // An unknown technology is preserved: the profile stays readable and
+    // the local guards still land. What refuses is an automatic release
+    // this binary ships no automation for.
     let target = tempfile::tempdir().expect("a scratch dir exists");
-    rk().args(["init", "--tech", "fortran", "--forge", "github", "--target"])
-        .arg(target.path())
-        .assert()
-        .code(64)
-        .stderr(predicate::str::contains("unknown tech"));
+    rk().args([
+        "init",
+        "--technology",
+        "fortran",
+        "--forge",
+        "github",
+        "--repo",
+        "acme/widget",
+        "--target",
+    ])
+    .arg(target.path())
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("unknown git.guards").not())
+    .stdout(predicate::str::contains("created AGENTS.md"));
+    rk().args([
+        "init",
+        "--technology",
+        "fortran",
+        "--forge",
+        "github",
+        "--repo",
+        "acme/widget",
+        "--release-mode",
+        "automatic",
+        "--release-driver",
+        "fortran",
+        "--apply",
+        "--target",
+    ])
+    .arg(target.path())
+    .assert()
+    .code(73)
+    .stderr(predicate::str::contains("fortran"))
+    .stderr(predicate::str::contains("the bindings are"));
+    assert!(!target.path().join(".release-kit").exists());
 }
 
 #[test]
@@ -1822,6 +1884,7 @@ fn usage_dumps_every_verb_in_one_call() {
         "rk forge",
         "rk versions",
         "rk init",
+        "rk profile",
         "rk setup check",
         "rk setup step",
         "rk setup script",
@@ -3162,8 +3225,8 @@ fn the_setup_skill_restates_no_projection_or_manager_matrix() {
 #[test]
 fn the_routing_block_bounds_the_agents_initiative() {
     for workflow in [
-        release_kit::landing::Workflow::Worktree,
-        release_kit::landing::Workflow::Branches,
+        release_kit::landing::CheckoutMode::LinkedWorktree,
+        release_kit::landing::CheckoutMode::MainWorktree,
     ] {
         let block =
             release_kit::projection::routing_block(workflow).expect("the binary embeds the block");
@@ -3421,8 +3484,8 @@ fn the_prose_checks_catch_every_class_they_name() {
 #[test]
 fn the_routing_block_reads_as_plain_prose() {
     for workflow in [
-        release_kit::landing::Workflow::Worktree,
-        release_kit::landing::Workflow::Branches,
+        release_kit::landing::CheckoutMode::LinkedWorktree,
+        release_kit::landing::CheckoutMode::MainWorktree,
     ] {
         let rendered = release_kit::landing::render(
             release_kit::projection::routing_block(workflow)
@@ -3899,7 +3962,7 @@ fn guide_substitutes_the_tech() {
         .stdout
         .clone();
     let text = String::from_utf8_lossy(&out);
-    assert!(text.contains("--tech rust"), "the tech is filled in");
+    assert!(text.contains("rk binding rust"), "the tech is filled in");
     assert!(!text.contains("<tech>"), "a placeholder survived");
     assert!(!text.contains("<repo>"), "a placeholder survived");
 }
@@ -3967,16 +4030,42 @@ fn init_lands_nothing_from_the_host_only_roots() {
 #[test]
 fn init_refuses_an_unsupported_pair_and_an_undetectable_forge() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
-    rk().args(["init", "--tech", "python", "--forge", "gitlab", "--target"])
-        .arg(target.path())
-        .assert()
-        .code(64)
-        .stderr(predicate::str::contains("no landable files"));
-    rk().args(["init", "--tech", "rust", "--target"])
-        .arg(target.path())
-        .assert()
-        .code(73)
-        .stderr(predicate::str::contains("--forge"));
+    rk().args([
+        "init",
+        "--technology",
+        "python",
+        "--forge",
+        "gitlab",
+        "--repo",
+        "acme/widget",
+        "--release-mode",
+        "automatic",
+        "--release-driver",
+        "python",
+        "--apply",
+        "--target",
+    ])
+    .arg(target.path())
+    .assert()
+    .code(73)
+    .stderr(predicate::str::contains("no landable files"))
+    .stderr(predicate::str::contains("rust, github"));
+    assert!(!target.path().join(".release-kit").exists());
+    // An automatic release needs a forge; a release-less profile does not.
+    rk().args([
+        "init",
+        "--technology",
+        "rust",
+        "--release-mode",
+        "automatic",
+        "--release-driver",
+        "rust",
+        "--target",
+    ])
+    .arg(target.path())
+    .assert()
+    .code(73)
+    .stderr(predicate::str::contains("--forge"));
 }
 
 #[test]
@@ -6895,18 +6984,18 @@ fn a_landing_writes_the_record_with_its_identity() {
         .success()
         .stdout(predicate::str::contains("wrote .release-kit/manifest.json"));
     let manifest = read_manifest(target.path());
-    assert_eq!(manifest["schema_version"], 8);
+    assert_eq!(manifest["schema_version"], 9);
     assert_eq!(manifest["rk_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(manifest["origin"], "init");
-    assert_eq!(manifest["tech"], "rust");
-    assert_eq!(manifest["forge"], "github");
+    assert_eq!(manifest["profile"]["release"]["driver"], "rust");
+    assert_eq!(manifest["profile"]["forge"], "github");
     assert_eq!(manifest["parameters"]["repo"], "acme/widget");
     assert!(
         manifest["parameters"]["scopes"].is_null(),
         "the record carries no scope vocabulary"
     );
     assert_eq!(
-        manifest["parameters"]["style"], "trunk",
+        manifest["profile"]["release"]["style"], "trunk",
         "the default style records the armed request"
     );
 
@@ -7398,11 +7487,11 @@ fn status_json_is_one_object_over_a_fresh_landing() {
         .stdout
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["schema"], "rk.status/11");
+    assert_eq!(report["schema"], "rk.status/12");
     assert_eq!(report["landed"], true);
-    assert_eq!(report["tech"], "rust");
-    assert_eq!(report["style"], "trunk");
-    assert_eq!(report["forge"], "github");
+    assert_eq!(report["profile"]["release"]["driver"], "rust");
+    assert_eq!(report["profile"]["release"]["style"], "trunk");
+    assert_eq!(report["profile"]["forge"], "github");
     assert_eq!(report["alignment"], "aligned");
     assert_eq!(report["drift"]["rendered"], 0);
     assert_eq!(report["drift"]["seeded"], 0);
@@ -7901,7 +7990,7 @@ fn an_upgrade_replaces_a_recorded_generated_file_whose_bytes_differ() {
         "semver_check = true\n"
     );
     let receipt = read_manifest(target.path());
-    assert_eq!(receipt["schema_version"], 8);
+    assert_eq!(receipt["schema_version"], 9);
     assert_eq!(
         manifest_file(&receipt, ".github/workflows/release-plz.yml")["sha256"],
         Digest::of(landed.as_bytes()).to_string()
@@ -10939,7 +11028,9 @@ fn the_action_commit_table_covers_what_dist_emits() {
             matched[0]
                 .get("used_by")
                 .and_then(toml::Value::as_array)
-                .is_some_and(|users| users.iter().any(|user| user.as_str() == Some("rust"))),
+                .is_some_and(|users| users
+                    .iter()
+                    .any(|user| user.as_str() == Some("release.automation/rust"))),
             "the table's {action} pin runs in the rust binding's workflow, so its registry entry must say so"
         );
     }
@@ -10971,8 +11062,19 @@ fn this_repos_own_record_carries_every_rust_pin() {
         std::fs::read_to_string(repo_path(".release-kit/manifest.json")).expect("the record reads");
     let manifest: serde_json::Value = serde_json::from_str(&manifest).expect("the record parses");
     let recorded = manifest["pins"].as_object().expect("a pin map");
+    let selected = release_kit::profile::catalog::select(
+        &record_params(
+            "rust",
+            "github",
+            release_kit::landing::CheckoutMode::LinkedWorktree,
+            Some(release_kit::landing::Style::Trunk),
+            false,
+            "gubasso/release-kit",
+        ),
+        &release_kit::profile::catalog::Availability::embedded(),
+    );
     let expected: std::collections::BTreeMap<String, String> =
-        release_kit::registry::pins_for("rust")
+        release_kit::registry::pins_for(&selected)
             .into_iter()
             .map(|pin| (pin.name, pin.version))
             .collect();
@@ -11011,7 +11113,7 @@ fn init_defaults_to_the_worktree_workflow() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
     land_rust(target.path()).success();
     let manifest = read_manifest(target.path());
-    assert_eq!(manifest["parameters"]["workflow"], "worktree");
+    assert_eq!(manifest["git"]["checkout_mode"], "linked-worktree");
     let hooks = std::fs::read_to_string(target.path().join(".pre-commit-config.yaml"))
         .expect("the hook file reads");
     assert!(
@@ -11035,7 +11137,7 @@ fn init_lands_the_branches_workflow_without_the_guard() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
     land_rust_with_workflow(target.path(), "branches").success();
     let manifest = read_manifest(target.path());
-    assert_eq!(manifest["parameters"]["workflow"], "branches");
+    assert_eq!(manifest["git"]["checkout_mode"], "main-worktree");
     let hooks = std::fs::read_to_string(target.path().join(".pre-commit-config.yaml"))
         .expect("the hook file reads");
     assert!(
@@ -11060,7 +11162,7 @@ fn init_lands_the_branches_workflow_without_the_guard() {
     .arg(target.path())
     .assert()
     .code(64)
-    .stderr(predicate::str::contains("worktree, branches"));
+    .stderr(predicate::str::contains("linked-worktree, main-worktree"));
 }
 
 /// The flag chooses which candidate adoption verifies against — nothing
@@ -11080,8 +11182,8 @@ fn adopt_records_the_branches_workflow_by_default() {
     .assert()
     .success();
     assert_eq!(
-        read_manifest(target.path())["parameters"]["workflow"],
-        "branches"
+        read_manifest(target.path())["git"]["checkout_mode"],
+        "main-worktree"
     );
 }
 
@@ -11133,7 +11235,7 @@ fn status_check_flags_a_manifest_whose_workflow_contradicts_its_landed_blocks() 
     let target = tempfile::tempdir().expect("a scratch dir exists");
     land_rust(target.path()).success();
     let mut manifest = read_manifest(target.path());
-    manifest["parameters"]["workflow"] = serde_json::json!("branches");
+    manifest["git"]["checkout_mode"] = serde_json::json!("main-worktree");
     write_manifest(target.path(), &manifest);
 
     rk().args(["status", "--target"])
@@ -11175,35 +11277,33 @@ fn an_upgrade_migrates_a_schema_1_record_to_the_current_schema() {
     std::fs::remove_file(target.path().join(".release-kit/config.toml"))
         .expect("a pre-config target");
     let mut manifest = read_manifest(target.path());
+    // The shape a schema-1 landing wrote: one technology and one forge at
+    // the top, every parameter flat, and no domain table at all.
     manifest["schema_version"] = serde_json::json!(1);
-    manifest
-        .get_mut("parameters")
-        .and_then(serde_json::Value::as_object_mut)
-        .expect("a parameters object")
-        .remove("workflow");
-    manifest
-        .get_mut("parameters")
-        .and_then(serde_json::Value::as_object_mut)
-        .expect("a parameters object")
-        .remove("style");
+    manifest["tech"] = serde_json::json!("rust");
+    manifest["forge"] = serde_json::json!("github");
+    let record = manifest.as_object_mut().expect("a record object");
+    record.remove("profile");
+    record.remove("git");
+    record.remove("capabilities");
     write_manifest(target.path(), &manifest);
 
-    // A pre-style record refuses until --style names one: neither value is
-    // a compatibility-safe reading of a target nobody asked.
+    // A pre-style record refuses until the style names one: neither value
+    // is a compatibility-safe reading of a target nobody asked.
     rk().args(["upgrade", "--apply", "--target"])
         .arg(target.path())
         .assert()
         .code(64)
-        .stderr(predicate::str::contains("--style"));
+        .stderr(predicate::str::contains("profile.release.style"));
 
-    rk().args(["upgrade", "--apply", "--style", "trunk", "--target"])
+    rk().args(["upgrade", "--apply", "--release-style", "trunk", "--target"])
         .arg(target.path())
         .assert()
         .success();
     let migrated = read_manifest(target.path());
-    assert_eq!(migrated["schema_version"], 8);
-    assert_eq!(migrated["parameters"]["workflow"], "branches");
-    assert_eq!(migrated["parameters"]["style"], "trunk");
+    assert_eq!(migrated["schema_version"], 9);
+    assert_eq!(migrated["git"]["checkout_mode"], "main-worktree");
+    assert_eq!(migrated["profile"]["release"]["style"], "trunk");
     let hooks = std::fs::read_to_string(target.path().join(".pre-commit-config.yaml"))
         .expect("the hook file reads");
     assert!(
@@ -11283,7 +11383,7 @@ fn an_upgrade_drops_the_recorded_scope_vocabulary() {
         );
 
     let migrated = read_manifest(target.path());
-    assert_eq!(migrated["schema_version"], 8);
+    assert_eq!(migrated["schema_version"], 9);
     assert!(
         migrated["parameters"]["scopes"].is_null(),
         "the vocabulary leaves the record: {migrated}"
@@ -11369,8 +11469,8 @@ fn a_mode_change_replaces_the_edited_owned_file() {
         .expect("the hook file reads");
     assert!(!hooks.contains("rk-worktree-location"), "{hooks}");
     assert_eq!(
-        read_manifest(target.path())["parameters"]["workflow"],
-        "branches"
+        read_manifest(target.path())["git"]["checkout_mode"],
+        "main-worktree"
     );
 }
 
@@ -11388,7 +11488,7 @@ fn a_mode_change_upgrades_from_the_record() {
         .assert()
         .success();
     let manifest = read_manifest(target.path());
-    assert_eq!(manifest["parameters"]["workflow"], "branches");
+    assert_eq!(manifest["git"]["checkout_mode"], "main-worktree");
     let hooks = std::fs::read_to_string(target.path().join(".pre-commit-config.yaml"))
         .expect("the hook file reads");
     assert!(!hooks.contains("rk-worktree-location"), "{hooks}");
@@ -11420,8 +11520,8 @@ fn upgrade_keeps_the_recorded_mode() {
         .assert()
         .success();
     assert_eq!(
-        read_manifest(target.path())["parameters"]["workflow"],
-        "worktree"
+        read_manifest(target.path())["git"]["checkout_mode"],
+        "linked-worktree"
     );
     let hooks = std::fs::read_to_string(target.path().join(".pre-commit-config.yaml"))
         .expect("the hook file reads");
@@ -11444,12 +11544,12 @@ fn status_reports_the_mode_and_check_flags_a_hand_edited_guard() {
         .stdout
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["workflow"], "worktree");
+    assert_eq!(report["git"]["checkout_mode"], "linked-worktree");
     rk().args(["status", "--target"])
         .arg(target.path())
         .assert()
         .success()
-        .stdout(predicate::str::contains("worktree workflow"));
+        .stdout(predicate::str::contains("checkout mode linked-worktree"));
 
     let hooks_path = target.path().join(".pre-commit-config.yaml");
     let hooks = std::fs::read_to_string(&hooks_path).expect("the hook file reads");
@@ -12462,8 +12562,9 @@ fn worktree_json_failure_is_one_diagnostic_line() {
 fn guard_script() -> String {
     // The guard names the trunk, so the block carries a token and the
     // script under test is the rendered form a landing writes.
-    let template = release_kit::projection::hooks_block(release_kit::landing::Workflow::Worktree)
-        .expect("the binary embeds the block");
+    let template =
+        release_kit::projection::hooks_block(release_kit::landing::CheckoutMode::LinkedWorktree)
+            .expect("the binary embeds the block");
     let block = String::from_utf8(release_kit::landing::render(
         template.as_bytes(),
         &render_params("acme/widget", Some(release_kit::landing::Style::Trunk)),
@@ -12849,7 +12950,7 @@ fn a_preview_follow_up_keeps_the_previewed_decision() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
     land_rust(target.path()).success();
     let out = rk()
-        .args(["upgrade", "--workflow", "branches", "--target"])
+        .args(["upgrade", "--checkout-mode", "main-worktree", "--target"])
         .arg(target.path())
         .assert()
         .success()
@@ -12862,7 +12963,7 @@ fn a_preview_follow_up_keeps_the_previewed_decision() {
     // configured value and apply a decision the preview did not show.
     assert!(
         String::from_utf8_lossy(&out).contains(
-            "rk upgrade --workflow branches --nix off --scorecard off --code-scanning off --target"
+            "rk upgrade --checkout-mode main-worktree --nix-packaging off --reporting-policy on --scorecard off --code-scanning off --target"
         ),
         "the upgrade follow-up carries the mode change and every capability: {}",
         String::from_utf8_lossy(&out)
@@ -12896,7 +12997,7 @@ fn a_preview_follow_up_keeps_the_previewed_decision() {
         .collect();
     rk().args(&arguments).assert().success();
     assert_eq!(
-        read_manifest(opted.path())["parameters"]["scorecard"],
+        read_manifest(opted.path())["capabilities"]["scorecard"],
         false,
         "the printed command applied the previewed decision"
     );
@@ -12931,8 +13032,8 @@ fn a_preview_follow_up_keeps_the_previewed_decision() {
     let arguments: Vec<&str> = follow.split_whitespace().skip(1).collect();
     rk().args(&arguments).assert().success();
     let manifest = read_manifest(fresh.path());
-    assert_eq!(manifest["parameters"]["scorecard"], true);
-    assert_eq!(manifest["parameters"]["code_scanning"], "codeql");
+    assert_eq!(manifest["capabilities"]["scorecard"], true);
+    assert_eq!(manifest["capabilities"]["code_scanning"], "codeql");
 }
 
 /// A scratch repository ignoring `.draft/`, for the message content guard.
@@ -13580,7 +13681,7 @@ fn init_renders_the_recorded_style_into_the_release_workflow() {
         "the lines style renders unarmed"
     );
     let manifest = read_manifest(lines.path());
-    assert_eq!(manifest["parameters"]["style"], "lines");
+    assert_eq!(manifest["profile"]["release"]["style"], "lines");
 }
 
 /// Git against a scratch repository with the hook environment scrubbed:
@@ -13800,11 +13901,11 @@ fn lines_open_json_keeps_its_own_schema() {
 fn upgrade_preview_replays_the_style_override() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
     land_rust(target.path()).success();
-    rk().args(["upgrade", "--style", "lines", "--target"])
+    rk().args(["upgrade", "--release-style", "lines", "--target"])
         .arg(target.path())
         .assert()
         .success()
-        .stdout(predicate::str::contains("--style lines"));
+        .stdout(predicate::str::contains("--release-style lines"));
 }
 
 /// A remote-only line adopts the remote tip as a tracking branch instead
@@ -13863,10 +13964,10 @@ fn adopt_preview_replays_a_complete_apply_command() {
     .assert()
     .success()
     .stdout(
-        predicate::str::contains("--tech rust")
+        predicate::str::contains("--technology rust")
             .and(predicate::str::contains("--repo acme/widget"))
-            .and(predicate::str::contains("--workflow worktree"))
-            .and(predicate::str::contains("--style trunk")),
+            .and(predicate::str::contains("--checkout-mode linked-worktree"))
+            .and(predicate::str::contains("--release-style trunk")),
     );
 }
 
@@ -13943,7 +14044,7 @@ fn the_nix_opt_in_lands_the_capability_with_its_kinds() {
         assert!(target.path().join(name).is_file(), "{name} lands");
     }
     let manifest = read_manifest(target.path());
-    assert_eq!(manifest["parameters"]["nix"], true);
+    assert_eq!(manifest["capabilities"]["nix_packaging"], true);
     assert_eq!(
         manifest_file(&manifest, "nix/package.nix")["kind"],
         "seeded"
@@ -13961,7 +14062,7 @@ fn the_nix_opt_in_lands_the_capability_with_its_kinds() {
         .stdout
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["nix"], true);
+    assert_eq!(report["capabilities"]["nix_packaging"], true);
     assert_eq!(report["missing"], serde_json::json!([]));
     assert_eq!(report["drift"]["rendered"], 0);
     assert_eq!(
@@ -13981,7 +14082,7 @@ fn a_landing_without_nix_lands_none_and_the_record_says_so() {
         assert!(!target.path().join(name).exists(), "{name} must not land");
     }
     let manifest = read_manifest(target.path());
-    assert_eq!(manifest["parameters"]["nix"], false);
+    assert_eq!(manifest["capabilities"]["nix_packaging"], false);
     let out = rk()
         .args(["status", "--json", "--target"])
         .arg(target.path())
@@ -13991,7 +14092,7 @@ fn a_landing_without_nix_lands_none_and_the_record_says_so() {
         .stdout
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["nix"], false);
+    assert_eq!(report["capabilities"]["nix_packaging"], false);
     assert_eq!(
         report["missing"],
         serde_json::json!([]),
@@ -14027,7 +14128,7 @@ fn a_target_with_its_own_flake_keeps_it_and_the_pair_is_withheld() {
         "the target's own flake survives byte-identically"
     );
     let manifest = read_manifest(target.path());
-    assert_eq!(manifest["parameters"]["nix"], true);
+    assert_eq!(manifest["capabilities"]["nix_packaging"], true);
     assert!(
         manifest["files"]
             .as_array()
@@ -14068,7 +14169,7 @@ fn an_upgrade_moves_the_nix_opt_in_in_both_directions() {
         .success();
     assert!(target.path().join("flake.nix").is_file());
     let manifest = read_manifest(target.path());
-    assert_eq!(manifest["parameters"]["nix"], true);
+    assert_eq!(manifest["capabilities"]["nix_packaging"], true);
     assert_eq!(manifest_file(&manifest, "flake.lock")["kind"], "state");
     rk().args(["upgrade", "--nix", "off", "--apply", "--target"])
         .arg(target.path())
@@ -14076,7 +14177,7 @@ fn an_upgrade_moves_the_nix_opt_in_in_both_directions() {
         .success()
         .stdout(predicate::str::contains("released flake.nix"));
     let manifest = read_manifest(target.path());
-    assert_eq!(manifest["parameters"]["nix"], false);
+    assert_eq!(manifest["capabilities"]["nix_packaging"], false);
     assert!(
         target.path().join("flake.nix").is_file(),
         "an opt-out leaves the file as the target's own"
@@ -14120,7 +14221,7 @@ fn a_pre_nix_record_upgrades_to_nothing_unrequested() {
         .stdout
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["nix"], false);
+    assert_eq!(report["capabilities"]["nix_packaging"], false);
     assert!(
         report["files"]
             .as_array()
@@ -14148,7 +14249,7 @@ fn a_workspace_root_withholds_the_whole_nix_capability() {
         assert!(!target.path().join(name).exists(), "{name} must not land");
     }
     let manifest = read_manifest(target.path());
-    assert_eq!(manifest["parameters"]["nix"], true);
+    assert_eq!(manifest["capabilities"]["nix_packaging"], true);
     let out = rk()
         .args(["status", "--json", "--target"])
         .arg(target.path())
@@ -14210,7 +14311,7 @@ fn an_adoption_records_the_nix_parameter() {
         .stdout(predicate::str::contains("withheld flake.nix"));
     let manifest = read_manifest(target.path());
     assert_eq!(manifest["origin"], "adopt");
-    assert_eq!(manifest["parameters"]["nix"], true);
+    assert_eq!(manifest["capabilities"]["nix_packaging"], true);
     assert_eq!(
         manifest_file(&manifest, "nix/package.nix")["kind"],
         "seeded"
@@ -14262,7 +14363,7 @@ fn the_scorecard_opt_in_lands_the_workflow_and_records_the_parameter() {
         "the action is pinned by commit: {text}"
     );
     let manifest = read_manifest(target.path());
-    assert_eq!(manifest["parameters"]["scorecard"], true);
+    assert_eq!(manifest["capabilities"]["scorecard"], true);
     assert_eq!(
         manifest_file(&manifest, SCORECARD_WORKFLOW)["kind"],
         "rendered"
@@ -14285,7 +14386,7 @@ fn a_landing_without_the_scorecard_flag_lands_nothing_and_judges_clean() {
         "off by default"
     );
     let manifest = read_manifest(target.path());
-    assert_eq!(manifest["parameters"]["scorecard"], false);
+    assert_eq!(manifest["capabilities"]["scorecard"], false);
     assert!(
         manifest["files"]
             .as_array()
@@ -14305,7 +14406,7 @@ fn a_landing_without_the_scorecard_flag_lands_nothing_and_judges_clean() {
         .stdout
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["scorecard"], false);
+    assert_eq!(report["capabilities"]["scorecard"], false);
     assert_eq!(report["drift"]["rendered"], 0);
     assert_eq!(report["record_drift"], 0);
     assert_eq!(report["pending"], 0);
@@ -14345,7 +14446,7 @@ fn a_pre_scorecard_record_upgrades_to_nothing_unrequested() {
         "no workflow joins an upgrade nobody opted into"
     );
     assert_eq!(
-        read_manifest(target.path())["parameters"]["scorecard"],
+        read_manifest(target.path())["capabilities"]["scorecard"],
         false
     );
 }
@@ -14364,7 +14465,7 @@ fn the_scorecard_opt_in_lands_no_file_on_gitlab() {
         .success();
     assert!(!target.path().join(SCORECARD_WORKFLOW).exists());
     assert_eq!(
-        read_manifest(target.path())["parameters"]["scorecard"],
+        read_manifest(target.path())["capabilities"]["scorecard"],
         true
     );
 }
@@ -14454,7 +14555,7 @@ fn an_osi_licensed_rust_target_lands_the_codeql_workflow() {
         "one provider, one destination"
     );
     let manifest = read_manifest(target.path());
-    assert_eq!(manifest["parameters"]["code_scanning"], "codeql");
+    assert_eq!(manifest["capabilities"]["code_scanning"], "codeql");
     assert_eq!(
         manifest_file(&manifest, CODEQL_WORKFLOW)["kind"],
         "rendered"
@@ -14518,7 +14619,7 @@ fn semgrep_lands_on_both_forges_with_no_licence_condition() {
             "{forge}: {destination} lands"
         );
         let manifest = read_manifest(target.path());
-        assert_eq!(manifest["parameters"]["code_scanning"], "semgrep");
+        assert_eq!(manifest["capabilities"]["code_scanning"], "semgrep");
         assert_eq!(manifest_file(&manifest, destination)["kind"], "rendered");
     }
 }
@@ -14622,7 +14723,7 @@ fn a_landing_without_the_code_scanning_flag_lands_neither_workflow() {
         }
         let manifest = read_manifest(target.path());
         assert!(
-            manifest["parameters"]["code_scanning"].is_null(),
+            manifest["capabilities"]["code_scanning"].is_null(),
             "{forge}: {manifest}"
         );
     }
@@ -14657,7 +14758,7 @@ fn switching_the_code_scanning_provider_retires_the_other_destination() {
         "a released destination stays on disk"
     );
     let manifest = read_manifest(target.path());
-    assert_eq!(manifest["parameters"]["code_scanning"], "semgrep");
+    assert_eq!(manifest["capabilities"]["code_scanning"], "semgrep");
     assert!(
         manifest["files"]
             .as_array()
@@ -14670,7 +14771,7 @@ fn switching_the_code_scanning_provider_retires_the_other_destination() {
         .arg(target.path())
         .assert()
         .success();
-    assert!(read_manifest(target.path())["parameters"]["code_scanning"].is_null());
+    assert!(read_manifest(target.path())["capabilities"]["code_scanning"].is_null());
     rk().args(["upgrade", "--code-scanning", "sonar", "--target"])
         .arg(target.path())
         .assert()
@@ -14830,9 +14931,9 @@ fn a_recorded_provider_the_pair_cannot_run_is_reported_and_judged() {
         // which is the only way this state arises: a hand edit, or a landing
         // from a binary whose pairs differed.
         let mut manifest = read_manifest(target.path());
-        manifest["parameters"]
+        manifest["capabilities"]
             .as_object_mut()
-            .expect("parameters is an object")
+            .expect("the capability requests are an object")
             .insert("code_scanning".into(), serde_json::json!(provider));
         write_manifest(target.path(), &manifest);
         let out = rk()
@@ -14844,7 +14945,7 @@ fn a_recorded_provider_the_pair_cannot_run_is_reported_and_judged() {
             .stdout
             .clone();
         let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-        assert_eq!(report["code_scanning"], provider);
+        assert_eq!(report["capabilities"]["code_scanning"], provider);
         assert!(
             report["record_drift"].as_u64().unwrap_or(0) >= 1,
             "{tech} {forge}: the incompatible record is drift: {report}"
@@ -14884,7 +14985,7 @@ fn a_recorded_provider_the_pair_cannot_run_is_reported_and_judged() {
         repair.args(&arguments).arg("--apply");
         repair.assert().success();
         assert!(
-            read_manifest(target.path())["parameters"]["code_scanning"].is_null(),
+            read_manifest(target.path())["capabilities"]["code_scanning"].is_null(),
             "{tech} {forge}: the remedy dropped the capability"
         );
         // The incompatibility is gone. A fresh landing's own unfilled sentinel
@@ -14901,7 +15002,7 @@ fn a_recorded_provider_the_pair_cannot_run_is_reported_and_judged() {
         let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
         assert_eq!(report["record_drift"], 0, "{tech} {forge}: {report}");
         assert!(
-            report["code_scanning"].is_null(),
+            report["capabilities"]["code_scanning"].is_null(),
             "{tech} {forge}: {report}"
         );
     }
@@ -14968,7 +15069,7 @@ fn an_explicit_off_survives_into_the_init_follow_up_command() {
     let arguments: Vec<&str> = follow.split_whitespace().skip(1).collect();
     rk().args(&arguments).assert().success();
     assert!(
-        read_manifest(target.path())["parameters"]["code_scanning"].is_null(),
+        read_manifest(target.path())["capabilities"]["code_scanning"].is_null(),
         "the printed command kept the capability off"
     );
     assert!(
@@ -14998,7 +15099,7 @@ fn a_pre_code_scanning_record_upgrades_to_nothing_unrequested() {
     for destination in [CODEQL_WORKFLOW, SEMGREP_WORKFLOW_GITHUB] {
         assert!(!target.path().join(destination).exists(), "{destination}");
     }
-    assert!(read_manifest(target.path())["parameters"]["code_scanning"].is_null());
+    assert!(read_manifest(target.path())["capabilities"]["code_scanning"].is_null());
 }
 
 /// Turning the capability off drops the destination from the receipt and
@@ -15017,7 +15118,7 @@ fn an_upgrade_can_turn_the_scorecard_capability_off() {
         "a released destination stays on disk"
     );
     let manifest = read_manifest(target.path());
-    assert_eq!(manifest["parameters"]["scorecard"], false);
+    assert_eq!(manifest["capabilities"]["scorecard"], false);
     assert!(
         manifest["files"]
             .as_array()
@@ -15209,7 +15310,7 @@ fn a_record_whose_parameters_and_files_disagree_is_drift() {
     seed_crate(target.path());
     land_rust(target.path()).success();
     let mut manifest = read_manifest(target.path());
-    manifest["parameters"]["nix"] = serde_json::json!(true);
+    manifest["capabilities"]["nix_packaging"] = serde_json::json!(true);
     write_manifest(target.path(), &manifest);
     let out = rk()
         .args(["status", "--check", "--json", "--target"])
@@ -15294,7 +15395,7 @@ fn record_drift_counts_apart_from_file_drift() {
     seed_crate(target.path());
     land_rust(target.path()).success();
     let mut manifest = read_manifest(target.path());
-    manifest["parameters"]["nix"] = serde_json::json!(true);
+    manifest["capabilities"]["nix_packaging"] = serde_json::json!(true);
     write_manifest(target.path(), &manifest);
     let out = rk()
         .args(["status", "--json", "--target"])
@@ -18087,7 +18188,7 @@ fn assess_classifies_a_plain_directory_and_a_release_marker() {
         .stdout
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["schema"], "rk.assess/3");
+    assert_eq!(report["schema"], "rk.assess/4");
     assert_eq!(report["classification"], "brownfield");
     assert_eq!(report["landing"]["recorded"], false);
     assert_eq!(
@@ -18189,7 +18290,7 @@ fn assess_reports_a_landing_and_routes_by_status() {
     assert_eq!(report["classification"], "brownfield");
     assert_eq!(report["landing"]["recorded"], true);
     assert_eq!(report["landing"]["rk_version"], env!("CARGO_PKG_VERSION"));
-    assert_eq!(report["tech"], "rust");
+    assert_eq!(report["technologies"], serde_json::json!(["rust"]));
     let collisions = report["collisions"].as_array().expect("collisions");
     for expected in ["AGENTS.md", ".pre-commit-config.yaml", "release-plz.toml"] {
         assert!(
@@ -19654,7 +19755,7 @@ fn issue_start_previews_without_touching_the_forge_or_the_clone() {
         .stdout
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["schema"], "rk.issue-start/1");
+    assert_eq!(report["schema"], "rk.issue-start/2");
     assert_eq!(report["mode"], "preview");
     assert_eq!(report["branch"], "57-fix-the-csv-upload");
     assert_eq!(report["origin"], "already");
@@ -19709,7 +19810,7 @@ fn issue_start_seats_a_worktree_at_the_derived_path() {
         .stdout
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["workflow"], "worktree");
+    assert_eq!(report["checkout_mode"], "linked-worktree");
     let seat = parent.path().join("widget@57-fix-the-csv-upload");
     assert_eq!(report["path"], seat.to_string_lossy().into_owned());
     assert!(seat.is_dir(), "the worktree stands at the derived path");
@@ -19772,7 +19873,7 @@ fn issue_start_checks_out_in_place_under_branches_mode() {
     .stdout
     .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["workflow"], "branches");
+    assert_eq!(report["checkout_mode"], "main-worktree");
     assert_eq!(report["checkout"], "57-fix-the-csv-upload");
     assert!(report["path"].is_null(), "branches mode seats no worktree");
     let head = tip_of(&repo, "HEAD");
@@ -19784,7 +19885,7 @@ fn issue_start_reads_the_mode_from_the_landing_record() {
     let (_parent, repo) = worktree_fixture();
     land_rust(&repo).success();
     let mut manifest = read_manifest(&repo);
-    manifest["parameters"]["workflow"] = serde_json::json!("branches");
+    manifest["git"]["checkout_mode"] = serde_json::json!("main-worktree");
     write_manifest(&repo, &manifest);
     let (mock, gh) = mock_forge("gh", GH_ISSUE_MOCK);
     std::fs::write(
@@ -19799,7 +19900,7 @@ fn issue_start_reads_the_mode_from_the_landing_record() {
         .stdout
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["workflow"], "branches");
+    assert_eq!(report["checkout_mode"], "main-worktree");
 }
 
 #[test]
@@ -20015,11 +20116,20 @@ fn the_issue_start_schema_snapshot_holds() {
     assert_eq!(
         keys,
         [
-            "branch", "forge", "issue", "mode", "next", "origin", "path", "repo", "schema",
-            "title", "workflow"
+            "branch",
+            "checkout_mode",
+            "forge",
+            "issue",
+            "mode",
+            "next",
+            "origin",
+            "path",
+            "repo",
+            "schema",
+            "title"
         ]
     );
-    assert_eq!(report["schema"], "rk.issue-start/1");
+    assert_eq!(report["schema"], "rk.issue-start/2");
 }
 
 #[test]
@@ -21743,7 +21853,7 @@ fn private_reporting_policy_adoption_and_parameter_replay() {
         if mode == "matching" {
             out.success();
             let manifest = read_manifest(target.path());
-            assert_eq!(manifest["schema_version"], 8);
+            assert_eq!(manifest["schema_version"], 9);
             assert_eq!(manifest_file(&manifest, "SECURITY.md")["kind"], "rendered");
             assert_eq!(
                 std::fs::read(target.path().join("SECURITY.md")).unwrap(),
@@ -21775,8 +21885,8 @@ fn private_reporting_policy_adoption_and_parameter_replay() {
             )
         )
     );
-    assert_eq!(manifest["schema_version"], 8);
-    assert_eq!(manifest["parameters"]["style"], "trunk");
+    assert_eq!(manifest["schema_version"], 9);
+    assert_eq!(manifest["profile"]["release"]["style"], "trunk");
 }
 
 /// One forge's authored policy with the security markers removed and
@@ -22014,7 +22124,7 @@ fn a_pre_policy_record_upgrades_without_touching_the_policy() {
         .success();
     assert_eq!(landed_policy(target.path()), policy);
     let manifest = read_manifest(target.path());
-    assert_eq!(manifest["schema_version"], 8);
+    assert_eq!(manifest["schema_version"], 9);
     assert_eq!(manifest["parameters"]["security_contact"], "");
     assert_eq!(manifest["parameters"]["security_response"], "best-effort");
 }
@@ -22121,19 +22231,39 @@ fn a_landing_writes_the_config_beside_the_record() {
         .expect("config present");
     let manifest = read_manifest(target.path());
     assert_eq!(config.project.repo, manifest["parameters"]["repo"]);
-    assert_eq!(config.project.tech, manifest["tech"]);
-    assert_eq!(config.project.forge, manifest["forge"]);
     assert_eq!(
-        config.landing.style.expect("style").as_str(),
-        manifest["parameters"]["style"]
+        config.profile.technologies.expect("technologies"),
+        manifest["profile"]["technologies"]
+            .as_array()
+            .expect("the record names its technologies")
+            .iter()
+            .map(|value| value.as_str().expect("a name").to_owned())
+            .collect::<Vec<String>>()
     );
     assert_eq!(
-        config.landing.workflow.expect("workflow").as_str(),
-        manifest["parameters"]["workflow"]
+        config.profile.forge.expect("forge"),
+        manifest["profile"]["forge"]
     );
     assert_eq!(
-        config.landing.nix.expect("nix"),
-        manifest["parameters"]["nix"]
+        config.profile.release.mode.expect("mode").as_str(),
+        manifest["profile"]["release"]["mode"]
+    );
+    assert_eq!(
+        config.profile.release.driver.expect("driver"),
+        manifest["profile"]["release"]["driver"]
+    );
+    assert_eq!(
+        config.profile.release.style.expect("style").as_str(),
+        manifest["profile"]["release"]["style"]
+    );
+    assert_eq!(
+        config.git.checkout_mode.expect("checkout mode").as_str(),
+        manifest["git"]["checkout_mode"]
+    );
+    assert_eq!(config.git.trunk.expect("trunk"), manifest["git"]["trunk"]);
+    assert_eq!(
+        config.capabilities.nix_packaging.expect("nix"),
+        manifest["capabilities"]["nix_packaging"]
     );
     assert!(config.setup.required_check.is_empty());
     assert!(config.setup.bot.app_id.is_empty());
@@ -22158,10 +22288,10 @@ fn an_edited_config_is_reported_and_check_still_passes() {
         assert_eq!(report["config"]["state"], "pending");
         assert_eq!(
             report["config"]["pending"],
-            serde_json::json!(["landing.style"])
+            serde_json::json!(["profile.release.style"])
         );
         assert_eq!(report["drift"]["rendered"], 0);
-        assert_eq!(report["style"], "trunk");
+        assert_eq!(report["profile"]["release"]["style"], "trunk");
     }
     assert_eq!(tree_digests(target.path()), before);
 }
@@ -22183,7 +22313,7 @@ fn an_upgrade_takes_the_config_over_the_record() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "configuration changes landing.style",
+            "configuration changes profile.release.style",
         ))
         .stdout(predicate::str::contains(
             "configuration changes project.repo",
@@ -22194,7 +22324,7 @@ fn an_upgrade_takes_the_config_over_the_record() {
         .assert()
         .success();
     let record = read_manifest(target.path());
-    assert_eq!(record["parameters"]["style"], "lines");
+    assert_eq!(record["profile"]["release"]["style"], "lines");
     assert_eq!(record["parameters"]["repo"], "other/widget");
     let workflow = std::fs::read_to_string(target.path().join(".github/workflows/release-plz.yml"))
         .expect("workflow");
@@ -22251,15 +22381,15 @@ fn a_pre_style_record_upgrades_from_the_config() {
     let target = tempfile::tempdir().expect("target");
     land_rust_with_workflow(target.path(), "branches").success();
     let mut record = read_manifest(target.path());
-    record["parameters"]
+    record["profile"]["release"]
         .as_object_mut()
-        .expect("parameters")
+        .expect("the release intent")
         .remove("style");
     write_manifest(target.path(), &record);
     let path = target.path().join(".release-kit/config.toml");
     std::fs::write(
         &path,
-        "schema_version = 1\n[landing]\nworkflow = 'branches'\n",
+        "schema_version = 2\n[git]\ncheckout_mode = 'main-worktree'\n",
     )
     .expect("unanswered style");
     let before = tree_digests(target.path());
@@ -22267,15 +22397,21 @@ fn a_pre_style_record_upgrades_from_the_config() {
         .arg(target.path())
         .assert()
         .code(64)
-        .stderr(predicate::str::contains("landing.style"));
+        .stderr(predicate::str::contains("profile.release.style"));
     assert_eq!(tree_digests(target.path()), before);
-    std::fs::write(path, "schema_version = 1\n[landing]\nstyle = 'trunk'\n")
-        .expect("answered style");
+    std::fs::write(
+        path,
+        "schema_version = 2\n[profile.release]\nstyle = 'trunk'\n",
+    )
+    .expect("answered style");
     rk().args(["upgrade", "--apply", "--target"])
         .arg(target.path())
         .assert()
         .success();
-    assert_eq!(read_manifest(target.path())["parameters"]["style"], "trunk");
+    assert_eq!(
+        read_manifest(target.path())["profile"]["release"]["style"],
+        "trunk"
+    );
 }
 
 #[test]
@@ -22300,7 +22436,10 @@ fn a_flag_overrides_the_config_and_the_apply_writes_it_back() {
     let text =
         std::fs::read_to_string(target.path().join(".release-kit/config.toml")).expect("config");
     assert!(text.contains("style = \"lines\" # operator choice"));
-    assert_eq!(read_manifest(target.path())["parameters"]["style"], "lines");
+    assert_eq!(
+        read_manifest(target.path())["profile"]["release"]["style"],
+        "lines"
+    );
 }
 
 #[test]
@@ -22319,9 +22458,9 @@ fn an_init_over_a_config_with_no_record_relands() {
         .assert()
         .success();
     let record = read_manifest(target.path());
-    assert_eq!(record["parameters"]["workflow"], "branches");
-    assert_eq!(record["parameters"]["style"], "lines");
-    assert_eq!(record["parameters"]["nix"], true);
+    assert_eq!(record["git"]["checkout_mode"], "main-worktree");
+    assert_eq!(record["profile"]["release"]["style"], "lines");
+    assert_eq!(record["capabilities"]["nix_packaging"], true);
 }
 
 #[test]
@@ -22408,7 +22547,7 @@ fn the_trunk_branch_comes_from_the_config() {
 
     let manifest = read_manifest(target.path());
     assert_eq!(
-        manifest["parameters"]["trunk"], "main",
+        manifest["git"]["trunk"], "main",
         "the record carries the trunk, so a re-render reproduces these bytes"
     );
 
@@ -22450,7 +22589,7 @@ fn the_line_prefix_comes_from_the_config() {
     );
 
     let manifest = read_manifest(target.path());
-    assert_eq!(manifest["parameters"]["line_prefix"], "stable/");
+    assert_eq!(manifest["profile"]["release"]["line_prefix"], "stable/");
 }
 
 /// SATISFIES landing:a-rendered-file-is-reproducible
@@ -22496,10 +22635,10 @@ fn a_record_predating_the_keys_reads_the_compiled_defaults() {
 
     let manifest = read_manifest(target.path());
     assert_eq!(
-        manifest["parameters"]["trunk"], "master",
+        manifest["git"]["trunk"], "master",
         "the upgrade records the trunk such a landing wrote"
     );
-    assert_eq!(manifest["parameters"]["line_prefix"], "release/");
+    assert_eq!(manifest["profile"]["release"]["line_prefix"], "release/");
 }
 
 /// SATISFIES forge-setup:every-supported-forge-runs-every-step
@@ -23218,8 +23357,12 @@ fn the_landing_pair_renders() {
     let text = String::from_utf8_lossy(&out);
     assert!(text.starts_with("# Landing runbook"), "{text}");
     assert!(
-        text.contains("rk init --tech rust --target ."),
+        text.contains("rk binding rust"),
         "detection fills <tech>: {text}"
+    );
+    assert!(
+        text.contains("rk init --target ."),
+        "the landing reads the target's own configuration: {text}"
     );
     for command in [
         "rk stage --target .",
@@ -23374,7 +23517,7 @@ fn the_landing_runbook_names_the_real_stage_fields() {
     let scratch = tempfile::tempdir().expect("a scratch dir exists");
     let target = stage_target();
     let report = stage_json(target.path(), &scratch.path().join("stage"));
-    assert_eq!(report["schema"], "rk.stage/3");
+    assert_eq!(report["schema"], "rk.stage/4");
     for top in [
         "schema",
         "rk_version",
@@ -24530,7 +24673,7 @@ fn stage_writes_only_below_the_resolved_stage_root() {
         "an explicit --output leaves the state root without a stage"
     );
     assert!(resolved.join("stage.json").is_file());
-    assert_eq!(report["receipt_schema_version"], 8);
+    assert_eq!(report["receipt_schema_version"], 9);
 }
 
 /// SATISFIES staging:the-output-path-has-one-precedence
@@ -25106,7 +25249,7 @@ fn the_stage_receipt_and_human_output_snapshot_hold() {
         format!("stage: {}", stage.display()),
         "output: from --output".to_owned(),
         format!("target: {}", canonical_target.display()),
-        "parameters: tech rust, forge github, repo acme/widget, workflow worktree, style trunk, nix off".to_owned(),
+        "parameters: technologies rust; forge github; repo acme/widget; release automatic (driver rust, style trunk, line prefix release/); trunk master; checkout mode linked-worktree; requests reporting_policy".to_owned(),
         "landing record: none".to_owned(),
         "  artifacts/AGENTS.md (rendered, region)".to_owned(),
         "  artifacts/release-plz.toml (seeded, whole)".to_owned(),
@@ -25125,6 +25268,7 @@ fn the_stage_receipt_and_human_output_snapshot_hold() {
         "target",
         "stage_root",
         "parameters",
+        "capabilities",
         "receipt_schema_version",
         "candidates",
         "omissions",
@@ -25136,13 +25280,19 @@ fn the_stage_receipt_and_human_output_snapshot_hold() {
     ];
     assert_eq!(top_level_keys(&receipt_text), receipt_keys);
     let receipt = stage_receipt(&stage);
-    assert_eq!(receipt["schema"], "rk.stage/3");
+    assert_eq!(receipt["schema"], "rk.stage/4");
     assert_eq!(receipt["rk_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(receipt["target"], canonical_target.display().to_string());
     assert_eq!(receipt["stage_root"], stage.display().to_string());
     assert!(receipt["receipt_schema_version"].is_null());
-    assert_eq!(receipt["parameters"]["tech"], "rust");
-    assert_eq!(receipt["parameters"]["style"], "trunk");
+    assert_eq!(
+        receipt["parameters"]["profile"]["release"]["driver"],
+        "rust"
+    );
+    assert_eq!(
+        receipt["parameters"]["profile"]["release"]["style"],
+        "trunk"
+    );
     let first = &receipt["candidates"][0];
     for key in ["destination", "kind", "placement", "sha256", "sources"] {
         assert!(
@@ -25164,8 +25314,11 @@ fn the_stage_receipt_and_human_output_snapshot_hold() {
         .clone();
     let report_text = String::from_utf8_lossy(&report_text);
     let report_keys = top_level_keys(&report_text);
-    assert_eq!(&report_keys[..13], &receipt_keys[..]);
-    assert_eq!(&report_keys[13..], ["output_source", "next"]);
+    assert_eq!(&report_keys[..receipt_keys.len()], &receipt_keys[..]);
+    assert_eq!(
+        &report_keys[receipt_keys.len()..],
+        ["output_source", "next"]
+    );
 
     // A landed target explains its record: the schema version, the
     // seeded files a landing keeps, and a recorded destination the
@@ -25193,7 +25346,7 @@ fn the_stage_receipt_and_human_output_snapshot_hold() {
         .clone();
     let human = String::from_utf8_lossy(&human);
     assert!(
-        human.contains("landing record: schema_version 8"),
+        human.contains("landing record: schema_version 9"),
         "{human}"
     );
     assert!(
@@ -25205,7 +25358,7 @@ fn the_stage_receipt_and_human_output_snapshot_hold() {
         "{human}"
     );
     let receipt = stage_receipt(&landed_out);
-    assert_eq!(receipt["receipt_schema_version"], 8);
+    assert_eq!(receipt["receipt_schema_version"], 9);
     assert_eq!(receipt["retired"], serde_json::json!(["old-workflow.yml"]));
     assert!(
         receipt["seeded_present"]
@@ -25307,7 +25460,7 @@ fn stage_clean_refuses_every_protected_or_ambiguous_path_and_deletes_one_valid_s
     std::fs::write(
         ancestor.join("stage.json"),
         format!(
-            r#"{{"schema":"rk.stage/3","stage_root":"{}","target":"{}"}}"#,
+            r#"{{"schema":"rk.stage/4","stage_root":"{}","target":"{}"}}"#,
             ancestor.display(),
             ancestor.join("inner").display()
         ),
@@ -25341,7 +25494,7 @@ fn stage_clean_refuses_every_protected_or_ambiguous_path_and_deletes_one_valid_s
     // A receipt at another schema.
     let other = canonical.join("other");
     std::fs::create_dir(&other).expect("creates");
-    std::fs::write(other.join("stage.json"), r#"{"schema":"rk.stage/4"}"#).expect("writes");
+    std::fs::write(other.join("stage.json"), r#"{"schema":"rk.stage/1"}"#).expect("writes");
     let json = clean(&other)
         .arg("--json")
         .assert()
@@ -26182,16 +26335,17 @@ fn fresh_init_preview_is_read_only_and_apply_writes_the_schema_8_receipt() {
             "schema_version",
             "rk_version",
             "origin",
-            "tech",
-            "forge",
             "landed_at",
+            "profile",
+            "git",
+            "capabilities",
             "parameters",
             "files",
             "pins",
         ]
     );
     let receipt = read_manifest(target.path());
-    assert_eq!(receipt["schema_version"], 8);
+    assert_eq!(receipt["schema_version"], 9);
     assert_eq!(receipt["rk_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(receipt["origin"], "init");
     for file in receipt["files"].as_array().expect("files") {
@@ -26323,10 +26477,10 @@ fn receipt_schemas_1_through_7_load_without_a_release_source_and_rewrite_as_sche
         );
         assert!(!text.contains("scopes"), "schema {schema}: {text}");
         let rewritten = read_manifest(target.path());
-        assert_eq!(rewritten["schema_version"], 8, "schema {schema}");
-        assert_eq!(rewritten["parameters"]["style"], "trunk");
+        assert_eq!(rewritten["schema_version"], 9, "schema {schema}");
+        assert_eq!(rewritten["profile"]["release"]["style"], "trunk");
         assert_eq!(
-            rewritten["parameters"]["scorecard"], false,
+            rewritten["capabilities"]["scorecard"], false,
             "schema {schema}: a receipt predating the parameter upgrades to the opt-out"
         );
         assert_eq!(
@@ -26427,7 +26581,16 @@ fn assert_no_release_selection_flag(target: &Path) {
             .clone();
         let help = String::from_utf8_lossy(&help);
         for flag in &flags {
-            assert!(!help.contains(flag), "{verb} help names {flag}: {help}");
+            // The whole flag, not a prefix of one: the profile's own
+            // `--release-mode` names the project's release intent, which
+            // is a different subject from selecting a release of rk.
+            let named = help.match_indices(flag).any(|(at, _)| {
+                help[at + flag.len()..]
+                    .chars()
+                    .next()
+                    .is_none_or(|c| !c.is_ascii_alphanumeric() && c != '-')
+            });
+            assert!(!named, "{verb} help names {flag}: {help}");
         }
     }
 }
@@ -26444,7 +26607,9 @@ fn production_outputs_carry_no_plan_bundle_or_release_selection_field() {
         "run_id",
         "compatibility",
         "bundle",
-        "release",
+        "release_source",
+        "release_selection",
+        "selected_release",
         "selector",
         "applied",
         "operations",
@@ -26521,11 +26686,11 @@ fn production_outputs_carry_no_plan_bundle_or_release_selection_field() {
         .map(|(_, document)| document["schema"].as_str().expect("a schema"))
         .collect();
     for expected in [
-        "rk.init/9",
-        "rk.assess/3",
-        "rk.status/11",
-        "rk.upgrade/9",
-        "rk.adopt/9",
+        "rk.init/10",
+        "rk.assess/4",
+        "rk.status/12",
+        "rk.upgrade/10",
+        "rk.adopt/10",
     ] {
         assert!(
             schemas.contains(&expected),
@@ -26821,7 +26986,7 @@ fn a_failpoint_at_every_write_boundary_leaves_whole_files_and_the_previous_recei
             .arg(target.path())
             .assert()
             .success();
-        assert_eq!(read_manifest(target.path())["schema_version"], 8);
+        assert_eq!(read_manifest(target.path())["schema_version"], 9);
         assert_eq!(
             std::fs::read_to_string(target.path().join("release-plz.toml")).expect("reads"),
             tuned
@@ -27169,24 +27334,28 @@ fn stage_and_landing_need_no_release_resolution_network_access() {
 #[test]
 fn status_check_judges_every_rendered_file_against_the_receipts_parameters() {
     for (key, value, destination) in [
-        ("repo", serde_json::json!("acme/other"), "SECURITY.md"),
         (
-            "style",
+            vec!["parameters", "repo"],
+            serde_json::json!("acme/other"),
+            "SECURITY.md",
+        ),
+        (
+            vec!["profile", "release", "style"],
             serde_json::json!("lines"),
             ".github/workflows/release-plz.yml",
         ),
         (
-            "trunk",
+            vec!["git", "trunk"],
             serde_json::json!("main"),
             ".github/workflows/release-plz.yml",
         ),
         (
-            "line_prefix",
+            vec!["profile", "release", "line_prefix"],
             serde_json::json!("maint/"),
             ".github/workflows/release-plz.yml",
         ),
         (
-            "security_response",
+            vec!["parameters", "security_response"],
             serde_json::json!("14 days"),
             "SECURITY.md",
         ),
@@ -27215,7 +27384,11 @@ fn status_check_judges_every_rendered_file_against_the_receipts_parameters() {
 
         // The receipt's parameter moves; every file stays as landed.
         let mut manifest = read_manifest(target.path());
-        manifest["parameters"][key] = value;
+        let mut at = &mut manifest;
+        for segment in &key[..key.len() - 1] {
+            at = &mut at[segment];
+        }
+        at[key[key.len() - 1]] = value;
         write_manifest(target.path(), &manifest);
         let out = rk()
             .args(["status", "--check", "--json", "--target"])
@@ -27233,11 +27406,11 @@ fn status_check_judges_every_rendered_file_against_the_receipts_parameters() {
                 .any(|line| line.as_str().is_some_and(
                     |line| line.starts_with("parameter drift:") && line.contains(destination)
                 )),
-            "{key}: {report}"
+            "{key:?}: {report}"
         );
         assert_eq!(
             report["config"]["state"], "pending",
-            "{key}: the committed configuration stays informational: {report}"
+            "{key:?}: the committed configuration stays informational: {report}"
         );
     }
 }
@@ -28399,7 +28572,7 @@ fn a_public_v0_4_0_target_upgrades_from_its_receipt_alone() {
         .stdout
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["schema"], "rk.upgrade/9", "{report}");
+    assert_eq!(report["schema"], "rk.upgrade/10", "{report}");
     assert_eq!(report["from_version"], "0.4.0", "{report}");
     let action_of = |destination: &str| -> String {
         report["files"]
@@ -28444,7 +28617,7 @@ fn a_public_v0_4_0_target_upgrades_from_its_receipt_alone() {
     }
 
     let manifest = read_manifest(target);
-    assert_eq!(manifest["schema_version"], 8);
+    assert_eq!(manifest["schema_version"], 9);
     assert_eq!(manifest["rk_version"], env!("CARGO_PKG_VERSION"));
     let text = std::fs::read_to_string(target.join(".release-kit/manifest.json"))
         .expect("the receipt reads");
@@ -28541,5 +28714,513 @@ fn copy_tree(from: &Path, to: &Path) {
         let destination = to.join(relative);
         std::fs::create_dir_all(destination.parent().expect("a parent")).expect("dirs exist");
         std::fs::copy(&path, &destination).expect("the file copies");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The target configuration: the project profile, the Git workflow, and the
+// capabilities the catalog selects from them.
+
+/// A target directory with a git repository and nothing else, so the
+/// observation finds no technology and no forge.
+fn bare_target() -> tempfile::TempDir {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    std::fs::create_dir(target.path().join(".git")).expect("a git directory exists");
+    target
+}
+
+/// SATISFIES project-profile:the-profile-is-typed-and-the-forge-is-optional
+/// A repository with no technology, no forge, and no release is a valid
+/// target: the local Git workflow guards land, the record states what it
+/// is, and `rk status --check` reads it as healthy.
+#[test]
+fn a_target_with_no_technology_and_no_forge_lands_the_guards() {
+    let target = bare_target();
+    rk().args(["init", "--release-mode", "none", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("capability git.guards: selected"))
+        .stdout(predicate::str::contains(
+            "capability git.title-check: not-applicable",
+        ));
+    for destination in ["AGENTS.md", "GLOSSARY.md", ".pre-commit-config.yaml"] {
+        assert!(
+            target.path().join(destination).is_file(),
+            "{destination}: the guards land without a forge"
+        );
+    }
+    for destination in ["SECURITY.md", ".github/workflows/pr-title.yml"] {
+        assert!(
+            !target.path().join(destination).exists(),
+            "{destination}: no forge, so no forge capability"
+        );
+    }
+    let record = read_manifest(target.path());
+    assert_eq!(record["profile"]["technologies"], serde_json::json!([]));
+    assert!(record["profile"]["forge"].is_null());
+    assert_eq!(record["profile"]["release"]["mode"], "none");
+    assert!(record["profile"]["release"]["driver"].is_null());
+    assert_eq!(record["parameters"]["repo"], "");
+    assert_eq!(
+        record["pins"]
+            .as_object()
+            .expect("a pin map")
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<&str>>(),
+        ["conventional-pre-commit", "pre-commit-hooks"],
+        "a guards-only target records the guards' own pins"
+    );
+    rk().args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+}
+
+/// SATISFIES project-profile:an-unknown-category-is-preserved
+/// An unknown forge has no adapter: the value survives every verb, the
+/// local guards still land, and the forge capabilities read as unknown.
+#[test]
+fn an_unknown_forge_survives_init_status_and_upgrade() {
+    let target = bare_target();
+    let init = [
+        "init",
+        "--forge",
+        "codeberg",
+        "--technology",
+        "raku",
+        "--release-mode",
+        "none",
+        "--apply",
+        "--target",
+    ];
+    rk().args(init)
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("capability git.guards: selected"))
+        .stdout(predicate::str::contains(
+            "capability git.title-check: unknown",
+        ));
+    let recorded = |target: &Path| {
+        let record = read_manifest(target);
+        (
+            record["profile"]["forge"].clone(),
+            record["profile"]["technologies"].clone(),
+        )
+    };
+    let expected = (serde_json::json!("codeberg"), serde_json::json!(["raku"]));
+    assert_eq!(recorded(target.path()), expected);
+    rk().args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("codeberg"));
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    assert_eq!(recorded(target.path()), expected);
+    let config = std::fs::read_to_string(target.path().join(".release-kit/config.toml"))
+        .expect("the configuration reads");
+    assert!(config.contains("technologies = [\"raku\"]"), "{config}");
+    assert!(config.contains("forge = \"codeberg\""), "{config}");
+}
+
+/// SATISFIES project-profile:a-capability-is-available-only-when-complete
+/// A release-less GitLab target receives a complete, active title gate:
+/// the fragment and the minimal root pipeline that includes it.
+#[test]
+fn a_release_less_gitlab_target_lands_a_complete_title_gate() {
+    let target = bare_target();
+    rk().args([
+        "init",
+        "--forge",
+        "gitlab",
+        "--repo",
+        "acme/widget",
+        "--release-mode",
+        "none",
+        "--apply",
+        "--target",
+    ])
+    .arg(target.path())
+    .assert()
+    .success()
+    .stdout(predicate::str::contains(
+        "capability git.title-check: selected",
+    ));
+    let root = std::fs::read_to_string(target.path().join(".gitlab-ci.yml"))
+        .expect("the root pipeline lands");
+    assert!(
+        root.contains("- local: .gitlab/ci/mr-title.yml"),
+        "the root pipeline activates the fragment: {root}"
+    );
+    assert!(
+        !root.contains("release-plz"),
+        "a release-less landing writes no release job: {root}"
+    );
+    assert!(target.path().join(".gitlab/ci/mr-title.yml").is_file());
+    rk().args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+}
+
+/// SATISFIES project-profile:a-capability-is-available-only-when-complete
+/// A GitLab target that owns its root pipeline keeps it: the fragment
+/// lands as the gate's prerequisite, the capability is withheld with the
+/// one include line the operator adds, and the landing does not refuse.
+#[test]
+fn an_occupied_gitlab_root_pipeline_withholds_the_title_gate() {
+    let target = bare_target();
+    let own = "stages:\n  - test\n\nours:\n  stage: test\n  script:\n    - echo ours\n";
+    std::fs::write(target.path().join(".gitlab-ci.yml"), own).expect("the target's pipeline");
+    rk().args([
+        "init",
+        "--forge",
+        "gitlab",
+        "--repo",
+        "acme/widget",
+        "--release-mode",
+        "none",
+        "--apply",
+        "--target",
+    ])
+    .arg(target.path())
+    .assert()
+    .success()
+    .stdout(predicate::str::contains(
+        "capability git.title-check: withheld",
+    ))
+    .stdout(predicate::str::contains("- local: .gitlab/ci/mr-title.yml"));
+    assert_eq!(
+        std::fs::read_to_string(target.path().join(".gitlab-ci.yml")).expect("reads"),
+        own,
+        "the target's own pipeline is untouched"
+    );
+    assert!(
+        target.path().join(".gitlab/ci/mr-title.yml").is_file(),
+        "the fragment lands as the gate's prerequisite"
+    );
+    let record = read_manifest(target.path());
+    assert!(
+        record["files"]
+            .as_array()
+            .expect("files")
+            .iter()
+            .all(|file| file["destination"] != ".gitlab-ci.yml"),
+        "a withheld destination stays out of the record: {record}"
+    );
+    rk().args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+}
+
+/// SATISFIES project-profile:every-field-resolves-by-one-precedence
+/// A repeatable technology flag replaces the configured list whole, a
+/// duplicate refuses by name, and the recorded list sorts.
+#[test]
+fn a_repeatable_technology_flag_replaces_the_list_whole() {
+    let target = bare_target();
+    rk().args([
+        "init",
+        "--technology",
+        "rust",
+        "--technology",
+        "python",
+        "--release-mode",
+        "none",
+        "--apply",
+        "--target",
+    ])
+    .arg(target.path())
+    .assert()
+    .success();
+    assert_eq!(
+        read_manifest(target.path())["profile"]["technologies"],
+        serde_json::json!(["python", "rust"]),
+        "every wire list sorts"
+    );
+    rk().args(["upgrade", "--technology", "bash", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    assert_eq!(
+        read_manifest(target.path())["profile"]["technologies"],
+        serde_json::json!(["bash"]),
+        "a supplied list replaces the configured one whole"
+    );
+    rk().args([
+        "upgrade",
+        "--technology",
+        "rust",
+        "--technology",
+        "rust",
+        "--target",
+    ])
+    .arg(target.path())
+    .assert()
+    .code(64)
+    .stderr(predicate::str::contains("profile.technologies"))
+    .stderr(predicate::str::contains("twice"));
+}
+
+/// SATISFIES project-profile:a-record-is-source-free
+/// The precedence source of a value explains a resolution and never
+/// reaches a committed file: `rk profile` reports it, and neither the
+/// configuration nor the record carries it.
+#[test]
+fn runtime_sources_never_reach_the_config_or_the_record() {
+    let target = bare_target();
+    rk().args(["init", "--release-mode", "none", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let config = std::fs::read_to_string(target.path().join(".release-kit/config.toml"))
+        .expect("the configuration reads");
+    let record = std::fs::read_to_string(target.path().join(".release-kit/manifest.json"))
+        .expect("the record reads");
+    for word in ["\"observation\"", "\"flag\"", "\"record\"", "precedence"] {
+        assert!(
+            !config.contains(word),
+            "the config carries {word}: {config}"
+        );
+        assert!(
+            !record.contains(word),
+            "the record carries {word}: {record}"
+        );
+    }
+    let out = rk()
+        .args(["profile", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    // A landing writes every resolved answer back, so the configuration
+    // is what answers them afterwards; a value no file states falls to
+    // the compiled default.
+    assert_eq!(report["sources"]["git.trunk"], "config");
+    assert_eq!(report["sources"]["profile.release.mode"], "config");
+    let fresh = bare_target();
+    let out = rk()
+        .args(["profile", "--json", "--target"])
+        .arg(fresh.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let fresh: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(fresh["sources"]["git.trunk"], "default");
+    assert_eq!(fresh["sources"]["profile.technologies"], "observation");
+}
+
+/// SATISFIES project-profile:the-observation-proposes-a-release-mode
+/// Zero release-bearing technologies propose no release, one proposes an
+/// automatic release it drives, and more than one is an ambiguity a
+/// preview reports and an apply refuses.
+#[test]
+fn the_observation_proposes_a_release_mode() {
+    let none = bare_target();
+    rk().args(["profile", "--target"])
+        .arg(none.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "no release-bearing technology, so the release mode is none",
+        ));
+
+    let one = bare_target();
+    std::fs::write(
+        one.path().join("Cargo.toml"),
+        "[package]\nname = \"widget\"\n",
+    )
+    .expect("a crate manifest");
+    rk().args(["profile", "--target"])
+        .arg(one.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "an automatic release driven by rust",
+        ));
+
+    let two = bare_target();
+    std::fs::write(
+        two.path().join("Cargo.toml"),
+        "[package]\nname = \"widget\"\n",
+    )
+    .expect("a crate manifest");
+    std::fs::write(
+        two.path().join("pyproject.toml"),
+        "[project]\nname = \"widget\"\n",
+    )
+    .expect("a python manifest");
+    rk().args(["profile", "--target"])
+        .arg(two.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ambiguous"))
+        .stdout(predicate::str::contains("--release-driver"));
+    rk().args([
+        "init",
+        "--forge",
+        "github",
+        "--repo",
+        "acme/widget",
+        "--release-mode",
+        "automatic",
+        "--apply",
+        "--target",
+    ])
+    .arg(two.path())
+    .assert()
+    .code(64)
+    .stderr(predicate::str::contains("--release-driver"));
+    assert!(!two.path().join(".release-kit").exists());
+}
+
+/// SATISFIES project-profile:an-operation-refuses-only-what-it-requires
+/// A profile may request a release this binary cannot land: the preview
+/// reports it unavailable with the tuples that are, and the apply refuses
+/// before any write rather than recording an automation nothing landed.
+#[test]
+fn python_on_gitlab_reports_unavailable_and_apply_refuses() {
+    let target = bare_target();
+    let flags = [
+        "--technology",
+        "python",
+        "--forge",
+        "gitlab",
+        "--repo",
+        "acme/widget",
+        "--release-mode",
+        "automatic",
+        "--release-driver",
+        "python",
+        "--target",
+    ];
+    rk().arg("init")
+        .args(flags)
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "capability release.automation: unavailable",
+        ))
+        .stdout(predicate::str::contains("python, github"));
+    rk().arg("init")
+        .args(flags)
+        .arg(target.path())
+        .arg("--apply")
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("not available in this release"));
+    assert!(!target.path().join(".release-kit").exists());
+}
+
+/// SATISFIES project-profile:the-profile-command-writes-nothing
+/// `rk profile` reports every effective value with its source, the
+/// capabilities the catalog selects with their destinations, and writes
+/// nothing at all.
+#[test]
+fn profile_reports_values_sources_and_the_selection_and_writes_nothing() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+    let before = tree_digests(target.path());
+    let out = rk()
+        .args(["profile", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(
+        tree_digests(target.path()),
+        before,
+        "rk profile writes nothing"
+    );
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["schema"], "rk.profile/1");
+    assert_eq!(report["profile"]["release"]["driver"], "rust");
+    assert_eq!(report["git"]["checkout_mode"], "linked-worktree");
+    assert_eq!(report["sources"]["profile.technologies"], "config");
+    let selection = report["selection"].as_array().expect("a selection");
+    let ids: Vec<&str> = selection
+        .iter()
+        .map(|entry| entry["id"].as_str().expect("an id"))
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            "git.guards",
+            "git.title-check",
+            "security.reporting-policy",
+            "release.automation",
+            "packaging.nix",
+            "supply-chain.scorecard",
+            "supply-chain.code-scanning"
+        ]
+    );
+    let automation = selection
+        .iter()
+        .find(|entry| entry["id"] == "release.automation")
+        .expect("the release automation answers");
+    assert_eq!(automation["status"], "selected");
+    assert!(
+        automation["destinations"]
+            .as_array()
+            .expect("destinations")
+            .iter()
+            .any(|path| path == ".github/workflows/release-plz.yml"),
+        "{automation}"
+    );
+}
+
+/// SATISFIES git:checkout-mode-selects-where-a-topic-branch-opens
+/// The checkout mode's value vocabulary is a configuration and record
+/// word: the landed blocks, the hook ids, and the CI sweep pair render
+/// exactly as they did under the older spelling.
+#[test]
+fn the_checkout_mode_rename_reaches_no_landed_byte() {
+    for (older, canonical) in [
+        ("worktree", "linked-worktree"),
+        ("branches", "main-worktree"),
+    ] {
+        let old_target = tempfile::tempdir().expect("a scratch dir exists");
+        let new_target = tempfile::tempdir().expect("a scratch dir exists");
+        for (target, mode) in [(&old_target, older), (&new_target, canonical)] {
+            rk().args(["init", "--tech", "rust", "--forge", "github"])
+                .args(["--repo", "acme/widget", "--checkout-mode", mode])
+                .args(["--apply", "--target"])
+                .arg(target.path())
+                .assert()
+                .success();
+        }
+        for destination in [".pre-commit-config.yaml", "AGENTS.md"] {
+            assert_eq!(
+                std::fs::read(old_target.path().join(destination)).expect("reads"),
+                std::fs::read(new_target.path().join(destination)).expect("reads"),
+                "{destination}: the {older} spelling and {canonical} land one byte set"
+            );
+        }
+        let hooks = std::fs::read_to_string(old_target.path().join(".pre-commit-config.yaml"))
+            .expect("the hook file reads");
+        assert_eq!(
+            hooks.contains("id: rk-worktree-location"),
+            older == "worktree",
+            "{hooks}"
+        );
+        assert_eq!(
+            hooks.contains("SKIP=no-commit-to-branch,rk-worktree-location"),
+            older == "worktree",
+            "the sweep pair renders unchanged: {hooks}"
+        );
     }
 }

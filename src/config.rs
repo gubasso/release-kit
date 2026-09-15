@@ -1,7 +1,11 @@
-//! The committed target answers, parsed strictly and written from authored text.
+//! The committed target configuration, parsed strictly and written from
+//! authored text, typed by the domain that owns each answer.
 //! Comparisons continue to use the landing record alone.
+//!
+//! SATISFIES project-profile:the-target-configuration-is-typed-by-domain
 
 pub mod floors;
+pub mod migrate;
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -9,13 +13,15 @@ use std::path::Path;
 
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
-use crate::landing::{Style, Workflow};
+use crate::landing::{CheckoutMode, Style};
+use crate::profile::ReleaseMode;
 use serde::Deserialize;
 
 /// The committed input, relative to the target root.
 pub const CONFIG_PATH: &str = ".release-kit/config.toml";
-/// The only supported configuration schema.
-pub const SCHEMA_VERSION: i64 = 1;
+/// The configuration schema this binary writes. Schema 1 reads through
+/// the one migration in [`migrate`].
+pub const SCHEMA_VERSION: i64 = 2;
 
 /// Per-target answers; an omitted table uses its compiled defaults.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -23,13 +29,17 @@ pub const SCHEMA_VERSION: i64 = 1;
 pub struct Config {
     /// Version of the authored configuration shape.
     pub schema_version: i64,
-    /// Landing identity and trunk name.
+    /// Project identity.
     pub project: Project,
-    /// Values resolved into the landing record.
-    pub landing: Landing,
-    /// Report-routing facts, currently not rendered into any landed file.
+    /// What the project is.
+    pub profile: Profile,
+    /// How topic branches reach the trunk.
+    pub git: Git,
+    /// Which optional products the target requests.
+    pub capabilities: Capabilities,
+    /// Report-routing facts and the two policy answers.
     pub security: Security,
-    /// Forge setup inputs.
+    /// Forge setup inputs and the setup declaration.
     pub setup: Setup,
     /// Names and floored policy.
     pub protection: Protection,
@@ -40,7 +50,9 @@ impl Default for Config {
         Self {
             schema_version: SCHEMA_VERSION,
             project: Project::default(),
-            landing: Landing::default(),
+            profile: Profile::default(),
+            git: Git::default(),
+            capabilities: Capabilities::default(),
             security: Security::default(),
             setup: Setup::default(),
             protection: Protection::default(),
@@ -48,20 +60,70 @@ impl Default for Config {
     }
 }
 
-/// The `project` table.
+/// The `project` table: identity.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Project {
-    /// P: project path on the forge, nested groups included.
+    /// P: project path on the forge, nested groups included. Empty where
+    /// the project has no forge repository.
     pub repo: String,
-    /// P: github or gitlab; empty means detect.
-    pub forge: String,
-    /// P: the binding; empty means detect.
-    pub tech: String,
+}
+
+/// The `profile` table: what the project is.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct Profile {
+    /// P: every technology present, zero or many. Absent means detect.
+    pub technologies: Option<Vec<String>>,
+    /// P: the forge. Absent means detect from the remote; empty states
+    /// that the project has no forge.
+    pub forge: Option<String>,
+    /// P: the release intent.
+    pub release: Release,
+}
+
+/// The `profile.release` table.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct Release {
+    /// P: automatic, external, or none. Absent means the observation
+    /// proposes one.
+    pub mode: Option<ReleaseMode>,
+    /// P: the technology that states the version and takes the bot;
+    /// automatic alone.
+    pub driver: Option<String>,
+    /// P: trunk or lines; automatic alone.
+    pub style: Option<Style>,
+    /// P: release-line branch prefix; automatic alone.
+    pub line_prefix: Option<String>,
+}
+
+/// The `git` table: the Git workflow parameters.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct Git {
     /// P: the one permanent branch, rendered into every landed artifact
     /// that names it. Absent means the landing has not answered it, so a
     /// record's own answer survives an upgrade that predates the key.
     pub trunk: Option<String>,
+    /// P: linked-worktree or main-worktree.
+    pub checkout_mode: Option<CheckoutMode>,
+}
+
+/// The `capabilities` table: the optional products the target requests.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct Capabilities {
+    /// P: opt-in Nix capability.
+    pub nix_packaging: Option<bool>,
+    /// P: the landed vulnerability reporting policy.
+    pub reporting_policy: Option<bool>,
+    /// P: opt-in Scorecard capability.
+    pub scorecard: Option<bool>,
+    /// P: opt-in code scanning provider, as `codeql`, `semgrep`, or `off`.
+    /// The value stays a string here so an absent key and an explicit `off`
+    /// stay distinguishable; the resolution parses it.
+    pub code_scanning: Option<String>,
 }
 
 /// The compiled trunk, used where neither a configuration nor a record answers.
@@ -69,24 +131,6 @@ pub const TRUNK_DEFAULT: &str = "master";
 
 /// The compiled release-line prefix, used where nothing else answers.
 pub const LINE_PREFIX_DEFAULT: &str = "release/";
-
-/// The `landing` table.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields, default)]
-pub struct Landing {
-    /// P: worktree or branches.
-    pub workflow: Option<Workflow>,
-    /// P: trunk or lines.
-    pub style: Option<Style>,
-    /// P: opt-in Nix capability.
-    pub nix: Option<bool>,
-    /// P: opt-in Scorecard capability.
-    pub scorecard: Option<bool>,
-    /// P: opt-in code scanning provider, as `codeql`, `semgrep`, or `off`.
-    /// The value stays a string here so an absent key and an explicit `off`
-    /// stay distinguishable; the landing parses it.
-    pub code_scanning: Option<String>,
-}
 
 /// The `security` table.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
@@ -171,10 +215,6 @@ pub struct Setup {
     pub required_check: String,
     /// N: long-lived branches retired by the trunk.
     pub retired_branches: Vec<String>,
-    /// P: release-line branch prefix, rendered into the release triggers
-    /// and branch guards a landing writes. Absent means unanswered, so a
-    /// record's own answer survives an upgrade that predates the key.
-    pub line_prefix: Option<String>,
     /// N: run release-line protection in a full apply.
     pub release_lines: bool,
     /// N: the steps this target does not run, each against the reason a
@@ -191,7 +231,6 @@ impl Default for Setup {
         Self {
             required_check: String::new(),
             retired_branches: vec!["main".into(), "develop".into()],
-            line_prefix: None,
             release_lines: false,
             excluded_steps: BTreeMap::new(),
             bot: Bot::default(),
@@ -360,13 +399,41 @@ pub fn load(target: &Path) -> Result<Option<Config>, RkError> {
     parse(&text).map(Some)
 }
 
-fn parse(text: &str) -> Result<Config, RkError> {
+/// The text as this binary's schema: a schema 1 file migrated, any other
+/// text as it is, so the strict reader judges the schema afterwards.
+fn current_text(text: &str) -> Result<String, RkError> {
     let raw: toml::Value =
         toml::from_str(text).map_err(|error: toml::de::Error| invalid(error.to_string()))?;
-    if raw.get("schema_version").and_then(toml::Value::as_integer) != Some(SCHEMA_VERSION) {
-        return Err(invalid(format!("schema_version must be {SCHEMA_VERSION}")));
+    match raw.get("schema_version").and_then(toml::Value::as_integer) {
+        Some(1) => migrate::to_schema_2(text),
+        _ => Ok(text.to_owned()),
     }
-    let config: Config = toml::from_str(text).map_err(|error: toml::de::Error| {
+}
+
+fn parse(text: &str) -> Result<Config, RkError> {
+    let text = current_text(text)?;
+    let raw: toml::Value =
+        toml::from_str(&text).map_err(|error: toml::de::Error| invalid(error.to_string()))?;
+    if raw.get("schema_version").and_then(toml::Value::as_integer) != Some(SCHEMA_VERSION) {
+        return Err(invalid(format!(
+            "schema_version must be {SCHEMA_VERSION}, or 1 for a file this binary migrates"
+        )));
+    }
+    // The release mode is read as a string first, so a value outside the
+    // vocabulary refuses naming its own key rather than a span and a
+    // variant list the reader must locate for itself.
+    if let Some(mode) = raw
+        .get("profile")
+        .and_then(|profile| profile.get("release"))
+        .and_then(|release| release.get("mode"))
+    {
+        let named = mode.as_str().ok_or_else(|| {
+            invalid("profile.release.mode must be a string: automatic, external, or none")
+        })?;
+        crate::profile::ReleaseMode::parse(named)
+            .map_err(|error| invalid(format!("profile.release.mode: {error}")))?;
+    }
+    let config: Config = toml::from_str(&text).map_err(|error: toml::de::Error| {
         let mut message = error.to_string();
         if let Some(rest) = error.message().strip_prefix("unknown field `") {
             let names: Vec<_> = rest.split('`').collect();
@@ -382,18 +449,48 @@ fn parse(text: &str) -> Result<Config, RkError> {
         }
         invalid(message)
     })?;
-    if !config.project.forge.is_empty()
-        && crate::detect::Forge::parse(&config.project.forge).is_none()
-    {
-        return Err(invalid("project.forge must be github or gitlab"));
+    if let Some(technologies) = &config.profile.technologies {
+        crate::profile::canonical_list("profile.technologies", technologies).map_err(invalid)?;
     }
-    if !config.project.tech.is_empty()
-        && (config.project.tech.starts_with('_')
-            || crate::embedded::SNIPPETS
-                .get_dir(&config.project.tech)
-                .is_none())
+    if let Some(forge) = &config.profile.forge
+        && !forge.is_empty()
     {
-        return Err(invalid("project.tech must name a supported binding"));
+        crate::profile::canonical_category(forge)
+            .map_err(|reason| invalid(format!("profile.forge: {reason}")))?;
+    }
+    if let Some(driver) = &config.profile.release.driver {
+        crate::profile::canonical_category(driver)
+            .map_err(|reason| invalid(format!("profile.release.driver: {reason}")))?;
+    }
+    if matches!(
+        config.profile.release.mode,
+        Some(ReleaseMode::External | ReleaseMode::None)
+    ) {
+        let mode = config
+            .profile
+            .release
+            .mode
+            .map_or("none", ReleaseMode::as_str);
+        for (key, present) in [
+            (
+                "profile.release.driver",
+                config.profile.release.driver.is_some(),
+            ),
+            (
+                "profile.release.style",
+                config.profile.release.style.is_some(),
+            ),
+            (
+                "profile.release.line_prefix",
+                config.profile.release.line_prefix.is_some(),
+            ),
+        ] {
+            if present {
+                return Err(invalid(format!(
+                    "{key} is set while profile.release.mode is {mode}; an external or none release names no driver, style, or line prefix"
+                )));
+            }
+        }
     }
     if let Some(contact) = &config.security.contact {
         canonical_contact(contact).map_err(invalid)?;
@@ -483,136 +580,237 @@ fn inline(values: &BTreeMap<String, String>) -> toml_edit::Value {
     toml_edit::Value::InlineTable(table)
 }
 
+/// The value of every landing parameter as the template renders it, or
+/// `None` for a key the resolved answers omit: the repository where the
+/// project has no forge, and the automatic-only release keys under
+/// another mode.
 #[allow(
     clippy::too_many_lines,
     reason = "the render list is one token per authored line of the config template, and splitting it would hide that correspondence"
 )]
-fn render(config: &Config) -> Result<Vec<u8>, RkError> {
+fn fields(config: &Config) -> Result<Vec<(&'static str, Option<toml_edit::Value>)>, RkError> {
     // The trunk names the ruleset the setup installs, so the written
     // configuration states the name a target actually gets rather than a
     // literal that would be wrong for any trunk but the default.
     let trunk = config
-        .project
+        .git
         .trunk
         .clone()
-        .ok_or_else(|| invalid("project.trunk is unresolved"))?;
-    let mut fields: Vec<(&str, toml_edit::Value)> = vec![
-        ("RK_CONFIG_SCHEMA_VERSION", config.schema_version.into()),
-        ("RK_CONFIG_PROJECT_REPO", config.project.repo.clone().into()),
+        .ok_or_else(|| invalid("git.trunk is unresolved"))?;
+    let technologies = config
+        .profile
+        .technologies
+        .clone()
+        .ok_or_else(|| invalid("profile.technologies is unresolved"))?;
+    let forge = config
+        .profile
+        .forge
+        .clone()
+        .ok_or_else(|| invalid("profile.forge is unresolved"))?;
+    let mode = config
+        .profile
+        .release
+        .mode
+        .ok_or_else(|| invalid("profile.release.mode is unresolved"))?;
+    let mut fields: Vec<(&'static str, Option<toml_edit::Value>)> = vec![
         (
-            "RK_CONFIG_PROJECT_FORGE",
-            config.project.forge.clone().into(),
-        ),
-        ("RK_CONFIG_PROJECT_TECH", config.project.tech.clone().into()),
-        ("RK_CONFIG_PROJECT_TRUNK", trunk.clone().into()),
-        (
-            "RK_CONFIG_LANDING_WORKFLOW",
-            config
-                .landing
-                .workflow
-                .ok_or_else(|| invalid("landing.workflow is unresolved"))?
-                .as_str()
-                .into(),
-        ),
-        (
-            "RK_CONFIG_LANDING_STYLE",
-            config
-                .landing
-                .style
-                .ok_or_else(|| invalid("landing.style is unresolved"))?
-                .as_str()
-                .into(),
+            "RK_CONFIG_SCHEMA_VERSION",
+            Some(config.schema_version.into()),
         ),
         (
-            "RK_CONFIG_LANDING_NIX",
-            config
-                .landing
-                .nix
-                .ok_or_else(|| invalid("landing.nix is unresolved"))?
-                .into(),
+            "RK_CONFIG_PROJECT_REPO",
+            (!config.project.repo.is_empty()).then(|| config.project.repo.clone().into()),
         ),
+        ("RK_CONFIG_PROFILE_TECHNOLOGIES", Some(array(&technologies))),
+        ("RK_CONFIG_PROFILE_FORGE", Some(forge.into())),
+        ("RK_CONFIG_PROFILE_RELEASE_MODE", Some(mode.as_str().into())),
         (
-            "RK_CONFIG_LANDING_SCORECARD",
+            "RK_CONFIG_PROFILE_RELEASE_DRIVER",
             config
-                .landing
-                .scorecard
-                .ok_or_else(|| invalid("landing.scorecard is unresolved"))?
-                .into(),
-        ),
-        (
-            "RK_CONFIG_LANDING_CODE_SCANNING",
-            config
-                .landing
-                .code_scanning
+                .profile
+                .release
+                .driver
                 .clone()
-                .ok_or_else(|| invalid("landing.code_scanning is unresolved"))?
-                .into(),
+                .map(toml_edit::Value::from),
+        ),
+        (
+            "RK_CONFIG_PROFILE_RELEASE_STYLE",
+            config
+                .profile
+                .release
+                .style
+                .map(|style| style.as_str().into()),
+        ),
+        (
+            "RK_CONFIG_PROFILE_RELEASE_LINE_PREFIX",
+            config
+                .profile
+                .release
+                .line_prefix
+                .clone()
+                .map(toml_edit::Value::from),
+        ),
+        ("RK_CONFIG_GIT_TRUNK", Some(trunk.clone().into())),
+        (
+            "RK_CONFIG_GIT_CHECKOUT_MODE",
+            Some(
+                config
+                    .git
+                    .checkout_mode
+                    .ok_or_else(|| invalid("git.checkout_mode is unresolved"))?
+                    .as_str()
+                    .into(),
+            ),
+        ),
+        (
+            "RK_CONFIG_CAPABILITIES_NIX_PACKAGING",
+            Some(
+                config
+                    .capabilities
+                    .nix_packaging
+                    .ok_or_else(|| invalid("capabilities.nix_packaging is unresolved"))?
+                    .into(),
+            ),
+        ),
+        (
+            "RK_CONFIG_CAPABILITIES_REPORTING_POLICY",
+            Some(
+                config
+                    .capabilities
+                    .reporting_policy
+                    .ok_or_else(|| invalid("capabilities.reporting_policy is unresolved"))?
+                    .into(),
+            ),
+        ),
+        (
+            "RK_CONFIG_CAPABILITIES_SCORECARD",
+            Some(
+                config
+                    .capabilities
+                    .scorecard
+                    .ok_or_else(|| invalid("capabilities.scorecard is unresolved"))?
+                    .into(),
+            ),
+        ),
+        (
+            "RK_CONFIG_CAPABILITIES_CODE_SCANNING",
+            Some(
+                config
+                    .capabilities
+                    .code_scanning
+                    .clone()
+                    .ok_or_else(|| invalid("capabilities.code_scanning is unresolved"))?
+                    .into(),
+            ),
         ),
         (
             "RK_CONFIG_SECURITY_ADVISORIES",
-            config.security.advisories.clone().into(),
+            Some(config.security.advisories.clone().into()),
         ),
         (
             "RK_CONFIG_SECURITY_CONTACT",
-            config.security.contact.clone().unwrap_or_default().into(),
+            Some(config.security.contact.clone().unwrap_or_default().into()),
         ),
         (
             "RK_CONFIG_SECURITY_RESPONSE",
-            config
-                .security
-                .response
-                .clone()
-                .unwrap_or_else(|| RESPONSE_DEFAULT.to_owned())
-                .into(),
+            Some(
+                config
+                    .security
+                    .response
+                    .clone()
+                    .unwrap_or_else(|| RESPONSE_DEFAULT.to_owned())
+                    .into(),
+            ),
         ),
         (
             "RK_CONFIG_SETUP_REQUIRED_CHECK",
-            config.setup.required_check.clone().into(),
+            Some(config.setup.required_check.clone().into()),
         ),
         (
             "RK_CONFIG_SETUP_RETIRED_BRANCHES",
-            array(&config.setup.retired_branches),
-        ),
-        (
-            "RK_CONFIG_SETUP_LINE_PREFIX",
-            config
-                .setup
-                .line_prefix
-                .clone()
-                .ok_or_else(|| invalid("setup.line_prefix is unresolved"))?
-                .into(),
+            Some(array(&config.setup.retired_branches)),
         ),
         (
             "RK_CONFIG_SETUP_RELEASE_LINES",
-            config.setup.release_lines.into(),
+            Some(config.setup.release_lines.into()),
         ),
         (
             "RK_CONFIG_SETUP_EXCLUDED_STEPS",
-            inline(&config.setup.excluded_steps),
+            Some(inline(&config.setup.excluded_steps)),
         ),
         (
             "RK_CONFIG_SETUP_BOT_APP_ID",
-            config.setup.bot.app_id.clone().into(),
+            Some(config.setup.bot.app_id.clone().into()),
         ),
     ];
-    fields.extend(protection_fields(&config.protection, trunk.as_str()));
+    fields.extend(
+        protection_fields(&config.protection, trunk.as_str())
+            .into_iter()
+            .map(|(token, value)| (token, Some(value))),
+    );
+    Ok(fields)
+}
+
+fn render(config: &Config) -> Result<Vec<u8>, RkError> {
+    let fields = fields(config)?;
     let template = crate::embedded::BLOCKS
         .get_file("target-config.toml.in")
         .and_then(include_dir::File::contents_utf8)
         .ok_or_else(|| invalid("the binary lacks its configuration template"))?;
     // Each authored line has one token. Substitute in the source line once,
-    // so a user's string containing another token stays literal.
+    // so a user's string containing another token stays literal. A line
+    // whose token has no value is dropped: the key is absent rather than
+    // written empty, and a table every one of whose keys dropped goes with
+    // its own header rather than standing empty.
+    let lines: Vec<&str> = template.split_inclusive('\n').collect();
+    let dropped: Vec<bool> = lines
+        .iter()
+        .map(|line| {
+            matches!(
+                fields.iter().find(|(token, _)| line.contains(token)),
+                Some((_, None))
+            )
+        })
+        .collect();
     let mut bytes = Vec::new();
-    for line in template.split_inclusive('\n') {
-        if let Some((token, value)) = fields.iter().find(|(token, _)| line.contains(token)) {
-            bytes.extend(crate::landing::substitute(
-                line.as_bytes(),
-                token.as_bytes(),
-                value.to_string().as_bytes(),
-            ));
-        } else {
-            bytes.extend_from_slice(line.as_bytes());
+    let mut at = 0;
+    while at < lines.len() {
+        let line = lines[at];
+        if line.trim_start().starts_with('[') && line.trim_end().ends_with(']') {
+            let mut end = at + 1;
+            let mut keeps = false;
+            while end < lines.len()
+                && !(lines[end].trim_start().starts_with('[')
+                    && lines[end].trim_end().ends_with(']'))
+            {
+                keeps |=
+                    fields.iter().any(|(token, _)| lines[end].contains(token)) && !dropped[end];
+                end += 1;
+            }
+            if !keeps {
+                // The header, its lines, and the blank line that opened it.
+                while bytes.last() == Some(&b'\n')
+                    && bytes.len() >= 2
+                    && bytes[bytes.len() - 2] == b'\n'
+                {
+                    bytes.pop();
+                }
+                at = end;
+                continue;
+            }
         }
+        if !dropped[at] {
+            match fields.iter().find(|(token, _)| line.contains(token)) {
+                Some((token, Some(value))) => bytes.extend(crate::landing::substitute(
+                    line.as_bytes(),
+                    token.as_bytes(),
+                    value.to_string().as_bytes(),
+                )),
+                Some((_, None)) => {}
+                None => bytes.extend_from_slice(line.as_bytes()),
+            }
+        }
+        at += 1;
     }
     Ok(bytes)
 }
@@ -705,6 +903,26 @@ fn protection_fields(
     ]
 }
 
+/// The keys a landing writes back: every class P answer.
+const PARAMETER_KEYS: [&str; 16] = [
+    "project.repo",
+    "profile.technologies",
+    "profile.forge",
+    "profile.release.mode",
+    "profile.release.driver",
+    "profile.release.style",
+    "profile.release.line_prefix",
+    "git.trunk",
+    "git.checkout_mode",
+    "capabilities.nix_packaging",
+    "capabilities.reporting_policy",
+    "capabilities.scorecard",
+    "capabilities.code_scanning",
+    "security.contact",
+    "security.response",
+    "schema_version",
+];
+
 /// Change one landing parameter while preserving comments and table ordering.
 ///
 /// # Errors
@@ -712,53 +930,52 @@ fn protection_fields(
 pub fn rewrite_key(target: &Path, key: &str, value: toml_edit::Value) -> Result<(), RkError> {
     let path = target.join(CONFIG_PATH);
     let text = std::fs::read_to_string(&path)?;
-    let next = rewrite_text(&text, key, value)?;
+    let next = rewrite_text(&text, key, Some(value))?;
     crate::atomic::write(&path, next.as_bytes())?;
     Ok(())
 }
 
-fn rewrite_text(text: &str, key: &str, mut value: toml_edit::Value) -> Result<String, RkError> {
-    if ![
-        "project.repo",
-        "project.forge",
-        "project.tech",
-        "project.trunk",
-        "landing.workflow",
-        "landing.style",
-        "landing.nix",
-        "landing.scorecard",
-        "landing.code_scanning",
-        "security.contact",
-        "security.response",
-        "setup.line_prefix",
-    ]
-    .contains(&key)
-    {
+/// The text with `key` set to `value`, or removed where `value` is
+/// `None`, every other byte kept. A schema 1 text migrates first.
+fn rewrite_text(text: &str, key: &str, value: Option<toml_edit::Value>) -> Result<String, RkError> {
+    if !PARAMETER_KEYS.contains(&key) {
         return Err(invalid(format!("{key} is not a landing parameter")));
     }
     parse(text)?;
+    let text = current_text(text)?;
     let mut document = text
         .parse::<toml_edit::DocumentMut>()
         .map_err(|error| invalid(error.to_string()))?;
+    let segments: Vec<&str> = key.split('.').collect();
+    // Every key in `PARAMETER_KEYS` has at least one segment, so the split
+    // answers; a key that did not would have refused above.
+    let Some((last, parents)) = segments.split_last() else {
+        return Err(invalid(format!("{key} names no key")));
+    };
     let mut item = document.as_item_mut();
-    for segment in key.split('.') {
+    for segment in parents {
+        if item.get(segment).is_none() {
+            let mut table = toml_edit::Table::new();
+            table.set_implicit(true);
+            item[segment] = toml_edit::Item::Table(table);
+        }
         item = &mut item[segment];
     }
-    if let Some(old) = item.as_value() {
-        if old
-            .as_str()
-            .zip(value.as_str())
-            .is_some_and(|(old, new)| old == new)
-            || old
-                .as_bool()
-                .zip(value.as_bool())
-                .is_some_and(|(old, new)| old == new)
-        {
-            return Ok(text.to_owned());
+    let Some(mut value) = value else {
+        if let Some(table) = item.as_table_like_mut() {
+            table.remove(last);
+        }
+        let next = document.to_string();
+        parse(&next)?;
+        return Ok(next);
+    };
+    if let Some(old) = item.get(last).and_then(toml_edit::Item::as_value) {
+        if old.to_string().trim() == value.to_string().trim() {
+            return Ok(text);
         }
         *value.decor_mut() = old.decor().clone();
     }
-    *item = toml_edit::Item::Value(value);
+    item[last] = toml_edit::Item::Value(value);
     let next = document.to_string();
     parse(&next)?;
     Ok(next)
@@ -805,13 +1022,25 @@ impl Plan {
         record: Option<&crate::landing::manifest::Manifest>,
     ) -> Result<Self, RkError> {
         let mut resolved = existing.cloned().unwrap_or_default();
-        resolved.project.tech = params.tech().into();
-        resolved.project.forge = params.forge().into();
-        resolved.project.repo = params.repo().into();
-        resolved.landing = Landing {
-            workflow: Some(params.workflow()),
-            style: params.style(),
-            nix: Some(params.nix()),
+        resolved.schema_version = SCHEMA_VERSION;
+        params.repo().clone_into(&mut resolved.project.repo);
+        resolved.profile = Profile {
+            technologies: Some(params.technologies().to_vec()),
+            forge: Some(params.forge().unwrap_or_default().to_owned()),
+            release: Release {
+                mode: Some(params.release_mode()),
+                driver: params.driver().map(str::to_owned),
+                style: params.style(),
+                line_prefix: params.profile().release.line_prefix.clone(),
+            },
+        };
+        resolved.git = Git {
+            trunk: Some(params.trunk().to_owned()),
+            checkout_mode: Some(params.checkout_mode()),
+        };
+        resolved.capabilities = Capabilities {
+            nix_packaging: Some(params.nix_packaging()),
+            reporting_policy: Some(params.reporting_policy()),
             scorecard: Some(params.scorecard()),
             code_scanning: Some(
                 params
@@ -820,12 +1049,10 @@ impl Plan {
                     .to_owned(),
             ),
         };
-        resolved.project.trunk = Some(params.trunk().to_owned());
-        resolved.setup.line_prefix = Some(params.line_prefix().to_owned());
         resolved.security.contact = Some(params.security_contact().to_owned());
         resolved.security.response = Some(params.security_response().to_owned());
         let content = if let Some(text) = text.filter(|_| existing.is_some()) {
-            let mut text = text.to_owned();
+            let mut text = current_text(text)?;
             for (key, value) in parameter_values(&resolved) {
                 text = rewrite_text(&text, key, value)?;
             }
@@ -855,45 +1082,72 @@ impl Plan {
     }
 }
 
-fn parameter_values(config: &Config) -> Vec<(&'static str, toml_edit::Value)> {
-    let mut values = Vec::new();
-    for (key, value) in [
-        ("project.repo", &config.project.repo),
-        ("project.forge", &config.project.forge),
-        ("project.tech", &config.project.tech),
-    ] {
-        if !value.is_empty() {
-            values.push((key, value.clone().into()));
-        }
+/// Every class P key with its value, `None` for a key the answers omit.
+fn parameter_values(config: &Config) -> Vec<(&'static str, Option<toml_edit::Value>)> {
+    let mut values: Vec<(&'static str, Option<toml_edit::Value>)> = vec![(
+        "project.repo",
+        (!config.project.repo.is_empty()).then(|| config.project.repo.clone().into()),
+    )];
+    if let Some(list) = &config.profile.technologies {
+        values.push(("profile.technologies", Some(array(list))));
     }
-    if let Some(value) = config.landing.workflow {
-        values.push(("landing.workflow", value.as_str().into()));
+    if let Some(forge) = config.profile.forge.clone() {
+        values.push(("profile.forge", Some(forge.into())));
     }
-    if let Some(value) = config.landing.style {
-        values.push(("landing.style", value.as_str().into()));
+    if let Some(mode) = config.profile.release.mode {
+        values.push(("profile.release.mode", Some(mode.as_str().into())));
+        values.push((
+            "profile.release.driver",
+            config
+                .profile
+                .release
+                .driver
+                .clone()
+                .map(toml_edit::Value::from),
+        ));
+        values.push((
+            "profile.release.style",
+            config
+                .profile
+                .release
+                .style
+                .map(|style| style.as_str().into()),
+        ));
+        values.push((
+            "profile.release.line_prefix",
+            config
+                .profile
+                .release
+                .line_prefix
+                .clone()
+                .map(toml_edit::Value::from),
+        ));
     }
-    if let Some(value) = config.landing.nix {
-        values.push(("landing.nix", value.into()));
+    if let Some(trunk) = config.git.trunk.clone() {
+        values.push(("git.trunk", Some(trunk.into())));
     }
-    if let Some(value) = config.landing.scorecard {
-        values.push(("landing.scorecard", value.into()));
+    if let Some(mode) = config.git.checkout_mode {
+        values.push(("git.checkout_mode", Some(mode.as_str().into())));
     }
-    if let Some(value) = config.landing.code_scanning.clone() {
-        values.push(("landing.code_scanning", value.into()));
+    if let Some(value) = config.capabilities.nix_packaging {
+        values.push(("capabilities.nix_packaging", Some(value.into())));
     }
-    if let Some(value) = config.project.trunk.clone() {
-        values.push(("project.trunk", value.into()));
+    if let Some(value) = config.capabilities.reporting_policy {
+        values.push(("capabilities.reporting_policy", Some(value.into())));
     }
-    if let Some(value) = config.setup.line_prefix.clone() {
-        values.push(("setup.line_prefix", value.into()));
+    if let Some(value) = config.capabilities.scorecard {
+        values.push(("capabilities.scorecard", Some(value.into())));
+    }
+    if let Some(value) = config.capabilities.code_scanning.clone() {
+        values.push(("capabilities.code_scanning", Some(value.into())));
     }
     // An empty contact is an answer, not an absence: it resets the landed
     // policy to the forge's own prose, so it projects like any other value.
     if let Some(value) = config.security.contact.clone() {
-        values.push(("security.contact", value.into()));
+        values.push(("security.contact", Some(value.into())));
     }
     if let Some(value) = config.security.response.clone() {
-        values.push(("security.response", value.into()));
+        values.push(("security.response", Some(value.into())));
     }
     values
 }
@@ -901,34 +1155,32 @@ fn parameter_values(config: &Config) -> Vec<(&'static str, toml_edit::Value)> {
 /// Only explicit class P answers can be pending; comparisons still use the record.
 #[must_use]
 pub fn pending(config: &Config, record: &crate::landing::manifest::Manifest) -> Vec<String> {
-    let mut recorded = Config::default();
-    recorded.project.repo.clone_from(&record.parameters.repo);
-    recorded.project.forge.clone_from(&record.forge);
-    recorded.project.tech.clone_from(&record.tech);
-    recorded.landing = Landing {
-        workflow: Some(record.parameters.workflow),
-        style: record.parameters.style,
-        nix: Some(record.parameters.nix),
-        scorecard: Some(record.parameters.scorecard),
-        code_scanning: Some(
-            record
-                .parameters
-                .code_scanning
-                .map_or("off", crate::landing::Provider::as_str)
-                .to_owned(),
-        ),
+    let recorded = {
+        let params = crate::landing::Params::from_record(record);
+        Plan::compose(None, &params, None, None)
+            .ok()
+            .and_then(|plan| parse(&plan.content).ok())
     };
-    recorded.project.trunk = Some(record.parameters.trunk.clone());
-    recorded.setup.line_prefix = Some(record.parameters.line_prefix.clone());
-    recorded.security.contact = Some(record.parameters.security_contact.clone());
-    recorded.security.response = Some(record.parameters.security_response.clone());
-    let baseline = parameter_values(&recorded);
+    let Some(recorded) = recorded else {
+        return Vec::new();
+    };
+    let render = |value: &Option<toml_edit::Value>| {
+        value.as_ref().map_or_else(
+            || "<absent>".to_owned(),
+            |value| value.to_string().trim().to_owned(),
+        )
+    };
+    let baseline: Vec<(&str, String)> = parameter_values(&recorded)
+        .iter()
+        .map(|(key, value)| (*key, render(value)))
+        .collect();
     parameter_values(config)
         .into_iter()
+        .map(|(key, value)| (key, render(&value)))
         .filter(|(key, value)| {
-            !baseline
+            baseline
                 .iter()
-                .any(|(other, old)| key == other && value.to_string() == old.to_string())
+                .any(|(other, old)| key == other && value != old)
         })
         .map(|(key, _)| key.to_owned())
         .collect()
@@ -940,7 +1192,7 @@ pub fn pending(config: &Config, record: &crate::landing::manifest::Manifest) -> 
 /// Propagates invalid configuration and I/O failures.
 pub fn trunk_of(target: &Path) -> Result<String, RkError> {
     Ok(load(target)?
-        .and_then(|config| config.project.trunk)
+        .and_then(|config| config.git.trunk)
         .unwrap_or_else(|| TRUNK_DEFAULT.to_owned()))
 }
 
@@ -950,29 +1202,83 @@ pub fn trunk_of(target: &Path) -> Result<String, RkError> {
 /// Propagates invalid configuration and I/O failures.
 pub fn line_prefix_of(target: &Path) -> Result<String, RkError> {
     Ok(load(target)?
-        .and_then(|config| config.setup.line_prefix)
+        .and_then(|config| config.profile.release.line_prefix)
         .unwrap_or_else(|| LINE_PREFIX_DEFAULT.to_owned()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::{CONFIG_PATH, Config, load, parse, rewrite_key, trunk_of, write};
-    use crate::landing::{Style, Workflow};
+    use crate::landing::{CheckoutMode, Style};
+    use crate::profile::ReleaseMode;
+
+    /// The resolved defaults a landing writes for an automatic rust
+    /// release on GitHub.
+    fn resolved_defaults() -> Config {
+        Config {
+            project: super::Project {
+                repo: "acme/widget".into(),
+            },
+            profile: super::Profile {
+                technologies: Some(vec!["rust".into()]),
+                forge: Some("github".into()),
+                release: super::Release {
+                    mode: Some(ReleaseMode::Automatic),
+                    driver: Some("rust".into()),
+                    style: Some(Style::Trunk),
+                    line_prefix: Some(super::LINE_PREFIX_DEFAULT.into()),
+                },
+            },
+            git: super::Git {
+                trunk: Some(super::TRUNK_DEFAULT.into()),
+                checkout_mode: Some(CheckoutMode::LinkedWorktree),
+            },
+            capabilities: super::Capabilities {
+                nix_packaging: Some(false),
+                reporting_policy: Some(true),
+                scorecard: Some(false),
+                code_scanning: Some("off".to_owned()),
+            },
+            // Writing states both security answers, so a reader sees the
+            // policy the target landed rather than an implied one.
+            security: super::Security {
+                contact: Some(String::new()),
+                response: Some(super::RESPONSE_DEFAULT.into()),
+                ..super::Security::default()
+            },
+            // Writing resolves the derived ruleset name, so the file states
+            // the name the setup installs rather than leaving it implied.
+            protection: super::Protection {
+                trunk_ruleset: Some(format!("{}-protection", super::TRUNK_DEFAULT)),
+                ..super::Protection::default()
+            },
+            ..Config::default()
+        }
+    }
 
     #[test]
-    fn an_omitted_landing_key_is_distinguishable_from_an_explicit_default() {
-        let omitted = parse("schema_version = 1\n").expect("omitted answers parse");
+    fn an_omitted_key_is_distinguishable_from_an_explicit_default() {
+        let omitted = parse("schema_version = 2\n").expect("omitted answers parse");
         let explicit = parse(
-            "schema_version = 1\n[landing]\nworkflow = 'worktree'\nstyle = 'trunk'\nnix = false\nscorecard = false\ncode_scanning = 'off'\n",
+            "schema_version = 2\n[git]\ncheckout_mode = 'linked-worktree'\n[profile.release]\nmode = 'automatic'\nstyle = 'trunk'\n[capabilities]\nnix_packaging = false\nreporting_policy = true\nscorecard = false\ncode_scanning = 'off'\n",
         )
         .expect("explicit defaults parse");
-        assert_eq!(omitted.landing, super::Landing::default());
-        assert_eq!(explicit.landing.workflow, Some(Workflow::Worktree));
-        assert_eq!(explicit.landing.style, Some(Style::Trunk));
-        assert_eq!(explicit.landing.nix, Some(false));
-        assert_eq!(explicit.landing.scorecard, Some(false));
-        assert_eq!(explicit.landing.code_scanning.as_deref(), Some("off"));
+        assert_eq!(omitted.git, super::Git::default());
+        assert_eq!(omitted.capabilities, super::Capabilities::default());
+        assert_eq!(
+            explicit.git.checkout_mode,
+            Some(CheckoutMode::LinkedWorktree)
+        );
+        assert_eq!(explicit.profile.release.style, Some(Style::Trunk));
+        assert_eq!(explicit.capabilities.nix_packaging, Some(false));
+        assert_eq!(explicit.capabilities.reporting_policy, Some(true));
+        assert_eq!(explicit.capabilities.scorecard, Some(false));
+        assert_eq!(explicit.capabilities.code_scanning.as_deref(), Some("off"));
         assert_ne!(omitted, explicit);
+        // The older spellings of the checkout mode still read.
+        let older = parse("schema_version = 2\n[git]\ncheckout_mode = 'worktree'\n")
+            .expect("the older spelling reads");
+        assert_eq!(older.git.checkout_mode, Some(CheckoutMode::LinkedWorktree));
     }
 
     /// A configuration written by 0.3.13 carries `installation_id`, which
@@ -998,19 +1304,82 @@ mod tests {
         );
     }
 
+    /// SATISFIES project-profile:a-schema-one-configuration-migrates-in-place
+    #[test]
+    fn a_schema_1_config_migrates_into_its_domains() {
+        let held = parse(
+            "schema_version = 1\n[project]\nrepo = 'acme/widget'\nforge = 'gitlab'\ntech = 'bash'\ntrunk = 'main'\n[landing]\nworkflow = 'branches'\nstyle = 'lines'\nnix = false\n[setup]\nline_prefix = 'stable/'\n",
+        )
+        .expect("a schema 1 file reads");
+        assert_eq!(held.schema_version, 2);
+        assert_eq!(held.profile.technologies, Some(vec!["bash".to_owned()]));
+        assert_eq!(held.profile.forge.as_deref(), Some("gitlab"));
+        assert_eq!(held.profile.release.mode, Some(ReleaseMode::Automatic));
+        assert_eq!(held.profile.release.driver.as_deref(), Some("bash"));
+        assert_eq!(held.profile.release.style, Some(Style::Lines));
+        assert_eq!(held.profile.release.line_prefix.as_deref(), Some("stable/"));
+        assert_eq!(held.git.trunk.as_deref(), Some("main"));
+        assert_eq!(held.git.checkout_mode, Some(CheckoutMode::MainWorktree));
+        assert_eq!(held.capabilities.nix_packaging, Some(false));
+        assert_eq!(held.capabilities.reporting_policy, Some(true));
+    }
+
+    /// SATISFIES project-profile:release-intent-has-three-modes
+    #[test]
+    fn every_invalid_release_state_names_its_key() {
+        for (text, key) in [
+            (
+                "[profile.release]\nmode = 'none'\nstyle = 'trunk'\n",
+                "profile.release.style",
+            ),
+            (
+                "[profile.release]\nmode = 'external'\ndriver = 'rust'\n",
+                "profile.release.driver",
+            ),
+            (
+                "[profile.release]\nmode = 'none'\nline_prefix = 'release/'\n",
+                "profile.release.line_prefix",
+            ),
+            (
+                "[profile]\ntechnologies = ['rust', 'rust']\n",
+                "profile.technologies",
+            ),
+            (
+                "[profile]\ntechnologies = ['Rust!']\n",
+                "profile.technologies",
+            ),
+            ("[profile]\nforge = 'Git Hub'\n", "profile.forge"),
+            (
+                "[profile.release]\nmode = 'manual'\n",
+                "profile.release.mode",
+            ),
+        ] {
+            let error = parse(&format!("schema_version = 2\n{text}"))
+                .expect_err("an invalid release state refuses")
+                .to_string();
+            assert!(error.contains(key), "{key}: {error}");
+        }
+    }
+
     #[test]
     fn the_landed_config_template_round_trips() {
         let dir = tempfile::tempdir().expect("a target exists");
         let mut config = Config::default();
         config.project.repo = "acme/nested/widget".into();
-        config.project.forge = "gitlab".into();
-        config.project.tech = "bash".into();
-        config.project.trunk = Some("main".into());
-        config.landing.workflow = Some(Workflow::Branches);
-        config.landing.style = Some(Style::Lines);
-        config.landing.nix = Some(true);
-        config.landing.scorecard = Some(true);
-        config.landing.code_scanning = Some("semgrep".to_owned());
+        config.profile.technologies = Some(vec!["bash".into(), "python".into()]);
+        config.profile.forge = Some("gitlab".into());
+        config.profile.release = super::Release {
+            mode: Some(ReleaseMode::Automatic),
+            driver: Some("bash".into()),
+            style: Some(Style::Lines),
+            line_prefix: Some("stable/".into()),
+        };
+        config.git.trunk = Some("main".into());
+        config.git.checkout_mode = Some(CheckoutMode::MainWorktree);
+        config.capabilities.nix_packaging = Some(true);
+        config.capabilities.reporting_policy = Some(false);
+        config.capabilities.scorecard = Some(true);
+        config.capabilities.code_scanning = Some("semgrep".to_owned());
         // The escaping subject moved to the one unrestricted string in this
         // table: `contact` is now a class P value the reader holds to a
         // single control-free line, so it can carry neither.
@@ -1020,7 +1389,6 @@ mod tests {
         config.security.response = Some("14 business days".into());
         config.setup.required_check = "build / test".into();
         config.setup.retired_branches = vec!["develop".into(), "old\"branch".into()];
-        config.setup.line_prefix = Some("stable/".into());
         config.setup.release_lines = true;
         config.setup.excluded_steps = [
             (
@@ -1051,53 +1419,42 @@ mod tests {
         config.protection.gitlab.squash_commit_template =
             "%{title}\n\nContext: %{description}".into();
         config.protection.gitlab.merge_access_level = 40;
-        let defaults = Config {
-            landing: super::Landing {
-                workflow: Some(Workflow::Worktree),
-                style: Some(Style::Trunk),
-                nix: Some(false),
-                scorecard: Some(false),
-                code_scanning: Some("off".to_owned()),
-            },
-            project: super::Project {
-                trunk: Some(super::TRUNK_DEFAULT.into()),
-                ..super::Project::default()
-            },
-            setup: super::Setup {
-                line_prefix: Some(super::LINE_PREFIX_DEFAULT.into()),
-                ..super::Setup::default()
-            },
-            // Writing states both security answers, so a reader sees the
-            // policy the target landed rather than an implied one.
-            security: super::Security {
-                contact: Some(String::new()),
-                response: Some(super::RESPONSE_DEFAULT.into()),
-                ..super::Security::default()
-            },
-            // Writing resolves the derived ruleset name, so the file states
-            // the name the setup installs rather than leaving it implied.
-            protection: super::Protection {
-                trunk_ruleset: Some(format!("{}-protection", super::TRUNK_DEFAULT)),
-                ..super::Protection::default()
-            },
-            ..Config::default()
+        // A release-less profile with no forge: the automatic-only keys
+        // and the repository are absent from the written file.
+        let mut release_less = resolved_defaults();
+        release_less.project.repo = String::new();
+        release_less.profile.technologies = Some(Vec::new());
+        release_less.profile.forge = Some(String::new());
+        release_less.profile.release = super::Release {
+            mode: Some(ReleaseMode::None),
+            driver: None,
+            style: None,
+            line_prefix: None,
         };
-        for expected in [defaults, config] {
+        release_less.capabilities.reporting_policy = Some(false);
+        for expected in [resolved_defaults(), config, release_less] {
             write(dir.path(), &expected).expect("the template renders");
             assert_eq!(load(dir.path()).expect("the config reads"), Some(expected));
             let text =
                 std::fs::read_to_string(dir.path().join(CONFIG_PATH)).expect("the text reads");
-            assert!(text.contains("# P: project path"));
+            assert!(text.contains("# P: every technology"));
             assert!(text.contains("# F: invariant"));
         }
+        let text = std::fs::read_to_string(dir.path().join(CONFIG_PATH)).expect("the text reads");
+        assert!(
+            !text.contains("style ="),
+            "a none release writes no style: {text}"
+        );
+        assert!(!text.contains("repo ="), "no forge writes no repo: {text}");
     }
 
     #[test]
     fn a_config_with_an_unknown_key_refuses_by_name() {
         for (table, typo, nearest) in [
             ("", "schemax_version", "schema_version"),
-            ("project", "trunkx", "trunk"),
-            ("landing", "stile", "style"),
+            ("git", "trunkx", "trunk"),
+            ("profile.release", "stile", "style"),
+            ("capabilities", "nix_packagingg", "nix_packaging"),
             ("security", "contactx", "contact"),
             ("setup", "required_checkx", "required_check"),
             ("setup.bot", "app_i", "app_id"),
@@ -1114,7 +1471,7 @@ mod tests {
             } else {
                 format!("[{table}]\n")
             };
-            let text = format!("schema_version = 1\n{header}{typo} = 'value'\n");
+            let text = format!("schema_version = 2\n{header}{typo} = 'value'\n");
             let error = parse(&text).expect_err("unknown keys refuse").to_string();
             for expected in [CONFIG_PATH, typo, &format!("nearest known key: {nearest}")] {
                 assert!(error.contains(expected), "{error}");
@@ -1137,7 +1494,7 @@ mod tests {
                 vec!["protect-trunk", "no reason"],
             ),
         ] {
-            let error = parse(&format!("schema_version = 1\n{text}"))
+            let error = parse(&format!("schema_version = 2\n{text}"))
                 .expect_err("the exclusion refuses")
                 .to_string();
             for want in expected {
@@ -1145,7 +1502,7 @@ mod tests {
             }
         }
         let held = parse(
-            "schema_version = 1\n[setup.excluded_steps]\nprotect-trunk = 'we merge locally'\n",
+            "schema_version = 2\n[setup.excluded_steps]\nprotect-trunk = 'we merge locally'\n",
         )
         .expect("a named step with a reason parses");
         assert_eq!(
@@ -1163,7 +1520,7 @@ mod tests {
     #[test]
     fn an_exclusion_does_not_lift_a_floor() {
         let error = parse(
-            "schema_version = 1\n[setup.excluded_steps]\nprotect-trunk = 'we merge locally'\n\n[protection]\nallowed_merge_methods = ['squash', 'merge']\n",
+            "schema_version = 2\n[setup.excluded_steps]\nprotect-trunk = 'we merge locally'\n\n[protection]\nallowed_merge_methods = ['squash', 'merge']\n",
         )
         .expect_err("the floor binds an excluded step's keys too")
         .to_string();
@@ -1175,7 +1532,7 @@ mod tests {
 
     #[test]
     fn a_config_at_an_unknown_schema_refuses() {
-        for text in ["schema_version = 999", "schema_version = '1'", ""] {
+        for text in ["schema_version = 999", "schema_version = '2'", ""] {
             let error = parse(text)
                 .expect_err("a schema must be declared and known")
                 .to_string();
@@ -1188,7 +1545,7 @@ mod tests {
 
     #[test]
     fn an_unparsable_config_refuses_naming_the_position() {
-        let error = parse("schema_version = 1\n[project\n")
+        let error = parse("schema_version = 2\n[project\n")
             .expect_err("bad TOML refuses")
             .to_string();
         for expected in [CONFIG_PATH, "line 2", "column"] {
@@ -1209,7 +1566,7 @@ mod tests {
         std::fs::create_dir(dir.path().join(".release-kit")).expect("the directory exists");
         std::fs::write(
             dir.path().join(CONFIG_PATH),
-            "schema_version = 1\n[protection]\nstrict_required_status_checks = false\n",
+            "schema_version = 2\n[protection]\nstrict_required_status_checks = false\n",
         )
         .expect("a config exists");
         let error =
@@ -1226,17 +1583,19 @@ mod tests {
     fn rewrite_key_preserves_comments() {
         let dir = tempfile::tempdir().expect("a target exists");
         std::fs::create_dir(dir.path().join(".release-kit")).expect("the directory exists");
-        let original = "# Project answers\nschema_version = 1\n\n[security] # first table stays first\ncontact = 'team' # keep me\n\n[landing]\n# Our release choice\nstyle  = 'trunk'  # keep this reason\nworkflow = 'branches'\n";
+        let original = "# Project answers\nschema_version = 2\n\n[security] # first table stays first\ncontact = 'team' # keep me\n\n[profile.release]\n# Our release choice\nmode = 'automatic'\nstyle  = 'trunk'  # keep this reason\n\n[git]\ncheckout_mode = 'main-worktree'\n";
         let path = dir.path().join(CONFIG_PATH);
         std::fs::write(&path, original).expect("a config exists");
-        rewrite_key(dir.path(), "landing.style", "lines".into()).expect("the style writes back");
+        rewrite_key(dir.path(), "profile.release.style", "lines".into())
+            .expect("the style writes back");
         let text = std::fs::read_to_string(&path).expect("the text reads");
         assert_eq!(text, original.replace("'trunk'", "\"lines\""));
         assert_eq!(
             load(dir.path())
                 .expect("the config reads")
                 .expect("present")
-                .landing
+                .profile
+                .release
                 .style,
             Some(Style::Lines)
         );
@@ -1255,9 +1614,9 @@ mod tests {
             "security.contact",
             "security@acme.example".into(),
         )
-        .expect("the contact is a landing parameter now");
+        .expect("the contact is a landing parameter");
         rewrite_key(dir.path(), "security.response", "14 days".into())
-            .expect("the response is a landing parameter now");
+            .expect("the response is a landing parameter");
         let held = load(dir.path()).expect("reads").expect("present");
         assert_eq!(
             held.security.contact.as_deref(),
@@ -1270,7 +1629,7 @@ mod tests {
         for (key, value) in [
             ("security.advisories", "acme/private"),
             ("security.response", "90d"),
-            ("landing.style", "unknown"),
+            ("profile.release.style", "unknown"),
         ] {
             assert!(rewrite_key(dir.path(), key, value.into()).is_err());
             assert_eq!(std::fs::read(&path).expect("the bytes read"), before);
@@ -1325,7 +1684,7 @@ mod tests {
             assert!(refusal.contains("security.response"), "{value}: {refusal}");
             assert!(refusal.contains("business days"), "{value}: {refusal}");
         }
-        let refusal = parse("schema_version = 1\n[security]\nresponse = '90d'\n")
+        let refusal = parse("schema_version = 2\n[security]\nresponse = '90d'\n")
             .expect_err("the reader refuses it too")
             .to_string();
         assert!(refusal.contains("security.response"), "{refusal}");

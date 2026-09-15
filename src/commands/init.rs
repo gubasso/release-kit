@@ -23,9 +23,11 @@ use crate::embedded;
 use crate::error::RkError;
 use crate::held;
 use crate::landing::apply::{self, Action, Collision, Prepared};
-use crate::landing::manifest::{self, Provider, Style, Workflow};
+use crate::landing::manifest::{self, Provider};
 use crate::landing::{self, lock};
 use crate::output::Output;
+use crate::profile::{CapabilityRequests, GitWorkflow, ProfileSnapshot};
+use crate::stage::CapabilityNote;
 
 /// One destination and what happened to it.
 #[derive(Debug, Serialize)]
@@ -57,26 +59,24 @@ struct Report {
     schema: &'static str,
     /// `preview` or `apply`.
     mode: &'static str,
-    /// The technology whose files land.
-    tech: String,
-    /// The forge whose subtree lands.
-    forge: String,
     /// The target directory.
     target: String,
+    /// What the project is.
+    profile: ProfileSnapshot,
+    /// How topic branches reach the trunk.
+    git: GitWorkflow,
+    /// Which optional products the target requested.
+    capabilities: CapabilityRequests,
     /// The resolved project path, where detection or `--repo` named one.
     #[serde(skip_serializing_if = "Option::is_none")]
     repo: Option<String>,
-    /// The working-copy mode the landing records and renders under.
-    workflow: &'static str,
-    style: &'static str,
-    /// Whether the landing carries the Nix capability.
-    nix: bool,
-    /// Whether the landing carries the Scorecard capability.
-    scorecard: bool,
-    /// The code scanning provider the landing carries, absent where the
-    /// project did not opt in.
+    /// Every capability, in catalog order, with its status.
+    selection: Vec<CapabilityNote>,
+    /// Why the selected release automation cannot land in this release,
+    /// absent where it can or none is selected. A preview reports it and
+    /// exits 0; the apply refuses on it.
     #[serde(skip_serializing_if = "Option::is_none")]
-    code_scanning: Option<&'static str>,
+    release_unavailable: Option<String>,
     /// Why the provider's licence condition refuses this target, absent
     /// where no condition applies or the licence satisfies it. A preview
     /// reports it and exits 0; the apply refuses on it.
@@ -159,18 +159,15 @@ pub fn run(args: &InitArgs) -> Result<(), RkError> {
     let params = landing::Params::resolve(
         held.base(),
         &landing::Inputs {
-            tech: args.tech.as_deref(),
-            forge: args.forge.as_deref(),
-            repo: args.repo.as_deref(),
-            workflow: args.workflow.as_deref().map(Workflow::parse).transpose()?,
-            style: args.style.as_deref().map(Style::parse).transpose()?,
-            nix: args.nix.then_some(true),
+            nix: args.nix_packaging.then_some(true),
+            reporting_policy: args.reporting_policy.then_some(true),
             scorecard: args.scorecard.then_some(true),
             code_scanning: args
                 .code_scanning
                 .as_deref()
                 .map(Provider::parse)
                 .transpose()?,
+            ..args.profile.inputs()?
         },
         config.as_ref(),
         None,
@@ -180,47 +177,81 @@ pub fn run(args: &InitArgs) -> Result<(), RkError> {
             landing::Purpose::Preview
         },
     )?;
-    let style = params
-        .style()
-        .ok_or_else(|| RkError::Usage("landing style is unresolved".into()))?;
     if let Some(lock) = lock {
         refuse_a_recorded_target(&held)?;
         let prepared = apply::prepare(&held, None, &params, config.as_ref())?;
         let landed = apply::land(&held, None, &prepared, apply::Origin::Init, &lock)?;
         drop(lock);
-        report_apply(out, args, &held, &params, style, &prepared, &landed)
+        report_apply(out, args, &held, &params, &prepared, &landed)
     } else {
         let prepared = apply::prepare(&held, None, &params, config.as_ref())?;
-        let repo = (params.repo() != landing::REPO_PLACEHOLDER).then(|| params.repo().to_owned());
-        if repo.is_none() {
+        let repo = (params.repo() != landing::REPO_PLACEHOLDER && !params.repo().is_empty())
+            .then(|| params.repo().to_owned());
+        if params.repo() == landing::REPO_PLACEHOLDER {
             out.frame(
                 "note: no repository detected; an apply derives the owner from --repo <path>",
             );
         }
-        preview(out, args, &params, repo, style, &prepared)
+        preview(out, args, &params, repo, &prepared)
+    }
+}
+
+/// The capability notes a report carries, in catalog order.
+fn selection_of(prepared: &Prepared) -> Vec<CapabilityNote> {
+    prepared
+        .projection
+        .capabilities
+        .iter()
+        .map(|selection| CapabilityNote::of(selection, &prepared.projection))
+        .collect()
+}
+
+/// The human lines naming every capability's answer.
+pub(crate) fn describe_selection(out: Output, prepared: &Prepared) {
+    for note in selection_of(prepared) {
+        let mut line = format!("capability {}: {}", note.id, note.status);
+        if let Some(reason) = &note.reason {
+            line.push_str(" (");
+            line.push_str(reason);
+            line.push(')');
+        }
+        out.result_line(line);
+        if let Some(action) = &note.action {
+            out.result_line(format!("  action: {action}"));
+        }
     }
 }
 
 /// List every destination with what a production landing would do, and
 /// write nothing.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one pass prints the profile, the selection, every decision, and the follow-up, and splitting it would separate a line from the value behind it"
+)]
 fn preview(
     out: Output,
     args: &InitArgs,
     params: &landing::Params,
     repo: Option<String>,
-    style: Style,
     prepared: &Prepared,
 ) -> Result<(), RkError> {
-    let repo_argument = repo.as_deref().unwrap_or("<owner/name>");
+    let flags = params.canonical_flags();
+    let flags = if params.forge().is_some() && repo.is_none() {
+        format!("{flags} --repo <owner/name>")
+    } else {
+        flags
+    };
     let capabilities = params.capability_flags();
     let mut next = vec![format!(
-        "rk init --tech {} --forge {} --repo {repo_argument} --workflow {} --style {}{capabilities} --target {} --apply",
-        params.tech(),
-        params.forge(),
-        params.workflow().as_str(),
-        style.as_str(),
+        "rk init{flags}{capabilities} --target {} --apply",
         args.target
     )];
+    if let Some(reason) = prepared.projection.release_unavailable() {
+        next.insert(
+            0,
+            format!("the apply refuses until the release automation resolves: {reason}"),
+        );
+    }
     if !prepared.collisions.is_empty() {
         next.insert(
             0,
@@ -242,6 +273,16 @@ fn preview(
         "DRY RUN: rk init writes these files into {}; re-run with --apply",
         args.target
     ));
+    out.result_line(format!(
+        "profile: {}",
+        crate::commands::profile::describe(
+            params.profile(),
+            params.git(),
+            params.capabilities(),
+            params.repo()
+        )
+    ));
+    describe_selection(out, prepared);
     for decision in &prepared.decisions {
         out.result_line(format!(
             "{} {}",
@@ -263,21 +304,22 @@ fn preview(
     ));
     for entry in &prepared.projection.omissions {
         out.result_line(format!("withheld {}: {}", entry.destination, entry.reason));
+        if let Some(action) = &entry.action {
+            out.result_line(format!("  action: {action}"));
+        }
     }
     out.next(&next);
     out.emit(&Report {
-        schema: "rk.init/9",
+        schema: "rk.init/10",
         config: prepared.config.clone(),
         mode: "preview",
-        tech: params.tech().to_owned(),
-        forge: params.forge().to_owned(),
         target: args.target.to_string(),
+        profile: params.profile().clone(),
+        git: params.git().clone(),
+        capabilities: params.capabilities().clone(),
         repo,
-        workflow: params.workflow().as_str(),
-        style: style.as_str(),
-        nix: params.nix(),
-        scorecard: params.scorecard(),
-        code_scanning: params.code_scanning().map(Provider::as_str),
+        selection: selection_of(prepared),
+        release_unavailable: prepared.projection.release_unavailable().map(str::to_owned),
         licence_refusal: prepared.projection.licence_refusal.clone(),
         withheld: withheld_of(prepared),
         collisions: (!prepared.collisions.is_empty()).then(|| prepared.collisions.clone()),
@@ -306,17 +348,30 @@ fn preview(
     clippy::too_many_arguments,
     reason = "the report reads the landed files through the held target and names them by the path the operator gave, which are two arguments for one target"
 )]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one pass reports the profile, the selection, every decision, and the sentinels the operator still owes"
+)]
 fn report_apply(
     out: Output,
     args: &InitArgs,
     held: &apply::Held,
     params: &landing::Params,
-    style: Style,
     prepared: &Prepared,
     landed: &apply::Landed,
 ) -> Result<(), RkError> {
     let mut file_entries = Vec::new();
     let mut sentinels = Vec::new();
+    out.result_line(format!(
+        "profile: {}",
+        crate::commands::profile::describe(
+            params.profile(),
+            params.git(),
+            params.capabilities(),
+            params.repo()
+        )
+    ));
+    describe_selection(out, prepared);
     for decision in &prepared.decisions {
         out.result_line(describe(decision));
         if decision.action != Action::Released {
@@ -337,6 +392,9 @@ fn report_apply(
     }
     for entry in &prepared.projection.omissions {
         out.result_line(format!("withheld {}: {}", entry.destination, entry.reason));
+        if let Some(action) = &entry.action {
+            out.result_line(format!("  action: {action}"));
+        }
     }
     out.result_line(format!(
         "{} {}",
@@ -378,7 +436,7 @@ fn report_apply(
             ));
         }
     }
-    let next = vec![
+    let mut next = vec![
         if sentinels.is_empty() {
             "commit the landed files, the receipt included".to_owned()
         } else {
@@ -386,22 +444,26 @@ fn report_apply(
                 .to_owned()
         },
         format!("rk status --target {} reports this landing", args.target),
-        "rk method setup orders what follows".to_owned(),
     ];
+    // Only an automatic release routes to the bot-operate chapter; an
+    // external or none release has no bot to operate.
+    if params.release_mode() == crate::profile::ReleaseMode::Automatic {
+        next.push("rk method setup orders what follows".to_owned());
+    } else if params.forge().is_some() {
+        next.push("rk setup --target . previews the applicable forge steps".to_owned());
+    }
     out.next(&next);
     out.emit(&Report {
-        schema: "rk.init/9",
+        schema: "rk.init/10",
         config: prepared.config.clone(),
         mode: "apply",
-        tech: params.tech().to_owned(),
-        forge: params.forge().to_owned(),
         target: args.target.to_string(),
-        repo: Some(params.repo().to_owned()),
-        workflow: params.workflow().as_str(),
-        style: style.as_str(),
-        nix: params.nix(),
-        scorecard: params.scorecard(),
-        code_scanning: params.code_scanning().map(Provider::as_str),
+        profile: params.profile().clone(),
+        git: params.git().clone(),
+        capabilities: params.capabilities().clone(),
+        repo: (!params.repo().is_empty()).then(|| params.repo().to_owned()),
+        selection: selection_of(prepared),
+        release_unavailable: None,
         licence_refusal: prepared.projection.licence_refusal.clone(),
         withheld: withheld_of(prepared),
         collisions: None,
@@ -480,29 +542,55 @@ fn collect_sentinels(
 #[cfg(test)]
 mod tests {
     use super::{FileEntry, Report, SentinelEntry};
+    use crate::landing::CheckoutMode;
+    use crate::profile::{
+        CapabilityRequests, GitWorkflow, ProfileSnapshot, ReleaseIntent, ReleaseMode,
+    };
+    use crate::stage::CapabilityNote;
 
-    /// The complete `rk.init/9` shape, held by snapshot in both modes: a
+    /// The complete `rk.init/10` shape, held by snapshot in both modes: a
     /// field rename or removal fails here and becomes a schema-version
     /// bump instead of a silent parser break at some agent.
     #[test]
     fn the_init_report_schema_snapshot_holds() {
         let apply = Report {
-            schema: "rk.init/9",
+            schema: "rk.init/10",
             config: crate::config::Plan {
                 action: "added",
                 changes: vec![],
-                content: "schema_version = 1\n".into(),
+                content: "schema_version = 2\n".into(),
             },
             mode: "apply",
-            tech: "rust".into(),
-            forge: "github".into(),
             target: "/tmp/t".into(),
+            profile: ProfileSnapshot {
+                technologies: vec!["rust".into()],
+                forge: Some("github".into()),
+                release: ReleaseIntent {
+                    mode: ReleaseMode::Automatic,
+                    driver: Some("rust".into()),
+                    style: Some(crate::landing::Style::Trunk),
+                    line_prefix: Some("release/".into()),
+                },
+            },
+            git: GitWorkflow {
+                trunk: "master".into(),
+                checkout_mode: CheckoutMode::LinkedWorktree,
+            },
+            capabilities: CapabilityRequests {
+                nix_packaging: true,
+                reporting_policy: true,
+                scorecard: true,
+                code_scanning: Some(crate::landing::Provider::CodeQl),
+            },
             repo: Some("acme/widget".into()),
-            workflow: "worktree",
-            style: "trunk",
-            nix: true,
-            scorecard: true,
-            code_scanning: Some("codeql"),
+            selection: vec![CapabilityNote {
+                id: "git.guards".into(),
+                status: "selected".into(),
+                reason: None,
+                action: None,
+                destinations: vec!["AGENTS.md".into()],
+            }],
+            release_unavailable: None,
             licence_refusal: None,
             withheld: Some(vec![crate::landing::Withheld {
                 path: "flake.nix".into(),
@@ -523,15 +611,22 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&apply).expect("a report serializes"),
-            r##"{"schema":"rk.init/9","mode":"apply","tech":"rust","forge":"github","target":"/tmp/t","repo":"acme/widget","workflow":"worktree","style":"trunk","nix":true,"scorecard":true,"code_scanning":"codeql","withheld":[{"path":"flake.nix","reason":"the target already carries flake.nix"}],"config":{"action":"added","changes":[],"content":"schema_version = 1\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"created"}],"sentinels":[{"path":"/tmp/t/release-plz.toml","line":3,"text":"# TODO(release-kit): keep false for a binary-only crate"}],"next":["commit the landed files, the receipt included"]}"##
+            r##"{"schema":"rk.init/10","mode":"apply","target":"/tmp/t","profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"linked-worktree"},"capabilities":{"nix_packaging":true,"reporting_policy":true,"scorecard":true,"code_scanning":"codeql"},"repo":"acme/widget","selection":[{"id":"git.guards","status":"selected","destinations":["AGENTS.md"]}],"withheld":[{"path":"flake.nix","reason":"the target already carries flake.nix"}],"config":{"action":"added","changes":[],"content":"schema_version = 2\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"created"}],"sentinels":[{"path":"/tmp/t/release-plz.toml","line":3,"text":"# TODO(release-kit): keep false for a binary-only crate"}],"next":["commit the landed files, the receipt included"]}"##
         );
         let preview = Report {
             sentinels: None,
             repo: None,
             mode: "preview",
-            nix: false,
-            scorecard: false,
-            code_scanning: None,
+            capabilities: CapabilityRequests {
+                nix_packaging: false,
+                reporting_policy: false,
+                scorecard: false,
+                code_scanning: None,
+            },
+            selection: vec![],
+            release_unavailable: Some(
+                "the release automation at (python, gitlab) has no landable files".to_owned(),
+            ),
             licence_refusal: Some("the target's Cargo.toml declares no license field".to_owned()),
             withheld: None,
             collisions: Some(vec![super::Collision {
@@ -542,7 +637,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&preview).expect("a report serializes"),
-            r#"{"schema":"rk.init/9","mode":"preview","tech":"rust","forge":"github","target":"/tmp/t","workflow":"worktree","style":"trunk","nix":false,"scorecard":false,"licence_refusal":"the target's Cargo.toml declares no license field","collisions":[{"path":"SECURITY.md","reason":"exists, and no receipt attributes it to release-kit"}],"config":{"action":"added","changes":[],"content":"schema_version = 1\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"created"}],"next":["commit the landed files, the receipt included"]}"#,
+            r#"{"schema":"rk.init/10","mode":"preview","target":"/tmp/t","profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"linked-worktree"},"capabilities":{"nix_packaging":false,"reporting_policy":false,"scorecard":false},"selection":[],"release_unavailable":"the release automation at (python, gitlab) has no landable files","licence_refusal":"the target's Cargo.toml declares no license field","collisions":[{"path":"SECURITY.md","reason":"exists, and no receipt attributes it to release-kit"}],"config":{"action":"added","changes":[],"content":"schema_version = 2\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"created"}],"next":["commit the landed files, the receipt included"]}"#,
             "a preview omits the sentinels, the unresolved repo, and an empty withheld list rather than serializing null"
         );
     }
