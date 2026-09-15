@@ -230,3 +230,54 @@ used_by = ["rust", "python", "bash"]
 purpose = "computes the OpenSSF Scorecard result and publishes it in the opt-in scorecard workflow"
 check = "https://api.github.com/repos/ossf/scorecard-action/releases/latest"
 checked = 2026-09-15
+
+# The three codeql-action entry points the two code scanning workflows run.
+# Each is its own action path, so each carries its own registry entry; they
+# share one repository, one moving major tag, and one pinned commit.
+#
+# No check URL. github/codeql-action names its releases for the CodeQL bundle
+# they carry, codeql-bundle-v2.27.0 and the like, so no endpoint answers the
+# action's own version and a comparison against the major would read every
+# release as an update. The discovery ref is the whole freshness signal here:
+# rk versions --check reports ref-moved when v4 advances, which is when the
+# pin earns a review.
+[[tool]]
+name = "codeql-init"
+version = "4"
+action = "github/codeql-action/init@v4"
+commit = "b96794f015dfd88f77b49b1c93e0fa7110f94c63"
+ref_class = "moving-major-tag"
+used_by = ["rust", "python", "bash"]
+purpose = "builds the CodeQL database in the opt-in code scanning workflow"
+checked = 2026-09-15
+
+[[tool]]
+name = "codeql-analyze"
+version = "4"
+action = "github/codeql-action/analyze@v4"
+commit = "b96794f015dfd88f77b49b1c93e0fa7110f94c63"
+ref_class = "moving-major-tag"
+used_by = ["rust", "python", "bash"]
+purpose = "runs the queries and uploads the result in the opt-in code scanning workflow"
+checked = 2026-09-15
+
+[[tool]]
+name = "codeql-upload-sarif"
+version = "4"
+action = "github/codeql-action/upload-sarif@v4"
+commit = "b96794f015dfd88f77b49b1c93e0fa7110f94c63"
+ref_class = "moving-major-tag"
+used_by = ["rust", "python", "bash"]
+purpose = "uploads the Semgrep result to code scanning in the opt-in code scanning workflow"
+checked = 2026-09-15
+
+# The Semgrep CE image the opt-in code scanning workflow runs in. An image is
+# the execution environment rather than a fetched step, so it is pinned by
+# version tag per ADR-pin-every-action-by-commit's stated boundary.
+[[tool]]
+name = "semgrep-image"
+version = "1.177.0"
+used_by = ["rust", "python", "bash"]
+purpose = "runs the Semgrep CE rules in the opt-in code scanning workflow on either forge"
+check = "https://api.github.com/repos/semgrep/semgrep/releases/latest"
+checked = 2026-09-15

@@ -138,10 +138,17 @@ pub fn run(args: &VersionsArgs) -> Result<(), RkError> {
 /// Resolve an action's discovery ref to the commit it names today and
 /// compare it against the pinned execution commit.
 fn resolve_ref(action: &str, pinned_commit: &str) -> (&'static str, Option<String>) {
-    let Some((repo, reference)) = action.split_once('@') else {
+    let Some((path, reference)) = action.split_once('@') else {
         return ("ref-unparsable", None);
     };
-    let url = format!("https://api.github.com/repos/{repo}/commits/{reference}");
+    // An action may live below its repository's root — `owner/repo/init` is
+    // one entry point of `owner/repo` — and a ref belongs to the repository,
+    // so only the first two segments address it.
+    let mut segments = path.split('/');
+    let (Some(owner), Some(repo)) = (segments.next(), segments.next()) else {
+        return ("ref-unparsable", None);
+    };
+    let url = format!("https://api.github.com/repos/{owner}/{repo}/commits/{reference}");
     let curl = std::env::var_os("RK_CURL_BIN").unwrap_or_else(|| "curl".into());
     let fetched = std::process::Command::new(curl)
         .args(["-fsSL", "--max-time", "10", &url])

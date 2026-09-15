@@ -60,6 +60,12 @@ pub struct AdoptArgs {
     #[arg(long)]
     pub scorecard: bool,
 
+    /// The target runs code scanning under this provider: codeql or
+    /// semgrep. The candidate includes its workflow and the record carries
+    /// the parameter.
+    #[arg(long, value_name = "PROVIDER")]
+    pub code_scanning: Option<String>,
+
     /// Write the config and record; without it verification runs and nothing is
     /// touched.
     #[arg(long)]

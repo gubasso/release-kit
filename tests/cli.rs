@@ -140,6 +140,7 @@ fn projection_params(
             style: Some(style),
             nix,
             scorecard: false,
+            code_scanning: None,
             trunk: release_kit::config::TRUNK_DEFAULT.to_owned(),
             line_prefix: release_kit::config::LINE_PREFIX_DEFAULT.to_owned(),
             security_contact: String::new(),
@@ -259,6 +260,7 @@ fn render_params(
             style,
             nix: false,
             scorecard: false,
+            code_scanning: None,
             trunk: release_kit::config::TRUNK_DEFAULT.to_owned(),
             line_prefix: release_kit::config::LINE_PREFIX_DEFAULT.to_owned(),
             security_contact: String::new(),
@@ -786,7 +788,7 @@ fn init_json_emits_one_object_and_nothing_else() {
             .stdout
             .clone();
         let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-        assert_eq!(report["schema"], "rk.init/8");
+        assert_eq!(report["schema"], "rk.init/9");
         assert_eq!(report["mode"], mode);
         assert!(
             report["files"].as_array().is_some_and(|f| !f.is_empty()),
@@ -7396,7 +7398,7 @@ fn status_json_is_one_object_over_a_fresh_landing() {
         .stdout
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["schema"], "rk.status/10");
+    assert_eq!(report["schema"], "rk.status/11");
     assert_eq!(report["landed"], true);
     assert_eq!(report["tech"], "rust");
     assert_eq!(report["style"], "trunk");
@@ -8211,6 +8213,67 @@ fn tree_digests(root: &Path) -> Vec<(String, String)> {
     walk(root, root, &mut out);
     out.sort();
     out
+}
+
+/// A discovery ref belongs to the action's repository, not to its path. An
+/// action below the repository root — `owner/repo/init` — resolves against
+/// `owner/repo`, because the URL a path built would name no repository at all
+/// and every such pin would read unreachable.
+#[test]
+fn a_sub_path_actions_discovery_ref_resolves_against_its_repository() {
+    let mock = tempfile::tempdir().expect("a scratch dir exists");
+    let curl = mock.path().join("curl");
+    // The mock answers exactly one URL, the repository-rooted one, and fails
+    // every other: a resolver that kept the entry-point segment would ask for
+    // /repos/github/codeql-action/init/commits/v4 and read unreachable.
+    std::fs::write(
+        &curl,
+        r#"#!/usr/bin/env bash
+url="${@: -1}"
+case "$url" in
+  "https://api.github.com/repos/github/codeql-action/commits/v4")
+    printf '%s' '{"sha":"b96794f015dfd88f77b49b1c93e0fa7110f94c63"}';;
+  */commits/*) exit 22;;
+  *) printf '%s' '{"tag_name":"v0.0.0"}';;
+esac
+"#,
+    )
+    .expect("the mock writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&curl, std::fs::Permissions::from_mode(0o755))
+            .expect("the mock is executable");
+    }
+    let out = rk()
+        .args(["versions", "--check", "--json"])
+        .env("RK_CURL_BIN", &curl)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    let pins = report["pins"].as_array().expect("a pin list");
+    let mut seen = 0;
+    for pin in pins {
+        let Some(tool) = pin["tool"].as_str() else {
+            continue;
+        };
+        if !tool.starts_with("codeql-") {
+            continue;
+        }
+        seen += 1;
+        assert_eq!(
+            pin["ref_result"], "ref-unmoved",
+            "{tool}: the ref resolves against the repository: {pin}"
+        );
+        assert_eq!(
+            pin["ref_commit"],
+            "b96794f015dfd88f77b49b1c93e0fa7110f94c63"
+        );
+    }
+    assert_eq!(seen, 3, "every codeql entry point is judged: {report}");
 }
 
 /// `rk versions --check` against a mocked fetch: all four per-pin results
@@ -14209,6 +14272,314 @@ fn an_edited_scorecard_workflow_is_rendered_drift_an_upgrade_replaces() {
         projected,
         "an upgrade replaces a rendered file from the projection"
     );
+}
+
+/// The code scanning destinations, named once for the tests below.
+const CODEQL_WORKFLOW: &str = ".github/workflows/code-scanning-codeql.yml";
+const SEMGREP_WORKFLOW_GITHUB: &str = ".github/workflows/code-scanning-semgrep.yml";
+const SEMGREP_WORKFLOW_GITLAB: &str = ".gitlab/ci/code-scanning-semgrep.yml";
+
+/// A crate seeded with one declared licence, so the codeql condition has
+/// something to read.
+fn seed_licensed_crate(target: &Path, licence: &str) {
+    std::fs::write(
+        target.join("Cargo.toml"),
+        // The dist profile too: a landed rust/github target without it fails
+        // the seeded-file invariant, and this fixture is used where the exit
+        // code must answer the licence question alone.
+        format!(
+            "[package]\nname = \"widget\"\nversion = \"0.1.0\"\nlicense = \"{licence}\"\n\n[profile.dist]\ninherits = \"release\"\n"
+        ),
+    )
+    .expect("the crate manifest writes");
+    std::fs::create_dir_all(target.join("src")).expect("the src dir exists");
+    std::fs::write(target.join("src/main.rs"), "fn main() {}\n").expect("the main writes");
+    std::fs::write(target.join("Cargo.lock"), "version = 4\n").expect("the lock writes");
+}
+
+/// Land with the code scanning capability under one provider on one forge.
+fn land_code_scanning(target: &Path, forge: &str, provider: &str) -> Command {
+    let mut command = rk();
+    command
+        .args(["init", "--tech", "rust", "--forge", forge])
+        .args(["--repo", "acme/widget", "--code-scanning", provider])
+        .arg("--target")
+        .arg(target)
+        .arg("--apply");
+    command
+}
+
+/// A rust target whose declared licence is OSI-approved gets the `CodeQL`
+/// workflow, with its provider recorded.
+#[test]
+fn an_osi_licensed_rust_target_lands_the_codeql_workflow() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    seed_licensed_crate(target.path(), "MIT OR Apache-2.0");
+    land_code_scanning(target.path(), "github", "codeql")
+        .assert()
+        .success();
+    let landed = target.path().join(CODEQL_WORKFLOW);
+    assert!(landed.is_file(), "the codeql workflow lands");
+    let text = std::fs::read_to_string(&landed).expect("the workflow reads");
+    assert!(text.contains("languages: rust"), "{text}");
+    assert!(text.contains("build-mode: none"), "{text}");
+    assert!(
+        !text.contains("pull_request"),
+        "a second request-reporting workflow gates nothing: {text}"
+    );
+    assert!(
+        !target.path().join(SEMGREP_WORKFLOW_GITHUB).exists(),
+        "one provider, one destination"
+    );
+    let manifest = read_manifest(target.path());
+    assert_eq!(manifest["parameters"]["code_scanning"], "codeql");
+    assert_eq!(
+        manifest_file(&manifest, CODEQL_WORKFLOW)["kind"],
+        "rendered"
+    );
+}
+
+/// A licence this release does not recognize as OSI-approved refuses the
+/// codeql pair by name, names the fallback, and lands nothing.
+#[test]
+fn a_licence_codeql_does_not_permit_refuses_the_pair_and_lands_nothing() {
+    for licence in ["LicenseRef-proprietary", "MIT AND LicenseRef-proprietary"] {
+        let target = tempfile::tempdir().expect("a scratch dir exists");
+        seed_licensed_crate(target.path(), licence);
+        land_code_scanning(target.path(), "github", "codeql")
+            .assert()
+            .code(73)
+            .stderr(
+                predicate::str::contains(licence)
+                    .and(predicate::str::contains("OSI-approved"))
+                    .and(predicate::str::contains("--code-scanning semgrep")),
+            );
+        assert!(
+            !target.path().join(CODEQL_WORKFLOW).exists(),
+            "{licence}: nothing lands"
+        );
+        assert!(
+            !target.path().join(".release-kit").exists(),
+            "{licence}: no receipt appears"
+        );
+    }
+}
+
+/// A crate that declares no licence at all refuses the same way: the
+/// condition is unread rather than unsatisfied, and a landing never guesses.
+#[test]
+fn a_crate_declaring_no_licence_refuses_the_codeql_pair() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    seed_crate(target.path());
+    land_code_scanning(target.path(), "github", "codeql")
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("declares no license field"));
+    assert!(!target.path().join(CODEQL_WORKFLOW).exists());
+}
+
+/// Semgrep carries no licence condition, so it lands on either forge over a
+/// licence `codeql` refuses.
+#[test]
+fn semgrep_lands_on_both_forges_with_no_licence_condition() {
+    for (forge, destination) in [
+        ("github", SEMGREP_WORKFLOW_GITHUB),
+        ("gitlab", SEMGREP_WORKFLOW_GITLAB),
+    ] {
+        let target = tempfile::tempdir().expect("a scratch dir exists");
+        seed_licensed_crate(target.path(), "LicenseRef-proprietary");
+        land_code_scanning(target.path(), forge, "semgrep")
+            .assert()
+            .success();
+        assert!(
+            target.path().join(destination).is_file(),
+            "{forge}: {destination} lands"
+        );
+        let manifest = read_manifest(target.path());
+        assert_eq!(manifest["parameters"]["code_scanning"], "semgrep");
+        assert_eq!(manifest_file(&manifest, destination)["kind"], "rendered");
+    }
+}
+
+/// codeql is GitHub's own analyzer, so the gitlab pair refuses it by name
+/// rather than recording an answer and writing nothing.
+#[test]
+fn the_gitlab_pair_refuses_codeql_by_name() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    seed_licensed_crate(target.path(), "MIT");
+    land_code_scanning(target.path(), "gitlab", "codeql")
+        .assert()
+        .code(64)
+        .stderr(
+            predicate::str::contains("codeql is GitHub's own analyzer")
+                .and(predicate::str::contains("--code-scanning semgrep")),
+        );
+    assert!(!target.path().join(".release-kit").exists());
+}
+
+/// A licence that lapses after the landing is a warning with its stable
+/// reason code, not a fault: the target is not broken and the licensing
+/// decision is the operator's.
+#[test]
+fn a_lapsed_licence_is_a_warning_and_check_still_exits_zero() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    seed_licensed_crate(target.path(), "MIT");
+    land_code_scanning(target.path(), "github", "codeql")
+        .assert()
+        .success();
+    // The sentinel a fresh landing leaves is the only violation, so filling
+    // it is what makes the exit code answer the licence question alone.
+    let seeded = target.path().join("release-plz.toml");
+    let text = std::fs::read_to_string(&seeded).expect("the seed reads");
+    let mut filled = String::new();
+    for line in text
+        .lines()
+        .filter(|line| !line.contains("TODO(release-kit)"))
+    {
+        filled.push_str(line);
+        filled.push('\n');
+    }
+    std::fs::write(&seeded, filled).expect("the seed writes");
+    rk().args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    seed_licensed_crate(target.path(), "LicenseRef-proprietary");
+    let out = rk()
+        .args(["status", "--check", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    let warnings = report["warnings"].as_array().expect("a warning list");
+    assert_eq!(warnings.len(), 1, "{report}");
+    assert_eq!(warnings[0]["code"], "code-scanning-licence");
+    assert!(
+        warnings[0]["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("LicenseRef-proprietary")),
+        "{report}"
+    );
+    assert_eq!(
+        report["violations"].as_array().expect("a list").len(),
+        0,
+        "a lapsed licence is no violation: {report}"
+    );
+    rk().args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("WARNING (code-scanning-licence)"));
+}
+
+/// Without the flag neither workflow lands on either forge, and nothing
+/// about the capability reaches the report.
+#[test]
+fn a_landing_without_the_code_scanning_flag_lands_neither_workflow() {
+    for forge in ["github", "gitlab"] {
+        let target = tempfile::tempdir().expect("a scratch dir exists");
+        seed_licensed_crate(target.path(), "MIT");
+        rk().args(["init", "--tech", "rust", "--forge", forge])
+            .args(["--repo", "acme/widget", "--target"])
+            .arg(target.path())
+            .arg("--apply")
+            .assert()
+            .success();
+        for destination in [
+            CODEQL_WORKFLOW,
+            SEMGREP_WORKFLOW_GITHUB,
+            SEMGREP_WORKFLOW_GITLAB,
+        ] {
+            assert!(
+                !target.path().join(destination).exists(),
+                "{forge}: {destination} must stay out"
+            );
+        }
+        let manifest = read_manifest(target.path());
+        assert!(
+            manifest["parameters"]["code_scanning"].is_null(),
+            "{forge}: {manifest}"
+        );
+    }
+}
+
+/// Switching provider retires one destination and adds the other: the
+/// retired file stays on disk as the target's own, exactly as any file this
+/// binary stops shipping does.
+#[test]
+fn switching_the_code_scanning_provider_retires_the_other_destination() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    seed_licensed_crate(target.path(), "MIT");
+    land_code_scanning(target.path(), "github", "codeql")
+        .assert()
+        .success();
+    rk().args([
+        "upgrade",
+        "--code-scanning",
+        "semgrep",
+        "--apply",
+        "--target",
+    ])
+    .arg(target.path())
+    .assert()
+    .success();
+    assert!(
+        target.path().join(SEMGREP_WORKFLOW_GITHUB).is_file(),
+        "the new provider's workflow lands"
+    );
+    assert!(
+        target.path().join(CODEQL_WORKFLOW).is_file(),
+        "a released destination stays on disk"
+    );
+    let manifest = read_manifest(target.path());
+    assert_eq!(manifest["parameters"]["code_scanning"], "semgrep");
+    assert!(
+        manifest["files"]
+            .as_array()
+            .expect("a file list")
+            .iter()
+            .all(|file| file["destination"] != CODEQL_WORKFLOW),
+        "the retired destination leaves the receipt"
+    );
+    rk().args(["upgrade", "--code-scanning", "off", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    assert!(read_manifest(target.path())["parameters"]["code_scanning"].is_null());
+    rk().args(["upgrade", "--code-scanning", "sonar", "--target"])
+        .arg(target.path())
+        .assert()
+        .code(64)
+        .stderr(predicate::str::contains(
+            "the providers are: codeql, semgrep",
+        ));
+}
+
+/// A receipt predating the parameter upgrades to no provider, and no
+/// workflow sprouts.
+#[test]
+fn a_pre_code_scanning_record_upgrades_to_nothing_unrequested() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    seed_licensed_crate(target.path(), "MIT");
+    land_rust(target.path()).success();
+    let mut manifest = read_manifest(target.path());
+    manifest["schema_version"] = serde_json::json!(7);
+    manifest["parameters"]
+        .as_object_mut()
+        .expect("parameters is an object")
+        .remove("code_scanning");
+    write_manifest(target.path(), &manifest);
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    for destination in [CODEQL_WORKFLOW, SEMGREP_WORKFLOW_GITHUB] {
+        assert!(!target.path().join(destination).exists(), "{destination}");
+    }
+    assert!(read_manifest(target.path())["parameters"]["code_scanning"].is_null());
 }
 
 /// Turning the capability off drops the destination from the receipt and
@@ -22584,7 +22955,7 @@ fn the_landing_runbook_names_the_real_stage_fields() {
     let scratch = tempfile::tempdir().expect("a scratch dir exists");
     let target = stage_target();
     let report = stage_json(target.path(), &scratch.path().join("stage"));
-    assert_eq!(report["schema"], "rk.stage/2");
+    assert_eq!(report["schema"], "rk.stage/3");
     for top in [
         "schema",
         "rk_version",
@@ -23831,6 +24202,48 @@ fn stage_output_precedence_is_flag_then_env_then_state_root() {
 
 /// SATISFIES staging:a-stage-is-one-target-specific-candidate
 ///
+/// The code scanning arm of the same rule, on the forge whose file a
+/// GitLab landing writes under a pipeline include.
+#[test]
+fn a_staged_semgrep_workflow_equals_the_landed_one() {
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let target = tempfile::tempdir().expect("a scratch target exists");
+    std::fs::create_dir_all(target.path().join(".git")).expect("the target is a repository");
+    seed_licensed_crate(target.path(), "MIT");
+    let output = scratch.path().join("stage");
+    rk().env_remove("RK_STAGE_ROOT")
+        .args(["stage", "--tech", "rust", "--forge", "gitlab"])
+        .args(["--repo", "acme/widget", "--code-scanning", "semgrep"])
+        .arg("--target")
+        .arg(target.path())
+        .arg("--output")
+        .arg(&output)
+        .assert()
+        .success();
+    let staged = std::fs::read(output.join("artifacts").join(SEMGREP_WORKFLOW_GITLAB))
+        .expect("the stage carries the candidate");
+    land_code_scanning(target.path(), "gitlab", "semgrep")
+        .assert()
+        .success();
+    let landed =
+        std::fs::read(target.path().join(SEMGREP_WORKFLOW_GITLAB)).expect("the landing wrote it");
+    assert_eq!(
+        staged, landed,
+        "the stage and the production landing render one projection"
+    );
+    // The rendered pipeline includes the job only where the file exists, so
+    // a target that did not opt in runs a pipeline that never names it.
+    let pipeline =
+        std::fs::read_to_string(target.path().join(".gitlab-ci.yml")).expect("the pipeline reads");
+    assert!(
+        pipeline.contains("- local: .gitlab/ci/code-scanning-semgrep.yml"),
+        "{pipeline}"
+    );
+    assert!(pipeline.contains("- exists:"), "{pipeline}");
+}
+
+/// SATISFIES staging:a-stage-is-one-target-specific-candidate
+///
 /// One capability, one projection: the workflow an agent studies in a
 /// stage is byte for byte the workflow the production landing writes.
 #[test]
@@ -24304,7 +24717,7 @@ fn the_stage_receipt_and_human_output_snapshot_hold() {
     ];
     assert_eq!(top_level_keys(&receipt_text), receipt_keys);
     let receipt = stage_receipt(&stage);
-    assert_eq!(receipt["schema"], "rk.stage/2");
+    assert_eq!(receipt["schema"], "rk.stage/3");
     assert_eq!(receipt["rk_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(receipt["target"], canonical_target.display().to_string());
     assert_eq!(receipt["stage_root"], stage.display().to_string());
@@ -24475,7 +24888,7 @@ fn stage_clean_refuses_every_protected_or_ambiguous_path_and_deletes_one_valid_s
     std::fs::write(
         ancestor.join("stage.json"),
         format!(
-            r#"{{"schema":"rk.stage/2","stage_root":"{}","target":"{}"}}"#,
+            r#"{{"schema":"rk.stage/3","stage_root":"{}","target":"{}"}}"#,
             ancestor.display(),
             ancestor.join("inner").display()
         ),
@@ -24509,7 +24922,7 @@ fn stage_clean_refuses_every_protected_or_ambiguous_path_and_deletes_one_valid_s
     // A receipt at another schema.
     let other = canonical.join("other");
     std::fs::create_dir(&other).expect("creates");
-    std::fs::write(other.join("stage.json"), r#"{"schema":"rk.stage/3"}"#).expect("writes");
+    std::fs::write(other.join("stage.json"), r#"{"schema":"rk.stage/4"}"#).expect("writes");
     let json = clean(&other)
         .arg("--json")
         .assert()
@@ -25689,11 +26102,11 @@ fn production_outputs_carry_no_plan_bundle_or_release_selection_field() {
         .map(|(_, document)| document["schema"].as_str().expect("a schema"))
         .collect();
     for expected in [
-        "rk.init/8",
+        "rk.init/9",
         "rk.assess/3",
-        "rk.status/10",
-        "rk.upgrade/8",
-        "rk.adopt/8",
+        "rk.status/11",
+        "rk.upgrade/9",
+        "rk.adopt/9",
     ] {
         assert!(
             schemas.contains(&expected),
@@ -27567,7 +27980,7 @@ fn a_public_v0_4_0_target_upgrades_from_its_receipt_alone() {
         .stdout
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["schema"], "rk.upgrade/8", "{report}");
+    assert_eq!(report["schema"], "rk.upgrade/9", "{report}");
     assert_eq!(report["from_version"], "0.4.0", "{report}");
     let action_of = |destination: &str| -> String {
         report["files"]

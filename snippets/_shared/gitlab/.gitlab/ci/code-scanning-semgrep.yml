@@ -1,0 +1,39 @@
+# Static analysis, Semgrep CE. A landing writes this file only under the
+# recorded code-scanning opt-in with semgrep chosen. The rendered
+# .gitlab-ci.yml includes it only where it exists, so a target that did not
+# opt in runs a pipeline that never names it.
+#
+# Semgrep rather than this forge's own SAST template: GitLab SAST is free
+# at every tier, and it ships no GitLab-managed Rust ruleset, so the
+# template would run and scan nothing. forges/gitlab.md states it.
+#
+# The image is pinned by version tag. It is the execution environment
+# rather than a fetched step, which is the boundary
+# ADR-pin-every-action-by-commit draws, and nothing this forge's pipeline
+# runs fetches CI code at all.
+#
+# The report is a CI artifact rather than a merge-request widget. The
+# vulnerability report that reads a SAST artifact is an Ultimate-tier
+# feature, so on every other tier the artifact is what a reader opens.
+
+code-scanning:
+  stage: test
+  image: semgrep/semgrep:1.177.0
+  # The trunk and the release lines, never a merge request: this pipeline's
+  # merge check is the whole pipeline, so a scan that blocked a merge would
+  # block it on a finding the author cannot triage in the request.
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "RK_TRUNK_BRANCH"'
+    - if: '$CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/'
+  # The public rust ruleset, named rather than resolved: --config auto asks
+  # the registry which rules apply and needs an account token, which this
+  # convention does not ask a target to hold.
+  script:
+    - semgrep scan --config p/rust --sarif --output semgrep.sarif
+  artifacts:
+    when: always
+    paths:
+      - semgrep.sarif
+    expire_in: 30 days

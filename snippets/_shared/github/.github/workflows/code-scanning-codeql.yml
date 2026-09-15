@@ -1,0 +1,52 @@
+# Static analysis, CodeQL. A landing writes this file only under the
+# recorded code-scanning opt-in with codeql chosen, and only where the
+# binding's declared licence is OSI-approved: CodeQL's terms cover an
+# open-source codebase, and a run over anything else needs a paid seat, so
+# a landing that guessed would write a licence violation. bindings/rust.md
+# states which field the licence is read from and what the two other
+# providers cost.
+#
+# The scan reads the binding's own language and no other. The actions
+# language is left out on purpose: the exclusion that would spare a
+# generated release workflow is undocumented for it, so a scan there
+# reports findings on a file this convention does not write.
+#
+# This workflow does not trigger on a pull request, and that is deliberate.
+# The forge resolves a job's needs inside one workflow file, so a second
+# request-reporting workflow holds no merge whatever it proves, and the
+# trunk protection requires one project-owned context beside the title
+# check. forges/github.md states the rule.
+
+name: code-scanning
+
+on:
+  push:
+    branches: [RK_TRUNK_BRANCH]
+  schedule:
+    # Weekly. A query pack updates upstream, so a scan finds what a scan at
+    # the last push could not.
+    - cron: '17 3 * * 1'
+
+permissions: {}
+
+jobs:
+  code-scanning:
+    name: code-scanning
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # The scan uploads its SARIF to this repository's code scanning.
+      security-events: write
+    steps:
+      - name: check out the trunk
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: the database is built
+        uses: github/codeql-action/init@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4
+        with:
+          languages: rust
+          # Rust needs no build to produce a database.
+          build-mode: none
+      - name: the queries run and the result uploads
+        uses: github/codeql-action/analyze@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4

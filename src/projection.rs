@@ -34,6 +34,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::embedded;
 use crate::error::RkError;
+pub use crate::landing::manifest::Provider;
 use crate::landing::{Params, Workflow};
 
 /// The complete input to one projection: the resolved landing parameters
@@ -101,6 +102,12 @@ pub struct Projection {
     /// The block destinations whose existing document offers the block no
     /// place, a target-side defect staging explains and landing refuses.
     pub collisions: Vec<Collision>,
+    /// Why the recorded code scanning provider's licence condition refuses
+    /// this target, or `None` where no condition applies or the licence
+    /// satisfies it. A landing verb refuses on it and writes nothing; `rk
+    /// status` reports it as a warning and still exits 0, because the
+    /// target is not broken and the operator owns the licensing decision.
+    pub licence_refusal: Option<String>,
 }
 
 /// One proposed destination.
@@ -187,6 +194,9 @@ impl Projection {
             {
                 continue;
             }
+            if code_scanning_withheld(&selected.destination, params.code_scanning()) {
+                continue;
+            }
             let kind = kind_of(&selected.destination).ok_or_else(|| {
                 anyhow::anyhow!(
                     "the embedded sources do not classify {}; the kind table is stale",
@@ -255,10 +265,16 @@ impl Projection {
         }
         candidates.sort_by(|a, b| a.destination.cmp(&b.destination));
         omissions.sort_by(|a, b| a.destination.cmp(&b.destination));
+        let licence_refusal = code_scanning_licence_refusal(
+            params.code_scanning(),
+            params.tech(),
+            &evidence.crate_shape,
+        );
         Ok(Self {
             candidates,
             omissions,
             collisions,
+            licence_refusal,
         })
     }
 }
@@ -432,12 +448,18 @@ impl Kind {
 /// OIDC permission, so release-kit owns them; the tool configurations are
 /// per-project judgment; the two state files are rewritten by the release
 /// automation itself.
-const KINDS: [(&str, Kind); 17] = [
+const KINDS: [(&str, Kind); 20] = [
     (".github/workflows/release-plz.yml", Kind::Rendered),
     (".github/workflows/release-please.yml", Kind::Rendered),
     (".github/workflows/release.yml", Kind::Rendered),
     (".github/workflows/pr-title.yml", Kind::Rendered),
     (".github/workflows/scorecard.yml", Kind::Rendered),
+    (".github/workflows/code-scanning-codeql.yml", Kind::Rendered),
+    (
+        ".github/workflows/code-scanning-semgrep.yml",
+        Kind::Rendered,
+    ),
+    (".gitlab/ci/code-scanning-semgrep.yml", Kind::Rendered),
     (".gitlab-ci.yml", Kind::Rendered),
     ("SECURITY.md", Kind::Rendered),
     (".gitlab/ci/mr-title.yml", Kind::Rendered),
@@ -489,6 +511,154 @@ pub const NIX_WITHHOLDABLE: [&str; 2] = ["flake.nix", "flake.lock"];
 /// target is expected to tune, so release-kit owns them and an edit is
 /// drift.
 pub const SCORECARD_DESTINATIONS: [&str; 1] = [".github/workflows/scorecard.yml"];
+
+/// Every destination the opt-in code scanning capability can land, against
+/// the provider that lands it.
+///
+/// One source owns one destination, so the provider is in the name: a
+/// landing writes exactly the entry its recorded provider names and the
+/// forge ships. Switching provider retires one destination and adds
+/// another, which `landing:a-dropped-file-stays` already answers.
+///
+/// `codeql` is GitHub's own analyzer and has no GitLab entry, so a GitLab
+/// landing that names it lands nothing; the parameter resolution refuses
+/// that pair by name before it gets here.
+pub const CODE_SCANNING_DESTINATIONS: [(&str, Provider); 3] = [
+    (
+        ".github/workflows/code-scanning-codeql.yml",
+        Provider::CodeQl,
+    ),
+    (
+        ".github/workflows/code-scanning-semgrep.yml",
+        Provider::Semgrep,
+    ),
+    (".gitlab/ci/code-scanning-semgrep.yml", Provider::Semgrep),
+];
+
+/// Whether `destination` belongs to the code scanning capability, and
+/// whether `provider` is the answer that lands it.
+fn code_scanning_withheld(destination: &str, provider: Option<Provider>) -> bool {
+    CODE_SCANNING_DESTINATIONS
+        .iter()
+        .any(|(name, owner)| *name == destination && provider != Some(*owner))
+}
+
+/// The SPDX identifiers this convention recognizes as OSI-approved, sorted.
+///
+/// A closed list rather than a parse of the OSI register: the register moves
+/// and this binary reads no network, so an identifier absent here is
+/// unrecognized rather than rejected, and the refusal says so. Every entry
+/// is an OSI-approved licence that appears on published Rust crates.
+const OSI_APPROVED: [&str; 18] = [
+    "0BSD",
+    "AGPL-3.0",
+    "AGPL-3.0-only",
+    "AGPL-3.0-or-later",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "EPL-2.0",
+    "GPL-2.0",
+    "GPL-2.0-only",
+    "GPL-2.0-or-later",
+    "GPL-3.0",
+    "GPL-3.0-only",
+    "GPL-3.0-or-later",
+    "ISC",
+    "MIT",
+    "MPL-2.0",
+];
+
+/// Whether every operand of an SPDX expression is OSI-approved.
+///
+/// The expression grammar a crate manifest uses in practice: identifiers
+/// joined by `AND`, `OR`, and `WITH`, with parentheses. Every operand must
+/// be recognized, because a codebase offered under one non-approved term is
+/// a codebase whose reader may take that term. A `+` suffix reads as the
+/// bare identifier, which is what the deprecated `GPL-3.0+` form means.
+#[must_use]
+pub fn licence_is_osi_approved(expression: &str) -> bool {
+    let cleaned = expression.replace(['(', ')'], " ");
+    let mut operands = 0usize;
+    let mut skip_next = false;
+    for token in cleaned.split_whitespace() {
+        // The token after WITH names an SPDX exception rather than a
+        // licence. An exception lives in its own register, and the question
+        // here is which licence the codebase is offered under, so the
+        // exception is read past rather than looked up.
+        if std::mem::replace(&mut skip_next, false) {
+            continue;
+        }
+        if token == "WITH" {
+            skip_next = true;
+            continue;
+        }
+        if matches!(token, "AND" | "OR") {
+            continue;
+        }
+        operands += 1;
+        let identifier = token.strip_suffix('+').unwrap_or(token);
+        if !OSI_APPROVED.contains(&identifier) {
+            return false;
+        }
+    }
+    operands > 0
+}
+
+/// Why the code scanning capability's licence condition refuses this
+/// target, or `None` where no condition applies or the licence satisfies
+/// it.
+///
+/// Only `codeql` carries a condition: its terms cover an open-source
+/// codebase, and a run over anything else needs a paid seat, so a landing
+/// that guessed would write a licence violation. Semgrep CE carries none,
+/// and is the fallback the refusal names.
+///
+/// The licence is read where the binding declares it. For `rust` that is
+/// the `license` field of `Cargo.toml`. A manifest that names a
+/// `license-file` instead states no identifier this judgment can read, so
+/// the pair refuses rather than guessing at the file's contents.
+#[must_use]
+pub fn code_scanning_licence_refusal(
+    provider: Option<Provider>,
+    tech: &str,
+    shape: &CrateShape,
+) -> Option<String> {
+    if provider != Some(Provider::CodeQl) {
+        return None;
+    }
+    if tech != "rust" {
+        return Some(format!(
+            "the {tech} binding declares no licence field this release reads, and codeql's terms cover an open-source codebase alone; land --code-scanning semgrep, which carries no licence condition"
+        ));
+    }
+    let fallback = "land --code-scanning semgrep, which carries no licence condition";
+    let Some(text) = shape.cargo_toml.as_deref() else {
+        return Some(format!(
+            "the target has no readable Cargo.toml, so the licence codeql's terms depend on cannot be read; {fallback}"
+        ));
+    };
+    let Ok(table) = text.parse::<toml::Table>() else {
+        return Some(format!(
+            "the target's Cargo.toml does not parse, so the licence codeql's terms depend on cannot be read; {fallback}"
+        ));
+    };
+    let licence = table
+        .get("package")
+        .and_then(toml::Value::as_table)
+        .and_then(|package| package.get("license"))
+        .and_then(toml::Value::as_str);
+    match licence {
+        None => Some(format!(
+            "the target's Cargo.toml declares no license field, and codeql's terms cover an open-source codebase alone; declare one, or {fallback}"
+        )),
+        Some(expression) if !licence_is_osi_approved(expression) => Some(format!(
+            "the target's license, {expression}, is not one this release recognizes as OSI-approved, and codeql's terms cover an open-source codebase alone; {fallback}"
+        )),
+        Some(_) => None,
+    }
+}
 
 /// The declared kind of a destination, or `None` for a file the sources
 /// does not classify.
@@ -1398,6 +1568,118 @@ mod tests {
         assert_eq!(candidate.placement, Placement::Whole);
         let text = String::from_utf8_lossy(&candidate.bytes);
         assert!(!text.contains("RK_"), "a token survived: {text}");
+    }
+
+    /// The licence judgment over the expression forms a crate manifest
+    /// uses: every operand must be recognized, a disjunction of approved
+    /// terms passes, and one unapproved operand anywhere fails.
+    #[test]
+    fn the_licence_judgment_reads_every_operand() {
+        use super::licence_is_osi_approved as approved;
+        for expression in [
+            "MIT",
+            "Apache-2.0",
+            "MIT OR Apache-2.0",
+            "MIT AND Apache-2.0",
+            "(MIT OR Apache-2.0) AND ISC",
+            "Apache-2.0 WITH LLVM-exception OR MIT",
+            "GPL-3.0+",
+        ] {
+            assert!(approved(expression), "{expression} is OSI-approved");
+        }
+        for expression in [
+            "",
+            "   ",
+            "LicenseRef-proprietary",
+            "MIT AND LicenseRef-proprietary",
+            "SEE LICENSE IN COPYING",
+            "CC-BY-4.0",
+            "mit",
+        ] {
+            assert!(!approved(expression), "{expression} is not recognized");
+        }
+    }
+
+    /// The code scanning capability: the provider gates its own destination,
+    /// semgrep carries no licence condition, and codeql's condition reads the
+    /// crate's declared licence without touching the filesystem.
+    #[test]
+    fn the_code_scanning_destinations_follow_the_recorded_provider() {
+        use super::{
+            CODE_SCANNING_DESTINATIONS, Kind, Provider, code_scanning_licence_refusal, kind_of,
+        };
+        for (destination, _) in CODE_SCANNING_DESTINATIONS {
+            assert_eq!(kind_of(destination), Some(Kind::Rendered), "{destination}");
+        }
+
+        let project = |provider: Option<Provider>| {
+            let mut params = Params::for_test("acme/widget", Some(Style::Trunk));
+            params.set_code_scanning_for_test(provider);
+            Projection::compute(&ProjectionInput {
+                params,
+                evidence: TargetEvidence {
+                    crate_shape: CrateShape {
+                        cargo_toml: Some(
+                            "[package]\nname = \"widget\"\nlicense = \"MIT\"\n".to_owned(),
+                        ),
+                        ..CrateShape::default()
+                    },
+                    ..TargetEvidence::default()
+                },
+            })
+            .expect("the embedded pair projects")
+        };
+        let landed = |projection: &Projection, destination: &str| {
+            projection
+                .candidates
+                .iter()
+                .any(|candidate| candidate.destination == destination)
+        };
+
+        let off = project(None);
+        for (destination, _) in CODE_SCANNING_DESTINATIONS {
+            assert!(!landed(&off, destination), "{destination}");
+        }
+        assert!(off.licence_refusal.is_none());
+
+        let codeql = project(Some(Provider::CodeQl));
+        assert!(landed(
+            &codeql,
+            ".github/workflows/code-scanning-codeql.yml"
+        ));
+        assert!(!landed(
+            &codeql,
+            ".github/workflows/code-scanning-semgrep.yml"
+        ));
+        assert!(codeql.licence_refusal.is_none(), "MIT satisfies the terms");
+
+        let semgrep = project(Some(Provider::Semgrep));
+        assert!(landed(
+            &semgrep,
+            ".github/workflows/code-scanning-semgrep.yml"
+        ));
+        assert!(!landed(
+            &semgrep,
+            ".github/workflows/code-scanning-codeql.yml"
+        ));
+
+        // Semgrep carries no condition, whatever the licence says.
+        let proprietary = CrateShape {
+            cargo_toml: Some("[package]\nlicense = \"LicenseRef-proprietary\"\n".to_owned()),
+            ..CrateShape::default()
+        };
+        assert!(
+            code_scanning_licence_refusal(Some(Provider::Semgrep), "rust", &proprietary).is_none()
+        );
+        let refusal = code_scanning_licence_refusal(Some(Provider::CodeQl), "rust", &proprietary)
+            .expect("codeql refuses a licence its terms do not cover");
+        assert!(refusal.contains("LicenseRef-proprietary"), "{refusal}");
+        assert!(refusal.contains("semgrep"), "{refusal}");
+        // A binding whose licence field this release does not read refuses
+        // rather than assuming the terms are met.
+        let bash = code_scanning_licence_refusal(Some(Provider::CodeQl), "bash", &proprietary)
+            .expect("an unread binding refuses");
+        assert!(bash.contains("bash binding"), "{bash}");
     }
 
     /// The pure boundary, held by a source scan over this file's

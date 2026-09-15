@@ -65,6 +65,9 @@
     "attest": "4",
     "cargo-dist": "0.32.0",
     "checkout": "4",
+    "codeql-analyze": "4",
+    "codeql-init": "4",
+    "codeql-upload-sarif": "4",
     "conventional-pre-commit": "4.4.0",
     "create-github-app-token": "3",
     "dist-checkout": "6",
@@ -76,6 +79,7 @@
     "pre-commit-hooks": "6.0.0",
     "release-plz": "0.3.160",
     "rust-toolchain": "stable",
-    "scorecard-action": "2.4.4"
+    "scorecard-action": "2.4.4",
+    "semgrep-image": "1.177.0"
   }
 }

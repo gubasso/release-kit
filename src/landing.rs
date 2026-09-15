@@ -24,14 +24,14 @@ use camino::Utf8Path;
 
 pub use crate::projection::{
     AGENTS_DESTINATION, BLOCK_BEGIN, BLOCK_DESTINATIONS, BLOCK_END, BRANCH_GRAMMAR,
-    GLOSSARY_DESTINATION, HOOK_TYPES_LINE, HOOKS_BEGIN, HOOKS_DESTINATION, HOOKS_END, Kind,
-    LINE_PREFIX_RE_TOKEN, LINE_PREFIX_TOKEN, NIX_DESTINATIONS, NIX_WITHHOLDABLE, OWNER_TOKEN,
-    REPO_PLACEHOLDER, REPO_TOKEN, SCOPE_SHAPE, SCOPE_SHAPE_TOKEN, SCORECARD_DESTINATIONS,
-    SECURITY_SPANS, STYLE_TOKEN, TRUNK_BRANCH_TOKEN, authored, block_markers, destinations,
-    extract_block, hooks_marker_defect, kind_of, marker_defect, render, scope_is_shaped,
-    splice_hooks_block, splice_marked_block, substitute,
+    CODE_SCANNING_DESTINATIONS, GLOSSARY_DESTINATION, HOOK_TYPES_LINE, HOOKS_BEGIN,
+    HOOKS_DESTINATION, HOOKS_END, Kind, LINE_PREFIX_RE_TOKEN, LINE_PREFIX_TOKEN, NIX_DESTINATIONS,
+    NIX_WITHHOLDABLE, OWNER_TOKEN, REPO_PLACEHOLDER, REPO_TOKEN, SCOPE_SHAPE, SCOPE_SHAPE_TOKEN,
+    SCORECARD_DESTINATIONS, SECURITY_SPANS, STYLE_TOKEN, TRUNK_BRANCH_TOKEN, authored,
+    block_markers, destinations, extract_block, hooks_marker_defect, kind_of, marker_defect,
+    render, scope_is_shaped, splice_hooks_block, splice_marked_block, substitute,
 };
-pub use manifest::{Style, Workflow};
+pub use manifest::{Provider, Style, Workflow};
 use serde::Serialize;
 
 use crate::diagnostic::{Diagnostic, Reason};
@@ -48,6 +48,7 @@ pub struct Params {
     style: Option<Style>,
     nix: bool,
     scorecard: bool,
+    code_scanning: Option<Provider>,
     trunk: String,
     line_prefix: String,
     security_contact: String,
@@ -71,6 +72,9 @@ pub struct Inputs<'a> {
     pub nix: Option<bool>,
     /// Scorecard capability override.
     pub scorecard: Option<bool>,
+    /// Code scanning capability override: `Some(None)` turns it off, and
+    /// absence leaves the configuration and the record to answer.
+    pub code_scanning: Option<Option<Provider>>,
 }
 
 /// Compatibility policy for a landing candidate.
@@ -99,6 +103,7 @@ impl Params {
             style: record.parameters.style,
             nix: record.parameters.nix,
             scorecard: record.parameters.scorecard,
+            code_scanning: record.parameters.code_scanning,
             trunk: record.parameters.trunk.clone(),
             line_prefix: record.parameters.line_prefix.clone(),
             security_contact: record.parameters.security_contact.clone(),
@@ -195,6 +200,7 @@ impl Params {
             .unwrap_or_else(|| crate::config::RESPONSE_DEFAULT.to_owned());
         let security_response = crate::config::canonical_response(&security_response)
             .map_err(crate::config::invalid)?;
+        let code_scanning = resolve_code_scanning(flags, config, record, &resolved.forge)?;
         Ok(Self {
             tech,
             forge: resolved.forge,
@@ -211,6 +217,7 @@ impl Params {
                 .or_else(|| config.and_then(|c| c.landing.scorecard))
                 .or_else(|| record.map(|r| r.parameters.scorecard))
                 .unwrap_or(false),
+            code_scanning,
             trunk,
             line_prefix,
             security_contact,
@@ -240,6 +247,12 @@ impl Params {
     #[must_use]
     pub const fn scorecard(&self) -> bool {
         self.scorecard
+    }
+
+    /// The code scanning provider this landing opted into, if any.
+    #[must_use]
+    pub const fn code_scanning(&self) -> Option<Provider> {
+        self.code_scanning
     }
 
     /// The project path used by parameter-bearing blocks.
@@ -300,6 +313,7 @@ impl Params {
             style,
             nix: false,
             scorecard: false,
+            code_scanning: None,
             trunk: crate::config::TRUNK_DEFAULT.to_owned(),
             line_prefix: crate::config::LINE_PREFIX_DEFAULT.to_owned(),
             security_contact: String::new(),
@@ -325,6 +339,49 @@ impl Params {
     pub(crate) fn set_scorecard_for_test(&mut self, scorecard: bool) {
         self.scorecard = scorecard;
     }
+
+    /// The same set with the code scanning provider answered.
+    pub(crate) fn set_code_scanning_for_test(&mut self, provider: Option<Provider>) {
+        self.code_scanning = provider;
+    }
+}
+
+/// The code scanning provider one landing resolves, and the one pair that
+/// refuses by name.
+///
+/// The precedence is every other parameter's: the flag, then the committed
+/// configuration, then the record. A configured key answers as the string it
+/// carries, so `off` is an answer and an absent key is not.
+///
+/// `codeql` is GitHub's own analyzer and no other forge's zone ships a
+/// workflow for it, so the pair refuses here rather than recording an answer
+/// and landing nothing.
+///
+/// # Errors
+///
+/// [`RkError::Usage`] for a configured provider name that is not one of the
+/// two, and for `codeql` on any forge but GitHub.
+fn resolve_code_scanning(
+    flags: &Inputs<'_>,
+    config: Option<&crate::config::Config>,
+    record: Option<&manifest::Manifest>,
+    forge: &str,
+) -> Result<Option<Provider>, RkError> {
+    let configured = config
+        .and_then(|c| c.landing.code_scanning.as_deref())
+        .map(Provider::parse)
+        .transpose()?;
+    let provider = flags
+        .code_scanning
+        .or(configured)
+        .or_else(|| record.map(|r| r.parameters.code_scanning))
+        .unwrap_or(None);
+    if provider == Some(Provider::CodeQl) && forge != "github" {
+        return Err(RkError::Usage(format!(
+            "codeql is GitHub's own analyzer and the {forge} pair ships no workflow for it; pass --code-scanning semgrep"
+        )));
+    }
+    Ok(provider)
 }
 
 /// One destination a landing withholds, with why.
@@ -437,7 +494,7 @@ mod tests {
     use super::{
         AGENTS_DESTINATION, BLOCK_BEGIN, BLOCK_DESTINATIONS, BLOCK_END, BRANCH_GRAMMAR,
         GLOSSARY_DESTINATION, HOOK_TYPES_LINE, HOOKS_BEGIN, HOOKS_DESTINATION, HOOKS_END, Kind,
-        SCOPE_SHAPE, Style, Workflow, extract_block, kind_of, render, splice_hooks_block,
+        Provider, SCOPE_SHAPE, Style, Workflow, extract_block, kind_of, render, splice_hooks_block,
         splice_marked_block,
     };
     use crate::embedded;
@@ -742,9 +799,12 @@ mod tests {
             for forge in ["github", "gitlab"] {
                 for workflow in [Workflow::Branches, Workflow::Worktree] {
                     for style in [None, Some(Style::Trunk), Some(Style::Lines)] {
-                        for (nix, scorecard) in
-                            [(false, false), (false, true), (true, false), (true, true)]
-                        {
+                        for ((nix, scorecard), code_scanning) in [
+                            ((false, false), None),
+                            ((false, true), Some(Provider::Semgrep)),
+                            ((true, false), Some(Provider::CodeQl)),
+                            ((true, true), None),
+                        ] {
                             let record = manifest::Manifest {
                                 schema_version: manifest::SCHEMA_VERSION,
                                 rk_version: "0.1.0".to_owned(),
@@ -758,6 +818,7 @@ mod tests {
                                     style,
                                     nix,
                                     scorecard,
+                                    code_scanning,
                                     trunk: crate::config::TRUNK_DEFAULT.to_owned(),
                                     line_prefix: crate::config::LINE_PREFIX_DEFAULT.to_owned(),
                                     security_contact: String::new(),
@@ -778,6 +839,7 @@ mod tests {
                             assert_eq!(params.style(), style);
                             assert_eq!(params.nix, nix);
                             assert_eq!(params.scorecard, scorecard);
+                            assert_eq!(params.code_scanning, code_scanning);
                             // The loaded record and the same answers given
                             // directly project the same candidate tree.
                             let mut direct = super::Params::for_test("acme/team/widget", style);
@@ -786,6 +848,7 @@ mod tests {
                             direct.workflow = workflow;
                             direct.nix = nix;
                             direct.scorecard = scorecard;
+                            direct.code_scanning = code_scanning;
                             assert_eq!(params, direct);
                             let projected = destinations(&params);
                             for block in
@@ -824,6 +887,7 @@ mod tests {
         style: Option<Style>,
         nix: bool,
         scorecard: bool,
+        code_scanning: Option<Provider>,
     ) -> Result<super::Params, crate::error::RkError> {
         super::Params::resolve(
             camino::Utf8Path::new("."),
@@ -835,6 +899,7 @@ mod tests {
                 style,
                 nix: Some(nix),
                 scorecard: Some(scorecard),
+                code_scanning: Some(code_scanning),
             },
             None,
             None,
@@ -857,6 +922,7 @@ mod tests {
             Some(Style::Trunk),
             false,
             false,
+            None,
         )
         .expect("the parameters resolve");
         let entries = Projection::compute(&ProjectionInput {
@@ -927,6 +993,7 @@ mod tests {
                     Some(Style::Trunk),
                     nix,
                     false,
+                    None,
                 )
                 .expect("the parameters resolve"),
             )
@@ -961,6 +1028,7 @@ mod tests {
                 Some(Style::Trunk),
                 true,
                 false,
+                None,
             )
             .expect("the parameters resolve"),
         );
@@ -1009,6 +1077,7 @@ mod tests {
                 Some(Style::Trunk),
                 nix,
                 false,
+                None,
             )
             .expect("the parameters resolve");
             let evidence = TargetEvidence::gather(target, None).expect("the evidence reads");

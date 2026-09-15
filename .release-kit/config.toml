@@ -16,6 +16,7 @@ workflow = "worktree" # P: worktree or branches
 style = "trunk" # P: trunk or lines
 nix = false # P: opt-in Nix capability
 scorecard = false # P: opt-in OpenSSF Scorecard workflow, github only
+code_scanning = "off" # P: opt-in code scanning provider: codeql, semgrep, or off
 
 [security]
 advisories = "" # N: project receiving vulnerability reports

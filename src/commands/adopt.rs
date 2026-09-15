@@ -20,7 +20,7 @@ use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
 use crate::held;
 use crate::landing::apply::{self, Prepared};
-use crate::landing::manifest::{self, Style, Workflow};
+use crate::landing::manifest::{self, Provider, Style, Workflow};
 use crate::landing::{self, Kind, lock};
 use crate::output::Output;
 use crate::projection::Placement;
@@ -59,6 +59,15 @@ struct Report {
     nix: bool,
     /// Whether the target runs the Scorecard capability.
     scorecard: bool,
+    /// The code scanning provider the landing carries, absent where the
+    /// project did not opt in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code_scanning: Option<&'static str>,
+    /// Why the provider's licence condition refuses this target, absent
+    /// where no condition applies or the licence satisfies it. A preview
+    /// reports it and exits 0; the apply refuses on it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    licence_refusal: Option<String>,
     /// The Nix destinations excluded from the candidate, each with why;
     /// absent where nothing was withheld.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -137,6 +146,11 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
             style: args.style.as_deref().map(Style::parse).transpose()?,
             nix: args.nix.then_some(true),
             scorecard: args.scorecard.then_some(true),
+            code_scanning: args
+                .code_scanning
+                .as_deref()
+                .map(Provider::parse)
+                .transpose()?,
         },
         config.as_ref(),
         None,
@@ -208,7 +222,7 @@ fn report(
     ));
     out.next(&next);
     out.emit(&Report {
-        schema: "rk.adopt/8",
+        schema: "rk.adopt/9",
         config: prepared.config.clone(),
         mode: if args.apply { "apply" } else { "preview" },
         target: args.target.to_string(),
@@ -219,6 +233,8 @@ fn report(
         style: style.as_str(),
         nix: params.nix(),
         scorecard: params.scorecard(),
+        code_scanning: params.code_scanning().map(Provider::as_str),
+        licence_refusal: prepared.projection.licence_refusal.clone(),
         withheld: {
             let withheld: Vec<landing::Withheld> = prepared
                 .projection
@@ -340,11 +356,11 @@ fn verify(
 mod tests {
     use super::{FileEntry, Report};
 
-    /// The complete `rk.adopt/8` shape, held by snapshot.
+    /// The complete `rk.adopt/9` shape, held by snapshot.
     #[test]
     fn the_adopt_report_schema_snapshot_holds() {
         let report = Report {
-            schema: "rk.adopt/8",
+            schema: "rk.adopt/9",
             config: crate::config::Plan {
                 action: "added",
                 changes: vec![],
@@ -359,6 +375,8 @@ mod tests {
             style: "trunk",
             nix: false,
             scorecard: false,
+            code_scanning: Some("semgrep"),
+            licence_refusal: None,
             withheld: None,
             files: vec![FileEntry {
                 path: "release-plz.toml".into(),
@@ -369,7 +387,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.adopt/8","mode":"apply","target":"/tmp/t","tech":"rust","forge":"github","repo":"acme/widget","workflow":"branches","style":"trunk","nix":false,"scorecard":false,"config":{"action":"added","changes":[],"content":"schema_version = 1\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"differs"}],"next":["commit the config and the receipt"]}"#
+            r#"{"schema":"rk.adopt/9","mode":"apply","target":"/tmp/t","tech":"rust","forge":"github","repo":"acme/widget","workflow":"branches","style":"trunk","nix":false,"scorecard":false,"code_scanning":"semgrep","config":{"action":"added","changes":[],"content":"schema_version = 1\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"differs"}],"next":["commit the config and the receipt"]}"#
         );
     }
 }

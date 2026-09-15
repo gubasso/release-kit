@@ -174,6 +174,24 @@ nix:
 
 Three things the shape rests on. The official `nixos/nix` image enables neither `nix-command` nor `flakes`, and both commands need them, so without the flags the job fails on every target. The job carries no `stage:` and no `merge_request_event` rule: it runs inside the child pipeline, where `CI_PIPELINE_SOURCE` reads `parent_pipeline`, so that rule could never match, and the bridge already restricts the child to merge requests — use `CI_MERGE_REQUEST_ID` where a rule is wanted. And `nix build` runs before `nix flake check` for the same reason it does on github.
 
+### The code scanning capability
+
+`rk init --code-scanning <provider>` lands one static analysis workflow, and the provider is the target's choice between two answers with different costs.
+
+`codeql` is GitHub's own analyzer and this binding's best result. It scans `rust` with `build-mode: none`, so no toolchain and no build runs in the job. Its terms cover an open-source codebase alone, so the landing reads this binding's declared licence first: the `license` field of the target's `Cargo.toml`. Every operand of that SPDX expression must be an OSI-approved identifier this release recognizes. A licence that is not, a `license-file` in place of a `license`, and an absent field each refuse the pair by name and land nothing, because a workflow whose terms the codebase does not satisfy is a licence violation this convention does not commit on a target's behalf. The list is compiled rather than fetched, so an identifier it does not carry reads as unrecognized and the refusal says so.
+
+`semgrep` is Semgrep Community Edition and carries no licence condition on the codebase it scans, so it is the answer for a target whose licence codeql cannot cover. It runs on either forge. The job names the public `p/rust` ruleset rather than `--config auto`, which asks the registry which rules apply and needs an account token this convention does not ask a target to hold.
+
+A licence that lapses after the landing is a warning in `rk status`, under the code `code-scanning-licence`, and `rk status --check` still exits 0. The target is not broken, and the licensing decision is the operator's.
+
+The scan reads this binding's own language and no other. The `actions` language is left out: the exclusion that would spare the generated release workflow is undocumented for it, so a scan there reports findings on a file this convention does not write.
+
+Three providers were considered and refused, named here rather than left for each target to rediscover.
+
+- Sonar: its Rust analyzer works through Clippy and needs Cargo and Clippy on the analysis machine, so adopting it routes analysis a landed target already runs through a third-party service to earn credit for it.
+- Qodana: `qodana-rust` is a paid linter that cannot run under the Community licence, though `JetBrains/qodana-action` is the cheapest route to a maximum score.
+- Snyk: an account and a quota.
+
 ## Operate specifics
 
 - `release_always = false` in `release-plz.toml`: the release half fires only on the merge of the bot's own request, which the branch heuristic recognizes by its `release-plz-*` head branch, so an ordinary work merge publishes nothing and the release decision stays on the one merge button.

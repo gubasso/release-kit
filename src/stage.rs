@@ -31,13 +31,13 @@ use crate::diagnostic::{Diagnostic, Reason};
 use crate::digest::Digest;
 use crate::embedded;
 use crate::error::RkError;
-use crate::landing::manifest::{Manifest, Style, Workflow};
+use crate::landing::manifest::{Manifest, Provider, Style, Workflow};
 use crate::landing::{Kind, Params};
 use crate::projection::{Placement, Projection};
 use crate::skills;
 
 /// The shape version of the stage receipt and of the `rk stage` report.
-pub const STAGE_SCHEMA: &str = "rk.stage/2";
+pub const STAGE_SCHEMA: &str = "rk.stage/3";
 
 /// The receipt's name at the stage root.
 pub const RECEIPT_NAME: &str = "stage.json";
@@ -128,6 +128,9 @@ pub struct Parameters {
     pub nix: bool,
     /// Whether the landing carries the Scorecard capability.
     pub scorecard: bool,
+    /// The code scanning provider the landing carries, where one is
+    /// recorded.
+    pub code_scanning: Option<Provider>,
     /// The one permanent branch.
     pub trunk: String,
     /// The release-line prefix.
@@ -148,6 +151,7 @@ impl From<&Params> for Parameters {
             style: params.style(),
             nix: params.nix(),
             scorecard: params.scorecard(),
+            code_scanning: params.code_scanning(),
             trunk: params.trunk().to_owned(),
             line_prefix: params.line_prefix().to_owned(),
             security_contact: params.security_contact().to_owned(),
@@ -884,7 +888,7 @@ mod tests {
     use crate::landing::Kind;
     use crate::landing::manifest::{Style, Workflow};
 
-    /// The complete `rk.stage/2` receipt shape, held by snapshot: a field
+    /// The complete `rk.stage/3` receipt shape, held by snapshot: a field
     /// rename or removal fails here and becomes a schema-version bump.
     #[test]
     fn the_stage_receipt_schema_snapshot_holds() {
@@ -901,6 +905,7 @@ mod tests {
                 style: Some(Style::Trunk),
                 nix: false,
                 scorecard: false,
+                code_scanning: None,
                 trunk: "master".into(),
                 line_prefix: "release/".into(),
                 security_contact: String::new(),
@@ -941,7 +946,7 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&receipt).expect("a receipt serializes"),
             format!(
-                r#"{{"schema":"rk.stage/2","rk_version":"0.0.0","target":"/tmp/t","stage_root":"/tmp/s","parameters":{{"tech":"rust","forge":"github","repo":"acme/widget","workflow":"worktree","style":"trunk","nix":false,"scorecard":false,"trunk":"master","line_prefix":"release/","security_contact":"","security_response":"best-effort"}},"receipt_schema_version":6,"candidates":[{{"destination":"AGENTS.md","kind":"rendered","placement":"region","sha256":"{}","region_sha256":"{}","sources":["blocks/routing.md.in"]}},{{"destination":"release-plz.toml","kind":"seeded","placement":"whole","sha256":"{}","sources":["snippets/rust/github/release-plz.toml"]}}],"omissions":[{{"destination":"flake.nix","reason":"the target already carries flake.nix"}}],"collisions":[],"retired":["old.yml"],"seeded_present":["release-plz.toml"],"state_present":[],"reference":["CHANGELOG.md","guidance","method","bindings","runbooks","forges","skills/rk-setup","skill-shared"]}}"#,
+                r#"{{"schema":"rk.stage/3","rk_version":"0.0.0","target":"/tmp/t","stage_root":"/tmp/s","parameters":{{"tech":"rust","forge":"github","repo":"acme/widget","workflow":"worktree","style":"trunk","nix":false,"scorecard":false,"code_scanning":null,"trunk":"master","line_prefix":"release/","security_contact":"","security_response":"best-effort"}},"receipt_schema_version":6,"candidates":[{{"destination":"AGENTS.md","kind":"rendered","placement":"region","sha256":"{}","region_sha256":"{}","sources":["blocks/routing.md.in"]}},{{"destination":"release-plz.toml","kind":"seeded","placement":"whole","sha256":"{}","sources":["snippets/rust/github/release-plz.toml"]}}],"omissions":[{{"destination":"flake.nix","reason":"the target already carries flake.nix"}}],"collisions":[],"retired":["old.yml"],"seeded_present":["release-plz.toml"],"state_present":[],"reference":["CHANGELOG.md","guidance","method","bindings","runbooks","forges","skills/rk-setup","skill-shared"]}}"#,
                 Digest::of(b"a"),
                 Digest::of(b"r"),
                 Digest::of(b"b")
@@ -1103,6 +1108,7 @@ mod tests {
                 style: Some(Style::Trunk),
                 nix: false,
                 scorecard: false,
+                code_scanning: None,
                 trunk: "master".into(),
                 line_prefix: "release/".into(),
                 security_contact: String::new(),

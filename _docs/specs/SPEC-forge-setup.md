@@ -93,7 +93,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `forge-setup:every-supported-forge-runs-every-step` — Every supported forge runs every step
 
-Where the distribution carries a setup step for one forge, it MUST carry a step of the same name for every forge it supports, so an operator's setup does not silently depend on which forge they chose.
+Where the distribution carries a setup step for one forge, it MUST carry a step of the same name for every forge it supports, so an operator's setup does not silently depend on which forge they chose. A landed file is not a step: a capability that needs no forge setting MUST reach a target through the projection and the landing record alone, judged by `rk status`, and MUST add no `StepSpec`, so a capability one forge alone can run does not force a counterpart step nothing on the other forge would do.
 
 #### Scenario: A step is added to one forge tree and forgotten in the other
 

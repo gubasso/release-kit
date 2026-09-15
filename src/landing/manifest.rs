@@ -136,6 +136,50 @@ impl Style {
     }
 }
 
+/// The code scanning provider a landing records.
+///
+/// A project decision: which analyzer the landed workflow runs, and with it
+/// whether the landing carries a licence condition at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Provider {
+    /// GitHub's own analyzer. Free under terms that cover an open-source
+    /// codebase alone, so a landing reads the binding's declared licence
+    /// first and refuses the pair where it is not OSI-approved.
+    CodeQl,
+    /// Semgrep Community Edition, which carries no licence condition on the
+    /// codebase it scans and runs on either forge.
+    Semgrep,
+}
+
+impl Provider {
+    /// The flag, wire, and report form.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CodeQl => "codeql",
+            Self::Semgrep => "semgrep",
+        }
+    }
+
+    /// Parse a `--code-scanning` flag value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RkError::Usage`] naming the providers and the word that
+    /// turns the capability off.
+    pub fn parse(raw: &str) -> Result<Option<Self>, RkError> {
+        match raw {
+            "codeql" => Ok(Some(Self::CodeQl)),
+            "semgrep" => Ok(Some(Self::Semgrep)),
+            "off" => Ok(None),
+            other => Err(RkError::Usage(format!(
+                "unknown code scanning provider '{other}'; the providers are: codeql, semgrep, and off turns the capability off"
+            ))),
+        }
+    }
+}
+
 /// The record a landing writes and every target-side verb reads.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Manifest {
@@ -196,6 +240,11 @@ pub struct Parameters {
     /// because this field is part of it.
     #[serde(default)]
     pub scorecard: bool,
+    /// The code scanning provider the landing carries, or none where the
+    /// project did not opt in. A record predating the field carries none,
+    /// so an upgrade adds no workflow unrequested.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_scanning: Option<Provider>,
     /// The one permanent branch, rendered into every landed artifact that
     /// names it. A record predating the field reads as `master`, which is
     /// what such a landing wrote, so the projection stays reproducible.
@@ -565,7 +614,8 @@ fn numeric_core(version: &str) -> Vec<u64> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Alignment, FileRecord, Manifest, Parameters, Placement, Style, Workflow, alignment,
+        Alignment, FileRecord, Manifest, Parameters, Placement, Provider, Style, Workflow,
+        alignment,
     };
     use crate::digest::Digest;
     use crate::landing::Kind;
@@ -588,6 +638,7 @@ mod tests {
                 style: Some(Style::Trunk),
                 nix: true,
                 scorecard: true,
+                code_scanning: Some(Provider::Semgrep),
                 trunk: crate::config::TRUNK_DEFAULT.to_owned(),
                 line_prefix: crate::config::LINE_PREFIX_DEFAULT.to_owned(),
                 security_contact: String::new(),
@@ -614,7 +665,7 @@ mod tests {
         assert_eq!(
             text,
             format!(
-                r#"{{"schema_version":8,"rk_version":"0.1.0","origin":"init","tech":"rust","forge":"github","landed_at":"2026-08-29T00:00:00Z","parameters":{{"repo":"acme/widget","workflow":"worktree","style":"trunk","nix":true,"scorecard":true,"trunk":"master","line_prefix":"release/","security_contact":"","security_response":"best-effort"}},"files":[{{"destination":"release-plz.toml","kind":"seeded","sha256":"{empty}"}},{{"destination":"AGENTS.md","kind":"rendered","sha256":"{empty}","placement":"region"}}],"pins":{{"release-plz":"0.3.160"}}}}"#
+                r#"{{"schema_version":8,"rk_version":"0.1.0","origin":"init","tech":"rust","forge":"github","landed_at":"2026-08-29T00:00:00Z","parameters":{{"repo":"acme/widget","workflow":"worktree","style":"trunk","nix":true,"scorecard":true,"code_scanning":"semgrep","trunk":"master","line_prefix":"release/","security_contact":"","security_response":"best-effort"}},"files":[{{"destination":"release-plz.toml","kind":"seeded","sha256":"{empty}"}},{{"destination":"AGENTS.md","kind":"rendered","sha256":"{empty}","placement":"region"}}],"pins":{{"release-plz":"0.3.160"}}}}"#
             ),
             "a whole file omits its placement, and no retired digest field survives"
         );

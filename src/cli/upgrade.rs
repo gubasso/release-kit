@@ -53,6 +53,13 @@ pub struct UpgradeArgs {
     #[arg(long)]
     pub scorecard: Option<String>,
 
+    /// Change the recorded code scanning provider: `codeql` or `semgrep`
+    /// lands that provider's workflow and records it; `off` drops it from
+    /// the record while the file stays on disk as the target's own. Omitted,
+    /// configuration precedes the recorded choice.
+    #[arg(long, value_name = "PROVIDER")]
+    pub code_scanning: Option<String>,
+
     /// Write the upgrade; without it every file's action is listed and
     /// nothing is touched. `rk stage` is the full-byte comparison surface.
     #[arg(long)]
