@@ -3,6 +3,8 @@
 use camino::Utf8PathBuf;
 use clap::{Args, Subcommand};
 
+use super::profile_flags::ProfileFlags;
+
 /// Write the candidate this binary would land in a target into a
 /// disposable stage, beside the knowledge that explains it.
 ///
@@ -12,41 +14,31 @@ use clap::{Args, Subcommand};
 /// `reference/`, and one explanatory `stage.json`. Production landing
 /// never reads a stage; `rk stage clean <path>` removes one.
 #[derive(Debug, Args)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each field is one clap flag, and an opt-in capability's flag is a boolean by design; a state machine would hide the command line this struct describes"
+)]
 pub struct StageArgs {
     /// The one companion: remove a stage.
     #[command(subcommand)]
     pub action: Option<StageAction>,
 
-    /// The technology whose candidate is staged; one of the bindings.
-    #[arg(long)]
-    pub tech: Option<String>,
+    /// The project profile and the Git workflow the candidate renders
+    /// under.
+    #[command(flatten)]
+    pub profile: ProfileFlags,
 
     /// The repository the candidate is computed for; read, never written.
     #[arg(long, default_value = ".")]
     pub target: Utf8PathBuf,
 
-    /// The forge whose files are staged: github or gitlab. Defaults to
-    /// detection from the target's git remote.
-    #[arg(long)]
-    pub forge: Option<String>,
-
-    /// The project path on the forge, substituted into the rendered files.
-    /// Defaults to detection from the target's git remote.
-    #[arg(long)]
-    pub repo: Option<String>,
-
-    /// The working-copy mode the candidate renders under: worktree or
-    /// branches.
-    #[arg(long)]
-    pub workflow: Option<String>,
-
-    /// The release style the candidate renders under: trunk or lines.
-    #[arg(long)]
-    pub style: Option<String>,
-
     /// Stage the Nix capability too.
+    #[arg(long, alias = "nix")]
+    pub nix_packaging: bool,
+
+    /// Stage the reporting policy too.
     #[arg(long)]
-    pub nix: bool,
+    pub reporting_policy: bool,
 
     /// Stage the Scorecard capability too.
     #[arg(long)]

@@ -12,7 +12,7 @@ use crate::commands::walk;
 use crate::detect;
 use crate::embedded;
 use crate::error::RkError;
-use crate::landing::manifest::{self, Style, Workflow};
+use crate::landing::manifest::{self, CheckoutMode, Style};
 use crate::output::Output;
 
 /// Print one runbook, or list them.
@@ -22,6 +22,10 @@ use crate::output::Output;
 /// Returns [`RkError::NotFound`] for an unknown runbook and
 /// [`RkError::Usage`] when neither a name nor `--list` is given, or a flag
 /// value is not one of the known axes.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one pass resolves every runbook axis from the same three sources, and splitting it would separate an axis from the precedence it shares"
+)]
 pub fn run(args: &GuideArgs) -> Result<(), RkError> {
     let out = Output::human();
     let entries = walk(&embedded::RUNBOOKS);
@@ -61,35 +65,67 @@ pub fn run(args: &GuideArgs) -> Result<(), RkError> {
         ),
         None => None,
     };
-    let tech = match args.tech.as_deref() {
+    let tech = match args.technology.as_deref() {
         Some(value @ ("rust" | "python" | "bash")) => Some(value.to_owned()),
         Some(other) => {
             return Err(RkError::Usage(format!(
-                "unknown tech '{other}'; the bindings are: rust, python, bash"
+                "unknown technology '{other}'; the bindings are: rust, python, bash"
             )));
         }
         None => None,
     };
-    let workflow = args.workflow.as_deref().map(Workflow::parse).transpose()?;
-    let style = args.style.as_deref().map(Style::parse).transpose()?;
+    let checkout_mode = args
+        .checkout_mode
+        .as_deref()
+        .map(CheckoutMode::parse)
+        .transpose()?;
+    let style = args
+        .release_style
+        .as_deref()
+        .map(Style::parse)
+        .transpose()?;
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let config = crate::config::load(&cwd)?;
     let detected = detect::detect(&cwd);
-    let forge = forge
-        .or_else(|| {
-            config
-                .as_ref()
-                .map(|c| c.project.forge.as_str())
-                .filter(|v| !v.is_empty())
-        })
-        .or_else(|| detected.forge.map(detect::Forge::as_str));
+    let record =
+        camino::Utf8Path::from_path(&cwd).and_then(|path| manifest::load(path).ok().flatten());
+    // An empty `profile.forge` is the committed statement that the project
+    // has no forge, so it answers the axis and no lower tier is consulted.
+    // Dropping it would let a remote or an older record re-introduce a
+    // forge the configuration ruled out.
+    let configured_forge = config.as_ref().and_then(|c| c.profile.forge.clone());
+    let recorded_forge = record.as_ref().and_then(|r| r.profile.forge.clone());
+    let forge = match (forge, configured_forge) {
+        (Some(flag), _) => Forge::Value(flag.to_owned()),
+        (None, Some(configured)) if configured.is_empty() => Forge::Absent,
+        (None, Some(configured)) => Forge::Value(configured),
+        (None, None) => recorded_forge
+            .or_else(|| {
+                detected
+                    .forge
+                    .map(|forge| detect::Forge::as_str(forge).to_owned())
+            })
+            .map_or(Forge::Unresolved, Forge::Value),
+    };
+    let forge = match forge {
+        Forge::Value(named) => detect::Forge::parse(&named)
+            .map(detect::Forge::as_str)
+            .map_or(Forge::Unresolved, |name| Forge::Value(name.to_owned())),
+        other => other,
+    };
+    // The technology axis is the release driver: the configured or
+    // recorded driver, then the first release-bearing version file.
     let tech = tech
         .or_else(|| {
             config
                 .as_ref()
-                .map(|c| c.project.tech.clone())
-                .filter(|v| !v.is_empty())
+                .and_then(|c| c.profile.release.driver.clone())
+        })
+        .or_else(|| {
+            record
+                .as_ref()
+                .and_then(|r| r.profile.release.driver.clone())
         })
         .or_else(|| detect::tech_of(&cwd).map(str::to_owned));
     let repo = args
@@ -101,27 +137,35 @@ pub fn run(args: &GuideArgs) -> Result<(), RkError> {
                 .map(|c| c.project.repo.clone())
                 .filter(|v| !v.is_empty())
         })
+        .or_else(|| {
+            record
+                .as_ref()
+                .map(|r| r.parameters.repo.clone())
+                .filter(|v| !v.is_empty())
+        })
         .or(detected.repo);
-    // The workflow axis resolves from the landing record — the mode is a
-    // committed project decision, not a detection guess — and stays open
-    // where no record exists, the honest pre-landing fallback.
-    let record =
-        camino::Utf8Path::from_path(&cwd).and_then(|path| manifest::load(path).ok().flatten());
-    let workflow = workflow
-        .or_else(|| config.as_ref().and_then(|c| c.landing.workflow))
-        .or_else(|| record.as_ref().map(|record| record.parameters.workflow));
+    // The checkout mode resolves from the configuration and the landing
+    // record — a committed project decision, not a detection guess — and
+    // stays open where neither exists, the honest pre-landing fallback.
+    let checkout_mode = checkout_mode
+        .or_else(|| config.as_ref().and_then(|c| c.git.checkout_mode))
+        .or_else(|| record.as_ref().map(|record| record.git.checkout_mode));
     // The style axis resolves the same way: a committed project decision,
     // open where no record exists.
     let style = style
-        .or_else(|| config.as_ref().and_then(|c| c.landing.style))
-        .or_else(|| record.as_ref().and_then(|record| record.parameters.style));
+        .or_else(|| config.as_ref().and_then(|c| c.profile.release.style))
+        .or_else(|| {
+            record
+                .as_ref()
+                .and_then(|record| record.profile.release.style)
+        });
 
     let rendered = render(
         &text,
-        forge,
+        &forge,
         tech.as_deref(),
         repo.as_deref(),
-        workflow.map(Workflow::as_str),
+        checkout_mode.map(CheckoutMode::runbook_label),
         style.map(Style::as_str),
     );
     let unresolved = repo.is_none() && rendered.contains("<repo>");
@@ -149,6 +193,35 @@ fn axis_of(selector: &str) -> Option<&'static str> {
     }
 }
 
+/// What the forge axis knows, which is three states rather than two.
+///
+/// A project that states no forge has answered the axis. Collapsing that
+/// into the same value as an unanswered one would print both forges'
+/// instructions to an operator whose configuration ruled both out, which
+/// is the opposite of what the committed answer asked for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Forge {
+    /// Nothing has answered yet: every variant stays, label and all.
+    Unresolved,
+    /// The project has no forge: no forge variant belongs in the text.
+    Absent,
+    /// The named forge.
+    Value(String),
+}
+
+impl Forge {
+    /// The selector a variant must carry to survive, or `None` where the
+    /// axis is open. An absent forge matches no forge this binary knows,
+    /// so every forge and pair variant drops.
+    fn selector(&self) -> Option<String> {
+        match self {
+            Self::Unresolved => None,
+            Self::Absent => Some(String::new()),
+            Self::Value(named) => Some(named.clone()),
+        }
+    }
+}
+
 /// The selector of a variant label line, `On <selector>:`.
 fn label_of(line: &str) -> Option<&str> {
     let selector = line.strip_prefix("On ")?.strip_suffix(":")?;
@@ -160,7 +233,7 @@ fn label_of(line: &str) -> Option<&str> {
 /// and leave everything else byte-identical.
 fn render(
     text: &str,
-    forge: Option<&str>,
+    forge: &Forge,
     tech: Option<&str>,
     repo: Option<&str>,
     workflow: Option<&str>,
@@ -177,14 +250,17 @@ fn render(
             continue;
         };
         let resolved = match axis_of(selector) {
-            Some("forge") => forge.map(str::to_owned),
+            Some("forge") => forge.selector(),
             Some("tech") => tech.map(str::to_owned),
             Some("workflow") => workflow.map(str::to_owned),
             Some("style") => style.map(str::to_owned),
             // A pair resolves only once both halves have: with either axis
-            // open, every pair variant stays visible, label and all.
+            // open, every pair variant stays visible, label and all. A
+            // forge the project states it does not have is not an open
+            // axis, though, and no pair variant belongs in that text.
             Some("pair") => match (tech, forge) {
-                (Some(tech), Some(forge)) => Some(format!("{tech}/{forge}")),
+                (_, Forge::Absent) => Some(String::new()),
+                (Some(tech), Forge::Value(forge)) => Some(format!("{tech}/{forge}")),
                 _ => None,
             },
             _ => None,
@@ -240,14 +316,14 @@ fn substitute(line: &str, repo: Option<&str>, tech: Option<&str>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::render;
+    use super::{Forge, render};
 
     const DOC: &str = "# T\n\nOn github:\n\n```bash\ngh pr list --repo <repo>\n```\n\nOn gitlab:\n\n```bash\nglab mr list\n```\n\ntail <release pr>\n";
 
     /// Nothing resolved: the output is byte-identical to the source.
     #[test]
     fn an_unresolved_render_is_byte_identical() {
-        assert_eq!(render(DOC, None, None, None, None, None), DOC);
+        assert_eq!(render(DOC, &Forge::Unresolved, None, None, None, None), DOC);
     }
 
     /// A resolved forge keeps its variant, drops the sibling and both
@@ -255,13 +331,27 @@ mod tests {
     /// stays a placeholder.
     #[test]
     fn a_resolved_render_selects_and_substitutes() {
-        let rendered = render(DOC, Some("github"), None, Some("acme/widget"), None, None);
+        let rendered = render(
+            DOC,
+            &Forge::Value("github".to_owned()),
+            None,
+            Some("acme/widget"),
+            None,
+            None,
+        );
         assert!(rendered.contains("gh pr list --repo acme/widget"));
         assert!(!rendered.contains("glab"));
         assert!(!rendered.contains("On github:"));
         assert!(!rendered.contains("<repo>"));
         assert!(rendered.contains("<release pr>"));
-        let gitlab = render(DOC, Some("gitlab"), None, None, None, None);
+        let gitlab = render(
+            DOC,
+            &Forge::Value("gitlab".to_owned()),
+            None,
+            None,
+            None,
+            None,
+        );
         assert!(gitlab.contains("glab mr list"));
         assert!(!gitlab.contains("gh pr list"));
     }
@@ -270,7 +360,14 @@ mod tests {
     #[test]
     fn a_paragraph_variant_renders() {
         let doc = "On github:\n\nthe force-push refresh survives.\n\nOn gitlab:\n\nthe request is replaced.\n\nend\n";
-        let rendered = render(doc, Some("gitlab"), None, None, None, None);
+        let rendered = render(
+            doc,
+            &Forge::Value("gitlab".to_owned()),
+            None,
+            None,
+            None,
+            None,
+        );
         assert_eq!(rendered, "the request is replaced.\n\nend\n");
     }
 
@@ -281,14 +378,35 @@ mod tests {
     #[test]
     fn a_pair_variant_selects_on_both_axes() {
         let doc = "On bash/gitlab:\n\n```bash\ncosign verify-blob-attestation\n```\n\nOn rust/gitlab:\n\nno provenance surface.\n\nend\n";
-        let matched = render(doc, Some("gitlab"), Some("bash"), None, None, None);
+        let matched = render(
+            doc,
+            &Forge::Value("gitlab".to_owned()),
+            Some("bash"),
+            None,
+            None,
+            None,
+        );
         assert!(matched.contains("cosign verify-blob-attestation"));
         assert!(!matched.contains("no provenance surface"));
         assert!(!matched.contains("On bash/gitlab:"));
-        let sibling = render(doc, Some("gitlab"), Some("rust"), None, None, None);
+        let sibling = render(
+            doc,
+            &Forge::Value("gitlab".to_owned()),
+            Some("rust"),
+            None,
+            None,
+            None,
+        );
         assert!(!sibling.contains("cosign"));
         assert!(sibling.contains("no provenance surface."));
-        let open_axis = render(doc, Some("gitlab"), None, None, None, None);
+        let open_axis = render(
+            doc,
+            &Forge::Value("gitlab".to_owned()),
+            None,
+            None,
+            None,
+            None,
+        );
         assert_eq!(open_axis, doc, "an open axis keeps every pair variant");
     }
 
@@ -298,14 +416,14 @@ mod tests {
     #[test]
     fn a_workflow_variant_selects_on_the_mode() {
         let doc = "On worktree:\n\nrk worktree add release-branch --apply\n\nOn branches:\n\ngh pr checkout 7\n\nend\n";
-        let worktree = render(doc, None, None, None, Some("worktree"), None);
+        let worktree = render(doc, &Forge::Unresolved, None, None, Some("worktree"), None);
         assert!(worktree.contains("rk worktree add"));
         assert!(!worktree.contains("gh pr checkout"));
-        let branches = render(doc, None, None, None, Some("branches"), None);
+        let branches = render(doc, &Forge::Unresolved, None, None, Some("branches"), None);
         assert!(branches.contains("gh pr checkout"));
         assert!(!branches.contains("rk worktree add"));
         assert_eq!(
-            render(doc, None, None, None, None, None),
+            render(doc, &Forge::Unresolved, None, None, None, None),
             doc,
             "an unresolved mode keeps every variant, label and all"
         );
@@ -317,14 +435,14 @@ mod tests {
     #[test]
     fn a_style_variant_selects_on_the_style() {
         let doc = "On trunk:\n\nthe request merges itself when the last check passes.\n\nOn lines:\n\nthe merge is yours.\n\nend\n";
-        let trunk = render(doc, None, None, None, None, Some("trunk"));
+        let trunk = render(doc, &Forge::Unresolved, None, None, None, Some("trunk"));
         assert!(trunk.contains("merges itself"));
         assert!(!trunk.contains("the merge is yours"));
-        let lines = render(doc, None, None, None, None, Some("lines"));
+        let lines = render(doc, &Forge::Unresolved, None, None, None, Some("lines"));
         assert!(lines.contains("the merge is yours"));
         assert!(!lines.contains("merges itself"));
         assert_eq!(
-            render(doc, None, None, None, None, None),
+            render(doc, &Forge::Unresolved, None, None, None, None),
             doc,
             "an unresolved style keeps every variant, label and all"
         );
@@ -335,9 +453,9 @@ mod tests {
     fn a_resolved_tech_fills_the_placeholder() {
         let doc = "rk init --tech <tech> --target .\n";
         assert_eq!(
-            render(doc, None, Some("rust"), None, None, None),
+            render(doc, &Forge::Unresolved, Some("rust"), None, None, None),
             "rk init --tech rust --target .\n"
         );
-        assert_eq!(render(doc, None, None, None, None, None), doc);
+        assert_eq!(render(doc, &Forge::Unresolved, None, None, None, None), doc);
     }
 }

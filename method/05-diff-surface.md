@@ -2,6 +2,8 @@
 
 Five axes vary between projects. Four are technology answers, and a binding is those four plus the runbook lines and files that wire them. The fifth is the forge, which varies independently of all four. Everything else is the spine, unchanged.
 
+A binding is the release automation capability at two dimensions: the release driver, which is the one technology among the project's technologies that states the version and takes the bot, and the forge. `release.automation` at `(rust, github)` is one binding, and a project whose profile names several technologies still selects exactly one driver. A profile with no automatic release selects no binding at all, and the local Git workflow guards and the forge's title gate land without one.
+
 ## The four technology axes
 
 | Axis                | The question it answers                                     |
@@ -26,16 +28,16 @@ Rust, Python, and Bash have full bindings under [bindings](../bindings/README.md
 
 The forge hosts the repository and enforces its protections, and it is orthogonal to the other four axes. A Rust project on GitLab has the same version file, the same release-request bot, and the same registry as a Rust project on GitHub, and a different everything else: a different CLI, a different protection model, a different bot identity, a different CI file format.
 
-Because the two vary independently, a project's configuration is a pair, not a single choice:
+Because the two vary independently, the release automation a project selects is a pair, not a single choice:
 
 ```text
-(technology, forge) -> the concrete answers
-(rust,   github)    -> Cargo.toml, release-plz, crates.io+OIDC, cargo-dist, gh
-(rust,   gitlab)    -> Cargo.toml, release-plz, crates.io+OIDC, none, glab
-(python, github)    -> pyproject.toml, release-please, PyPI+OIDC, wheels, gh
+(driver, forge) -> the concrete answers
+(rust,   github) -> Cargo.toml, release-plz, crates.io+OIDC, cargo-dist, gh
+(rust,   gitlab) -> Cargo.toml, release-plz, crates.io+OIDC, none, glab
+(python, github) -> pyproject.toml, release-please, PyPI+OIDC, wheels, gh
 ```
 
-An axis answer can be nothing, and the pair table already holds one: `(rust, gitlab)` has no artifact builder, the same shape as the Go column's bot and registry rows. [The Rust binding](../bindings/rust.md) carries that fact, because it is a property of the pair rather than of either axis alone.
+An axis answer can be nothing, and the pair table already holds one: `(rust, gitlab)` has no artifact builder, the same shape as the Go column's bot and registry rows. [The Rust binding](../bindings/rust.md) carries that fact, because it is a property of the pair rather than of either axis alone. A pair the distribution ships no files for, `(python, gitlab)` today, is a capability that is unavailable at those dimensions: the profile stays valid, and an apply that requires the automation refuses naming the available tuples.
 
 What the forge axis owns: how the release request is named and refreshed, which merge verbs keep the trunk linear, how branches and tags are protected, what the bot identity is, and which CI file format the workflows use. What it never changes: the one-pull-request gate, the committed version leading the tag, the one-directional release lines, and the recovery paths.
 
@@ -49,7 +51,7 @@ A binding document answers the four technology axes for its technology, then car
 - The registry's specific rejects, limits, and token scopes, so [setup](./02-setup.md) step 0 and step 5 are executable.
 - The facts that disqualify or configure tools: what the bot can and cannot bump, what the artifact builder generates and owns.
 - The provenance the channel offers, how it is switched on, and how a consumer verifies it; where the channel offers none, the binding says so, per [the invariants](./01-invariants.md).
-- The deterministic files, added under `snippets/<technology>/` with sentinel placeholders, and their tools pinned in the versions registry.
+- The deterministic files, added under `snippets/<driver>/<forge>/` with sentinel placeholders, and their tools pinned in the versions registry under the capability that lands them.
 - Where a technology axis has no answer on a forge, that fact, stated as a smaller product rather than smoothed over.
 
 What a binding never carries: a restatement of the spine, the invariants, another binding's facts, or a forge's own mechanics. If a sentence holds for every technology, it belongs in a method chapter; if it holds for every technology on one forge, it belongs to the forge axis.

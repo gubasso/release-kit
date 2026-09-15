@@ -9,12 +9,13 @@
 //! what would be written.
 //!
 //! The pure pieces of that model, the kind table, the token rendering,
-//! the block templating, the splice and marker judgments, the pair
+//! the block templating, the splice and marker judgments, the capability
 //! selection, and the Nix crate-shape judgment, have one implementation
 //! in [`crate::projection`] and are re-exported here under their old
-//! names. What lives in this file is [`Params`], the resolved input every
-//! projection takes, the readers of a target's recorded destinations, and
-//! the submodules that lock, write, and record.
+//! names. [`Params`], the resolved input every projection takes, lives in
+//! [`crate::profile`] and is re-exported here. What lives in this file is
+//! the readers of a target's recorded destinations and the submodules
+//! that lock, write, and record.
 pub mod apply;
 pub mod invariants;
 pub mod lock;
@@ -31,401 +32,13 @@ pub use crate::projection::{
     authored, block_markers, destinations, extract_block, hooks_marker_defect, kind_of,
     marker_defect, render, scope_is_shaped, splice_hooks_block, splice_marked_block, substitute,
 };
-pub use manifest::{Provider, Style, Workflow};
+pub use manifest::{CheckoutMode, Provider, Style};
 use serde::Serialize;
 
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
 
-/// The complete input to a projection. Comparisons reconstruct it from
-/// the landing record; landing verbs resolve their candidate inputs.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Params {
-    tech: String,
-    forge: String,
-    repo: String,
-    workflow: Workflow,
-    style: Option<Style>,
-    nix: bool,
-    scorecard: bool,
-    code_scanning: Option<Provider>,
-    trunk: String,
-    line_prefix: String,
-    security_contact: String,
-    security_response: String,
-}
-
-/// Explicit invocation answers; absence falls through to configuration.
-#[derive(Default)]
-pub struct Inputs<'a> {
-    /// Binding override.
-    pub tech: Option<&'a str>,
-    /// Forge override.
-    pub forge: Option<&'a str>,
-    /// Repository override.
-    pub repo: Option<&'a str>,
-    /// Workflow override.
-    pub workflow: Option<Workflow>,
-    /// Release style override.
-    pub style: Option<Style>,
-    /// Nix capability override.
-    pub nix: Option<bool>,
-    /// Scorecard capability override.
-    pub scorecard: Option<bool>,
-    /// Code scanning capability override: `Some(None)` turns it off, and
-    /// absence leaves the configuration and the record to answer.
-    pub code_scanning: Option<Option<Provider>>,
-}
-
-/// Compatibility policy for a landing candidate.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Purpose {
-    /// A first landing.
-    Init,
-    /// A preview may leave the repository unresolved.
-    Preview,
-    /// An existing record supplies compatibility answers.
-    Upgrade,
-    /// A pre-record target requires an explicit release style.
-    Adopt,
-}
-
-impl Params {
-    /// Reconstruct every projection parameter from the record alone,
-    /// including the compatibility defaults applied when it was loaded.
-    #[must_use]
-    pub fn from_record(record: &manifest::Manifest) -> Self {
-        Self {
-            tech: record.tech.clone(),
-            forge: record.forge.clone(),
-            repo: record.parameters.repo.clone(),
-            workflow: record.parameters.workflow,
-            style: record.parameters.style,
-            nix: record.parameters.nix,
-            scorecard: record.parameters.scorecard,
-            code_scanning: record.parameters.code_scanning,
-            trunk: record.parameters.trunk.clone(),
-            line_prefix: record.parameters.line_prefix.clone(),
-            security_contact: record.parameters.security_contact.clone(),
-            security_response: record.parameters.security_response.clone(),
-        }
-    }
-
-    /// Resolve flags, configuration, recorded compatibility inputs or detection,
-    /// and finally the compiled defaults. Comparisons use `from_record` alone.
-    ///
-    /// # Errors
-    /// Refuses unresolved identity or a style an existing target has not answered.
-    pub fn resolve(
-        target: &Utf8Path,
-        flags: &Inputs<'_>,
-        config: Option<&crate::config::Config>,
-        record: Option<&manifest::Manifest>,
-        purpose: Purpose,
-    ) -> Result<Self, RkError> {
-        let answer = |flag: Option<&str>, configured: Option<&str>, recorded: Option<&str>| {
-            flag.or_else(|| configured.filter(|value| !value.is_empty()))
-                .or(recorded)
-                .map(str::to_owned)
-        };
-        let forge = answer(
-            flags.forge,
-            config.map(|c| c.project.forge.as_str()),
-            record.map(|r| r.forge.as_str()),
-        );
-        let repo = answer(
-            flags.repo,
-            config.map(|c| c.project.repo.as_str()),
-            record.map(|r| r.parameters.repo.as_str()),
-        );
-        let resolved = resolve(target, forge.as_deref(), repo.as_deref())?;
-        let tech = answer(
-            flags.tech,
-            config.map(|c| c.project.tech.as_str()),
-            record.map(|r| r.tech.as_str()),
-        )
-        .or_else(|| crate::detect::tech_of(target.as_std_path()).map(str::to_owned))
-        .ok_or_else(|| {
-            RkError::missing(
-                Diagnostic::new(
-                    Reason::TargetNotFound,
-                    "no technology detected: the target has no version file",
-                )
-                .action("pass --tech <rust|python|bash>"),
-            )
-        })?;
-        crate::projection::check_pair(&tech, &resolved.forge)?;
-        let workflow = flags
-            .workflow
-            .or_else(|| config.and_then(|c| c.landing.workflow))
-            .or_else(|| record.map(|r| r.parameters.workflow))
-            .unwrap_or(if purpose == Purpose::Adopt {
-                Workflow::Branches
-            } else {
-                Workflow::Worktree
-            });
-        let style = flags
-            .style
-            .or_else(|| config.and_then(|c| c.landing.style))
-            .or_else(|| record.and_then(|r| r.parameters.style));
-        let style = match (style, purpose) {
-            (None, Purpose::Upgrade | Purpose::Adopt) => return Err(RkError::Usage("the target carries no style parameter; set landing.style in .release-kit/config.toml or pass --style <trunk|lines>".into())),
-            (value, _) => Some(value.unwrap_or(Style::Trunk)),
-        };
-        let repo = resolved
-            .repo
-            .or_else(|| (purpose == Purpose::Preview).then(|| REPO_PLACEHOLDER.to_owned()))
-            .ok_or_else(repo_unresolved)?;
-        let trunk = config
-            .and_then(|c| c.project.trunk.clone())
-            .or_else(|| record.map(|r| r.parameters.trunk.clone()))
-            .unwrap_or_else(|| crate::config::TRUNK_DEFAULT.to_owned());
-        let line_prefix = config
-            .and_then(|c| c.setup.line_prefix.clone())
-            .or_else(|| record.map(|r| r.parameters.line_prefix.clone()))
-            .unwrap_or_else(|| crate::config::LINE_PREFIX_DEFAULT.to_owned());
-        // An explicitly present key wins, including an empty contact,
-        // which is how a target resets a recorded custom contact. An
-        // omitted key falls through to the record, so an upgrade under an
-        // older configuration keeps the policy the target already carries.
-        let security_contact = config
-            .and_then(|c| c.security.contact.clone())
-            .or_else(|| record.map(|r| r.parameters.security_contact.clone()))
-            .unwrap_or_default();
-        let security_contact =
-            crate::config::canonical_contact(&security_contact).map_err(crate::config::invalid)?;
-        let security_response = config
-            .and_then(|c| c.security.response.clone())
-            .or_else(|| record.map(|r| r.parameters.security_response.clone()))
-            .unwrap_or_else(|| crate::config::RESPONSE_DEFAULT.to_owned());
-        let security_response = crate::config::canonical_response(&security_response)
-            .map_err(crate::config::invalid)?;
-        let code_scanning = resolve_code_scanning(flags, config, record, &tech, &resolved.forge)?;
-        Ok(Self {
-            tech,
-            forge: resolved.forge,
-            repo,
-            workflow,
-            style,
-            nix: flags
-                .nix
-                .or_else(|| config.and_then(|c| c.landing.nix))
-                .or_else(|| record.map(|r| r.parameters.nix))
-                .unwrap_or(false),
-            scorecard: flags
-                .scorecard
-                .or_else(|| config.and_then(|c| c.landing.scorecard))
-                .or_else(|| record.map(|r| r.parameters.scorecard))
-                .unwrap_or(false),
-            code_scanning,
-            trunk,
-            line_prefix,
-            security_contact,
-            security_response,
-        })
-    }
-
-    /// The binding selected for this landing.
-    #[must_use]
-    pub fn tech(&self) -> &str {
-        &self.tech
-    }
-
-    /// The forge selected for this landing.
-    #[must_use]
-    pub fn forge(&self) -> &str {
-        &self.forge
-    }
-
-    /// Whether this landing opted into Nix.
-    #[must_use]
-    pub const fn nix(&self) -> bool {
-        self.nix
-    }
-
-    /// Whether this landing opted into the Scorecard capability.
-    #[must_use]
-    pub const fn scorecard(&self) -> bool {
-        self.scorecard
-    }
-
-    /// The code scanning provider this landing opted into, if any.
-    #[must_use]
-    pub const fn code_scanning(&self) -> Option<Provider> {
-        self.code_scanning
-    }
-
-    /// Every opt-in capability's flag, as `rk init` and `rk adopt` take it.
-    ///
-    /// The resolved answers, not the flags the caller typed: a follow-up
-    /// command a preview prints must apply the decision that was previewed,
-    /// and the preview's decision is what resolution produced.
-    #[must_use]
-    pub fn capability_flags(&self) -> String {
-        let mut out = String::new();
-        if self.nix {
-            out.push_str(" --nix");
-        }
-        if self.scorecard {
-            out.push_str(" --scorecard");
-        }
-        // The provider flag takes a value, so `off` is a statable answer and
-        // is stated: a committed `landing.code_scanning` would otherwise
-        // re-enable on replay exactly what this preview turned off. The two
-        // boolean flags above have no off form, so absence is their only
-        // honest rendering and no committed value can contradict it.
-        out.push_str(" --code-scanning ");
-        out.push_str(self.code_scanning.map_or("off", Provider::as_str));
-        out
-    }
-
-    /// The same answers as `rk upgrade` takes them, every one stated.
-    ///
-    /// An upgrade can turn a capability off as well as on, so absence is no
-    /// answer there and each value is rendered explicitly. That is what makes
-    /// a printed follow-up command reproduce the previewed decision rather
-    /// than re-resolve the configured one.
-    #[must_use]
-    pub fn capability_toggles(&self) -> String {
-        let word = |on: bool| if on { "on" } else { "off" };
-        format!(
-            " --nix {} --scorecard {} --code-scanning {}",
-            word(self.nix),
-            word(self.scorecard),
-            self.code_scanning.map_or("off", Provider::as_str)
-        )
-    }
-
-    /// The project path used by parameter-bearing blocks.
-    #[must_use]
-    pub fn repo(&self) -> &str {
-        &self.repo
-    }
-
-    /// The mode used by parameter-bearing blocks.
-    #[must_use]
-    pub const fn workflow(&self) -> Workflow {
-        self.workflow
-    }
-
-    /// The release style used by parameter-bearing blocks.
-    #[must_use]
-    pub const fn style(&self) -> Option<Style> {
-        self.style
-    }
-
-    /// The one permanent branch this landing writes into its artifacts.
-    #[must_use]
-    pub fn trunk(&self) -> &str {
-        &self.trunk
-    }
-
-    /// The release-line prefix this landing writes into its artifacts.
-    #[must_use]
-    pub fn line_prefix(&self) -> &str {
-        &self.line_prefix
-    }
-
-    /// The contact the landed policy names, empty for the forge's own
-    /// authored wording.
-    #[must_use]
-    pub fn security_contact(&self) -> &str {
-        &self.security_contact
-    }
-
-    /// The acknowledgment window the landed policy promises.
-    #[must_use]
-    pub fn security_response(&self) -> &str {
-        &self.security_response
-    }
-}
-
-#[cfg(test)]
-impl Params {
-    /// A parameter set for tests alone. Production code reaches `Params`
-    /// through `from_record` and `resolve` and through nothing else, and
-    /// this constructor is compiled out of the shipped binary.
-    pub(crate) fn for_test(repo: &str, style: Option<Style>) -> Self {
-        Self {
-            tech: "rust".to_owned(),
-            forge: "github".to_owned(),
-            repo: repo.to_owned(),
-            workflow: Workflow::Worktree,
-            style,
-            nix: false,
-            scorecard: false,
-            code_scanning: None,
-            trunk: crate::config::TRUNK_DEFAULT.to_owned(),
-            line_prefix: crate::config::LINE_PREFIX_DEFAULT.to_owned(),
-            security_contact: String::new(),
-            security_response: crate::config::RESPONSE_DEFAULT.to_owned(),
-        }
-    }
-
-    /// The same set with the two security parameters answered.
-    pub(crate) fn for_test_security(contact: &str, response: &str) -> Self {
-        Self {
-            security_contact: contact.to_owned(),
-            security_response: response.to_owned(),
-            ..Self::for_test("acme/widget", Some(Style::Trunk))
-        }
-    }
-
-    /// The same set with the Nix opt-in answered.
-    pub(crate) fn set_nix_for_test(&mut self, nix: bool) {
-        self.nix = nix;
-    }
-
-    /// The same set with the Scorecard opt-in answered.
-    pub(crate) fn set_scorecard_for_test(&mut self, scorecard: bool) {
-        self.scorecard = scorecard;
-    }
-
-    /// The same set with the code scanning provider answered.
-    pub(crate) fn set_code_scanning_for_test(&mut self, provider: Option<Provider>) {
-        self.code_scanning = provider;
-    }
-}
-
-/// The code scanning provider one landing resolves, and the one pair that
-/// refuses by name.
-///
-/// The precedence is every other parameter's: the flag, then the committed
-/// configuration, then the record. A configured key answers as the string it
-/// carries, so `off` is an answer and an absent key is not.
-///
-/// Two pairs refuse here rather than recording an answer and landing
-/// nothing. A scanner scans one language, so the workflows live in the
-/// binding that owns that language and a technology shipping none refuses
-/// the whole capability. And `codeql` is GitHub's own analyzer, so no other
-/// forge's zone ships a workflow for it.
-///
-/// # Errors
-///
-/// [`RkError::Usage`] for a configured provider name that is not one of the
-/// two, for a technology that ships no scanner, and for `codeql` on any
-/// forge but GitHub.
-fn resolve_code_scanning(
-    flags: &Inputs<'_>,
-    config: Option<&crate::config::Config>,
-    record: Option<&manifest::Manifest>,
-    tech: &str,
-    forge: &str,
-) -> Result<Option<Provider>, RkError> {
-    let configured = config
-        .and_then(|c| c.landing.code_scanning.as_deref())
-        .map(Provider::parse)
-        .transpose()?;
-    let provider = flags
-        .code_scanning
-        .or(configured)
-        .or_else(|| record.map(|r| r.parameters.code_scanning))
-        .unwrap_or(None);
-    if let Some(reason) = crate::projection::code_scanning_incompatibility(provider, tech, forge) {
-        return Err(RkError::Usage(reason));
-    }
-    Ok(provider)
-}
+pub use crate::profile::{Inputs, Params, Purpose};
 
 /// One destination a landing withholds, with why.
 #[derive(Debug, Clone, Serialize)]
@@ -462,22 +75,21 @@ pub fn read_recorded(target: &Utf8Path, destination: &str) -> std::io::Result<Op
     }
 }
 
-/// What one detection pass resolved for a target-side verb, with the
-/// override flags applied.
+/// What one detection pass resolved for a forge verb, with the override
+/// flags applied: a forge this binary drives, and the project path.
 #[derive(Debug)]
 pub struct Resolved {
-    /// The forge whose files apply.
+    /// The forge whose adapter applies.
     pub forge: String,
     /// The project path, where a flag or the remote names one.
     pub repo: Option<String>,
 }
 
-/// Resolve forge and repository in one pass: the flags override, the
-/// `origin` remote answers otherwise.
+/// Resolve the forge and the repository a forge verb acts on, in one
+/// pass: the flags override, and the `origin` remote answers otherwise.
 ///
-/// An unrecognized host refuses rather than defaulting — landing one
-/// forge's files into the other forge's project is a half-configured
-/// repository that looks done.
+/// An unrecognized host refuses rather than defaulting: a forge call
+/// against the wrong API is a half-run setup that looks done.
 ///
 /// # Errors
 ///
@@ -536,11 +148,14 @@ pub fn repo_unresolved() -> RkError {
 mod tests {
     use super::{
         AGENTS_DESTINATION, BLOCK_BEGIN, BLOCK_DESTINATIONS, BLOCK_END, BRANCH_GRAMMAR,
-        GLOSSARY_DESTINATION, HOOK_TYPES_LINE, HOOKS_BEGIN, HOOKS_DESTINATION, HOOKS_END, Kind,
-        Provider, SCOPE_SHAPE, Style, Workflow, extract_block, kind_of, render, splice_hooks_block,
-        splice_marked_block,
+        CheckoutMode, GLOSSARY_DESTINATION, HOOK_TYPES_LINE, HOOKS_BEGIN, HOOKS_DESTINATION,
+        HOOKS_END, Kind, Provider, SCOPE_SHAPE, Style, extract_block, kind_of, render,
+        splice_hooks_block, splice_marked_block,
     };
     use crate::embedded;
+    use crate::profile::{
+        CapabilityRequests, GitWorkflow, ProfileSnapshot, ReleaseIntent, ReleaseMode,
+    };
     use crate::projection::{self, Projection, ProjectionInput, TargetEvidence};
 
     /// The candidate destinations for `params` over a target that holds
@@ -566,12 +181,12 @@ mod tests {
         .collect()
     }
 
-    fn routing_block(workflow: Workflow) -> String {
-        projection::routing_block(workflow).expect("the binary embeds the block")
+    fn routing_block(mode: CheckoutMode) -> String {
+        projection::routing_block(mode).expect("the binary embeds the block")
     }
 
-    fn hooks_block(workflow: Workflow) -> String {
-        projection::hooks_block(workflow).expect("the binary embeds the block")
+    fn hooks_block(mode: CheckoutMode) -> String {
+        projection::hooks_block(mode).expect("the binary embeds the block")
     }
 
     fn glossary_block() -> String {
@@ -648,10 +263,8 @@ mod tests {
                 }
                 text
             };
-            let default = super::Params {
-                forge: forge.to_owned(),
-                ..super::Params::for_test_security("", crate::config::RESPONSE_DEFAULT)
-            };
+            let mut default = super::Params::for_test_security("", crate::config::RESPONSE_DEFAULT);
+            default.set_pair_for_test("rust", forge);
             let rendered = String::from_utf8(render(bytes, &default)).expect("text");
             assert_eq!(
                 rendered,
@@ -660,10 +273,9 @@ mod tests {
             );
             assert!(!rendered.contains("RK_SECURITY"), "{forge}: {rendered}");
 
-            let answered = super::Params {
-                forge: forge.to_owned(),
-                ..super::Params::for_test_security("OWNER RK_REPO <team@acme.example>", "14 days")
-            };
+            let mut answered =
+                super::Params::for_test_security("OWNER RK_REPO <team@acme.example>", "14 days");
+            answered.set_pair_for_test("rust", forge);
             let rendered = String::from_utf8(render(bytes, &answered)).expect("text");
             assert!(
                 rendered.contains("OWNER RK_REPO <team@acme.example>"),
@@ -801,38 +413,36 @@ mod tests {
         assert!(!super::scope_is_shaped("Specs Ugly"));
     }
 
-    /// The shared zone composes into every pair, lands first, and is
-    /// absent from the technology listing an unknown tech names.
+    /// The forge's own capabilities land with every automatic pair on that
+    /// forge: the title gate and the reporting policy, and the shared zone
+    /// is never a technology.
     #[test]
     fn the_shared_zone_composes_into_the_pair() {
-        let github = destinations(&super::Params {
-            forge: "github".to_owned(),
-            ..super::Params::for_test("acme/widget", Some(Style::Trunk))
-        });
+        let mut github = super::Params::for_test("acme/widget", Some(Style::Trunk));
+        github.set_pair_for_test("rust", "github");
+        let github = destinations(&github);
         assert!(
             github.contains(&".github/workflows/pr-title.yml".to_owned()),
             "the shared title check lands with the pair"
         );
-        let gitlab = destinations(&super::Params {
-            forge: "gitlab".to_owned(),
-            ..super::Params::for_test("acme/widget", Some(Style::Trunk))
-        });
+        assert!(github.contains(&"SECURITY.md".to_owned()));
+        let mut gitlab = super::Params::for_test("acme/widget", Some(Style::Trunk));
+        gitlab.set_pair_for_test("rust", "gitlab");
+        let gitlab = destinations(&gitlab);
         assert!(
             gitlab.contains(&".gitlab/ci/mr-title.yml".to_owned()),
             "the shared title job lands with the pair"
         );
-        let err =
-            projection::check_pair("_shared", "github").expect_err("the shared zone is no tech");
-        let listing = err.to_string();
-        let bindings = listing
-            .split("the bindings are:")
-            .nth(1)
-            .expect("the refusal lists the bindings");
-        assert!(!bindings.contains("_shared"), "{listing}");
+        assert!(
+            !crate::profile::catalog::known_drivers()
+                .iter()
+                .any(|driver| driver.starts_with('_')),
+            "the shared zone is no driver"
+        );
     }
 
     /// A loaded record reaches the projection unchanged, including old
-    /// records' absent style and the two workflow modes.
+    /// records' absent style and the two checkout modes.
     #[test]
     fn params_from_a_record_round_trips() {
         use super::{Params, manifest};
@@ -840,7 +450,7 @@ mod tests {
         let target = camino::Utf8Path::from_path(dir.path()).expect("utf-8 path");
         for tech in ["rust", "bash"] {
             for forge in ["github", "gitlab"] {
-                for workflow in [Workflow::Branches, Workflow::Worktree] {
+                for checkout_mode in [CheckoutMode::MainWorktree, CheckoutMode::LinkedWorktree] {
                     for style in [None, Some(Style::Trunk), Some(Style::Lines)] {
                         for ((nix, scorecard), code_scanning) in [
                             ((false, false), None),
@@ -852,18 +462,31 @@ mod tests {
                                 schema_version: manifest::SCHEMA_VERSION,
                                 rk_version: "0.1.0".to_owned(),
                                 origin: "init".to_owned(),
-                                tech: tech.to_owned(),
-                                forge: forge.to_owned(),
                                 landed_at: "2026-08-29T00:00:00Z".to_owned(),
-                                parameters: manifest::Parameters {
-                                    repo: "acme/team/widget".to_owned(),
-                                    workflow,
-                                    style,
-                                    nix,
+                                profile: ProfileSnapshot {
+                                    technologies: vec![tech.to_owned()],
+                                    forge: Some(forge.to_owned()),
+                                    release: ReleaseIntent {
+                                        mode: ReleaseMode::Automatic,
+                                        driver: Some(tech.to_owned()),
+                                        style,
+                                        line_prefix: Some(
+                                            crate::config::LINE_PREFIX_DEFAULT.to_owned(),
+                                        ),
+                                    },
+                                },
+                                git: GitWorkflow {
+                                    trunk: crate::config::TRUNK_DEFAULT.to_owned(),
+                                    checkout_mode,
+                                },
+                                capabilities: CapabilityRequests {
+                                    nix_packaging: nix,
+                                    reporting_policy: true,
                                     scorecard,
                                     code_scanning,
-                                    trunk: crate::config::TRUNK_DEFAULT.to_owned(),
-                                    line_prefix: crate::config::LINE_PREFIX_DEFAULT.to_owned(),
+                                },
+                                parameters: manifest::Parameters {
+                                    repo: "acme/team/widget".to_owned(),
                                     security_contact: String::new(),
                                     security_response: crate::config::RESPONSE_DEFAULT.to_owned(),
                                 },
@@ -875,23 +498,22 @@ mod tests {
                                 .expect("the record loads")
                                 .expect("the record exists");
                             let params = Params::from_record(&loaded);
-                            assert_eq!(params.tech, tech);
-                            assert_eq!(params.forge, forge);
+                            assert_eq!(params.driver(), Some(tech));
+                            assert_eq!(params.forge(), Some(forge));
                             assert_eq!(params.repo(), "acme/team/widget");
-                            assert_eq!(params.workflow(), workflow);
+                            assert_eq!(params.checkout_mode(), checkout_mode);
                             assert_eq!(params.style(), style);
-                            assert_eq!(params.nix, nix);
-                            assert_eq!(params.scorecard, scorecard);
-                            assert_eq!(params.code_scanning, code_scanning);
+                            assert_eq!(params.nix_packaging(), nix);
+                            assert_eq!(params.scorecard(), scorecard);
+                            assert_eq!(params.code_scanning(), code_scanning);
                             // The loaded record and the same answers given
                             // directly project the same candidate tree.
                             let mut direct = super::Params::for_test("acme/team/widget", style);
-                            direct.tech = tech.to_owned();
-                            direct.forge = forge.to_owned();
-                            direct.workflow = workflow;
-                            direct.nix = nix;
-                            direct.scorecard = scorecard;
-                            direct.code_scanning = code_scanning;
+                            direct.set_pair_for_test(tech, forge);
+                            direct.set_checkout_mode_for_test(checkout_mode);
+                            direct.set_nix_for_test(nix);
+                            direct.set_scorecard_for_test(scorecard);
+                            direct.set_code_scanning_for_test(code_scanning);
                             assert_eq!(params, direct);
                             let projected = destinations(&params);
                             for block in
@@ -907,7 +529,7 @@ mod tests {
                                 );
                             }
                             // The Scorecard workflow ships in the shared
-                            // GitHub zone alone, so the parameter reaches
+                            // GitHub zone alone, so the request reaches
                             // every binding and no GitLab landing.
                             for destination in super::SCORECARD_DESTINATIONS {
                                 assert_eq!(
@@ -926,21 +548,26 @@ mod tests {
     fn resolved_test_params(
         tech: &str,
         resolved: &super::Resolved,
-        workflow: Workflow,
+        checkout_mode: CheckoutMode,
         style: Option<Style>,
         nix: bool,
         scorecard: bool,
         code_scanning: Option<Provider>,
     ) -> Result<super::Params, crate::error::RkError> {
+        let technologies = vec![tech.to_owned()];
         super::Params::resolve(
             camino::Utf8Path::new("."),
             &super::Inputs {
-                tech: Some(tech),
+                technologies: &technologies,
                 forge: Some(&resolved.forge),
                 repo: resolved.repo.as_deref(),
-                workflow: Some(workflow),
+                release_mode: Some(ReleaseMode::Automatic),
+                release_driver: Some(tech),
                 style,
+                trunk: None,
+                checkout_mode: Some(checkout_mode),
                 nix: Some(nix),
+                reporting_policy: None,
                 scorecard: Some(scorecard),
                 code_scanning: Some(code_scanning),
             },
@@ -961,7 +588,7 @@ mod tests {
                 forge: "github".to_owned(),
                 repo: Some("acme/widget".to_owned()),
             },
-            Workflow::Branches,
+            CheckoutMode::MainWorktree,
             Some(Style::Trunk),
             false,
             false,
@@ -1032,7 +659,7 @@ mod tests {
                         forge: forge.to_owned(),
                         repo: Some("acme/widget".to_owned()),
                     },
-                    Workflow::Worktree,
+                    CheckoutMode::LinkedWorktree,
                     Some(Style::Trunk),
                     nix,
                     false,
@@ -1067,7 +694,7 @@ mod tests {
                     forge: "github".to_owned(),
                     repo: Some("acme/widget".to_owned()),
                 },
-                Workflow::Worktree,
+                CheckoutMode::LinkedWorktree,
                 Some(Style::Trunk),
                 true,
                 false,
@@ -1116,7 +743,7 @@ mod tests {
                     forge: "github".to_owned(),
                     repo: Some("acme/widget".to_owned()),
                 },
-                Workflow::Worktree,
+                CheckoutMode::LinkedWorktree,
                 Some(Style::Trunk),
                 nix,
                 false,
@@ -1309,14 +936,14 @@ mod tests {
             assert!(block.contains(term), "{term} is missing from {block}");
         }
         assert!(
-            routing_block(Workflow::Worktree).contains(GLOSSARY_DESTINATION),
+            routing_block(CheckoutMode::LinkedWorktree).contains(GLOSSARY_DESTINATION),
             "the routing block must name the destination it indexes"
         );
     }
 
     #[test]
     fn the_block_splices_into_every_agents_shape() {
-        let owned = routing_block(Workflow::Branches);
+        let owned = routing_block(CheckoutMode::MainWorktree);
         let block = owned.as_str();
         let fresh = spliced(None, block);
         assert_eq!(fresh, format!("{block}\n"));
@@ -1347,7 +974,7 @@ mod tests {
     /// refuses the one dishonest shape by name.
     #[test]
     fn the_hook_block_splices_under_repos() {
-        let owned = hooks_block(Workflow::Branches);
+        let owned = hooks_block(CheckoutMode::MainWorktree);
         let block = owned.as_str();
         let fresh = splice_hooks_block(None, block).expect("a fresh file splices");
         assert!(fresh.starts_with(HOOK_TYPES_LINE));
@@ -1395,8 +1022,8 @@ mod tests {
     /// one owner.
     #[test]
     fn the_blocks_render_per_mode_and_carry_the_one_grammar() {
-        let worktree_hooks = hooks_block(Workflow::Worktree);
-        let branches_hooks = hooks_block(Workflow::Branches);
+        let worktree_hooks = hooks_block(CheckoutMode::LinkedWorktree);
+        let branches_hooks = hooks_block(CheckoutMode::MainWorktree);
         assert!(worktree_hooks.contains("- id: rk-worktree-location"));
         assert!(
             worktree_hooks.contains("SKIP=no-commit-to-branch,rk-worktree-location"),
@@ -1437,8 +1064,8 @@ mod tests {
             "the guard lands directly after rk-branch-name"
         );
 
-        let worktree_routing = routing_block(Workflow::Worktree);
-        let branches_routing = routing_block(Workflow::Branches);
+        let worktree_routing = routing_block(CheckoutMode::LinkedWorktree);
+        let branches_routing = routing_block(CheckoutMode::MainWorktree);
         assert!(worktree_routing.contains("This project works in worktrees"));
         assert!(branches_routing.contains("Branches are worked in the main checkout"));
         for block in [&worktree_routing, &branches_routing] {
@@ -1463,7 +1090,7 @@ mod tests {
     #[test]
     fn the_hook_marker_defects_are_named() {
         use super::hooks_marker_defect;
-        let owned = hooks_block(Workflow::Branches);
+        let owned = hooks_block(CheckoutMode::MainWorktree);
         let block = owned.as_str();
         assert_eq!(hooks_marker_defect(""), None);
         assert_eq!(hooks_marker_defect(&format!("repos:\n{block}\n")), None);

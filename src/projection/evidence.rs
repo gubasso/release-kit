@@ -46,6 +46,9 @@ pub fn gather(target: &Utf8Path, recorded: Option<&Manifest>) -> std::io::Result
         flake_nix_present,
         flake_lock_present,
         flake_recorded: flake_recorded(recorded),
+        root_pipeline_present: present(target, super::GITLAB_ROOT_PIPELINE)?,
+        root_pipeline_recorded: recorded
+            .is_some_and(|record| record.file(super::GITLAB_ROOT_PIPELINE).is_some()),
     })
 }
 
@@ -75,12 +78,20 @@ pub fn crate_shape(target: &Utf8Path) -> CrateShape {
 ///
 /// Any read failure other than the entry being absent.
 pub fn flake_presence(target: &Utf8Path) -> std::io::Result<(bool, bool)> {
-    let present = |name: &str| match std::fs::symlink_metadata(target.join(name).as_std_path()) {
+    Ok((
+        present(target, "flake.nix")?,
+        present(target, "flake.lock")?,
+    ))
+}
+
+/// Whether `name` is present at `target`, a link or any other entry
+/// counted as present.
+fn present(target: &Utf8Path, name: &str) -> std::io::Result<bool> {
+    match std::fs::symlink_metadata(target.join(name).as_std_path()) {
         Ok(_) => Ok(true),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(e) => Err(e),
-    };
-    Ok((present("flake.nix")?, present("flake.lock")?))
+    }
 }
 
 /// The bytes at `path`, or `None` where no file exists.

@@ -17,6 +17,8 @@
 //! SATISFIES landing:a-dropped-file-stays
 //! SATISFIES landing:a-target-is-never-downgraded
 
+use std::fmt::Write as _;
+
 use serde::Serialize;
 
 use crate::cli::upgrade::UpgradeArgs;
@@ -25,9 +27,11 @@ use crate::embedded;
 use crate::error::RkError;
 use crate::held;
 use crate::landing::apply::{self, Action, Collision, Prepared};
-use crate::landing::manifest::{self, Alignment, Manifest, Provider, Style, Workflow};
+use crate::landing::manifest::{self, Alignment, Manifest, Provider};
 use crate::landing::{self, lock};
 use crate::output::Output;
+use crate::profile::{CapabilityRequests, GitWorkflow, ProfileSnapshot};
+use crate::stage::CapabilityNote;
 
 /// One destination and what the upgrade decided for it.
 #[derive(Debug, Serialize)]
@@ -51,25 +55,23 @@ struct Report {
     mode: &'static str,
     /// The target directory.
     target: String,
-    /// The recorded technology.
-    tech: String,
-    /// The recorded forge.
-    forge: String,
     /// The version the receipt came from.
     from_version: String,
     /// This binary's version.
     to_version: &'static str,
-    /// The working-copy mode the rewritten receipt carries.
-    workflow: &'static str,
-    style: &'static str,
-    /// Whether the rewritten receipt carries the Nix capability.
-    nix: bool,
-    /// Whether the landing carries the Scorecard capability.
-    scorecard: bool,
-    /// The code scanning provider the landing carries, absent where the
-    /// project did not opt in.
+    /// What the project is, as the rewritten receipt carries it.
+    profile: ProfileSnapshot,
+    /// How topic branches reach the trunk.
+    git: GitWorkflow,
+    /// Which optional products the rewritten receipt carries.
+    capabilities: CapabilityRequests,
+    /// Every capability, in catalog order, with its status.
+    selection: Vec<CapabilityNote>,
+    /// Why the selected release automation cannot land in this release,
+    /// absent where it can or none is selected. A preview reports it and
+    /// exits 0; the apply refuses on it.
     #[serde(skip_serializing_if = "Option::is_none")]
-    code_scanning: Option<&'static str>,
+    release_unavailable: Option<String>,
     /// Why the provider's licence condition refuses this target, absent
     /// where no condition applies or the licence satisfies it. A preview
     /// reports it and exits 0; the apply refuses on it.
@@ -119,9 +121,6 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
     let recorded = load_upgradable(&held)?;
     let existing = crate::config::load(held.base().as_std_path())?;
     let params = resolve_params(args, &held, &recorded, existing.as_ref())?;
-    let style = params
-        .style()
-        .ok_or_else(|| RkError::Usage("landing style is unresolved".into()))?;
 
     let (prepared, landed) = if let Some(lock) = lock {
         let prepared = apply::prepare(&held, Some(&recorded), &params, existing.as_ref())?;
@@ -152,19 +151,22 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
     let next = next_lines(args, &params, prepared.collisions.is_empty());
     out.next(&next);
     out.emit(&Report {
-        schema: "rk.upgrade/9",
+        schema: "rk.upgrade/10",
         config: prepared.config.clone(),
         mode: if args.apply { "apply" } else { "preview" },
         target: args.target.to_string(),
-        tech: params.tech().into(),
-        forge: params.forge().into(),
         from_version: recorded.rk_version,
         to_version: env!("CARGO_PKG_VERSION"),
-        workflow: params.workflow().as_str(),
-        style: style.as_str(),
-        nix: params.nix(),
-        scorecard: params.scorecard(),
-        code_scanning: params.code_scanning().map(Provider::as_str),
+        profile: params.profile().clone(),
+        git: params.git().clone(),
+        capabilities: params.capabilities().clone(),
+        selection: prepared
+            .projection
+            .capabilities
+            .iter()
+            .map(|selection| CapabilityNote::of(selection, &prepared.projection))
+            .collect(),
+        release_unavailable: prepared.projection.release_unavailable().map(str::to_owned),
         licence_refusal: prepared.projection.licence_refusal.clone(),
         withheld: withheld_of(&prepared),
         collisions: (!prepared.collisions.is_empty()).then(|| prepared.collisions.clone()),
@@ -216,6 +218,16 @@ fn report_decisions(
     prepared: &Prepared,
     landed: bool,
 ) -> Result<Vec<String>, RkError> {
+    out.result_line(format!(
+        "profile: {}",
+        crate::commands::profile::describe(
+            prepared.params.profile(),
+            prepared.params.git(),
+            prepared.params.capabilities(),
+            prepared.params.repo()
+        )
+    ));
+    crate::commands::init::describe_selection(out, prepared);
     for key in &prepared.config.changes {
         out.result_line(format!("configuration changes {key}"));
     }
@@ -241,9 +253,15 @@ fn report_decisions(
     }
     for entry in &prepared.projection.omissions {
         out.result_line(format!("withheld {}: {}", entry.destination, entry.reason));
+        if let Some(action) = &entry.action {
+            out.result_line(format!("  action: {action}"));
+        }
     }
     if let Some(reason) = prepared.projection.licence_refusal.as_deref() {
         out.result_line(format!("licence refusal: {reason}"));
+    }
+    if let Some(reason) = prepared.projection.release_unavailable() {
+        out.result_line(format!("release automation unavailable: {reason}"));
     }
     Ok(sentinels)
 }
@@ -269,7 +287,8 @@ fn resolve_params(
     recorded: &Manifest,
     existing: Option<&crate::config::Config>,
 ) -> Result<landing::Params, RkError> {
-    let nix = toggle("nix", args.nix.as_deref())?;
+    let nix = toggle("nix-packaging", args.nix_packaging.as_deref())?;
+    let reporting_policy = toggle("reporting-policy", args.reporting_policy.as_deref())?;
     let scorecard = toggle("scorecard", args.scorecard.as_deref())?;
     let code_scanning = args
         .code_scanning
@@ -279,14 +298,11 @@ fn resolve_params(
     landing::Params::resolve(
         held.base(),
         &landing::Inputs {
-            tech: args.tech.as_deref(),
-            forge: args.forge.as_deref(),
-            repo: args.repo.as_deref(),
-            workflow: args.workflow.as_deref().map(Workflow::parse).transpose()?,
-            style: args.style.as_deref().map(Style::parse).transpose()?,
             nix,
+            reporting_policy,
             scorecard,
             code_scanning,
+            ..args.profile.inputs()?
         },
         existing,
         Some(recorded),
@@ -298,22 +314,59 @@ fn resolve_params(
 /// preview was run with rides into the follow-up command, so following
 /// it applies the decision that was previewed, never a different one.
 fn next_lines(args: &UpgradeArgs, params: &landing::Params, clean: bool) -> Vec<String> {
-    let identity_flags: String = [
-        ("tech", args.tech.as_deref()),
-        ("forge", args.forge.as_deref()),
-        ("repo", args.repo.as_deref()),
-    ]
-    .into_iter()
-    .filter_map(|(key, value)| value.map(|value| format!(" --{key} {value}")))
-    .collect();
-    let workflow_flag = args
-        .workflow
-        .as_deref()
-        .map_or_else(String::new, |mode| format!(" --workflow {mode}"));
-    let style_flag = args
-        .style
-        .as_deref()
-        .map_or_else(String::new, |style| format!(" --style {style}"));
+    // A flag the preview was run with rides into the follow-up, as the
+    // resolved answer it produced; a flag it was not run with stays out,
+    // so the configuration and the record keep answering it.
+    let profile = &args.profile;
+    let mut identity_flags = String::new();
+    for technology in params.technologies() {
+        if !profile.technology.is_empty() {
+            let _ = write!(identity_flags, " --technology {technology}");
+        }
+    }
+    for (given, flag, value) in [
+        (
+            profile.forge.is_some(),
+            "forge",
+            params.forge().map(str::to_owned),
+        ),
+        (
+            profile.repo.is_some(),
+            "repo",
+            Some(params.repo().to_owned()),
+        ),
+        (
+            profile.release_mode.is_some(),
+            "release-mode",
+            Some(params.release_mode().as_str().to_owned()),
+        ),
+        (
+            profile.release_driver.is_some(),
+            "release-driver",
+            params.driver().map(str::to_owned),
+        ),
+        (
+            profile.release_style.is_some(),
+            "release-style",
+            params.style().map(|style| style.as_str().to_owned()),
+        ),
+        (
+            profile.trunk.is_some(),
+            "trunk",
+            Some(params.trunk().to_owned()),
+        ),
+        (
+            profile.checkout_mode.is_some(),
+            "checkout-mode",
+            Some(params.checkout_mode().as_str().to_owned()),
+        ),
+    ] {
+        if given && let Some(value) = value {
+            let _ = write!(identity_flags, " --{flag} {value}");
+        }
+    }
+    let workflow_flag = String::new();
+    let style_flag = String::new();
     let capabilities = params.capability_toggles();
     if args.apply {
         vec![
@@ -398,28 +451,47 @@ fn collect_sentinels(destination: &str, bytes: &[u8], found: &mut Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::{FileEntry, Report};
+    use crate::landing::CheckoutMode;
+    use crate::profile::{
+        CapabilityRequests, GitWorkflow, ProfileSnapshot, ReleaseIntent, ReleaseMode,
+    };
 
-    /// The complete `rk.upgrade/9` shape, held by snapshot.
+    /// The complete `rk.upgrade/10` shape, held by snapshot.
     #[test]
     fn the_upgrade_report_schema_snapshot_holds() {
         let report = Report {
-            schema: "rk.upgrade/9",
+            schema: "rk.upgrade/10",
             config: crate::config::Plan {
                 action: "added",
                 changes: vec![],
-                content: "schema_version = 1\n".into(),
+                content: "schema_version = 2\n".into(),
             },
             mode: "preview",
             target: "/tmp/t".into(),
-            tech: "rust".into(),
-            forge: "github".into(),
             from_version: "0.1.0".into(),
             to_version: "0.2.0",
-            workflow: "branches",
-            style: "trunk",
-            nix: false,
-            scorecard: false,
-            code_scanning: None,
+            profile: ProfileSnapshot {
+                technologies: vec!["rust".into()],
+                forge: Some("github".into()),
+                release: ReleaseIntent {
+                    mode: ReleaseMode::Automatic,
+                    driver: Some("rust".into()),
+                    style: Some(crate::landing::Style::Trunk),
+                    line_prefix: Some("release/".into()),
+                },
+            },
+            git: GitWorkflow {
+                trunk: "master".into(),
+                checkout_mode: CheckoutMode::MainWorktree,
+            },
+            capabilities: CapabilityRequests {
+                nix_packaging: false,
+                reporting_policy: true,
+                scorecard: false,
+                code_scanning: None,
+            },
+            selection: vec![],
+            release_unavailable: None,
             licence_refusal: None,
             withheld: None,
             collisions: None,
@@ -439,7 +511,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.upgrade/9","mode":"preview","target":"/tmp/t","tech":"rust","forge":"github","from_version":"0.1.0","to_version":"0.2.0","workflow":"branches","style":"trunk","nix":false,"scorecard":false,"config":{"action":"added","changes":[],"content":"schema_version = 1\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"drift"},{"path":"legacy.yml","kind":"rendered","action":"released"}],"next":["rk upgrade --target /tmp/t --apply writes"]}"#
+            r#"{"schema":"rk.upgrade/10","mode":"preview","target":"/tmp/t","from_version":"0.1.0","to_version":"0.2.0","profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"main-worktree"},"capabilities":{"nix_packaging":false,"reporting_policy":true,"scorecard":false},"selection":[],"config":{"action":"added","changes":[],"content":"schema_version = 2\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"drift"},{"path":"legacy.yml","kind":"rendered","action":"released"}],"next":["rk upgrade --target /tmp/t --apply writes"]}"#
         );
     }
 }

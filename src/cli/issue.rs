@@ -34,8 +34,9 @@ pub enum IssueAction {
         #[arg(long)]
         repo: Option<String>,
 
-        /// Override the recorded workflow mode: worktree or branches.
-        #[arg(long)]
+        /// Override the recorded checkout mode: linked-worktree or
+        /// main-worktree.
+        #[arg(long = "checkout-mode", alias = "workflow", value_name = "MODE")]
         workflow: Option<String>,
 
         /// The remote branch the new branch starts from; the forge's

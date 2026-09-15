@@ -23,7 +23,7 @@ rk self-depend clean --target . --apply
 rk self-depend add --target . --json            # the four fragments with their anchors, in application order; the tag is this binary's version
 rk self-depend add --target . --apply
 # check: seeds flake.nix and .envrc where the target has neither; an owned file is refused with the fragments still printed, and takes them by hand
-# a flake of its own plus rk init --nix: run the init first, because a flake this seed wrote is withheld by the landing
+# a flake of its own plus rk init --nix-packaging: run the init first, because a flake this seed wrote is withheld by the landing
 git add flake.nix .envrc && git commit -m 'chore(<scope>): pin rk in the devshell'
 # check: the pair is committed; nix reads only tracked files, and the sync refuses uncommitted edits to flake.nix or flake.lock
 rk self-depend sync --target . --caller operator --apply
@@ -55,13 +55,17 @@ On rust:
 
 The registry account is signed in at crates.io with a verified email, and `cargo info <crate>` 404s unless the account already owns the crate; [the binding](../bindings/rust.md) says why the email gates the first publish.
 
-A project that runs part of this convention declares that before its first apply. `setup.excluded_steps` in `.release-kit/config.toml` names each step the project does not run against the reason it does not, and `rk setup --list` names the steps it may hold. A full run then states each exclusion and runs nothing for it, `rk setup check --target .` reports each one with its reason and judges the rest, and `rk setup step <name> --apply` refuses a step named there until the entry goes. The file needs no landing to be read, so a project that lands no file still declares its model.
+Which steps apply is the target configuration's answer before it is the operator's. A forge step applies where `profile.forge` names a forge this release drives; the release half applies where `profile.release.mode` is `automatic`; the packaging gate applies where that release names a driver; the reporting channel applies where `capabilities.reporting_policy` asks for the landed policy. `rk profile --target .` reports those values, and every run prints the step's stance before it acts.
+
+A project that runs part of what still applies declares that before its first apply. `setup.excluded_steps` in `.release-kit/config.toml` names each step the project does not run against the reason it does not, and `rk setup --list` names the steps it may hold. A full run then states each exclusion and runs nothing for it, `rk setup check --target .` reports each one with its reason and judges the rest, and `rk setup step <name> --apply` refuses a step named there until the entry goes. An exclusion declared for a step that does not apply here reports as redundant. The file needs no landing to be read, so a project that lands no file still declares its model.
 
 ## 0. Gate the package metadata
 
 Before anything that needs credentials or cannot be undone; the binding names what the registry rejects here.
 
 ```bash
+rk binding <tech>
+# check: what the registry rejects, for the release driver this project runs
 rk setup step package-check --target .
 # check: exits 0; the package is publishable with no token spent
 ```
@@ -139,7 +143,7 @@ gh api "repos/<repo>" -q .delete_branch_on_merge
 
 ### 1d. Remind this clone after a pull
 
-Automated: `rk setup step branch-reminder --apply`. 1c deletes the remote copy; this clone's own copy survives with its upstream marked gone, and no forge can reach it. The step writes a post-merge hook that runs `rk branches prune --quiet` and `rk worktree prune --quiet` after every pull: silent when the clone is clean, a report naming the retired branches and worktrees otherwise, and never a deletion — the `--apply` forms are the operator's own call. Each call sits behind a capability probe on its own verb, `rk <verb> --help`, so an `rk` that is missing or too old for a verb keeps the hook silent while a genuine refusal still reaches the operator. The step refuses over an existing post-merge hook it did not write; merge by hand there, guarding each call behind its probe as below. Like every setup step it resolves the forge, so it runs where the forge CLI is installed.
+Automated: `rk setup step branch-reminder --apply`. 1c deletes the remote copy; this clone's own copy survives with its upstream marked gone, and no forge can reach it. The step writes a post-merge hook that runs `rk branches prune --quiet` and `rk worktree prune --quiet` after every pull: silent when the clone is clean, a report naming the retired branches and worktrees otherwise, and never a deletion — the `--apply` forms are the operator's own call. Each call sits behind a capability probe on its own verb, `rk <verb> --help`, so an `rk` that is missing or too old for a verb keeps the hook silent while a genuine refusal still reaches the operator. The step refuses over an existing post-merge hook it did not write; merge by hand there, guarding each call behind its probe as below. It is local work alone and calls no forge, so it runs whether or not the forge CLI is installed.
 
 ```bash
 hook="$(git rev-parse --git-path hooks)/post-merge"
@@ -270,9 +274,13 @@ Prove the gate once, by making one child job fail on purpose: the parent pipelin
 
 Automated: `rk setup step forge-version --apply`. It reads and writes nothing.
 
-On github: satisfied without a call. github.com is a rolling service and declares no version floor.
+On github:
 
-On gitlab: one `GET /version`, compared against the minimum [the forge document](../forges/gitlab.md) names and gives the reason for. An instance below it is refused here, before 3c installs a merge check its pipeline cannot feed. A version that cannot be read blocks the same as one that is too old; where the reading is unknown, run `glab auth login` and rerun.
+Satisfied without a call. github.com is a rolling service and declares no version floor.
+
+On gitlab:
+
+One `GET /version`, compared against the minimum [the forge document](../forges/gitlab.md) names and gives the reason for. An instance below it is refused here, before 3c installs a merge check its pipeline cannot feed. A version that cannot be read blocks the same as one that is too old; where the reading is unknown, run `glab auth login` and rerun.
 
 ```bash
 rk setup step forge-version --target . --apply
@@ -330,16 +338,17 @@ Where the forge enforces less than a step claims, the check names the weaker gua
 
 ### 4a. Land the files
 
-The apply names no scope vocabulary. The title check holds a scope to lowercase letters, digits, and `_ . / -`, the commit hook requires that a scope is there, and the landed `AGENTS.md` block tells the author how to pick the word. `--workflow` chooses the working-copy mode and defaults to `worktree` — every code-changing branch in a linked worktree, the main checkout commits nothing; `--workflow branches` leaves branches workable in the main checkout, with worktrees optional beside them. `--style` chooses the release style and defaults to `trunk` — the bot's request carries auto-merge from creation, so a green trunk ships itself; `--style lines` leaves every request unarmed, for a project that keeps older lines and validates a candidate by hand (check: `rk status` prints the mode and the style).
+The apply names no scope vocabulary. The title check holds a scope to lowercase letters, digits, and `_ . / -`, the commit hook requires that a scope is there, and the landed `AGENTS.md` block tells the author how to pick the word. `--checkout-mode` chooses where a topic branch opens and defaults to `linked-worktree` — every code-changing branch in a linked worktree, the main checkout commits nothing; `--checkout-mode main-worktree` leaves branches workable in the original working tree, with worktrees optional beside it. `--release-style` chooses the release style of an automatic release and defaults to `trunk` — the bot's request carries auto-merge from creation, so a green trunk ships itself; `--release-style lines` leaves every request unarmed, for a project that keeps older lines and validates a candidate by hand (check: `rk status` prints the mode and the style).
 
 The landing is staged, investigated, rendered, and verified: [the landing runbook](./landing.md) steps 1 and 2 carry the stage and the investigation before the front below, which is that runbook's step 3, and its steps 4 and 5 carry the verification and the cleanup after it.
 
 ```bash
-rk init --tech <tech> --target .             # preview every destination
-rk init --tech <tech> --target . --apply     # write the files and the landing record
+rk profile --target .                        # what the target resolves to, and what the catalog selects
+rk init --target .                           # preview every destination
+rk init --target . --apply                   # write the files and the landing record
 # check: the apply reports each written file, including SECURITY.md, and every sentinel left to fill
 # already landed: the apply refuses; rk upgrade --target . --apply takes an existing landing to the installed binary's projection
-# a record from before the style parameter: the upgrade refuses until --style names one
+# a record from before the style parameter: the upgrade refuses until --release-style names one
 ```
 
 Check `SECURITY.md` after landing: its project path must name this target and its instructions must describe the intended private reporting channel; return to 4a with the correct repository parameter if it does not. Existing landings receive the policy through `rk upgrade`. This rendered policy is release-kit-owned: an upgrade replaces a hand edit, so the two facts only this project knows are landing parameters instead. Set `security.contact` in `.release-kit/config.toml` to one line naming who receives a report when the forge channel is unavailable — an address, a URL, a person, or a team — and leave it empty to keep the forge's own wording. Set `security.response` to `best-effort`, or to `1 day`, `<n> days`, `1 business day`, or `<n> business days` to promise that the maintainers acknowledge a report within that window; the value promises acknowledgment alone and never remediation or disclosure. Both are class P: `rk status` reports an edited key as pending configuration, and the next `rk upgrade --apply` takes it and records it (check: `rk status` lists the key under pending, and the applied policy states the new wording).

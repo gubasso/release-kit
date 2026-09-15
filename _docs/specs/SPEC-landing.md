@@ -20,12 +20,12 @@
   - [`landing:a-landing-classifies-its-target-first` — A landing classifies its target first](#landinga-landing-classifies-its-target-first--a-landing-classifies-its-target-first)
   - [`landing:an-adoption-writes-the-record-and-nothing-else` — An adoption writes the record and nothing else](#landingan-adoption-writes-the-record-and-nothing-else--an-adoption-writes-the-record-and-nothing-else)
   - [`landing:a-block-destination-owns-its-marked-lines-alone` — A block destination owns its marked lines alone](#landinga-block-destination-owns-its-marked-lines-alone--a-block-destination-owns-its-marked-lines-alone)
-  - [`landing:the-shared-zone-composes-into-every-pair` — The shared zone composes into every pair](#landingthe-shared-zone-composes-into-every-pair--the-shared-zone-composes-into-every-pair)
   - [`landing:a-landed-hook-serves-the-release-convention-alone` — A landed hook serves the release convention alone](#landinga-landed-hook-serves-the-release-convention-alone--a-landed-hook-serves-the-release-convention-alone)
   - [`landing:the-landed-guards-hold-the-message-content` — The landed guards hold the message content](#landingthe-landed-guards-hold-the-message-content--the-landed-guards-hold-the-message-content)
   - [`landing:the-arming-identity-is-the-bot` — The arming identity is the bot](#landingthe-arming-identity-is-the-bot--the-arming-identity-is-the-bot)
   - [`landing:the-changelog-quality-gate-is-the-squash-message` — The changelog quality gate is the squash message](#landingthe-changelog-quality-gate-is-the-squash-message--the-changelog-quality-gate-is-the-squash-message)
   - [`landing:the-routing-block-bounds-the-agents-initiative` — The routing block bounds the agent's initiative and reads as plain prose](#landingthe-routing-block-bounds-the-agents-initiative--the-routing-block-bounds-the-agents-initiative-and-reads-as-plain-prose)
+  - [`landing:a-landing-writes-what-the-catalog-selects` — A landing writes what the catalog selects](#landinga-landing-writes-what-the-catalog-selects--a-landing-writes-what-the-catalog-selects)
   - [`landing:the-nix-capability-is-a-recorded-opt-in` — An opt-in capability is a recorded landing parameter](#landingthe-nix-capability-is-a-recorded-opt-in--an-opt-in-capability-is-a-recorded-landing-parameter)
   - [`landing:the-flake-pair-lands-all-or-nothing` — The flake pair lands all-or-nothing](#landingthe-flake-pair-lands-all-or-nothing--the-flake-pair-lands-all-or-nothing)
 
@@ -51,19 +51,19 @@ Verify: `cargo nextest run -E 'test(fresh_init_preview_is_read_only_and_apply_wr
 
 ### `landing:a-record-states-its-schema` — A record states its schema
 
-The receipt MUST carry an integer `schema_version`, and a receipt at a version this binary does not know MUST refuse by that record schema alone, naming the record and independent of any other schema, never a best-effort read, because commands make decisions from it and must be able to say when they cannot, and at schema 8 the receipt MUST name the producing `rk_version`, the origin, the resolved parameters, and per destination the path, the kind, the placement where the destination is a marked region, and the digest of the bytes or region now present, and this binary MUST read a receipt at schemas 1 through 7 through one bounded conversion that ignores the two retired digest fields and write schema 8 at the next successful landing.
+The receipt MUST carry an integer `schema_version`, and a receipt at a version this binary does not know MUST refuse by that record schema alone, naming the record and independent of any other schema, never a best-effort read, because commands make decisions from it and must be able to say when they cannot, and at schema 9 the receipt MUST name the producing `rk_version`, the origin, the resolved target configuration by domain — the source-free profile snapshot, the Git workflow, and the capability requests — the remaining render parameters, and per destination the path, the kind, the placement where the destination is a marked region, and the digest of the bytes or region now present, and this binary MUST read a receipt at schemas 1 through 8 through one bounded conversion that ignores the two retired digest fields, reads the one recorded technology as the sole technology and the automatic release driver, and moves each flat parameter into the domain that owns it, and write schema 9 at the next successful landing.
 
 #### Scenario: A schema 3 receipt and a schema 999 receipt meet this binary
 
 - GIVEN one target whose receipt declares `schema_version: 3` with `payload_sha256` and per-file `baseline_sha256`, and another declaring `schema_version: 999`
 - WHEN `rk upgrade --apply` runs against each
-- THEN the first loads with no other release resolved and rewrites as schema 8 carrying neither retired field, and the second exits 73 naming the record and the version it found with nothing written
+- THEN the first loads with no other release resolved and rewrites as schema 9 carrying neither retired field and stating its domains, and the second exits 73 naming the record and the version it found with nothing written
 
-Verify: `cargo nextest run -E 'test(receipt_schemas_1_through_7_load_without_a_release_source_and_rewrite_as_schema_8) or test(a_receipt_newer_than_the_binary_refuses_by_record_schema) or test(production_outputs_carry_no_plan_bundle_or_release_selection_field)'`
+Verify: `cargo nextest run -E 'test(receipt_schemas_1_through_7_load_without_a_release_source_and_rewrite_as_schema_8) or test(an_upgrade_migrates_a_schema_1_record_to_the_current_schema) or test(a_receipt_newer_than_the_binary_refuses_by_record_schema) or test(production_outputs_carry_no_plan_bundle_or_release_selection_field)'`
 
 ### `landing:a-rendered-file-is-reproducible` — A rendered file is reproducible
 
-A `rendered` file's landed bytes MUST be a deterministic function of the embedded sources and the recorded parameters only, and every substituted value MUST be recorded in the manifest's `parameters`, so every re-render and comparison reads the manifest parameters alone, whatever a later configuration says. A value the renderer substitutes from one constant — the commit scope's shape — is not a parameter, so it MUST NOT be recorded, and a parameter an earlier schema recorded and this binary substitutes nowhere MUST read without it and rewrite without it. A parameter a snippet supplies its own fallback for MUST carry that fallback in the authored snippet inside removable markers rather than in the binary, so a record predating the parameter renders its file byte for byte and a per-forge wording stays the forge's own; the record's value MUST be held to the same grammar the configuration key is, because the record is what a re-render reads.
+A `rendered` file's landed bytes MUST be a deterministic function of the embedded sources and the recorded target configuration only, and every substituted value MUST be recorded in the manifest's `parameters`, so every re-render and comparison reads the manifest parameters alone, whatever a later configuration says. A value the renderer substitutes from one constant — the commit scope's shape — is not a parameter, so it MUST NOT be recorded, and a parameter an earlier schema recorded and this binary substitutes nowhere MUST read without it and rewrite without it. A parameter a snippet supplies its own fallback for MUST carry that fallback in the authored snippet inside removable markers rather than in the binary, so a record predating the parameter renders its file byte for byte and a per-forge wording stays the forge's own; the record's value MUST be held to the same grammar the configuration key is, because the record is what a re-render reads.
 
 #### Scenario: The owner and the security contact substitute from the parameters
 
@@ -75,13 +75,13 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `landing:the-release-style-is-a-landing-parameter` — The release style is a landing parameter
 
-The release style MUST be recorded in the manifest as `trunk` or `lines`, reported by every parameter-bearing report, rendered into the landed release workflow as the one value that arms or does not arm the bot's request, resolved as the runbooks' style axis, and taken from committed configuration or an invocation flag by the landing verbs; a record predating the field carries no style, and `rk upgrade` MUST refuse until `landing.style` in the config or `--style` answers it, because neither value is a compatibility-safe reading of a target nobody asked.
+Where the release mode is `automatic`, the release style MUST be recorded in the manifest as `trunk` or `lines`, reported by every parameter-bearing report, rendered into the landed release workflow as the one value that arms or does not arm the bot's request, resolved as the runbooks' style axis, and taken from committed configuration or an invocation flag by the landing verbs; a record predating the field carries no style, and `rk upgrade` MUST refuse until `profile.release.style` in the config or `--release-style` answers it, because neither value is a compatibility-safe reading of a target nobody asked.
 
 #### Scenario: A pre-style record upgrades
 
 - GIVEN a landed target whose record predates the style parameter
 - WHEN `rk upgrade --apply` runs with no `--style`
-- THEN it refuses naming the parameter and the two values, nothing is written, and a rerun naming `--style trunk` records the answer
+- THEN it refuses naming the parameter and the two values, nothing is written, and a rerun naming `--release-style trunk` records the answer
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 
@@ -229,18 +229,6 @@ A block-placed artifact MUST own exactly the lines between its markers: a landin
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 
-### `landing:the-shared-zone-composes-into-every-pair` — The shared zone composes into every pair
-
-`snippets/_shared/<forge>` MUST land with every `(technology, forge)` pair for its forge, MUST never be selectable as a technology, and a destination the shared zone and a pair both ship MUST refuse as a projection defect, never one zone silently winning.
-
-#### Scenario: The shared zone is offered as a technology
-
-- GIVEN the embedded sources carrying `snippets/_shared/`
-- WHEN `rk init --tech _shared` runs, and the supported pairs are listed for an unknown pair
-- THEN the tech refuses as unknown, and neither listing names `_shared`
-
-Verify: `cargo nextest run -E 'binary(cli)'`
-
 ### `landing:a-landed-hook-serves-the-release-convention-alone` — A landed hook serves the release convention alone
 
 The hook block MUST carry only hooks enforcing the release convention's own rules — the commit contract and the local mirrors of the forge protections — never general hygiene, which stays the target's own, and every third-party hook it names MUST be pinned in `versions.toml`.
@@ -301,9 +289,21 @@ The routing block MUST state that an agent acting in the target guides and never
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 
+### `landing:a-landing-writes-what-the-catalog-selects` — A landing writes what the catalog selects
+
+Every destination a landing writes MUST belong to exactly one capability the catalog selected for the target's resolved configuration, every capability MUST be reported with one of `selected`, `not-requested`, `not-applicable`, `unavailable`, `unknown`, and `withheld`, and a selected release automation this release does not carry at the target's driver and forge MUST refuse the apply before any write, naming the dimensions and the tuples it does carry, because a record stating an automation nothing landed is a false receipt.
+
+#### Scenario: A profile asks for a release this binary cannot land
+
+- GIVEN a GitLab target whose release is automatic and driven by `python`
+- WHEN `rk init` previews and then applies
+- THEN the preview reports `release.automation` unavailable with the available tuples, the apply exits 73 before any write, and no `.release-kit/` directory appears
+
+Verify: `cargo nextest run -E 'test(python_on_gitlab_reports_unavailable_and_apply_refuses) or test(an_occupied_gitlab_root_pipeline_withholds_the_title_gate) or test(a_target_with_no_technology_and_no_forge_lands_the_guards)'`
+
 ### `landing:the-nix-capability-is-a-recorded-opt-in` — An opt-in capability is a recorded landing parameter
 
-A landing MUST include an opt-in capability's destinations only under an explicit opt-in recorded as a landing parameter, defaulting off, with a record predating the parameter reading as opt-out, because the projection must stay reproducible from the record: without the parameter, `status` cannot tell an absent-because-not-wanted file from a drifted one, and `upgrade` cannot decide whether to add the files. Three capabilities are bound by this rule: the Nix destinations, the OpenSSF Scorecard workflow, which posts to a public API and reads repository metadata, and the code scanning workflow, whose parameter names the analyzer. Each stays a target's choice rather than a guard this method requires. A capability whose files are technology-independent and which one forge alone can run MUST ship them in that forge's shared zone, so the parameter records the target's answer on either forge and the projection lands nothing the forge cannot execute; a capability whose files read one language MUST ship them in that binding's own pair instead, and a landing for a binding that ships none MUST refuse the capability by name rather than record a parameter and write nothing. A capability whose parameter names a provider MUST land exactly the destination that provider owns, and where that provider's terms bind the codebase it runs over, the landing MUST read the licence the binding declares and refuse the pair by name, writing nothing and naming a provider that carries no such condition, because a workflow whose terms the codebase does not satisfy is a licence violation this convention does not commit on a target's behalf; a licence that lapses after the landing MUST report as a warning under a stable code that `rk status --check` exits 0 on, because the target is not broken and the licensing decision is the operator's.
+A landing MUST include an opt-in capability's destinations only under an explicit request recorded under `capabilities`, defaulting off, with a record predating the parameter reading as opt-out, because the projection must stay reproducible from the record: without the parameter, `status` cannot tell an absent-because-not-wanted file from a drifted one, and `upgrade` cannot decide whether to add the files. Three capabilities are bound by this rule: the Nix destinations, the OpenSSF Scorecard workflow, which posts to a public API and reads repository metadata, and the code scanning workflow, whose parameter names the analyzer. Each stays a target's choice rather than a guard this method requires. A capability whose files are technology-independent and which one forge alone can run MUST ship them in that forge's shared zone, so the parameter records the target's answer on either forge and the projection lands nothing the forge cannot execute; a capability whose files read one language MUST ship them in that binding's own pair instead, and a landing for a binding that ships none MUST report the capability unavailable by name and omit its destinations, per [the project profile specification](./SPEC-project-profile.md). A capability whose parameter names a provider MUST land exactly the destination that provider owns, and where a provider the target's dimensions can land carries terms that bind the codebase it runs over, the landing MUST read the licence the binding declares and refuse the pair by name, writing nothing and naming a provider that carries no such condition, because a workflow whose terms the codebase does not satisfy is a licence violation this convention does not commit on a target's behalf; a licence that lapses after the landing MUST report as a warning under a stable code that `rk status --check` exits 0 on, because the target is not broken and the licensing decision is the operator's.
 
 #### Scenario: An old record meets a newer binary
 
@@ -320,7 +320,7 @@ A landing MUST land the seed `flake.nix` and its matching `flake.lock` as a pair
 #### Scenario: A target with its own flake opts in
 
 - GIVEN a rust target carrying a `flake.nix` of its own
-- WHEN `rk init --nix --apply` runs
+- WHEN `rk init --nix-packaging --apply` runs
 - THEN `nix/package.nix` lands, the pair is withheld with the reason reported, no workflow is written, the withheld destinations stay out of the record, and a later `rk upgrade` reproduces the same decision
 
 Verify: `cargo nextest run -E 'test(a_target_with_its_own_flake_keeps_it_and_the_pair_is_withheld)'`

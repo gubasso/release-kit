@@ -13,6 +13,8 @@ pub mod init;
 pub mod issue;
 pub mod lines;
 pub mod message;
+pub mod profile;
+pub mod profile_flags;
 pub mod read;
 pub mod runs;
 pub mod self_depend;
@@ -50,8 +52,10 @@ pub enum Commands {
     Forge(read::ReadArgs),
     /// Print the pinned-tool registry, with --check as its online freshness report.
     Versions(versions::VersionsArgs),
-    /// Land a technology's files into a target repository.
+    /// Land the files the target configuration selects into a repository.
     Init(init::InitArgs),
+    /// Report what a target resolves to and which capabilities the catalog selects; writes nothing.
+    Profile(profile::ProfileArgs),
     /// Report what landed in a target and whether it drifted.
     Status(status::StatusArgs),
     /// Take a landed target to this binary's embedded sources.

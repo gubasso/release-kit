@@ -1,0 +1,32 @@
+# The root pipeline for a project that automates no release here. Its one
+# job is the squash-title gate the include below carries, so every merge
+# request runs the pipeline the project setting requires and the title
+# check holds the trunk's commit messages to the convention. A project
+# that automates its release takes the binding's own root pipeline
+# instead, which carries this include beside the release jobs.
+#
+# The project's own jobs go in .gitlab/ci/project.yml, which the bridge
+# below triggers as a child pipeline: a separate configuration, with its
+# own stages and its own includes, that never merges into this file. The
+# forge document carries the rules that file follows.
+
+include:
+  - local: .gitlab/ci/mr-title.yml
+
+stages:
+  - test
+
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+
+project-jobs:
+  stage: test
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      exists:
+        - .gitlab/ci/project.yml
+  trigger:
+    include:
+      - local: .gitlab/ci/project.yml
+    strategy: mirror

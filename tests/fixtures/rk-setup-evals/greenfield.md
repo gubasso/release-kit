@@ -9,16 +9,16 @@
 
 ## Situation
 
-A repository with no release mechanism, no tag, no second long-lived branch, and no `.release-kit/manifest.json`. `rk assess --target .` reports `greenfield`. The operator asked for the release workflow to be set up, with cleanup, and answered the technology, the workflow mode, and the release style.
+A Rust repository with no release mechanism, no tag, no second long-lived branch, and no `.release-kit/manifest.json`. `rk assess --target .` reports `greenfield`. The operator asked for the release workflow to be set up, with cleanup. `rk profile --target .` names one technology, the forge from the remote, and an automatic release driven by rust; the operator answered the checkout mode and the release style.
 
 ## Route
 
 1. `rk guide landing` step 1a: run `rk --version` and `rk self-depend status --target .`. The installed version is the one the operator chose. No step selects, fetches, or installs another. The report names no wired manager on a bare tree, so no freshness offer is raised here: there is no pin for a line to move. The acquisition question is raised instead, last.
 2. `rk assess --target .`: the verdict is `greenfield`, so the arrival loads `rk method setup` and `rk guide setup`. The landing is that runbook's step 4a.
-3. `rk guide landing` step 1c: run `rk stage --target . --tech <tech> --workflow <mode> --style <style>` and hold `<stage>`.
+3. `rk guide landing` step 1c: run `rk stage --target . --checkout-mode <mode> --release-style <style>` and hold `<stage>`.
 4. `rk guide landing` step 2a: read `<stage>/stage.json`, `<stage>/artifacts/`, and `<stage>/reference/`. Every candidate is a creation, because no destination exists yet.
 5. `rk guide landing` step 2b: the evidence class is neither receipt nor history, which on a bare tree is a best-effort heuristic with nothing uncertain: no destination is present, so no ownership question arises and no automatic overwrite can happen.
-6. `rk guide landing` step 3: preview `rk init --tech <tech> --target . --workflow <mode> --style <style>`, read every `created` word, then run it with `--apply`.
+6. `rk guide landing` step 3: preview the command `rk profile` rendered, `rk init --technology rust --forge <forge> --repo <repo> --release-mode automatic --release-driver rust --release-style <style> --trunk <trunk> --checkout-mode <mode> --target .`, read every `created` word, then run it with `--apply`.
 7. `rk guide landing` step 4: compare `git diff --stat` with `<stage>/artifacts/`, then run `rk status --check --target .`, `rk setup check --target .`, and the project's checks.
 8. `rk guide landing` step 5a: show `rk stage clean <stage>`. Run it only because the request's authority includes cleanup.
 9. The landing is green and nothing here pins `rk`. Ask the operator how the project obtains it before the task closes, offering a manager the binary can wire, a host install, and their own wiring, with what each one costs. The operator answers that they wire it themselves. Record that answer in the report and close: the question is asked once per landing, and an answer already recorded is not asked again.

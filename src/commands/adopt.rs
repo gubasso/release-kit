@@ -20,10 +20,12 @@ use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
 use crate::held;
 use crate::landing::apply::{self, Prepared};
-use crate::landing::manifest::{self, Provider, Style, Workflow};
+use crate::landing::manifest::{self, CheckoutMode, Provider};
 use crate::landing::{self, Kind, lock};
 use crate::output::Output;
+use crate::profile::{CapabilityRequests, GitWorkflow, ProfileSnapshot};
 use crate::projection::Placement;
+use crate::stage::CapabilityNote;
 
 /// One verified destination.
 #[derive(Debug, Serialize)]
@@ -45,24 +47,20 @@ struct Report {
     mode: &'static str,
     /// The target directory.
     target: String,
-    /// The technology whose projection was verified.
-    tech: String,
-    /// The forge whose projection was verified.
-    forge: String,
+    /// What the project is, as the candidate was rendered under it.
+    profile: ProfileSnapshot,
+    /// How topic branches reach the trunk.
+    git: GitWorkflow,
+    /// Which optional products the record carries.
+    capabilities: CapabilityRequests,
     /// The parameter the candidate was rendered under.
     repo: String,
-    /// The working-copy mode the candidate was rendered under and the
-    /// receipt carries.
-    workflow: &'static str,
-    style: &'static str,
-    /// Whether the receipt carries the Nix capability.
-    nix: bool,
-    /// Whether the target runs the Scorecard capability.
-    scorecard: bool,
-    /// The code scanning provider the landing carries, absent where the
-    /// project did not opt in.
+    /// Every capability, in catalog order, with its status.
+    selection: Vec<CapabilityNote>,
+    /// Why the selected release automation cannot land in this release,
+    /// absent where it can or none is selected.
     #[serde(skip_serializing_if = "Option::is_none")]
-    code_scanning: Option<&'static str>,
+    release_unavailable: Option<String>,
     /// Why the provider's licence condition refuses this target, absent
     /// where no condition applies or the licence satisfies it. A preview
     /// reports it and exits 0; the apply refuses on it.
@@ -139,35 +137,39 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
     let params = landing::Params::resolve(
         held.base(),
         &landing::Inputs {
-            tech: args.tech.as_deref(),
-            forge: args.forge.as_deref(),
-            repo: args.repo.as_deref(),
-            workflow: args.workflow.as_deref().map(Workflow::parse).transpose()?,
-            style: args.style.as_deref().map(Style::parse).transpose()?,
-            nix: args.nix.then_some(true),
+            nix: args.nix_packaging.then_some(true),
+            reporting_policy: args.reporting_policy.then_some(true),
             scorecard: args.scorecard.then_some(true),
             code_scanning: args
                 .code_scanning
                 .as_deref()
                 .map(Provider::parse)
                 .transpose()?,
+            ..args.profile.inputs()?
         },
         config.as_ref(),
         None,
         landing::Purpose::Adopt,
     )?;
-    let workflow = params.workflow();
-    let style = params
-        .style()
-        .ok_or_else(|| RkError::Usage("landing style is unresolved".into()))?;
+    let checkout_mode = params.checkout_mode();
 
     let mut prepared = apply::prepare(&held, None, &params, config.as_ref())?;
-    let files = verify(&held, workflow, &prepared)?;
+    let files = verify(&held, checkout_mode, &prepared)?;
     // Every destination verified, so what the decision pass read as an
     // unattributed whole file is a file the agent brought to the
     // projection: the adoption records it and writes nothing else.
     prepared.collisions.clear();
 
+    out.result_line(format!(
+        "profile: {}",
+        crate::commands::profile::describe(
+            params.profile(),
+            params.git(),
+            params.capabilities(),
+            params.repo()
+        )
+    ));
+    crate::commands::init::describe_selection(out, &prepared);
     for file in &files {
         out.result_line(match file.action {
             "differs" => format!("differs {} (seeded, target-owned)", file.path),
@@ -183,7 +185,7 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
         out.result_line(format!("wrote {}", manifest::MANIFEST_PATH));
     }
     drop(lock);
-    report(out, args, &params, style, &prepared, files)
+    report(out, args, &params, &prepared, files)
 }
 
 /// The report of a verified target, and of the receipt where one was
@@ -192,13 +194,10 @@ fn report(
     out: Output,
     args: &AdoptArgs,
     params: &landing::Params,
-    style: Style,
     prepared: &Prepared,
     files: Vec<FileEntry>,
 ) -> Result<(), RkError> {
-    let tech = params.tech().to_owned();
     let repo = params.repo().to_owned();
-    let workflow = params.workflow();
     let mut next = if args.apply {
         vec![
             "commit the config and the receipt".to_owned(),
@@ -206,14 +205,18 @@ fn report(
         ]
     } else {
         vec![format!(
-            "rk adopt --tech {tech} --forge {} --repo {repo} --workflow {} --style {}{} --target {} --apply writes the config and the receipt inside .release-kit/",
-            params.forge(),
-            workflow.as_str(),
-            style.as_str(),
+            "rk adopt{}{} --target {} --apply writes the config and the receipt inside .release-kit/",
+            params.canonical_flags(),
             params.capability_flags(),
             args.target
         )]
     };
+    if let Some(reason) = prepared.projection.release_unavailable() {
+        next.insert(
+            0,
+            format!("the apply refuses until the release automation resolves: {reason}"),
+        );
+    }
     if let Some(reason) = prepared.projection.licence_refusal.as_deref() {
         next.insert(
             0,
@@ -228,18 +231,21 @@ fn report(
     ));
     out.next(&next);
     out.emit(&Report {
-        schema: "rk.adopt/9",
+        schema: "rk.adopt/10",
         config: prepared.config.clone(),
         mode: if args.apply { "apply" } else { "preview" },
         target: args.target.to_string(),
-        tech,
-        forge: params.forge().to_owned(),
+        profile: params.profile().clone(),
+        git: params.git().clone(),
+        capabilities: params.capabilities().clone(),
         repo,
-        workflow: workflow.as_str(),
-        style: style.as_str(),
-        nix: params.nix(),
-        scorecard: params.scorecard(),
-        code_scanning: params.code_scanning().map(Provider::as_str),
+        selection: prepared
+            .projection
+            .capabilities
+            .iter()
+            .map(|selection| CapabilityNote::of(selection, &prepared.projection))
+            .collect(),
+        release_unavailable: prepared.projection.release_unavailable().map(str::to_owned),
         licence_refusal: prepared.projection.licence_refusal.clone(),
         withheld: {
             let withheld: Vec<landing::Withheld> = prepared
@@ -263,7 +269,7 @@ fn report(
 /// resolves everything and re-runs once.
 fn verify(
     held: &apply::Held,
-    workflow: Workflow,
+    checkout_mode: CheckoutMode,
     prepared: &Prepared,
 ) -> Result<Vec<FileEntry>, RkError> {
     let target = held.display();
@@ -340,10 +346,10 @@ fn verify(
         )
         .expected(format!(
             "every rendered destination matching the {} candidate, byte for byte",
-            workflow.as_str()
+            checkout_mode.as_str()
         ))
         .action(format!(
-            "align first: rk stage --target {} stages the candidate for a byte comparison, and the rk-setup skill carries the migration that brings each destination to it; then re-run, or select the other candidate with --workflow or --style{}",
+            "align first: rk stage --target {} stages the candidate for a byte comparison, and the rk-setup skill carries the migration that brings each destination to it; then re-run, or select the other candidate with --checkout-mode or --release-style{}",
             target,
             // A policy the target wrote its own contact into is the one
             // mismatch a committed answer resolves rather than an edit:
@@ -361,27 +367,46 @@ fn verify(
 #[cfg(test)]
 mod tests {
     use super::{FileEntry, Report};
+    use crate::landing::CheckoutMode;
+    use crate::profile::{
+        CapabilityRequests, GitWorkflow, ProfileSnapshot, ReleaseIntent, ReleaseMode,
+    };
 
-    /// The complete `rk.adopt/9` shape, held by snapshot.
+    /// The complete `rk.adopt/10` shape, held by snapshot.
     #[test]
     fn the_adopt_report_schema_snapshot_holds() {
         let report = Report {
-            schema: "rk.adopt/9",
+            schema: "rk.adopt/10",
             config: crate::config::Plan {
                 action: "added",
                 changes: vec![],
-                content: "schema_version = 1\n".into(),
+                content: "schema_version = 2\n".into(),
             },
             mode: "apply",
             target: "/tmp/t".into(),
-            tech: "rust".into(),
-            forge: "github".into(),
+            profile: ProfileSnapshot {
+                technologies: vec!["rust".into()],
+                forge: Some("github".into()),
+                release: ReleaseIntent {
+                    mode: ReleaseMode::Automatic,
+                    driver: Some("rust".into()),
+                    style: Some(crate::landing::Style::Trunk),
+                    line_prefix: Some("release/".into()),
+                },
+            },
+            git: GitWorkflow {
+                trunk: "master".into(),
+                checkout_mode: CheckoutMode::MainWorktree,
+            },
+            capabilities: CapabilityRequests {
+                nix_packaging: false,
+                reporting_policy: true,
+                scorecard: false,
+                code_scanning: Some(crate::landing::Provider::Semgrep),
+            },
             repo: "acme/widget".into(),
-            workflow: "branches",
-            style: "trunk",
-            nix: false,
-            scorecard: false,
-            code_scanning: Some("semgrep"),
+            selection: vec![],
+            release_unavailable: None,
             licence_refusal: None,
             withheld: None,
             files: vec![FileEntry {
@@ -393,7 +418,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.adopt/9","mode":"apply","target":"/tmp/t","tech":"rust","forge":"github","repo":"acme/widget","workflow":"branches","style":"trunk","nix":false,"scorecard":false,"code_scanning":"semgrep","config":{"action":"added","changes":[],"content":"schema_version = 1\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"differs"}],"next":["commit the config and the receipt"]}"#
+            r#"{"schema":"rk.adopt/10","mode":"apply","target":"/tmp/t","profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"main-worktree"},"capabilities":{"nix_packaging":false,"reporting_policy":true,"scorecard":false,"code_scanning":"semgrep"},"repo":"acme/widget","selection":[],"config":{"action":"added","changes":[],"content":"schema_version = 2\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"differs"}],"next":["commit the config and the receipt"]}"#
         );
     }
 }

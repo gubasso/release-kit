@@ -7,8 +7,8 @@ The eight steps of [release lines](../method/09-release-lines.md) as commands: t
 ```bash
 rk status --target .
 # check: prints the lines style
-# trunk style: this project ships from the trunk; rk upgrade --target . --style lines --apply changes it, and the diff is the arming line in the release workflow
-# no style in the record: the record predates the parameter; the upgrade refuses until --style names one
+# trunk style: this project ships from the trunk; rk upgrade --target . --release-style lines --apply changes it, and the diff is the arming line in the release workflow
+# no style in the record: the record predates the parameter; the upgrade refuses until --release-style names one
 ```
 
 ## 2. Wire the repository for lines

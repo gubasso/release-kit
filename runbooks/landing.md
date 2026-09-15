@@ -54,7 +54,7 @@ Remove nothing here. Step 5b owns the removal, and only under explicit cleanup a
 ```bash
 rk stage --target .
 # check: prints stage: <stage>, the parameters, the landing record's schema, one candidate line per destination, and the omitted, collision, retired, seeded present, and state present lines
-# a first landing: pass --tech <tech>, and --workflow, --style, and --nix where the request answers them, so the stage renders the candidate the landing will render
+# a first landing: pass --technology, --release-mode, and the checkout-mode, release-style, and capability flags the request answers, so the stage renders the candidate the landing will render
 # an exact directory wanted: pass --output <dir>. It must be absent or empty, and RK_STAGE_ROOT is the base otherwise
 # exit 73 naming an existing nonempty output: choose another directory, or clean the old stage through step 5a first
 ```
@@ -67,11 +67,15 @@ Add `<stage>` to the inventory of stage paths, and hold it for every step below.
 
 ```bash
 cat <stage>/stage.json
-# check: schema is rk.stage/3, rk_version is the binary's, and target is this repository
+# check: schema is rk.stage/4, rk_version is the binary's, and target is this repository
 # check: each candidates entry carries destination, kind, placement, sha256, sources, and region_sha256 where the placement is region
 # check: each omissions and collisions entry carries destination and reason, and each retired entry is a destination alone
 ls -R <stage>/artifacts <stage>/reference
 # check: artifacts/ holds each candidate at its target-relative path. reference/ holds CHANGELOG.md, guidance/, method/, bindings/, runbooks/, forges/, skills/rk-setup, and skill-shared/
+rk profile --target .
+# check: every domain value with its source, each capability with its status, and the destinations the selected ones land
+rk binding <tech>
+# check: the release driver's own four axes and the registry facts the candidate rests on
 ```
 
 ### 2b. Compare the candidate with the working tree
@@ -123,20 +127,21 @@ git status --porcelain
 The production verb renders again from the binary and the target. It never opens `<stage>`.
 
 ```bash
-rk init --tech <tech> --target .                  # a target with no record and no release mechanism
+rk init --target .                                # a target with no record and no release mechanism
 rk upgrade --target .                             # a recorded target
 # check: the preview lists each destination with its word: created, replaced, matched, preserved, drift, or released. A collision line names a file step 2d still owes
-rk init --tech <tech> --target . --apply          # or rk upgrade --target . --apply
+rk init --target . --apply                        # or rk upgrade --target . --apply
 # check: the same words, then added or updated .release-kit/config.toml, then wrote or rewrote .release-kit/manifest.json last. Every sentinel left to fill is listed
-rk adopt --target . --workflow <mode> --style <style>   # a target already at the candidate, with no record
+rk adopt --target . --checkout-mode <mode> --release-style <style>   # a target already at the candidate, with no record
 # check: matches for each rendered and seeded destination that holds the candidate's bytes, differs for a seeded file the target tuned, and state for a state file. No sentinel is listed, because adoption writes no candidate file
-rk adopt --target . --workflow <mode> --style <style> --apply
+rk adopt --target . --checkout-mode <mode> --release-style <style> --apply
 # check: wrote .release-kit/manifest.json and added .release-kit/config.toml, and nothing else. Every landed destination is unchanged
 ```
 
 - exit 73 naming collisions: nothing was written. Return to step 2d with the named files.
 - exit 73 from `rk adopt` naming a destination as `expected and missing` or differing: the target is not at the candidate. Return to step 2d, or land through `rk init` where the target holds no release mechanism.
-- exit 73 naming the style: a pre-style record. Pass `--style <style>`, asked of the operator where the config is silent.
+- exit 64 naming the style: a pre-style record. Pass `--release-style <style>`, asked of the operator where the config is silent.
+- exit 73 naming the release automation: the profile asks for a release this binary does not carry at its driver and forge. The refusal names the tuples it does carry; the answer is an available pair or another release mode, never a flag that forces past it.
 - exit 73 naming a newer `rk_version`: the target is ahead of this binary, and the operator installs the named version.
 - exit 74 naming completed paths: a rename stopped part way. Whole files stand beside the previous receipt. Read `git status`, then run the same command again.
 

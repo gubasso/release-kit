@@ -1,8 +1,8 @@
 # 08 — Worktrees
 
-A project chooses its working-copy form once, at setup, and records the choice in the landing: the workflow mode, `worktree` or `branches`. The mode is a landing parameter — recorded in `.release-kit/manifest.json`, rendered into the committed hook block and routing block, reported by `rk status`, judged by `rk status --check`, and changed only through the landing verbs — so every clone and every agent sees the same mode, and changing it is a visible, reviewed re-landing, never an ad hoc local toggle.
+A project chooses its working-copy form once, at setup, and records the choice in the landing: the checkout mode, `linked-worktree` or `main-worktree`, which says where a topic branch opens. The mode is a Git workflow parameter — `git.checkout_mode` in the target configuration, recorded in `.release-kit/manifest.json`, rendered into the committed hook block and routing block, reported by `rk status`, judged by `rk status --check`, and changed only through the landing verbs — so every clone and every agent sees the same mode, and changing it is a visible, reviewed re-landing, never an ad hoc local toggle. A checkout mode selects a working tree and nothing else: it is not a branching method, a rebase policy, or a merge policy, all of which [the Git specification](../_docs/specs/SPEC-git.md) fixes for every target.
 
-`worktree` is the default and the first-class form: every code-changing branch lives in a linked worktree at `../<project>@<flattened branch>`, and the main checkout commits nothing — not on a branch, not detached — just as the forge trunk takes no direct push. `branches` is the supported alternative: short-lived branches are worked in the main checkout, worktrees remain available and fully functional beside them, and nothing refuses either form.
+`linked-worktree` is the default and the first-class form: every code-changing branch lives in a linked worktree at `../<project>@<flattened branch>`, and the main checkout commits nothing — not on a branch, not detached — just as the forge trunk takes no direct push. `main-worktree` is the supported alternative: short-lived branches are worked in the repository's original working tree, which switches to them, worktrees remain available and fully functional beside it, and nothing refuses either form.
 
 ## Why worktrees are first-class
 
@@ -37,13 +37,13 @@ Pruning rests on the same proof as branch pruning: a merged request whose record
 
 ## Changing the mode
 
-The mode change is an upgrade with exactly one overridden parameter: `rk upgrade --workflow <mode> --apply` rewrites the two blocks and the record from what the record already states, and the committed diff is the visible change, reaching every clone through the trunk like any change. A plain `rk upgrade` keeps the recorded mode across releases.
+The mode change is an upgrade with exactly one overridden parameter: `rk upgrade --checkout-mode <mode> --apply` rewrites the two blocks and the record from what the record already states, and the committed diff is the visible change, reaching every clone through the trunk like any change. A plain `rk upgrade` keeps the recorded mode across releases.
 
-The blocks are branch-versioned files, so a bare branch opened before a change to `worktree` mode does not carry the guard until it takes the trunk's tip; the change protects the future, not the past. The transition closes the gap in order: land the mode change on the trunk through its pull request; move the main checkout to the trunk and pull, so the main checkout itself is guarded from here on; adopt each open bare branch into its worktree with `rk worktree add <branch> --apply` — the main checkout is off it, so the adoption is clean. A branch that must keep committing before it merges is guarded either way, because hooks are installed per clone, not per branch; it rebases onto the trunk only where its own tree must show an agent the new blocks. Switching to `branches` while worktrees exist needs no procedure: the verbs are mode-free and every worktree keeps working.
+The blocks are branch-versioned files, so a bare branch opened before a change to `linked-worktree` mode does not carry the guard until it takes the trunk's tip; the change protects the future, not the past. The transition closes the gap in order: land the mode change on the trunk through its pull request; move the main checkout to the trunk and pull, so the main checkout itself is guarded from here on; adopt each open bare branch into its worktree with `rk worktree add <branch> --apply` — the main checkout is off it, so the adoption is clean. A branch that must keep committing before it merges is guarded either way, because hooks are installed per clone, not per branch; it rebases onto the trunk only where its own tree must show an agent the new blocks. Switching to `main-worktree` while worktrees exist needs no procedure: the verbs are mode-free and every worktree keeps working.
 
 ## The escape and its cost
 
-Every desk-level mirror dies to `--no-verify`, and the forge cannot see local topology: the worktree mode's guard is honest about both. Its one named escape is the sweep: a CI checkout is commonly detached on the main worktree, so a worktree-mode target's `pre-commit run` sweep sets `SKIP=no-commit-to-branch,rk-worktree-location` in its environment. The same escape serves deliberate main-checkout surgery, stated here once.
+Every desk-level mirror dies to `--no-verify`, and the forge cannot see local topology: the linked-worktree mode's guard is honest about both. Its one named escape is the sweep: a CI checkout is commonly detached on the main worktree, so a linked-worktree target's `pre-commit run` sweep sets `SKIP=no-commit-to-branch,rk-worktree-location` in its environment. The same escape serves deliberate main-checkout surgery, stated here once.
 
 ## What a worktree does not isolate
 
@@ -51,7 +51,7 @@ A worktree isolates the working tree — HEAD, index, uncommitted files — and 
 
 ## Enforcement distances
 
-The forge protections are the enforcement, identical in both modes and blind to local topology; the mode picks which desk-level mirrors stand. In `worktree` mode the main checkout mirrors the trunk protection locally — the trunk refused by the trunk guard, every other commit by the location guard — and in `branches` mode both forms stay open. The two-distances doctrine of [setup](./02-setup.md) holds unchanged.
+The forge protections are the enforcement, identical in both modes and blind to local topology; the mode picks which desk-level mirrors stand. In `linked-worktree` mode the main checkout mirrors the trunk protection locally — the trunk refused by the trunk guard, every other commit by the location guard — and in `main-worktree` mode both forms stay open. The two-distances doctrine of [setup](./02-setup.md) holds unchanged.
 
 ## Harnesses
 

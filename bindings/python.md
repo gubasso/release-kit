@@ -7,7 +7,7 @@
 | Registry and auth   | PyPI, trusted publishing over OIDC                    |
 | Artifact builder    | none separate; the wheels and sdist are the artifacts |
 
-`rk init --tech python` lands `release-please-config.json`, `.release-please-manifest.json`, and the publish workflow `.github/workflows/release-please.yml`.
+`rk init --technology python --release-driver python` lands `release-please-config.json`, `.release-please-manifest.json`, and the publish workflow `.github/workflows/release-please.yml`.
 
 The release-request answer holds on GitHub only: release-please speaks the GitHub API and no other forge's, so `(python, gitlab)` has no release-request bot and `rk init` lands nothing for that pair — stated here as a smaller product rather than smoothed over, the same shape as the Go column's missing bot.
 

@@ -155,7 +155,7 @@ The distribution MUST install every skill at user scope alone, and `rk init` MUS
 #### Scenario: A project is initialized inside a home that already carries the skills
 
 - GIVEN a home directory holding the installed skills and a target repository
-- WHEN `rk init --tech rust --target . --apply` runs
+- WHEN `rk init --technology rust --target . --apply` runs
 - THEN the target carries no `.claude/skills/` or `.agents/skills/` file, so each skill name resolves to exactly one file
 
 Verify: `cargo nextest run -E 'binary(cli)'`

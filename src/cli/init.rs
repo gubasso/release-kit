@@ -3,69 +3,49 @@
 use camino::Utf8PathBuf;
 use clap::Args;
 
-/// Land a technology's deterministic files into a target repository.
+use super::profile_flags::ProfileFlags;
+
+/// Land the files the target configuration selects into a repository.
 #[derive(Debug, Clone, Args)]
 #[expect(
     clippy::struct_excessive_bools,
     reason = "each field is one clap flag, and an opt-in capability's flag is a boolean by design; a state machine would hide the command line this struct describes"
 )]
 pub struct InitArgs {
-    /// The technology whose files land; one of the bindings.
-    #[arg(long)]
-    pub tech: Option<String>,
+    /// The project profile and the Git workflow.
+    #[command(flatten)]
+    pub profile: ProfileFlags,
 
     /// The repository the files land into.
     #[arg(long)]
     pub target: Utf8PathBuf,
 
-    /// The forge whose files land: github or gitlab. Defaults to detection
-    /// from the target's git remote; an unrecognized host refuses.
-    #[arg(long)]
-    pub forge: Option<String>,
-
-    /// The project path on the forge, substituted into the rendered files
-    /// and recorded as the landing parameter. Defaults to detection from
-    /// the target's git remote; an apply with neither refuses.
-    #[arg(long)]
-    pub repo: Option<String>,
-
-    /// The working-copy mode this project chooses: worktree (every
-    /// code-changing branch in a linked worktree, the main checkout
-    /// commits nothing) or branches (branches worked in the main
-    /// checkout, worktrees optional beside them). Recorded as a landing
-    /// parameter and rendered into the landed blocks.
-    #[arg(long)]
-    pub workflow: Option<String>,
-
-    /// The release style this project chooses: trunk (the bot's release
-    /// request carries auto-merge from creation, so a green trunk ships
-    /// itself) or lines (every request waits for a human's merge).
-    /// Recorded as a landing parameter and rendered into the landed
-    /// release workflow.
-    #[arg(long)]
-    pub style: Option<String>,
-
     /// Opt the landing into the Nix capability: a seeded package
-    /// expression, a seed flake pair where the target has none, and the
-    /// workflow that proves the build. Recorded as a landing parameter;
-    /// off by default, because a packaging surface is a decision, not a
-    /// default.
+    /// expression and a seed flake pair where the target has none.
+    /// Recorded as a capability request; off by default, because a
+    /// packaging surface is a decision, not a default.
+    #[arg(long, alias = "nix")]
+    pub nix_packaging: bool,
+
+    /// Request the landed vulnerability reporting policy, `SECURITY.md`.
+    /// An automatic release requests it by default; a release-less
+    /// profile asks for it with this flag.
     #[arg(long)]
-    pub nix: bool,
+    pub reporting_policy: bool,
 
     /// Opt the landing into the Scorecard capability: a workflow that
     /// computes an `OpenSSF` Scorecard result and publishes it to the public
-    /// Scorecard API. GitHub only. Recorded as a landing parameter; off by
+    /// Scorecard API. GitHub only. Recorded as a capability request; off by
     /// default, because publishing a score is a decision, not a default.
     #[arg(long)]
     pub scorecard: bool,
 
     /// Opt the landing into code scanning, naming the provider: codeql,
     /// GitHub's own analyzer, whose terms cover an open-source codebase so
-    /// the landing reads the binding's declared licence and refuses the pair
+    /// the landing reads the driver's declared licence and refuses the pair
     /// where it is not OSI-approved; or semgrep, which carries no licence
-    /// condition and runs on either forge. Recorded as a landing parameter;
-    /// off by default, because a scanning surface is a decision.
+    /// condition and runs on either forge. Recorded as a capability
+    /// request; off by default, because a scanning surface is a decision.
     #[arg(long, value_name = "PROVIDER")]
     pub code_scanning: Option<String>,
 

@@ -22,11 +22,15 @@ One workflow file publishes, and only that file carries the OIDC token permissio
 
 The registry refuses a second upload of the same version, and a moved tag serves two artifacts under one name. A defect ships as the next version, and the defective one is withdrawn so new consumers stop resolving to it. [Recovery](./04-recovery.md) owns the sequence.
 
+## Git and trunk-based development are requirements
+
+Every target is a non-bare Git repository with one main working tree, and trunk-based development is the one development method: one configured trunk receives short-lived topic branches through guarded pull requests or merge requests. Neither is a parameter, so the target configuration carries no key that selects either. What varies per target is recorded under `[git]`: the trunk's name, and the checkout mode that says where a topic branch opens, `linked-worktree` or `main-worktree`. A checkout mode changes the working tree a branch uses and nothing about branching, rebasing, or merging. [The Git specification](../_docs/specs/SPEC-git.md) binds these rules.
+
 ## Trunk is written through pull requests only
 
 The trunk takes no direct push and no force-push, requires the named passing check, and merges only by squash, so one pull request is one commit and the history stays linear. Nothing in the pipeline writes the branch outside a merge, so the ruleset names no bypass actor; the bot's bump rides the same merge button as everyone's work.
 
-The trunk's name is the project's own. `master` is the default, and a project states another in `project.trunk` in its committed configuration; the landing renders that name into every artifact that names a branch, and records it, so the binary and the landed bytes cannot disagree about which branch is the trunk.
+The trunk's name is the project's own. `master` is the default, and a project states another in `git.trunk` in its committed configuration; the landing renders that name into every artifact that names a branch, and records it, so the binary and the landed bytes cannot disagree about which branch is the trunk.
 
 ## A protection carries a name and a policy
 

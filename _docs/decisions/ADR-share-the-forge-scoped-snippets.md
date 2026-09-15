@@ -12,7 +12,7 @@ The title checks are forge-scoped and technology-independent: `pr-title.yml` is 
 
 ## Decision Outcome
 
-Chosen option: `the shared zone`. `snippets/_shared/<forge>` holds the forge's technology-independent files, and `pair_files` composes it with the selected pair, shared files first. The underscore keeps it out of the technology namespace: the bindings listing never names it, and selecting it as a tech refuses as unknown. A destination the shared zone and a pair both ship refuses as a payload defect rather than either zone silently winning, so ownership stays unambiguous per `landing:the-shared-zone-composes-into-every-pair`.
+Chosen option: `the shared zone`. `snippets/_shared/<forge>` holds the forge's technology-independent files, and the capability catalog owns each of its files, so every selection composes it with the driver's own pair. The underscore keeps it out of the technology namespace: the bindings listing never names it, and selecting it as a tech refuses as unknown. A destination the shared zone and a pair both ship refuses as a payload defect rather than either zone silently winning, so ownership stays unambiguous per `project-profile:a-destination-has-one-capability-owner`.
 
 The kind table closes over the shared files like every snippet, so a shared file without a declared kind fails the same test a pair file does.
 

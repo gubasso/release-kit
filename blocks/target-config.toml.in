@@ -1,4 +1,4 @@
-# The committed answers this project gives release-kit.
+# The committed answers this project gives release-kit: the target configuration, typed by domain.
 # Landing verbs record resolved parameters in .release-kit/manifest.json.
 # P: landing parameter. N: free name. F: invariant floor.
 # A value below a floor refuses by name; read `rk method invariants`.
@@ -6,17 +6,27 @@
 schema_version = RK_CONFIG_SCHEMA_VERSION
 
 [project]
-repo = RK_CONFIG_PROJECT_REPO # P: project path on the forge, nested groups included
-forge = RK_CONFIG_PROJECT_FORGE # P: github or gitlab; empty means detect
-tech = RK_CONFIG_PROJECT_TECH # P: the binding; empty means detect
-trunk = RK_CONFIG_PROJECT_TRUNK # P: the one permanent branch, rendered into every artifact naming it
+repo = RK_CONFIG_PROJECT_REPO # P: project path on the forge, nested groups included; absent where the project has no forge
 
-[landing]
-workflow = RK_CONFIG_LANDING_WORKFLOW # P: worktree or branches
-style = RK_CONFIG_LANDING_STYLE # P: trunk or lines
-nix = RK_CONFIG_LANDING_NIX # P: opt-in Nix capability
-scorecard = RK_CONFIG_LANDING_SCORECARD # P: opt-in OpenSSF Scorecard workflow, github only
-code_scanning = RK_CONFIG_LANDING_CODE_SCANNING # P: opt-in code scanning provider: codeql, semgrep, or off
+[profile]
+technologies = RK_CONFIG_PROFILE_TECHNOLOGIES # P: every technology present, zero or many; an omitted key detects from the version files
+forge = RK_CONFIG_PROFILE_FORGE # P: github or gitlab; empty means the project has no forge, and an omitted key detects from the remote
+
+[profile.release]
+mode = RK_CONFIG_PROFILE_RELEASE_MODE # P: automatic, external, or none
+driver = RK_CONFIG_PROFILE_RELEASE_DRIVER # P: the technology that states the version and takes the bot; automatic alone
+style = RK_CONFIG_PROFILE_RELEASE_STYLE # P: trunk or lines; automatic alone
+line_prefix = RK_CONFIG_PROFILE_RELEASE_LINE_PREFIX # P: release-line branch prefix, rendered into the release triggers; automatic alone
+
+[git]
+trunk = RK_CONFIG_GIT_TRUNK # P: the one permanent branch, rendered into every artifact naming it
+checkout_mode = RK_CONFIG_GIT_CHECKOUT_MODE # P: linked-worktree or main-worktree, where a topic branch opens
+
+[capabilities]
+nix_packaging = RK_CONFIG_CAPABILITIES_NIX_PACKAGING # P: opt-in Nix capability
+reporting_policy = RK_CONFIG_CAPABILITIES_REPORTING_POLICY # P: the landed vulnerability reporting policy
+scorecard = RK_CONFIG_CAPABILITIES_SCORECARD # P: opt-in OpenSSF Scorecard workflow, github only
+code_scanning = RK_CONFIG_CAPABILITIES_CODE_SCANNING # P: opt-in code scanning provider: codeql, semgrep, or off
 
 [security]
 advisories = RK_CONFIG_SECURITY_ADVISORIES # N: project receiving vulnerability reports
@@ -26,7 +36,6 @@ response = RK_CONFIG_SECURITY_RESPONSE # P: the acknowledgment window the policy
 [setup]
 required_check = RK_CONFIG_SETUP_REQUIRED_CHECK # N: the check the merge must pass; empty asks for --required-check
 retired_branches = RK_CONFIG_SETUP_RETIRED_BRANCHES # N: long-lived branches retired by the trunk
-line_prefix = RK_CONFIG_SETUP_LINE_PREFIX # P: release-line branch prefix, rendered into the release triggers
 release_lines = RK_CONFIG_SETUP_RELEASE_LINES # N: true runs protect-release-lines in a full apply
 excluded_steps = RK_CONFIG_SETUP_EXCLUDED_STEPS # N: step = why this target does not run it; `rk setup check` reports it and does not judge it
 

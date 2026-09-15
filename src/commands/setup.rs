@@ -46,13 +46,17 @@ pub fn run(args: &SetupArgs) -> Result<(), RkError> {
             required_check,
             json,
         }) => {
-            let ctx = Ctx::resolve(
+            let mut ctx = Ctx::resolve(
                 target,
                 repo.as_deref(),
                 forge.as_deref(),
                 required_check.as_deref(),
             )?;
             reject_check_flag_on_gitlab(&ctx)?;
+            // A check observes every step the target runs, so it needs the
+            // forge CLI for each one that asks the forge a question.
+            let all: Vec<&StepSpec> = STEPS.iter().collect();
+            ctx.require_cli(&all)?;
             check(Output::new(*json), ctx)
         }
         Some(SetupAction::Step {
@@ -67,7 +71,7 @@ pub fn run(args: &SetupArgs) -> Result<(), RkError> {
             let selected = spec(name).ok_or_else(|| {
                 RkError::Usage(format!("unknown step '{name}'; rk setup --list names them"))
             })?;
-            let ctx = Ctx::resolve(
+            let mut ctx = Ctx::resolve(
                 target,
                 repo.as_deref(),
                 forge.as_deref(),
@@ -77,8 +81,15 @@ pub fn run(args: &SetupArgs) -> Result<(), RkError> {
             if *apply {
                 refuse_an_excluded_step(&ctx, selected)?;
                 require_check_for(&ctx, &[selected])?;
+                // Every argument refusal has been given, so what remains
+                // is the call itself and its one prerequisite.
+                ctx.require_cli(&[selected])?;
                 execute(Output::new(*json), ctx, &[selected], "setup step")
             } else {
+                // A preview writes nothing, but it names the command it
+                // would run, so a forge CLI it could never find is worth
+                // saying now rather than at the apply.
+                ctx.require_cli(&[selected])?;
                 preview(Output::new(*json), &ctx, &[selected])
             }
         }
@@ -87,21 +98,121 @@ pub fn run(args: &SetupArgs) -> Result<(), RkError> {
             let target = args.target.clone().ok_or_else(|| {
                 RkError::Usage("name a --target, or pass --list to see the steps".into())
             })?;
-            let ctx = Ctx::resolve(
+            let all: Vec<&StepSpec> = STEPS.iter().collect();
+            let mut ctx = Ctx::resolve(
                 &target,
                 args.repo.as_deref(),
                 args.forge.as_deref(),
                 args.required_check.as_deref(),
             )?;
             reject_check_flag_on_gitlab(&ctx)?;
-            let all: Vec<&StepSpec> = STEPS.iter().collect();
             if args.apply {
                 require_check_for(&ctx, &all)?;
+                // The full run skips its optional steps, so the callers
+                // are what the run will actually reach.
+                let acted: Vec<&StepSpec> = all
+                    .iter()
+                    .copied()
+                    .filter(|step| !skipped_by_a_full_run(&ctx, step, all.len()))
+                    .collect();
+                ctx.require_cli(&acted)?;
                 execute(Output::new(args.json), ctx, &all, "setup")
             } else {
+                let acted: Vec<&StepSpec> = all
+                    .iter()
+                    .copied()
+                    .filter(|step| !skipped_by_a_full_run(&ctx, step, all.len()))
+                    .collect();
+                ctx.require_cli(&acted)?;
                 preview(Output::new(args.json), &ctx, &all)
             }
         }
+    }
+}
+
+/// Where one step stands at this target, before anything runs.
+///
+/// Applicability is the profile's answer and carries no operator reason;
+/// an exclusion is the operator's own statement about a step that does
+/// apply. An exclusion declared for a step that does not apply is
+/// redundant: it is reported as such and turns the step into no work.
+///
+/// SATISFIES forge-setup:applicability-follows-the-target-configuration
+#[derive(Debug, Clone)]
+pub(crate) enum Stance {
+    /// The step applies and the run acts on it.
+    Applies,
+    /// The target configuration does not select it, with the value that
+    /// decided so.
+    NotApplicable(String),
+    /// The target declared it does not run it, with its stated reason.
+    Excluded(String),
+    /// The target excluded a step that does not apply here.
+    Redundant {
+        /// The reason the target stated.
+        reason: String,
+        /// Why the step does not apply either way.
+        inapplicable: String,
+    },
+}
+
+impl Stance {
+    /// The word a report and an event use.
+    const fn word(&self) -> &'static str {
+        match self {
+            Self::Applies => "applicable",
+            Self::NotApplicable(_) => "not-applicable",
+            Self::Excluded(_) => "excluded",
+            Self::Redundant { .. } => "redundant",
+        }
+    }
+
+    /// Whether the run acts on the step.
+    pub(crate) const fn acts(&self) -> bool {
+        matches!(self, Self::Applies)
+    }
+
+    /// The reason alone, as an event and a check line carry it.
+    fn detail(&self) -> String {
+        match self {
+            Self::Applies => String::new(),
+            Self::NotApplicable(reason) | Self::Excluded(reason) => reason.clone(),
+            Self::Redundant {
+                reason,
+                inapplicable,
+            } => format!("{inapplicable}; the stated reason was {reason}"),
+        }
+    }
+
+    /// The same, framed by what decided it, as a preview and an apply
+    /// name it.
+    fn framed(&self) -> String {
+        match self {
+            Self::Applies => String::new(),
+            Self::NotApplicable(reason) => format!("not applicable: {reason}"),
+            Self::Excluded(reason) => {
+                format!("excluded by {}: {reason}", crate::config::CONFIG_PATH)
+            }
+            Self::Redundant { .. } => format!(
+                "{} excludes a step that does not apply here: {}",
+                crate::config::CONFIG_PATH,
+                self.detail()
+            ),
+        }
+    }
+}
+
+/// Where `step` stands at this target.
+pub(crate) fn stance(ctx: &Ctx, step: &StepSpec) -> Stance {
+    let inapplicable = (step.applies)(ctx);
+    match (ctx.excluded(step.name).map(str::to_owned), inapplicable) {
+        (Some(reason), Some(inapplicable)) => Stance::Redundant {
+            reason,
+            inapplicable,
+        },
+        (Some(reason), None) => Stance::Excluded(reason),
+        (None, Some(reason)) => Stance::NotApplicable(reason),
+        (None, None) => Stance::Applies,
     }
 }
 
@@ -125,20 +236,36 @@ fn skipped_by_a_full_run(ctx: &Ctx, step: &StepSpec, selected: usize) -> bool {
 /// leave the forge and the declaration disagreeing with nobody to notice;
 /// changing the model is one edit, and that edit is the auditable act.
 fn refuse_an_excluded_step(ctx: &Ctx, step: &StepSpec) -> Result<(), RkError> {
-    ctx.excluded(step.name).map_or(Ok(()), |reason| {
-        Err(RkError::Usage(format!(
-            "{} is excluded by {}: {reason}; remove it from setup.excluded_steps to run it",
-            step.name,
-            crate::config::CONFIG_PATH
-        )))
-    })
+    match stance(ctx, step) {
+        Stance::Applies => Ok(()),
+        Stance::Excluded(reason) | Stance::Redundant { reason, .. } => {
+            Err(RkError::Usage(format!(
+                "{} is excluded by {}: {reason}; remove it from setup.excluded_steps to run it",
+                step.name,
+                crate::config::CONFIG_PATH
+            )))
+        }
+        // A step the target configuration does not select is refused
+        // rather than applied: the value that decided it is the answer,
+        // and changing the configuration is the auditable act.
+        Stance::NotApplicable(reason) => Err(RkError::refusal(
+            Diagnostic::new(
+                Reason::PrerequisiteUnmet,
+                format!("{} does not apply to this target: {reason}", step.name),
+            )
+            .expected("a target configuration that selects this step")
+            .action("rk profile --target . reports what this target resolves to")
+            .target_state("unchanged")
+            .step(step.name),
+        )),
+    }
 }
 
 /// On GitLab `--required-check` is a usage error, per the forge document:
 /// the forge requires the whole pipeline and names no individual check, and
 /// a flag silently discarded would read as configured while nothing uses it.
 fn reject_check_flag_on_gitlab(ctx: &Ctx) -> Result<(), RkError> {
-    if ctx.forge == Forge::Gitlab && ctx.required_check.is_some() {
+    if ctx.forge == Some(Forge::Gitlab) && ctx.required_check.is_some() {
         return Err(RkError::Usage(
             "--required-check is refused on gitlab: the forge requires the whole pipeline and names no individual check".into(),
         ));
@@ -152,11 +279,11 @@ fn reject_check_flag_on_gitlab(ctx: &Ctx) -> Result<(), RkError> {
 /// stopping. A target that excludes the protection is asked for nothing,
 /// because the value would answer a step this run never reaches.
 fn require_check_for(ctx: &Ctx, steps: &[&StepSpec]) -> Result<(), RkError> {
-    let needs = ctx.forge == Forge::Github
+    let needs = ctx.forge == Some(Forge::Github)
         && ctx.required_check.is_none()
         && steps
             .iter()
-            .any(|step| step.name == "protect-trunk" && ctx.excluded(step.name).is_none());
+            .any(|step| step.name == "protect-trunk" && stance(ctx, step).acts());
     if needs {
         return Err(RkError::refusal(
             Diagnostic::new(
@@ -280,24 +407,28 @@ impl Engine {
         // A stale key export is refused wherever a run opens, so every
         // mode catches it and not the one step that would have used it.
         secrets::refuse_legacy_key()?;
-        let journal =
-            match Journal::create(command, ctx.target.as_str(), ctx.forge.as_str(), &ctx.repo) {
-                Ok(journal) => Some(journal),
-                Err(source) if journal_required => {
-                    return Err(RkError::refusal(
-                        Diagnostic::new(
-                            Reason::JournalUnavailable,
-                            format!("the run journal cannot be created: {source}"),
-                        )
-                        .expected("a writable state root for the journal")
-                        .target_state("nothing was run and nothing changed"),
-                    ));
-                }
-                Err(source) => {
-                    out.warn(format!("no run journal for this run: {source}"));
-                    None
-                }
-            };
+        let journal = match Journal::create(
+            command,
+            ctx.target.as_str(),
+            ctx.forge.map_or("none", Forge::as_str),
+            &ctx.repo,
+        ) {
+            Ok(journal) => Some(journal),
+            Err(source) if journal_required => {
+                return Err(RkError::refusal(
+                    Diagnostic::new(
+                        Reason::JournalUnavailable,
+                        format!("the run journal cannot be created: {source}"),
+                    )
+                    .expected("a writable state root for the journal")
+                    .target_state("nothing was run and nothing changed"),
+                ));
+            }
+            Err(source) => {
+                out.warn(format!("no run journal for this run: {source}"));
+                None
+            }
+        };
         let run_id = journal
             .as_ref()
             .map_or_else(|| "unjournaled".to_owned(), |j| j.run_id().to_owned());
@@ -446,7 +577,7 @@ fn preview(out: Output, ctx: &Ctx, steps: &[&StepSpec]) -> Result<(), RkError> {
     out.result_line(format!(
         "DRY RUN: rk setup would run these steps against {} on {}; re-run with --apply",
         engine.ctx.repo,
-        engine.ctx.forge.as_str()
+        engine.ctx.forge.map_or("no forge", Forge::as_str)
     ));
     for (idx, step) in steps.iter().enumerate() {
         out.result_line(format!(
@@ -456,26 +587,24 @@ fn preview(out: Output, ctx: &Ctx, steps: &[&StepSpec]) -> Result<(), RkError> {
             step.name,
             step.proves
         ));
-        if let Some(reason) = engine.ctx.excluded(step.name).map(str::to_owned) {
-            out.result_line(format!(
-                "  excluded by {}: {reason}",
-                crate::config::CONFIG_PATH
-            ));
+        let stance = stance(&engine.ctx, step);
+        if !stance.acts() {
+            out.result_line(format!("  {}", stance.framed()));
             let mut event = engine.event(EventKind::StepFinished, Some(step.name));
-            event.status = Some("excluded".into());
-            event.detail = Some(reason);
+            event.status = Some(stance.word().into());
+            event.detail = Some(stance.detail());
             engine.emit(&event);
             continue;
         }
         // Preview is the rehearsal of apply, so a credential apply could
         // not use is a preview failure: the operator learns it here rather
         // than one flag later, and before an invocation is claimed.
-        if step.name == "bot-secrets" && engine.ctx.forge == Forge::Github {
+        if step.name == "bot-secrets" && engine.ctx.forge == Some(Forge::Github) {
             secrets::resolve_key_file(&engine.ctx.target)?;
         }
         out.result_line(format!("  {}", render_invocation(&engine.ctx, step)));
         if step.name == "protect-trunk"
-            && engine.ctx.forge == Forge::Github
+            && engine.ctx.forge == Some(Forge::Github)
             && engine.ctx.required_check.is_none()
         {
             out.result_line("  needs: --required-check <name> before apply");
@@ -515,20 +644,21 @@ fn render_invocation(ctx: &Ctx, step: &StepSpec) -> String {
         "forge-version" => {
             let (major, minor) = observe::GITLAB_VERSION_FLOOR;
             match ctx.forge {
-                Forge::Github => {
+                Some(Forge::Github) => {
                     "nothing to read: github.com is a rolling service and declares no version floor"
                         .to_owned()
                 }
-                Forge::Gitlab => format!(
+                Some(Forge::Gitlab) => format!(
                     "would read: GET /version, and compare it against the {major}.{minor} floor; nothing is written"
                 ),
+                None => "nothing to read: the profile names no forge".to_owned(),
             }
         }
         name => {
             let check = ctx
                 .required_check
                 .as_ref()
-                .filter(|_| ctx.forge == Forge::Github && name == "protect-trunk")
+                .filter(|_| ctx.forge == Some(Forge::Github) && name == "protect-trunk")
                 .map(|value| format!(" RK_REQUIRED_CHECK={value}"))
                 .unwrap_or_default();
             // The ruleset a protection step installs is the one
@@ -542,7 +672,7 @@ fn render_invocation(ctx: &Ctx, step: &StepSpec) -> String {
             };
             format!(
                 "would run: sh <embedded setup/{}/{name}> with RK_REPO={} RK_TRUNK_BRANCH={}{ruleset}{check}",
-                ctx.forge.as_str(),
+                ctx.forge.map_or("<no forge>", Forge::as_str),
                 ctx.repo,
                 ctx.trunk()
             )
@@ -585,19 +715,20 @@ fn execute(
         // A declared exclusion states the skip and runs nothing. A single
         // step named on the command line never arrives here: that form
         // refuses before the run opens.
-        if let Some(reason) = engine.ctx.excluded(step.name).map(str::to_owned) {
+        let stance = stance(&engine.ctx, step);
+        if !stance.acts() {
             engine.out.frame(format!(
-                "step {}/{} {} — excluded ({}: {reason})",
+                "step {}/{} {} — {}",
                 idx + 1,
                 steps.len(),
                 step.name,
-                crate::config::CONFIG_PATH
+                stance.framed()
             ));
             let mut finished = engine.event(EventKind::StepFinished, Some(step.name));
-            finished.status = Some("excluded".into());
-            finished.detail = Some(reason);
+            finished.status = Some(stance.word().into());
+            finished.detail = Some(stance.detail());
             engine.emit(&finished);
-            done.push((step.name.to_owned(), "excluded".to_owned()));
+            done.push((step.name.to_owned(), stance.word().to_owned()));
             continue;
         }
         // An optional step applies only by name: a full run states the skip
@@ -887,14 +1018,15 @@ fn apply_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
             // forge call. Only GitHub reads a key file; GitLab's credential
             // is a token, and its step must not fail over a variable it
             // never consumes.
-            let key = match engine.ctx.forge {
+            let adapter = engine.ctx.adapter()?;
+            let key = match adapter {
                 // The run's one read: an install-bot observation earlier in
                 // this run already holds the bytes, and this step stores
                 // those very bytes rather than reopening the path.
                 Forge::Github => key_file_for(engine)?.map(|key| key.bytes.clone()),
                 Forge::Gitlab => None,
             };
-            let provided = match engine.ctx.forge {
+            let provided = match adapter {
                 // Both halves of an App identity, or neither: a run holding
                 // only one of them would store half a credential.
                 Forge::Github => secrets::value_of("RK_BOT_APP_ID").is_some() && key.is_some(),
@@ -905,7 +1037,7 @@ fn apply_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
                 if state.satisfied() {
                     return Ok(Done::Satisfied(state_detail(&state)));
                 }
-                let wanted = match engine.ctx.forge {
+                let wanted = match adapter {
                     Forge::Github => {
                         "export RK_BOT_APP_ID and RK_BOT_PRIVATE_KEY_FILE, the second naming the .pem; rk forge github carries the walkthrough"
                     }
@@ -984,7 +1116,7 @@ fn apply_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
         // post-observation, and the installation id the script is handed —
         // happens as the App itself. GitLab's install-bot needs none of
         // this and takes the generic lifecycle below.
-        "install-bot" if engine.ctx.forge == Forge::Github => {
+        "install-bot" if engine.ctx.forge == Some(Forge::Github) => {
             match observe_with(engine, step.name)? {
                 StepState::Satisfied { detail, .. } => {
                     return Ok(Done::Satisfied(detail));
@@ -1187,7 +1319,7 @@ fn run_forge_step_with(
 /// engine can mint once and register the redaction needles — rather than
 /// through the credential-free name dispatch in [`observe::observe`].
 fn observe_with(engine: &mut Engine, step: &str) -> Result<StepState, RkError> {
-    if step == "install-bot" && engine.ctx.forge == Forge::Github {
+    if step == "install-bot" && engine.ctx.forge == Some(Forge::Github) {
         let jwt = match app_jwt_for(engine)? {
             Ok(jwt) => jwt,
             Err(detail) => return Ok(StepState::Unknown { detail }),
@@ -1280,7 +1412,8 @@ fn run_script_with(
     stdin: Option<Zeroizing<Vec<u8>>>,
     extra_env: Vec<(OsString, OsString)>,
 ) -> Result<(Outcome, PathBuf), RkError> {
-    let rel = format!("{}/{}", engine.ctx.forge.as_str(), step.name);
+    let forge = engine.ctx.adapter()?;
+    let rel = format!("{}/{}", forge.as_str(), step.name);
     let bytes = embedded::SETUP
         .get_file(&rel)
         .map(include_dir::File::contents)
@@ -1289,7 +1422,7 @@ fn run_script_with(
         .journal
         .as_mut()
         .ok_or_else(|| RkError::Other(anyhow::anyhow!("an apply always has a journal")))?;
-    let dir = journal.scripts_dir().join(engine.ctx.forge.as_str());
+    let dir = journal.scripts_dir().join(forge.as_str());
     fs::create_dir_all(&dir)?;
     restrict(&dir, 0o700);
     let path = dir.join(step.name);
@@ -1336,7 +1469,7 @@ fn classify_failure(engine: &Engine, step: &StepSpec, outcome: &Outcome) -> RkEr
             .unwrap_or("no output")
             .to_owned()
     };
-    let reason = if (engine.ctx.forge == Forge::Github && outcome.exit_code == 4)
+    let reason = if (engine.ctx.forge == Some(Forge::Github) && outcome.exit_code == 4)
         || stderr.contains("HTTP 401")
     {
         Reason::ForgeAuthentication
@@ -1407,13 +1540,17 @@ fn check(out: Output, ctx: Ctx) -> Result<(), RkError> {
         // by nothing: no forge call, no verdict, and no weight in the exit
         // code. The reason travels with it, so a reader can tell a chosen
         // subset from an incomplete setup.
-        if let Some(reason) = engine.ctx.excluded(step.name).map(str::to_owned) {
-            engine
-                .out
-                .result_line(format!("excluded {} — {reason}", step.name));
+        let stance = stance(&engine.ctx, step);
+        if !stance.acts() {
+            engine.out.result_line(format!(
+                "{} {} — {}",
+                stance.word(),
+                step.name,
+                stance.detail()
+            ));
             let mut finished = engine.event(EventKind::StepFinished, Some(step.name));
-            finished.status = Some("excluded".into());
-            finished.detail = Some(reason);
+            finished.status = Some(stance.word().into());
+            finished.detail = Some(stance.detail());
             finished.duration_ms = Some(elapsed_ms(clock));
             engine.emit(&finished);
             continue;
@@ -1451,10 +1588,14 @@ fn check(out: Output, ctx: Ctx) -> Result<(), RkError> {
         finished.duration_ms = Some(elapsed_ms(clock));
         engine.emit(&finished);
     }
-    if engine.ctx.excluded_count() > 0 {
-        let excluded = step_count(engine.ctx.excluded_count());
+    let judged = STEPS
+        .iter()
+        .filter(|step| stance(&engine.ctx, step).acts())
+        .count();
+    if judged < STEPS.len() {
         engine.out.result_line(format!(
-            "{excluded} excluded by {}; this check judges the rest",
+            "{} judged; the rest do not apply to this target or {} excludes them",
+            step_count(judged),
             crate::config::CONFIG_PATH
         ));
     }

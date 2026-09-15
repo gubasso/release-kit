@@ -27,7 +27,7 @@ Every line of those reports that is not green is one entry in the inventory. Not
 
 ### 2a. Adopt a target with no record
 
-Adoption verifies the disk against one rendered candidate and never blesses the disk. `landing.workflow` and `landing.style` in `.release-kit/config.toml` choose the candidate, and invocation flags override them. Style requires an answer from one of those inputs.
+Adoption verifies the disk against one rendered candidate and never blesses the disk. `git.checkout_mode` and `profile.release.style` in `.release-kit/config.toml` choose the candidate, and invocation flags override them. An automatic release requires the style from one of those inputs.
 
 The adoption is the whole landing procedure: [the landing runbook](./landing.md) steps 1 to 5, with `rk adopt` as the front in its step 3. Its step 2b is where each destination the stage names as a collision is compared with the candidate, and its step 2d is where the target is brought to the candidate's bytes before the front runs (check: the front's preview prints `matches` for every rendered destination).
 
@@ -39,13 +39,13 @@ The adoption is the whole landing procedure: [the landing runbook](./landing.md)
 The upgrade is the whole landing procedure: [the landing runbook](./landing.md) steps 1 to 5, with `rk upgrade` as the front in its step 3. Its steps 1 and 2 carry the stage and the investigation, and its step 2d carries the collision, the tuned seeded file, the edited generated file, and the retired destination. Its steps 4 and 5 carry the verification and the cleanup (check: the front's preview prints one word per destination, and no `collision` line).
 
 - an edited generated file: the landing replaces it and prints `replaced`. Only an unattributed differing file refuses, and no flag forces past that refusal. The landing runbook's steps 2d and 3 carry both.
-- a record without the style parameter: answer `landing.style` in the config or pass `--style <style>`, asked of the operator only where the config is silent, because arming an existing project's release request changes what a green trunk does.
+- a record without the style parameter: answer `profile.release.style` in the config or pass `--release-style <style>`, asked of the operator only where the config is silent, because arming an existing project's release request changes what a green trunk does.
 - an absent config: the upgrade seeds it from the record. Where the projection is unchanged, only that file is added.
 - a hook block lacking the `rk-message` content guard: the upgrade re-renders the block. A hand-edited block is brought to the candidate first, per 2d.
 
 ### 2c. Change a landing parameter
 
-Edit `landing.workflow` or `landing.style` in `.release-kit/config.toml` (check: `rk status --check` reports the key as pending and exits 0 on an otherwise healthy landing). Then take the whole landing procedure, [the landing runbook](./landing.md) steps 1 to 5, with `rk upgrade` as the front in its step 3 and `--workflow <mode>` or `--style <style>` passed to both the stage and the front. The flag overrides the file and writes back on apply (check: the affected rendered files, the config, and the record moved, and the committed diff is the visible change).
+Edit `git.checkout_mode` or `profile.release.style` in `.release-kit/config.toml` (check: `rk status --check` reports the key as pending and exits 0 on an otherwise healthy landing). Then take the whole landing procedure, [the landing runbook](./landing.md) steps 1 to 5, with `rk upgrade` as the front in its step 3 and `--checkout-mode <mode>` or `--release-style <style>` passed to both the stage and the front. The flag overrides the file and writes back on apply (check: the affected rendered files, the config, and the record moved, and the committed diff is the visible change).
 
 On worktree:
 
