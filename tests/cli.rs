@@ -28517,6 +28517,13 @@ fn a_release_changing_a_destination_without_guidance_is_named() {
     };
     let describe = git(&["describe", "--tags", "--abbrev=0", "--match", "v*"]);
     if !describe.status.success() {
+        // A source archive and a fresh shallow clone keep the note and the
+        // pass. A runner that lost its tags fails: the required check would
+        // otherwise report success over a gate that compared nothing.
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "no release tag is reachable in CI; the authoring gate cannot prove anything. The test job checks out with fetch-depth: 0 for this reason."
+        );
         eprintln!(
             "no release tag is reachable from this checkout; the authoring gate has nothing to compare against"
         );
@@ -28562,6 +28569,36 @@ fn a_release_changing_a_destination_without_guidance_is_named() {
     assert!(
         described,
         "a landed destination changed since {tag} ({changed:?}) and no guidance file names a release above it; add guidance/<next version>.md, or record the release under no_steps in guidance/index.toml"
+    );
+}
+
+/// The job that runs the authoring gate checks out the release tags. The
+/// gate reads the last tag with `git describe`, and `actions/checkout`
+/// fetches one commit and no tag by default, so a shallow checkout turns
+/// a required check into a note that proves nothing.
+#[test]
+fn the_test_job_checks_out_the_release_tags() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let ci = std::fs::read_to_string(root.join(".github/workflows/ci.yml")).expect("ci.yml reads");
+    let test_job = ci
+        .split("\n  test:\n")
+        .nth(1)
+        .expect("ci.yml has a test job");
+    let test_job = test_job
+        .split("\n  flake:\n")
+        .next()
+        .expect("the test job ends");
+    let checkout = test_job
+        .split("- uses: actions/checkout@")
+        .nth(1)
+        .expect("the test job checks out");
+    let checkout = checkout
+        .split("\n      - ")
+        .next()
+        .expect("the checkout step ends");
+    assert!(
+        checkout.contains("fetch-depth: 0"),
+        "the test job's checkout carries no fetch-depth: 0, so the authoring gate has no tag to describe"
     );
 }
 
