@@ -62,13 +62,13 @@ Verify: `cargo nextest run -E 'test(config) or test(params_from_a_record) or tes
 
 ### `target-config:a-flag-overrides-and-a-landing-writes-back` — A flag overrides and a landing writes back
 
-When a landing applies a class P invocation flag, the verb MUST write that key back through the comment-preserving editor, with class N names and class F policy left to their use-time readers. Exactly two class F keys are excepted, because `git.integration` decides them and a configuration carrying one authority's key beside the other's mode is one its own floor table refuses: `protection.owned_trunk_rules` and `protection.gitlab.push_access_level` travel with that parameter where they still match a compiled authority's pair, keep whatever a target narrowed or widened them to otherwise, and are excluded from the comparison that reports untaken configuration, because the record holds no baseline for a floored policy.
+When a landing applies a class P invocation flag, the verb MUST write that key back through the comment-preserving editor, with class N names and class F policy left to their use-time readers. Exactly three class F keys are excepted, because `git.integration` decides them and a configuration carrying one authority's keys beside the other's mode is one its own floor table refuses: `protection.bypass_actors`, `protection.owned_trunk_rules`, and `protection.gitlab.push_access_level` travel with that parameter where they still match a compiled authority's tuple, keep whatever a target narrowed or widened them to otherwise, and are excluded from the comparison that reports untaken configuration, because the record holds no baseline for a floored policy.
 
 #### Scenario: The integration authority changes
 
-- GIVEN a landed target whose protection keys are one authority's compiled pair
+- GIVEN a landed target whose protection keys are one authority's compiled tuple
 - WHEN a landing resolves the other authority
-- THEN both keys are written to that authority's pair, the configuration passes its own floor table, and status reports it aligned
+- THEN all three keys are written to that authority's tuple, the configuration passes its own floor table, and status reports it aligned
 
 #### Scenario: A style flag overrides a commented key
 
@@ -92,7 +92,7 @@ Verify: `cargo nextest run -E 'test(config) or test(params_from_a_record) or tes
 
 ### `target-config:an-invariant-bearing-key-carries-a-floor` — An invariant-bearing key carries a floor
 
-The config reader MUST judge class F values through a floor table selected by the resolved `git.integration` mode, naming each key, its minimum and its source heading in `rk method invariants`, accept stricter values, and refuse a weaker value naming all three. The forge table MUST carry the request rule and the required-check rule; the local table MUST drop exactly those, because no forge can require a check before the push that starts it, and MUST keep every deletion, force-push, squash, and tag floor, refusing only a GitLab push access level broad enough to name every writer. Every heading either table cites MUST exist in the invariants chapter.
+The config reader MUST judge class F values through a floor table selected by the resolved `git.integration` mode, naming each key, its minimum and its source heading in `rk method invariants`, accept stricter values, and refuse a weaker value naming all three. Both tables MUST carry the request rule, required-check rule, and strict status-check policy. Under GitHub local integration the table MUST require exactly the stable `repository-admin` bypass, so an administrator may make the deliberate direct push while integrations remain governed; under GitLab it MUST refuse a push access level broad enough to name every writer. The reader MAY accept the former compiled local tuple only so a landing or setup can migrate it to the current policy rather than strand an installed target. Every heading either table cites MUST exist in the invariants chapter.
 
 #### Scenario: A target permits an additional merge method
 
@@ -102,9 +102,9 @@ The config reader MUST judge class F values through a floor table selected by th
 
 #### Scenario: One policy is judged under each mode
 
-- GIVEN a policy whose owned trunk rules name deletion and non-fast-forward alone
+- GIVEN a policy with all four owned trunk rules and no bypass actor
 - WHEN the config reader checks it under `forge` and then under `local`
-- THEN the forge check refuses naming the missing request rule, and the local check passes
+- THEN the forge check passes, the local check refuses naming `protection.bypass_actors`, and adding `repository-admin` makes the local check pass
 
 Verify: `cargo nextest run -E 'test(config) or test(params_from_a_record) or test(a_schema_1_config_migrates_into_its_domains)'`
 
@@ -130,7 +130,7 @@ Verify: `cargo nextest run -E 'test(config) or test(the_trunk_branch_comes_from_
 
 A setup fact the operator would otherwise retype MUST resolve from the committed configuration where no flag answers it, and an invocation flag MUST override it. The release gate's two answers resolve this way on GitHub alone, because GitLab requires its whole pipeline through one project setting, names no individual check, and refuses either answer as a usage error; the release-line protection runs in a full apply where `setup.release_lines` asks for it; the retired long-lived branches come from `setup.retired_branches`; and the bot App's public identifier comes from `setup.bot.app_id` where the environment carries none.
 
-The two answers are class P landing parameters and MUST divide as follows. `setup.required_check` names the check the release gate believes: the context the trunk ruleset requires under forge integration, and the context the rendered gate judges under local integration. `setup.required_workflow` names the workflow whose completion wakes that gate, by the workflow's literal `name` and never by its filename, because a `workflow_run` trigger cannot name a check and cannot omit the workflow. One shape renders that gate: GitHub, an automatic release, the trunk style, and local integration together. Where no flag, configuration, or compatible record answers a key at that shape, the resolution MUST take this convention's own pair, `gate` and `ci`, so a landing renders a gate that names something rather than a hole no event can satisfy, and MUST write the resolved answer back to the configuration and record it, so the decision is visible and reproducible rather than compiled. Every other shape MUST resolve both to empty, because no rendered reader consumes them there; under forge integration `setup.required_check` stays the context the trunk ruleset requires, which is the project's own answer, and `protect-trunk` keeps refusing until one is named. A setup check MUST fault where the workflow named by `setup.required_workflow` does not carry the one pull-request job reporting `setup.required_check`, because a gate that wakes on one workflow and judges a check another workflow reports either wakes too early or never wakes at all.
+The two answers are class P landing parameters and MUST divide as follows. `setup.required_check` names the context the trunk ruleset requires in both integration modes and the context the rendered gate also judges under local integration. `setup.required_workflow` names the workflow whose completion wakes that gate, by the workflow's literal `name` and never by its filename, because a `workflow_run` trigger cannot name a check and cannot omit the workflow. One shape renders that gate: GitHub, an automatic release, the trunk style, and local integration together. Where no flag, configuration, or compatible record answers a key at that shape, the resolution MUST take this convention's own pair, `gate` and `ci`, so a landing renders a gate that names something rather than a hole no event can satisfy, and MUST write the resolved answer back to the configuration and record it, so the decision is visible and reproducible rather than compiled. Every other shape MUST resolve both to empty, except that under forge integration `setup.required_check` stays the context the trunk ruleset requires, which is the project's own answer, and `protect-trunk` keeps refusing until one is named. A setup check MUST fault where the workflow named by `setup.required_workflow` does not carry the one pull-request job reporting `setup.required_check`, because a gate that wakes on one workflow and judges a check another workflow reports either wakes too early or never wakes at all.
 
 #### Scenario: A project commits its required check
 

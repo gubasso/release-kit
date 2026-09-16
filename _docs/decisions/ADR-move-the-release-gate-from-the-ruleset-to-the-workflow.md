@@ -23,4 +23,4 @@ Chosen option: `a gate in the release workflow` — under local integration on G
 
 ## Status
 
-Accepted.
+Superseded by [native freshness](./ADR-keep-native-freshness-under-local-integration.md).

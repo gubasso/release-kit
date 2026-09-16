@@ -155,6 +155,13 @@ pub struct Security {
 /// policy promises no window at all.
 pub const RESPONSE_DEFAULT: &str = "best-effort";
 
+/// The one GitHub ruleset bypass local integration owns.
+///
+/// GitHub identifies its built-in repository administrator role as role 5.
+/// The setup maps this stable policy name to the forge object, so the target
+/// configuration records intent rather than an API encoding.
+pub const LOCAL_GITHUB_BYPASS: &str = "repository-admin";
+
 /// The canonical form of a security contact, or why it is refused.
 ///
 /// One trimmed line. The value is rendered into `SECURITY.md` verbatim, so
@@ -214,9 +221,8 @@ pub fn canonical_response(raw: &str) -> Result<String, String> {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Setup {
-    /// P: the check the release gate believes. Under forge integration
-    /// the trunk ruleset requires it; under local integration the
-    /// rendered release gate judges it.
+    /// P: the check the trunk ruleset requires in both modes. Under local
+    /// integration the rendered release gate judges it too.
     pub required_check: String,
     /// P: the workflow name whose completion wakes the release gate.
     /// GitHub alone, because a `workflow_run` trigger cannot name a check
@@ -942,13 +948,14 @@ fn protection_fields(
 /// `target-config:a-flag-overrides-and-a-landing-writes-back` leaves
 /// class F policy with its use-time readers, and excluding these from
 /// what status judges keeps that true.
-const DERIVED_POLICY_KEYS: [&str; 2] = [
+const DERIVED_POLICY_KEYS: [&str; 3] = [
+    "protection.bypass_actors",
     "protection.owned_trunk_rules",
     "protection.gitlab.push_access_level",
 ];
 
 /// The keys a landing writes back: every class P answer.
-const PARAMETER_KEYS: [&str; 21] = [
+const PARAMETER_KEYS: [&str; 22] = [
     "project.repo",
     "profile.technologies",
     "profile.forge",
@@ -959,9 +966,10 @@ const PARAMETER_KEYS: [&str; 21] = [
     "git.trunk",
     "git.checkout_mode",
     "git.integration",
-    // The two floored keys the integration authority decides. They are
+    // The three floored keys the integration authority decides. They are
     // written back with it, because changing the authority without them
     // leaves a configuration whose own floor table refuses it.
+    "protection.bypass_actors",
     "protection.owned_trunk_rules",
     "protection.gitlab.push_access_level",
     "capabilities.nix_packaging",
@@ -1494,9 +1502,17 @@ fn parameter_values(config: &Config) -> Vec<(&'static str, Option<toml_edit::Val
     }
     if let Some(mode) = config.git.integration {
         values.push(("git.integration", Some(mode.as_str().into())));
-        // The pair that authority decides travels with it: a write-back
+        // The policy tuple the authority decides travels with it: a write-back
         // that moved the mode alone would leave a configuration the
         // floor table refuses on the next read.
+        let mut bypass = toml_edit::Array::new();
+        for actor in &config.protection.bypass_actors {
+            bypass.push(actor.as_str());
+        }
+        values.push((
+            "protection.bypass_actors",
+            Some(toml_edit::Value::Array(bypass)),
+        ));
         let mut rules = toml_edit::Array::new();
         for rule in &config.protection.owned_trunk_rules {
             rules.push(rule.as_str());
@@ -1585,34 +1601,46 @@ pub fn pending(config: &Config, record: &crate::landing::manifest::Manifest) -> 
 ///
 /// The ordinary defaults describe forge integration, because that is the
 /// shape this convention had before the authority became an axis. A
-/// locally integrated trunk drops the two rules no forge can apply to a
-/// push, and takes the narrowest GitLab level that still admits the push
-/// its integrations end in.
+/// locally integrated trunk keeps the full GitHub rule set and grants the
+/// repository-administrator role the bypass its deliberate push needs. On
+/// GitLab it takes the narrowest access level that still admits that push.
 #[must_use]
-fn local_protection() -> Protection {
+pub(crate) fn local_protection() -> Protection {
     /// The narrowest GitLab access level that still admits a push.
     const MAINTAINER: i64 = 40;
-    let mut policy = Protection::default();
-    policy
-        .owned_trunk_rules
-        .retain(|rule| rule != "pull_request" && rule != "required_status_checks");
-    policy.gitlab.push_access_level = MAINTAINER;
-    policy
+    Protection {
+        bypass_actors: vec![LOCAL_GITHUB_BYPASS.into()],
+        gitlab: Gitlab {
+            push_access_level: MAINTAINER,
+            ..Gitlab::default()
+        },
+        ..Protection::default()
+    }
+}
+
+/// Whether this is the compiled local policy from before release-request
+/// freshness moved back into the trunk ruleset.
+#[must_use]
+pub(crate) fn legacy_local_protection(policy: &Protection) -> bool {
+    policy.bypass_actors.is_empty()
+        && policy.owned_trunk_rules == ["deletion", "non_fast_forward"]
+        && policy.gitlab.push_access_level >= 40
 }
 
 /// The protection values a landing writes, for one integration authority.
 ///
-/// Exactly two keys differ between the authorities, and they are the two
-/// this looks at: the owned trunk rules, and the GitLab push access
-/// level. A target whose pair matches one authority's compiled defaults
-/// never stated them; it took them, so a landing that resolves the other
-/// authority writes that authority's pair instead, and a fresh landing
-/// writes its own. A target whose pair matches neither is one an operator
+/// Exactly three keys differ between the authorities, and they are the
+/// tuple this looks at: the GitHub bypass actors, the owned trunk rules,
+/// and the GitLab push access level. A target whose tuple matches one
+/// authority's compiled defaults never stated them; it took them, so a
+/// landing that resolves the other authority writes that authority's tuple
+/// instead, and a fresh landing
+/// writes its own. A target whose tuple matches neither is one an operator
 /// narrowed or widened, and it keeps every value it stated: the floor
 /// table already judged it under the same mode, and an operator who
 /// changed a protection meant it.
 ///
-/// The pair alone, never the whole policy: every other key here is a name
+/// The tuple alone, never the whole policy: every other key here is a name
 /// or a review policy the authority does not decide, and a target that
 /// renamed its ruleset would otherwise read as having stated the pair.
 ///
@@ -1624,13 +1652,17 @@ fn local_protection() -> Protection {
 fn protection_for(held: &Protection, integration: Integration, fresh: bool) -> Protection {
     let forge = Protection::default();
     let local = local_protection();
-    let pair = |policy: &Protection| {
+    let tuple = |policy: &Protection| {
         (
+            policy.bypass_actors.clone(),
             policy.owned_trunk_rules.clone(),
             policy.gitlab.push_access_level,
         )
     };
-    let taken = fresh || pair(held) == pair(&forge) || pair(held) == pair(&local);
+    let taken = fresh
+        || tuple(held) == tuple(&forge)
+        || tuple(held) == tuple(&local)
+        || legacy_local_protection(held);
     if !taken {
         return held.clone();
     }
@@ -1639,6 +1671,7 @@ fn protection_for(held: &Protection, integration: Integration, fresh: bool) -> P
         Integration::Forge => forge,
         Integration::Local => local,
     };
+    next.bypass_actors = source.bypass_actors;
     next.owned_trunk_rules = source.owned_trunk_rules;
     next.gitlab.push_access_level = source.gitlab.push_access_level;
     next
@@ -1709,7 +1742,7 @@ mod tests {
             // the name the setup installs rather than leaving it implied.
             protection: super::Protection {
                 trunk_ruleset: Some(format!("{}-protection", super::TRUNK_DEFAULT)),
-                ..super::Protection::default()
+                ..super::local_protection()
             },
             ..Config::default()
         }
@@ -1829,11 +1862,11 @@ mod tests {
         let next = super::rewrite_text(
             text,
             "git.integration",
-            Some(toml_edit::Value::from("local")),
+            Some(toml_edit::Value::from("forge")),
         )
         .expect("the key writes");
         assert!(
-            next.contains("integration = \"local\" # P: local or forge"),
+            next.contains("integration = \"forge\" # P: local or forge"),
             "{next}"
         );
         // A key the operator already commented keeps their words.

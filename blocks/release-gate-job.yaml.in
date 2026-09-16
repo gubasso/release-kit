@@ -1,10 +1,9 @@
 
-  # The release request's hold. Under local integration the trunk carries no
-  # required-check rule, because a ruleset carrying one rejects the direct
-  # push that mode exists to make, so what held the release request moves
-  # here. The job wakes when RK_REQUIRED_WORKFLOW completes, and judges again on
-  # every push, so a request that was already green when nothing new ran
-  # still merges.
+  # The release request's merger. Under local integration the repository
+  # administrator may bypass the trunk rules for the deliberate direct push;
+  # the release App may not. The job wakes when RK_REQUIRED_WORKFLOW completes,
+  # and judges again after the push-side request job succeeds, so a request
+  # that was already green when nothing new ran still merges.
   #
   # It trusts no value the event carries. Every fact it acts on is read back
   # from the forge: the request must be open, not a draft, based on the
@@ -16,7 +15,8 @@
     if: >-
       always()
       && github.repository_owner == 'OWNER'
-      && (github.event_name == 'push'
+      && ((github.event_name == 'push'
+      && needs.RK_REQUEST_JOB.result == 'success')
       || github.event.workflow_run.event == 'pull_request')
     runs-on: ubuntu-latest
     permissions: {}
@@ -55,9 +55,9 @@
           # renders the same actor as `app/<slug>`, and the GraphQL one as
           # the bare slug, so a filter written against either would refuse
           # every release rather than admit a foreign request.
-          selection="$(gh api "repos/{owner}/{repo}/pulls" -X GET \
+          selection="$(gh api --paginate --slurp "repos/{owner}/{repo}/pulls" -X GET \
             -f state=open -f base="$TRUNK" -f per_page=100 \
-            --jq '[ .[]
+            --jq '[ .[][]
                     | select(.draft == false)
                     | select(.base.ref == env.TRUNK)
                     | select(.head.repo.full_name == env.GH_REPO)

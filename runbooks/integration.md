@@ -65,7 +65,7 @@ The request itself is yours to open, with the command the report names. Its titl
 
 On local:
 
-The trunk push is separate and deliberate, and it takes the fast-forward form alone. Push when you decide to; several integrations may ride one push, and the release bot reads each commit's intent separately.
+The trunk push is separate and deliberate, and it takes the fast-forward form alone. On GitHub, authenticate as a repository administrator: that is the one role the local-mode ruleset permits to bypass its request rule. Push when you decide to; several integrations may ride one push, and the release bot reads each commit's intent separately.
 
 ```bash
 git -C ../<project> push origin master   # check: a fast-forward; never --force
@@ -85,7 +85,7 @@ rk worktree prune --apply                # check: pruned; the seat and the branc
 
 ### 4a. When the push turns the trunk red
 
-The local path cannot see the remote checks before the push, because the push is what starts them. Watch the run the push started and the release request it refreshed. A failure blocks the release request, so nothing publishes: under this mode the landed release workflow holds the request itself, on the check `setup.required_check` names, and its own `release-gate` job log says which check it read and what that check concluded. Repair it as a fresh implementation, integrated the same way: no local integration is erased, and nothing is reverted by hand.
+The local path cannot see the remote checks before the push, because the push is what starts them. Watch the run the push started and the release request it refreshed. A failure leaves the release request open, so nothing publishes: the trunk's strict rule is the boundary, and the landed `release-gate` job logs which `setup.required_check` result it read before returning a successful no-op. Repair it as a fresh implementation, integrated the same way: no local integration is erased, and nothing is reverted by hand.
 
 ## 5. Release
 

@@ -1425,16 +1425,14 @@ fn substitute_tokens(baseline: &[u8], params: &Params) -> Vec<u8> {
     let escaped = params.line_prefix().replace('/', "\\/");
     out = substitute(&out, LINE_PREFIX_RE_TOKEN, escaped.as_bytes());
     out = substitute(&out, LINE_PREFIX_TOKEN, params.line_prefix().as_bytes());
-    out = substitute(
-        &out,
-        REQUIRED_CHECK_TOKEN,
-        params.required_check().as_bytes(),
-    );
-    out = substitute(
-        &out,
-        REQUIRED_WORKFLOW_TOKEN,
-        params.required_workflow().as_bytes(),
-    );
+    // JSON strings are valid YAML double-quoted scalars. Rendering the two
+    // operator-owned names through that encoding keeps spaces, comments,
+    // quotes, and backslashes data rather than YAML structure.
+    let required_check = serde_json::Value::String(params.required_check().to_owned()).to_string();
+    let required_workflow =
+        serde_json::Value::String(params.required_workflow().to_owned()).to_string();
+    out = substitute(&out, REQUIRED_CHECK_TOKEN, required_check.as_bytes());
+    out = substitute(&out, REQUIRED_WORKFLOW_TOKEN, required_workflow.as_bytes());
     // The push guard is non-empty exactly where a second trigger is added,
     // and the gate is what adds one.
     let guard: &[u8] = if release_gates(params) {

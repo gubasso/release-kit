@@ -326,6 +326,26 @@ pub fn canonical_list(key: &str, raw: &[String]) -> Result<Vec<String>, String> 
     Ok(out)
 }
 
+/// Append one POSIX-shell word, leaving the common inert alphabet readable
+/// and single-quoting everything that could become syntax on replay.
+fn push_shell_word(out: &mut String, value: &str) {
+    let inert = !value.is_empty()
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'_' | b'@' | b'%' | b'+' | b'=' | b':' | b',' | b'.' | b'/' | b'-'
+                )
+        });
+    if inert {
+        out.push_str(value);
+        return;
+    }
+    out.push('\'');
+    out.push_str(&value.replace('\'', "'\"'\"'"));
+    out.push('\'');
+}
+
 impl Params {
     /// Reconstruct every projection parameter from the record alone,
     /// including the compatibility defaults applied when it was loaded.
@@ -547,11 +567,11 @@ impl Params {
         // pass a name the resolution never produced.
         if !self.required_check.is_empty() {
             out.push_str(" --required-check ");
-            out.push_str(&self.required_check);
+            push_shell_word(&mut out, &self.required_check);
         }
         if !self.required_workflow.is_empty() {
             out.push_str(" --required-workflow ");
-            out.push_str(&self.required_workflow);
+            push_shell_word(&mut out, &self.required_workflow);
         }
         out
     }

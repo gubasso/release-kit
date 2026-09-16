@@ -7,6 +7,7 @@
 set -eu
 : "${RK_REPO:?rk sets this; run this script through rk setup}"
 : "${RK_TRUNK_BRANCH:?rk sets this; run this script through rk setup}"
+: "${RK_BYPASS_ACTORS:?rk sets this; run this script through rk setup}"
 
 trunk_name="$RK_TRUNK_BRANCH-protection"
 tags_name=release-tags
@@ -60,7 +61,8 @@ id="$(gh api "repos/$RK_REPO/rulesets" -q ".[] | select(.name == \"$trunk_name\"
 if [ -n "$id" ]; then
   rerun='rk setup step protect-trunk --apply'
 
-  check "$id" "$trunk_name names no bypass actor" 0 "$rerun" '.bypass_actors // [] | length'
+  check "$id" "$trunk_name names the recorded bypass actors" "$RK_BYPASS_ACTORS" "$rerun" \
+    '(.bypass_actors // [] | sort_by(.actor_type, .actor_id, .bypass_mode) | tojson)'
   check "$id" "$trunk_name requires a pull request" true "$rerun" '[.rules[].type] | contains(["pull_request"])'
   check "$id" "$trunk_name requires a status check" true "$rerun" '[.rules[].type] | contains(["required_status_checks"])'
   check "$id" "$trunk_name allows only the squash merge" '["squash"]' \

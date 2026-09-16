@@ -3705,6 +3705,7 @@ fn every_setup_script_passes_the_static_battery() {
         "RK_LINES_RULESET",
         "RK_TITLE_CHECK",
         "RK_TRUNK_RULES",
+        "RK_BYPASS_ACTORS",
         "RK_TAG_PATTERN",
         "RK_REVIEW_COUNT",
         "RK_DISMISS_STALE_REVIEWS",
@@ -4494,7 +4495,7 @@ api)
     body="$(cat "$STATE/ruleset_$name" 2>/dev/null)"
     case "$query" in
       "") printf '%s\n' "$body";;
-      *"bypass_actors"*) echo 0;;
+      *"bypass_actors"*) jq -c '(.bypass_actors // [] | sort_by(.actor_type, .actor_id, .bypass_mode))' <<<"$body";;
       *'contains(["pull_request"])'*) echo true;;
       *'contains(["required_status_checks"])'*) echo true;;
       *'contains(["deletion","non_fast_forward"])'*) echo true;;
@@ -24982,9 +24983,10 @@ fn release_workflow(driver: &str, integration: release_kit::landing::Integration
         .expect("the workflow is text")
 }
 
-/// Under local integration the trunk carries no required-check rule, so
-/// the landed release workflow holds its own request: it wakes on the
-/// recorded workflow completing and it no longer stands armed.
+/// Under local integration the trunk keeps its strict required-check rule,
+/// and the landed release workflow merges its own request under the
+/// release App: it wakes on the recorded workflow completing and it no
+/// longer stands armed.
 ///
 /// SATISFIES git:the-release-request-integrates-at-the-forge
 #[test]
@@ -25032,7 +25034,7 @@ fn a_forge_integrated_target_keeps_the_standing_arm() {
 fn the_release_request_is_gated_under_both_integration_modes() {
     use release_kit::landing::Integration;
     let gated = release_workflow("rust", Integration::Local);
-    assert!(gated.contains("GATE_CHECK: gate"));
+    assert!(gated.contains("GATE_CHECK: \"gate\""));
     assert!(gated.contains("check_name=\"$GATE_CHECK\""));
     // The forge rendering names no check, because the ruleset does.
     let armed = release_workflow("rust", Integration::Forge);
@@ -25058,7 +25060,50 @@ fn the_gate_names_the_recorded_check_and_not_the_workflow() {
     let text = std::fs::read_to_string(target.path().join(".github/workflows/release-plz.yml"))
         .expect("the workflow lands");
     assert!(text.contains("workflows: [\"build\"]"), "{text}");
-    assert!(text.contains("GATE_CHECK: verify"), "{text}");
+    assert!(text.contains("GATE_CHECK: \"verify\""), "{text}");
+}
+
+/// Gate names are data in both the rendered YAML and the preview's replay
+/// command. YAML punctuation and shell metacharacters therefore survive as
+/// names rather than becoming structure or a second command.
+///
+/// SATISFIES target-config:a-setup-fact-is-committed-once
+#[test]
+fn gate_names_are_encoded_for_yaml_and_shell_replay() {
+    let target = tempfile::tempdir().expect("a scratch target exists");
+    let check = "build: #1's";
+    let workflow = "CI \"main\" \\ path";
+    let output = rk()
+        .args(["init", "--tech", "rust", "--forge", "github"])
+        .args(["--repo", "acme/widget", "--required-check", check])
+        .args(["--required-workflow", workflow, "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let preview = String::from_utf8_lossy(&output.get_output().stdout);
+    assert!(
+        preview.contains("--required-check 'build: #1'\"'\"'s'"),
+        "{preview}"
+    );
+    assert!(
+        preview.contains("--required-workflow 'CI \"main\" \\ path'"),
+        "{preview}"
+    );
+
+    rk().args(["init", "--tech", "rust", "--forge", "github"])
+        .args(["--repo", "acme/widget", "--required-check", check])
+        .args(["--required-workflow", workflow, "--target"])
+        .arg(target.path())
+        .arg("--apply")
+        .assert()
+        .success();
+    let text = std::fs::read_to_string(target.path().join(".github/workflows/release-plz.yml"))
+        .expect("the workflow lands");
+    assert!(
+        text.contains("workflows: [\"CI \\\"main\\\" \\\\ path\"]"),
+        "{text}"
+    );
+    assert!(text.contains("GATE_CHECK: \"build: #1's\""), "{text}");
 }
 
 /// Each driver's request branch is a structural second guard. The proof of
@@ -25110,6 +25155,109 @@ fn an_imitating_request_never_merges() {
     assert!(
         text.contains("select(.head.ref | startswith(env.BRANCH_SHAPE))"),
         "{text}"
+    );
+}
+
+/// Candidate discovery consumes every page before it applies the exact-one
+/// filter. A release request after one full page is therefore still found
+/// and merged when its exact head carries the recorded successful check.
+///
+/// SATISFIES git:the-release-request-integrates-at-the-forge
+#[test]
+fn a_release_request_after_the_first_candidate_page_is_found() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let text = release_workflow("rust", release_kit::landing::Integration::Local);
+    let run = text
+        .split("release-gate:")
+        .nth(1)
+        .and_then(|job| job.split("        run: |\n").nth(1))
+        .expect("the gate carries one run script");
+    let script = run
+        .lines()
+        .take_while(|line| line.starts_with("          ") || line.is_empty())
+        .map(|line| line.strip_prefix("          ").unwrap_or(line))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let scratch = tempfile::tempdir().expect("a scratch gate fixture exists");
+    let bin = scratch.path().join("bin");
+    std::fs::create_dir(&bin).expect("the fake bin creates");
+    let gh = bin.join("gh");
+    std::fs::write(
+        &gh,
+        r#"#!/usr/bin/env bash
+set -eu
+args="$*"
+if [[ "$args" == *"/pulls"* ]]; then
+  [[ "$args" == *"--paginate"* && "$args" == *"--slurp"* ]]
+  query=""
+  while (($#)); do
+    if [[ "$1" == "--jq" ]]; then query="$2"; break; fi
+    shift
+  done
+  jq -r "$query" "$STATE/pages.json"
+elif [[ "$args" == *"/check-runs"* ]]; then
+  printf '%s\n' 'completed success'
+elif [[ "$args" == "pr merge 101 --match-head-commit release-head --squash --delete-branch" ]]; then
+  printf '%s\n' "$args" > "$STATE/merged"
+else
+  printf 'unexpected gh call: %s\n' "$args" >&2
+  exit 1
+fi
+"#,
+    )
+    .expect("the fake gh writes");
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755))
+        .expect("the fake gh is executable");
+
+    let irrelevant = serde_json::json!({
+        "number": 1,
+        "draft": true,
+        "base": {"ref": "master"},
+        "head": {"repo": {"full_name": "acme/widget"}, "ref": "release-plz-old", "sha": "old"},
+        "user": {"type": "Bot", "login": "release-bot[bot]"}
+    });
+    let first_page = vec![irrelevant; 100];
+    let candidate = serde_json::json!({
+        "number": 101,
+        "draft": false,
+        "base": {"ref": "master"},
+        "head": {"repo": {"full_name": "acme/widget"}, "ref": "release-plz-current", "sha": "release-head"},
+        "user": {"type": "Bot", "login": "release-bot[bot]"}
+    });
+    std::fs::write(
+        scratch.path().join("pages.json"),
+        serde_json::to_vec(&serde_json::json!([first_page, [candidate]]))
+            .expect("the pages serialize"),
+    )
+    .expect("the pages write");
+
+    let old_path = std::env::var_os("PATH").unwrap_or_default();
+    let mut paths = vec![bin];
+    paths.extend(std::env::split_paths(&old_path));
+    let path = std::env::join_paths(paths).expect("PATH joins");
+    let output = std::process::Command::new("sh")
+        .args(["-c", &script])
+        .env("PATH", path)
+        .env("STATE", scratch.path())
+        .env("GH_TOKEN", "fixture")
+        .env("GH_REPO", "acme/widget")
+        .env("APP_LOGIN", "release-bot[bot]")
+        .env("TRUNK", "master")
+        .env("GATE_CHECK", "gate")
+        .env("BRANCH_SHAPE", "release-plz-")
+        .output()
+        .expect("the gate script runs");
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path().join("merged")).expect("the merge is recorded"),
+        "pr merge 101 --match-head-commit release-head --squash --delete-branch\n"
     );
 }
 
@@ -31070,7 +31218,7 @@ fn integrate_fixture() -> (tempfile::TempDir, PathBuf) {
     std::fs::create_dir_all(repo.join(".release-kit")).expect("the record dir creates");
     std::fs::write(
         repo.join(".release-kit/config.toml"),
-        "schema_version = 2\n[git]\ntrunk = \"master\"\ncheckout_mode = \"linked-worktree\"\nintegration = \"local\"\n",
+        "schema_version = 2\n[git]\ntrunk = \"master\"\ncheckout_mode = \"linked-worktree\"\nintegration = \"local\"\n[protection]\nbypass_actors = [\"repository-admin\"]\nowned_trunk_rules = [\"deletion\", \"non_fast_forward\", \"pull_request\", \"required_status_checks\"]\n[protection.gitlab]\npush_access_level = 40\n",
     )
     .expect("the config writes");
     // The record, not the configuration, is what `rk integrate` reads:
@@ -31829,9 +31977,9 @@ fn unreachable_evidence_confirms_nothing() {
     );
 }
 
-/// The two floored keys the integration authority decides travel with it.
-/// A fresh local landing writes the rules that hold against a push, and a
-/// mode change rewrites both directions, so the committed configuration
+/// The three floored keys the integration authority decides travel with it.
+/// A fresh local landing writes the full rule set and its administrator
+/// bypass, and a mode change rewrites both directions, so the configuration
 /// never states a policy its own floor table refuses.
 ///
 /// SATISFIES target-config:an-invariant-bearing-key-carries-a-floor
@@ -31845,8 +31993,14 @@ fn the_protection_the_authority_decides_travels_with_it() {
     };
     let config = read();
     assert!(
-        config.contains(r#"owned_trunk_rules = ["deletion", "non_fast_forward"]"#),
-        "a local trunk installs the rules that hold against a push: {config}"
+        config.contains(r#"bypass_actors = ["repository-admin"]"#),
+        "a local trunk records the authority for its deliberate push: {config}"
+    );
+    assert!(
+        config.contains(
+            r#"owned_trunk_rules = ["deletion", "non_fast_forward", "pull_request", "required_status_checks"]"#
+        ),
+        "a local trunk retains the release request's freshness rules: {config}"
     );
     assert!(
         config.contains("push_access_level = 40"),
@@ -31860,7 +32014,7 @@ fn the_protection_the_authority_decides_travels_with_it() {
         !config.contains("push_access_level = 40 # F: invariant, zero"),
         "the rendered comment contradicts the rendered value: {config}"
     );
-    for key in ["owned_trunk_rules", "push_access_level"] {
+    for key in ["bypass_actors", "owned_trunk_rules", "push_access_level"] {
         let line = config
             .lines()
             .find(|line| line.starts_with(key))
@@ -31876,6 +32030,7 @@ fn the_protection_the_authority_decides_travels_with_it() {
         .assert()
         .success();
     let config = read();
+    assert!(config.contains("bypass_actors = []"), "{config}");
     assert!(
         config.contains(
             r#"owned_trunk_rules = ["deletion", "non_fast_forward", "pull_request", "required_status_checks"]"#
@@ -31891,16 +32046,22 @@ fn the_protection_the_authority_decides_travels_with_it() {
         .success();
     let config = read();
     assert!(
-        config.contains(r#"owned_trunk_rules = ["deletion", "non_fast_forward"]"#),
+        config.contains(r#"bypass_actors = ["repository-admin"]"#),
+        "{config}"
+    );
+    assert!(
+        config.contains(
+            r#"owned_trunk_rules = ["deletion", "non_fast_forward", "pull_request", "required_status_checks"]"#
+        ),
         "{config}"
     );
     assert!(config.contains("push_access_level = 40"), "{config}");
 
     // A policy the operator narrowed is theirs: the authority decides the
-    // pair only where the target never diverged from one mode's own.
+    // tuple only where the target never diverged from one mode's own.
     let stated = read().replace(
-        r#"owned_trunk_rules = ["deletion", "non_fast_forward"]"#,
-        r#"owned_trunk_rules = ["deletion", "non_fast_forward", "required_signatures"]"#,
+        r#"owned_trunk_rules = ["deletion", "non_fast_forward", "pull_request", "required_status_checks"]"#,
+        r#"owned_trunk_rules = ["deletion", "non_fast_forward", "pull_request", "required_status_checks", "required_signatures"]"#,
     );
     std::fs::write(target.path().join(".release-kit/config.toml"), stated)
         .expect("the config writes");
@@ -31908,12 +32069,36 @@ fn the_protection_the_authority_decides_travels_with_it() {
         .arg(target.path())
         .assert()
         .code(73)
-        .stderr(predicate::str::contains("owned_trunk_rules"));
+        .stderr(predicate::str::contains("protection."));
+}
+
+/// The agent routing sentence is operational input, so it names the same
+/// integration authority as this repository's committed target record.
+///
+/// SATISFIES git:integration-mode-selects-the-authority-that-squashes
+#[test]
+fn agent_routing_names_the_repositories_recorded_integration() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let config = release_kit::config::load(root)
+        .expect("the repository config loads")
+        .expect("the repository carries a config");
+    let integration = config
+        .git
+        .integration
+        .expect("the repository records an integration mode");
+    let agents = std::fs::read_to_string(root.join("AGENTS.md")).expect("AGENTS.md reads");
+    assert!(
+        agents.contains(&format!(
+            "This repository records `{}`.",
+            integration.as_str()
+        )),
+        "AGENTS.md must route agents to the committed integration authority"
+    );
 }
 
 /// A policy an operator narrowed within its floor converges: the status
 /// reports it aligned rather than routing an upgrade that would change
-/// nothing. The two protection keys a write-back carries are derived
+/// nothing. The three protection keys a write-back carries are derived
 /// companions of the authority, and the record holds no baseline for
 /// them, so judging them as recorded parameters would never settle.
 ///

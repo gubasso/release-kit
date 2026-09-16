@@ -963,8 +963,9 @@ fn github_trunk_ruleset(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkErro
     if detail["conditions"]["ref_name"]["exclude"] != serde_json::json!([]) {
         faults.push(format!("{name} excludes refs from its own coverage"));
     }
-    if !detail["bypass_actors"].as_array().is_none_or(Vec::is_empty) {
-        faults.push("a bypass actor is named".to_owned());
+    let expected_bypass = super::context::github_bypass_actors(&ctx.protection().bypass_actors);
+    if detail["bypass_actors"] != expected_bypass {
+        faults.push("the bypass actors do not match the recorded authority".to_owned());
     }
     for required in &ctx.protection().owned_trunk_rules {
         if !has(required) {

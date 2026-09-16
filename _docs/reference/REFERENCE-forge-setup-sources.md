@@ -10,12 +10,16 @@ Rulesets are managed at `/repos/{owner}/{repo}/rulesets`, with separate create a
 
 The `gh ruleset` subcommands are `check`, `list`, and `view`, all read-only, so a ruleset write goes through `gh api` while a read may use the friendlier verbs.
 
+Re-checked 2026-09-16: GitHub documents bypass eligibility for repository roles, teams, and Apps, with `Always allow` as the mode that admits a direct push. The rules API represents those identities as distinct actor types, including `RepositoryRole` and `Integration`. A live disposable-repository probe established the remaining encoding and behavior the public documentation does not spell out: built-in repository administrator is repository-role actor `5`; naming that role alone admitted the administrator's direct push, while the workflow integration received a rule-violation refusal. This is why local integration can retain strict required checks without granting the release App the same bypass.
+
 - <https://docs.github.com/en/rest/repos/rules>
+- <https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/creating-rulesets-for-a-repository>
+- <https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets>
 - <https://cli.github.com/manual/gh_ruleset>
 - <https://github.blog/news-insights/product-news/github-repository-rules-are-now-generally-available/>
 - <https://github.com/orgs/community/discussions/139808>
 
-Bearing: `forge-setup:a-step-is-idempotent`. Separate create and update endpoints are why a step resolves the ruleset by name and then chooses between them, rather than blindly creating.
+Bearing: `forge-setup:a-step-is-idempotent` and `forge-setup:a-merge-carries-the-trunk-it-was-tested-against`. Separate create and update endpoints are why a step resolves the ruleset by name and then chooses between them, rather than blindly creating. Distinct bypass actor types are what let the administrator push without exempting the release App from strict freshness.
 
 ## Removing a protection from a retired branch
 

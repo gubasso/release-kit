@@ -281,15 +281,11 @@ fn reject_check_flag_on_gitlab(ctx: &Ctx) -> Result<(), RkError> {
 /// runs: a wrong or missing one does not fail, it hangs the merge button,
 /// so a full apply refuses up front rather than writing eight steps and
 /// stopping. A target that excludes the protection is asked for nothing,
-/// because the value would answer a step this run never reaches, and so
-/// is one whose effective policy carries no required-check rule: a
-/// locally integrated trunk installs no such rule, and this step would
-/// write the name nowhere.
-///
-/// That is a statement about this step and not about the name. Under
-/// local integration the rendered release gate reads the same name, which
-/// is why it is a landing parameter; the landing verbs are what refuse an
-/// unanswered gate, and this prerequisite stays about the ruleset.
+/// because the value would answer a step this run never reaches, or one
+/// whose effective policy carries no required-check rule. Both integration
+/// modes normally carry that rule; local integration also renders the same
+/// name into its release gate. The landing verbs refuse an unanswered gate,
+/// while this prerequisite stays about the ruleset step.
 fn require_check_for(ctx: &Ctx, steps: &[&StepSpec]) -> Result<(), RkError> {
     let needs = ctx.forge == Some(Forge::Github)
         && ctx.required_check.is_none()

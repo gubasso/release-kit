@@ -1,6 +1,6 @@
 {
   "schema_version": 10,
-  "rk_version": "0.8.2",
+  "rk_version": "0.8.3",
   "origin": "adopt",
   "landed_at": "2026-08-30T00:14:29Z",
   "profile": {
@@ -47,7 +47,7 @@
     {
       "destination": ".github/workflows/release-plz.yml",
       "kind": "rendered",
-      "sha256": "87f28e0b4ea955742b07090327360bf8324b004b5fad56e0239a3d7d9e6808ec"
+      "sha256": "8e3806b0f54abf68dc4279480ce559fe40a74578f1486d4bb96616cadd0d6f5a"
     },
     {
       "destination": ".github/workflows/scorecard.yml",

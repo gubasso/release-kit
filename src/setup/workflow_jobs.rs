@@ -423,11 +423,11 @@ fn declared_name(workflow: &str) -> Option<String> {
         if key != "name" {
             continue;
         }
-        let value = unquote(before_comment(value).trim());
+        let value = scalar(before_comment(value).trim());
         if value.is_empty() || value.contains("${{") {
             return None;
         }
-        return Some(value.to_owned());
+        return Some(value);
     }
     None
 }
@@ -642,13 +642,13 @@ fn jobs(workflow: &str) -> Vec<Job> {
         };
         match key {
             "name" => {
-                let value = unquote(before_comment(value).trim());
+                let value = scalar(before_comment(value).trim());
                 // A name built from an expression resolves per run, so
                 // the context it reports is not in the file.
                 if value.contains("${{") || value.is_empty() {
                     job.name = Name::Unproven;
                 } else {
-                    job.name = Name::Fixed(value.to_owned());
+                    job.name = Name::Fixed(value);
                 }
             }
             // A reusable-workflow call reports the called jobs' contexts,
@@ -786,6 +786,21 @@ fn unquote(value: &str) -> &str {
                 .and_then(|rest| rest.strip_suffix('\''))
         })
         .unwrap_or(value)
+}
+
+/// One YAML scalar as text for the forms this reader accepts.
+///
+/// The projection emits JSON strings, which are YAML double-quoted scalars,
+/// so decoding JSON here preserves escaped quotes and backslashes in a
+/// generated workflow or job name. Authored single-quoted and bare values
+/// retain the reader's existing behavior.
+fn scalar(value: &str) -> String {
+    if value.starts_with(QUOTES[0])
+        && let Ok(decoded) = serde_json::from_str::<String>(value)
+    {
+        return decoded;
+    }
+    unquote(value).replace("''", "'")
 }
 
 fn indent(line: &str) -> usize {

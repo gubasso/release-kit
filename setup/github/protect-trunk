@@ -2,18 +2,16 @@
 # Protect the trunk. Which rules that means is the recorded integration
 # mode's answer, and rk composes them into RK_TRUNK_RULES from the one
 # owned-rules key its floor table judges and its check reads. Under forge
-# integration the trunk takes no direct push and no force-push: a pull
-# request carrying the named passing check and the pr-title check is the
-# only way in. Under local integration the request and required-check
-# rules are absent, because no forge can require a check before the push
-# that starts it, and deletion and force-push protection stand alone. The request must carry the trunk's tip: the release request
+# integration the trunk takes no direct push. Under local integration a
+# repository administrator may bypass the same rules for the deliberate
+# trunk push, while the release App remains governed by them. The request
+# must carry the trunk's tip: the release request
 # has computed contents, and nothing else re-reads the trunk between that
 # computation and the merge. Squash is the only merge method, so the trunk history
 # stays linear on a forge that offers no fast-forward merge. The squash
 # title is the pull request's title — never a lone branch commit's subject —
 # because the bot derives the version from the trunk's commit messages.
-# Nothing in the pipeline writes this branch — the bot pushes a tag, which
-# release-tags governs — so it names no bypass actor. The method's
+# Nothing in the pipeline bypasses this ruleset. The method's
 # invariants chapter owns these facts; this comment points there. Rerunning
 # updates in place.
 set -eu
@@ -24,6 +22,7 @@ set -eu
 # The policy below. rk judged every value against the floor table before
 # this ran, so this script substitutes and never decides.
 : "${RK_TRUNK_RULES:?rk sets this; run this script through rk setup}"
+: "${RK_BYPASS_ACTORS:?rk sets this; run this script through rk setup}"
 : "${RK_SQUASH_TITLE_SOURCE:?rk sets this; run this script through rk setup}"
 : "${RK_SQUASH_BODY_SOURCE:?rk sets this; run this script through rk setup}"
 
@@ -39,7 +38,7 @@ fi <<JSON
   "name": "$name",
   "target": "branch",
   "enforcement": "active",
-  "bypass_actors": [],
+  "bypass_actors": $RK_BYPASS_ACTORS,
   "conditions": {
     "ref_name": { "include": ["refs/heads/$RK_TRUNK_BRANCH"], "exclude": [] }
   },

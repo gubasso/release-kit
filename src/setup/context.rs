@@ -39,6 +39,27 @@ fn json_list(values: &[String]) -> String {
     format!("[{}]", inner.join(", "))
 }
 
+/// The GitHub API objects named by the policy's stable bypass vocabulary.
+///
+/// GitHub's built-in repository-administrator role is actor 5. Keeping that
+/// API encoding here lets configuration, diagnostics, and prose name intent
+/// while the setup owns the forge representation in one place.
+pub(super) fn github_bypass_actors(values: &[String]) -> serde_json::Value {
+    serde_json::Value::Array(
+        values
+            .iter()
+            .filter_map(|value| match value.as_str() {
+                crate::config::LOCAL_GITHUB_BYPASS => Some(serde_json::json!({
+                    "actor_id": 5,
+                    "actor_type": "RepositoryRole",
+                    "bypass_mode": "always",
+                })),
+                _ => None,
+            })
+            .collect(),
+    )
+}
+
 /// The GitHub trunk ruleset's `rules` array, as JSON.
 ///
 /// Every rule comes from `protection.owned_trunk_rules`, which the floor
@@ -92,16 +113,18 @@ fn compose_trunk_rules(
 ///
 /// A target that stated a policy gets its own values: the floor table
 /// already judged them under the same mode, and an operator who narrowed
-/// or widened something meant it. A target that stated nothing gets the
+/// or widened something meant it. The one exception is the former compiled
+/// local tuple: it remains readable so an upgrade can migrate it, but setup
+/// must never reinstall its missing freshness rules. A target that stated nothing gets the
 /// compiled defaults, which describe forge integration because that is
 /// the shape this convention had before the axis existed — so under
 /// local integration they are adjusted rather than installed.
 ///
-/// Two adjustments, and both only where the target stated nothing. The
-/// owned rules drop the request rule and the required-check rule, which
-/// no forge can apply to a push. The GitLab push level moves off zero to
-/// the narrowest level that still admits a push, because zero closes the
-/// trunk to the very act that mode's integrations end in.
+/// Two adjustments, and both only where the target stated nothing. GitHub
+/// names the repository-administrator role as the bypass authority while
+/// retaining every rule, so a local integrator may push but the release App
+/// may merge only the tested request. The GitLab push level moves off zero
+/// to the narrowest level that still admits a push.
 ///
 /// One resolution serves the body a step sends, the observer that reads
 /// the answer back, and the prerequisites, so a canonical apply cannot
@@ -111,18 +134,22 @@ fn effective_protection(
     integration: crate::landing::Integration,
 ) -> crate::config::Protection {
     if let Some(stated) = stated {
+        if integration == crate::landing::Integration::Local
+            && crate::config::legacy_local_protection(stated)
+        {
+            let mut migrated = stated.clone();
+            let current = crate::config::local_protection();
+            migrated.bypass_actors = current.bypass_actors;
+            migrated.owned_trunk_rules = current.owned_trunk_rules;
+            migrated.gitlab.push_access_level = current.gitlab.push_access_level;
+            return migrated;
+        }
         return stated.clone();
     }
-    let mut policy = crate::config::Protection::default();
     if integration == crate::landing::Integration::Local {
-        /// The narrowest GitLab access level that still admits a push.
-        const MAINTAINER: i64 = 40;
-        policy
-            .owned_trunk_rules
-            .retain(|rule| rule != "pull_request" && rule != "required_status_checks");
-        policy.gitlab.push_access_level = MAINTAINER;
+        return crate::config::local_protection();
     }
-    policy
+    crate::config::Protection::default()
 }
 
 /// The variables that pass through from the operator's environment to a
@@ -636,6 +663,12 @@ impl Ctx {
                 bool_word(self.protection.strict_required_status_checks).into(),
             ),
             (
+                "RK_BYPASS_ACTORS".into(),
+                github_bypass_actors(&self.protection.bypass_actors)
+                    .to_string()
+                    .into(),
+            ),
+            (
                 "RK_SQUASH_TITLE_SOURCE".into(),
                 self.protection.github.squash_title_source.clone().into(),
             ),
@@ -662,9 +695,8 @@ impl Ctx {
             // The trunk ruleset's rules, built from the one key the floor
             // table judges and the observer reads, so the body a run
             // sends cannot install a rule the check does not expect, or
-            // omit one it does. A local-integration target's key names the two rules
-            // that still hold against a direct push, and the request and
-            // required-check rules are simply absent.
+            // omit one it does. Local integration keeps the same rule set;
+            // its administrator bypass is a separate, explicit value.
             ("RK_TRUNK_RULES".into(), self.trunk_rules().into()),
             (
                 "RK_GITLAB_MERGE_LEVEL".into(),
@@ -808,10 +840,9 @@ pub fn resolve_cli(forge: Forge) -> Result<PathBuf, RkError> {
 mod tests {
     /// The trunk ruleset's rules come from the one owned-rules key, so
     /// what a run installs, what the floor table judges, and what the
-    /// check expects cannot disagree. A local-integration target names
-    /// the two rules that still hold against a direct push, and the
-    /// request and required-check rules are absent rather than installed
-    /// against the mode that needs the push.
+    /// check expects cannot disagree. A local-integration target keeps the
+    /// request and required-check rules, while its separately recorded
+    /// administrator bypass admits the deliberate trunk push.
     #[test]
     fn the_trunk_rules_follow_the_owned_rule_key() {
         let mut policy = crate::config::Protection::default();
@@ -839,16 +870,22 @@ mod tests {
             serde_json::json!([{ "context": "gate" }, { "context": "pr-title" }])
         );
 
-        policy.owned_trunk_rules = vec!["deletion".into(), "non_fast_forward".into()];
+        policy.bypass_actors = vec![crate::config::LOCAL_GITHUB_BYPASS.into()];
         let local = super::compose_trunk_rules(&policy, "gate", "pr-title");
         let parsed: Vec<serde_json::Value> = serde_json::from_str(&local).expect("the rules parse");
         let kinds: Vec<&str> = parsed
             .iter()
             .filter_map(|rule| rule["type"].as_str())
             .collect();
-        assert_eq!(kinds, ["deletion", "non_fast_forward"]);
-        assert!(!local.contains("pull_request"), "{local}");
-        assert!(!local.contains("required_status_checks"), "{local}");
+        assert_eq!(
+            kinds,
+            [
+                "deletion",
+                "non_fast_forward",
+                "pull_request",
+                "required_status_checks"
+            ]
+        );
     }
 
     /// One effective policy serves the body a step sends, the observer
@@ -857,11 +894,12 @@ mod tests {
     /// A target that stated nothing gets the compiled defaults, which
     /// describe forge integration because that is the shape this
     /// convention had before the axis existed — so under local
-    /// integration they are adjusted: the two rules no forge can apply
-    /// to a push are dropped, and the GitLab level moves off the zero
-    /// that would close the trunk to the push that mode ends in. A
+    /// integration they are adjusted: the GitHub administrator role gains
+    /// the bypass that admits the direct push, and the GitLab level moves
+    /// off the zero that would close the trunk to that push. A
     /// target that stated a policy keeps every value it stated, because
-    /// the floor table already judged it under the same mode.
+    /// the floor table already judged it under the same mode. The former
+    /// compiled local tuple is migrated before setup can reinstall it.
     #[test]
     fn the_effective_policy_follows_the_recorded_authority() {
         use crate::landing::Integration;
@@ -876,8 +914,12 @@ mod tests {
         let silent = super::effective_protection(None, Integration::Local);
         assert_eq!(
             silent.owned_trunk_rules,
-            ["deletion".to_owned(), "non_fast_forward".to_owned()],
-            "no forge can apply a request rule to a push"
+            crate::config::Protection::default().owned_trunk_rules,
+            "local integration retains the release request's atomic check"
+        );
+        assert_eq!(
+            silent.bypass_actors,
+            [crate::config::LOCAL_GITHUB_BYPASS.to_owned()]
         );
         assert_eq!(
             silent.gitlab.push_access_level, 40,
@@ -890,5 +932,20 @@ mod tests {
         let held = super::effective_protection(Some(&stated), Integration::Local);
         assert_eq!(held.gitlab.push_access_level, 0, "a stated value wins");
         assert_eq!(held.owned_trunk_rules, ["deletion".to_owned()]);
+
+        let legacy = crate::config::Protection {
+            owned_trunk_rules: vec!["deletion".into(), "non_fast_forward".into()],
+            gitlab: crate::config::Gitlab {
+                push_access_level: 40,
+                ..crate::config::Gitlab::default()
+            },
+            ..crate::config::Protection::default()
+        };
+        let migrated = super::effective_protection(Some(&legacy), Integration::Local);
+        assert_eq!(
+            migrated,
+            crate::config::local_protection(),
+            "setup cannot reinstall the legacy policy while upgrade remains able to read it"
+        );
     }
 }

@@ -1,6 +1,6 @@
 //! The single owner of configuration policy judgments and their method sources.
 
-use super::{Config, Protection, invalid};
+use super::{Config, LOCAL_GITHUB_BYPASS, Protection, invalid, legacy_local_protection};
 use crate::error::RkError;
 use crate::landing::Integration;
 
@@ -30,12 +30,6 @@ const SHARED: &[Floor] = &[
         minimum: "refs/tags/v* or refs/tags/*, covering every published version",
         heading: "A published version is immutable",
         accepts: |p| matches!(p.tag_pattern.as_str(), "refs/tags/v*" | "refs/tags/*"),
-    },
-    Floor {
-        key: "protection.bypass_actors",
-        minimum: "empty",
-        heading: SQUASH,
-        accepts: |p| p.bypass_actors.is_empty(),
     },
     Floor {
         key: "protection.allowed_merge_methods",
@@ -88,6 +82,12 @@ const SHARED: &[Floor] = &[
 /// What a forge-integrated trunk adds: the request rule, the check the
 /// request must carry, and the review policy above them.
 const FORGE_ONLY: &[Floor] = &[
+    Floor {
+        key: "protection.bypass_actors",
+        minimum: "empty",
+        heading: SQUASH,
+        accepts: |p| p.bypass_actors.is_empty(),
+    },
     Floor {
         key: "protection.strict_required_status_checks",
         minimum: "true",
@@ -150,25 +150,39 @@ const FORGE_ONLY: &[Floor] = &[
     },
 ];
 
-/// What a locally integrated trunk keeps in their place.
+/// What a locally integrated trunk changes.
 ///
-/// The request rule and the required-check rule are gone, because no
-/// forge can require a check before the push that starts it, and the
-/// push is the mechanism this mode uses. What still holds against a
-/// direct push stays: no deletion and no force-push. Who may make the
-/// push is the forge's own answer rather than a rule this table can
-/// floor on both forges — GitLab names a level, and a GitHub ruleset
-/// carries no allowed-pushers list — so the one thing floored here is
-/// that a stated GitLab level is not broad enough to name every writer.
+/// GitHub keeps the request and strict-check rules so they can hold a
+/// release request on the trunk it was tested against. The repository
+/// administrator alone bypasses them for the direct push this mode exists
+/// to make. GitLab keeps its native access-level answer.
 const LOCAL_ONLY: &[Floor] = &[
     Floor {
-        key: "protection.owned_trunk_rules",
-        minimum: "contains deletion, non_fast_forward",
+        key: "protection.bypass_actors",
+        minimum: "exactly [repository-admin]",
         heading: SQUASH,
+        accepts: |p| p.bypass_actors == [LOCAL_GITHUB_BYPASS] || legacy_local_protection(p),
+    },
+    Floor {
+        key: "protection.strict_required_status_checks",
+        minimum: "true",
+        heading: REQUEST,
+        accepts: |p| p.strict_required_status_checks,
+    },
+    Floor {
+        key: "protection.owned_trunk_rules",
+        minimum: "contains deletion, non_fast_forward, pull_request, required_status_checks",
+        heading: REQUEST,
         accepts: |p| {
-            ["deletion", "non_fast_forward"]
-                .iter()
-                .all(|rule| p.owned_trunk_rules.iter().any(|owned| owned == rule))
+            [
+                "deletion",
+                "non_fast_forward",
+                "pull_request",
+                "required_status_checks",
+            ]
+            .iter()
+            .all(|rule| p.owned_trunk_rules.iter().any(|owned| owned == rule))
+                || legacy_local_protection(p)
         },
     },
     Floor {
@@ -180,6 +194,39 @@ const LOCAL_ONLY: &[Floor] = &[
         minimum: "at least 40 (maintainers alone); 0 is stricter and closes the trunk entirely",
         heading: SQUASH,
         accepts: |p| p.gitlab.push_access_level == 0 || p.gitlab.push_access_level >= 40,
+    },
+    Floor {
+        key: "protection.required_approving_review_count",
+        minimum: "at least 0",
+        heading: REQUEST,
+        accepts: |p| p.required_approving_review_count >= 0,
+    },
+    Floor {
+        key: "protection.dismiss_stale_reviews_on_push",
+        minimum: "false; true is stricter",
+        heading: REQUEST,
+        accepts: |p| {
+            let _ = p.dismiss_stale_reviews_on_push;
+            true
+        },
+    },
+    Floor {
+        key: "protection.require_code_owner_review",
+        minimum: "false; true is stricter",
+        heading: REQUEST,
+        accepts: |p| {
+            let _ = p.require_code_owner_review;
+            true
+        },
+    },
+    Floor {
+        key: "protection.require_last_push_approval",
+        minimum: "false; true is stricter",
+        heading: REQUEST,
+        accepts: |p| {
+            let _ = p.require_last_push_approval;
+            true
+        },
     },
 ];
 
@@ -243,6 +290,7 @@ mod tests {
         check(&Config::default()).expect("defaults meet every floor");
         let mut local = Config::default();
         local.git.integration = Some(Integration::Local);
+        local.protection = crate::config::local_protection();
         check(&local).expect("defaults meet every local floor too");
     }
 
@@ -290,7 +338,8 @@ mod tests {
         assert!(error.contains("protection.owned_trunk_rules"), "{error}");
         assert!(error.contains("pull_request"), "{error}");
         config.git.integration = Some(Integration::Local);
-        check(&config).expect("the same policy holds under local integration");
+        config.protection.gitlab.push_access_level = 40;
+        check(&config).expect("the legacy local policy remains readable for migration");
     }
 
     #[test]
@@ -305,6 +354,7 @@ mod tests {
     fn a_local_target_still_refuses_a_developer_wide_trunk_push() {
         let mut config = Config::default();
         config.git.integration = Some(Integration::Local);
+        config.protection = crate::config::local_protection();
         config.protection.gitlab.push_access_level = 30;
         let error = check(&config)
             .expect_err("developer level is everyone")
