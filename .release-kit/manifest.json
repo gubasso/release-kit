@@ -1,6 +1,6 @@
 {
   "schema_version": 10,
-  "rk_version": "0.8.1",
+  "rk_version": "0.8.2",
   "origin": "adopt",
   "landed_at": "2026-08-30T00:14:29Z",
   "profile": {
@@ -29,7 +29,9 @@
   "parameters": {
     "repo": "gubasso/release-kit",
     "security_contact": "",
-    "security_response": "best-effort"
+    "security_response": "best-effort",
+    "required_check": "gate",
+    "required_workflow": "ci"
   },
   "files": [
     {
@@ -45,7 +47,7 @@
     {
       "destination": ".github/workflows/release-plz.yml",
       "kind": "rendered",
-      "sha256": "dae0bfc1282b30535df0a13562b0b3ea5b4ff59af63009301f5ee86a9406c968"
+      "sha256": "87f28e0b4ea955742b07090327360bf8324b004b5fad56e0239a3d7d9e6808ec"
     },
     {
       "destination": ".github/workflows/scorecard.yml",
@@ -55,7 +57,7 @@
     {
       "destination": ".pre-commit-config.yaml",
       "kind": "rendered",
-      "sha256": "08d2e7ed97600b1cddb940ed273f32cca04db1d9a80e0c1097c4996b5b128cc3",
+      "sha256": "00cd0e8d543612be4e0db105b9a1a49e7afa709068772f7df4306704d1c07f02",
       "placement": "region"
     },
     {

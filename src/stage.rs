@@ -38,7 +38,7 @@ use crate::projection::{Placement, Projection};
 use crate::skills;
 
 /// The shape version of the stage receipt and of the `rk stage` report.
-pub const STAGE_SCHEMA: &str = "rk.stage/4";
+pub const STAGE_SCHEMA: &str = "rk.stage/5";
 
 /// The receipt's name at the stage root.
 pub const RECEIPT_NAME: &str = "stage.json";
@@ -129,6 +129,13 @@ pub struct Parameters {
     pub security_contact: String,
     /// The acknowledgment window.
     pub security_response: String,
+    /// The check the release gate believes, empty where nothing answered it.
+    #[serde(default)]
+    pub required_check: String,
+    /// The workflow whose completion wakes the release gate, empty where
+    /// nothing answered it.
+    #[serde(default)]
+    pub required_workflow: String,
 }
 
 impl From<&Params> for Parameters {
@@ -140,6 +147,8 @@ impl From<&Params> for Parameters {
             repo: params.repo().to_owned(),
             security_contact: params.security_contact().to_owned(),
             security_response: params.security_response().to_owned(),
+            required_check: params.required_check().to_owned(),
+            required_workflow: params.required_workflow().to_owned(),
         }
     }
 }
@@ -952,6 +961,8 @@ mod tests {
             },
             repo: "acme/widget".into(),
             security_contact: String::new(),
+            required_check: String::new(),
+            required_workflow: String::new(),
             security_response: "best-effort".into(),
         }
     }
@@ -1003,7 +1014,7 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&receipt).expect("a receipt serializes"),
             format!(
-                r#"{{"schema":"rk.stage/4","rk_version":"0.0.0","target":"/tmp/t","stage_root":"/tmp/s","parameters":{{"profile":{{"technologies":["rust"],"forge":"github","release":{{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}}}},"git":{{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"}},"capabilities":{{"nix_packaging":false,"reporting_policy":true,"scorecard":false}},"repo":"acme/widget","security_contact":"","security_response":"best-effort"}},"capabilities":[],"receipt_schema_version":6,"candidates":[{{"destination":"AGENTS.md","kind":"rendered","placement":"region","sha256":"{}","region_sha256":"{}","sources":["blocks/routing.md.in"]}},{{"destination":"release-plz.toml","kind":"seeded","placement":"whole","sha256":"{}","sources":["snippets/rust/github/release-plz.toml"]}}],"omissions":[{{"destination":"flake.nix","reason":"the target already carries flake.nix"}}],"collisions":[],"retired":["old.yml"],"seeded_present":["release-plz.toml"],"state_present":[],"reference":["CHANGELOG.md","guidance","method","bindings","runbooks","forges","skills/rk-setup","skill-shared"]}}"#,
+                r#"{{"schema":"rk.stage/5","rk_version":"0.0.0","target":"/tmp/t","stage_root":"/tmp/s","parameters":{{"profile":{{"technologies":["rust"],"forge":"github","release":{{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}}}},"git":{{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"}},"capabilities":{{"nix_packaging":false,"reporting_policy":true,"scorecard":false}},"repo":"acme/widget","security_contact":"","security_response":"best-effort","required_check":"","required_workflow":""}},"capabilities":[],"receipt_schema_version":6,"candidates":[{{"destination":"AGENTS.md","kind":"rendered","placement":"region","sha256":"{}","region_sha256":"{}","sources":["blocks/routing.md.in"]}},{{"destination":"release-plz.toml","kind":"seeded","placement":"whole","sha256":"{}","sources":["snippets/rust/github/release-plz.toml"]}}],"omissions":[{{"destination":"flake.nix","reason":"the target already carries flake.nix"}}],"collisions":[],"retired":["old.yml"],"seeded_present":["release-plz.toml"],"state_present":[],"reference":["CHANGELOG.md","guidance","method","bindings","runbooks","forges","skills/rk-setup","skill-shared"]}}"#,
                 Digest::of(b"a"),
                 Digest::of(b"r"),
                 Digest::of(b"b")

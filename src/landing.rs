@@ -506,6 +506,8 @@ mod tests {
                                     repo: "acme/team/widget".to_owned(),
                                     security_contact: String::new(),
                                     security_response: crate::config::RESPONSE_DEFAULT.to_owned(),
+                                    required_check: "gate".to_owned(),
+                                    required_workflow: "ci".to_owned(),
                                 },
                                 files: Vec::new(),
                                 pins: std::collections::BTreeMap::new(),
@@ -582,6 +584,9 @@ mod tests {
                 release_mode: Some(ReleaseMode::Automatic),
                 release_driver: Some(tech),
                 style,
+                // GitLab refuses both answers, because it names no check.
+                required_check: (resolved.forge == "github").then_some("gate"),
+                required_workflow: (resolved.forge == "github").then_some("ci"),
                 trunk: None,
                 checkout_mode: Some(checkout_mode),
                 integration: None,
@@ -1185,6 +1190,57 @@ mod tests {
         }
     }
 
+    /// Both sweep notes invite the project to name its own local-only
+    /// checks, so the pairing that starts empty still teaches the
+    /// mechanism rather than only the one that starts full.
+    ///
+    /// SATISFIES git:a-check-declares-where-it-runs
+    #[test]
+    fn a_landed_sweep_note_invites_the_projects_own_skips() {
+        let with_skip = hooks_block_for(CheckoutMode::LinkedWorktree, Integration::Local);
+        assert!(
+            with_skip.contains("SKIP=rk-worktree-location in"),
+            "{with_skip}"
+        );
+        assert!(with_skip.contains("local-only"), "{with_skip}");
+        assert!(with_skip.contains("the value is a list the"), "{with_skip}");
+
+        let without = hooks_block_for(CheckoutMode::MainWorktree, Integration::Local);
+        assert!(
+            without.contains("A CI sweep needs no SKIP here"),
+            "{without}"
+        );
+        assert!(without.contains("local-only"), "{without}");
+    }
+
+    /// The pre-integrate note teaches the stage assignment and the scope
+    /// assignment together, because a check assigned a stage and no scope
+    /// is still unclassified.
+    ///
+    /// SATISFIES git:a-check-declares-where-it-runs
+    #[test]
+    fn a_landed_integrate_note_names_both_axes() {
+        for mode in [CheckoutMode::LinkedWorktree, CheckoutMode::MainWorktree] {
+            let local = hooks_block_for(mode, Integration::Local);
+            assert!(
+                local.contains("pre-commit run --hook-stage manual --all-files"),
+                "{local}"
+            );
+            assert!(
+                local.contains("continuous integration invoke the same stages"),
+                "{local}"
+            );
+            assert!(
+                local.contains("guards one side alone"),
+                "the note states the consequence: {local}"
+            );
+            // The note belongs to the mode that has a pre-integrate gate.
+            let forge = hooks_block_for(mode, Integration::Forge);
+            assert!(!forge.contains("--hook-stage manual"), "{forge}");
+        }
+    }
+
+    /// One definition of an ill-formed hook file, for every reader: the
     /// One definition of an ill-formed hook file, for every reader: the
     /// well-formed shapes pass and each ambiguous shape names a defect.
     #[test]

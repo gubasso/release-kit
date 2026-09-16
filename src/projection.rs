@@ -1162,6 +1162,141 @@ pub const LINE_PREFIX_TOKEN: &[u8] = b"RK_LINE_PREFIX";
 /// This one substitutes first: the plain token is its own prefix.
 pub const LINE_PREFIX_RE_TOKEN: &[u8] = b"RK_LINE_PREFIX_RE";
 
+/// The token a release workflow's job condition carries, so that a
+/// rendering which adds a second trigger cannot let the new event enter a
+/// job written for a push.
+///
+/// It is a token rather than a span because it substitutes in place, once
+/// per job, and one span replaces one occurrence. It is written as a
+/// trailing YAML comment and carries the space in front of it, so the
+/// authored condition is an expression a workflow linter reads and every
+/// rendering that adds no trigger strips the comment whole.
+pub const PUSH_GUARD_TOKEN: &[u8] = b" # RK_PUSH_GUARD";
+
+/// The check the release gate judges.
+pub const REQUIRED_CHECK_TOKEN: &[u8] = b"RK_REQUIRED_CHECK";
+
+/// The workflow whose completion wakes the release gate.
+pub const REQUIRED_WORKFLOW_TOKEN: &[u8] = b"RK_REQUIRED_WORKFLOW";
+
+/// The head-branch shape the release driver gives its own request.
+pub const BRANCH_SHAPE_TOKEN: &[u8] = b"RK_BRANCH_SHAPE";
+
+/// The id of the job that opens and refreshes the release request.
+pub const REQUEST_JOB_TOKEN: &[u8] = b"RK_REQUEST_JOB";
+
+/// The gate's trigger block, added to a release workflow's `on` key.
+pub const RELEASE_GATE_TRIGGER: &str = "blocks/release-gate-trigger.yaml.in";
+
+/// The gate's own job, added to a release workflow.
+pub const RELEASE_GATE_JOB: &str = "blocks/release-gate-job.yaml.in";
+
+/// What a release driver's own release request is shaped like, and which
+/// job maintains it, where this release drives that driver on GitHub.
+///
+/// The branch shape is a structural second guard and never a proof of
+/// identity: the gate authenticates a request by its author, its base, and
+/// its head repository, all read back from the forge.
+#[must_use]
+pub fn release_driver_shape(driver: Option<&str>) -> Option<(&'static str, &'static str)> {
+    match driver {
+        // release-plz names its own branch, and the release half already
+        // recognizes a bump by this prefix.
+        Some("rust") => Some(("release-plz-", "release-plz-pr")),
+        // The bash pipeline writes the branch itself, in the request job.
+        Some("bash") => Some(("chore/release-v", "release-request")),
+        // release-please's own branch module builds this prefix from the
+        // target branch, with an optional components or groups suffix, so
+        // the trunk token stands inside the shape and resolves with it.
+        Some("python") => Some((
+            "release-please--branches--RK_TRUNK_BRANCH",
+            "release-please-pr",
+        )),
+        _ => None,
+    }
+}
+
+/// The three replaceable spans of a release workflow under the rendering
+/// that gates its request, each as its ordered begin and end marker.
+///
+/// The markers are YAML comments, because a reader may open the snippet
+/// before any landing renders it, and each begin marker carries the
+/// newline and the indentation in front of it, so a landing that replaces
+/// nothing strips the pair and leaves the authored bytes exactly.
+///
+/// The spans are in file order: the trigger the gate wakes on, the
+/// standing arm the gate replaces, and the gate's own job.
+#[must_use]
+pub fn release_gate_spans(driver: Option<&str>) -> [(&'static [u8], &'static [u8]); 3] {
+    // The bash pipeline arms inside a shell script rather than in a step of
+    // its own, so its arm markers are shell comments at the script's own
+    // indentation. Every other marker is a YAML comment at column zero.
+    let arm: (&[u8], &[u8]) = if driver == Some("bash") {
+        (
+            b"\n          # RK_GATE_ARM_BEGIN",
+            b"\n          # RK_GATE_ARM_END",
+        )
+    } else {
+        (b"\n# RK_GATE_ARM_BEGIN", b"\n# RK_GATE_ARM_END")
+    };
+    [
+        (b"\n# RK_GATE_TRIGGER_BEGIN", b"\n# RK_GATE_TRIGGER_END"),
+        arm,
+        (b"\n# RK_GATE_JOB_BEGIN", b"\n# RK_GATE_JOB_END"),
+    ]
+}
+
+/// Whether this parameter set renders a release workflow that gates its
+/// own request.
+///
+/// One shape does: GitHub, an automatic release, the trunk style, and
+/// local integration, at a driver this release ships a request shape for.
+/// Under forge integration the trunk ruleset requires the check before the
+/// merge, so the authored standing arm is exact.
+#[must_use]
+fn release_gates(params: &Params) -> bool {
+    params.forge() == Some("github")
+        && params.integration() == crate::landing::Integration::Local
+        && params.release_mode() == ReleaseMode::Automatic
+        && params.style() == Some(crate::landing::Style::Trunk)
+        && !params.required_check().is_empty()
+        && !params.required_workflow().is_empty()
+        && release_driver_shape(params.driver()).is_some()
+}
+
+/// The replacement for each release gate span under one parameter set, or
+/// `None` where the authored standing arm stands.
+///
+/// One shape renders the gate: GitHub, an automatic release, the trunk
+/// style, and local integration, at a driver this release ships a request
+/// shape for. Under forge integration the trunk ruleset requires the check
+/// before the merge, so the authored arm is exact and every marker strips.
+///
+/// # Errors
+///
+/// A block this binary does not embed, a defect in the binary.
+fn release_gate_replacements(params: &Params) -> Result<[Option<Vec<u8>>; 3], RkError> {
+    if !release_gates(params) {
+        return Ok([None, None, None]);
+    }
+    // A span's interior opens where its begin marker's newline stood, so
+    // each replacement states its own leading newline and no trailing one.
+    let opened = |block: &str| -> Result<Vec<u8>, RkError> {
+        let text = embedded_block(block)?;
+        Ok(substitute_tokens(
+            format!("\n{}", text.trim_end_matches('\n')).as_bytes(),
+            params,
+        ))
+    };
+    Ok([
+        Some(opened(RELEASE_GATE_TRIGGER)?),
+        // The standing arm goes: the gate merges, and an armed request
+        // would merge on the forge's own answer rather than on this one.
+        Some(Vec::new()),
+        Some(opened(RELEASE_GATE_JOB)?),
+    ])
+}
+
 /// The three replaceable spans of a landed security policy, each as its
 /// ordered begin and end marker.
 ///
@@ -1249,6 +1384,29 @@ fn replace_span(baseline: &[u8], begin: &[u8], end: &[u8], value: Option<&[u8]>)
 /// than being read as one more substitution site.
 #[must_use]
 pub fn render(baseline: &[u8], params: &Params) -> Vec<u8> {
+    let mut out = substitute_tokens(baseline, params);
+    // The release gate's spans resolve after the tokens and before the
+    // policy's, and each replacement carries the same token pass, so a
+    // composed block answers the same parameters the authored file does.
+    // A block this binary cannot read leaves the authored arm standing,
+    // which is the rendering every other shape already takes.
+    if let Ok(values) = release_gate_replacements(params) {
+        for ((begin, end), value) in release_gate_spans(params.driver()).iter().zip(values) {
+            out = replace_span(&out, begin, end, value.as_deref());
+        }
+    }
+    for ((begin, end), value) in SECURITY_SPANS.iter().zip(security_replacements(params)) {
+        out = replace_span(&out, begin, end, value.as_deref());
+    }
+    out
+}
+
+/// Every landing token substituted, the spans left alone.
+///
+/// A composed block answers the same tokens an authored file does, so this
+/// half is what both pass through.
+#[must_use]
+fn substitute_tokens(baseline: &[u8], params: &Params) -> Vec<u8> {
     let repo = params.repo();
     let owner = repo.split('/').next().unwrap_or(repo);
     let mut out = substitute(baseline, OWNER_TOKEN, owner.as_bytes());
@@ -1256,14 +1414,36 @@ pub fn render(baseline: &[u8], params: &Params) -> Vec<u8> {
         out = substitute(&out, STYLE_TOKEN, style.as_str().as_bytes());
     }
     out = substitute(&out, SCOPE_SHAPE_TOKEN, SCOPE_SHAPE.as_bytes());
+    // The branch shape substitutes before the trunk, because one driver's
+    // shape names the trunk inside itself; the trunk token is its own
+    // prefix, in the same way the escaped line prefix goes before the
+    // plain one.
+    let (shape, job) = release_driver_shape(params.driver()).unwrap_or_default();
+    out = substitute(&out, BRANCH_SHAPE_TOKEN, shape.as_bytes());
+    out = substitute(&out, REQUEST_JOB_TOKEN, job.as_bytes());
     out = substitute(&out, TRUNK_BRANCH_TOKEN, params.trunk().as_bytes());
     let escaped = params.line_prefix().replace('/', "\\/");
     out = substitute(&out, LINE_PREFIX_RE_TOKEN, escaped.as_bytes());
     out = substitute(&out, LINE_PREFIX_TOKEN, params.line_prefix().as_bytes());
+    out = substitute(
+        &out,
+        REQUIRED_CHECK_TOKEN,
+        params.required_check().as_bytes(),
+    );
+    out = substitute(
+        &out,
+        REQUIRED_WORKFLOW_TOKEN,
+        params.required_workflow().as_bytes(),
+    );
+    // The push guard is non-empty exactly where a second trigger is added,
+    // and the gate is what adds one.
+    let guard: &[u8] = if release_gates(params) {
+        b" && github.event_name == 'push'"
+    } else {
+        b""
+    };
+    out = substitute(&out, PUSH_GUARD_TOKEN, guard);
     out = substitute(&out, REPO_TOKEN, repo.as_bytes());
-    for ((begin, end), value) in SECURITY_SPANS.iter().zip(security_replacements(params)) {
-        out = replace_span(&out, begin, end, value.as_deref());
-    }
     out
 }
 

@@ -85,7 +85,7 @@ rk worktree prune --apply                # check: pruned; the seat and the branc
 
 ### 4a. When the push turns the trunk red
 
-The local path cannot see the remote checks before the push, because the push is what starts them. Watch the run the push started and the release request it refreshed. A failure blocks the release request, so nothing publishes. Repair it as a fresh implementation, integrated the same way: no local integration is erased, and nothing is reverted by hand.
+The local path cannot see the remote checks before the push, because the push is what starts them. Watch the run the push started and the release request it refreshed. A failure blocks the release request, so nothing publishes: under this mode the landed release workflow holds the request itself, on the check `setup.required_check` names, and its own `release-gate` job log says which check it read and what that check concluded. Repair it as a fresh implementation, integrated the same way: no local integration is erased, and nothing is reverted by hand.
 
 ## 5. Release
 

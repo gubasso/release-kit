@@ -35,7 +35,8 @@ contact = RK_CONFIG_SECURITY_CONTACT # P: one line naming who receives a report 
 response = RK_CONFIG_SECURITY_RESPONSE # P: the acknowledgment window the policy promises: best-effort, 1 day, <n> days, 1 business day, or <n> business days
 
 [setup]
-required_check = RK_CONFIG_SETUP_REQUIRED_CHECK # N: the check the merge must pass; empty asks for --required-check
+required_check = RK_CONFIG_SETUP_REQUIRED_CHECK # P: the check the release gate believes, and the check the trunk ruleset requires under forge integration
+required_workflow = RK_CONFIG_SETUP_REQUIRED_WORKFLOW # P: the workflow name whose completion wakes the release gate under local integration; GitHub only
 retired_branches = RK_CONFIG_SETUP_RETIRED_BRANCHES # N: long-lived branches retired by the trunk
 release_lines = RK_CONFIG_SETUP_RELEASE_LINES # N: true runs protect-release-lines in a full apply
 excluded_steps = RK_CONFIG_SETUP_EXCLUDED_STEPS # N: step = why this target does not run it; `rk setup check` reports it and does not judge it

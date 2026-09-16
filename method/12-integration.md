@@ -40,7 +40,23 @@ One rule produces both columns: every check runs at the last moment before the w
 pre-commit run --hook-stage manual --all-files
 ```
 
-Release-kit reads no hook identifier, no revision, no language, and no test category. The project owns everything in `.pre-commit-config.yaml` outside the marked block, owns its stage assignment, and owns its judgment about which checks are too expensive for a desk and which belong to continuous integration alone. That judgment lives in the project's own agent instructions, and the `rk-setup` skill is what researches the current hooks for the project's technologies.
+Release-kit reads no hook identifier, no revision, no language, and no test category. The project owns everything in `.pre-commit-config.yaml` outside the marked block, owns its stage assignment, and owns the second axis below. That judgment lives in the project's own agent instructions, and the `rk-setup` skill is what researches the current hooks for the project's technologies.
+
+## The scope axis
+
+The stage says when a check runs. Scope says where it can run at all, and it comes from the same boundary rule: a check runs at every boundary it can meaningfully guard, and the two values that are not `both` name the two ways a check cannot.
+
+| Scope        | What it means                                          | How a project expresses it                              |
+| ------------ | ------------------------------------------------------ | ------------------------------------------------------- |
+| `both`       | the check runs at a desk and in continuous integration | a hook at its native stage, with CI invoking that stage |
+| `local-only` | the check is meaningless in continuous integration     | a hook whose id the CI sweep names in `SKIP`            |
+| `ci-only`    | the check is meaningless at a desk                     | no hook; it names the remote boundary it guards and why |
+
+Most checks are `both`, and that is the value with a rule attached: such a check must have a local execution path and a remote execution path of equivalent coverage, not identical commands. A desk that runs a suite through a devshell and a runner that runs it through a task runner satisfy it; a check that exists on one side alone and claims `both` does not.
+
+Moment has two forms, because a `ci-only` check has no honest hook stage. A check with a local path declares its earliest native stage. A `ci-only` check declares the remote boundary it guards instead, ordinarily the pull request, beside the reason it cannot run at a desk.
+
+Under local integration the `manual` stage is the strongest gate a project has, so a project whose continuous integration does not invoke that stage has a gate on one side of the boundary only. That is the failure this axis exists to make visible.
 
 Continuous integration invokes the same stages the project declared, through the project's own devshell or task runner. Release-kit lands no CI workflow and judges no parity: a claim reverse-engineered from a forge workflow file produces refusals a project cannot act on, so the convention is prose and an agent holds it at authoring time. `rk status --check` judges the marked block it owns and nothing else.
 
@@ -70,7 +86,7 @@ A recorded default binds no single execution. `--forge` and `--local` select the
 
 Under forge integration the trunk keeps every protection [setup](./02-setup.md) installs: no direct push, no force-push, a request carrying the named passing check, and squash as the only merge method.
 
-Under local integration the forge keeps what still holds against a direct push: no deletion and no force-push. It drops the request rule and the required-check rule, because no forge can require a check before the push that starts it. Who may make that push is the forge's own answer rather than a rule this convention installs: `protection.gitlab.push_access_level` names a level on GitLab, and on GitHub it is repository write access, because a ruleset carries no allowed-pushers list and the one mechanism that would name them is a bypass actor, which the empty-bypass floor forbids. `rk setup` installs the set the recorded mode names and its check expects that same set, so a target that records `local` is not handed a trunk its own integrations cannot push. Every tag protection and every release-request protection is unchanged, in both modes.
+Under local integration the forge keeps what still holds against a direct push: no deletion and no force-push. It drops the request rule and the required-check rule, because no forge can require a check before the push that starts it. Who may make that push is the forge's own answer rather than a rule this convention installs: `protection.gitlab.push_access_level` names a level on GitLab, and on GitHub it is repository write access, because a ruleset carries no allowed-pushers list and the one mechanism that would name them is a bypass actor, which the empty-bypass floor forbids. `rk setup` installs the set the recorded mode names and its check expects that same set, so a target that records `local` is not handed a trunk its own integrations cannot push. Every tag protection is unchanged in both modes. The release-request protection moves rather than vanishing: the forge mode holds the request with the trunk's own required-check rule, and the local mode holds it in the landed release workflow, which wakes when the named workflow completes, proves the request's identity against the forge, and merges only once the same recorded check has concluded successfully for the head it merges. One check name, two authorities, and the mode decides which one carries it.
 
 The desk and the forge remain the two distances [setup](./02-setup.md) describes. What changes is how far the forge's refusal reaches. A hook is discipline and not a boundary: it dies to `--no-verify` in either mode. What catches a bypass is the integration transaction, the trunk gate, the post-push run, and the release request that refuses to go green on a broken trunk.
 

@@ -5,21 +5,6 @@ fmt:
     cargo fmt
     dprint fmt
 
-lint:
-    cargo fmt --check
-    cargo clippy --all-targets --all-features -- -D warnings
-    cargo deny check
-    dprint check
-    editorconfig-checker -disable-insert-final-newline
-    typos
-    markdownlint-cli2 "**/*.md" "#target/**"
-    pre-commit validate-config .pre-commit-config.yaml
-    cargo build -q
-    PATH="$(pwd)/target/debug:$PATH" pre-commit run --files $(rg --files --hidden -g '!.git')
-
-test:
-    cargo nextest run
-
 # The scratch round trip, end to end with the real binary: land, tune the
 # seeded file, upgrade, and assert the tune survived with the record moved
 # — the same again for the nix opt-in — then assert the published crate
@@ -42,7 +27,18 @@ build:
     grep -q '# tuned by the target' "$n/nix/package.nix"
     cargo nextest run --run-ignored ignored-only -E 'test(the_published_crate_carries_every_root) or test(the_published_crate_carries_the_two_new_roots) or test(the_landed_nix_capability_builds_end_to_end) or test(a_release_changing_a_destination_without_guidance_is_named)'
 
-check: lint test build
+# The pre-integrate gate, which is the one line `rk integrate` runs. Every
+# check this project classifies `both` is a hook at its declared stage, so
+# the desk and continuous integration reach the same set by invoking the
+# same stage rather than by anyone remembering to add a check twice.
+#
+# The build comes first because several hooks call this checkout's own rk,
+# which they find on PATH. Loading the configuration for the manual run is
+# what refuses an invalid pre-commit configuration, so no separate
+# validate step remains.
+check:
+    cargo build -q
+    PATH="$(pwd)/target/debug:$PATH" pre-commit run --hook-stage manual --all-files
 
 # Install this checkout as the user's rk, plus the user-scope agent skills.
 # The installed skills are this checkout's build artifact and never an edit

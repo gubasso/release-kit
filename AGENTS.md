@@ -44,7 +44,7 @@ This repository is the canonical knowledge product for the release-kit workflow.
 - Rust follows the exobrain CLI conventions: clap derive in `src/cli/`, one handler per subcommand in `src/commands/`, typed errors with a tested exit-code matrix in `src/error.rs`.
 - Every handler emits through the output boundary in `src/output.rs`; no direct printing in `commands/`, and every machine output carries a versioned, snapshot-tested schema per `distribution:machine-output-declares-its-schema`.
 - Every subcommand lands with its integration tests in `tests/cli.rs`.
-- Run `just check` before handoff. It lints, tests, and lands the rust files into a scratch target.
+- Run `just check` before handoff: it builds this checkout's `rk`, then runs the one line `rk integrate` runs, so the handoff gate and the integration gate are one set. Every check classified `both` is a hook at its declared stage, and CI reaches all of them by invoking that stage. Two are classified otherwise, each with its reason where it is expressed: `rk-worktree-location` is `local-only` and skipped in the CI sweep, because CI checks out detached on the main worktree; the `dist-plan` job is `ci-only` at the pull-request boundary, because `dist` is not in the devshell and the job installs it at the pin `dist-workspace.toml` carries.
 - `Cargo.toml` is the release source of truth. Every commit message is a scoped Conventional Commit; release-plz derives the version, the changelog, and the tag from them. Never author a tag: this repository runs its own convention, `rk method operate`.
 - Manage dependencies through cargo (`cargo add`, `cargo remove`, `cargo update`); never hand-edit versions in `Cargo.toml`.
 

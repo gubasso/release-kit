@@ -12,6 +12,7 @@
   - [`git:integration-mode-selects-the-authority-that-squashes` — Integration mode selects the authority that squashes](#gitintegration-mode-selects-the-authority-that-squashes--integration-mode-selects-the-authority-that-squashes)
   - [`git:the-release-request-integrates-at-the-forge` — The release request integrates at the forge](#gitthe-release-request-integrates-at-the-forge--the-release-request-integrates-at-the-forge)
   - [`git:the-manual-stage-is-the-pre-integrate-contract` — The manual stage is the pre-integrate contract](#gitthe-manual-stage-is-the-pre-integrate-contract--the-manual-stage-is-the-pre-integrate-contract)
+  - [`git:a-check-declares-where-it-runs` — A check declares where it runs](#gita-check-declares-where-it-runs--a-check-declares-where-it-runs)
   - [`git:a-local-integration-is-a-transaction` — A local integration is a transaction](#gita-local-integration-is-a-transaction--a-local-integration-is-a-transaction)
   - [`git:git-and-forge-terms-stay-explicit` — Git and forge terms stay explicit](#gitgit-and-forge-terms-stay-explicit--git-and-forge-terms-stay-explicit)
   - [`git:concurrent-pull-and-merge-requests-carry-the-tested-trunk` — Concurrent pull and merge requests carry the tested trunk](#gitconcurrent-pull-and-merge-requests-carry-the-tested-trunk--concurrent-pull-and-merge-requests-carry-the-tested-trunk)
@@ -98,15 +99,21 @@ Verify: `cargo nextest run -E 'test(integration) or test(params_from_a_record)'`
 
 ### `git:the-release-request-integrates-at-the-forge` — The release request integrates at the forge
 
-The release request MUST integrate at the forge in both integration modes, because merging it is the one event that authorizes the tag, the publish, the provenance, and the artifacts. The tag protections and the release-request protections MUST be identical under both modes, and no verb MAY offer a local path to a release.
+The release request MUST integrate at the forge in both integration modes, because merging it is the one event that authorizes the tag, the publish, the provenance, and the artifacts, and no verb MAY offer a local path to a release. The tag protections MUST be identical under both modes. The release request MUST merge only from a state whose named check concluded successfully, in both modes, and the authority that holds it MUST follow the integration mode: where the forge can require a check before a push, the trunk's own rule holds the request; where it cannot, the landed release workflow MUST hold it instead, on the same recorded check name. That gate MUST authenticate the request it merges from the forge's current answer rather than from the event that woke it — open, not a draft, based on the trunk, headed from the same repository, and authored by the release identity — MUST judge the named check for the exact head commit it merges, and MUST leave the request open on every other answer. A forge whose own mechanism requires the whole pipeline names no check and needs no such gate.
 
 #### Scenario: A local-integration target reaches a release
 
 - GIVEN a landed target whose recorded integration mode is `local`
 - WHEN the release-bearing protections are resolved for it
-- THEN they match a forge-integration target's, and the release still merges at the forge
+- THEN the tag protections match a forge-integration target's, and the release still merges at the forge
 
-Verify: `cargo nextest run -E 'test(the_tag_floors_hold_under_both_integration_modes)'`
+#### Scenario: A release request is gated under either authority
+
+- GIVEN two GitHub targets differing only in their recorded integration mode
+- WHEN each renders its release automation
+- THEN the forge-integration target arms the request behind the trunk's required check and the local-integration target renders a gate that judges the same recorded check name, and neither merges a request whose check has not concluded successfully
+
+Verify: `cargo nextest run -E 'test(the_tag_floors_hold_under_both_integration_modes) or test(the_release_request_is_gated_under_both_integration_modes)'`
 
 ### `git:the-manual-stage-is-the-pre-integrate-contract` — The manual stage is the pre-integrate contract
 
@@ -119,6 +126,18 @@ Release-kit MUST express the pre-integrate gate as one `pre-commit` run over the
 - THEN it invokes the stage as one command and names no hook the project declared
 
 Verify: `cargo nextest run -E 'test(the_gate_invokes_the_manual_stage)'`
+
+### `git:a-check-declares-where-it-runs` — A check declares where it runs
+
+A project MUST assign every check both a scope and a boundary moment, and the landed guidance MUST teach that assignment. Scope MUST be one of `both`, `local-only`, or `ci-only`. The moment MUST be a native `pre-commit` stage where the check has a local path, and a named remote boundary where the scope is `ci-only`, because a check that is not a hook has no honest hook stage. A check classified `both` MUST have a local execution path and a remote execution path of equivalent coverage rather than identical commands, and a check that is neither a hook nor a recorded `ci-only` check is unclassified, which is a defect in the project's own policy. This requires nothing of release-kit's readers: a scope declared forward by the author at the check duplicates nothing and infers nothing, where a parity claim derived backward from a workflow file infers intent that no file states, which is why `git:the-manual-stage-is-the-pre-integrate-contract` still refuses the second and this rule does not reintroduce it.
+
+#### Scenario: A project puts an expensive suite on the manual stage alone
+
+- GIVEN a project whose continuous integration invokes the default `pre-commit` stage while its expensive suite is declared on `manual` alone
+- WHEN the landed guidance is read
+- THEN it teaches that the two sides of the boundary must invoke the same stages, and no binary judges the project's workflow file to reach that conclusion
+
+Verify: `cargo nextest run -E 'test(a_landed_sweep_note_invites_the_projects_own_skips) or test(a_landed_integrate_note_names_both_axes)'`
 
 ### `git:a-local-integration-is-a-transaction` — A local integration is a transaction
 

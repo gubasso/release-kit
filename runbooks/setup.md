@@ -196,7 +196,8 @@ Automated, with 2b's exports in the environment. Run it on the host, not a conta
 
 ```bash
 rk setup step install-bot --target . --apply
-# check: reports the bot covering this repository
+# check: reports the bot covering this repository with the permissions its release automation needs
+# unsatisfied naming a permission: approve the App's updated permissions on the installation's own settings page; no token this run holds can grant them
 # refused on github: the grant write needs a user token; rk forge github walks the one it takes
 ```
 
@@ -385,7 +386,7 @@ git push origin master
 
 ### 4d. Install the hooks, last
 
-Last, because two of them refuse exactly what 4c just did. The landing splices a marked block of release-convention hooks into `.pre-commit-config.yaml`, under `repos:`, leaving the rest of the file the target's own — the commit-shape hooks, and the `rk-message` content guard that refuses a message carrying agent attribution or a reference to a git-ignored path, the release bot's request exempt by its title. A hook already doing one of these jobs — `committed`, `commitlint`, `gitlint`, another conventional-commit or branch-guard hook — is a duplicate to name, and the choice between it and the landed hook is the operator's, never a silent second hook doing the same job. On an existing config, verify the top level carries `default_install_hook_types: [pre-commit, commit-msg, pre-push]` — the splice cannot add a top-level key. Where the target's CI runs a `pre-commit run` sweep, set `SKIP=no-commit-to-branch` in that job's environment — and on a worktree-mode target the pair `SKIP=no-commit-to-branch,rk-worktree-location`, because a CI checkout is commonly detached on the main worktree: CI commits nothing, so the commit-time guards would refuse every trunk checkout they sweep.
+Last, because two of them refuse exactly what 4c just did. The landing splices a marked block of release-convention hooks into `.pre-commit-config.yaml`, under `repos:`, leaving the rest of the file the target's own — the commit-shape hooks, and the `rk-message` content guard that refuses a message carrying agent attribution or a reference to a git-ignored path, the release bot's request exempt by its title. A hook already doing one of these jobs — `committed`, `commitlint`, `gitlint`, another conventional-commit or branch-guard hook — is a duplicate to name, and the choice between it and the landed hook is the operator's, never a silent second hook doing the same job. On an existing config, verify the top level carries `default_install_hook_types: [pre-commit, commit-msg, pre-push]` — the splice cannot add a top-level key. Where the target's CI runs a `pre-commit run` sweep, set `SKIP=no-commit-to-branch` in that job's environment — and on a worktree-mode target the pair `SKIP=no-commit-to-branch,rk-worktree-location`, because a CI checkout is commonly detached on the main worktree: CI commits nothing, so the commit-time guards would refuse every trunk checkout they sweep. That value is a list the project owns the tail of: append the id of every check it classifies `local-only`, and have the sweep invoke the same stages the project assigned, so a check runs on both sides of the boundary or says why it cannot.
 
 ```bash
 pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push

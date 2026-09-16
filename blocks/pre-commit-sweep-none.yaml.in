@@ -1,2 +1,3 @@
 # A CI sweep needs no SKIP here: no hook in this block refuses a trunk
-# checkout.
+# checkout. Set one where this project classifies a check of its own
+# local-only, naming that hook's id.

@@ -107,6 +107,18 @@ Three upstream facts carry the arming steps the landed release workflows render.
 
 Bearing: `landing:the-arming-identity-is-the-bot`, both scenarios, and the arming steps in every landed release workflow. The default-token fact is the single most load-bearing citation in the arming design: it is why the arm sits in the job that already mints the bot token.
 
+## Gating the release request
+
+Five upstream facts carry the release gate the landed GitHub release workflows render under local integration, verified on 2026-09-16. GitHub's recursion guard is the first: events raised by a job running under `GITHUB_TOKEN` create no workflow run, and `workflow_run` is documented as the trigger that observes another workflow finishing, which is why a check-run event cannot carry the gate and this one can. The `workflow_run` trigger requires a `workflows` key naming a workflow by its `name`, so the waking answer is a workflow name and never a filename. The check-runs endpoint for a commit takes `check_name` and `filter=latest`, which is how the gate reads one current result for the exact head it judged. Each release driver names its own request branch: release-plz opens `release-plz-<...>`, the bash pipeline writes `chore/release-v<version>` itself, and release-please's branch module builds `release-please--branches--<targetBranch>`, with an optional `--components--` or `--groups--` suffix. One App actor is rendered three ways, which decides which answer the gate may read: the pulls endpoint states `user.login` as the App's slug with a `[bot]` suffix and `user.type` as `Bot`, the forge CLI's own pull-request list renders the same actor as `app/<slug>`, and GraphQL returns the bare slug under a `Bot` typename, so a filter written against either of the last two would refuse every release.
+
+- <https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows>
+- <https://docs.github.com/en/rest/checks/runs>
+- <https://github.com/googleapis/release-please/blob/main/src/util/branch-name.ts>
+- <https://docs.github.com/en/rest/pulls/pulls>
+- <https://cli.github.com/manual/gh_pr_merge>
+
+Bearing: `git:the-release-request-integrates-at-the-forge` and the release gate every landed GitHub release workflow renders under local integration. The branch forms are a structural second guard alone: the gate authenticates a request by its author, its base, and its head repository, every one read back from the forge, so a wrong branch form refuses a release and admits none.
+
 ## The Nix capability's destinations
 
 The Nix-owned destinations the projection names, verified against the Nix reference documentation on 2026-09-04. The flake file must be named `flake.nix` and live in the repository's root directory: the reference manual's flake description states that a flake is a filesystem tree whose root directory contains `flake.nix`, and the `nix flake` reference documents resolution of a `github:`/`git+https:` reference to the flake file at the tree's root. `flake.lock` is written beside it by the lock machinery, in the same root, and is maintained by Nix's own commands after landing — which is why it lands as a `state` file. The `nix/` subdirectory for auxiliary expressions is a placement release-kit chooses for its own seed, not a Nix requirement: the seed's `flake.nix` names the path explicitly, so a target may move it and adjust the call.

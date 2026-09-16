@@ -15,6 +15,8 @@ permissions: {}
 on:
   push:
     branches: [RK_TRUNK_BRANCH, 'RK_LINE_PREFIX**']
+# RK_GATE_TRIGGER_BEGIN
+# RK_GATE_TRIGGER_END
 
 jobs:
   # The release request. git-cliff maintains no pull request on its own, so
@@ -22,7 +24,7 @@ jobs:
   # request branch, and opens or refreshes the pull request. Force-pushing the
   # branch is the refresh: the request always reflects the pushed branch's tip.
   release-request:
-    if: github.repository_owner == 'OWNER'
+    if: github.repository_owner == 'OWNER' # RK_PUSH_GUARD
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -83,6 +85,7 @@ jobs:
               --title "chore(release): v$next" \
               --body "Bumps VERSION to $next and rewrites the changelog. Merging this request is the release: the bump push tags v$next and attaches the tarball."
           fi
+          # RK_GATE_ARM_BEGIN
           # The trunk style's standing arm, re-applied on every refresh; the
           # app token is what keeps the eventual merge able to start this
           # workflow's release half, and the lines style leaves the merge a
@@ -97,6 +100,7 @@ jobs:
           fi
           gh pr merge "$branch" --auto --squash --delete-branch
           echo "armed the release request for v$next."
+          # RK_GATE_ARM_END
 
   # The release itself. Only the push that lands the bot's own bump releases —
   # the VERSION comparison against the parent commit is the guard — so an
@@ -104,7 +108,7 @@ jobs:
   # as a pure function of the tree, attest it, and only then attach it with
   # its checksum: nothing is publicly reachable before its attestation exists.
   tag-and-attach:
-    if: github.repository_owner == 'OWNER'
+    if: github.repository_owner == 'OWNER' # RK_PUSH_GUARD
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -182,3 +186,5 @@ jobs:
           fi
           gh release create "v$VERSION" dist/*.tar.gz dist/*.sha256 \
             --title "v$VERSION" --notes-file notes.md
+# RK_GATE_JOB_BEGIN
+# RK_GATE_JOB_END

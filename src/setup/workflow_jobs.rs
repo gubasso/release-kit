@@ -218,6 +218,10 @@ fn is_glob(pattern: &str) -> bool {
 /// One workflow file that runs on a pull request.
 struct Workflow {
     name: String,
+    /// The literal top-level `name:` value, where the file states one.
+    /// This is what a `workflow_run` trigger names, and it is not the
+    /// filename: a trigger that names the file matches nothing.
+    declared_name: Option<String>,
     trigger: Trigger,
     jobs: Vec<Job>,
 }
@@ -271,6 +275,7 @@ fn read_workflows(dir: &Utf8Path, trunk: &str) -> (Vec<Workflow>, Vec<String>) {
                 if let Some(trigger) = request_trigger(&text, trunk) {
                     workflows.push(Workflow {
                         name,
+                        declared_name: declared_name(&text),
                         trigger,
                         jobs: jobs(&text),
                     });
@@ -401,6 +406,78 @@ pub fn faults(report: &GateReport, required_check: &str, trunk: &str) -> Option<
         ));
     }
     (!parts.is_empty()).then(|| parts.join("; "))
+}
+
+/// The workflow's literal top-level `name:` value, where it states one
+/// that is not an expression.
+///
+/// A `workflow_run` trigger names a workflow by this value and by nothing
+/// else. A file with no `name:` reports its path instead, which no trigger
+/// can name, so absence here is an answer rather than a gap.
+fn declared_name(workflow: &str) -> Option<String> {
+    for line in workflow.lines() {
+        if is_blank(line) || indent(line) > 0 {
+            continue;
+        }
+        let (key, value) = key_value(line)?;
+        if key != "name" {
+            continue;
+        }
+        let value = unquote(before_comment(value).trim());
+        if value.is_empty() || value.contains("${{") {
+            return None;
+        }
+        return Some(value.to_owned());
+    }
+    None
+}
+
+/// Why the recorded waking workflow cannot hold the release request, or
+/// `None` where the pair is sound.
+///
+/// The release gate under local integration wakes on one workflow
+/// completing and then judges one named check. A trigger cannot name a
+/// check and a required context cannot name a workflow, so the two
+/// answers are separate and nothing but this reader proves they describe
+/// one file. A mismatch is a setup fault rather than a landing defect: it
+/// wakes before the check reports, or never wakes after it succeeds, and
+/// the release request stays open with nothing saying why.
+#[must_use]
+pub fn waking_workflow_fault(
+    target: &Utf8Path,
+    required_workflow: &str,
+    required_check: &str,
+    trunk: &str,
+) -> Option<String> {
+    let (workflows, _) = read_workflows(&target.join(".github/workflows"), trunk);
+    let Some(waking) = workflows
+        .iter()
+        .find(|workflow| workflow.declared_name.as_deref() == Some(required_workflow))
+    else {
+        let named: Vec<&str> = workflows
+            .iter()
+            .filter_map(|workflow| workflow.declared_name.as_deref())
+            .collect();
+        return Some(format!(
+            "no workflow in .github/workflows declares name: {required_workflow} and runs on a pull request, so the release gate never wakes and the release request stays open; a workflow_run trigger names the name: value and never the filename, and the names that do run on a request are [{}]",
+            named.join(", ")
+        ));
+    };
+    if !waking
+        .jobs
+        .iter()
+        .any(|job| job.context() == Some(required_check))
+    {
+        return Some(format!(
+            "the workflow {required_workflow} carries no job reporting the context {required_check}, so the gate would wake on one workflow and judge a check another workflow reports; name one workflow that carries the check"
+        ));
+    }
+    if let Some(filter) = &waking.trigger.misses_trunk {
+        return Some(format!(
+            "the pull_request trigger of {required_workflow} reads {filter}, which does not prove it runs for a request against {trunk}, so the gate never wakes for a release request"
+        ));
+    }
+    None
 }
 
 /// The workflow's pull-request trigger, in the block, the flow, the
@@ -1123,6 +1200,68 @@ jobs:
         );
         assert_eq!(empty.reading, GateReading::NoRequestWorkflows);
         assert!(empty.unreadable.is_empty());
+    }
+
+    /// The gate wakes on a workflow and judges a check, and nothing but
+    /// this reader proves the two answers describe one file.
+    ///
+    /// SATISFIES target-config:a-setup-fact-is-committed-once
+
+    #[test]
+    fn the_waking_workflow_contains_the_named_check() {
+        fn target(files: &[(&str, &str)]) -> tempfile::TempDir {
+            let dir = tempfile::tempdir().expect("a tempdir");
+            let workflows = dir.path().join(".github/workflows");
+            std::fs::create_dir_all(&workflows).expect("the directory exists");
+            for (name, text) in files {
+                std::fs::write(workflows.join(name), text).expect("the workflow writes");
+            }
+            dir
+        }
+        fn fault(dir: &tempfile::TempDir, workflow: &str, check: &str) -> Option<String> {
+            waking_workflow_fault(
+                Utf8Path::from_path(dir.path()).expect("utf-8"),
+                workflow,
+                check,
+                "master",
+            )
+        }
+
+        let sound = target(&[(
+            "ci.yml",
+            "name: ci\non: [pull_request]\njobs:\n  gate:\n    if: always()\n",
+        )]);
+        assert_eq!(fault(&sound, "ci", "gate"), None);
+
+        // The trigger names the name: value and never the filename, so a
+        // file with no name: reports its path and no trigger can name it.
+        let unnamed = target(&[(
+            "ci.yml",
+            "on: [pull_request]\njobs:\n  gate:\n    if: always()\n",
+        )]);
+        let text = fault(&unnamed, "ci", "gate").expect("a fault");
+        assert!(text.contains("never the filename"), "{text}");
+
+        // The gate would wake on one workflow and judge a check another
+        // workflow reports, so it wakes before the check can report.
+        let split = target(&[
+            ("ci.yml", "name: ci\non: [pull_request]\njobs:\n  build:\n"),
+            (
+                "checks.yml",
+                "name: checks\non: [pull_request]\njobs:\n  gate:\n    if: always()\n",
+            ),
+        ]);
+        let text = fault(&split, "ci", "gate").expect("a fault");
+        assert!(text.contains("carries no job reporting"), "{text}");
+
+        // A trigger that never reaches the trunk never wakes for a
+        // release request.
+        let off_trunk = target(&[(
+            "ci.yml",
+            "name: ci\non:\n  pull_request:\n    branches: [main]\njobs:\n  gate:\n    if: always()\n",
+        )]);
+        let text = fault(&off_trunk, "ci", "gate").expect("a fault");
+        assert!(text.contains("against master"), "{text}");
     }
 
     #[test]

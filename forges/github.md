@@ -64,9 +64,11 @@ Walk the form at `github.com/settings/apps/new` top to bottom; each item below i
 5. Repository permissions
    - Contents: Read and write
    - Pull requests: Read and write
+   - Checks: Read-only
    - Metadata: Read-only, set by GitHub and not removable
    - Every other one: No access
    - Anything less than the two writes and the bot cannot push a release branch or open a request; the failure shows up weeks later as a workflow that silently never ran.
+   - Checks carries the release gate a locally integrated trunk lands: the gate reads the named check for the request's own head before it merges. An installation registered before this permission existed keeps working for everything else and reports unsatisfied here until its owner approves the updated permissions on the installation's settings page. A forge-integrated target never reads a check run and is not asked for it.
 6. Organization permissions, Account permissions
    - Every one: No access
 7. Subscribe to events
@@ -81,7 +83,7 @@ What it does not need, against the guesses that cost a rerun:
 - Actions, Workflows: `Workflows: write` is needed only to write files under `.github/workflows/`, and the release request never touches them.
 - Administration: release-plz asks for it only where a tag protection blocks tag creation. The convention's tag ruleset restricts `deletion` and `update` on `v*` and leaves creation open, so `Contents: write` carries the tag push. A target that adds a `creation` rule grants Administration here and widens the mint below to match.
 
-The grant above is the ceiling. Each landed workflow mints a token narrower than it, per job, through the `permission-*` inputs of `actions/create-github-app-token`: without one the token inherits every permission the installation holds. The half that opens and arms the release request takes `permission-contents: write` and `permission-pull-requests: write`; the half that tags and publishes opens no request and takes `permission-contents: write` alone. release-plz scopes its own release workflow the same way.
+The grant above is the ceiling. Each landed workflow mints a token narrower than it, per job, through the `permission-*` inputs of `actions/create-github-app-token`: without one the token inherits every permission the installation holds. The half that opens the release request takes `permission-contents: write` and `permission-pull-requests: write`; the half that tags and publishes opens no request and takes `permission-contents: write` alone; the release gate a locally integrated trunk lands adds `permission-checks: read` to the first pair, because reading the named check is what it does before it merges. release-plz scopes its own release workflow the same way.
 
 ### Collect the credentials
 

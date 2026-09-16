@@ -1,0 +1,6 @@
+  # zizmor: ignore[dangerous-triggers] the gate below trusts no value this
+  # event carries: it reads the candidate back from the forge, proves its
+  # author, base, and head repository there, and merges nothing else.
+  workflow_run:
+    workflows: ["RK_REQUIRED_WORKFLOW"]
+    types: [completed]

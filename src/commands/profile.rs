@@ -42,6 +42,8 @@ struct Report {
     repo: String,
     /// The two security answers.
     security: Security,
+    /// The setup answers the release gate renders.
+    setup: Setup,
     /// The source of each value, keyed by its configuration path.
     sources: BTreeMap<&'static str, Source>,
     /// The category names the catalog does not know.
@@ -68,6 +70,16 @@ struct Security {
     contact: String,
     /// The acknowledgment window.
     response: String,
+}
+
+/// The setup answers a landing renders.
+#[derive(Debug, Serialize)]
+struct Setup {
+    /// The check the release gate believes, empty where nothing answered it.
+    required_check: String,
+    /// The workflow whose completion wakes the release gate, empty where
+    /// nothing answered it.
+    required_workflow: String,
 }
 
 /// One line stating the three domains and the identity, for every human
@@ -287,7 +299,7 @@ pub fn run(args: &ProfileArgs) -> Result<(), RkError> {
     ));
     out.next(&next);
     out.emit(&Report {
-        schema: "rk.profile/1",
+        schema: "rk.profile/2",
         target: args.target.to_string(),
         profile: params.profile().clone(),
         git: params.git().clone(),
@@ -296,6 +308,10 @@ pub fn run(args: &ProfileArgs) -> Result<(), RkError> {
         security: Security {
             contact: params.security_contact().to_owned(),
             response: params.security_response().to_owned(),
+        },
+        setup: Setup {
+            required_check: params.required_check().to_owned(),
+            required_workflow: params.required_workflow().to_owned(),
         },
         sources: resolved.sources,
         unknown: resolved.unknown,
@@ -309,7 +325,7 @@ pub fn run(args: &ProfileArgs) -> Result<(), RkError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Report, Security};
+    use super::{Report, Security, Setup};
     use crate::landing::{CheckoutMode, Integration};
     use crate::profile::{
         CapabilityRequests, GitWorkflow, ProfileSnapshot, Proposal, ReleaseIntent, ReleaseMode,
@@ -321,7 +337,7 @@ mod tests {
     #[test]
     fn the_profile_report_schema_snapshot_holds() {
         let report = Report {
-            schema: "rk.profile/1",
+            schema: "rk.profile/2",
             target: "/tmp/t".into(),
             profile: ProfileSnapshot {
                 technologies: vec!["python".into(), "rust".into()],
@@ -349,6 +365,10 @@ mod tests {
                 contact: String::new(),
                 response: "best-effort".into(),
             },
+            setup: Setup {
+                required_check: String::new(),
+                required_workflow: String::new(),
+            },
             sources: std::iter::once(("profile.technologies", Source::Observation)).collect(),
             unknown: vec![],
             proposal: Some(Proposal::Ambiguous {
@@ -371,7 +391,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.profile/1","target":"/tmp/t","profile":{"technologies":["python","rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"},"capabilities":{"nix_packaging":false,"reporting_policy":true,"scorecard":false},"repo":"acme/widget","security":{"contact":"","response":"best-effort"},"sources":{"profile.technologies":"observation"},"unknown":[],"proposal":{"state":"ambiguous","drivers":["python","rust"]},"selection":[{"id":"git.guards","status":"selected","destinations":["AGENTS.md"]}],"omissions":[{"destination":".gitlab-ci.yml","reason":"the target owns it","action":"add the include"}],"collisions":[],"next":["rk init --target /tmp/t previews the landing"]}"#
+            r#"{"schema":"rk.profile/2","target":"/tmp/t","profile":{"technologies":["python","rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"},"capabilities":{"nix_packaging":false,"reporting_policy":true,"scorecard":false},"repo":"acme/widget","security":{"contact":"","response":"best-effort"},"setup":{"required_check":"","required_workflow":""},"sources":{"profile.technologies":"observation"},"unknown":[],"proposal":{"state":"ambiguous","drivers":["python","rust"]},"selection":[{"id":"git.guards","status":"selected","destinations":["AGENTS.md"]}],"omissions":[{"destination":".gitlab-ci.yml","reason":"the target owns it","action":"add the include"}],"collisions":[],"next":["rk init --target /tmp/t previews the landing"]}"#
         );
     }
 }

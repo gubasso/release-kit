@@ -35,9 +35,10 @@ contact = "" # P: one line naming who receives a report when the forge channel i
 response = "best-effort" # P: the acknowledgment window the policy promises: best-effort, 1 day, <n> days, 1 business day, or <n> business days
 
 [setup]
-required_check = "" # N: the check the merge must pass; empty asks for --required-check
+required_check = "gate" # P: the check the release gate believes, and the check the trunk ruleset requires under forge integration
 retired_branches = ["main", "develop"] # N: long-lived branches retired by the trunk
 release_lines = false # N: true runs protect-release-lines in a full apply
+required_workflow = "ci" # P: the workflow name whose completion wakes the release gate under local integration; GitHub only
 
 [setup.bot]
 app_id = "" # N: public App identifier; private credentials stay outside this file

@@ -71,6 +71,18 @@ pub struct ProfileFlags {
     /// landed blocks. Defaults to local.
     #[arg(long, value_name = "MODE")]
     pub integration: Option<String>,
+
+    /// The check the release gate believes: the context the trunk ruleset
+    /// requires under forge integration, and the context the rendered
+    /// release gate judges under local integration. GitHub only.
+    #[arg(long, value_name = "NAME")]
+    pub required_check: Option<String>,
+
+    /// The workflow whose completion wakes the release gate under local
+    /// integration, named by its `name:` key rather than its filename.
+    /// GitHub only.
+    #[arg(long, value_name = "NAME")]
+    pub required_workflow: Option<String>,
 }
 
 impl ProfileFlags {
@@ -109,6 +121,8 @@ impl ProfileFlags {
                 .as_deref()
                 .map(Integration::parse)
                 .transpose()?,
+            required_check: self.required_check.as_deref(),
+            required_workflow: self.required_workflow.as_deref(),
             ..crate::profile::Inputs::default()
         })
     }

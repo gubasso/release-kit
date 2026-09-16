@@ -320,6 +320,15 @@ pub struct Parameters {
     /// landing wrote.
     #[serde(default = "response_best_effort", deserialize_with = "read_response")]
     pub security_response: String,
+    /// The check the release gate believes. A record predating the field
+    /// reads as empty, which is what such a landing wrote: it rendered a
+    /// standing arm that named no check.
+    #[serde(default)]
+    pub required_check: String,
+    /// The workflow whose completion wakes the release gate. A record
+    /// predating the field reads as empty, for the same reason.
+    #[serde(default)]
+    pub required_workflow: String,
 }
 
 /// The stance a record predating the field carries.
@@ -764,6 +773,8 @@ mod tests {
                 repo: "acme/widget".into(),
                 security_contact: String::new(),
                 security_response: crate::config::RESPONSE_DEFAULT.to_owned(),
+                required_check: String::new(),
+                required_workflow: String::new(),
             },
             files: vec![
                 FileRecord {
@@ -786,7 +797,7 @@ mod tests {
         assert_eq!(
             text,
             format!(
-                r#"{{"schema_version":10,"rk_version":"0.1.0","origin":"init","landed_at":"2026-08-29T00:00:00Z","profile":{{"technologies":["rust"],"forge":"github","release":{{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}}}},"git":{{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"}},"capabilities":{{"nix_packaging":true,"reporting_policy":true,"scorecard":true,"code_scanning":"semgrep"}},"parameters":{{"repo":"acme/widget","security_contact":"","security_response":"best-effort"}},"files":[{{"destination":"release-plz.toml","kind":"seeded","sha256":"{empty}"}},{{"destination":"AGENTS.md","kind":"rendered","sha256":"{empty}","placement":"region"}}],"pins":{{"release-plz":"0.3.160"}}}}"#
+                r#"{{"schema_version":10,"rk_version":"0.1.0","origin":"init","landed_at":"2026-08-29T00:00:00Z","profile":{{"technologies":["rust"],"forge":"github","release":{{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}}}},"git":{{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"}},"capabilities":{{"nix_packaging":true,"reporting_policy":true,"scorecard":true,"code_scanning":"semgrep"}},"parameters":{{"repo":"acme/widget","security_contact":"","security_response":"best-effort","required_check":"","required_workflow":""}},"files":[{{"destination":"release-plz.toml","kind":"seeded","sha256":"{empty}"}},{{"destination":"AGENTS.md","kind":"rendered","sha256":"{empty}","placement":"region"}}],"pins":{{"release-plz":"0.3.160"}}}}"#
             ),
             "a whole file omits its placement, and no retired digest field survives"
         );
@@ -813,6 +824,8 @@ mod tests {
                 repo: String::new(),
                 security_contact: String::new(),
                 security_response: crate::config::RESPONSE_DEFAULT.to_owned(),
+                required_check: String::new(),
+                required_workflow: String::new(),
             },
             files: vec![],
             pins: std::collections::BTreeMap::new(),
@@ -820,7 +833,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&release_less).expect("serializes"),
-            r#"{"schema_version":10,"rk_version":"0.1.0","origin":"init","landed_at":"2026-08-29T00:00:00Z","profile":{"technologies":[],"release":{"mode":"none"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"},"capabilities":{"nix_packaging":false,"reporting_policy":false,"scorecard":false},"parameters":{"repo":"","security_contact":"","security_response":"best-effort"},"files":[],"pins":{}}"#
+            r#"{"schema_version":10,"rk_version":"0.1.0","origin":"init","landed_at":"2026-08-29T00:00:00Z","profile":{"technologies":[],"release":{"mode":"none"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"},"capabilities":{"nix_packaging":false,"reporting_policy":false,"scorecard":false},"parameters":{"repo":"","security_contact":"","security_response":"best-effort","required_check":"","required_workflow":""},"files":[],"pins":{}}"#
         );
     }
 

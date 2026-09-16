@@ -17,10 +17,12 @@ permissions: {}
 on:
   push:
     branches: [RK_TRUNK_BRANCH, 'RK_LINE_PREFIX**']
+# RK_GATE_TRIGGER_BEGIN
+# RK_GATE_TRIGGER_END
 
 jobs:
   release-please-pr:
-    if: github.repository_owner == 'OWNER'
+    if: github.repository_owner == 'OWNER' # RK_PUSH_GUARD
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -44,6 +46,7 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token }}
           target-branch: ${{ github.ref_name }}
+# RK_GATE_ARM_BEGIN
       # Arm the request the moment it exists: the forge merges it once every
       # required check is green, the trunk style's release decision made once
       # at landing; the lines style leaves every merge a human's and this
@@ -75,6 +78,7 @@ jobs:
           fi
           gh pr merge "$number" --auto --squash --delete-branch
           echo "armed pull request #$number."
+# RK_GATE_ARM_END
 
   # The publish half. Only the push that lands the bot's own bump releases:
   # the detect step compares the committed version against the parent commit
@@ -83,7 +87,7 @@ jobs:
   # OIDC token is minted only here, inside the pypi environment the trusted
   # publisher names.
   tag-and-publish:
-    if: github.repository_owner == 'OWNER'
+    if: github.repository_owner == 'OWNER' # RK_PUSH_GUARD
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -155,3 +159,5 @@ jobs:
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
         with:
           skip-existing: true
+# RK_GATE_JOB_BEGIN
+# RK_GATE_JOB_END

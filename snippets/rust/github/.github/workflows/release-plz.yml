@@ -17,6 +17,8 @@ permissions: {}
 on:
   push:
     branches: [RK_TRUNK_BRANCH, 'RK_LINE_PREFIX**']
+# RK_GATE_TRIGGER_BEGIN
+# RK_GATE_TRIGGER_END
 
 jobs:
   # Merging the release pull request is the release: the bump push lands here,
@@ -24,7 +26,7 @@ jobs:
   # makes the tag trigger release.yml; a tag pushed with GITHUB_TOKEN starts no
   # further workflow. On a RK_LINE_PREFIX* line the same job tags the line's patch.
   release-plz-release:
-    if: github.repository_owner == 'OWNER'
+    if: github.repository_owner == 'OWNER' # RK_PUSH_GUARD
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -54,7 +56,7 @@ jobs:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
 
   release-plz-pr:
-    if: github.repository_owner == 'OWNER'
+    if: github.repository_owner == 'OWNER' # RK_PUSH_GUARD
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -83,6 +85,7 @@ jobs:
           command: release-pr
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+# RK_GATE_ARM_BEGIN
       # Arm the request the moment it exists: the forge merges it once every
       # required check is green, which is the trunk style's release decision,
       # made once at landing rather than per release; the lines style leaves
@@ -116,3 +119,6 @@ jobs:
           fi
           gh pr merge "$number" --auto --squash --delete-branch
           echo "armed pull request #$number."
+# RK_GATE_ARM_END
+# RK_GATE_JOB_BEGIN
+# RK_GATE_JOB_END

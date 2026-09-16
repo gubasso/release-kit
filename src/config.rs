@@ -214,8 +214,14 @@ pub fn canonical_response(raw: &str) -> Result<String, String> {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Setup {
-    /// N: the check the merge must pass.
+    /// P: the check the release gate believes. Under forge integration
+    /// the trunk ruleset requires it; under local integration the
+    /// rendered release gate judges it.
     pub required_check: String,
+    /// P: the workflow name whose completion wakes the release gate.
+    /// GitHub alone, because a `workflow_run` trigger cannot name a check
+    /// and cannot omit the workflow.
+    pub required_workflow: String,
     /// N: long-lived branches retired by the trunk.
     pub retired_branches: Vec<String>,
     /// N: run release-line protection in a full apply.
@@ -233,6 +239,7 @@ impl Default for Setup {
     fn default() -> Self {
         Self {
             required_check: String::new(),
+            required_workflow: String::new(),
             retired_branches: vec!["main".into(), "develop".into()],
             release_lines: false,
             excluded_steps: BTreeMap::new(),
@@ -746,6 +753,10 @@ fn fields(config: &Config) -> Result<Vec<(&'static str, Option<toml_edit::Value>
             Some(config.setup.required_check.clone().into()),
         ),
         (
+            "RK_CONFIG_SETUP_REQUIRED_WORKFLOW",
+            Some(config.setup.required_workflow.clone().into()),
+        ),
+        (
             "RK_CONFIG_SETUP_RETIRED_BRANCHES",
             Some(array(&config.setup.retired_branches)),
         ),
@@ -937,7 +948,7 @@ const DERIVED_POLICY_KEYS: [&str; 2] = [
 ];
 
 /// The keys a landing writes back: every class P answer.
-const PARAMETER_KEYS: [&str; 19] = [
+const PARAMETER_KEYS: [&str; 21] = [
     "project.repo",
     "profile.technologies",
     "profile.forge",
@@ -959,6 +970,10 @@ const PARAMETER_KEYS: [&str; 19] = [
     "capabilities.code_scanning",
     "security.contact",
     "security.response",
+    // The release gate's two answers. One names the check the gate
+    // believes, the other names the workflow whose completion wakes it.
+    "setup.required_check",
+    "setup.required_workflow",
     "schema_version",
 ];
 
@@ -1397,6 +1412,12 @@ impl Plan {
         };
         resolved.security.contact = Some(params.security_contact().to_owned());
         resolved.security.response = Some(params.security_response().to_owned());
+        params
+            .required_check()
+            .clone_into(&mut resolved.setup.required_check);
+        params
+            .required_workflow()
+            .clone_into(&mut resolved.setup.required_workflow);
         let content = if let Some(text) = text.filter(|_| existing.is_some()) {
             rewrite_all(text, parameter_values(&resolved))?
         } else {
@@ -1509,6 +1530,18 @@ fn parameter_values(config: &Config) -> Vec<(&'static str, Option<toml_edit::Val
     if let Some(value) = config.security.response.clone() {
         values.push(("security.response", Some(value.into())));
     }
+    // The gate's two answers project like any other class P string. An
+    // empty answer is an answer: it says this target renders no standing
+    // release gate, which is true of every target outside GitHub's local
+    // trunk release shape.
+    values.push((
+        "setup.required_check",
+        Some(config.setup.required_check.clone().into()),
+    ));
+    values.push((
+        "setup.required_workflow",
+        Some(config.setup.required_workflow.clone().into()),
+    ));
     values
 }
 

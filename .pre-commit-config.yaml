@@ -5,10 +5,14 @@ repos:
 # The release convention's hooks. Install every stage they run at:
 # pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push
 # A CI sweep commits nothing, so a job running pre-commit against a trunk
-# checkout sets SKIP=rk-worktree-location in its environment.
+# checkout sets SKIP=rk-worktree-location in its environment. Append the id of
+# every check this project classifies local-only: the value is a list the
+# project owns the tail of.
 # rk integrate runs this project's pre-integrate suite as
 # `pre-commit run --hook-stage manual --all-files`. Assign to the manual
-# stage every check that must pass before work reaches the trunk.
+# stage every check that must pass before work reaches the trunk, and have
+# continuous integration invoke the same stages: a check that runs on one
+# side of the boundary alone guards one side alone.
   - repo: https://github.com/compilerla/conventional-pre-commit
     rev: v4.4.0
     hooks:
@@ -100,6 +104,34 @@ repos:
         entry: cargo test
         language: system
         files: '^(src/|tests/|build\.rs$|Cargo\.(toml|lock)$|method/|bindings/|snippets/|blocks/|skills/|versions\.toml$|LICENSE)'
+        pass_filenames: false
+      # The three checks below are scope `both` at moment `manual`: each is
+      # too expensive for a commit and belongs at the last boundary before
+      # the trunk, and continuous integration reaches all three by invoking
+      # the same stage through `just check`.
+      - id: cargo-deny
+        name: cargo deny check
+        entry: cargo deny check
+        language: system
+        always_run: true
+        stages: [manual]
+        pass_filenames: false
+      - id: nix-flake-check
+        name: nix flake check
+        entry: nix flake check
+        language: system
+        always_run: true
+        stages: [manual]
+        pass_filenames: false
+      # The scratch landing round trip, through the recipe that owns it.
+      # Never make this entry `just check`: that recipe invokes pre-commit
+      # and the hook would re-enter itself.
+      - id: scratch-landing
+        name: scratch landing round trip
+        entry: just build
+        language: system
+        always_run: true
+        stages: [manual]
         pass_filenames: false
       # The snippets are audited against nothing: --no-config keeps zizmor.yml
       # out of reach, because an ignore there is keyed by base filename alone

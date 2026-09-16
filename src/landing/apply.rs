@@ -698,6 +698,8 @@ fn receipt(
             repo: params.repo().to_owned(),
             security_contact: params.security_contact().to_owned(),
             security_response: params.security_response().to_owned(),
+            required_check: params.required_check().to_owned(),
+            required_workflow: params.required_workflow().to_owned(),
         },
         files,
         pins: crate::registry::pins_for(&projection.capabilities)

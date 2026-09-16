@@ -798,11 +798,46 @@ pub fn github_install_bot(ctx: &Ctx, jwt: &str) -> StepState {
     match app_jwt::api_get(ctx, jwt, &format!("repos/{}/installation", ctx.repo)) {
         AppApi::Ok(body) => {
             let id = body["id"].as_i64().unwrap_or_default();
-            StepState::ok(format!("installation {id} covers {}", ctx.repo))
+            let held = &body["permissions"];
+            let short: Vec<String> = minimum_grant(ctx)
+                .into_iter()
+                .filter(|(key, level)| held[key] != *level)
+                .map(|(key, level)| format!("{key}: {level}"))
+                .collect();
+            if short.is_empty() {
+                StepState::ok(format!("installation {id} covers {}", ctx.repo))
+            } else {
+                // An installation predating a widened grant reads
+                // unsatisfied until its owner approves the new permission
+                // in the App's installation settings; no token this run
+                // can mint grants it.
+                StepState::not(format!(
+                    "installation {id} covers {} and does not hold [{}]; approve the App's updated permissions on the installation's own settings page",
+                    ctx.repo,
+                    short.join(", ")
+                ))
+            }
         }
         AppApi::Missing => StepState::not(format!("the App is not installed on {}", ctx.repo)),
         AppApi::Refused(detail) | AppApi::Failed(detail) => StepState::unknown(detail),
     }
+}
+
+/// The release App's minimum grant for this target, as the installation
+/// reports it.
+///
+/// Contents and pull requests carry the release itself: the tag, the bump
+/// branch, and the request. A rendered release gate reads a check run
+/// beside them, and that rendering is the one shape that needs the third
+/// permission, so a target that renders no gate is not asked for it.
+fn minimum_grant(ctx: &Ctx) -> Vec<(&'static str, &'static str)> {
+    let mut grant = vec![("contents", "write"), ("pull_requests", "write")];
+    if ctx.integration() == crate::landing::Integration::Local
+        && ctx.profile.release.style == Some(crate::landing::Style::Trunk)
+    {
+        grant.push(("checks", "read"));
+    }
+    grant
 }
 
 /// A plain ruleset: active, and carrying exactly the expected rule types —
@@ -1020,11 +1055,26 @@ fn github_trunk_ruleset(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkErro
 /// as a convention instead.
 fn gate_faults(ctx: &Ctx) -> Option<String> {
     let check = ctx.required_check.as_deref()?;
-    workflow_jobs::faults(
+    let shape = workflow_jobs::faults(
         &workflow_jobs::read_gate(&ctx.target, check, ctx.trunk()),
         check,
         ctx.trunk(),
-    )
+    );
+    // Under local integration the release gate waits on a workflow
+    // completing and then judges this check. A trigger cannot name a check
+    // and a required context cannot name a workflow, so nothing but this
+    // reader proves the two answers describe one file.
+    let waking = (ctx.integration() == crate::landing::Integration::Local)
+        .then_some(ctx.required_workflow.as_deref())
+        .flatten()
+        .and_then(|workflow| {
+            workflow_jobs::waking_workflow_fault(&ctx.target, workflow, check, ctx.trunk())
+        });
+    match (shape, waking) {
+        (None, None) => None,
+        (Some(one), None) | (None, Some(one)) => Some(one),
+        (Some(shape), Some(waking)) => Some(format!("{shape}; {waking}")),
+    }
 }
 
 /// What the repository's squash message settings hold.

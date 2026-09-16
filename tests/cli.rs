@@ -206,6 +206,8 @@ fn params_requesting(
             repo: repo.to_owned(),
             security_contact: String::new(),
             security_response: release_kit::config::RESPONSE_DEFAULT.to_owned(),
+            required_check: String::new(),
+            required_workflow: String::new(),
         },
         files: Vec::new(),
         pins: std::collections::BTreeMap::new(),
@@ -840,7 +842,7 @@ fn init_preview_human_lines_are_snapshot_held() {
          created SECURITY.md\n\
          created dist-workspace.toml\n\
          created release-plz.toml\n\
-         Next:\n  rk init --technology rust --forge github --release-mode automatic --release-driver rust --release-style trunk --trunk master --checkout-mode linked-worktree --integration local --repo <owner/name> --reporting-policy --code-scanning off --target {path} --apply\n\
+         Next:\n  rk init --technology rust --forge github --release-mode automatic --release-driver rust --release-style trunk --trunk master --checkout-mode linked-worktree --integration local --required-check gate --required-workflow ci --repo <owner/name> --reporting-policy --code-scanning off --target {path} --apply\n\
          \x20 rk stage --target {path} stages the complete candidate for a byte comparison\n"
     );
     let output = rk()
@@ -858,7 +860,10 @@ fn init_preview_human_lines_are_snapshot_held() {
         .expect("config preview");
     let end = text.find("Next:\n").expect("next block");
     assert!(text[start..end].contains("schema_version = 2"));
-    assert!(text[start..end].contains("required_check = \"\""));
+    // The consuming shape: this landing renders a release gate, so the
+    // compiled default answers both keys and the configuration states them.
+    assert!(text[start..end].contains("required_check = \"gate\""));
+    assert!(text[start..end].contains("required_workflow = \"ci\""));
     assert_eq!(format!("{}{}", &text[..start], &text[end..]), expected);
 }
 
@@ -4622,7 +4627,15 @@ case "$url" in
     printf '{"message":"Not Found"}\n404';;
   *"/repos/"*"/installation")
     if [[ -f "$STATE/installed" ]]; then
-      printf '{"id":42,"app_id":7,"app_slug":"bot"}\n200'
+      # The permissions the installation holds, which the observation reads
+      # back: the two writes always, and checks where a rendered release
+      # gate reads one. A fixture dropping the key stands for an older
+      # installation whose owner has not approved the widened grant.
+      perms='{"contents":"write","pull_requests":"write","checks":"read"}'
+      if [[ -f "$STATE/old_grant" ]]; then
+        perms='{"contents":"write","pull_requests":"write"}'
+      fi
+      printf '{"id":42,"app_id":7,"app_slug":"bot","permissions":%s}\n200' "$perms"
     else
       printf '{"message":"Not Found"}\n404'
     fi;;
@@ -5148,6 +5161,61 @@ fn check_reports_install_bot_unknown_without_app_credentials() {
     );
 }
 
+/// A token is minted no wider than the installation it comes from, so the
+/// observation reads the installation's own permissions and names each one
+/// the target's rendered release automation needs and the installation
+/// lacks. The third permission is asked for only where a rendered gate
+/// reads a check run.
+///
+/// SATISFIES forge-setup:the-setup-permits-a-request-to-merge-itself
+#[test]
+fn install_bot_requires_the_release_apps_minimum_grant() {
+    let fixture = ForgeFixture::new();
+    let key = fixture.key_file();
+    std::fs::write(fixture.state("installed"), "").expect("the installation exists");
+    std::fs::write(fixture.state("old_grant"), "").expect("the older grant stands");
+    // The setup reads the recorded authority rather than a resolved
+    // default: it configures a forge to match what landed.
+    let check = |fixture: &ForgeFixture, integration: &str| {
+        let root = fixture.target.path().join(".release-kit");
+        std::fs::create_dir_all(&root).expect("the record directory exists");
+        std::fs::write(
+            root.join("manifest.json"),
+            format!(
+                r#"{{"schema_version":10,"rk_version":"0.0.0","origin":"init","landed_at":"2026-08-29T00:00:00Z","profile":{{"technologies":["rust"],"forge":"github","release":{{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}}}},"git":{{"trunk":"master","checkout_mode":"linked-worktree","integration":"{integration}"}},"capabilities":{{"nix_packaging":false,"reporting_policy":true,"scorecard":false}},"parameters":{{"repo":"acme/widget","security_contact":"","security_response":"best-effort","required_check":"gate","required_workflow":"ci"}},"files":[],"pins":{{}}}}"#
+            ),
+        )
+        .expect("the record writes");
+        let mut command = fixture.rk(&["setup", "check"]);
+        command
+            .args(["--repo", "acme/widget", "--forge", "github"])
+            .env("RK_BOT_APP_ID", "314159")
+            .env("RK_BOT_PRIVATE_KEY_FILE", &key);
+        command
+    };
+    // A locally integrated trunk renders a gate that reads a check run, so
+    // the older two-permission installation is short of its minimum.
+    let out = check(&fixture, "local").assert().get_output().clone();
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(text.contains("checks: read"), "{text}");
+    assert!(text.contains("settings page"), "{text}");
+
+    // The same installation satisfies a target that renders no gate.
+    std::fs::remove_file(fixture.state("old_grant")).expect("the widened grant stands");
+    let out = check(&fixture, "forge").assert().get_output().clone();
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!text.contains("does not hold"), "{text}");
+}
+
+/// The grant: the observation answers 404 as the App, rk reads the
 /// The grant: the observation answers 404 as the App, rk reads the
 /// installation id from the App's own list and hands it to the script,
 /// the script issues exactly the documented PUT, and the readback — as
@@ -22189,6 +22257,220 @@ fn a_committed_contact_lands_in_both_forge_policies() {
     }
 }
 
+/// The release gate's two answers resolve by the class P precedence: a
+/// flag over the committed configuration over a compatible record, with
+/// the convention's own pair last.
+///
+/// SATISFIES target-config:a-setup-fact-is-committed-once
+#[test]
+fn a_release_gate_answer_resolves_by_the_parameter_precedence() {
+    let target = land_pair("rust", "github");
+    // Nothing answered either key, and this is the shape that renders a
+    // gate, so the compiled default did.
+    let config = std::fs::read_to_string(target.path().join(".release-kit/config.toml"))
+        .expect("config exists");
+    assert!(config.contains("required_check = \"gate\""), "{config}");
+    assert!(config.contains("required_workflow = \"ci\""), "{config}");
+
+    // The committed answer wins over the default.
+    edit_target_config(
+        target.path(),
+        "required_check = \"gate\"",
+        "required_check = \"verify\"",
+    );
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    assert_eq!(
+        read_manifest(target.path())["parameters"]["required_check"],
+        "verify"
+    );
+
+    // The flag wins over the committed answer.
+    rk().args([
+        "upgrade",
+        "--apply",
+        "--required-check",
+        "merge-gate",
+        "--target",
+    ])
+    .arg(target.path())
+    .assert()
+    .success();
+    assert_eq!(
+        read_manifest(target.path())["parameters"]["required_check"],
+        "merge-gate"
+    );
+    let config = std::fs::read_to_string(target.path().join(".release-kit/config.toml"))
+        .expect("config exists");
+    assert!(
+        config.contains("required_check = \"merge-gate\""),
+        "{config}"
+    );
+}
+
+/// Both answers reach the record, and `Params::from_record` reads them
+/// back unchanged, so a re-render asks nothing again.
+///
+/// SATISFIES landing:a-rendered-file-is-a-function-of-the-record
+#[test]
+fn a_release_gate_answer_reaches_the_record() {
+    let target = land_pair("rust", "github");
+    let recorded = read_manifest(target.path());
+    assert_eq!(recorded["parameters"]["required_check"], "gate");
+    assert_eq!(recorded["parameters"]["required_workflow"], "ci");
+
+    // The record alone answers a landing whose configuration lost the keys.
+    edit_target_config(target.path(), "required_check = \"gate\"", "");
+    edit_target_config(target.path(), "required_workflow = \"ci\"", "");
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let recorded = read_manifest(target.path());
+    assert_eq!(recorded["parameters"]["required_check"], "gate");
+    assert_eq!(recorded["parameters"]["required_workflow"], "ci");
+}
+
+/// GitLab requires its whole pipeline through one project setting and
+/// names no individual check, so either answer is a usage error rather
+/// than a value silently discarded.
+///
+/// SATISFIES target-config:a-setup-fact-is-committed-once
+#[test]
+fn a_release_gate_answer_is_refused_on_gitlab() {
+    let target = land_pair("rust", "gitlab");
+    for flag in ["--required-check", "--required-workflow"] {
+        rk().args(["upgrade", "--apply", flag, "gate", "--target"])
+            .arg(target.path())
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(flag))
+            .stderr(predicate::str::contains("names no individual check"));
+    }
+}
+
+/// A target whose release shape renders no gate leaves both answers
+/// empty, because no rendered reader consumes them there. Under forge
+/// integration `setup.required_check` stays the project's own answer,
+/// which `protect-trunk` asks for.
+///
+/// SATISFIES target-config:a-setup-fact-is-committed-once
+#[test]
+fn an_unconsumed_release_gate_resolves_empty() {
+    for (forge, integration, style) in [
+        ("github", "forge", "trunk"),
+        ("github", "local", "lines"),
+        ("gitlab", "local", "trunk"),
+    ] {
+        let target = tempfile::tempdir().expect("a scratch target exists");
+        rk().args(["init", "--tech", "rust", "--forge", forge])
+            .args(["--integration", integration, "--release-style", style])
+            .args(["--repo", "acme/widget", "--target"])
+            .arg(target.path())
+            .arg("--apply")
+            .assert()
+            .success();
+        let recorded = read_manifest(target.path());
+        assert_eq!(
+            recorded["parameters"]["required_check"], "",
+            "{forge} {integration} {style}"
+        );
+        assert_eq!(
+            recorded["parameters"]["required_workflow"], "",
+            "{forge} {integration} {style}"
+        );
+    }
+}
+
+/// The one shape that renders a gate answers both keys from the
+/// convention when nothing else does, so a fresh landing renders a gate
+/// that names something rather than a hole no event can satisfy.
+///
+/// SATISFIES target-config:a-setup-fact-is-committed-once
+#[test]
+fn a_local_github_trunk_release_defaults_the_gate_answers() {
+    let target = land_pair("rust", "github");
+    let recorded = read_manifest(target.path());
+    assert_eq!(recorded["git"]["integration"], "local");
+    assert_eq!(recorded["profile"]["release"]["style"], "trunk");
+    assert_eq!(recorded["parameters"]["required_check"], "gate");
+    assert_eq!(recorded["parameters"]["required_workflow"], "ci");
+
+    // The resolved answers are visible rather than compiled-in: the
+    // configuration states them and `rk profile` reports them.
+    rk().args(["profile", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"required_check\": \"gate\""))
+        .stdout(predicate::str::contains("\"required_workflow\": \"ci\""));
+}
+
+/// A configuration this release writes marks both gate answers class P,
+/// and a comment that drifted from the template is rewritten from it, so
+/// the file's own sentence outlives the answer it once described.
+///
+/// SATISFIES target-config:a-setup-fact-is-committed-once
+#[test]
+fn the_committed_comment_carries_the_parameter_class() {
+    let target = land_pair("rust", "github");
+    let read = |target: &Path| {
+        std::fs::read_to_string(target.join(".release-kit/config.toml")).expect("config exists")
+    };
+    let config = read(target.path());
+    for key in ["required_check", "required_workflow"] {
+        let line = config
+            .lines()
+            .find(|line| line.starts_with(key))
+            .unwrap_or_else(|| panic!("{key} is written"));
+        assert!(line.contains("# P:"), "{line}");
+    }
+
+    // The old sentence said the name asks for a flag, which stopped being
+    // true when the gate started rendering it.
+    edit_target_config(
+        target.path(),
+        "# P: the check the release gate believes",
+        "# N: the check the merge must pass; empty asks for --required-check",
+    );
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let config = read(target.path());
+    assert!(
+        config.contains("# P: the check the release gate believes"),
+        "{config}"
+    );
+    assert!(
+        !config.contains("empty asks for --required-check"),
+        "{config}"
+    );
+}
+
+/// A committed answer that differs from the record's is untaken
+/// configuration: reported by its full key path and informational under
+/// `--check`.
+///
+/// SATISFIES target-config:untaken-configuration-is-reported-and-not-drift
+#[test]
+fn an_untaken_release_gate_answer_is_informational() {
+    let target = land_pair("rust", "github");
+    clear_landing_sentinels(target.path());
+    edit_target_config(
+        target.path(),
+        "required_workflow = \"ci\"",
+        "required_workflow = \"build\"",
+    );
+    rk().args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("setup.required_workflow"));
+}
+
 /// An explicit empty contact resets a recorded one; an omitted key leaves
 /// the record in force; neither reaches the policy through a value the
 /// reader refuses.
@@ -23721,7 +24003,7 @@ fn the_landing_runbook_names_the_real_stage_fields() {
     let scratch = tempfile::tempdir().expect("a scratch dir exists");
     let target = stage_target();
     let report = stage_json(target.path(), &scratch.path().join("stage"));
-    assert_eq!(report["schema"], "rk.stage/4");
+    assert_eq!(report["schema"], "rk.stage/5");
     for top in [
         "schema",
         "rk_version",
@@ -24369,24 +24651,43 @@ fn a_fresh_rust_landing_advertises_only_x86_64_linux() {
         toml_list(&dist, "installers", "the root declaration"),
         ["shell"]
     );
-    // The flake proof runs natively on the one system's runner and on no
-    // matrix: the flake's list and the CI proof name the same one system.
+    the_flake_proof_runs_natively_on_the_one_system(root);
+}
+
+/// The flake proof runs natively on the one system's runner and on no
+/// matrix: the flake's list and the CI proof name the same one system.
+///
+/// It is a hook on the manual stage, so the job that carries it is the one
+/// that invokes that stage, and no standalone job executes the same
+/// declared check a second time.
+fn the_flake_proof_runs_natively_on_the_one_system(root: &Path) {
     let ci = std::fs::read_to_string(root.join(".github/workflows/ci.yml")).expect("ci.yml reads");
-    let flake_job = ci
-        .split("\n  flake:\n")
+    assert!(
+        !ci.contains("\n  flake:\n"),
+        "one check, one execution owner"
+    );
+    let hooks = std::fs::read_to_string(root.join(".pre-commit-config.yaml"))
+        .expect("the hook configuration reads");
+    assert!(hooks.contains("entry: nix flake check"), "{hooks}");
+    let test_job = ci
+        .split("\n  test:\n")
         .nth(1)
-        .expect("ci.yml has a flake job");
-    let flake_job = flake_job
+        .expect("ci.yml has a test job");
+    let test_job = test_job
         .split("\n  dist-plan:\n")
         .next()
-        .expect("the flake job ends");
+        .expect("the test job ends");
     assert!(
-        flake_job.contains("runs-on: ubuntu-latest"),
-        "the flake job runs on the one native runner"
+        test_job.contains("runs-on: ubuntu-latest"),
+        "the flake proof runs on the one native runner"
     );
     assert!(
-        !flake_job.contains("matrix"),
-        "the flake job has no runner matrix"
+        !test_job.contains("matrix"),
+        "the flake proof has no runner matrix"
+    );
+    assert!(
+        test_job.contains("just check"),
+        "the job that carries the proof invokes the manual stage"
     );
 }
 
@@ -24603,6 +24904,8 @@ fn record_signature_line(
             repo: params.repo().to_owned(),
             security_contact: params.security_contact().to_owned(),
             security_response: params.security_response().to_owned(),
+            required_check: params.required_check().to_owned(),
+            required_workflow: params.required_workflow().to_owned(),
         },
         files: vec![
             FileRecord {
@@ -24631,6 +24934,298 @@ fn record_signature_line(
         "{label} {MANIFEST_PATH} {}",
         Digest::of(&render(&manifest).expect("the record renders"))
     )
+}
+
+/// This repository's own two answers describe one file: the workflow that
+/// declares `name: ci` runs for a request against the trunk and carries
+/// the job reporting `gate`. A wrong pair would refuse every release
+/// silently, so the pairing is proved here rather than at a release.
+///
+/// SATISFIES target-config:a-setup-fact-is-committed-once
+#[test]
+fn this_project_pairs_its_waking_workflow_with_its_named_check() {
+    let root = camino::Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    assert_eq!(
+        release_kit::setup::workflow_jobs::waking_workflow_fault(&root, "ci", "gate", "master"),
+        None
+    );
+    assert!(
+        release_kit::setup::workflow_jobs::waking_workflow_fault(&root, "build", "gate", "master")
+            .is_some(),
+        "a workflow name nothing declares faults"
+    );
+}
+
+/// The landed release workflow for one driver under one integration mode,
+/// The landed release workflow for one driver under one integration mode,
+/// as the projection renders it.
+fn release_workflow(driver: &str, integration: release_kit::landing::Integration) -> String {
+    use release_kit::landing::{CheckoutMode, Style};
+    let params = projection_params(
+        driver,
+        "github",
+        CheckoutMode::LinkedWorktree,
+        integration,
+        Style::Trunk,
+        false,
+    );
+    let file = match driver {
+        "rust" => "release-plz.yml",
+        "python" => "release-please.yml",
+        "bash" => "release.yml",
+        other => panic!("{other} has no GitHub release workflow"),
+    };
+    let source = release_kit::embedded::SNIPPETS
+        .get_file(format!("{driver}/github/.github/workflows/{file}"))
+        .expect("the binary embeds the snippet");
+    String::from_utf8(release_kit::projection::render(source.contents(), &params))
+        .expect("the workflow is text")
+}
+
+/// Under local integration the trunk carries no required-check rule, so
+/// the landed release workflow holds its own request: it wakes on the
+/// recorded workflow completing and it no longer stands armed.
+///
+/// SATISFIES git:the-release-request-integrates-at-the-forge
+#[test]
+fn a_locally_integrated_target_lands_a_gated_release_arm() {
+    use release_kit::landing::Integration;
+    for driver in ["rust", "python", "bash"] {
+        let text = release_workflow(driver, Integration::Local);
+        assert!(text.contains("workflow_run:"), "{driver}");
+        assert!(text.contains("workflows: [\"ci\"]"), "{driver}");
+        assert!(text.contains("types: [completed]"), "{driver}");
+        assert!(text.contains("release-gate:"), "{driver}");
+        assert!(!text.contains("--auto"), "{driver} still stands armed");
+        assert!(!text.contains("RK_GATE"), "{driver} leaks a marker");
+        assert!(!text.contains("RK_PUSH_GUARD"), "{driver} leaks a token");
+    }
+}
+
+/// Under forge integration the ruleset requires the check before the
+/// merge, so every marker strips and the authored standing arm stands.
+///
+/// SATISFIES git:the-release-request-integrates-at-the-forge
+#[test]
+fn a_forge_integrated_target_keeps_the_standing_arm() {
+    use release_kit::landing::Integration;
+    for driver in ["rust", "python", "bash"] {
+        let text = release_workflow(driver, Integration::Forge);
+        assert!(text.contains("--auto --squash --delete-branch"), "{driver}");
+        assert!(!text.contains("workflow_run"), "{driver}");
+        assert!(!text.contains("release-gate:"), "{driver}");
+        assert!(!text.contains("RK_GATE"), "{driver} leaks a marker");
+        assert!(!text.contains("RK_PUSH_GUARD"), "{driver} leaks a token");
+        assert!(
+            !text.contains("github.event_name == 'push'"),
+            "{driver} guards a trigger it does not carry"
+        );
+    }
+}
+
+/// Both modes hold the release request on the same recorded check name.
+/// One does it with the trunk's own rule, the other with the workflow it
+/// lands, and the authority is the only difference.
+///
+/// SATISFIES git:the-release-request-integrates-at-the-forge
+#[test]
+fn the_release_request_is_gated_under_both_integration_modes() {
+    use release_kit::landing::Integration;
+    let gated = release_workflow("rust", Integration::Local);
+    assert!(gated.contains("GATE_CHECK: gate"));
+    assert!(gated.contains("check_name=\"$GATE_CHECK\""));
+    // The forge rendering names no check, because the ruleset does.
+    let armed = release_workflow("rust", Integration::Forge);
+    assert!(!armed.contains("GATE_CHECK"));
+    assert!(armed.contains("--auto"));
+}
+
+/// The gate judges the recorded check and waits on the recorded workflow.
+/// They answer two different questions, so a target whose names differ
+/// must carry both, each where it belongs.
+///
+/// SATISFIES target-config:a-setup-fact-is-committed-once
+#[test]
+fn the_gate_names_the_recorded_check_and_not_the_workflow() {
+    let target = tempfile::tempdir().expect("a scratch target exists");
+    rk().args(["init", "--tech", "rust", "--forge", "github"])
+        .args(["--repo", "acme/widget", "--required-check", "verify"])
+        .args(["--required-workflow", "build", "--target"])
+        .arg(target.path())
+        .arg("--apply")
+        .assert()
+        .success();
+    let text = std::fs::read_to_string(target.path().join(".github/workflows/release-plz.yml"))
+        .expect("the workflow lands");
+    assert!(text.contains("workflows: [\"build\"]"), "{text}");
+    assert!(text.contains("GATE_CHECK: verify"), "{text}");
+}
+
+/// Each driver's request branch is a structural second guard. The proof of
+/// identity is the author, the base, and the head repository, every one
+/// read back from the forge, so a request that imitates the branch shape
+/// is refused by the proofs rather than admitted by the pattern.
+///
+/// SATISFIES git:the-release-request-integrates-at-the-forge
+#[test]
+fn each_driver_proves_its_release_request_identity() {
+    use release_kit::landing::Integration;
+    for (driver, shape) in [
+        ("rust", "BRANCH_SHAPE: release-plz-"),
+        ("python", "BRANCH_SHAPE: release-please--branches--master"),
+        ("bash", "BRANCH_SHAPE: chore/release-v"),
+    ] {
+        let text = release_workflow(driver, Integration::Local);
+        assert!(text.contains(shape), "{driver}");
+        // Every proof, read from the forge rather than from the event.
+        for proof in [
+            "-f state=open",
+            "-f base=\"$TRUNK\"",
+            "select(.draft == false)",
+            "select(.base.ref == env.TRUNK)",
+            "select(.head.repo.full_name == env.GH_REPO)",
+            "select(.user.type == \"Bot\")",
+            "select(.user.login == env.APP_LOGIN)",
+        ] {
+            assert!(text.contains(proof), "{driver} lacks {proof}");
+        }
+    }
+}
+
+/// A request imitating the branch shape never merges, because the shape
+/// is never the proof: a fork's head is cross-repository and a human's
+/// request is not the release app's.
+///
+/// SATISFIES git:the-release-request-integrates-at-the-forge
+#[test]
+fn an_imitating_request_never_merges() {
+    use release_kit::landing::Integration;
+    let text = release_workflow("rust", Integration::Local);
+    // Exactly one candidate survives every filter, or the job stops.
+    assert!(text.contains("| if length == 1"), "{text}");
+    assert!(
+        text.contains("no single release request the release app owns"),
+        "{text}"
+    );
+    assert!(
+        text.contains("select(.head.ref | startswith(env.BRANCH_SHAPE))"),
+        "{text}"
+    );
+}
+
+/// The new event enters the gate's job alone. Every job written for a
+/// push carries the guard that keeps it out.
+///
+/// SATISFIES git:the-release-request-integrates-at-the-forge
+#[test]
+fn a_workflow_run_enters_only_the_reconciliation_job() {
+    use release_kit::landing::Integration;
+    for driver in ["rust", "python", "bash"] {
+        let text = release_workflow(driver, Integration::Local);
+        let guards = text.matches("github.event_name == 'push'").count();
+        assert!(guards >= 3, "{driver} guards {guards} conditions");
+        assert!(
+            text.contains("github.event.workflow_run.event == 'pull_request'"),
+            "{driver}"
+        );
+    }
+}
+
+/// The stale-head proof lives in the write itself, so a refresh between
+/// the judgment and the merge refuses rather than merging bytes nothing
+/// judged.
+///
+/// SATISFIES git:the-release-request-integrates-at-the-forge
+#[test]
+fn the_gate_matches_the_judged_head_at_merge() {
+    use release_kit::landing::Integration;
+    for driver in ["rust", "python", "bash"] {
+        let text = release_workflow(driver, Integration::Local);
+        assert!(
+            text.contains("gh pr merge \"$number\" --match-head-commit \"$head\""),
+            "{driver}"
+        );
+        // The judged head is the request's own current head, never the
+        // commit the event carried.
+        assert!(text.contains("head=\"${selection#* }\""), "{driver}");
+        assert!(text.contains("commits/$head/check-runs"), "{driver}");
+    }
+}
+
+/// The gate reads and merges under the release app alone. The default
+/// token is not a second authority here: a merge under it would start no
+/// workflow, which is the reason the arm needed the app in the first
+/// place.
+///
+/// SATISFIES forge-setup:the-setup-permits-a-request-to-merge-itself
+#[test]
+fn the_gate_reads_checks_with_the_release_app() {
+    use release_kit::landing::Integration;
+    for driver in ["rust", "python", "bash"] {
+        let text = release_workflow(driver, Integration::Local);
+        let job = text.split("release-gate:").nth(1).expect("the gate job");
+        for grant in [
+            "permission-contents: write",
+            "permission-pull-requests: write",
+            "permission-checks: read",
+        ] {
+            assert!(job.contains(grant), "{driver} lacks {grant}");
+        }
+        assert!(
+            job.contains("GH_TOKEN: ${{ steps.app-token.outputs.token }}"),
+            "{driver}"
+        );
+        assert!(!job.contains("secrets.GITHUB_TOKEN"), "{driver}");
+    }
+}
+
+/// Every answer but one leaves the request open, and the log says which
+/// one it was. A missing result, a duplicated one, and an unfinished one
+/// are all not-success.
+///
+/// SATISFIES git:the-release-request-integrates-at-the-forge
+#[test]
+fn every_non_success_check_state_leaves_the_request_open() {
+    use release_kit::landing::Integration;
+    let text = release_workflow("rust", Integration::Local);
+    // One current result, or the count is reported rather than indexed.
+    assert!(text.contains("if (.check_runs | length) == 1"), "{text}");
+    assert!(text.contains("\\(.check_runs | length) results"), "{text}");
+    // Success is the one accepted pair; everything else stops.
+    assert!(
+        text.contains("if [ \"$verdict\" != \"completed success\" ]"),
+        "{text}"
+    );
+    assert!(text.contains("stays open."), "{text}");
+}
+
+/// GitLab needs no gate and no answer. Its own auto-merge waits for the
+/// whole pipeline through one project setting, which local integration
+/// does not disturb, because that forge holds its trunk with a push
+/// access level rather than with a required check.
+///
+/// SATISFIES git:the-release-request-integrates-at-the-forge
+#[test]
+fn a_gitlab_target_keeps_its_pipeline_gated_arm() {
+    use release_kit::landing::{CheckoutMode, Integration, Style};
+    for integration in [Integration::Forge, Integration::Local] {
+        let params = projection_params(
+            "rust",
+            "gitlab",
+            CheckoutMode::LinkedWorktree,
+            integration,
+            Style::Trunk,
+            false,
+        );
+        let source = release_kit::embedded::SNIPPETS
+            .get_file("rust/gitlab/.gitlab-ci.yml")
+            .expect("the binary embeds the pipeline");
+        let text = String::from_utf8(release_kit::projection::render(source.contents(), &params))
+            .expect("the pipeline is text");
+        assert!(text.contains("merge_when_pipeline_succeeds=true"));
+        assert!(!text.contains("release-gate"));
+        assert!(!text.contains("GATE_CHECK"));
+    }
 }
 
 /// Every current fixture combination projects, with no collision over an
@@ -25714,7 +26309,7 @@ fn the_stage_receipt_and_human_output_snapshot_hold() {
     ];
     assert_eq!(top_level_keys(&receipt_text), receipt_keys);
     let receipt = stage_receipt(&stage);
-    assert_eq!(receipt["schema"], "rk.stage/4");
+    assert_eq!(receipt["schema"], "rk.stage/5");
     assert_eq!(receipt["rk_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(receipt["target"], canonical_target.display().to_string());
     assert_eq!(receipt["stage_root"], stage.display().to_string());
@@ -25894,7 +26489,7 @@ fn stage_clean_refuses_every_protected_or_ambiguous_path_and_deletes_one_valid_s
     std::fs::write(
         ancestor.join("stage.json"),
         format!(
-            r#"{{"schema":"rk.stage/4","stage_root":"{}","target":"{}"}}"#,
+            r#"{{"schema":"rk.stage/5","stage_root":"{}","target":"{}"}}"#,
             ancestor.display(),
             ancestor.join("inner").display()
         ),
@@ -30045,7 +30640,7 @@ fn profile_reports_values_sources_and_the_selection_and_writes_nothing() {
         "rk profile writes nothing"
     );
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["schema"], "rk.profile/1");
+    assert_eq!(report["schema"], "rk.profile/2");
     assert_eq!(report["profile"]["release"]["driver"], "rust");
     assert_eq!(report["git"]["checkout_mode"], "linked-worktree");
     assert_eq!(report["sources"]["profile.technologies"], "config");

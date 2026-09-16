@@ -208,13 +208,13 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `forge-setup:the-setup-permits-a-request-to-merge-itself` — The setup permits a request to merge itself
 
-The `auto-merge` step MUST assert that the forge permits a pull request to merge itself once every required check passes, and where a forge carries no such switch the observation MUST name what stands in for it rather than reporting a bare pass, because the trunk style's release decision is a standing instruction the forge executes and a repository that forbids it fails silently — the request simply never offers the option.
+The `auto-merge` step MUST assert that the forge permits a pull request to merge itself once every required check passes, and where a forge carries no such switch the observation MUST name what stands in for it rather than reporting a bare pass, because the trunk style's release decision is a standing instruction the forge executes and a repository that forbids it fails silently — the request simply never offers the option. Where the release identity is what executes that instruction, the `install-bot` observation MUST read the installation's own permissions and MUST report unsatisfied naming each permission the target's rendered release automation needs and the installation lacks, for the same reason: a token is minted no wider than its installation, so a missing permission fails at release time rather than at setup time. That minimum MUST be `contents: write` and `pull_requests: write`, MUST add `checks: read` exactly where the target renders a release gate that reads a check run, and MUST ask a target rendering no such gate for nothing more; the remedy MUST name the installation's own settings page, because approving a widened grant is the installation owner's act.
 
 #### Scenario: One forge carries the switch and the other does not
 
-- GIVEN a GitHub repository whose `allow_auto_merge` is false and a GitLab project gated only by its pipeline requirement
+- GIVEN a GitHub repository whose `allow_auto_merge` is false, a GitLab project gated only by its pipeline requirement, and a locally integrated GitHub trunk whose App installation holds the two writes alone
 - WHEN `rk setup step auto-merge --apply` runs on each and `rk setup check` reads each back
-- THEN the GitHub setting reads back true, and the GitLab step reports satisfied with the limitation naming that the forge offers no project-level switch and availability follows the pipeline requirement `protect-trunk` asserts
+- THEN the GitHub setting reads back true, the GitLab step reports satisfied with the limitation naming that the forge offers no project-level switch and availability follows the pipeline requirement `protect-trunk` asserts, and `install-bot` on the third reports unsatisfied naming `checks: read` and the installation settings page
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 
