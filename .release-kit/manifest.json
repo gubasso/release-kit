@@ -47,7 +47,7 @@
     {
       "destination": ".github/workflows/release-plz.yml",
       "kind": "rendered",
-      "sha256": "208732d43f7502d9f968757d5538dcba7a9f6fb1521eb0dd174c56b696c3fe3a"
+      "sha256": "0153222618886e7d40f8ac005c2480a266857e8a30d6efce9eeb5ea42c5bba59"
     },
     {
       "destination": ".github/workflows/scorecard.yml",

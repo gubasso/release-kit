@@ -25290,6 +25290,11 @@ fn each_driver_proves_its_release_request_identity() {
         ] {
             assert!(text.contains(proof), "{driver} lacks {proof}");
         }
+        // The forge CLI refuses to gather the pages into one array while a
+        // filter is given, and it says so rather than answering. A rendered
+        // workflow asking for both never reads a single request.
+        assert!(!text.contains("--slurp"), "{driver} asks for --slurp");
+        assert!(text.contains("--paginate"), "{driver} reads one page only");
     }
 }
 
@@ -25303,7 +25308,7 @@ fn an_imitating_request_never_merges() {
     use release_kit::landing::Integration;
     let text = release_workflow("rust", Integration::Local);
     // Exactly one candidate survives every filter, or the job stops.
-    assert!(text.contains("| if length == 1"), "{text}");
+    assert!(text.contains(r#"if [ "$count" != "1" ]; then"#), "{text}");
     assert!(
         text.contains("no single release request the release app owns"),
         "{text}"
@@ -25321,41 +25326,6 @@ fn an_imitating_request_never_merges() {
 /// SATISFIES git:the-release-request-integrates-at-the-forge
 #[test]
 fn a_release_request_after_the_first_candidate_page_is_found() {
-    use std::os::unix::fs::PermissionsExt as _;
-
-    let script = release_gate_script();
-
-    let scratch = tempfile::tempdir().expect("a scratch gate fixture exists");
-    let bin = scratch.path().join("bin");
-    std::fs::create_dir(&bin).expect("the fake bin creates");
-    let gh = bin.join("gh");
-    std::fs::write(
-        &gh,
-        r#"#!/usr/bin/env bash
-set -eu
-args="$*"
-if [[ "$args" == *"/pulls"* ]]; then
-  [[ "$args" == *"--paginate"* && "$args" == *"--slurp"* ]]
-  query=""
-  while (($#)); do
-    if [[ "$1" == "--jq" ]]; then query="$2"; break; fi
-    shift
-  done
-  jq -r "$query" "$STATE/pages.json"
-elif [[ "$args" == *"/check-runs"* ]]; then
-  printf '%s\n' 'completed success'
-elif [[ "$args" == "pr merge 101 --match-head-commit release-head --squash --delete-branch" ]]; then
-  printf '%s\n' "$args" > "$STATE/merged"
-else
-  printf 'unexpected gh call: %s\n' "$args" >&2
-  exit 1
-fi
-"#,
-    )
-    .expect("the fake gh writes");
-    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755))
-        .expect("the fake gh is executable");
-
     let irrelevant = serde_json::json!({
         "number": 1,
         "draft": true,
@@ -25364,19 +25334,115 @@ fi
         "user": {"type": "Bot", "login": "release-bot[bot]"}
     });
     let first_page = vec![irrelevant; 100];
-    let candidate = serde_json::json!({
-        "number": 101,
-        "draft": false,
-        "base": {"ref": "master"},
-        "head": {"repo": {"full_name": "acme/widget"}, "ref": "release-plz-current", "sha": "release-head"},
-        "user": {"type": "Bot", "login": "release-bot[bot]"}
-    });
+    let run = run_gate_script(
+        &serde_json::json!([first_page, [gate_candidate(101, "release-head")]]),
+        "",
+        r#"elif [[ "$args" == *"/check-runs"* ]]; then
+  printf '%s\n' 'completed success'
+elif [[ "$args" == "pr merge"* ]]; then
+  printf '%s\n' "$args" > "$STATE/merged""#,
+    );
+    assert!(
+        run.output.status.success(),
+        "stdout: {}\nstderr: {}",
+        run.stdout(),
+        String::from_utf8_lossy(&run.output.stderr)
+    );
+    assert_eq!(
+        run.merged().expect("the merge is recorded"),
+        "pr merge 101 --match-head-commit release-head --squash --delete-branch\n"
+    );
+}
+
+/// The exact-one condition spans every page, never one page at a time. Two
+/// requests the release app owns, split across a page boundary, are an
+/// ambiguity the job refuses: merging the first would release whichever
+/// candidate the forge happened to answer with first.
+///
+/// SATISFIES git:the-release-request-integrates-at-the-forge
+#[test]
+fn two_candidates_across_two_pages_merge_neither() {
+    let run = run_gate_script(
+        &serde_json::json!([
+            [gate_candidate(101, "first-head")],
+            [gate_candidate(102, "second-head")]
+        ]),
+        "",
+        r#"elif [[ "$args" == *"/check-runs"* ]]; then
+  printf '%s\n' 'completed success'
+elif [[ "$args" == "pr merge"* ]]; then
+  printf '%s\n' "$args" > "$STATE/merged""#,
+    );
+    let stdout = run.stdout();
+    assert!(run.output.status.success(), "{stdout}");
+    assert!(
+        stdout.contains("no single release request the release app owns"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("2 match and nothing merged"), "{stdout}");
+    assert_eq!(run.merged(), None, "{stdout}");
+}
+
+/// The forge CLI as the gate meets it, so a test proves the shipped shell
+/// against the real tool's behavior rather than against a convenience.
+///
+/// Two properties matter and neither is decorative. `gh` rejects `--slurp`
+/// beside `--jq`, so a workflow pairing them never runs at all. And
+/// `--paginate` applies the filter to each page alone and concatenates
+/// what each page answers, so no filter ever sees the whole set. A mock
+/// that folded the pages into one array hid both facts, and the gate
+/// shipped broken.
+///
+/// `arms` carries the calls past candidate discovery. `$STATE/pages.json`
+/// holds an array of pages, each an array of requests.
+fn write_fake_gh(bin: &std::path::Path, arms: &str) {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let script = format!(
+        r#"#!/usr/bin/env bash
+set -eu
+args="$*"
+if [[ "$args" == *"/pulls"* ]]; then
+  if [[ "$args" == *"--slurp"* ]] && [[ "$args" == *"--jq"* || "$args" == *"--template"* ]]; then
+    echo 'the `--slurp` option is not supported with `--jq` or `--template`' >&2
+    exit 1
+  fi
+  [[ "$args" == *"--paginate"* ]]
+  query=""
+  while (($#)); do
+    if [[ "$1" == "--jq" ]]; then query="$2"; break; fi
+    shift
+  done
+  jq -c '.[]' "$STATE/pages.json" | while IFS= read -r page; do
+    printf '%s' "$page" | jq -r "$query"
+  done
+{arms}
+else
+  printf 'unexpected gh call: %s\n' "$args" >&2
+  exit 1
+fi
+"#
+    );
+    let gh = bin.join("gh");
+    std::fs::write(&gh, script).expect("the fake gh writes");
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755))
+        .expect("the fake gh is executable");
+}
+
+/// Run the gate's shell against a fake forge CLI, with `pages` as the
+/// paginated candidate answer and `arms` as every call after discovery.
+fn run_gate_script(pages: &serde_json::Value, state: &str, arms: &str) -> GateRun {
+    let script = release_gate_script();
+    let scratch = tempfile::tempdir().expect("a scratch gate fixture exists");
+    let bin = scratch.path().join("bin");
+    std::fs::create_dir(&bin).expect("the fake bin creates");
+    write_fake_gh(&bin, arms);
     std::fs::write(
         scratch.path().join("pages.json"),
-        serde_json::to_vec(&serde_json::json!([first_page, [candidate]]))
-            .expect("the pages serialize"),
+        serde_json::to_vec(pages).expect("the pages serialize"),
     )
     .expect("the pages write");
+    std::fs::write(scratch.path().join("state"), state).expect("the state writes");
 
     let old_path = std::env::var_os("PATH").unwrap_or_default();
     let mut paths = vec![bin];
@@ -25394,16 +25460,39 @@ fi
         .env("BRANCH_SHAPE", "release-plz-")
         .output()
         .expect("the gate script runs");
-    assert!(
-        output.status.success(),
-        "stdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(
-        std::fs::read_to_string(scratch.path().join("merged")).expect("the merge is recorded"),
-        "pr merge 101 --match-head-commit release-head --squash --delete-branch\n"
-    );
+    GateRun { output, scratch }
+}
+
+/// One run of the gate's shell, holding its scratch open so a test can read
+/// what the fake forge CLI recorded.
+struct GateRun {
+    output: std::process::Output,
+    scratch: tempfile::TempDir,
+}
+
+impl GateRun {
+    fn stdout(&self) -> String {
+        String::from_utf8_lossy(&self.output.stdout).into_owned()
+    }
+
+    fn merged(&self) -> Option<String> {
+        std::fs::read_to_string(self.scratch.path().join("merged")).ok()
+    }
+}
+
+/// One release request the release app owns, on its own page.
+fn gate_candidate(number: u64, head: &str) -> serde_json::Value {
+    serde_json::json!({
+        "number": number,
+        "draft": false,
+        "base": {"ref": "master"},
+        "head": {
+            "repo": {"full_name": "acme/widget"},
+            "ref": format!("release-plz-{head}"),
+            "sha": head
+        },
+        "user": {"type": "Bot", "login": "release-bot[bot]"}
+    })
 }
 
 /// The gate's own shell, lifted out of the rendered workflow so a test can
@@ -25424,72 +25513,18 @@ fn release_gate_script() -> String {
 
 /// Run the gate's shell against a fake forge CLI whose merge refuses, and
 /// whose readback answers `state`.
-fn gate_merge_refused_with(state: &str) -> std::process::Output {
-    use std::os::unix::fs::PermissionsExt as _;
-
-    let script = release_gate_script();
-    let scratch = tempfile::tempdir().expect("a scratch gate fixture exists");
-    let bin = scratch.path().join("bin");
-    std::fs::create_dir(&bin).expect("the fake bin creates");
-    let candidate = serde_json::json!({
-        "number": 7,
-        "draft": false,
-        "base": {"ref": "master"},
-        "head": {"repo": {"full_name": "acme/widget"}, "ref": "release-plz-current", "sha": "release-head"},
-        "user": {"type": "Bot", "login": "release-bot[bot]"}
-    });
-    std::fs::write(
-        scratch.path().join("pages.json"),
-        serde_json::to_vec(&serde_json::json!([[candidate]])).expect("the pages serialize"),
-    )
-    .expect("the pages write");
-    std::fs::write(scratch.path().join("state"), state).expect("the state writes");
-    let gh = bin.join("gh");
-    std::fs::write(
-        &gh,
-        r#"#!/usr/bin/env bash
-set -eu
-args="$*"
-if [[ "$args" == *"/pulls"* ]]; then
-  query=""
-  while (($#)); do
-    if [[ "$1" == "--jq" ]]; then query="$2"; break; fi
-    shift
-  done
-  jq -r "$query" "$STATE/pages.json"
-elif [[ "$args" == *"/check-runs"* ]]; then
+fn gate_merge_refused_with(state: &str) -> GateRun {
+    run_gate_script(
+        &serde_json::json!([[gate_candidate(7, "release-head")]]),
+        state,
+        r#"elif [[ "$args" == *"/check-runs"* ]]; then
   printf '%s\n' 'completed success'
 elif [[ "$args" == "pr merge"* ]]; then
   echo 'the forge refused the merge' >&2
   exit 1
 elif [[ "$args" == "pr view"* ]]; then
-  cat "$STATE/state"
-else
-  printf 'unexpected gh call: %s\n' "$args" >&2
-  exit 1
-fi
-"#,
+  cat "$STATE/state""#,
     )
-    .expect("the fake gh writes");
-    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755))
-        .expect("the fake gh is executable");
-
-    let old_path = std::env::var_os("PATH").unwrap_or_default();
-    let mut paths = vec![bin];
-    paths.extend(std::env::split_paths(&old_path));
-    let path = std::env::join_paths(paths).expect("PATH joins");
-    std::process::Command::new("sh")
-        .args(["-c", &script])
-        .env("PATH", path)
-        .env("STATE", scratch.path())
-        .env("GH_TOKEN", "fixture")
-        .env("GH_REPO", "acme/widget")
-        .env("APP_LOGIN", "release-bot[bot]")
-        .env("TRUNK", "master")
-        .env("GATE_CHECK", "gate")
-        .env("BRANCH_SHAPE", "release-plz-")
-        .output()
-        .expect("the gate script runs")
 }
 
 /// The trunk's own rule refusing a stale merge is the protection working.
@@ -25501,9 +25536,9 @@ fi
 #[test]
 fn a_merge_the_trunk_refuses_on_policy_is_a_successful_no_op() {
     for state in ["OPEN BEHIND release-head", "OPEN BLOCKED release-head"] {
-        let output = gate_merge_refused_with(state);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(output.status.success(), "{state}: {stdout}");
+        let run = gate_merge_refused_with(state);
+        let stdout = run.stdout();
+        assert!(run.output.status.success(), "{state}: {stdout}");
         assert!(
             stdout.contains("the trunk refused the merge of #7"),
             "{state}: {stdout}"
@@ -25518,9 +25553,9 @@ fn a_merge_the_trunk_refuses_on_policy_is_a_successful_no_op() {
 /// SATISFIES git:the-release-request-integrates-at-the-forge
 #[test]
 fn a_merge_that_fails_for_another_reason_still_fails_the_job() {
-    let output = gate_merge_refused_with("OPEN DIRTY release-head");
-    assert!(!output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let run = gate_merge_refused_with("OPEN DIRTY release-head");
+    assert!(!run.output.status.success());
+    let stdout = run.stdout();
     assert!(stdout.contains("::error::"), "{stdout}");
     assert!(stdout.contains("OPEN DIRTY release-head"), "{stdout}");
 }
@@ -25531,9 +25566,9 @@ fn a_merge_that_fails_for_another_reason_still_fails_the_job() {
 /// SATISFIES git:the-release-request-integrates-at-the-forge
 #[test]
 fn a_request_another_run_already_merged_ends_successfully() {
-    let output = gate_merge_refused_with("MERGED UNKNOWN release-head");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(output.status.success(), "{stdout}");
+    let run = gate_merge_refused_with("MERGED UNKNOWN release-head");
+    let stdout = run.stdout();
+    assert!(run.output.status.success(), "{stdout}");
     assert!(
         stdout.contains("pull request #7 was already merged at release-head"),
         "{stdout}"
@@ -25574,7 +25609,7 @@ fn the_gate_matches_the_judged_head_at_merge() {
         );
         // The judged head is the request's own current head, never the
         // commit the event carried.
-        assert!(text.contains("head=\"${selection#* }\""), "{driver}");
+        assert!(text.contains("head=\"${candidates#* }\""), "{driver}");
         assert!(text.contains("commits/$head/check-runs"), "{driver}");
     }
 }

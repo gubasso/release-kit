@@ -57,25 +57,29 @@
           # renders the same actor as `app/<slug>`, and the GraphQL one as
           # the bare slug, so a filter written against either would refuse
           # every release rather than admit a foreign request.
-          selection="$(gh api --paginate --slurp "repos/{owner}/{repo}/pulls" -X GET \
+          #
+          # `--paginate` reads every page, and the forge CLI refuses to
+          # gather them into one array while a filter is given. So the
+          # filter judges each page alone and names every survivor, and the
+          # shell counts them across the whole set. Anything but one exact
+          # candidate merges nothing.
+          candidates="$(gh api --paginate "repos/{owner}/{repo}/pulls" -X GET \
             -f state=open -f base="$TRUNK" -f per_page=100 \
-            --jq '[ .[][]
-                    | select(.draft == false)
-                    | select(.base.ref == env.TRUNK)
-                    | select(.head.repo.full_name == env.GH_REPO)
-                    | select(.user.type == "Bot")
-                    | select(.user.login == env.APP_LOGIN)
-                    | select(.head.ref | startswith(env.BRANCH_SHAPE))
-                  ]
-                  | if length == 1
-                    then "\(.[0].number) \(.[0].head.sha)"
-                    else "" end')"
-          if [ -z "$selection" ]; then
-            echo "no single release request the release app owns against $TRUNK; nothing merged."
+            --jq '.[]
+                  | select(.draft == false)
+                  | select(.base.ref == env.TRUNK)
+                  | select(.head.repo.full_name == env.GH_REPO)
+                  | select(.user.type == "Bot")
+                  | select(.user.login == env.APP_LOGIN)
+                  | select(.head.ref | startswith(env.BRANCH_SHAPE))
+                  | "\(.number) \(.head.sha)"')"
+          count="$(printf '%s\n' "$candidates" | grep -c '^[0-9]' || true)"
+          if [ "$count" != "1" ]; then
+            echo "no single release request the release app owns against $TRUNK; $count match and nothing merged."
             exit 0
           fi
-          number="${selection% *}"
-          head="${selection#* }"
+          number="${candidates% *}"
+          head="${candidates#* }"
           # The named check for that exact head, latest result only. A
           # missing, duplicated, unfinished, or non-success answer all leave
           # the request open, and the log says which one it was.
