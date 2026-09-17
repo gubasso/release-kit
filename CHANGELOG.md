@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.4](https://github.com/gubasso/release-kit/compare/v0.8.3...v0.8.4) - 2026-09-17
+
+### Fixed
+
+- *(integration)* read every page of release requests with a filter the forge CLI accepts
+- *(setup/protection)* keep the trunk's unbypassable rules out of the bypassed ruleset
+- *(integration)* preserve release request freshness
+
 ## [0.8.3](https://github.com/gubasso/release-kit/compare/v0.8.2...v0.8.3) - 2026-09-16
 
 ### Added
