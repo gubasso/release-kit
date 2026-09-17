@@ -60,21 +60,28 @@ pub(super) fn github_bypass_actors(values: &[String]) -> serde_json::Value {
     )
 }
 
-/// The GitHub trunk ruleset's `rules` array, as JSON.
+/// One GitHub ruleset's `rules` array, as JSON.
 ///
 /// Every rule comes from `protection.owned_trunk_rules`, which the floor
 /// table judges per integration mode and the observer checks against, so
 /// one key decides what a run installs and what the check expects. A rule
 /// this convention parameterizes carries its parameters; the rest are
 /// bare type entries.
-fn compose_trunk_rules(
+///
+/// `wanted` selects which of the owned rules this ruleset carries. The
+/// trunk's rules live in two rulesets because a bypass actor is recorded
+/// on a ruleset: the rules a bypass may excuse are kept apart from the
+/// rules that must hold against everyone.
+fn compose_rules(
     protection: &crate::config::Protection,
+    wanted: &[&str],
     required_check: &str,
     title_check: &str,
 ) -> String {
     let rules: Vec<serde_json::Value> = protection
         .owned_trunk_rules
         .iter()
+        .filter(|rule| wanted.iter().any(|kind| kind == &rule.as_str()))
         .map(|rule| match rule.as_str() {
             "pull_request" => serde_json::json!({
                 "type": "pull_request",
@@ -228,6 +235,9 @@ pub struct Ctx {
     bot_app_id: Option<String>,
     /// The ruleset that protects the trunk, as this target names it.
     trunk_ruleset: String,
+    /// The ruleset that keeps the trunk undeletable and unrewritable, as
+    /// this target names it. It names no bypass actor.
+    safety_ruleset: String,
     /// The ruleset that makes published tags immutable.
     tag_ruleset: String,
     /// The ruleset that protects the release lines.
@@ -350,6 +360,7 @@ impl Ctx {
                     .find(|known| *known == driver)
             }),
             trunk_ruleset: protection.trunk_ruleset(&trunk),
+            safety_ruleset: protection.safety_ruleset(&trunk),
             tag_ruleset: protection.tag_ruleset.clone(),
             lines_ruleset: protection.lines_ruleset.clone(),
             title_check: protection.title_check.clone(),
@@ -444,6 +455,7 @@ impl Ctx {
             excluded_steps: std::collections::BTreeMap::new(),
             bot_app_id: None,
             trunk_ruleset: format!("{}-protection", crate::config::TRUNK_DEFAULT),
+            safety_ruleset: format!("{}-safety", crate::config::TRUNK_DEFAULT),
             tag_ruleset: defaults.tag_ruleset.clone(),
             lines_ruleset: defaults.lines_ruleset.clone(),
             title_check: defaults.title_check.clone(),
@@ -558,6 +570,12 @@ impl Ctx {
         &self.trunk_ruleset
     }
 
+    /// The ruleset that keeps the trunk undeletable and unrewritable.
+    #[must_use]
+    pub fn safety_ruleset(&self) -> &str {
+        &self.safety_ruleset
+    }
+
     /// The ruleset that makes published tags immutable.
     #[must_use]
     pub fn tag_ruleset(&self) -> &str {
@@ -582,10 +600,22 @@ impl Ctx {
         self.integration
     }
 
-    /// The trunk ruleset's rules, for the body a run sends the forge.
+    /// The trunk ruleset's rules: the request and the check it carries,
+    /// which the recorded bypass actors may be excused from.
     fn trunk_rules(&self) -> String {
-        compose_trunk_rules(
+        compose_rules(
             &self.protection,
+            &crate::config::REQUEST_RULES,
+            self.required_check.as_deref().unwrap_or_default(),
+            &self.title_check,
+        )
+    }
+
+    /// The safety ruleset's rules: what holds against every actor.
+    fn safety_rules(&self) -> String {
+        compose_rules(
+            &self.protection,
+            &crate::config::SAFETY_RULES,
             self.required_check.as_deref().unwrap_or_default(),
             &self.title_check,
         )
@@ -625,6 +655,10 @@ impl Ctx {
             ("RK_TRUNK_BRANCH".into(), self.trunk.clone().into()),
             ("RK_LINE_PREFIX".into(), self.line_prefix.clone().into()),
             ("RK_TRUNK_RULESET".into(), self.trunk_ruleset.clone().into()),
+            (
+                "RK_SAFETY_RULESET".into(),
+                self.safety_ruleset.clone().into(),
+            ),
             ("RK_TAG_RULESET".into(), self.tag_ruleset.clone().into()),
             ("RK_LINES_RULESET".into(), self.lines_ruleset.clone().into()),
             ("RK_TITLE_CHECK".into(), self.title_check.clone().into()),
@@ -692,12 +726,15 @@ impl Ctx {
                 "RK_GITLAB_PUSH_LEVEL".into(),
                 self.protection.gitlab.push_access_level.to_string().into(),
             ),
-            // The trunk ruleset's rules, built from the one key the floor
+            // The two rulesets' rules, built from the one key the floor
             // table judges and the observer reads, so the body a run
             // sends cannot install a rule the check does not expect, or
-            // omit one it does. Local integration keeps the same rule set;
-            // its administrator bypass is a separate, explicit value.
+            // omit one it does. The split is what a bypass costs: an
+            // actor excused from the trunk ruleset is excused from every
+            // rule in it, so the rules that must hold against everyone
+            // live in the safety ruleset, which names nobody.
             ("RK_TRUNK_RULES".into(), self.trunk_rules().into()),
+            ("RK_SAFETY_RULES".into(), self.safety_rules().into()),
             (
                 "RK_GITLAB_MERGE_LEVEL".into(),
                 self.protection.gitlab.merge_access_level.to_string().into(),
@@ -838,29 +875,33 @@ pub fn resolve_cli(forge: Forge) -> Result<PathBuf, RkError> {
 
 #[cfg(test)]
 mod tests {
-    /// The trunk ruleset's rules come from the one owned-rules key, so
-    /// what a run installs, what the floor table judges, and what the
-    /// check expects cannot disagree. A local-integration target keeps the
-    /// request and required-check rules, while its separately recorded
-    /// administrator bypass admits the deliberate trunk push.
+    /// Both rulesets' rules come from the one owned-rules key, so what a
+    /// run installs, what the floor table judges, and what the check
+    /// expects cannot disagree. The split is what a bypass costs: a
+    /// recorded actor is excused from every rule in the ruleset it names,
+    /// so the rules that hold against everyone are composed apart, and a
+    /// target under either authority composes the same two halves.
     #[test]
-    fn the_trunk_rules_follow_the_owned_rule_key() {
+    fn each_ruleset_composes_its_half_of_the_owned_rule_key() {
+        let kinds = |text: &str| -> Vec<String> {
+            let parsed: Vec<serde_json::Value> =
+                serde_json::from_str(text).expect("the rules parse");
+            parsed
+                .iter()
+                .filter_map(|rule| rule["type"].as_str())
+                .map(str::to_owned)
+                .collect()
+        };
         let mut policy = crate::config::Protection::default();
-        let forge = super::compose_trunk_rules(&policy, "gate", "pr-title");
-        let parsed: Vec<serde_json::Value> = serde_json::from_str(&forge).expect("the rules parse");
-        let kinds: Vec<&str> = parsed
-            .iter()
-            .filter_map(|rule| rule["type"].as_str())
-            .collect();
-        assert_eq!(
-            kinds,
-            [
-                "deletion",
-                "non_fast_forward",
-                "pull_request",
-                "required_status_checks"
-            ]
-        );
+        let request =
+            super::compose_rules(&policy, &crate::config::REQUEST_RULES, "gate", "pr-title");
+        assert_eq!(kinds(&request), ["pull_request", "required_status_checks"]);
+        let safety =
+            super::compose_rules(&policy, &crate::config::SAFETY_RULES, "gate", "pr-title");
+        assert_eq!(kinds(&safety), ["deletion", "non_fast_forward"]);
+
+        let parsed: Vec<serde_json::Value> =
+            serde_json::from_str(&request).expect("the rules parse");
         let checks = parsed
             .iter()
             .find(|rule| rule["type"] == "required_status_checks")
@@ -870,21 +911,26 @@ mod tests {
             serde_json::json!([{ "context": "gate" }, { "context": "pr-title" }])
         );
 
+        // The recorded bypass changes who is excused, never which rules
+        // each ruleset carries.
         policy.bypass_actors = vec![crate::config::LOCAL_GITHUB_BYPASS.into()];
-        let local = super::compose_trunk_rules(&policy, "gate", "pr-title");
-        let parsed: Vec<serde_json::Value> = serde_json::from_str(&local).expect("the rules parse");
-        let kinds: Vec<&str> = parsed
-            .iter()
-            .filter_map(|rule| rule["type"].as_str())
-            .collect();
         assert_eq!(
-            kinds,
-            [
-                "deletion",
-                "non_fast_forward",
-                "pull_request",
-                "required_status_checks"
-            ]
+            kinds(&super::compose_rules(
+                &policy,
+                &crate::config::REQUEST_RULES,
+                "gate",
+                "pr-title"
+            )),
+            ["pull_request", "required_status_checks"]
+        );
+        assert_eq!(
+            kinds(&super::compose_rules(
+                &policy,
+                &crate::config::SAFETY_RULES,
+                "gate",
+                "pr-title"
+            )),
+            ["deletion", "non_fast_forward"]
         );
     }
 

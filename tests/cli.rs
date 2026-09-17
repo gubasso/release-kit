@@ -3701,10 +3701,12 @@ fn every_setup_script_passes_the_static_battery() {
         "RK_BOT_INSTALLATION",
         "RK_LINE_PREFIX",
         "RK_TRUNK_RULESET",
+        "RK_SAFETY_RULESET",
         "RK_TAG_RULESET",
         "RK_LINES_RULESET",
         "RK_TITLE_CHECK",
         "RK_TRUNK_RULES",
+        "RK_SAFETY_RULES",
         "RK_BYPASS_ACTORS",
         "RK_TAG_PATTERN",
         "RK_REVIEW_COUNT",
@@ -4493,16 +4495,12 @@ api)
     n="${path##*/}"
     name="$(sed -n "${n}p" "$STATE/rulesets.index")"
     body="$(cat "$STATE/ruleset_$name" 2>/dev/null)"
+    # The real query against the seeded body, never a canned answer per
+    # pattern: a check that reads a ruleset differently must fail here the
+    # way it would on the forge.
     case "$query" in
       "") printf '%s\n' "$body";;
-      *"bypass_actors"*) jq -c '(.bypass_actors // [] | sort_by(.actor_type, .actor_id, .bypass_mode))' <<<"$body";;
-      *'contains(["pull_request"])'*) echo true;;
-      *'contains(["required_status_checks"])'*) echo true;;
-      *'contains(["deletion","non_fast_forward"])'*) echo true;;
-      *"allowed_merge_methods"*) echo '["squash"]';;
-      *"required_status_checks[].context"*) grep -o '"context": "[^"]*"' <<<"$body" | head -1 | cut -d'"' -f4;;
-      *"required_approving_review_count"*) echo 0;;
-      *) echo null;;
+      *) jq -r "$query" <<<"$body";;
     esac;;
   *) echo '{}';;
   esac
@@ -4965,8 +4963,8 @@ fn a_full_github_apply_lands_reasserts_and_checks_clean() {
     let rulesets = std::fs::read_to_string(fixture.state("rulesets.index")).expect("reads");
     assert_eq!(
         rulesets.lines().count(),
-        2,
-        "exactly two protections: {rulesets}"
+        3,
+        "exactly three protections: {rulesets}"
     );
     let body = std::fs::read_to_string(fixture.state("ruleset_master-protection")).expect("reads");
     // Read as JSON rather than as text: the rules are composed from the
@@ -4993,9 +4991,29 @@ fn a_full_github_apply_lands_reasserts_and_checks_clean() {
         serde_json::json!(["squash"]),
         "{body}"
     );
+    // The rules a bypass may never excuse live in their own ruleset, which
+    // names no actor. A run that left them beside a bypassed rule would
+    // read as protection while granting the bypass everything.
     for kind in ["deletion", "non_fast_forward"] {
-        rule(kind);
+        assert!(
+            rules.iter().all(|rule| rule["type"] != kind),
+            "the {kind} rule belongs to the safety ruleset: {body}"
+        );
     }
+    let safety = std::fs::read_to_string(fixture.state("ruleset_master-safety")).expect("reads");
+    let safety: serde_json::Value = serde_json::from_str(&safety).expect("the ruleset parses");
+    assert_eq!(safety["bypass_actors"], serde_json::json!([]));
+    assert_eq!(
+        safety["conditions"]["ref_name"]["include"],
+        serde_json::json!(["refs/heads/master"])
+    );
+    let held: Vec<&str> = safety["rules"]
+        .as_array()
+        .expect("a rules array")
+        .iter()
+        .filter_map(|rule| rule["type"].as_str())
+        .collect();
+    assert_eq!(held, ["deletion", "non_fast_forward"], "{safety}");
     assert_eq!(
         std::fs::read_to_string(fixture.state("squash_merge_commit_title")).expect("state reads"),
         "PR_TITLE\n",
@@ -5111,7 +5129,7 @@ fn a_full_github_apply_lands_reasserts_and_checks_clean() {
     );
 
     // The optional step applies by name, and the ownership check still
-    // holds with the third protection present.
+    // holds with the fourth protection present.
     fixture
         .rk(&["setup", "step", "protect-release-lines"])
         .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
@@ -5120,7 +5138,7 @@ fn a_full_github_apply_lands_reasserts_and_checks_clean() {
     let rulesets = std::fs::read_to_string(fixture.state("rulesets.index")).expect("reads");
     assert_eq!(
         rulesets.lines().count(),
-        3,
+        4,
         "the optional protection joins the owned set: {rulesets}"
     );
 
@@ -6080,6 +6098,25 @@ fn a_protection_step_refuses_before_the_trunk_is_the_default() {
 // ---------------------------------------------------------------------------
 // The merge queue this convention refuses
 
+/// The safety ruleset the setup owns: the rules no actor is excused from,
+/// which is why they sit apart from the ruleset a bypass may name.
+fn owned_safety_ruleset() -> String {
+    r#"{
+  "name": "master-safety",
+  "target": "branch",
+  "enforcement": "active",
+  "bypass_actors": [],
+  "conditions": {
+    "ref_name": { "include": ["refs/heads/master"], "exclude": [] }
+  },
+  "rules": [
+    { "type": "deletion" },
+    { "type": "non_fast_forward" }
+  ]
+}"#
+    .to_owned()
+}
+
 /// A trunk ruleset the setup owns, plus whatever extra rules a case adds.
 fn owned_trunk_ruleset(extra: &str, strict: Option<bool>) -> String {
     let policy = strict.map_or_else(String::new, |value| {
@@ -6095,8 +6132,6 @@ fn owned_trunk_ruleset(extra: &str, strict: Option<bool>) -> String {
     "ref_name": {{ "include": ["refs/heads/master"], "exclude": [] }}
   }},
   "rules": [
-    {{ "type": "deletion" }},
-    {{ "type": "non_fast_forward" }},
     {{
       "type": "pull_request",
       "parameters": {{ "required_approving_review_count": 0, "allowed_merge_methods": ["squash"] }}
@@ -6116,11 +6151,12 @@ fn check_owned_trunk(fixture: &ForgeFixture, extra: &str, strict: Option<bool>) 
     fixture.seed("squash_merge_commit_title", "PR_TITLE");
     fixture.seed("squash_merge_commit_message", "PR_BODY");
     fixture.seed("default_branch", "master");
-    fixture.seed("rulesets.index", "master-protection\n");
+    fixture.seed("rulesets.index", "master-protection\nmaster-safety\n");
     fixture.seed(
         "ruleset_master-protection",
         &owned_trunk_ruleset(extra, strict),
     );
+    fixture.seed("ruleset_master-safety", &owned_safety_ruleset());
     let out = fixture
         .rk(&["setup", "check"])
         .args(["--repo", "acme/widget", "--forge", "github"])
@@ -6208,7 +6244,7 @@ fn a_loose_status_check_policy_faults() {
     // Empty checks and a loose policy are independent defects.
     let mut body: serde_json::Value =
         serde_json::from_str(&owned_trunk_ruleset("", Some(false))).expect("the ruleset parses");
-    body["rules"][3]["parameters"]["required_status_checks"] = serde_json::json!([]);
+    body["rules"][1]["parameters"]["required_status_checks"] = serde_json::json!([]);
     fixture.seed("ruleset_master-protection", &body.to_string());
     let line = protect_trunk_line(&fixture, Some("test-check"));
     assert!(line.contains("no status check is required"), "{line}");
@@ -6236,6 +6272,127 @@ fn the_strict_status_check_policy_holds_the_shape() {
         !text.contains("version computed against a trunk that moved"),
         "{text}"
     );
+}
+
+/// A local-integration target excuses its administrator from the request
+/// rules and from nothing else.
+///
+/// A bypass actor is recorded on a ruleset, so the rules that must hold
+/// against every actor are installed in a ruleset that names none. A run
+/// that left them beside the bypassed rules would read as protection while
+/// handing the bypass the deletion and the force-push as well.
+///
+/// SATISFIES forge-setup:a-merge-carries-the-trunk-it-was-tested-against
+#[test]
+fn a_local_trunk_excuses_the_request_rules_and_never_the_safety_rules() {
+    let fixture = ForgeFixture::new();
+    fixture.seed_gate();
+    fixture.seed("default_branch", "master");
+    fixture.seed("squash_merge_commit_title", "PR_TITLE");
+    fixture.seed("squash_merge_commit_message", "PR_BODY");
+    std::fs::create_dir_all(fixture.target.path().join(".release-kit"))
+        .expect("the record dir creates");
+    std::fs::write(
+        fixture.target.path().join(".release-kit/config.toml"),
+        concat!(
+            "schema_version = 2\n",
+            "[project]\nrepo = \"acme/widget\"\n",
+            "[profile]\nforge = \"github\"\n",
+            "[git]\ntrunk = \"master\"\nintegration = \"local\"\n",
+            "[protection]\n",
+            "bypass_actors = [\"repository-admin\"]\n",
+            "owned_trunk_rules = [\"deletion\", \"non_fast_forward\", \"pull_request\", \"required_status_checks\"]\n",
+            "[protection.gitlab]\npush_access_level = 40\n",
+        ),
+    )
+    .expect("the config writes");
+    fixture
+        .rk(&["setup", "step", "protect-trunk", "--apply"])
+        .args(["--required-check", "test-check"])
+        .assert()
+        .success();
+
+    let read = |name: &str| -> serde_json::Value {
+        let text = std::fs::read_to_string(fixture.state(&format!("ruleset_{name}")))
+            .unwrap_or_else(|_| panic!("{name} is installed"));
+        serde_json::from_str(&text).expect("the ruleset parses")
+    };
+    let kinds = |ruleset: &serde_json::Value| -> Vec<String> {
+        ruleset["rules"]
+            .as_array()
+            .expect("a rules array")
+            .iter()
+            .filter_map(|rule| rule["type"].as_str())
+            .map(str::to_owned)
+            .collect()
+    };
+
+    let trunk = read("master-protection");
+    assert_eq!(kinds(&trunk), ["pull_request", "required_status_checks"]);
+    assert_eq!(
+        trunk["bypass_actors"],
+        serde_json::json!([{
+            "actor_id": 5,
+            "actor_type": "RepositoryRole",
+            "bypass_mode": "always",
+        }]),
+        "the administrator role is the one actor the direct push needs"
+    );
+
+    let safety = read("master-safety");
+    assert_eq!(kinds(&safety), ["deletion", "non_fast_forward"]);
+    assert_eq!(
+        safety["bypass_actors"],
+        serde_json::json!([]),
+        "nobody is excused from the trunk's own history"
+    );
+    assert_eq!(
+        safety["conditions"]["ref_name"]["include"],
+        serde_json::json!(["refs/heads/master"])
+    );
+    assert_eq!(safety["enforcement"], "active");
+
+    // The observation reads the same pair back and reports the shape.
+    let out = fixture
+        .rk(&["setup", "check"])
+        .args(["--required-check", "test-check"])
+        .assert()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8_lossy(&out);
+    let line = text
+        .lines()
+        .find(|line| line.contains("protect-trunk"))
+        .expect("the step reports");
+    assert!(line.starts_with("ok protect-trunk"), "{text}");
+    assert!(line.contains("master-safety"), "{line}");
+}
+
+/// A safety rule left on the bypassed ruleset is drift with its own words,
+/// because it reads as protection while the bypass excuses it.
+///
+/// SATISFIES forge-setup:a-merge-carries-the-trunk-it-was-tested-against
+#[test]
+fn a_safety_rule_on_the_bypassed_ruleset_reads_as_drift() {
+    let fixture = ForgeFixture::new();
+    let mut body: serde_json::Value =
+        serde_json::from_str(&owned_trunk_ruleset("", Some(true))).expect("the ruleset parses");
+    let rules = body["rules"].as_array_mut().expect("a rules array");
+    rules.insert(0, serde_json::json!({ "type": "non_fast_forward" }));
+    fixture.seed_gate();
+    fixture.seed("squash_merge_commit_title", "PR_TITLE");
+    fixture.seed("squash_merge_commit_message", "PR_BODY");
+    fixture.seed("default_branch", "master");
+    fixture.seed("rulesets.index", "master-protection\nmaster-safety\n");
+    fixture.seed("ruleset_master-protection", &body.to_string());
+    fixture.seed("ruleset_master-safety", &owned_safety_ruleset());
+    let line = protect_trunk_line(&fixture, Some("test-check"));
+    assert!(
+        line.contains("the non_fast_forward rule sits in master-protection"),
+        "{line}"
+    );
+    assert!(line.contains("bypass actor excuses it"), "{line}");
 }
 
 /// SATISFIES forge-setup:a-merge-carries-the-trunk-it-was-tested-against
@@ -6301,7 +6458,8 @@ fn the_applied_trunk_ruleset_requires_a_fresh_branch() {
 fn check_reports_a_ruleset_covering_the_wrong_ref() {
     let fixture = ForgeFixture::new();
     fixture.seed("default_branch", "master");
-    fixture.seed("rulesets.index", "master-protection\n");
+    fixture.seed("rulesets.index", "master-protection\nmaster-safety\n");
+    fixture.seed("ruleset_master-safety", &owned_safety_ruleset());
     fixture.seed(
         "ruleset_master-protection",
         r#"{
@@ -6313,8 +6471,6 @@ fn check_reports_a_ruleset_covering_the_wrong_ref() {
     "ref_name": { "include": ["refs/heads/other"], "exclude": [] }
   },
   "rules": [
-    { "type": "deletion" },
-    { "type": "non_fast_forward" },
     {
       "type": "pull_request",
       "parameters": { "required_approving_review_count": 0, "allowed_merge_methods": ["squash"] }
@@ -6352,8 +6508,6 @@ fn check_reports_a_ruleset_covering_the_wrong_ref() {
     "ref_name": { "include": ["refs/heads/master"], "exclude": ["refs/heads/master"] }
   },
   "rules": [
-    { "type": "deletion" },
-    { "type": "non_fast_forward" },
     {
       "type": "pull_request",
       "parameters": { "required_approving_review_count": 0, "allowed_merge_methods": ["squash"] }
@@ -6387,7 +6541,8 @@ fn check_reports_a_ruleset_covering_the_wrong_ref() {
 fn check_keeps_proven_trunk_drift_over_a_settings_outage() {
     let fixture = ForgeFixture::new();
     fixture.seed("default_branch", "master");
-    fixture.seed("rulesets.index", "master-protection\n");
+    fixture.seed("rulesets.index", "master-protection\nmaster-safety\n");
+    fixture.seed("ruleset_master-safety", &owned_safety_ruleset());
     fixture.seed(
         "ruleset_master-protection",
         r#"{
@@ -6399,8 +6554,6 @@ fn check_keeps_proven_trunk_drift_over_a_settings_outage() {
     "ref_name": { "include": ["refs/heads/master"], "exclude": [] }
   },
   "rules": [
-    { "type": "deletion" },
-    { "type": "non_fast_forward" },
     {
       "type": "pull_request",
       "parameters": { "required_approving_review_count": 0, "allowed_merge_methods": ["squash"] }
@@ -6435,7 +6588,11 @@ fn check_keeps_proven_trunk_drift_over_a_settings_outage() {
 fn protections_check_apply_reads_back_through_the_observation() {
     let fixture = ForgeFixture::new();
     fixture.seed("default_branch", "master");
-    fixture.seed("rulesets.index", "master-protection\nrelease-tags\n");
+    fixture.seed(
+        "rulesets.index",
+        "master-protection\nmaster-safety\nrelease-tags\n",
+    );
+    fixture.seed("ruleset_master-safety", &owned_safety_ruleset());
     fixture.seed(
         "ruleset_master-protection",
         r#"{
@@ -6447,8 +6604,6 @@ fn protections_check_apply_reads_back_through_the_observation() {
     "ref_name": { "include": ["refs/heads/other"], "exclude": [] }
   },
   "rules": [
-    { "type": "deletion" },
-    { "type": "non_fast_forward" },
     {
       "type": "pull_request",
       "parameters": { "required_approving_review_count": 0, "allowed_merge_methods": ["squash"] }
@@ -13469,7 +13624,8 @@ fn a_nested_draft_reference_is_reported_once() {
 fn check_reports_a_drifted_squash_message_source() {
     let fixture = ForgeFixture::new();
     fixture.seed("default_branch", "master");
-    fixture.seed("rulesets.index", "master-protection\n");
+    fixture.seed("rulesets.index", "master-protection\nmaster-safety\n");
+    fixture.seed("ruleset_master-safety", &owned_safety_ruleset());
     fixture.seed(
         "ruleset_master-protection",
         r#"{
@@ -13481,8 +13637,6 @@ fn check_reports_a_drifted_squash_message_source() {
     "ref_name": { "include": ["refs/heads/master"], "exclude": [] }
   },
   "rules": [
-    { "type": "deletion" },
-    { "type": "non_fast_forward" },
     {
       "type": "pull_request",
       "parameters": { "required_approving_review_count": 0, "allowed_merge_methods": ["squash"] }
@@ -19395,7 +19549,8 @@ fn every_depend_action_emits_one_json_object() {
 /// title check, and both squash sources owned.
 fn seed_owned_trunk(fixture: &ForgeFixture) {
     fixture.seed("default_branch", "master");
-    fixture.seed("rulesets.index", "master-protection\n");
+    fixture.seed("rulesets.index", "master-protection\nmaster-safety\n");
+    fixture.seed("ruleset_master-safety", &owned_safety_ruleset());
     fixture.seed(
         "ruleset_master-protection",
         r#"{
@@ -19407,8 +19562,6 @@ fn seed_owned_trunk(fixture: &ForgeFixture) {
     "ref_name": { "include": ["refs/heads/master"], "exclude": [] }
   },
   "rules": [
-    { "type": "deletion" },
-    { "type": "non_fast_forward" },
     {
       "type": "pull_request",
       "parameters": { "required_approving_review_count": 0, "allowed_merge_methods": ["squash"] }
@@ -19796,7 +19949,10 @@ fn check_reads_workflows_only_with_a_required_check() {
 fn protections_check_carries_the_trunk_fault() {
     let fixture = ForgeFixture::new();
     seed_owned_trunk(&fixture);
-    fixture.seed("rulesets.index", "master-protection\nrelease-tags\n");
+    fixture.seed(
+        "rulesets.index",
+        "master-protection\nmaster-safety\nrelease-tags\n",
+    );
     fixture.seed(
         "ruleset_release-tags",
         r#"{
@@ -25167,18 +25323,7 @@ fn an_imitating_request_never_merges() {
 fn a_release_request_after_the_first_candidate_page_is_found() {
     use std::os::unix::fs::PermissionsExt as _;
 
-    let text = release_workflow("rust", release_kit::landing::Integration::Local);
-    let run = text
-        .split("release-gate:")
-        .nth(1)
-        .and_then(|job| job.split("        run: |\n").nth(1))
-        .expect("the gate carries one run script");
-    let script = run
-        .lines()
-        .take_while(|line| line.starts_with("          ") || line.is_empty())
-        .map(|line| line.strip_prefix("          ").unwrap_or(line))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let script = release_gate_script();
 
     let scratch = tempfile::tempdir().expect("a scratch gate fixture exists");
     let bin = scratch.path().join("bin");
@@ -25258,6 +25403,140 @@ fi
     assert_eq!(
         std::fs::read_to_string(scratch.path().join("merged")).expect("the merge is recorded"),
         "pr merge 101 --match-head-commit release-head --squash --delete-branch\n"
+    );
+}
+
+/// The gate's own shell, lifted out of the rendered workflow so a test can
+/// run it against a fake forge CLI. What ships is what runs here.
+fn release_gate_script() -> String {
+    let text = release_workflow("rust", release_kit::landing::Integration::Local);
+    let run = text
+        .split("release-gate:")
+        .nth(1)
+        .and_then(|job| job.split("        run: |\n").nth(1))
+        .expect("the gate carries one run script");
+    run.lines()
+        .take_while(|line| line.starts_with("          ") || line.is_empty())
+        .map(|line| line.strip_prefix("          ").unwrap_or(line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Run the gate's shell against a fake forge CLI whose merge refuses, and
+/// whose readback answers `state`.
+fn gate_merge_refused_with(state: &str) -> std::process::Output {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let script = release_gate_script();
+    let scratch = tempfile::tempdir().expect("a scratch gate fixture exists");
+    let bin = scratch.path().join("bin");
+    std::fs::create_dir(&bin).expect("the fake bin creates");
+    let candidate = serde_json::json!({
+        "number": 7,
+        "draft": false,
+        "base": {"ref": "master"},
+        "head": {"repo": {"full_name": "acme/widget"}, "ref": "release-plz-current", "sha": "release-head"},
+        "user": {"type": "Bot", "login": "release-bot[bot]"}
+    });
+    std::fs::write(
+        scratch.path().join("pages.json"),
+        serde_json::to_vec(&serde_json::json!([[candidate]])).expect("the pages serialize"),
+    )
+    .expect("the pages write");
+    std::fs::write(scratch.path().join("state"), state).expect("the state writes");
+    let gh = bin.join("gh");
+    std::fs::write(
+        &gh,
+        r#"#!/usr/bin/env bash
+set -eu
+args="$*"
+if [[ "$args" == *"/pulls"* ]]; then
+  query=""
+  while (($#)); do
+    if [[ "$1" == "--jq" ]]; then query="$2"; break; fi
+    shift
+  done
+  jq -r "$query" "$STATE/pages.json"
+elif [[ "$args" == *"/check-runs"* ]]; then
+  printf '%s\n' 'completed success'
+elif [[ "$args" == "pr merge"* ]]; then
+  echo 'the forge refused the merge' >&2
+  exit 1
+elif [[ "$args" == "pr view"* ]]; then
+  cat "$STATE/state"
+else
+  printf 'unexpected gh call: %s\n' "$args" >&2
+  exit 1
+fi
+"#,
+    )
+    .expect("the fake gh writes");
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755))
+        .expect("the fake gh is executable");
+
+    let old_path = std::env::var_os("PATH").unwrap_or_default();
+    let mut paths = vec![bin];
+    paths.extend(std::env::split_paths(&old_path));
+    let path = std::env::join_paths(paths).expect("PATH joins");
+    std::process::Command::new("sh")
+        .args(["-c", &script])
+        .env("PATH", path)
+        .env("STATE", scratch.path())
+        .env("GH_TOKEN", "fixture")
+        .env("GH_REPO", "acme/widget")
+        .env("APP_LOGIN", "release-bot[bot]")
+        .env("TRUNK", "master")
+        .env("GATE_CHECK", "gate")
+        .env("BRANCH_SHAPE", "release-plz-")
+        .output()
+        .expect("the gate script runs")
+}
+
+/// The trunk's own rule refusing a stale merge is the protection working.
+/// The request stays open, the log names what the forge answered, and the
+/// job ends successfully: a red job would report a broken release where
+/// the release was correctly withheld.
+///
+/// SATISFIES git:concurrent-pull-and-merge-requests-carry-the-tested-trunk
+#[test]
+fn a_merge_the_trunk_refuses_on_policy_is_a_successful_no_op() {
+    for state in ["OPEN BEHIND release-head", "OPEN BLOCKED release-head"] {
+        let output = gate_merge_refused_with(state);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(output.status.success(), "{state}: {stdout}");
+        assert!(
+            stdout.contains("the trunk refused the merge of #7"),
+            "{state}: {stdout}"
+        );
+        assert!(!stdout.contains("::error::"), "{state}: {stdout}");
+    }
+}
+
+/// Every other refusal is still an error. A conflicted request, or one the
+/// forge answers for in no recognized way, is a release that needs a human.
+///
+/// SATISFIES git:the-release-request-integrates-at-the-forge
+#[test]
+fn a_merge_that_fails_for_another_reason_still_fails_the_job() {
+    let output = gate_merge_refused_with("OPEN DIRTY release-head");
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("::error::"), "{stdout}");
+    assert!(stdout.contains("OPEN DIRTY release-head"), "{stdout}");
+}
+
+/// A merge another run of the same job already made is this job's own
+/// outcome reached by another route.
+///
+/// SATISFIES git:the-release-request-integrates-at-the-forge
+#[test]
+fn a_request_another_run_already_merged_ends_successfully() {
+    let output = gate_merge_refused_with("MERGED UNKNOWN release-head");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{stdout}");
+    assert!(
+        stdout.contains("pull request #7 was already merged at release-head"),
+        "{stdout}"
     );
 }
 

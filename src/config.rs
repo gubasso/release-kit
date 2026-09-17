@@ -285,6 +285,11 @@ pub struct Protection {
     /// is the name the setup script built before the key existed, so a
     /// target that states none keeps the ruleset it already has.
     pub trunk_ruleset: Option<String>,
+    /// N: safety ruleset name. Absent derives `<trunk>-safety`. This is the
+    /// ruleset that names no bypass actor, so the deletion and force-push
+    /// protections hold against every actor including the one the trunk
+    /// ruleset may excuse.
+    pub safety_ruleset: Option<String>,
     /// N: tag ruleset name.
     pub tag_ruleset: String,
     /// N: release-line ruleset name.
@@ -293,7 +298,8 @@ pub struct Protection {
     pub title_check: String,
     /// F: invariant, covers every published version.
     pub tag_pattern: String,
-    /// F: invariant, empty.
+    /// F: invariant, the actors `git.integration` names. It excuses the
+    /// trunk ruleset alone; the safety ruleset names nobody.
     pub bypass_actors: Vec<String>,
     /// F: invariant, exactly squash.
     pub allowed_merge_methods: Vec<String>,
@@ -321,6 +327,7 @@ impl Default for Protection {
     fn default() -> Self {
         Self {
             trunk_ruleset: None,
+            safety_ruleset: None,
             tag_ruleset: "release-tags".into(),
             lines_ruleset: "release-lines".into(),
             title_check: "pr-title".into(),
@@ -353,7 +360,32 @@ impl Protection {
             .clone()
             .unwrap_or_else(|| format!("{trunk}-protection"))
     }
+
+    /// The safety ruleset's name: the target's own answer, or the derived
+    /// `<trunk>-safety`.
+    ///
+    /// A separate ruleset because a bypass actor is recorded on a ruleset
+    /// and never on a rule. The deletion and force-push rules therefore
+    /// cannot sit beside a bypassed rule without inheriting its excuse.
+    #[must_use]
+    pub fn safety_ruleset(&self, trunk: &str) -> String {
+        self.safety_ruleset
+            .clone()
+            .unwrap_or_else(|| format!("{trunk}-safety"))
+    }
 }
+
+/// The rules the safety ruleset carries, in the order the setup writes them.
+///
+/// These hold against every actor, so they live apart from the rules a
+/// bypass may excuse. `protection.owned_trunk_rules` still names them, and
+/// the floor table still requires them, so one key remains the answer to
+/// what the setup owns on the trunk.
+pub const SAFETY_RULES: [&str; 2] = ["deletion", "non_fast_forward"];
+
+/// The rules the trunk ruleset carries: the request and the check it must
+/// carry, which a recorded bypass actor may be excused from.
+pub const REQUEST_RULES: [&str; 2] = ["pull_request", "required_status_checks"];
 
 /// The `protection.github` table.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -859,6 +891,10 @@ fn protection_fields(
         (
             "RK_CONFIG_PROTECTION_TRUNK_RULESET",
             protection.trunk_ruleset(trunk).into(),
+        ),
+        (
+            "RK_CONFIG_PROTECTION_SAFETY_RULESET",
+            protection.safety_ruleset(trunk).into(),
         ),
         (
             "RK_CONFIG_PROTECTION_TAG_RULESET",
@@ -1742,6 +1778,7 @@ mod tests {
             // the name the setup installs rather than leaving it implied.
             protection: super::Protection {
                 trunk_ruleset: Some(format!("{}-protection", super::TRUNK_DEFAULT)),
+                safety_ruleset: Some(format!("{}-safety", super::TRUNK_DEFAULT)),
                 ..super::local_protection()
             },
             ..Config::default()
@@ -1919,6 +1956,7 @@ mod tests {
         .collect();
         config.setup.bot.app_id = "123".into();
         config.protection.trunk_ruleset = Some("primary".into());
+        config.protection.safety_ruleset = Some("guardrail".into());
         config.protection.tag_ruleset = "versions".into();
         config.protection.lines_ruleset = "maintenance".into();
         config.protection.title_check = "intent".into();

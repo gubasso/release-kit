@@ -753,6 +753,7 @@ fn github(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
                 Api::Ok(body) => {
                     let owned = [
                         ctx.trunk_ruleset().to_owned(),
+                        ctx.safety_ruleset().to_owned(),
                         ctx.tag_ruleset().to_owned(),
                         ctx.lines_ruleset().to_owned(),
                     ];
@@ -943,7 +944,6 @@ fn github_trunk_ruleset(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkErro
         RulesetLookup::Unreadable(err) => return Ok(StepState::unknown(err)),
     };
     let rules = detail["rules"].as_array().cloned().unwrap_or_default();
-    let has = |kind: &str| rules.iter().any(|rule| rule["type"] == kind);
     let mut faults = Vec::new();
     if detail["enforcement"] != "active" {
         faults.push(format!("{name} is not active"));
@@ -967,15 +967,7 @@ fn github_trunk_ruleset(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkErro
     if detail["bypass_actors"] != expected_bypass {
         faults.push("the bypass actors do not match the recorded authority".to_owned());
     }
-    for required in &ctx.protection().owned_trunk_rules {
-        if !has(required) {
-            faults.push(format!("the {required} rule is missing"));
-        }
-    }
-    faults.extend(unowned_rule_faults(
-        &rules,
-        &ctx.protection().owned_trunk_rules,
-    ));
+    faults.extend(trunk_rule_faults(ctx, &rules, &name));
     if let Some(request) = rules.iter().find(|rule| rule["type"] == "pull_request")
         && request["parameters"]["allowed_merge_methods"]
             != serde_json::json!(ctx.protection().allowed_merge_methods)
@@ -1034,6 +1026,15 @@ fn github_trunk_ruleset(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkErro
             }
         }
     }
+    match github_safety_ruleset(ctx, run)? {
+        SafetyRuleset::Owned => {}
+        SafetyRuleset::Faults(proven) => faults.extend(proven),
+        SafetyRuleset::Unreadable(err) => {
+            if faults.is_empty() {
+                return Ok(StepState::unknown(err));
+            }
+        }
+    }
     if let Some(shape) = gate_faults(ctx) {
         faults.push(shape);
     }
@@ -1041,8 +1042,110 @@ fn github_trunk_ruleset(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkErro
         return Ok(StepState::not(faults.join("; ")));
     }
     Ok(StepState::ok(format!(
-        "{name} holds the release-merge shape"
+        "{name} holds the release-merge shape beside {}",
+        ctx.safety_ruleset()
     )))
+}
+
+/// Which rules the trunk ruleset must carry, and which it must not.
+///
+/// Each ruleset carries the half of the owned rules its bypass fits, so the
+/// trunk ruleset holds what a recorded actor may be excused from. A safety
+/// rule here is the shape from before the split: it reads as protection
+/// while inheriting this ruleset's bypass, so it gets its own words rather
+/// than the generic unowned-rule fault.
+fn trunk_rule_faults(ctx: &Ctx, rules: &[Value], name: &str) -> Vec<String> {
+    let has = |kind: &str| rules.iter().any(|rule| rule["type"] == kind);
+    let mut faults = Vec::new();
+    let mut accounted: Vec<String> = ctx
+        .protection()
+        .owned_trunk_rules
+        .iter()
+        .filter(|rule| crate::config::REQUEST_RULES.contains(&rule.as_str()))
+        .cloned()
+        .collect();
+    for required in &accounted {
+        if !has(required) {
+            faults.push(format!("the {required} rule is missing"));
+        }
+    }
+    for stray in crate::config::SAFETY_RULES {
+        if has(stray) {
+            faults.push(format!(
+                "the {stray} rule sits in {name}, where a bypass actor excuses it"
+            ));
+        }
+        accounted.push(stray.to_owned());
+    }
+    faults.extend(unowned_rule_faults(rules, &accounted));
+    faults
+}
+
+/// What the safety ruleset's own read answered.
+enum SafetyRuleset {
+    Owned,
+    Faults(Vec<String>),
+    Unreadable(String),
+}
+
+/// The ruleset no actor is excused from.
+///
+/// A bypass actor recorded here would hand whoever it names the deletion
+/// and the force-push along with the trunk push, which is the one thing the
+/// split exists to prevent. The rules it carries are the safety half of
+/// `protection.owned_trunk_rules`, so one key still answers what the setup
+/// owns on the trunk.
+fn github_safety_ruleset(ctx: &Ctx, run: &mut Runner) -> Result<SafetyRuleset, RkError> {
+    let trunk = ctx.trunk();
+    let name = ctx.safety_ruleset().to_owned();
+    let detail = match github_ruleset_body(ctx, run, &name)? {
+        RulesetLookup::Found(detail) => detail,
+        RulesetLookup::Absent => {
+            return Ok(SafetyRuleset::Faults(vec![format!(
+                "no ruleset named {name} holds the trunk against deletion and force-push"
+            )]));
+        }
+        RulesetLookup::Unreadable(err) => return Ok(SafetyRuleset::Unreadable(err)),
+    };
+    let mut faults = Vec::new();
+    if detail["enforcement"] != "active" {
+        faults.push(format!("{name} is not active"));
+    }
+    if detail["target"] != "branch" {
+        faults.push(format!("{name} does not target branches"));
+    }
+    if detail["conditions"]["ref_name"]["include"]
+        != serde_json::json!([format!("refs/heads/{trunk}")])
+    {
+        faults.push(format!("{name} does not cover refs/heads/{trunk} alone"));
+    }
+    if detail["conditions"]["ref_name"]["exclude"] != serde_json::json!([]) {
+        faults.push(format!("{name} excludes refs from its own coverage"));
+    }
+    if !detail["bypass_actors"].as_array().is_none_or(Vec::is_empty) {
+        faults.push(format!(
+            "{name} names a bypass actor, so deletion and force-push hold against nobody"
+        ));
+    }
+    let rules = detail["rules"].as_array().cloned().unwrap_or_default();
+    let safety_rules: Vec<String> = ctx
+        .protection()
+        .owned_trunk_rules
+        .iter()
+        .filter(|rule| crate::config::SAFETY_RULES.contains(&rule.as_str()))
+        .cloned()
+        .collect();
+    for required in &safety_rules {
+        if !rules.iter().any(|rule| rule["type"] == required.as_str()) {
+            faults.push(format!("the {required} rule is missing from {name}"));
+        }
+    }
+    faults.extend(unowned_rule_faults(&rules, &safety_rules));
+    if faults.is_empty() {
+        Ok(SafetyRuleset::Owned)
+    } else {
+        Ok(SafetyRuleset::Faults(faults))
+    }
 }
 
 /// The ways the named gate is shaped so that it cannot report a blocking

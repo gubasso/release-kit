@@ -90,9 +90,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
 
-  # The release request's merger. Under local integration the repository
-  # administrator may bypass the trunk rules for the deliberate direct push;
-  # the release App may not. The job wakes when "ci" completes,
+  # The release request's merger, never its authority. Under local
+  # integration the repository administrator bypasses the trunk ruleset for
+  # the deliberate direct push; this job holds no such bypass, so the trunk's
+  # own strict check still decides whether the request carries the trunk it
+  # was tested against. The job wakes when "ci" completes,
   # and judges again after the push-side request job succeeds, so a request
   # that was already green when nothing new ran still merges.
   #
@@ -179,18 +181,42 @@ jobs:
           fi
           # The match moves the stale-head proof into the write itself, so a
           # refresh between the judgment and the merge refuses rather than
-          # merging bytes nothing judged.
+          # merging bytes nothing judged. The trunk's own strict rule makes
+          # the base-freshness proof part of the same write, and this job
+          # holds no bypass of it.
           if gh pr merge "$number" --match-head-commit "$head" --squash --delete-branch; then
             echo "merged pull request #$number at $head."
             exit 0
           fi
+          # The forge computes mergeability after the fact, so a read taken
+          # right after a refused write can still answer UNKNOWN. Let it
+          # settle before reading what refused the merge.
+          for _ in 1 2 3 4 5 6; do
+            outcome="$(gh pr view "$number" --json state,mergeStateStatus,headRefOid \
+              --jq '"\(.state) \(.mergeStateStatus) \(.headRefOid)"')"
+            case "$outcome" in
+              "MERGED "*) break ;;
+              *" UNKNOWN "*) sleep 5 ;;
+              *) break ;;
+            esac
+          done
           # Another run of this job may have merged the same judged head
           # first. That is this job's own outcome reached by another route,
           # and nothing else is.
-          outcome="$(gh pr view "$number" --json state,headRefOid --jq '"\(.state) \(.headRefOid)"')"
-          if [ "$outcome" = "MERGED $head" ]; then
-            echo "pull request #$number was already merged at $head."
-            exit 0
-          fi
+          case "$outcome" in
+            "MERGED "*" $head")
+              echo "pull request #$number was already merged at $head."
+              exit 0
+              ;;
+            # The trunk's own policy refused the merge: the request no longer
+            # carries the trunk, or the check it must carry is not satisfied
+            # for the state the merge would create. The request stays open
+            # and the next refresh rebuilds it, so this is the protection
+            # working rather than a broken job.
+            "OPEN BEHIND "*|"OPEN BLOCKED "*)
+              echo "the trunk refused the merge of #$number and the request reads: $outcome."
+              exit 0
+              ;;
+          esac
           echo "::error::the merge of #$number at $head failed and the request reads: $outcome."
           exit 1

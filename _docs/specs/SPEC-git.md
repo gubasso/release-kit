@@ -99,7 +99,7 @@ Verify: `cargo nextest run -E 'test(integration) or test(params_from_a_record)'`
 
 ### `git:the-release-request-integrates-at-the-forge` — The release request integrates at the forge
 
-The release request MUST integrate at the forge in both integration modes, because merging it is the one event that authorizes the tag, the publish, the provenance, and the artifacts, and no verb MAY offer a local path to a release. The tag protections MUST be identical under both modes. On GitHub the trunk's strict required-check rule MUST hold the release request in both modes; local integration MUST admit its deliberate direct push through the repository-administrator bypass while leaving the release App governed by that rule. The local-mode workflow MUST additionally retry a ready request after either its named workflow or the successful push-side request job completes. It MUST authenticate the candidate from the forge's current, fully paginated answer rather than the event that woke it — open, not a draft, based on the trunk, headed from the same repository, and authored by the release identity — MUST judge the named check for the exact head commit it merges, and MUST leave the request open with a successful no-op on every other answer. A forge whose own mechanism requires the whole pipeline names no check and needs no such gate.
+The release request MUST integrate at the forge in both integration modes, because merging it is the one event that authorizes the tag, the publish, the provenance, and the artifacts, and no verb MAY offer a local path to a release. The tag protections MUST be identical under both modes. On GitHub the trunk's strict required-check rule MUST hold the release request in both modes; local integration MUST admit its deliberate direct push through the repository-administrator bypass while leaving the release App governed by that rule. The local-mode workflow MUST additionally retry a ready request after either its named workflow or the successful push-side request job completes. It MUST authenticate the candidate from the forge's current, fully paginated answer rather than the event that woke it — open, not a draft, based on the trunk, headed from the same repository, and authored by the release identity — MUST judge the named check for the exact head commit it merges, and MUST leave the request open with a successful no-op on every other answer, including a merge the trunk's own rules refuse on policy. A forge whose own mechanism requires the whole pipeline names no check and needs no such gate.
 
 #### Scenario: A local-integration target reaches a release
 
@@ -177,7 +177,7 @@ Verify: `rg -ln 'ForgeRequest' method bindings runbooks forges skills skill-shar
 
 ### `git:concurrent-pull-and-merge-requests-carry-the-tested-trunk` — Concurrent pull and merge requests carry the tested trunk
 
-A merge MUST carry the trunk it was tested against. On GitHub the protection domain enforces it through `protection.strict_required_status_checks` in both integration modes. A local integrator's repository-administrator role MAY bypass that rule for the deliberate trunk push, but the release App MUST NOT be a bypass actor, so its stale release request remains refused. On GitLab the protection domain enforces freshness through `protection.gitlab.merge_method = "ff"`, so a rebase is part of the GitLab path. The protection domain owns both mappings, and this convention refuses a merge queue on GitHub because the landed CI workflows carry no `merge_group` trigger and a queued merge would wait on a check that never reports.
+A merge MUST carry the trunk it was tested against. On GitHub the protection domain enforces it through `protection.strict_required_status_checks` in both integration modes. A local integrator's repository-administrator role MAY bypass the ruleset carrying that rule for the deliberate trunk push, but the release App MUST NOT be a bypass actor, so its stale release request remains refused. That bypass MUST NOT reach the deletion and force-push rules, which a bypass actor would otherwise excuse along with the rest of its ruleset, so they hold in a ruleset of their own. On GitLab the protection domain enforces freshness through `protection.gitlab.merge_method = "ff"`, so a rebase is part of the GitLab path. The protection domain owns both mappings, and this convention refuses a merge queue on GitHub because the landed CI workflows carry no `merge_group` trigger and a queued merge would wait on a check that never reports.
 
 #### Scenario: The two forges enforce one rule
 
@@ -189,6 +189,12 @@ A merge MUST carry the trunk it was tested against. On GitHub the protection dom
 
 - GIVEN a locally integrated GitHub target whose administrator advanced the trunk after the release request's check passed
 - WHEN the release App attempts the squash merge
-- THEN the strict required-check rule refuses it because the App is not the repository-administrator bypass actor
+- THEN the strict required-check rule refuses it because the App is not the repository-administrator bypass actor, and the gate logs the refusal and leaves the request open
 
-Verify: `cargo nextest run -E 'test(a_loose_status_check_policy_faults) or test(the_merge_queue_fault_names_its_consequence) or test(the_strict_status_check_policy_holds_the_shape)'`
+#### Scenario: The local integrator rewrites the trunk
+
+- GIVEN the same target, whose administrator bypasses the ruleset carrying the request rules
+- WHEN that administrator force-pushes or deletes the trunk
+- THEN the safety ruleset refuses it, because the bypass names no actor there
+
+Verify: `cargo nextest run -E 'test(a_loose_status_check_policy_faults) or test(the_merge_queue_fault_names_its_consequence) or test(the_strict_status_check_policy_holds_the_shape) or test(a_local_trunk_excuses_the_request_rules_and_never_the_safety_rules) or test(a_merge_the_trunk_refuses_on_policy_is_a_successful_no_op)'`

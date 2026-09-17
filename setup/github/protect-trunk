@@ -1,50 +1,67 @@
 #!/usr/bin/env sh
-# Protect the trunk. Which rules that means is the recorded integration
-# mode's answer, and rk composes them into RK_TRUNK_RULES from the one
-# owned-rules key its floor table judges and its check reads. Under forge
-# integration the trunk takes no direct push. Under local integration a
-# repository administrator may bypass the same rules for the deliberate
-# trunk push, while the release App remains governed by them. The request
-# must carry the trunk's tip: the release request
-# has computed contents, and nothing else re-reads the trunk between that
-# computation and the merge. Squash is the only merge method, so the trunk history
+# Protect the trunk, in two rulesets. A bypass actor is recorded on a
+# ruleset and never on a rule, so anything that may be bypassed is kept
+# apart from anything that may not.
+#
+# RK_SAFETY_RULESET carries deletion and force-push protection and names no
+# bypass actor, so those hold against every actor including the operator.
+# RK_TRUNK_RULESET carries the request rule and the check the request must
+# carry, and names the actors the recorded integration mode excuses. Under
+# forge integration that list is empty and the trunk takes no direct push.
+# Under local integration it names the repository administrator, so the
+# deliberate trunk push goes through while the release App, which is an
+# integration actor and holds no repository role, stays governed.
+#
+# The request must carry the trunk's tip: the release request has computed
+# contents, and nothing else re-reads the trunk between that computation
+# and the merge. Squash is the only merge method, so the trunk history
 # stays linear on a forge that offers no fast-forward merge. The squash
 # title is the pull request's title — never a lone branch commit's subject —
 # because the bot derives the version from the trunk's commit messages.
-# Nothing in the pipeline bypasses this ruleset. The method's
-# invariants chapter owns these facts; this comment points there. Rerunning
-# updates in place.
+# The method's invariants chapter owns these facts; this comment points
+# there. Rerunning updates in place.
 set -eu
 : "${RK_REPO:?rk sets this; run this script through rk setup}"
 : "${RK_TRUNK_BRANCH:?rk sets this; run this script through rk setup}"
 : "${RK_TRUNK_RULESET:?rk sets this; run this script through rk setup}"
+: "${RK_SAFETY_RULESET:?rk sets this; run this script through rk setup}"
 : "${RK_TITLE_CHECK:?rk sets this; run this script through rk setup}"
 # The policy below. rk judged every value against the floor table before
 # this ran, so this script substitutes and never decides.
 : "${RK_TRUNK_RULES:?rk sets this; run this script through rk setup}"
+: "${RK_SAFETY_RULES:?rk sets this; run this script through rk setup}"
 : "${RK_BYPASS_ACTORS:?rk sets this; run this script through rk setup}"
 : "${RK_SQUASH_TITLE_SOURCE:?rk sets this; run this script through rk setup}"
 : "${RK_SQUASH_BODY_SOURCE:?rk sets this; run this script through rk setup}"
 
-name="$RK_TRUNK_RULESET"
-id="$(gh api "repos/$RK_REPO/rulesets" -q ".[] | select(.name == \"$name\") | .id" | head -n 1)"
-
-if [ -n "$id" ]; then
-  gh api -X PUT "repos/$RK_REPO/rulesets/$id" --input - >/dev/null
-else
-  gh api -X POST "repos/$RK_REPO/rulesets" --input - >/dev/null
-fi <<JSON
+upsert() {
+  name="$1"
+  bypass="$2"
+  rules="$3"
+  id="$(gh api "repos/$RK_REPO/rulesets" -q ".[] | select(.name == \"$name\") | .id" | head -n 1)"
+  if [ -n "$id" ]; then
+    gh api -X PUT "repos/$RK_REPO/rulesets/$id" --input - >/dev/null
+  else
+    gh api -X POST "repos/$RK_REPO/rulesets" --input - >/dev/null
+  fi <<JSON
 {
   "name": "$name",
   "target": "branch",
   "enforcement": "active",
-  "bypass_actors": $RK_BYPASS_ACTORS,
+  "bypass_actors": $bypass,
   "conditions": {
     "ref_name": { "include": ["refs/heads/$RK_TRUNK_BRANCH"], "exclude": [] }
   },
-  "rules": $RK_TRUNK_RULES
+  "rules": $rules
 }
 JSON
+}
+
+# The safety ruleset first. A run that moved the deletion and force-push
+# rules out of the trunk ruleset before installing the ruleset that
+# receives them would leave a window with neither.
+upsert "$RK_SAFETY_RULESET" '[]' "$RK_SAFETY_RULES"
+upsert "$RK_TRUNK_RULESET" "$RK_BYPASS_ACTORS" "$RK_TRUNK_RULES"
 
 # The squash title source is a repository setting, not a ruleset rule: on a
 # one-commit request the forge otherwise offers that commit's own subject,
@@ -52,7 +69,8 @@ JSON
 gh api -X PATCH "repos/$RK_REPO" \
   -f "squash_merge_commit_title=$RK_SQUASH_TITLE_SOURCE" -f "squash_merge_commit_message=$RK_SQUASH_BODY_SOURCE" >/dev/null
 
-echo "check: prints $name and the squash message sources"
-gh api "repos/$RK_REPO/rulesets" -q ".[] | select(.name == \"$name\") | .name"
+echo "check: prints both ruleset names and the squash message sources"
+gh api "repos/$RK_REPO/rulesets" \
+  -q ".[] | select(.name == \"$RK_SAFETY_RULESET\" or .name == \"$RK_TRUNK_RULESET\") | .name"
 gh api "repos/$RK_REPO" -q .squash_merge_commit_title
 gh api "repos/$RK_REPO" -q .squash_merge_commit_message

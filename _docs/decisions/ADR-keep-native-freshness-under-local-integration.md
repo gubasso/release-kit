@@ -26,4 +26,4 @@ Enforced by `git:concurrent-pull-and-merge-requests-carry-the-tested-trunk`, `ta
 
 ## Status
 
-Implemented.
+Superseded by [holding the trunk in two rulesets](./ADR-hold-the-trunk-in-two-rulesets.md), which keeps this authority split and moves the rules no actor may be excused from into a ruleset of their own.

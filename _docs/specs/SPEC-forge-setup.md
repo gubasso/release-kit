@@ -252,7 +252,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 On every supported forge, the trunk protection MUST refuse a merge from a branch that does not carry the trunk's tip, and `rk setup check` MUST fault where the protection does not enforce that requirement, accepting a forge's existing enforcing setting rather than requiring a second switch.
 
-The release request is the one branch whose contents are computed: a merge that does not re-read the trunk publishes a version its contents did not earn. GitHub requires the strict status-check policy with required checks in both integration modes. Local integration adds exactly the repository-administrator bypass for the deliberate direct push and MUST leave the release App governed; setup and observation MUST fault any other bypass shape. GitLab's `ff` merge method carries the requirement. [The freshness decision](../decisions/ADR-require-a-fresh-branch-before-a-merge.md) and [the local-authority decision](../decisions/ADR-keep-native-freshness-under-local-integration.md) record the trade.
+The release request is the one branch whose contents are computed: a merge that does not re-read the trunk publishes a version its contents did not earn. GitHub requires the strict status-check policy with required checks in both integration modes, and MUST install the trunk's rules as two rulesets, because a bypass actor is recorded on a ruleset and excuses every rule in it: the deletion and force-push rules in a ruleset naming no bypass actor, written first, and the request and required-check rules in the ruleset the integration mode's actors name. Local integration names exactly the repository-administrator bypass there for the deliberate direct push and MUST leave the release App governed. Setup and observation MUST fault any other bypass shape, a bypass actor on the safety ruleset, and a safety rule installed in the bypassed one. GitLab's `ff` merge method carries the requirement. [The freshness decision](../decisions/ADR-require-a-fresh-branch-before-a-merge.md) and [the two-ruleset decision](../decisions/ADR-hold-the-trunk-in-two-rulesets.md) record the trade.
 
 #### Scenario: The GitHub policy is loose
 
@@ -264,7 +264,7 @@ The release request is the one branch whose contents are computed: a merge that 
 
 - GIVEN an otherwise owned trunk ruleset whose `required_status_checks` rule sets the strict policy true
 - WHEN `rk setup check` runs
-- THEN `protect-trunk` reports the release-merge shape; under local integration that includes exactly the repository-administrator bypass and no Integration actor
+- THEN `protect-trunk` reports the release-merge shape beside the safety ruleset; under local integration that is exactly the repository-administrator bypass on the request rules, no Integration actor, and no bypass at all on deletion and force-push
 
 #### Scenario: GitLab enforces freshness through its merge method
 

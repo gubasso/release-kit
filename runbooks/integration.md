@@ -65,7 +65,7 @@ The request itself is yours to open, with the command the report names. Its titl
 
 On local:
 
-The trunk push is separate and deliberate, and it takes the fast-forward form alone. On GitHub, authenticate as a repository administrator: that is the one role the local-mode ruleset permits to bypass its request rule. Push when you decide to; several integrations may ride one push, and the release bot reads each commit's intent separately.
+The trunk push is separate and deliberate, and it takes the fast-forward form alone. On GitHub, authenticate as a repository administrator: that is the one role the local-mode trunk ruleset permits to bypass its request rule. The push stays a fast-forward because the second ruleset refuses a rewrite from that administrator too. Push when you decide to; several integrations may ride one push, and the release bot reads each commit's intent separately.
 
 ```bash
 git -C ../<project> push origin master   # check: a fast-forward; never --force

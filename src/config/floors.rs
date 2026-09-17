@@ -154,8 +154,10 @@ const FORGE_ONLY: &[Floor] = &[
 ///
 /// GitHub keeps the request and strict-check rules so they can hold a
 /// release request on the trunk it was tested against. The repository
-/// administrator alone bypasses them for the direct push this mode exists
-/// to make. GitLab keeps its native access-level answer.
+/// administrator alone bypasses the ruleset carrying them, for the direct
+/// push this mode exists to make. Deletion and force-push protection sit in
+/// the safety ruleset, which names nobody, so that bypass never reaches
+/// them. GitLab keeps its native access-level answer.
 const LOCAL_ONLY: &[Floor] = &[
     Floor {
         key: "protection.bypass_actors",

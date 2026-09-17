@@ -46,6 +46,7 @@ app_id = RK_CONFIG_SETUP_BOT_APP_ID # N: public App identifier; private credenti
 
 [protection]
 trunk_ruleset = RK_CONFIG_PROTECTION_TRUNK_RULESET # N: trunk ruleset name
+safety_ruleset = RK_CONFIG_PROTECTION_SAFETY_RULESET # N: safety ruleset name, bypassed by nobody
 tag_ruleset = RK_CONFIG_PROTECTION_TAG_RULESET # N: tag ruleset name
 lines_ruleset = RK_CONFIG_PROTECTION_LINES_RULESET # N: release-line ruleset name
 title_check = RK_CONFIG_PROTECTION_TITLE_CHECK # N: title job context

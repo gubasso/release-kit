@@ -689,7 +689,12 @@ fn render_invocation(ctx: &Ctx, step: &StepSpec) -> String {
             // per-target fact the operator most needs to see before an
             // apply, because a renamed ruleset leaves the old one standing.
             let ruleset = match name {
-                "protect-trunk" => format!(" RK_TRUNK_RULESET={} RK_TITLE_CHECK={}", ctx.trunk_ruleset(), ctx.title_check()),
+                "protect-trunk" => format!(
+                    " RK_TRUNK_RULESET={} RK_SAFETY_RULESET={} RK_TITLE_CHECK={}",
+                    ctx.trunk_ruleset(),
+                    ctx.safety_ruleset(),
+                    ctx.title_check()
+                ),
                 "protect-tags" => format!(" RK_TAG_RULESET={}", ctx.tag_ruleset()),
                 "protect-release-lines" => format!(" RK_LINES_RULESET={}", ctx.lines_ruleset()),
                 _ => String::new(),
