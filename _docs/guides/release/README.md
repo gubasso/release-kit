@@ -29,9 +29,10 @@ A variable here is something a project is free to choose. Everything the convent
   - fixed by the snippet that lands it, and it runs on `pull_request_target` so the forge executes the trunk's copy
 - Squash title source: `PR_TITLE`, with `PR_BODY` as the message
   - fixed by `setup/github/protect-trunk`, which sets both on the repository
-- Trunk ruleset: `master-protection`
-  - fixed by `setup/github/protect-trunk`
-  - it sets `strict_required_status_checks_policy`, so a request merges only while it carries the trunk's tip; a request the forge reports as `BEHIND` takes `gh pr update-branch` and one more `gate` run before it merges
+- Trunk rulesets: `master-protection` and `master-safety`
+  - `master-protection` is fixed by `setup/github/protect-trunk`. It carries the pull-request rule and the strict required checks, with the repository-administrator bypass that admits the recorded local integration
+  - `master-safety` is fixed by the same step. It refuses deletion and force-push for every actor and names no bypass
+  - the strict policy makes a request carry the trunk's tip. A request the forge reports as `BEHIND` takes `gh pr update-branch` and one more `gate` run before it merges
 - Tag and line rulesets: `release-tags`, `release-lines`
   - fixed by `setup/github/protect-tags` and `setup/github/protect-release-lines`
 - Bot secrets: `RELEASE_BOT_APP_ID`, `RELEASE_BOT_APP_PRIVATE_KEY`

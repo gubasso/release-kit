@@ -25305,18 +25305,50 @@ fn each_driver_proves_its_release_request_identity() {
 /// SATISFIES git:the-release-request-integrates-at-the-forge
 #[test]
 fn an_imitating_request_never_merges() {
-    use release_kit::landing::Integration;
-    let text = release_workflow("rust", Integration::Local);
-    // Exactly one candidate survives every filter, or the job stops.
-    assert!(text.contains(r#"if [ "$count" != "1" ]; then"#), "{text}");
-    assert!(
-        text.contains("no single release request the release app owns"),
-        "{text}"
-    );
-    assert!(
-        text.contains("select(.head.ref | startswith(env.BRANCH_SHAPE))"),
-        "{text}"
-    );
+    for (driver, branch, shape) in [
+        ("rust", "release-plz-imitation", "release-plz-"),
+        (
+            "python",
+            "release-please--branches--master",
+            "release-please--branches--master",
+        ),
+        ("bash", "chore/release-v9.9.9", "chore/release-v"),
+    ] {
+        let mut owned = gate_candidate(7, "imitation");
+        owned["head"]["ref"] = serde_json::json!(branch);
+        let mut fork = owned.clone();
+        fork["head"]["repo"]["full_name"] = serde_json::json!("outsider/widget");
+        let mut human = owned.clone();
+        human["user"] = serde_json::json!({"type": "User", "login": "maintainer"});
+        let mut other_bot = owned;
+        other_bot["user"] = serde_json::json!({"type": "Bot", "login": "other-bot[bot]"});
+
+        for (case, candidate) in [
+            ("fork", fork),
+            ("same-repository human", human),
+            ("other bot", other_bot),
+        ] {
+            let run = run_gate_script_for(
+                driver,
+                shape,
+                &serde_json::json!([[candidate]]),
+                "",
+                r#"elif [[ "$args" == *"/check-runs"* ]]; then
+  : > "$STATE/check-read"
+  printf '%s\n' 'completed success'
+elif [[ "$args" == "pr merge"* ]]; then
+  printf '%s\n' "$args" > "$STATE/merged""#,
+            );
+            let stdout = run.stdout();
+            assert!(run.output.status.success(), "{driver} {case}: {stdout}");
+            assert!(
+                stdout.contains("0 match and nothing merged"),
+                "{driver} {case}: {stdout}"
+            );
+            assert!(!run.check_read(), "{driver} {case}: {stdout}");
+            assert_eq!(run.merged(), None, "{driver} {case}: {stdout}");
+        }
+    }
 }
 
 /// Candidate discovery consumes every page before it applies the exact-one
@@ -25432,7 +25464,18 @@ fi
 /// Run the gate's shell against a fake forge CLI, with `pages` as the
 /// paginated candidate answer and `arms` as every call after discovery.
 fn run_gate_script(pages: &serde_json::Value, state: &str, arms: &str) -> GateRun {
-    let script = release_gate_script();
+    run_gate_script_for("rust", "release-plz-", pages, state, arms)
+}
+
+/// Run one driver's rendered gate shell with its own branch shape.
+fn run_gate_script_for(
+    driver: &str,
+    branch_shape: &str,
+    pages: &serde_json::Value,
+    state: &str,
+    arms: &str,
+) -> GateRun {
+    let script = release_gate_script(driver);
     let scratch = tempfile::tempdir().expect("a scratch gate fixture exists");
     let bin = scratch.path().join("bin");
     std::fs::create_dir(&bin).expect("the fake bin creates");
@@ -25457,7 +25500,7 @@ fn run_gate_script(pages: &serde_json::Value, state: &str, arms: &str) -> GateRu
         .env("APP_LOGIN", "release-bot[bot]")
         .env("TRUNK", "master")
         .env("GATE_CHECK", "gate")
-        .env("BRANCH_SHAPE", "release-plz-")
+        .env("BRANCH_SHAPE", branch_shape)
         .output()
         .expect("the gate script runs");
     GateRun { output, scratch }
@@ -25478,6 +25521,10 @@ impl GateRun {
     fn merged(&self) -> Option<String> {
         std::fs::read_to_string(self.scratch.path().join("merged")).ok()
     }
+
+    fn check_read(&self) -> bool {
+        self.scratch.path().join("check-read").exists()
+    }
 }
 
 /// One release request the release app owns, on its own page.
@@ -25497,8 +25544,8 @@ fn gate_candidate(number: u64, head: &str) -> serde_json::Value {
 
 /// The gate's own shell, lifted out of the rendered workflow so a test can
 /// run it against a fake forge CLI. What ships is what runs here.
-fn release_gate_script() -> String {
-    let text = release_workflow("rust", release_kit::landing::Integration::Local);
+fn release_gate_script(driver: &str) -> String {
+    let text = release_workflow(driver, release_kit::landing::Integration::Local);
     let run = text
         .split("release-gate:")
         .nth(1)
