@@ -22,7 +22,7 @@ A variable here is something a project is free to choose. Everything the convent
 - Release lines: `release/*`
   - fixed by that same `branches:` filter
 - Required checks: `gate` and `pr-title`
-  - `gate` is the job id this project's CI workflow reports for that workflow: it needs `test`, `flake`, and `dist-plan`, runs `if: always()`, and fails on any result other than success, which `--required-check gate` assumes
+  - `gate` is the job id this project's CI workflow reports for that workflow: it needs `test` and `dist-plan`, runs `if: always()`, and fails on any result other than success, which `--required-check gate` assumes
   - the generated `release.yml` runs on tags alone, because `dist-workspace.toml` sets `pr-run-mode = "skip"`: `needs` reaches no job in another file, so the release proofs run as the `dist-plan` job under the gate instead, carrying `dist plan` and the `dist generate` no-diff check
   - `pr-title` is the job id the landed title check reports, and `setup/github/protect-trunk` requires it beside the first
 - Title check: `.github/workflows/pr-title.yml`
