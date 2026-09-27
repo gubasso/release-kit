@@ -4845,8 +4845,14 @@ impl ForgeFixture {
     }
 
     /// A landing record for a Rust crate on GitHub naming `destinations`,
-    /// so the package check reads what release-kit landed here.
+    /// with the policy requested, so the package check reads what
+    /// release-kit landed here.
     fn seed_record(&self, destinations: &[&str]) {
+        self.seed_record_with(destinations, true);
+    }
+
+    /// The same record, with the reporting policy requested or not.
+    fn seed_record_with(&self, destinations: &[&str], reporting_policy: bool) {
         let files: Vec<serde_json::Value> = destinations
             .iter()
             .map(|destination| {
@@ -4883,7 +4889,7 @@ impl ForgeFixture {
                 },
                 "capabilities": {
                     "nix_packaging": false,
-                    "reporting_policy": true,
+                    "reporting_policy": reporting_policy,
                     "scorecard": false,
                 },
                 "parameters": {
@@ -5834,6 +5840,71 @@ fn package_check_names_both_faults_in_one_detail() {
     ] {
         assert!(line.contains(expected), "{expected} absent: {line}");
     }
+}
+
+/// A target that opted out of the reporting policy owes none in its
+/// crate: the step asks nothing about one, and still faults release-kit's
+/// own files.
+///
+/// SATISFIES forge-setup:a-package-check-states-policy-reach
+#[test]
+fn package_check_asks_no_policy_of_a_target_that_opted_out() {
+    let fixture = ForgeFixture::new();
+    fixture.seed_record_with(&["GLOSSARY.md"], false);
+    fixture.seed_cargo(
+        &[("widget 0.1.0", fixture.root_manifest())],
+        "Cargo.toml\nsrc/main.rs\n",
+    );
+    let line = package_check_line(&fixture);
+    assert!(line.starts_with("ok package-check"), "{line}");
+    assert!(
+        line.contains("ships no file release-kit lands or owns"),
+        "{line}"
+    );
+    assert!(!line.contains("SECURITY.md"), "{line}");
+
+    let fixture = ForgeFixture::new();
+    fixture.seed_record_with(&["GLOSSARY.md"], false);
+    fixture.seed_cargo(
+        &[("widget 0.1.0", fixture.root_manifest())],
+        "Cargo.toml\nGLOSSARY.md\n",
+    );
+    let line = package_check_line(&fixture);
+    assert!(line.starts_with("unsatisfied package-check"), "{line}");
+    assert!(line.contains("\"/GLOSSARY.md\""), "{line}");
+    assert!(!line.contains("SECURITY.md"), "{line}");
+}
+
+/// Without the policy, a shape no listing proves names only the half it
+/// still owes, and the preview names only that assertion.
+///
+/// SATISFIES forge-setup:a-package-check-states-policy-reach
+#[test]
+fn package_check_names_no_policy_gap_for_a_target_that_opted_out() {
+    let fixture = ForgeFixture::new();
+    fixture.seed_record_with(&[], false);
+    fixture.seed_cargo(&[], "Cargo.toml\n");
+    let line = package_check_line(&fixture);
+    assert!(line.starts_with("ok package-check"), "{line}");
+    assert!(
+        line.contains("the absence of release-kit's own files is unproved"),
+        "{line}"
+    );
+    assert!(!line.contains("SECURITY.md"), "{line}");
+
+    let out = fixture
+        .rk(&["setup", "step", "package-check"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        text.contains("asserting it ships none of release-kit's own files"),
+        "{text}"
+    );
+    assert!(!text.contains("SECURITY.md"), "{text}");
 }
 
 /// With no record, release-kit has landed nothing here, so it claims its

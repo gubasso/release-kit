@@ -157,19 +157,24 @@ const BASH_LIMITATION: &str = "the make dist tarball is not inspected: git archi
 /// reads its command from the binding rather than from a forge tree.
 ///
 /// Publishability is the whole of the check for every binding. Policy reach
-/// is asserted only where the binding has a deterministic listing command
-/// the step can run with no credentials, which today is a sole Cargo
-/// package rooted at the target; every other shape reports its successful
-/// packaging result with the unproved inclusion named.
+/// is asserted only where the target requests the reporting policy and the
+/// binding has a deterministic listing command the step can run with no
+/// credentials, which today is a sole Cargo package rooted at the target;
+/// every other shape reports its successful packaging result with the
+/// unproved inclusion named. A target that opted out of the policy owes no
+/// policy in its artifact, so nothing about one is judged or named there.
 fn package_check(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkError> {
+    let policy = ctx.reporting_policy();
     let (program, args): (&str, &[&str]) = match ctx.tech {
         Some("rust") => ("cargo", &["publish", "--dry-run", "--allow-dirty"]),
         Some("python") => ("python3", &["-m", "build"]),
         Some("bash") => {
-            return Ok(StepState::ok_with_limitation(
-                "no registry for this technology; there is nothing to package",
-                BASH_LIMITATION,
-            ));
+            let built = "no registry for this technology; there is nothing to package";
+            return Ok(if policy {
+                StepState::ok_with_limitation(built, BASH_LIMITATION)
+            } else {
+                StepState::ok(built)
+            });
         }
         Some(other) => {
             return Ok(StepState::unknown(format!(
@@ -192,7 +197,8 @@ fn package_check(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkError> {
     let built = "the package builds and passes the registry's dry run";
     Ok(match ctx.tech {
         Some("rust") => policy_in_the_crate(ctx, run, built)?,
-        _ => StepState::ok_with_limitation(built, PYTHON_LIMITATION),
+        _ if policy => StepState::ok_with_limitation(built, PYTHON_LIMITATION),
+        _ => StepState::ok(built),
     })
 }
 
@@ -223,6 +229,7 @@ fn cargo_exec(ctx: &Ctx, program: &str, args: &[&str]) -> Exec {
 ///
 /// SATISFIES forge-setup:a-package-check-states-policy-reach
 fn policy_in_the_crate(ctx: &Ctx, run: &mut Runner, built: &str) -> Result<StepState, RkError> {
+    let policy = ctx.reporting_policy();
     let root_manifest = ctx.target.as_std_path().join("Cargo.toml");
     let probe = cargo_package::probe(&root_manifest, &[], |args| {
         run(&cargo_exec(ctx, "cargo", args)).map(|outcome| Answer {
@@ -234,10 +241,17 @@ fn policy_in_the_crate(ctx: &Ctx, run: &mut Runner, built: &str) -> Result<StepS
     let listing = match probe {
         Probe::Listed(listing) => listing,
         Probe::OtherShape => {
+            let unproved = if policy {
+                format!(
+                    "{POLICY_DESTINATION} inclusion and the absence of release-kit's own files are"
+                )
+            } else {
+                "the absence of release-kit's own files is".to_owned()
+            };
             return Ok(StepState::ok_with_limitation(
                 built,
                 format!(
-                    "{POLICY_DESTINATION} inclusion and the absence of release-kit's own files are unproved: the package check lists files only for a single default package rooted at the target, and this workspace selects a different shape; inspect the published archive before releasing"
+                    "{unproved} unproved: the package check lists files only for a single default package rooted at the target, and this workspace selects a different shape; inspect the published archive before releasing"
                 ),
             ));
         }
@@ -258,15 +272,16 @@ fn policy_in_the_crate(ctx: &Ctx, run: &mut Runner, built: &str) -> Result<StepS
     let shipped = listing.shipped(&forbidden);
     Ok(boundary_state(
         built,
-        listing.carries(POLICY_DESTINATION),
+        policy,
+        !policy || listing.carries(POLICY_DESTINATION),
         &shipped,
     ))
 }
 
-/// The verdict over one listing: the policy must ship, and no file
-/// release-kit lands or owns may. Both faults share one detail, because a
-/// step reports one line.
-fn boundary_state(built: &str, carried: bool, shipped: &[&str]) -> StepState {
+/// The verdict over one listing: the policy must ship where the target
+/// requests it, and no file release-kit lands or owns may. Both faults
+/// share one detail, because a step reports one line.
+fn boundary_state(built: &str, policy: bool, carried: bool, shipped: &[&str]) -> StepState {
     const WHY: &str = "and release-plz attributes every commit touching one of them to the package, so a landing that rewrites one asks for a release with no code change";
     let policy_fix = format!(
         "add /{POLICY_DESTINATION} to [package].include, remove the [package].exclude entry matching it, or stop ignoring the file"
@@ -283,8 +298,11 @@ fn boundary_state(built: &str, carried: bool, shipped: &[&str]) -> StepState {
         )
     };
     match (carried, shipped.is_empty()) {
-        (true, true) => StepState::ok(format!(
+        (true, true) if policy => StepState::ok(format!(
             "{built}, and the published package carries {POLICY_DESTINATION} and no file release-kit lands or owns"
+        )),
+        (true, true) => StepState::ok(format!(
+            "{built}, and the published package ships no file release-kit lands or owns"
         )),
         (false, true) => StepState::not(format!(
             "{built}, but the published package omits {POLICY_DESTINATION}: {policy_fix}"
