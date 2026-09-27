@@ -15,6 +15,8 @@ pub mod context;
 pub mod journal;
 pub mod observe;
 pub mod process;
+pub mod proof;
+pub mod report;
 pub mod secrets;
 pub mod steps;
 pub mod workflow_jobs;

@@ -66,6 +66,17 @@ pub enum StepState {
 }
 
 impl StepState {
+    /// What was found, one line.
+    #[must_use]
+    pub fn detail(&self) -> &str {
+        match self {
+            Self::Satisfied { detail, .. }
+            | Self::Unsatisfied { detail }
+            | Self::Inapplicable { detail }
+            | Self::Unknown { detail } => detail,
+        }
+    }
+
     /// Whether the desired state holds.
     #[must_use]
     pub const fn satisfied(&self) -> bool {

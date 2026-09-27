@@ -109,11 +109,68 @@ pub fn refuse_legacy_key() -> Result<(), RkError> {
 /// unreadable, not a regular file, readable beyond its owner, empty,
 /// oversized, inside the target, or not a PEM private key.
 pub fn resolve_key_file(target: &Utf8Path) -> Result<Option<KeyFile>, RkError> {
+    match look_up_key_file(target)? {
+        KeyLookup::Absent => Ok(None),
+        KeyLookup::Found(key) => Ok(Some(key)),
+        KeyLookup::Unavailable(unavailable) => Err(unavailable.refusal()),
+    }
+}
+
+/// What the named key file turned out to be.
+pub enum KeyLookup {
+    /// No file is named.
+    Absent,
+    /// A named file this runtime cannot reach: a path that does not exist
+    /// here, or a file it may not open or read. Under a read-only check
+    /// that is an observation boundary, not a defect: the file can exist
+    /// on the host that named it and be absent from a container.
+    Unavailable(Unavailable),
+    /// A readable, owner-only PEM private key.
+    Found(KeyFile),
+}
+
+/// A named key file this runtime cannot reach, with the refusal a
+/// mutating run gives for it.
+pub struct Unavailable {
+    /// What was found, one line.
+    pub message: String,
+    action: &'static str,
+}
+
+impl Unavailable {
+    /// The refusal a run that needs the key gives.
+    #[must_use]
+    pub fn refusal(self) -> RkError {
+        refuse(self.message, self.action)
+    }
+}
+
+/// Look the named key file up, and tell a file this runtime cannot reach
+/// from a file that is wrong.
+///
+/// A wrong file is refused in every mode: an unsafe mode, a directory or
+/// a pipe, an oversized or empty file, a file inside the target, or bytes
+/// that are not a PEM private key. A file that cannot be reached is
+/// [`KeyLookup::Unavailable`], and the caller decides what that means.
+///
+/// SATISFIES setup-proof:an-unavailable-credential-is-an-observation-boundary
+///
+/// # Errors
+///
+/// Refuses a stale contents variable and every wrong file, as
+/// [`resolve_key_file`] names them.
+pub fn look_up_key_file(target: &Utf8Path) -> Result<KeyLookup, RkError> {
     refuse_legacy_key()?;
     let Some(raw) = value_of(PRIVATE_KEY_FILE) else {
-        return Ok(None);
+        return Ok(KeyLookup::Absent);
     };
-    let path = resolve_path(&raw, target)?;
+    let unavailable = |message: String, action: &'static str| {
+        Ok(KeyLookup::Unavailable(Unavailable { message, action }))
+    };
+    let path = match resolve_path(&raw, target)? {
+        Resolved::Path(path) => path,
+        Resolved::Unreachable(message) => return unavailable(message, "name an existing .pem"),
+    };
 
     // One handle answers every question that follows. Asking the path twice
     // — once for metadata, once for contents — would let a replacement
@@ -132,18 +189,24 @@ pub fn resolve_key_file(target: &Utf8Path) -> Result<Option<KeyFile>, RkError> {
         use std::os::unix::fs::OpenOptionsExt as _;
         options.custom_flags(libc::O_NONBLOCK);
     }
-    let file = options.open(&path).map_err(|err| {
-        refuse(
-            format!("{path} is unreadable: {err}"),
-            "name an existing .pem",
-        )
-    })?;
-    let meta = file.metadata().map_err(|err| {
-        refuse(
-            format!("{path} is unreadable: {err}"),
-            "name an existing .pem",
-        )
-    })?;
+    let file = match options.open(&path) {
+        Ok(file) => file,
+        Err(err) => {
+            return unavailable(
+                format!("{path} is unreadable: {err}"),
+                "name an existing .pem",
+            );
+        }
+    };
+    let meta = match file.metadata() {
+        Ok(meta) => meta,
+        Err(err) => {
+            return unavailable(
+                format!("{path} is unreadable: {err}"),
+                "name an existing .pem",
+            );
+        }
+    };
 
     // rk reads this handle and hands its bytes on, so a source that yields
     // them once, or has none of its own, is wrong here.
@@ -173,14 +236,12 @@ pub fn resolve_key_file(target: &Utf8Path) -> Result<Option<KeyFile>, RkError> {
     // reported: one byte past the cap is enough to know, and the cap holds
     // even where a handle's reported length and its contents disagree.
     let mut bytes = Zeroizing::new(Vec::new());
-    file.take(MAX_KEY_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|err| {
-            refuse(
-                format!("{path} is unreadable: {err}"),
-                "name a readable .pem",
-            )
-        })?;
+    if let Err(err) = file.take(MAX_KEY_BYTES + 1).read_to_end(&mut bytes) {
+        return unavailable(
+            format!("{path} is unreadable: {err}"),
+            "name a readable .pem",
+        );
+    }
     if bytes.len() as u64 > MAX_KEY_BYTES {
         return Err(refuse(
             format!("{path} is larger than {MAX_KEY_BYTES} bytes"),
@@ -200,13 +261,19 @@ pub fn resolve_key_file(target: &Utf8Path) -> Result<Option<KeyFile>, RkError> {
         ));
     }
 
-    Ok(Some(KeyFile { path, bytes }))
+    Ok(KeyLookup::Found(KeyFile { path, bytes }))
 }
 
 /// The canonical path the operator named, refused where the name itself is
 /// wrong: before anything is opened, and before a diagnostic could leak
 /// what the file holds.
-fn resolve_path(raw: &OsString, target: &Utf8Path) -> Result<Utf8PathBuf, RkError> {
+/// A named path, resolved, or a name this runtime cannot reach.
+enum Resolved {
+    Path(Utf8PathBuf),
+    Unreachable(String),
+}
+
+fn resolve_path(raw: &OsString, target: &Utf8Path) -> Result<Resolved, RkError> {
     let Ok(named) = Utf8PathBuf::from_path_buf(raw.clone().into()) else {
         return Err(refuse(
             format!("{PRIVATE_KEY_FILE} is not valid UTF-8"),
@@ -223,12 +290,14 @@ fn resolve_path(raw: &OsString, target: &Utf8Path) -> Result<Utf8PathBuf, RkErro
         ));
     }
 
-    let path = std::fs::canonicalize(&named).map_err(|err| {
-        refuse(
-            format!("{named} is unreadable: {err}"),
-            "name an existing .pem",
-        )
-    })?;
+    let path = match std::fs::canonicalize(&named) {
+        Ok(path) => path,
+        Err(err) => {
+            return Ok(Resolved::Unreachable(format!(
+                "{named} is unreadable: {err}"
+            )));
+        }
+    };
     let Ok(path) = Utf8PathBuf::from_path_buf(path) else {
         return Err(refuse(
             format!("{named} resolves to a path that is not valid UTF-8"),
@@ -246,7 +315,7 @@ fn resolve_path(raw: &OsString, target: &Utf8Path) -> Result<Utf8PathBuf, RkErro
         ));
     }
 
-    Ok(path)
+    Ok(Resolved::Path(path))
 }
 
 /// Whether the bytes are the RFC 7468 textual encoding of a private key.

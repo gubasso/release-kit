@@ -63,6 +63,44 @@ pub enum SetupAction {
         #[arg(long)]
         json: bool,
     },
+    /// Observe every step and, only where every applicable step holds,
+    /// commit the result to .release-kit/setup-proof.json.
+    Checkpoint {
+        /// The repository to check.
+        #[arg(long)]
+        target: Utf8PathBuf,
+        /// Override the detected project path (owner/name).
+        #[arg(long)]
+        repo: Option<String>,
+        /// Override the detected forge: github or gitlab.
+        #[arg(long)]
+        forge: Option<String>,
+        /// The check the gate must pass, verified where given.
+        #[arg(long)]
+        required_check: Option<String>,
+        /// Emit NDJSON events on stdout instead of the human report.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Judge the committed setup proof against this target, offline: no
+    /// forge call and no credential.
+    Status {
+        /// The repository whose proof to read.
+        #[arg(long)]
+        target: Utf8PathBuf,
+        /// Override the detected project path (owner/name).
+        #[arg(long)]
+        repo: Option<String>,
+        /// Override the detected forge: github or gitlab.
+        #[arg(long)]
+        forge: Option<String>,
+        /// The check the gate must pass, as the checkpoint named it.
+        #[arg(long)]
+        required_check: Option<String>,
+        /// Emit one rk.setup-status/1 document instead of the human report.
+        #[arg(long)]
+        json: bool,
+    },
     /// Run one step by name, for recovery and rerun.
     Step {
         /// The step, from `rk setup --list`.

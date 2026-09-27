@@ -5260,6 +5260,312 @@ fn check_reports_install_bot_unknown_without_app_credentials() {
     );
 }
 
+/// A GitHub target whose forge holds the whole setup, and the key file
+/// that proved it: the ground every setup-proof test starts from.
+fn a_proven_setup() -> (ForgeFixture, PathBuf) {
+    let fixture = ForgeFixture::new();
+    fixture.seed_gate();
+    let key = fixture.key_file();
+    fixture
+        .rk(&["setup"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .args(["--apply", "--required-check", "test-check"])
+        .env("RK_BOT_APP_ID", "314159")
+        .env("RK_BOT_PRIVATE_KEY_FILE", &key)
+        .assert()
+        .success();
+    (fixture, key)
+}
+
+/// A setup command run with the App's credentials.
+fn with_app(fixture: &ForgeFixture, key: &Path, args: &[&str]) -> Command {
+    let mut command = fixture.rk(args);
+    command
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .env("RK_BOT_APP_ID", "314159")
+        .env("RK_BOT_PRIVATE_KEY_FILE", key);
+    command
+}
+
+/// The committed proof's path in a fixture target.
+fn proof_path(fixture: &ForgeFixture) -> PathBuf {
+    fixture.target.path().join(".release-kit/setup-proof.json")
+}
+
+/// A complete observation becomes one committed proof, and the status
+/// reads it back with no forge call, no key, and no journal. The record
+/// carries normalized words alone: no key bytes, no key path, and no
+/// coordinate of the machine that wrote it.
+///
+/// SATISFIES setup-proof:a-checkpoint-records-only-a-complete-observation
+/// SATISFIES setup-proof:the-proof-carries-no-secret-or-machine-coordinate
+/// SATISFIES setup-proof:the-status-reads-the-proof-offline
+#[test]
+fn a_checkpoint_records_a_complete_observation_that_the_status_reads_offline() {
+    let (fixture, key) = a_proven_setup();
+    with_app(&fixture, &key, &["setup", "checkpoint"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "wrote .release-kit/setup-proof.json",
+        ));
+    let text = std::fs::read_to_string(proof_path(&fixture)).expect("the proof reads");
+    assert!(text.ends_with("}\n") && !text.ends_with("\n\n"), "{text}");
+    let proof: serde_json::Value = serde_json::from_str(&text).expect("the proof parses");
+    assert_eq!(proof["schema"], "rk.setup-proof/1");
+    let recorded: Vec<&str> = proof["steps"]
+        .as_array()
+        .expect("steps")
+        .iter()
+        .map(|step| step["state"].as_str().expect("a state"))
+        .collect();
+    assert!(
+        recorded.contains(&"satisfied") && recorded.contains(&"skipped"),
+        "{recorded:?}"
+    );
+    for needle in [
+        key.to_string_lossy().as_ref(),
+        "PRIVATE KEY",
+        "314159",
+        fixture.home.path().to_string_lossy().as_ref(),
+        fixture.mock.path().to_string_lossy().as_ref(),
+        "runs/",
+        "Bearer",
+        "eyJ",
+    ] {
+        assert!(!text.contains(needle), "the proof carries {needle}: {text}");
+    }
+
+    // The status runs with no credentials and no forge at all.
+    let calls = fixture.log();
+    let out = fixture
+        .rk(&["setup", "status", "--json"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .env("RK_GH_BIN", "/nonexistent/gh")
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let status: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one document");
+    assert_eq!(status["schema"], "rk.setup-status/1");
+    assert_eq!(status["state"], "compatible", "{status}");
+    assert_eq!(fixture.log(), calls, "the status called the forge");
+    fixture
+        .rk(&["setup", "status"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("setup proof: compatible"));
+}
+
+/// An observation with a gap writes nothing: no file where none stood,
+/// and an earlier proof stays byte for byte.
+///
+/// SATISFIES setup-proof:a-checkpoint-records-only-a-complete-observation
+#[test]
+fn a_checkpoint_refuses_an_incomplete_observation_and_keeps_the_earlier_proof() {
+    let fresh = ForgeFixture::new();
+    fresh
+        .rk(&["setup", "checkpoint"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("was not written"));
+    assert!(
+        !proof_path(&fresh).exists(),
+        "an incomplete observation wrote a proof"
+    );
+
+    let (fixture, key) = a_proven_setup();
+    with_app(&fixture, &key, &["setup", "checkpoint"])
+        .assert()
+        .success();
+    let before = std::fs::read(proof_path(&fixture)).expect("the proof reads");
+    // Without the App's credentials install-bot is unknown, so this
+    // observation is incomplete and the record must not move.
+    fixture
+        .rk(&["setup", "checkpoint"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .assert()
+        .code(1);
+    assert_eq!(std::fs::read(proof_path(&fixture)).expect("reads"), before);
+}
+
+/// A proof judges the contract it was written against: a changed answer
+/// stales it by name, a newer binary alone does not, and an edited record
+/// or a newer schema reads as invalid with its own reason.
+///
+/// SATISFIES setup-proof:the-status-reads-the-proof-offline
+#[test]
+fn the_status_names_what_moved_since_the_proof() {
+    let (fixture, key) = a_proven_setup();
+    with_app(&fixture, &key, &["setup", "checkpoint"])
+        .assert()
+        .success();
+    let status = |extra: &[&str]| -> serde_json::Value {
+        let out = fixture
+            .rk(&["setup", "status", "--json"])
+            .args(["--repo", "acme/widget", "--forge", "github"])
+            .args(extra)
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        serde_json::from_slice(&out.stdout).expect("one document")
+    };
+    let stale = status(&["--required-check", "another-check"]);
+    assert_eq!(stale["state"], "stale", "{stale}");
+    assert_eq!(stale["differences"][0], "target.required_check", "{stale}");
+
+    let path = proof_path(&fixture);
+    let original = std::fs::read_to_string(&path).expect("reads");
+    let mut proof: serde_json::Value = serde_json::from_str(&original).expect("parses");
+    proof["rk_version"] = "0.0.1".into();
+    std::fs::write(&path, serde_json::to_string_pretty(&proof).expect("ok")).expect("writes");
+    let older = status(&[]);
+    assert_eq!(older["state"], "compatible", "{older}");
+    assert_eq!(older["checkpoint"]["rk_version"], "0.0.1");
+
+    proof["subject"]["target"]["repo"] = "acme/other".into();
+    std::fs::write(&path, serde_json::to_string_pretty(&proof).expect("ok")).expect("writes");
+    let edited = status(&[]);
+    assert_eq!(edited["invalid"]["reason"], "digest-mismatch", "{edited}");
+
+    proof["schema"] = "rk.setup-proof/2".into();
+    std::fs::write(&path, serde_json::to_string_pretty(&proof).expect("ok")).expect("writes");
+    assert_eq!(status(&[])["invalid"]["reason"], "future-schema");
+
+    std::fs::remove_file(&path).expect("removes");
+    assert_eq!(status(&[])["state"], "absent");
+}
+
+/// A key the check cannot reach leaves install-bot unknown and every
+/// other step observed. The verdict names an incomplete observation, not
+/// drift, and prescribes no apply; beside a compatible proof it says the
+/// proof still matches and that no defect was inferred.
+///
+/// SATISFIES setup-proof:an-unavailable-credential-is-an-observation-boundary
+#[test]
+fn a_check_reads_an_unreachable_key_as_an_observation_boundary() {
+    let (fixture, key) = a_proven_setup();
+    let unreachable = fixture.home.path().join("mounted-elsewhere/bot.pem");
+    let check = |fixture: &ForgeFixture, key_path: &Path| {
+        let assert = with_app(fixture, key_path, &["setup", "check"])
+            .assert()
+            .code(1);
+        let out = assert.get_output();
+        (
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+    let (stdout, stderr) = check(&fixture, &unreachable);
+    assert!(stdout.contains("unknown install-bot"), "{stdout}");
+    assert!(
+        stdout.contains("ok protections-check"),
+        "the check stopped early: {stdout}"
+    );
+    assert!(
+        stderr.contains("could not be verified from this runtime"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("no compatible .release-kit/setup-proof.json"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("--apply"),
+        "an unknown step prescribed an apply: {stderr}"
+    );
+
+    with_app(&fixture, &key, &["setup", "checkpoint"])
+        .assert()
+        .success();
+    let (_, stderr) = check(&fixture, &unreachable);
+    assert!(
+        stderr.contains("still matches this target's setup contract"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("no setup defect was inferred"), "{stderr}");
+
+    // An unreadable file is the same boundary.
+    let locked = fixture.key_file_with("locked.pem", "", 0o000);
+    let (stdout, _) = check(&fixture, &locked);
+    assert!(stdout.contains("unknown install-bot"), "{stdout}");
+
+    // The machine form names the reason.
+    let out = with_app(&fixture, &unreachable, &["setup", "check", "--json"])
+        .assert()
+        .code(1)
+        .get_output()
+        .clone();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("observation-incomplete"), "{stderr}");
+}
+
+/// A run that would mutate the forge, or record a proof, needs the key:
+/// an unreachable one refuses before any mutation or write. A key that is
+/// present and wrong is refused in every mode, the check included.
+///
+/// SATISFIES setup-proof:an-unavailable-credential-is-an-observation-boundary
+#[test]
+fn apply_and_checkpoint_refuse_an_unreachable_key_and_every_mode_refuses_a_wrong_one() {
+    let (fixture, _) = a_proven_setup();
+    let unreachable = fixture.home.path().join("mounted-elsewhere/bot.pem");
+    let calls = fixture.log();
+    with_app(&fixture, &unreachable, &["setup", "checkpoint"])
+        .assert()
+        .code(73);
+    assert!(!proof_path(&fixture).exists());
+    with_app(
+        &fixture,
+        &unreachable,
+        &["setup", "step", "bot-secrets", "--apply"],
+    )
+    .assert()
+    .code(73);
+    let new_calls = &fixture.log()[calls.len()..];
+    assert!(
+        !new_calls.contains("-X POST") && !new_calls.contains("-X PUT"),
+        "a refused run mutated the forge: {new_calls}"
+    );
+
+    let loose = fixture.key_file_with("loose.pem", FAKE_PEM, 0o644);
+    with_app(&fixture, &loose, &["setup", "check"])
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("readable by group or other"));
+}
+
+/// A compatible proof never hides a step found wrong now: the current
+/// observation wins, and the verdict says it supersedes the record.
+///
+/// SATISFIES setup-proof:current-evidence-overrides-the-proof
+#[test]
+fn a_step_found_wrong_now_supersedes_a_compatible_proof() {
+    let (fixture, key) = a_proven_setup();
+    with_app(&fixture, &key, &["setup", "checkpoint"])
+        .assert()
+        .success();
+    std::fs::remove_file(fixture.state("installed")).expect("the App is uninstalled");
+    let out = with_app(&fixture, &key, &["setup", "check"])
+        .assert()
+        .code(1)
+        .get_output()
+        .clone();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stdout.contains("unsatisfied install-bot"), "{stdout}");
+    assert!(
+        stderr.contains("supersedes the committed setup proof"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("--apply re-asserts the unsatisfied ones"),
+        "{stderr}"
+    );
+}
+
 /// A token is minted no wider than the installation it comes from, so the
 /// observation reads the installation's own permissions and names each one
 /// the target's rendered release automation needs and the installation

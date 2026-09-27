@@ -15,7 +15,7 @@ use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
 use crate::landing::{CheckoutMode, Integration, Style};
 use crate::profile::ReleaseMode;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// The committed input, relative to the target root.
 pub const CONFIG_PATH: &str = ".release-kit/config.toml";
@@ -274,7 +274,7 @@ pub struct Bot {
 }
 
 /// The `protection` table.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 #[allow(
     clippy::struct_excessive_bools,
@@ -388,7 +388,7 @@ pub const SAFETY_RULES: [&str; 2] = ["deletion", "non_fast_forward"];
 pub const REQUEST_RULES: [&str; 2] = ["pull_request", "required_status_checks"];
 
 /// The `protection.github` table.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Github {
     /// F: invariant, `PR_TITLE`.
@@ -407,7 +407,7 @@ impl Default for Github {
 }
 
 /// The `protection.gitlab` table.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Gitlab {
     /// F: invariant, linear history.

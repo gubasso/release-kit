@@ -320,7 +320,7 @@ rk setup check --target .
 # check: the protection steps report satisfied — protect-trunk reads back strict_required_status_checks_policy=true with required checks on GitHub, or merge_method=ff on GitLab; auto-merge names its limitation where no switch exists, and protect-release-lines is skipped while no line exists
 # private-vulnerability-reporting unsatisfied or unknown: continue at 3g before calling setup ready
 # protect-trunk unsatisfied: return to 3c; a loose or absent strict policy faults even when checks are required
-# install-bot unknown: rerun with 2b's exports in the environment; rk forge <forge> owns why only the bot reads its own installation
+# install-bot unknown: this runtime cannot read the App's installation, which proves nothing wrong. Rerun with 2b's exports where the key lives, or read rk setup status where it does not; rk forge <forge> owns why only the bot reads its own installation
 ```
 
 Where the forge enforces less than a step claims, the check names the weaker guarantee rather than passing; tag protection on GitLab is the case this exists for, per `rk forge gitlab`.
@@ -539,6 +539,19 @@ rk guide release
 ```
 
 The chapter names its passing verify step as the proof the next step depends on.
+
+### 7d. Record the setup proof
+
+From a host that holds the bot's key, once every step reports satisfied:
+
+```bash
+rk setup checkpoint --target .
+# check: wrote .release-kit/setup-proof.json; an unsatisfied or unknown step writes nothing, so return to the substep that owns it
+rk setup status --target .
+# check: setup proof: compatible
+```
+
+Commit `.release-kit/setup-proof.json` through the trunk's one path, 4f. A runtime without the key reads `rk setup status` instead of repeating the check. After any change to the setup configuration, `rk setup status` names the changed field, and this substep runs again.
 
 ## 8. Require trusted publishing
 

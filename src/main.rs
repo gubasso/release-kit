@@ -167,7 +167,12 @@ const fn wants_json(command: &Commands) -> bool {
         Commands::Versions(args) => args.json,
         Commands::Doctor(args) => args.json,
         Commands::Setup(args) => match &args.action {
-            Some(SetupAction::Check { json, .. } | SetupAction::Step { json, .. }) => *json,
+            Some(
+                SetupAction::Check { json, .. }
+                | SetupAction::Checkpoint { json, .. }
+                | SetupAction::Status { json, .. }
+                | SetupAction::Step { json, .. },
+            ) => *json,
             Some(SetupAction::Script { .. }) => false,
             None => args.json,
         },

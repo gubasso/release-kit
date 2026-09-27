@@ -82,7 +82,7 @@ This repository is the canonical knowledge product for the release-kit workflow.
 - Every commit follows the same scoped convention. The landed commit-msg hook requires a scope on every one, and the title check holds it to lowercase letters, digits, and `_ . / -`.
 - The scope names the area you changed, and reads as `area/subarea` where that is clearer. Prefer a scope this repository already uses, which `git log --format=%s | sed -n 's/^[a-z]*(\([^)]*\)).*/\1/p' | sort -u` lists. Coin a new scope only where no existing one names the area.
 - Never author a tag, and never hand-edit a generated artifact workflow.
-- Run `rk status` before changing anything under `.github/workflows/` or `.gitlab-ci.yml`, or any file `.release-kit/manifest.json` names.
+- Run `rk status` before changing anything under `.github/workflows/` or `.gitlab-ci.yml`, or any file `.release-kit/manifest.json` names. Before reading a gap in `rk setup check` as a setup defect, run `rk setup status`. A credential this runtime cannot reach leaves a step unknown, which is an observation boundary and not drift. Never ask the operator to mount, expose, recreate, or rotate a secret only so an agent check can pass. Reopen the setup only where a check that holds the credentials finds a step unsatisfied. Reopen it also where `rk setup status` reports the proof stale or invalid in a part the request touches.
 - The full method is `rk method --list`. The recovery paths are `rk method recovery`.
 
 <!-- END release-kit -->

@@ -1,7 +1,7 @@
 bash github linked-worktree forge trunk false .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 bash github linked-worktree forge trunk false .github/workflows/release.yml 23727e6e3716f1f611be388d21e0e58878fed3f980a63cddd80072d78d3f7bd3
 bash github linked-worktree forge trunk false .pre-commit-config.yaml 2ccaa36ef2cfdb4c5512e7f49f1b6fcadc4150903fc9a46a9f0764e82c473ec5
-bash github linked-worktree forge trunk false AGENTS.md 0114f6f97be37df9ebd9d135ce1391f15de61e304da1197e948adfb6cc1edb72
+bash github linked-worktree forge trunk false AGENTS.md 19dcf839226d3dc6fa8aadbf72876961b5f3966f7ffb1908c2da54db0acf53bd
 bash github linked-worktree forge trunk false GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash github linked-worktree forge trunk false SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 bash github linked-worktree forge trunk false VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -11,7 +11,7 @@ bash github linked-worktree forge trunk false .release-kit/manifest.json 50a215d
 bash github linked-worktree forge trunk true .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 bash github linked-worktree forge trunk true .github/workflows/release.yml 23727e6e3716f1f611be388d21e0e58878fed3f980a63cddd80072d78d3f7bd3
 bash github linked-worktree forge trunk true .pre-commit-config.yaml 2ccaa36ef2cfdb4c5512e7f49f1b6fcadc4150903fc9a46a9f0764e82c473ec5
-bash github linked-worktree forge trunk true AGENTS.md 0114f6f97be37df9ebd9d135ce1391f15de61e304da1197e948adfb6cc1edb72
+bash github linked-worktree forge trunk true AGENTS.md 19dcf839226d3dc6fa8aadbf72876961b5f3966f7ffb1908c2da54db0acf53bd
 bash github linked-worktree forge trunk true GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash github linked-worktree forge trunk true SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 bash github linked-worktree forge trunk true VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -21,7 +21,7 @@ bash github linked-worktree forge trunk true .release-kit/manifest.json 50325b87
 bash github linked-worktree forge trunk withheld-shape .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 bash github linked-worktree forge trunk withheld-shape .github/workflows/release.yml 23727e6e3716f1f611be388d21e0e58878fed3f980a63cddd80072d78d3f7bd3
 bash github linked-worktree forge trunk withheld-shape .pre-commit-config.yaml 2ccaa36ef2cfdb4c5512e7f49f1b6fcadc4150903fc9a46a9f0764e82c473ec5
-bash github linked-worktree forge trunk withheld-shape AGENTS.md 0114f6f97be37df9ebd9d135ce1391f15de61e304da1197e948adfb6cc1edb72
+bash github linked-worktree forge trunk withheld-shape AGENTS.md 19dcf839226d3dc6fa8aadbf72876961b5f3966f7ffb1908c2da54db0acf53bd
 bash github linked-worktree forge trunk withheld-shape GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash github linked-worktree forge trunk withheld-shape SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 bash github linked-worktree forge trunk withheld-shape VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -31,7 +31,7 @@ bash github linked-worktree forge trunk withheld-shape .release-kit/manifest.jso
 bash github linked-worktree forge trunk withheld-flake .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 bash github linked-worktree forge trunk withheld-flake .github/workflows/release.yml 23727e6e3716f1f611be388d21e0e58878fed3f980a63cddd80072d78d3f7bd3
 bash github linked-worktree forge trunk withheld-flake .pre-commit-config.yaml 2ccaa36ef2cfdb4c5512e7f49f1b6fcadc4150903fc9a46a9f0764e82c473ec5
-bash github linked-worktree forge trunk withheld-flake AGENTS.md 0114f6f97be37df9ebd9d135ce1391f15de61e304da1197e948adfb6cc1edb72
+bash github linked-worktree forge trunk withheld-flake AGENTS.md 19dcf839226d3dc6fa8aadbf72876961b5f3966f7ffb1908c2da54db0acf53bd
 bash github linked-worktree forge trunk withheld-flake GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash github linked-worktree forge trunk withheld-flake SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 bash github linked-worktree forge trunk withheld-flake VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -41,7 +41,7 @@ bash github linked-worktree forge trunk withheld-flake .release-kit/manifest.jso
 bash github linked-worktree forge lines false .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 bash github linked-worktree forge lines false .github/workflows/release.yml 815355dac295c1a2d1d5b5be36d8fa2db752670c07db72a3a2eaa151d13ef99e
 bash github linked-worktree forge lines false .pre-commit-config.yaml 2ccaa36ef2cfdb4c5512e7f49f1b6fcadc4150903fc9a46a9f0764e82c473ec5
-bash github linked-worktree forge lines false AGENTS.md 0114f6f97be37df9ebd9d135ce1391f15de61e304da1197e948adfb6cc1edb72
+bash github linked-worktree forge lines false AGENTS.md 19dcf839226d3dc6fa8aadbf72876961b5f3966f7ffb1908c2da54db0acf53bd
 bash github linked-worktree forge lines false GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash github linked-worktree forge lines false SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 bash github linked-worktree forge lines false VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -51,7 +51,7 @@ bash github linked-worktree forge lines false .release-kit/manifest.json 5a1a496
 bash github linked-worktree forge lines true .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 bash github linked-worktree forge lines true .github/workflows/release.yml 815355dac295c1a2d1d5b5be36d8fa2db752670c07db72a3a2eaa151d13ef99e
 bash github linked-worktree forge lines true .pre-commit-config.yaml 2ccaa36ef2cfdb4c5512e7f49f1b6fcadc4150903fc9a46a9f0764e82c473ec5
-bash github linked-worktree forge lines true AGENTS.md 0114f6f97be37df9ebd9d135ce1391f15de61e304da1197e948adfb6cc1edb72
+bash github linked-worktree forge lines true AGENTS.md 19dcf839226d3dc6fa8aadbf72876961b5f3966f7ffb1908c2da54db0acf53bd
 bash github linked-worktree forge lines true GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash github linked-worktree forge lines true SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 bash github linked-worktree forge lines true VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -61,7 +61,7 @@ bash github linked-worktree forge lines true .release-kit/manifest.json 2ffd748c
 bash github linked-worktree forge lines withheld-shape .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 bash github linked-worktree forge lines withheld-shape .github/workflows/release.yml 815355dac295c1a2d1d5b5be36d8fa2db752670c07db72a3a2eaa151d13ef99e
 bash github linked-worktree forge lines withheld-shape .pre-commit-config.yaml 2ccaa36ef2cfdb4c5512e7f49f1b6fcadc4150903fc9a46a9f0764e82c473ec5
-bash github linked-worktree forge lines withheld-shape AGENTS.md 0114f6f97be37df9ebd9d135ce1391f15de61e304da1197e948adfb6cc1edb72
+bash github linked-worktree forge lines withheld-shape AGENTS.md 19dcf839226d3dc6fa8aadbf72876961b5f3966f7ffb1908c2da54db0acf53bd
 bash github linked-worktree forge lines withheld-shape GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash github linked-worktree forge lines withheld-shape SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 bash github linked-worktree forge lines withheld-shape VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -71,7 +71,7 @@ bash github linked-worktree forge lines withheld-shape .release-kit/manifest.jso
 bash github linked-worktree forge lines withheld-flake .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 bash github linked-worktree forge lines withheld-flake .github/workflows/release.yml 815355dac295c1a2d1d5b5be36d8fa2db752670c07db72a3a2eaa151d13ef99e
 bash github linked-worktree forge lines withheld-flake .pre-commit-config.yaml 2ccaa36ef2cfdb4c5512e7f49f1b6fcadc4150903fc9a46a9f0764e82c473ec5
-bash github linked-worktree forge lines withheld-flake AGENTS.md 0114f6f97be37df9ebd9d135ce1391f15de61e304da1197e948adfb6cc1edb72
+bash github linked-worktree forge lines withheld-flake AGENTS.md 19dcf839226d3dc6fa8aadbf72876961b5f3966f7ffb1908c2da54db0acf53bd
 bash github linked-worktree forge lines withheld-flake GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash github linked-worktree forge lines withheld-flake SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 bash github linked-worktree forge lines withheld-flake VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -81,7 +81,7 @@ bash github linked-worktree forge lines withheld-flake .release-kit/manifest.jso
 bash github linked-worktree local trunk false .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 bash github linked-worktree local trunk false .github/workflows/release.yml aa61a924d777d681b86513eb2606c2032cd1fd3511ed27cd973aa3ba044eef2a
 bash github linked-worktree local trunk false .pre-commit-config.yaml 57f335fd96353b5c743012a6e019735dd609fb96d4932a0504e16451fb2fff30
-bash github linked-worktree local trunk false AGENTS.md 7e3065ebfc525e526d5ba58faa7d8c15adaaf696157815acd6fde67495e80f4d
+bash github linked-worktree local trunk false AGENTS.md 6324449636c6632c4b68a46d6fed60589d1a9d902446a642f74ae00e694bafc7
 bash github linked-worktree local trunk false GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash github linked-worktree local trunk false SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 bash github linked-worktree local trunk false VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -91,7 +91,7 @@ bash github linked-worktree local trunk false .release-kit/manifest.json bc43906
 bash github linked-worktree local trunk true .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 bash github linked-worktree local trunk true .github/workflows/release.yml aa61a924d777d681b86513eb2606c2032cd1fd3511ed27cd973aa3ba044eef2a
 bash github linked-worktree local trunk true .pre-commit-config.yaml 57f335fd96353b5c743012a6e019735dd609fb96d4932a0504e16451fb2fff30
-bash github linked-worktree local trunk true AGENTS.md 7e3065ebfc525e526d5ba58faa7d8c15adaaf696157815acd6fde67495e80f4d
+bash github linked-worktree local trunk true AGENTS.md 6324449636c6632c4b68a46d6fed60589d1a9d902446a642f74ae00e694bafc7
 bash github linked-worktree local trunk true GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash github linked-worktree local trunk true SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 bash github linked-worktree local trunk true VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -101,7 +101,7 @@ bash github linked-worktree local trunk true .release-kit/manifest.json 5534bfc4
 bash github linked-worktree local trunk withheld-shape .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 bash github linked-worktree local trunk withheld-shape .github/workflows/release.yml aa61a924d777d681b86513eb2606c2032cd1fd3511ed27cd973aa3ba044eef2a
 bash github linked-worktree local trunk withheld-shape .pre-commit-config.yaml 57f335fd96353b5c743012a6e019735dd609fb96d4932a0504e16451fb2fff30
-bash github linked-worktree local trunk withheld-shape AGENTS.md 7e3065ebfc525e526d5ba58faa7d8c15adaaf696157815acd6fde67495e80f4d
+bash github linked-worktree local trunk withheld-shape AGENTS.md 6324449636c6632c4b68a46d6fed60589d1a9d902446a642f74ae00e694bafc7
 bash github linked-worktree local trunk withheld-shape GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash github linked-worktree local trunk withheld-shape SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 bash github linked-worktree local trunk withheld-shape VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -111,7 +111,7 @@ bash github linked-worktree local trunk withheld-shape .release-kit/manifest.jso
 bash github linked-worktree local trunk withheld-flake .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 bash github linked-worktree local trunk withheld-flake .github/workflows/release.yml aa61a924d777d681b86513eb2606c2032cd1fd3511ed27cd973aa3ba044eef2a
 bash github linked-worktree local trunk withheld-flake .pre-commit-config.yaml 57f335fd96353b5c743012a6e019735dd609fb96d4932a0504e16451fb2fff30
-bash github linked-worktree local trunk withheld-flake AGENTS.md 7e3065ebfc525e526d5ba58faa7d8c15adaaf696157815acd6fde67495e80f4d
+bash github linked-worktree local trunk withheld-flake AGENTS.md 6324449636c6632c4b68a46d6fed60589d1a9d902446a642f74ae00e694bafc7
 bash github linked-worktree local trunk withheld-flake GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash github linked-worktree local trunk withheld-flake SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 bash github linked-worktree local trunk withheld-flake VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -121,7 +121,7 @@ bash github linked-worktree local trunk withheld-flake .release-kit/manifest.jso
 bash github linked-worktree local lines false .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 bash github linked-worktree local lines false .github/workflows/release.yml 815355dac295c1a2d1d5b5be36d8fa2db752670c07db72a3a2eaa151d13ef99e
 bash github linked-worktree local lines false .pre-commit-config.yaml 57f335fd96353b5c743012a6e019735dd609fb96d4932a0504e16451fb2fff30
-bash github linked-worktree local lines false AGENTS.md 7e3065ebfc525e526d5ba58faa7d8c15adaaf696157815acd6fde67495e80f4d
+bash github linked-worktree local lines false AGENTS.md 6324449636c6632c4b68a46d6fed60589d1a9d902446a642f74ae00e694bafc7
 bash github linked-worktree local lines false GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash github linked-worktree local lines false SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 bash github linked-worktree local lines false VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -131,7 +131,7 @@ bash github linked-worktree local lines false .release-kit/manifest.json 079dce9
 bash github linked-worktree local lines true .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 bash github linked-worktree local lines true .github/workflows/release.yml 815355dac295c1a2d1d5b5be36d8fa2db752670c07db72a3a2eaa151d13ef99e
 bash github linked-worktree local lines true .pre-commit-config.yaml 57f335fd96353b5c743012a6e019735dd609fb96d4932a0504e16451fb2fff30
-bash github linked-worktree local lines true AGENTS.md 7e3065ebfc525e526d5ba58faa7d8c15adaaf696157815acd6fde67495e80f4d
+bash github linked-worktree local lines true AGENTS.md 6324449636c6632c4b68a46d6fed60589d1a9d902446a642f74ae00e694bafc7
 bash github linked-worktree local lines true GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash github linked-worktree local lines true SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 bash github linked-worktree local lines true VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -141,7 +141,7 @@ bash github linked-worktree local lines true .release-kit/manifest.json 5c80daca
 bash github linked-worktree local lines withheld-shape .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 bash github linked-worktree local lines withheld-shape .github/workflows/release.yml 815355dac295c1a2d1d5b5be36d8fa2db752670c07db72a3a2eaa151d13ef99e
 bash github linked-worktree local lines withheld-shape .pre-commit-config.yaml 57f335fd96353b5c743012a6e019735dd609fb96d4932a0504e16451fb2fff30
-bash github linked-worktree local lines withheld-shape AGENTS.md 7e3065ebfc525e526d5ba58faa7d8c15adaaf696157815acd6fde67495e80f4d
+bash github linked-worktree local lines withheld-shape AGENTS.md 6324449636c6632c4b68a46d6fed60589d1a9d902446a642f74ae00e694bafc7
 bash github linked-worktree local lines withheld-shape GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash github linked-worktree local lines withheld-shape SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 bash github linked-worktree local lines withheld-shape VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -151,7 +151,7 @@ bash github linked-worktree local lines withheld-shape .release-kit/manifest.jso
 bash github linked-worktree local lines withheld-flake .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 bash github linked-worktree local lines withheld-flake .github/workflows/release.yml 815355dac295c1a2d1d5b5be36d8fa2db752670c07db72a3a2eaa151d13ef99e
 bash github linked-worktree local lines withheld-flake .pre-commit-config.yaml 57f335fd96353b5c743012a6e019735dd609fb96d4932a0504e16451fb2fff30
-bash github linked-worktree local lines withheld-flake AGENTS.md 7e3065ebfc525e526d5ba58faa7d8c15adaaf696157815acd6fde67495e80f4d
+bash github linked-worktree local lines withheld-flake AGENTS.md 6324449636c6632c4b68a46d6fed60589d1a9d902446a642f74ae00e694bafc7
 bash github linked-worktree local lines withheld-flake GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash github linked-worktree local lines withheld-flake SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 bash github linked-worktree local lines withheld-flake VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -161,7 +161,7 @@ bash github linked-worktree local lines withheld-flake .release-kit/manifest.jso
 bash github main-worktree forge trunk false .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 bash github main-worktree forge trunk false .github/workflows/release.yml 23727e6e3716f1f611be388d21e0e58878fed3f980a63cddd80072d78d3f7bd3
 bash github main-worktree forge trunk false .pre-commit-config.yaml 49050c24a9629eceba0e6ee23e3cf5b358aeee29c9037745a92aee47fa4bc743
-bash github main-worktree forge trunk false AGENTS.md 1ec5d2ac253410291da0d49d39300771ba3e0ea68201165e3bb83265a7ba0262
+bash github main-worktree forge trunk false AGENTS.md b080de96289b51fa21468ae3a63ea908d438081259f8ec5586393d3f2bd1957b
 bash github main-worktree forge trunk false GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash github main-worktree forge trunk false SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 bash github main-worktree forge trunk false VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -171,7 +171,7 @@ bash github main-worktree forge trunk false .release-kit/manifest.json e8c25267e
 bash github main-worktree forge trunk true .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 bash github main-worktree forge trunk true .github/workflows/release.yml 23727e6e3716f1f611be388d21e0e58878fed3f980a63cddd80072d78d3f7bd3
 bash github main-worktree forge trunk true .pre-commit-config.yaml 49050c24a9629eceba0e6ee23e3cf5b358aeee29c9037745a92aee47fa4bc743
-bash github main-worktree forge trunk true AGENTS.md 1ec5d2ac253410291da0d49d39300771ba3e0ea68201165e3bb83265a7ba0262
+bash github main-worktree forge trunk true AGENTS.md b080de96289b51fa21468ae3a63ea908d438081259f8ec5586393d3f2bd1957b
 bash github main-worktree forge trunk true GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash github main-worktree forge trunk true SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 bash github main-worktree forge trunk true VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -181,7 +181,7 @@ bash github main-worktree forge trunk true .release-kit/manifest.json 0350af748f
 bash github main-worktree forge trunk withheld-shape .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 bash github main-worktree forge trunk withheld-shape .github/workflows/release.yml 23727e6e3716f1f611be388d21e0e58878fed3f980a63cddd80072d78d3f7bd3
 bash github main-worktree forge trunk withheld-shape .pre-commit-config.yaml 49050c24a9629eceba0e6ee23e3cf5b358aeee29c9037745a92aee47fa4bc743
-bash github main-worktree forge trunk withheld-shape AGENTS.md 1ec5d2ac253410291da0d49d39300771ba3e0ea68201165e3bb83265a7ba0262
+bash github main-worktree forge trunk withheld-shape AGENTS.md b080de96289b51fa21468ae3a63ea908d438081259f8ec5586393d3f2bd1957b
 bash github main-worktree forge trunk withheld-shape GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash github main-worktree forge trunk withheld-shape SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 bash github main-worktree forge trunk withheld-shape VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -191,7 +191,7 @@ bash github main-worktree forge trunk withheld-shape .release-kit/manifest.json 
 bash github main-worktree forge trunk withheld-flake .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 bash github main-worktree forge trunk withheld-flake .github/workflows/release.yml 23727e6e3716f1f611be388d21e0e58878fed3f980a63cddd80072d78d3f7bd3
 bash github main-worktree forge trunk withheld-flake .pre-commit-config.yaml 49050c24a9629eceba0e6ee23e3cf5b358aeee29c9037745a92aee47fa4bc743
-bash github main-worktree forge trunk withheld-flake AGENTS.md 1ec5d2ac253410291da0d49d39300771ba3e0ea68201165e3bb83265a7ba0262
+bash github main-worktree forge trunk withheld-flake AGENTS.md b080de96289b51fa21468ae3a63ea908d438081259f8ec5586393d3f2bd1957b
 bash github main-worktree forge trunk withheld-flake GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash github main-worktree forge trunk withheld-flake SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 bash github main-worktree forge trunk withheld-flake VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -201,7 +201,7 @@ bash github main-worktree forge trunk withheld-flake .release-kit/manifest.json 
 bash github main-worktree forge lines false .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 bash github main-worktree forge lines false .github/workflows/release.yml 815355dac295c1a2d1d5b5be36d8fa2db752670c07db72a3a2eaa151d13ef99e
 bash github main-worktree forge lines false .pre-commit-config.yaml 49050c24a9629eceba0e6ee23e3cf5b358aeee29c9037745a92aee47fa4bc743
-bash github main-worktree forge lines false AGENTS.md 1ec5d2ac253410291da0d49d39300771ba3e0ea68201165e3bb83265a7ba0262
+bash github main-worktree forge lines false AGENTS.md b080de96289b51fa21468ae3a63ea908d438081259f8ec5586393d3f2bd1957b
 bash github main-worktree forge lines false GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash github main-worktree forge lines false SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 bash github main-worktree forge lines false VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -211,7 +211,7 @@ bash github main-worktree forge lines false .release-kit/manifest.json 2081f1e4b
 bash github main-worktree forge lines true .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 bash github main-worktree forge lines true .github/workflows/release.yml 815355dac295c1a2d1d5b5be36d8fa2db752670c07db72a3a2eaa151d13ef99e
 bash github main-worktree forge lines true .pre-commit-config.yaml 49050c24a9629eceba0e6ee23e3cf5b358aeee29c9037745a92aee47fa4bc743
-bash github main-worktree forge lines true AGENTS.md 1ec5d2ac253410291da0d49d39300771ba3e0ea68201165e3bb83265a7ba0262
+bash github main-worktree forge lines true AGENTS.md b080de96289b51fa21468ae3a63ea908d438081259f8ec5586393d3f2bd1957b
 bash github main-worktree forge lines true GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash github main-worktree forge lines true SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 bash github main-worktree forge lines true VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -221,7 +221,7 @@ bash github main-worktree forge lines true .release-kit/manifest.json d75f7afc9d
 bash github main-worktree forge lines withheld-shape .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 bash github main-worktree forge lines withheld-shape .github/workflows/release.yml 815355dac295c1a2d1d5b5be36d8fa2db752670c07db72a3a2eaa151d13ef99e
 bash github main-worktree forge lines withheld-shape .pre-commit-config.yaml 49050c24a9629eceba0e6ee23e3cf5b358aeee29c9037745a92aee47fa4bc743
-bash github main-worktree forge lines withheld-shape AGENTS.md 1ec5d2ac253410291da0d49d39300771ba3e0ea68201165e3bb83265a7ba0262
+bash github main-worktree forge lines withheld-shape AGENTS.md b080de96289b51fa21468ae3a63ea908d438081259f8ec5586393d3f2bd1957b
 bash github main-worktree forge lines withheld-shape GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash github main-worktree forge lines withheld-shape SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 bash github main-worktree forge lines withheld-shape VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -231,7 +231,7 @@ bash github main-worktree forge lines withheld-shape .release-kit/manifest.json 
 bash github main-worktree forge lines withheld-flake .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 bash github main-worktree forge lines withheld-flake .github/workflows/release.yml 815355dac295c1a2d1d5b5be36d8fa2db752670c07db72a3a2eaa151d13ef99e
 bash github main-worktree forge lines withheld-flake .pre-commit-config.yaml 49050c24a9629eceba0e6ee23e3cf5b358aeee29c9037745a92aee47fa4bc743
-bash github main-worktree forge lines withheld-flake AGENTS.md 1ec5d2ac253410291da0d49d39300771ba3e0ea68201165e3bb83265a7ba0262
+bash github main-worktree forge lines withheld-flake AGENTS.md b080de96289b51fa21468ae3a63ea908d438081259f8ec5586393d3f2bd1957b
 bash github main-worktree forge lines withheld-flake GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash github main-worktree forge lines withheld-flake SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 bash github main-worktree forge lines withheld-flake VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -241,7 +241,7 @@ bash github main-worktree forge lines withheld-flake .release-kit/manifest.json 
 bash github main-worktree local trunk false .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 bash github main-worktree local trunk false .github/workflows/release.yml aa61a924d777d681b86513eb2606c2032cd1fd3511ed27cd973aa3ba044eef2a
 bash github main-worktree local trunk false .pre-commit-config.yaml 901d66d1ee93f0be1359791141bac49afab7ed0838b9a865222648df0db65078
-bash github main-worktree local trunk false AGENTS.md a80abcb79a28a642c1aeb494b8fe72af6d883e054f5d58e4cda333daf9ddb70d
+bash github main-worktree local trunk false AGENTS.md 6ce2478b61c723a3a628c9d9cca62e5c42067932914e67e40492d6f2e6838d1b
 bash github main-worktree local trunk false GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash github main-worktree local trunk false SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 bash github main-worktree local trunk false VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -251,7 +251,7 @@ bash github main-worktree local trunk false .release-kit/manifest.json 44d9de6c5
 bash github main-worktree local trunk true .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 bash github main-worktree local trunk true .github/workflows/release.yml aa61a924d777d681b86513eb2606c2032cd1fd3511ed27cd973aa3ba044eef2a
 bash github main-worktree local trunk true .pre-commit-config.yaml 901d66d1ee93f0be1359791141bac49afab7ed0838b9a865222648df0db65078
-bash github main-worktree local trunk true AGENTS.md a80abcb79a28a642c1aeb494b8fe72af6d883e054f5d58e4cda333daf9ddb70d
+bash github main-worktree local trunk true AGENTS.md 6ce2478b61c723a3a628c9d9cca62e5c42067932914e67e40492d6f2e6838d1b
 bash github main-worktree local trunk true GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash github main-worktree local trunk true SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 bash github main-worktree local trunk true VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -261,7 +261,7 @@ bash github main-worktree local trunk true .release-kit/manifest.json 7b0c1a80cd
 bash github main-worktree local trunk withheld-shape .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 bash github main-worktree local trunk withheld-shape .github/workflows/release.yml aa61a924d777d681b86513eb2606c2032cd1fd3511ed27cd973aa3ba044eef2a
 bash github main-worktree local trunk withheld-shape .pre-commit-config.yaml 901d66d1ee93f0be1359791141bac49afab7ed0838b9a865222648df0db65078
-bash github main-worktree local trunk withheld-shape AGENTS.md a80abcb79a28a642c1aeb494b8fe72af6d883e054f5d58e4cda333daf9ddb70d
+bash github main-worktree local trunk withheld-shape AGENTS.md 6ce2478b61c723a3a628c9d9cca62e5c42067932914e67e40492d6f2e6838d1b
 bash github main-worktree local trunk withheld-shape GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash github main-worktree local trunk withheld-shape SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 bash github main-worktree local trunk withheld-shape VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -271,7 +271,7 @@ bash github main-worktree local trunk withheld-shape .release-kit/manifest.json 
 bash github main-worktree local trunk withheld-flake .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 bash github main-worktree local trunk withheld-flake .github/workflows/release.yml aa61a924d777d681b86513eb2606c2032cd1fd3511ed27cd973aa3ba044eef2a
 bash github main-worktree local trunk withheld-flake .pre-commit-config.yaml 901d66d1ee93f0be1359791141bac49afab7ed0838b9a865222648df0db65078
-bash github main-worktree local trunk withheld-flake AGENTS.md a80abcb79a28a642c1aeb494b8fe72af6d883e054f5d58e4cda333daf9ddb70d
+bash github main-worktree local trunk withheld-flake AGENTS.md 6ce2478b61c723a3a628c9d9cca62e5c42067932914e67e40492d6f2e6838d1b
 bash github main-worktree local trunk withheld-flake GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash github main-worktree local trunk withheld-flake SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 bash github main-worktree local trunk withheld-flake VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -281,7 +281,7 @@ bash github main-worktree local trunk withheld-flake .release-kit/manifest.json 
 bash github main-worktree local lines false .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 bash github main-worktree local lines false .github/workflows/release.yml 815355dac295c1a2d1d5b5be36d8fa2db752670c07db72a3a2eaa151d13ef99e
 bash github main-worktree local lines false .pre-commit-config.yaml 901d66d1ee93f0be1359791141bac49afab7ed0838b9a865222648df0db65078
-bash github main-worktree local lines false AGENTS.md a80abcb79a28a642c1aeb494b8fe72af6d883e054f5d58e4cda333daf9ddb70d
+bash github main-worktree local lines false AGENTS.md 6ce2478b61c723a3a628c9d9cca62e5c42067932914e67e40492d6f2e6838d1b
 bash github main-worktree local lines false GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash github main-worktree local lines false SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 bash github main-worktree local lines false VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -291,7 +291,7 @@ bash github main-worktree local lines false .release-kit/manifest.json 166d17d7d
 bash github main-worktree local lines true .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 bash github main-worktree local lines true .github/workflows/release.yml 815355dac295c1a2d1d5b5be36d8fa2db752670c07db72a3a2eaa151d13ef99e
 bash github main-worktree local lines true .pre-commit-config.yaml 901d66d1ee93f0be1359791141bac49afab7ed0838b9a865222648df0db65078
-bash github main-worktree local lines true AGENTS.md a80abcb79a28a642c1aeb494b8fe72af6d883e054f5d58e4cda333daf9ddb70d
+bash github main-worktree local lines true AGENTS.md 6ce2478b61c723a3a628c9d9cca62e5c42067932914e67e40492d6f2e6838d1b
 bash github main-worktree local lines true GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash github main-worktree local lines true SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 bash github main-worktree local lines true VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -301,7 +301,7 @@ bash github main-worktree local lines true .release-kit/manifest.json 75a2907c4a
 bash github main-worktree local lines withheld-shape .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 bash github main-worktree local lines withheld-shape .github/workflows/release.yml 815355dac295c1a2d1d5b5be36d8fa2db752670c07db72a3a2eaa151d13ef99e
 bash github main-worktree local lines withheld-shape .pre-commit-config.yaml 901d66d1ee93f0be1359791141bac49afab7ed0838b9a865222648df0db65078
-bash github main-worktree local lines withheld-shape AGENTS.md a80abcb79a28a642c1aeb494b8fe72af6d883e054f5d58e4cda333daf9ddb70d
+bash github main-worktree local lines withheld-shape AGENTS.md 6ce2478b61c723a3a628c9d9cca62e5c42067932914e67e40492d6f2e6838d1b
 bash github main-worktree local lines withheld-shape GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash github main-worktree local lines withheld-shape SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 bash github main-worktree local lines withheld-shape VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -311,7 +311,7 @@ bash github main-worktree local lines withheld-shape .release-kit/manifest.json 
 bash github main-worktree local lines withheld-flake .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 bash github main-worktree local lines withheld-flake .github/workflows/release.yml 815355dac295c1a2d1d5b5be36d8fa2db752670c07db72a3a2eaa151d13ef99e
 bash github main-worktree local lines withheld-flake .pre-commit-config.yaml 901d66d1ee93f0be1359791141bac49afab7ed0838b9a865222648df0db65078
-bash github main-worktree local lines withheld-flake AGENTS.md a80abcb79a28a642c1aeb494b8fe72af6d883e054f5d58e4cda333daf9ddb70d
+bash github main-worktree local lines withheld-flake AGENTS.md 6ce2478b61c723a3a628c9d9cca62e5c42067932914e67e40492d6f2e6838d1b
 bash github main-worktree local lines withheld-flake GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash github main-worktree local lines withheld-flake SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 bash github main-worktree local lines withheld-flake VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -321,7 +321,7 @@ bash github main-worktree local lines withheld-flake .release-kit/manifest.json 
 bash gitlab linked-worktree forge trunk false .gitlab-ci.yml cf0d1d3dbb5812fda09edf59c249f9ad41e21a385469a4d8a2724fe6b6606e36
 bash gitlab linked-worktree forge trunk false .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 bash gitlab linked-worktree forge trunk false .pre-commit-config.yaml 2ccaa36ef2cfdb4c5512e7f49f1b6fcadc4150903fc9a46a9f0764e82c473ec5
-bash gitlab linked-worktree forge trunk false AGENTS.md 0114f6f97be37df9ebd9d135ce1391f15de61e304da1197e948adfb6cc1edb72
+bash gitlab linked-worktree forge trunk false AGENTS.md 19dcf839226d3dc6fa8aadbf72876961b5f3966f7ffb1908c2da54db0acf53bd
 bash gitlab linked-worktree forge trunk false GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash gitlab linked-worktree forge trunk false SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 bash gitlab linked-worktree forge trunk false VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -331,7 +331,7 @@ bash gitlab linked-worktree forge trunk false .release-kit/manifest.json 08a9950
 bash gitlab linked-worktree forge trunk true .gitlab-ci.yml cf0d1d3dbb5812fda09edf59c249f9ad41e21a385469a4d8a2724fe6b6606e36
 bash gitlab linked-worktree forge trunk true .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 bash gitlab linked-worktree forge trunk true .pre-commit-config.yaml 2ccaa36ef2cfdb4c5512e7f49f1b6fcadc4150903fc9a46a9f0764e82c473ec5
-bash gitlab linked-worktree forge trunk true AGENTS.md 0114f6f97be37df9ebd9d135ce1391f15de61e304da1197e948adfb6cc1edb72
+bash gitlab linked-worktree forge trunk true AGENTS.md 19dcf839226d3dc6fa8aadbf72876961b5f3966f7ffb1908c2da54db0acf53bd
 bash gitlab linked-worktree forge trunk true GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash gitlab linked-worktree forge trunk true SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 bash gitlab linked-worktree forge trunk true VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -341,7 +341,7 @@ bash gitlab linked-worktree forge trunk true .release-kit/manifest.json a4a391be
 bash gitlab linked-worktree forge trunk withheld-shape .gitlab-ci.yml cf0d1d3dbb5812fda09edf59c249f9ad41e21a385469a4d8a2724fe6b6606e36
 bash gitlab linked-worktree forge trunk withheld-shape .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 bash gitlab linked-worktree forge trunk withheld-shape .pre-commit-config.yaml 2ccaa36ef2cfdb4c5512e7f49f1b6fcadc4150903fc9a46a9f0764e82c473ec5
-bash gitlab linked-worktree forge trunk withheld-shape AGENTS.md 0114f6f97be37df9ebd9d135ce1391f15de61e304da1197e948adfb6cc1edb72
+bash gitlab linked-worktree forge trunk withheld-shape AGENTS.md 19dcf839226d3dc6fa8aadbf72876961b5f3966f7ffb1908c2da54db0acf53bd
 bash gitlab linked-worktree forge trunk withheld-shape GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash gitlab linked-worktree forge trunk withheld-shape SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 bash gitlab linked-worktree forge trunk withheld-shape VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -351,7 +351,7 @@ bash gitlab linked-worktree forge trunk withheld-shape .release-kit/manifest.jso
 bash gitlab linked-worktree forge trunk withheld-flake .gitlab-ci.yml cf0d1d3dbb5812fda09edf59c249f9ad41e21a385469a4d8a2724fe6b6606e36
 bash gitlab linked-worktree forge trunk withheld-flake .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 bash gitlab linked-worktree forge trunk withheld-flake .pre-commit-config.yaml 2ccaa36ef2cfdb4c5512e7f49f1b6fcadc4150903fc9a46a9f0764e82c473ec5
-bash gitlab linked-worktree forge trunk withheld-flake AGENTS.md 0114f6f97be37df9ebd9d135ce1391f15de61e304da1197e948adfb6cc1edb72
+bash gitlab linked-worktree forge trunk withheld-flake AGENTS.md 19dcf839226d3dc6fa8aadbf72876961b5f3966f7ffb1908c2da54db0acf53bd
 bash gitlab linked-worktree forge trunk withheld-flake GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash gitlab linked-worktree forge trunk withheld-flake SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 bash gitlab linked-worktree forge trunk withheld-flake VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -361,7 +361,7 @@ bash gitlab linked-worktree forge trunk withheld-flake .release-kit/manifest.jso
 bash gitlab linked-worktree forge lines false .gitlab-ci.yml a3e8c6ab5ba85053e669f86e7788ee4961f349d929d9b4f0438835859088754b
 bash gitlab linked-worktree forge lines false .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 bash gitlab linked-worktree forge lines false .pre-commit-config.yaml 2ccaa36ef2cfdb4c5512e7f49f1b6fcadc4150903fc9a46a9f0764e82c473ec5
-bash gitlab linked-worktree forge lines false AGENTS.md 0114f6f97be37df9ebd9d135ce1391f15de61e304da1197e948adfb6cc1edb72
+bash gitlab linked-worktree forge lines false AGENTS.md 19dcf839226d3dc6fa8aadbf72876961b5f3966f7ffb1908c2da54db0acf53bd
 bash gitlab linked-worktree forge lines false GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash gitlab linked-worktree forge lines false SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 bash gitlab linked-worktree forge lines false VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -371,7 +371,7 @@ bash gitlab linked-worktree forge lines false .release-kit/manifest.json 6d17336
 bash gitlab linked-worktree forge lines true .gitlab-ci.yml a3e8c6ab5ba85053e669f86e7788ee4961f349d929d9b4f0438835859088754b
 bash gitlab linked-worktree forge lines true .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 bash gitlab linked-worktree forge lines true .pre-commit-config.yaml 2ccaa36ef2cfdb4c5512e7f49f1b6fcadc4150903fc9a46a9f0764e82c473ec5
-bash gitlab linked-worktree forge lines true AGENTS.md 0114f6f97be37df9ebd9d135ce1391f15de61e304da1197e948adfb6cc1edb72
+bash gitlab linked-worktree forge lines true AGENTS.md 19dcf839226d3dc6fa8aadbf72876961b5f3966f7ffb1908c2da54db0acf53bd
 bash gitlab linked-worktree forge lines true GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash gitlab linked-worktree forge lines true SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 bash gitlab linked-worktree forge lines true VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -381,7 +381,7 @@ bash gitlab linked-worktree forge lines true .release-kit/manifest.json a0871d50
 bash gitlab linked-worktree forge lines withheld-shape .gitlab-ci.yml a3e8c6ab5ba85053e669f86e7788ee4961f349d929d9b4f0438835859088754b
 bash gitlab linked-worktree forge lines withheld-shape .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 bash gitlab linked-worktree forge lines withheld-shape .pre-commit-config.yaml 2ccaa36ef2cfdb4c5512e7f49f1b6fcadc4150903fc9a46a9f0764e82c473ec5
-bash gitlab linked-worktree forge lines withheld-shape AGENTS.md 0114f6f97be37df9ebd9d135ce1391f15de61e304da1197e948adfb6cc1edb72
+bash gitlab linked-worktree forge lines withheld-shape AGENTS.md 19dcf839226d3dc6fa8aadbf72876961b5f3966f7ffb1908c2da54db0acf53bd
 bash gitlab linked-worktree forge lines withheld-shape GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash gitlab linked-worktree forge lines withheld-shape SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 bash gitlab linked-worktree forge lines withheld-shape VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -391,7 +391,7 @@ bash gitlab linked-worktree forge lines withheld-shape .release-kit/manifest.jso
 bash gitlab linked-worktree forge lines withheld-flake .gitlab-ci.yml a3e8c6ab5ba85053e669f86e7788ee4961f349d929d9b4f0438835859088754b
 bash gitlab linked-worktree forge lines withheld-flake .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 bash gitlab linked-worktree forge lines withheld-flake .pre-commit-config.yaml 2ccaa36ef2cfdb4c5512e7f49f1b6fcadc4150903fc9a46a9f0764e82c473ec5
-bash gitlab linked-worktree forge lines withheld-flake AGENTS.md 0114f6f97be37df9ebd9d135ce1391f15de61e304da1197e948adfb6cc1edb72
+bash gitlab linked-worktree forge lines withheld-flake AGENTS.md 19dcf839226d3dc6fa8aadbf72876961b5f3966f7ffb1908c2da54db0acf53bd
 bash gitlab linked-worktree forge lines withheld-flake GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash gitlab linked-worktree forge lines withheld-flake SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 bash gitlab linked-worktree forge lines withheld-flake VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -401,7 +401,7 @@ bash gitlab linked-worktree forge lines withheld-flake .release-kit/manifest.jso
 bash gitlab linked-worktree local trunk false .gitlab-ci.yml cf0d1d3dbb5812fda09edf59c249f9ad41e21a385469a4d8a2724fe6b6606e36
 bash gitlab linked-worktree local trunk false .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 bash gitlab linked-worktree local trunk false .pre-commit-config.yaml 57f335fd96353b5c743012a6e019735dd609fb96d4932a0504e16451fb2fff30
-bash gitlab linked-worktree local trunk false AGENTS.md 7e3065ebfc525e526d5ba58faa7d8c15adaaf696157815acd6fde67495e80f4d
+bash gitlab linked-worktree local trunk false AGENTS.md 6324449636c6632c4b68a46d6fed60589d1a9d902446a642f74ae00e694bafc7
 bash gitlab linked-worktree local trunk false GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash gitlab linked-worktree local trunk false SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 bash gitlab linked-worktree local trunk false VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -411,7 +411,7 @@ bash gitlab linked-worktree local trunk false .release-kit/manifest.json 52ac665
 bash gitlab linked-worktree local trunk true .gitlab-ci.yml cf0d1d3dbb5812fda09edf59c249f9ad41e21a385469a4d8a2724fe6b6606e36
 bash gitlab linked-worktree local trunk true .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 bash gitlab linked-worktree local trunk true .pre-commit-config.yaml 57f335fd96353b5c743012a6e019735dd609fb96d4932a0504e16451fb2fff30
-bash gitlab linked-worktree local trunk true AGENTS.md 7e3065ebfc525e526d5ba58faa7d8c15adaaf696157815acd6fde67495e80f4d
+bash gitlab linked-worktree local trunk true AGENTS.md 6324449636c6632c4b68a46d6fed60589d1a9d902446a642f74ae00e694bafc7
 bash gitlab linked-worktree local trunk true GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash gitlab linked-worktree local trunk true SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 bash gitlab linked-worktree local trunk true VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -421,7 +421,7 @@ bash gitlab linked-worktree local trunk true .release-kit/manifest.json 03a8b9f0
 bash gitlab linked-worktree local trunk withheld-shape .gitlab-ci.yml cf0d1d3dbb5812fda09edf59c249f9ad41e21a385469a4d8a2724fe6b6606e36
 bash gitlab linked-worktree local trunk withheld-shape .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 bash gitlab linked-worktree local trunk withheld-shape .pre-commit-config.yaml 57f335fd96353b5c743012a6e019735dd609fb96d4932a0504e16451fb2fff30
-bash gitlab linked-worktree local trunk withheld-shape AGENTS.md 7e3065ebfc525e526d5ba58faa7d8c15adaaf696157815acd6fde67495e80f4d
+bash gitlab linked-worktree local trunk withheld-shape AGENTS.md 6324449636c6632c4b68a46d6fed60589d1a9d902446a642f74ae00e694bafc7
 bash gitlab linked-worktree local trunk withheld-shape GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash gitlab linked-worktree local trunk withheld-shape SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 bash gitlab linked-worktree local trunk withheld-shape VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -431,7 +431,7 @@ bash gitlab linked-worktree local trunk withheld-shape .release-kit/manifest.jso
 bash gitlab linked-worktree local trunk withheld-flake .gitlab-ci.yml cf0d1d3dbb5812fda09edf59c249f9ad41e21a385469a4d8a2724fe6b6606e36
 bash gitlab linked-worktree local trunk withheld-flake .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 bash gitlab linked-worktree local trunk withheld-flake .pre-commit-config.yaml 57f335fd96353b5c743012a6e019735dd609fb96d4932a0504e16451fb2fff30
-bash gitlab linked-worktree local trunk withheld-flake AGENTS.md 7e3065ebfc525e526d5ba58faa7d8c15adaaf696157815acd6fde67495e80f4d
+bash gitlab linked-worktree local trunk withheld-flake AGENTS.md 6324449636c6632c4b68a46d6fed60589d1a9d902446a642f74ae00e694bafc7
 bash gitlab linked-worktree local trunk withheld-flake GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash gitlab linked-worktree local trunk withheld-flake SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 bash gitlab linked-worktree local trunk withheld-flake VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -441,7 +441,7 @@ bash gitlab linked-worktree local trunk withheld-flake .release-kit/manifest.jso
 bash gitlab linked-worktree local lines false .gitlab-ci.yml a3e8c6ab5ba85053e669f86e7788ee4961f349d929d9b4f0438835859088754b
 bash gitlab linked-worktree local lines false .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 bash gitlab linked-worktree local lines false .pre-commit-config.yaml 57f335fd96353b5c743012a6e019735dd609fb96d4932a0504e16451fb2fff30
-bash gitlab linked-worktree local lines false AGENTS.md 7e3065ebfc525e526d5ba58faa7d8c15adaaf696157815acd6fde67495e80f4d
+bash gitlab linked-worktree local lines false AGENTS.md 6324449636c6632c4b68a46d6fed60589d1a9d902446a642f74ae00e694bafc7
 bash gitlab linked-worktree local lines false GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash gitlab linked-worktree local lines false SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 bash gitlab linked-worktree local lines false VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -451,7 +451,7 @@ bash gitlab linked-worktree local lines false .release-kit/manifest.json b58ce29
 bash gitlab linked-worktree local lines true .gitlab-ci.yml a3e8c6ab5ba85053e669f86e7788ee4961f349d929d9b4f0438835859088754b
 bash gitlab linked-worktree local lines true .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 bash gitlab linked-worktree local lines true .pre-commit-config.yaml 57f335fd96353b5c743012a6e019735dd609fb96d4932a0504e16451fb2fff30
-bash gitlab linked-worktree local lines true AGENTS.md 7e3065ebfc525e526d5ba58faa7d8c15adaaf696157815acd6fde67495e80f4d
+bash gitlab linked-worktree local lines true AGENTS.md 6324449636c6632c4b68a46d6fed60589d1a9d902446a642f74ae00e694bafc7
 bash gitlab linked-worktree local lines true GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash gitlab linked-worktree local lines true SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 bash gitlab linked-worktree local lines true VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -461,7 +461,7 @@ bash gitlab linked-worktree local lines true .release-kit/manifest.json 6f7c6260
 bash gitlab linked-worktree local lines withheld-shape .gitlab-ci.yml a3e8c6ab5ba85053e669f86e7788ee4961f349d929d9b4f0438835859088754b
 bash gitlab linked-worktree local lines withheld-shape .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 bash gitlab linked-worktree local lines withheld-shape .pre-commit-config.yaml 57f335fd96353b5c743012a6e019735dd609fb96d4932a0504e16451fb2fff30
-bash gitlab linked-worktree local lines withheld-shape AGENTS.md 7e3065ebfc525e526d5ba58faa7d8c15adaaf696157815acd6fde67495e80f4d
+bash gitlab linked-worktree local lines withheld-shape AGENTS.md 6324449636c6632c4b68a46d6fed60589d1a9d902446a642f74ae00e694bafc7
 bash gitlab linked-worktree local lines withheld-shape GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash gitlab linked-worktree local lines withheld-shape SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 bash gitlab linked-worktree local lines withheld-shape VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -471,7 +471,7 @@ bash gitlab linked-worktree local lines withheld-shape .release-kit/manifest.jso
 bash gitlab linked-worktree local lines withheld-flake .gitlab-ci.yml a3e8c6ab5ba85053e669f86e7788ee4961f349d929d9b4f0438835859088754b
 bash gitlab linked-worktree local lines withheld-flake .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 bash gitlab linked-worktree local lines withheld-flake .pre-commit-config.yaml 57f335fd96353b5c743012a6e019735dd609fb96d4932a0504e16451fb2fff30
-bash gitlab linked-worktree local lines withheld-flake AGENTS.md 7e3065ebfc525e526d5ba58faa7d8c15adaaf696157815acd6fde67495e80f4d
+bash gitlab linked-worktree local lines withheld-flake AGENTS.md 6324449636c6632c4b68a46d6fed60589d1a9d902446a642f74ae00e694bafc7
 bash gitlab linked-worktree local lines withheld-flake GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash gitlab linked-worktree local lines withheld-flake SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 bash gitlab linked-worktree local lines withheld-flake VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -481,7 +481,7 @@ bash gitlab linked-worktree local lines withheld-flake .release-kit/manifest.jso
 bash gitlab main-worktree forge trunk false .gitlab-ci.yml cf0d1d3dbb5812fda09edf59c249f9ad41e21a385469a4d8a2724fe6b6606e36
 bash gitlab main-worktree forge trunk false .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 bash gitlab main-worktree forge trunk false .pre-commit-config.yaml 49050c24a9629eceba0e6ee23e3cf5b358aeee29c9037745a92aee47fa4bc743
-bash gitlab main-worktree forge trunk false AGENTS.md 1ec5d2ac253410291da0d49d39300771ba3e0ea68201165e3bb83265a7ba0262
+bash gitlab main-worktree forge trunk false AGENTS.md b080de96289b51fa21468ae3a63ea908d438081259f8ec5586393d3f2bd1957b
 bash gitlab main-worktree forge trunk false GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash gitlab main-worktree forge trunk false SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 bash gitlab main-worktree forge trunk false VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -491,7 +491,7 @@ bash gitlab main-worktree forge trunk false .release-kit/manifest.json 04038a969
 bash gitlab main-worktree forge trunk true .gitlab-ci.yml cf0d1d3dbb5812fda09edf59c249f9ad41e21a385469a4d8a2724fe6b6606e36
 bash gitlab main-worktree forge trunk true .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 bash gitlab main-worktree forge trunk true .pre-commit-config.yaml 49050c24a9629eceba0e6ee23e3cf5b358aeee29c9037745a92aee47fa4bc743
-bash gitlab main-worktree forge trunk true AGENTS.md 1ec5d2ac253410291da0d49d39300771ba3e0ea68201165e3bb83265a7ba0262
+bash gitlab main-worktree forge trunk true AGENTS.md b080de96289b51fa21468ae3a63ea908d438081259f8ec5586393d3f2bd1957b
 bash gitlab main-worktree forge trunk true GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash gitlab main-worktree forge trunk true SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 bash gitlab main-worktree forge trunk true VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -501,7 +501,7 @@ bash gitlab main-worktree forge trunk true .release-kit/manifest.json 237b9518be
 bash gitlab main-worktree forge trunk withheld-shape .gitlab-ci.yml cf0d1d3dbb5812fda09edf59c249f9ad41e21a385469a4d8a2724fe6b6606e36
 bash gitlab main-worktree forge trunk withheld-shape .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 bash gitlab main-worktree forge trunk withheld-shape .pre-commit-config.yaml 49050c24a9629eceba0e6ee23e3cf5b358aeee29c9037745a92aee47fa4bc743
-bash gitlab main-worktree forge trunk withheld-shape AGENTS.md 1ec5d2ac253410291da0d49d39300771ba3e0ea68201165e3bb83265a7ba0262
+bash gitlab main-worktree forge trunk withheld-shape AGENTS.md b080de96289b51fa21468ae3a63ea908d438081259f8ec5586393d3f2bd1957b
 bash gitlab main-worktree forge trunk withheld-shape GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash gitlab main-worktree forge trunk withheld-shape SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 bash gitlab main-worktree forge trunk withheld-shape VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -511,7 +511,7 @@ bash gitlab main-worktree forge trunk withheld-shape .release-kit/manifest.json 
 bash gitlab main-worktree forge trunk withheld-flake .gitlab-ci.yml cf0d1d3dbb5812fda09edf59c249f9ad41e21a385469a4d8a2724fe6b6606e36
 bash gitlab main-worktree forge trunk withheld-flake .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 bash gitlab main-worktree forge trunk withheld-flake .pre-commit-config.yaml 49050c24a9629eceba0e6ee23e3cf5b358aeee29c9037745a92aee47fa4bc743
-bash gitlab main-worktree forge trunk withheld-flake AGENTS.md 1ec5d2ac253410291da0d49d39300771ba3e0ea68201165e3bb83265a7ba0262
+bash gitlab main-worktree forge trunk withheld-flake AGENTS.md b080de96289b51fa21468ae3a63ea908d438081259f8ec5586393d3f2bd1957b
 bash gitlab main-worktree forge trunk withheld-flake GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash gitlab main-worktree forge trunk withheld-flake SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 bash gitlab main-worktree forge trunk withheld-flake VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -521,7 +521,7 @@ bash gitlab main-worktree forge trunk withheld-flake .release-kit/manifest.json 
 bash gitlab main-worktree forge lines false .gitlab-ci.yml a3e8c6ab5ba85053e669f86e7788ee4961f349d929d9b4f0438835859088754b
 bash gitlab main-worktree forge lines false .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 bash gitlab main-worktree forge lines false .pre-commit-config.yaml 49050c24a9629eceba0e6ee23e3cf5b358aeee29c9037745a92aee47fa4bc743
-bash gitlab main-worktree forge lines false AGENTS.md 1ec5d2ac253410291da0d49d39300771ba3e0ea68201165e3bb83265a7ba0262
+bash gitlab main-worktree forge lines false AGENTS.md b080de96289b51fa21468ae3a63ea908d438081259f8ec5586393d3f2bd1957b
 bash gitlab main-worktree forge lines false GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash gitlab main-worktree forge lines false SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 bash gitlab main-worktree forge lines false VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -531,7 +531,7 @@ bash gitlab main-worktree forge lines false .release-kit/manifest.json 94f5452ae
 bash gitlab main-worktree forge lines true .gitlab-ci.yml a3e8c6ab5ba85053e669f86e7788ee4961f349d929d9b4f0438835859088754b
 bash gitlab main-worktree forge lines true .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 bash gitlab main-worktree forge lines true .pre-commit-config.yaml 49050c24a9629eceba0e6ee23e3cf5b358aeee29c9037745a92aee47fa4bc743
-bash gitlab main-worktree forge lines true AGENTS.md 1ec5d2ac253410291da0d49d39300771ba3e0ea68201165e3bb83265a7ba0262
+bash gitlab main-worktree forge lines true AGENTS.md b080de96289b51fa21468ae3a63ea908d438081259f8ec5586393d3f2bd1957b
 bash gitlab main-worktree forge lines true GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash gitlab main-worktree forge lines true SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 bash gitlab main-worktree forge lines true VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -541,7 +541,7 @@ bash gitlab main-worktree forge lines true .release-kit/manifest.json b948e1ef3e
 bash gitlab main-worktree forge lines withheld-shape .gitlab-ci.yml a3e8c6ab5ba85053e669f86e7788ee4961f349d929d9b4f0438835859088754b
 bash gitlab main-worktree forge lines withheld-shape .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 bash gitlab main-worktree forge lines withheld-shape .pre-commit-config.yaml 49050c24a9629eceba0e6ee23e3cf5b358aeee29c9037745a92aee47fa4bc743
-bash gitlab main-worktree forge lines withheld-shape AGENTS.md 1ec5d2ac253410291da0d49d39300771ba3e0ea68201165e3bb83265a7ba0262
+bash gitlab main-worktree forge lines withheld-shape AGENTS.md b080de96289b51fa21468ae3a63ea908d438081259f8ec5586393d3f2bd1957b
 bash gitlab main-worktree forge lines withheld-shape GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash gitlab main-worktree forge lines withheld-shape SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 bash gitlab main-worktree forge lines withheld-shape VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -551,7 +551,7 @@ bash gitlab main-worktree forge lines withheld-shape .release-kit/manifest.json 
 bash gitlab main-worktree forge lines withheld-flake .gitlab-ci.yml a3e8c6ab5ba85053e669f86e7788ee4961f349d929d9b4f0438835859088754b
 bash gitlab main-worktree forge lines withheld-flake .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 bash gitlab main-worktree forge lines withheld-flake .pre-commit-config.yaml 49050c24a9629eceba0e6ee23e3cf5b358aeee29c9037745a92aee47fa4bc743
-bash gitlab main-worktree forge lines withheld-flake AGENTS.md 1ec5d2ac253410291da0d49d39300771ba3e0ea68201165e3bb83265a7ba0262
+bash gitlab main-worktree forge lines withheld-flake AGENTS.md b080de96289b51fa21468ae3a63ea908d438081259f8ec5586393d3f2bd1957b
 bash gitlab main-worktree forge lines withheld-flake GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash gitlab main-worktree forge lines withheld-flake SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 bash gitlab main-worktree forge lines withheld-flake VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -561,7 +561,7 @@ bash gitlab main-worktree forge lines withheld-flake .release-kit/manifest.json 
 bash gitlab main-worktree local trunk false .gitlab-ci.yml cf0d1d3dbb5812fda09edf59c249f9ad41e21a385469a4d8a2724fe6b6606e36
 bash gitlab main-worktree local trunk false .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 bash gitlab main-worktree local trunk false .pre-commit-config.yaml 901d66d1ee93f0be1359791141bac49afab7ed0838b9a865222648df0db65078
-bash gitlab main-worktree local trunk false AGENTS.md a80abcb79a28a642c1aeb494b8fe72af6d883e054f5d58e4cda333daf9ddb70d
+bash gitlab main-worktree local trunk false AGENTS.md 6ce2478b61c723a3a628c9d9cca62e5c42067932914e67e40492d6f2e6838d1b
 bash gitlab main-worktree local trunk false GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash gitlab main-worktree local trunk false SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 bash gitlab main-worktree local trunk false VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -571,7 +571,7 @@ bash gitlab main-worktree local trunk false .release-kit/manifest.json 575418934
 bash gitlab main-worktree local trunk true .gitlab-ci.yml cf0d1d3dbb5812fda09edf59c249f9ad41e21a385469a4d8a2724fe6b6606e36
 bash gitlab main-worktree local trunk true .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 bash gitlab main-worktree local trunk true .pre-commit-config.yaml 901d66d1ee93f0be1359791141bac49afab7ed0838b9a865222648df0db65078
-bash gitlab main-worktree local trunk true AGENTS.md a80abcb79a28a642c1aeb494b8fe72af6d883e054f5d58e4cda333daf9ddb70d
+bash gitlab main-worktree local trunk true AGENTS.md 6ce2478b61c723a3a628c9d9cca62e5c42067932914e67e40492d6f2e6838d1b
 bash gitlab main-worktree local trunk true GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash gitlab main-worktree local trunk true SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 bash gitlab main-worktree local trunk true VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -581,7 +581,7 @@ bash gitlab main-worktree local trunk true .release-kit/manifest.json e873b11002
 bash gitlab main-worktree local trunk withheld-shape .gitlab-ci.yml cf0d1d3dbb5812fda09edf59c249f9ad41e21a385469a4d8a2724fe6b6606e36
 bash gitlab main-worktree local trunk withheld-shape .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 bash gitlab main-worktree local trunk withheld-shape .pre-commit-config.yaml 901d66d1ee93f0be1359791141bac49afab7ed0838b9a865222648df0db65078
-bash gitlab main-worktree local trunk withheld-shape AGENTS.md a80abcb79a28a642c1aeb494b8fe72af6d883e054f5d58e4cda333daf9ddb70d
+bash gitlab main-worktree local trunk withheld-shape AGENTS.md 6ce2478b61c723a3a628c9d9cca62e5c42067932914e67e40492d6f2e6838d1b
 bash gitlab main-worktree local trunk withheld-shape GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash gitlab main-worktree local trunk withheld-shape SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 bash gitlab main-worktree local trunk withheld-shape VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -591,7 +591,7 @@ bash gitlab main-worktree local trunk withheld-shape .release-kit/manifest.json 
 bash gitlab main-worktree local trunk withheld-flake .gitlab-ci.yml cf0d1d3dbb5812fda09edf59c249f9ad41e21a385469a4d8a2724fe6b6606e36
 bash gitlab main-worktree local trunk withheld-flake .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 bash gitlab main-worktree local trunk withheld-flake .pre-commit-config.yaml 901d66d1ee93f0be1359791141bac49afab7ed0838b9a865222648df0db65078
-bash gitlab main-worktree local trunk withheld-flake AGENTS.md a80abcb79a28a642c1aeb494b8fe72af6d883e054f5d58e4cda333daf9ddb70d
+bash gitlab main-worktree local trunk withheld-flake AGENTS.md 6ce2478b61c723a3a628c9d9cca62e5c42067932914e67e40492d6f2e6838d1b
 bash gitlab main-worktree local trunk withheld-flake GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash gitlab main-worktree local trunk withheld-flake SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 bash gitlab main-worktree local trunk withheld-flake VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -601,7 +601,7 @@ bash gitlab main-worktree local trunk withheld-flake .release-kit/manifest.json 
 bash gitlab main-worktree local lines false .gitlab-ci.yml a3e8c6ab5ba85053e669f86e7788ee4961f349d929d9b4f0438835859088754b
 bash gitlab main-worktree local lines false .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 bash gitlab main-worktree local lines false .pre-commit-config.yaml 901d66d1ee93f0be1359791141bac49afab7ed0838b9a865222648df0db65078
-bash gitlab main-worktree local lines false AGENTS.md a80abcb79a28a642c1aeb494b8fe72af6d883e054f5d58e4cda333daf9ddb70d
+bash gitlab main-worktree local lines false AGENTS.md 6ce2478b61c723a3a628c9d9cca62e5c42067932914e67e40492d6f2e6838d1b
 bash gitlab main-worktree local lines false GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash gitlab main-worktree local lines false SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 bash gitlab main-worktree local lines false VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -611,7 +611,7 @@ bash gitlab main-worktree local lines false .release-kit/manifest.json 2001224ef
 bash gitlab main-worktree local lines true .gitlab-ci.yml a3e8c6ab5ba85053e669f86e7788ee4961f349d929d9b4f0438835859088754b
 bash gitlab main-worktree local lines true .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 bash gitlab main-worktree local lines true .pre-commit-config.yaml 901d66d1ee93f0be1359791141bac49afab7ed0838b9a865222648df0db65078
-bash gitlab main-worktree local lines true AGENTS.md a80abcb79a28a642c1aeb494b8fe72af6d883e054f5d58e4cda333daf9ddb70d
+bash gitlab main-worktree local lines true AGENTS.md 6ce2478b61c723a3a628c9d9cca62e5c42067932914e67e40492d6f2e6838d1b
 bash gitlab main-worktree local lines true GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash gitlab main-worktree local lines true SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 bash gitlab main-worktree local lines true VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -621,7 +621,7 @@ bash gitlab main-worktree local lines true .release-kit/manifest.json 6a583e3191
 bash gitlab main-worktree local lines withheld-shape .gitlab-ci.yml a3e8c6ab5ba85053e669f86e7788ee4961f349d929d9b4f0438835859088754b
 bash gitlab main-worktree local lines withheld-shape .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 bash gitlab main-worktree local lines withheld-shape .pre-commit-config.yaml 901d66d1ee93f0be1359791141bac49afab7ed0838b9a865222648df0db65078
-bash gitlab main-worktree local lines withheld-shape AGENTS.md a80abcb79a28a642c1aeb494b8fe72af6d883e054f5d58e4cda333daf9ddb70d
+bash gitlab main-worktree local lines withheld-shape AGENTS.md 6ce2478b61c723a3a628c9d9cca62e5c42067932914e67e40492d6f2e6838d1b
 bash gitlab main-worktree local lines withheld-shape GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash gitlab main-worktree local lines withheld-shape SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 bash gitlab main-worktree local lines withheld-shape VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -631,7 +631,7 @@ bash gitlab main-worktree local lines withheld-shape .release-kit/manifest.json 
 bash gitlab main-worktree local lines withheld-flake .gitlab-ci.yml a3e8c6ab5ba85053e669f86e7788ee4961f349d929d9b4f0438835859088754b
 bash gitlab main-worktree local lines withheld-flake .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 bash gitlab main-worktree local lines withheld-flake .pre-commit-config.yaml 901d66d1ee93f0be1359791141bac49afab7ed0838b9a865222648df0db65078
-bash gitlab main-worktree local lines withheld-flake AGENTS.md a80abcb79a28a642c1aeb494b8fe72af6d883e054f5d58e4cda333daf9ddb70d
+bash gitlab main-worktree local lines withheld-flake AGENTS.md 6ce2478b61c723a3a628c9d9cca62e5c42067932914e67e40492d6f2e6838d1b
 bash gitlab main-worktree local lines withheld-flake GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 bash gitlab main-worktree local lines withheld-flake SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 bash gitlab main-worktree local lines withheld-flake VERSION f7af902eefb89f3a2216d798078294bb927e71c64bad70551f80effabd375875
@@ -642,7 +642,7 @@ python github linked-worktree forge trunk false .github/workflows/pr-title.yml 9
 python github linked-worktree forge trunk false .github/workflows/release-please.yml 694789569facc58f1d5dde44c9a2ba2e986340f737a7ce3179b7dc027b688047
 python github linked-worktree forge trunk false .pre-commit-config.yaml 2ccaa36ef2cfdb4c5512e7f49f1b6fcadc4150903fc9a46a9f0764e82c473ec5
 python github linked-worktree forge trunk false .release-please-manifest.json 5f2fad2ced4b17aba50a3070f44ce85ae1447e4aa6c16a787a9efcd5a744014b
-python github linked-worktree forge trunk false AGENTS.md 0114f6f97be37df9ebd9d135ce1391f15de61e304da1197e948adfb6cc1edb72
+python github linked-worktree forge trunk false AGENTS.md 19dcf839226d3dc6fa8aadbf72876961b5f3966f7ffb1908c2da54db0acf53bd
 python github linked-worktree forge trunk false GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 python github linked-worktree forge trunk false SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 python github linked-worktree forge trunk false release-please-config.json 57ce7b4ce86198258d10fb732fff8655d876ec6a6d4ea003c7795c32fc26ae9c
@@ -652,7 +652,7 @@ python github linked-worktree forge trunk true .github/workflows/pr-title.yml 97
 python github linked-worktree forge trunk true .github/workflows/release-please.yml 694789569facc58f1d5dde44c9a2ba2e986340f737a7ce3179b7dc027b688047
 python github linked-worktree forge trunk true .pre-commit-config.yaml 2ccaa36ef2cfdb4c5512e7f49f1b6fcadc4150903fc9a46a9f0764e82c473ec5
 python github linked-worktree forge trunk true .release-please-manifest.json 5f2fad2ced4b17aba50a3070f44ce85ae1447e4aa6c16a787a9efcd5a744014b
-python github linked-worktree forge trunk true AGENTS.md 0114f6f97be37df9ebd9d135ce1391f15de61e304da1197e948adfb6cc1edb72
+python github linked-worktree forge trunk true AGENTS.md 19dcf839226d3dc6fa8aadbf72876961b5f3966f7ffb1908c2da54db0acf53bd
 python github linked-worktree forge trunk true GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 python github linked-worktree forge trunk true SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 python github linked-worktree forge trunk true release-please-config.json 57ce7b4ce86198258d10fb732fff8655d876ec6a6d4ea003c7795c32fc26ae9c
@@ -662,7 +662,7 @@ python github linked-worktree forge trunk withheld-shape .github/workflows/pr-ti
 python github linked-worktree forge trunk withheld-shape .github/workflows/release-please.yml 694789569facc58f1d5dde44c9a2ba2e986340f737a7ce3179b7dc027b688047
 python github linked-worktree forge trunk withheld-shape .pre-commit-config.yaml 2ccaa36ef2cfdb4c5512e7f49f1b6fcadc4150903fc9a46a9f0764e82c473ec5
 python github linked-worktree forge trunk withheld-shape .release-please-manifest.json 5f2fad2ced4b17aba50a3070f44ce85ae1447e4aa6c16a787a9efcd5a744014b
-python github linked-worktree forge trunk withheld-shape AGENTS.md 0114f6f97be37df9ebd9d135ce1391f15de61e304da1197e948adfb6cc1edb72
+python github linked-worktree forge trunk withheld-shape AGENTS.md 19dcf839226d3dc6fa8aadbf72876961b5f3966f7ffb1908c2da54db0acf53bd
 python github linked-worktree forge trunk withheld-shape GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 python github linked-worktree forge trunk withheld-shape SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 python github linked-worktree forge trunk withheld-shape release-please-config.json 57ce7b4ce86198258d10fb732fff8655d876ec6a6d4ea003c7795c32fc26ae9c
@@ -672,7 +672,7 @@ python github linked-worktree forge trunk withheld-flake .github/workflows/pr-ti
 python github linked-worktree forge trunk withheld-flake .github/workflows/release-please.yml 694789569facc58f1d5dde44c9a2ba2e986340f737a7ce3179b7dc027b688047
 python github linked-worktree forge trunk withheld-flake .pre-commit-config.yaml 2ccaa36ef2cfdb4c5512e7f49f1b6fcadc4150903fc9a46a9f0764e82c473ec5
 python github linked-worktree forge trunk withheld-flake .release-please-manifest.json 5f2fad2ced4b17aba50a3070f44ce85ae1447e4aa6c16a787a9efcd5a744014b
-python github linked-worktree forge trunk withheld-flake AGENTS.md 0114f6f97be37df9ebd9d135ce1391f15de61e304da1197e948adfb6cc1edb72
+python github linked-worktree forge trunk withheld-flake AGENTS.md 19dcf839226d3dc6fa8aadbf72876961b5f3966f7ffb1908c2da54db0acf53bd
 python github linked-worktree forge trunk withheld-flake GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 python github linked-worktree forge trunk withheld-flake SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 python github linked-worktree forge trunk withheld-flake release-please-config.json 57ce7b4ce86198258d10fb732fff8655d876ec6a6d4ea003c7795c32fc26ae9c
@@ -682,7 +682,7 @@ python github linked-worktree forge lines false .github/workflows/pr-title.yml 9
 python github linked-worktree forge lines false .github/workflows/release-please.yml 26dd5804f55b2454c4a5966763b37133d59989e4289d87535e47d72b870c9df5
 python github linked-worktree forge lines false .pre-commit-config.yaml 2ccaa36ef2cfdb4c5512e7f49f1b6fcadc4150903fc9a46a9f0764e82c473ec5
 python github linked-worktree forge lines false .release-please-manifest.json 5f2fad2ced4b17aba50a3070f44ce85ae1447e4aa6c16a787a9efcd5a744014b
-python github linked-worktree forge lines false AGENTS.md 0114f6f97be37df9ebd9d135ce1391f15de61e304da1197e948adfb6cc1edb72
+python github linked-worktree forge lines false AGENTS.md 19dcf839226d3dc6fa8aadbf72876961b5f3966f7ffb1908c2da54db0acf53bd
 python github linked-worktree forge lines false GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 python github linked-worktree forge lines false SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 python github linked-worktree forge lines false release-please-config.json 57ce7b4ce86198258d10fb732fff8655d876ec6a6d4ea003c7795c32fc26ae9c
@@ -692,7 +692,7 @@ python github linked-worktree forge lines true .github/workflows/pr-title.yml 97
 python github linked-worktree forge lines true .github/workflows/release-please.yml 26dd5804f55b2454c4a5966763b37133d59989e4289d87535e47d72b870c9df5
 python github linked-worktree forge lines true .pre-commit-config.yaml 2ccaa36ef2cfdb4c5512e7f49f1b6fcadc4150903fc9a46a9f0764e82c473ec5
 python github linked-worktree forge lines true .release-please-manifest.json 5f2fad2ced4b17aba50a3070f44ce85ae1447e4aa6c16a787a9efcd5a744014b
-python github linked-worktree forge lines true AGENTS.md 0114f6f97be37df9ebd9d135ce1391f15de61e304da1197e948adfb6cc1edb72
+python github linked-worktree forge lines true AGENTS.md 19dcf839226d3dc6fa8aadbf72876961b5f3966f7ffb1908c2da54db0acf53bd
 python github linked-worktree forge lines true GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 python github linked-worktree forge lines true SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 python github linked-worktree forge lines true release-please-config.json 57ce7b4ce86198258d10fb732fff8655d876ec6a6d4ea003c7795c32fc26ae9c
@@ -702,7 +702,7 @@ python github linked-worktree forge lines withheld-shape .github/workflows/pr-ti
 python github linked-worktree forge lines withheld-shape .github/workflows/release-please.yml 26dd5804f55b2454c4a5966763b37133d59989e4289d87535e47d72b870c9df5
 python github linked-worktree forge lines withheld-shape .pre-commit-config.yaml 2ccaa36ef2cfdb4c5512e7f49f1b6fcadc4150903fc9a46a9f0764e82c473ec5
 python github linked-worktree forge lines withheld-shape .release-please-manifest.json 5f2fad2ced4b17aba50a3070f44ce85ae1447e4aa6c16a787a9efcd5a744014b
-python github linked-worktree forge lines withheld-shape AGENTS.md 0114f6f97be37df9ebd9d135ce1391f15de61e304da1197e948adfb6cc1edb72
+python github linked-worktree forge lines withheld-shape AGENTS.md 19dcf839226d3dc6fa8aadbf72876961b5f3966f7ffb1908c2da54db0acf53bd
 python github linked-worktree forge lines withheld-shape GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 python github linked-worktree forge lines withheld-shape SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 python github linked-worktree forge lines withheld-shape release-please-config.json 57ce7b4ce86198258d10fb732fff8655d876ec6a6d4ea003c7795c32fc26ae9c
@@ -712,7 +712,7 @@ python github linked-worktree forge lines withheld-flake .github/workflows/pr-ti
 python github linked-worktree forge lines withheld-flake .github/workflows/release-please.yml 26dd5804f55b2454c4a5966763b37133d59989e4289d87535e47d72b870c9df5
 python github linked-worktree forge lines withheld-flake .pre-commit-config.yaml 2ccaa36ef2cfdb4c5512e7f49f1b6fcadc4150903fc9a46a9f0764e82c473ec5
 python github linked-worktree forge lines withheld-flake .release-please-manifest.json 5f2fad2ced4b17aba50a3070f44ce85ae1447e4aa6c16a787a9efcd5a744014b
-python github linked-worktree forge lines withheld-flake AGENTS.md 0114f6f97be37df9ebd9d135ce1391f15de61e304da1197e948adfb6cc1edb72
+python github linked-worktree forge lines withheld-flake AGENTS.md 19dcf839226d3dc6fa8aadbf72876961b5f3966f7ffb1908c2da54db0acf53bd
 python github linked-worktree forge lines withheld-flake GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 python github linked-worktree forge lines withheld-flake SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 python github linked-worktree forge lines withheld-flake release-please-config.json 57ce7b4ce86198258d10fb732fff8655d876ec6a6d4ea003c7795c32fc26ae9c
@@ -722,7 +722,7 @@ python github linked-worktree local trunk false .github/workflows/pr-title.yml 9
 python github linked-worktree local trunk false .github/workflows/release-please.yml aff6207f4ee6cdc15dad29250f748b69c7c7a284783d957f14b06c1ae116477f
 python github linked-worktree local trunk false .pre-commit-config.yaml 57f335fd96353b5c743012a6e019735dd609fb96d4932a0504e16451fb2fff30
 python github linked-worktree local trunk false .release-please-manifest.json 5f2fad2ced4b17aba50a3070f44ce85ae1447e4aa6c16a787a9efcd5a744014b
-python github linked-worktree local trunk false AGENTS.md 7e3065ebfc525e526d5ba58faa7d8c15adaaf696157815acd6fde67495e80f4d
+python github linked-worktree local trunk false AGENTS.md 6324449636c6632c4b68a46d6fed60589d1a9d902446a642f74ae00e694bafc7
 python github linked-worktree local trunk false GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 python github linked-worktree local trunk false SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 python github linked-worktree local trunk false release-please-config.json 57ce7b4ce86198258d10fb732fff8655d876ec6a6d4ea003c7795c32fc26ae9c
@@ -732,7 +732,7 @@ python github linked-worktree local trunk true .github/workflows/pr-title.yml 97
 python github linked-worktree local trunk true .github/workflows/release-please.yml aff6207f4ee6cdc15dad29250f748b69c7c7a284783d957f14b06c1ae116477f
 python github linked-worktree local trunk true .pre-commit-config.yaml 57f335fd96353b5c743012a6e019735dd609fb96d4932a0504e16451fb2fff30
 python github linked-worktree local trunk true .release-please-manifest.json 5f2fad2ced4b17aba50a3070f44ce85ae1447e4aa6c16a787a9efcd5a744014b
-python github linked-worktree local trunk true AGENTS.md 7e3065ebfc525e526d5ba58faa7d8c15adaaf696157815acd6fde67495e80f4d
+python github linked-worktree local trunk true AGENTS.md 6324449636c6632c4b68a46d6fed60589d1a9d902446a642f74ae00e694bafc7
 python github linked-worktree local trunk true GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 python github linked-worktree local trunk true SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 python github linked-worktree local trunk true release-please-config.json 57ce7b4ce86198258d10fb732fff8655d876ec6a6d4ea003c7795c32fc26ae9c
@@ -742,7 +742,7 @@ python github linked-worktree local trunk withheld-shape .github/workflows/pr-ti
 python github linked-worktree local trunk withheld-shape .github/workflows/release-please.yml aff6207f4ee6cdc15dad29250f748b69c7c7a284783d957f14b06c1ae116477f
 python github linked-worktree local trunk withheld-shape .pre-commit-config.yaml 57f335fd96353b5c743012a6e019735dd609fb96d4932a0504e16451fb2fff30
 python github linked-worktree local trunk withheld-shape .release-please-manifest.json 5f2fad2ced4b17aba50a3070f44ce85ae1447e4aa6c16a787a9efcd5a744014b
-python github linked-worktree local trunk withheld-shape AGENTS.md 7e3065ebfc525e526d5ba58faa7d8c15adaaf696157815acd6fde67495e80f4d
+python github linked-worktree local trunk withheld-shape AGENTS.md 6324449636c6632c4b68a46d6fed60589d1a9d902446a642f74ae00e694bafc7
 python github linked-worktree local trunk withheld-shape GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 python github linked-worktree local trunk withheld-shape SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 python github linked-worktree local trunk withheld-shape release-please-config.json 57ce7b4ce86198258d10fb732fff8655d876ec6a6d4ea003c7795c32fc26ae9c
@@ -752,7 +752,7 @@ python github linked-worktree local trunk withheld-flake .github/workflows/pr-ti
 python github linked-worktree local trunk withheld-flake .github/workflows/release-please.yml aff6207f4ee6cdc15dad29250f748b69c7c7a284783d957f14b06c1ae116477f
 python github linked-worktree local trunk withheld-flake .pre-commit-config.yaml 57f335fd96353b5c743012a6e019735dd609fb96d4932a0504e16451fb2fff30
 python github linked-worktree local trunk withheld-flake .release-please-manifest.json 5f2fad2ced4b17aba50a3070f44ce85ae1447e4aa6c16a787a9efcd5a744014b
-python github linked-worktree local trunk withheld-flake AGENTS.md 7e3065ebfc525e526d5ba58faa7d8c15adaaf696157815acd6fde67495e80f4d
+python github linked-worktree local trunk withheld-flake AGENTS.md 6324449636c6632c4b68a46d6fed60589d1a9d902446a642f74ae00e694bafc7
 python github linked-worktree local trunk withheld-flake GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 python github linked-worktree local trunk withheld-flake SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 python github linked-worktree local trunk withheld-flake release-please-config.json 57ce7b4ce86198258d10fb732fff8655d876ec6a6d4ea003c7795c32fc26ae9c
@@ -762,7 +762,7 @@ python github linked-worktree local lines false .github/workflows/pr-title.yml 9
 python github linked-worktree local lines false .github/workflows/release-please.yml 26dd5804f55b2454c4a5966763b37133d59989e4289d87535e47d72b870c9df5
 python github linked-worktree local lines false .pre-commit-config.yaml 57f335fd96353b5c743012a6e019735dd609fb96d4932a0504e16451fb2fff30
 python github linked-worktree local lines false .release-please-manifest.json 5f2fad2ced4b17aba50a3070f44ce85ae1447e4aa6c16a787a9efcd5a744014b
-python github linked-worktree local lines false AGENTS.md 7e3065ebfc525e526d5ba58faa7d8c15adaaf696157815acd6fde67495e80f4d
+python github linked-worktree local lines false AGENTS.md 6324449636c6632c4b68a46d6fed60589d1a9d902446a642f74ae00e694bafc7
 python github linked-worktree local lines false GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 python github linked-worktree local lines false SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 python github linked-worktree local lines false release-please-config.json 57ce7b4ce86198258d10fb732fff8655d876ec6a6d4ea003c7795c32fc26ae9c
@@ -772,7 +772,7 @@ python github linked-worktree local lines true .github/workflows/pr-title.yml 97
 python github linked-worktree local lines true .github/workflows/release-please.yml 26dd5804f55b2454c4a5966763b37133d59989e4289d87535e47d72b870c9df5
 python github linked-worktree local lines true .pre-commit-config.yaml 57f335fd96353b5c743012a6e019735dd609fb96d4932a0504e16451fb2fff30
 python github linked-worktree local lines true .release-please-manifest.json 5f2fad2ced4b17aba50a3070f44ce85ae1447e4aa6c16a787a9efcd5a744014b
-python github linked-worktree local lines true AGENTS.md 7e3065ebfc525e526d5ba58faa7d8c15adaaf696157815acd6fde67495e80f4d
+python github linked-worktree local lines true AGENTS.md 6324449636c6632c4b68a46d6fed60589d1a9d902446a642f74ae00e694bafc7
 python github linked-worktree local lines true GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 python github linked-worktree local lines true SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 python github linked-worktree local lines true release-please-config.json 57ce7b4ce86198258d10fb732fff8655d876ec6a6d4ea003c7795c32fc26ae9c
@@ -782,7 +782,7 @@ python github linked-worktree local lines withheld-shape .github/workflows/pr-ti
 python github linked-worktree local lines withheld-shape .github/workflows/release-please.yml 26dd5804f55b2454c4a5966763b37133d59989e4289d87535e47d72b870c9df5
 python github linked-worktree local lines withheld-shape .pre-commit-config.yaml 57f335fd96353b5c743012a6e019735dd609fb96d4932a0504e16451fb2fff30
 python github linked-worktree local lines withheld-shape .release-please-manifest.json 5f2fad2ced4b17aba50a3070f44ce85ae1447e4aa6c16a787a9efcd5a744014b
-python github linked-worktree local lines withheld-shape AGENTS.md 7e3065ebfc525e526d5ba58faa7d8c15adaaf696157815acd6fde67495e80f4d
+python github linked-worktree local lines withheld-shape AGENTS.md 6324449636c6632c4b68a46d6fed60589d1a9d902446a642f74ae00e694bafc7
 python github linked-worktree local lines withheld-shape GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 python github linked-worktree local lines withheld-shape SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 python github linked-worktree local lines withheld-shape release-please-config.json 57ce7b4ce86198258d10fb732fff8655d876ec6a6d4ea003c7795c32fc26ae9c
@@ -792,7 +792,7 @@ python github linked-worktree local lines withheld-flake .github/workflows/pr-ti
 python github linked-worktree local lines withheld-flake .github/workflows/release-please.yml 26dd5804f55b2454c4a5966763b37133d59989e4289d87535e47d72b870c9df5
 python github linked-worktree local lines withheld-flake .pre-commit-config.yaml 57f335fd96353b5c743012a6e019735dd609fb96d4932a0504e16451fb2fff30
 python github linked-worktree local lines withheld-flake .release-please-manifest.json 5f2fad2ced4b17aba50a3070f44ce85ae1447e4aa6c16a787a9efcd5a744014b
-python github linked-worktree local lines withheld-flake AGENTS.md 7e3065ebfc525e526d5ba58faa7d8c15adaaf696157815acd6fde67495e80f4d
+python github linked-worktree local lines withheld-flake AGENTS.md 6324449636c6632c4b68a46d6fed60589d1a9d902446a642f74ae00e694bafc7
 python github linked-worktree local lines withheld-flake GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 python github linked-worktree local lines withheld-flake SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 python github linked-worktree local lines withheld-flake release-please-config.json 57ce7b4ce86198258d10fb732fff8655d876ec6a6d4ea003c7795c32fc26ae9c
@@ -802,7 +802,7 @@ python github main-worktree forge trunk false .github/workflows/pr-title.yml 972
 python github main-worktree forge trunk false .github/workflows/release-please.yml 694789569facc58f1d5dde44c9a2ba2e986340f737a7ce3179b7dc027b688047
 python github main-worktree forge trunk false .pre-commit-config.yaml 49050c24a9629eceba0e6ee23e3cf5b358aeee29c9037745a92aee47fa4bc743
 python github main-worktree forge trunk false .release-please-manifest.json 5f2fad2ced4b17aba50a3070f44ce85ae1447e4aa6c16a787a9efcd5a744014b
-python github main-worktree forge trunk false AGENTS.md 1ec5d2ac253410291da0d49d39300771ba3e0ea68201165e3bb83265a7ba0262
+python github main-worktree forge trunk false AGENTS.md b080de96289b51fa21468ae3a63ea908d438081259f8ec5586393d3f2bd1957b
 python github main-worktree forge trunk false GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 python github main-worktree forge trunk false SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 python github main-worktree forge trunk false release-please-config.json 57ce7b4ce86198258d10fb732fff8655d876ec6a6d4ea003c7795c32fc26ae9c
@@ -812,7 +812,7 @@ python github main-worktree forge trunk true .github/workflows/pr-title.yml 9723
 python github main-worktree forge trunk true .github/workflows/release-please.yml 694789569facc58f1d5dde44c9a2ba2e986340f737a7ce3179b7dc027b688047
 python github main-worktree forge trunk true .pre-commit-config.yaml 49050c24a9629eceba0e6ee23e3cf5b358aeee29c9037745a92aee47fa4bc743
 python github main-worktree forge trunk true .release-please-manifest.json 5f2fad2ced4b17aba50a3070f44ce85ae1447e4aa6c16a787a9efcd5a744014b
-python github main-worktree forge trunk true AGENTS.md 1ec5d2ac253410291da0d49d39300771ba3e0ea68201165e3bb83265a7ba0262
+python github main-worktree forge trunk true AGENTS.md b080de96289b51fa21468ae3a63ea908d438081259f8ec5586393d3f2bd1957b
 python github main-worktree forge trunk true GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 python github main-worktree forge trunk true SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 python github main-worktree forge trunk true release-please-config.json 57ce7b4ce86198258d10fb732fff8655d876ec6a6d4ea003c7795c32fc26ae9c
@@ -822,7 +822,7 @@ python github main-worktree forge trunk withheld-shape .github/workflows/pr-titl
 python github main-worktree forge trunk withheld-shape .github/workflows/release-please.yml 694789569facc58f1d5dde44c9a2ba2e986340f737a7ce3179b7dc027b688047
 python github main-worktree forge trunk withheld-shape .pre-commit-config.yaml 49050c24a9629eceba0e6ee23e3cf5b358aeee29c9037745a92aee47fa4bc743
 python github main-worktree forge trunk withheld-shape .release-please-manifest.json 5f2fad2ced4b17aba50a3070f44ce85ae1447e4aa6c16a787a9efcd5a744014b
-python github main-worktree forge trunk withheld-shape AGENTS.md 1ec5d2ac253410291da0d49d39300771ba3e0ea68201165e3bb83265a7ba0262
+python github main-worktree forge trunk withheld-shape AGENTS.md b080de96289b51fa21468ae3a63ea908d438081259f8ec5586393d3f2bd1957b
 python github main-worktree forge trunk withheld-shape GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 python github main-worktree forge trunk withheld-shape SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 python github main-worktree forge trunk withheld-shape release-please-config.json 57ce7b4ce86198258d10fb732fff8655d876ec6a6d4ea003c7795c32fc26ae9c
@@ -832,7 +832,7 @@ python github main-worktree forge trunk withheld-flake .github/workflows/pr-titl
 python github main-worktree forge trunk withheld-flake .github/workflows/release-please.yml 694789569facc58f1d5dde44c9a2ba2e986340f737a7ce3179b7dc027b688047
 python github main-worktree forge trunk withheld-flake .pre-commit-config.yaml 49050c24a9629eceba0e6ee23e3cf5b358aeee29c9037745a92aee47fa4bc743
 python github main-worktree forge trunk withheld-flake .release-please-manifest.json 5f2fad2ced4b17aba50a3070f44ce85ae1447e4aa6c16a787a9efcd5a744014b
-python github main-worktree forge trunk withheld-flake AGENTS.md 1ec5d2ac253410291da0d49d39300771ba3e0ea68201165e3bb83265a7ba0262
+python github main-worktree forge trunk withheld-flake AGENTS.md b080de96289b51fa21468ae3a63ea908d438081259f8ec5586393d3f2bd1957b
 python github main-worktree forge trunk withheld-flake GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 python github main-worktree forge trunk withheld-flake SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 python github main-worktree forge trunk withheld-flake release-please-config.json 57ce7b4ce86198258d10fb732fff8655d876ec6a6d4ea003c7795c32fc26ae9c
@@ -842,7 +842,7 @@ python github main-worktree forge lines false .github/workflows/pr-title.yml 972
 python github main-worktree forge lines false .github/workflows/release-please.yml 26dd5804f55b2454c4a5966763b37133d59989e4289d87535e47d72b870c9df5
 python github main-worktree forge lines false .pre-commit-config.yaml 49050c24a9629eceba0e6ee23e3cf5b358aeee29c9037745a92aee47fa4bc743
 python github main-worktree forge lines false .release-please-manifest.json 5f2fad2ced4b17aba50a3070f44ce85ae1447e4aa6c16a787a9efcd5a744014b
-python github main-worktree forge lines false AGENTS.md 1ec5d2ac253410291da0d49d39300771ba3e0ea68201165e3bb83265a7ba0262
+python github main-worktree forge lines false AGENTS.md b080de96289b51fa21468ae3a63ea908d438081259f8ec5586393d3f2bd1957b
 python github main-worktree forge lines false GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 python github main-worktree forge lines false SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 python github main-worktree forge lines false release-please-config.json 57ce7b4ce86198258d10fb732fff8655d876ec6a6d4ea003c7795c32fc26ae9c
@@ -852,7 +852,7 @@ python github main-worktree forge lines true .github/workflows/pr-title.yml 9723
 python github main-worktree forge lines true .github/workflows/release-please.yml 26dd5804f55b2454c4a5966763b37133d59989e4289d87535e47d72b870c9df5
 python github main-worktree forge lines true .pre-commit-config.yaml 49050c24a9629eceba0e6ee23e3cf5b358aeee29c9037745a92aee47fa4bc743
 python github main-worktree forge lines true .release-please-manifest.json 5f2fad2ced4b17aba50a3070f44ce85ae1447e4aa6c16a787a9efcd5a744014b
-python github main-worktree forge lines true AGENTS.md 1ec5d2ac253410291da0d49d39300771ba3e0ea68201165e3bb83265a7ba0262
+python github main-worktree forge lines true AGENTS.md b080de96289b51fa21468ae3a63ea908d438081259f8ec5586393d3f2bd1957b
 python github main-worktree forge lines true GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 python github main-worktree forge lines true SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 python github main-worktree forge lines true release-please-config.json 57ce7b4ce86198258d10fb732fff8655d876ec6a6d4ea003c7795c32fc26ae9c
@@ -862,7 +862,7 @@ python github main-worktree forge lines withheld-shape .github/workflows/pr-titl
 python github main-worktree forge lines withheld-shape .github/workflows/release-please.yml 26dd5804f55b2454c4a5966763b37133d59989e4289d87535e47d72b870c9df5
 python github main-worktree forge lines withheld-shape .pre-commit-config.yaml 49050c24a9629eceba0e6ee23e3cf5b358aeee29c9037745a92aee47fa4bc743
 python github main-worktree forge lines withheld-shape .release-please-manifest.json 5f2fad2ced4b17aba50a3070f44ce85ae1447e4aa6c16a787a9efcd5a744014b
-python github main-worktree forge lines withheld-shape AGENTS.md 1ec5d2ac253410291da0d49d39300771ba3e0ea68201165e3bb83265a7ba0262
+python github main-worktree forge lines withheld-shape AGENTS.md b080de96289b51fa21468ae3a63ea908d438081259f8ec5586393d3f2bd1957b
 python github main-worktree forge lines withheld-shape GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 python github main-worktree forge lines withheld-shape SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 python github main-worktree forge lines withheld-shape release-please-config.json 57ce7b4ce86198258d10fb732fff8655d876ec6a6d4ea003c7795c32fc26ae9c
@@ -872,7 +872,7 @@ python github main-worktree forge lines withheld-flake .github/workflows/pr-titl
 python github main-worktree forge lines withheld-flake .github/workflows/release-please.yml 26dd5804f55b2454c4a5966763b37133d59989e4289d87535e47d72b870c9df5
 python github main-worktree forge lines withheld-flake .pre-commit-config.yaml 49050c24a9629eceba0e6ee23e3cf5b358aeee29c9037745a92aee47fa4bc743
 python github main-worktree forge lines withheld-flake .release-please-manifest.json 5f2fad2ced4b17aba50a3070f44ce85ae1447e4aa6c16a787a9efcd5a744014b
-python github main-worktree forge lines withheld-flake AGENTS.md 1ec5d2ac253410291da0d49d39300771ba3e0ea68201165e3bb83265a7ba0262
+python github main-worktree forge lines withheld-flake AGENTS.md b080de96289b51fa21468ae3a63ea908d438081259f8ec5586393d3f2bd1957b
 python github main-worktree forge lines withheld-flake GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 python github main-worktree forge lines withheld-flake SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 python github main-worktree forge lines withheld-flake release-please-config.json 57ce7b4ce86198258d10fb732fff8655d876ec6a6d4ea003c7795c32fc26ae9c
@@ -882,7 +882,7 @@ python github main-worktree local trunk false .github/workflows/pr-title.yml 972
 python github main-worktree local trunk false .github/workflows/release-please.yml aff6207f4ee6cdc15dad29250f748b69c7c7a284783d957f14b06c1ae116477f
 python github main-worktree local trunk false .pre-commit-config.yaml 901d66d1ee93f0be1359791141bac49afab7ed0838b9a865222648df0db65078
 python github main-worktree local trunk false .release-please-manifest.json 5f2fad2ced4b17aba50a3070f44ce85ae1447e4aa6c16a787a9efcd5a744014b
-python github main-worktree local trunk false AGENTS.md a80abcb79a28a642c1aeb494b8fe72af6d883e054f5d58e4cda333daf9ddb70d
+python github main-worktree local trunk false AGENTS.md 6ce2478b61c723a3a628c9d9cca62e5c42067932914e67e40492d6f2e6838d1b
 python github main-worktree local trunk false GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 python github main-worktree local trunk false SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 python github main-worktree local trunk false release-please-config.json 57ce7b4ce86198258d10fb732fff8655d876ec6a6d4ea003c7795c32fc26ae9c
@@ -892,7 +892,7 @@ python github main-worktree local trunk true .github/workflows/pr-title.yml 9723
 python github main-worktree local trunk true .github/workflows/release-please.yml aff6207f4ee6cdc15dad29250f748b69c7c7a284783d957f14b06c1ae116477f
 python github main-worktree local trunk true .pre-commit-config.yaml 901d66d1ee93f0be1359791141bac49afab7ed0838b9a865222648df0db65078
 python github main-worktree local trunk true .release-please-manifest.json 5f2fad2ced4b17aba50a3070f44ce85ae1447e4aa6c16a787a9efcd5a744014b
-python github main-worktree local trunk true AGENTS.md a80abcb79a28a642c1aeb494b8fe72af6d883e054f5d58e4cda333daf9ddb70d
+python github main-worktree local trunk true AGENTS.md 6ce2478b61c723a3a628c9d9cca62e5c42067932914e67e40492d6f2e6838d1b
 python github main-worktree local trunk true GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 python github main-worktree local trunk true SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 python github main-worktree local trunk true release-please-config.json 57ce7b4ce86198258d10fb732fff8655d876ec6a6d4ea003c7795c32fc26ae9c
@@ -902,7 +902,7 @@ python github main-worktree local trunk withheld-shape .github/workflows/pr-titl
 python github main-worktree local trunk withheld-shape .github/workflows/release-please.yml aff6207f4ee6cdc15dad29250f748b69c7c7a284783d957f14b06c1ae116477f
 python github main-worktree local trunk withheld-shape .pre-commit-config.yaml 901d66d1ee93f0be1359791141bac49afab7ed0838b9a865222648df0db65078
 python github main-worktree local trunk withheld-shape .release-please-manifest.json 5f2fad2ced4b17aba50a3070f44ce85ae1447e4aa6c16a787a9efcd5a744014b
-python github main-worktree local trunk withheld-shape AGENTS.md a80abcb79a28a642c1aeb494b8fe72af6d883e054f5d58e4cda333daf9ddb70d
+python github main-worktree local trunk withheld-shape AGENTS.md 6ce2478b61c723a3a628c9d9cca62e5c42067932914e67e40492d6f2e6838d1b
 python github main-worktree local trunk withheld-shape GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 python github main-worktree local trunk withheld-shape SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 python github main-worktree local trunk withheld-shape release-please-config.json 57ce7b4ce86198258d10fb732fff8655d876ec6a6d4ea003c7795c32fc26ae9c
@@ -912,7 +912,7 @@ python github main-worktree local trunk withheld-flake .github/workflows/pr-titl
 python github main-worktree local trunk withheld-flake .github/workflows/release-please.yml aff6207f4ee6cdc15dad29250f748b69c7c7a284783d957f14b06c1ae116477f
 python github main-worktree local trunk withheld-flake .pre-commit-config.yaml 901d66d1ee93f0be1359791141bac49afab7ed0838b9a865222648df0db65078
 python github main-worktree local trunk withheld-flake .release-please-manifest.json 5f2fad2ced4b17aba50a3070f44ce85ae1447e4aa6c16a787a9efcd5a744014b
-python github main-worktree local trunk withheld-flake AGENTS.md a80abcb79a28a642c1aeb494b8fe72af6d883e054f5d58e4cda333daf9ddb70d
+python github main-worktree local trunk withheld-flake AGENTS.md 6ce2478b61c723a3a628c9d9cca62e5c42067932914e67e40492d6f2e6838d1b
 python github main-worktree local trunk withheld-flake GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 python github main-worktree local trunk withheld-flake SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 python github main-worktree local trunk withheld-flake release-please-config.json 57ce7b4ce86198258d10fb732fff8655d876ec6a6d4ea003c7795c32fc26ae9c
@@ -922,7 +922,7 @@ python github main-worktree local lines false .github/workflows/pr-title.yml 972
 python github main-worktree local lines false .github/workflows/release-please.yml 26dd5804f55b2454c4a5966763b37133d59989e4289d87535e47d72b870c9df5
 python github main-worktree local lines false .pre-commit-config.yaml 901d66d1ee93f0be1359791141bac49afab7ed0838b9a865222648df0db65078
 python github main-worktree local lines false .release-please-manifest.json 5f2fad2ced4b17aba50a3070f44ce85ae1447e4aa6c16a787a9efcd5a744014b
-python github main-worktree local lines false AGENTS.md a80abcb79a28a642c1aeb494b8fe72af6d883e054f5d58e4cda333daf9ddb70d
+python github main-worktree local lines false AGENTS.md 6ce2478b61c723a3a628c9d9cca62e5c42067932914e67e40492d6f2e6838d1b
 python github main-worktree local lines false GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 python github main-worktree local lines false SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 python github main-worktree local lines false release-please-config.json 57ce7b4ce86198258d10fb732fff8655d876ec6a6d4ea003c7795c32fc26ae9c
@@ -932,7 +932,7 @@ python github main-worktree local lines true .github/workflows/pr-title.yml 9723
 python github main-worktree local lines true .github/workflows/release-please.yml 26dd5804f55b2454c4a5966763b37133d59989e4289d87535e47d72b870c9df5
 python github main-worktree local lines true .pre-commit-config.yaml 901d66d1ee93f0be1359791141bac49afab7ed0838b9a865222648df0db65078
 python github main-worktree local lines true .release-please-manifest.json 5f2fad2ced4b17aba50a3070f44ce85ae1447e4aa6c16a787a9efcd5a744014b
-python github main-worktree local lines true AGENTS.md a80abcb79a28a642c1aeb494b8fe72af6d883e054f5d58e4cda333daf9ddb70d
+python github main-worktree local lines true AGENTS.md 6ce2478b61c723a3a628c9d9cca62e5c42067932914e67e40492d6f2e6838d1b
 python github main-worktree local lines true GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 python github main-worktree local lines true SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 python github main-worktree local lines true release-please-config.json 57ce7b4ce86198258d10fb732fff8655d876ec6a6d4ea003c7795c32fc26ae9c
@@ -942,7 +942,7 @@ python github main-worktree local lines withheld-shape .github/workflows/pr-titl
 python github main-worktree local lines withheld-shape .github/workflows/release-please.yml 26dd5804f55b2454c4a5966763b37133d59989e4289d87535e47d72b870c9df5
 python github main-worktree local lines withheld-shape .pre-commit-config.yaml 901d66d1ee93f0be1359791141bac49afab7ed0838b9a865222648df0db65078
 python github main-worktree local lines withheld-shape .release-please-manifest.json 5f2fad2ced4b17aba50a3070f44ce85ae1447e4aa6c16a787a9efcd5a744014b
-python github main-worktree local lines withheld-shape AGENTS.md a80abcb79a28a642c1aeb494b8fe72af6d883e054f5d58e4cda333daf9ddb70d
+python github main-worktree local lines withheld-shape AGENTS.md 6ce2478b61c723a3a628c9d9cca62e5c42067932914e67e40492d6f2e6838d1b
 python github main-worktree local lines withheld-shape GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 python github main-worktree local lines withheld-shape SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 python github main-worktree local lines withheld-shape release-please-config.json 57ce7b4ce86198258d10fb732fff8655d876ec6a6d4ea003c7795c32fc26ae9c
@@ -952,7 +952,7 @@ python github main-worktree local lines withheld-flake .github/workflows/pr-titl
 python github main-worktree local lines withheld-flake .github/workflows/release-please.yml 26dd5804f55b2454c4a5966763b37133d59989e4289d87535e47d72b870c9df5
 python github main-worktree local lines withheld-flake .pre-commit-config.yaml 901d66d1ee93f0be1359791141bac49afab7ed0838b9a865222648df0db65078
 python github main-worktree local lines withheld-flake .release-please-manifest.json 5f2fad2ced4b17aba50a3070f44ce85ae1447e4aa6c16a787a9efcd5a744014b
-python github main-worktree local lines withheld-flake AGENTS.md a80abcb79a28a642c1aeb494b8fe72af6d883e054f5d58e4cda333daf9ddb70d
+python github main-worktree local lines withheld-flake AGENTS.md 6ce2478b61c723a3a628c9d9cca62e5c42067932914e67e40492d6f2e6838d1b
 python github main-worktree local lines withheld-flake GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 python github main-worktree local lines withheld-flake SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 python github main-worktree local lines withheld-flake release-please-config.json 57ce7b4ce86198258d10fb732fff8655d876ec6a6d4ea003c7795c32fc26ae9c
@@ -961,7 +961,7 @@ python github main-worktree local lines withheld-flake .release-kit/manifest.jso
 rust github linked-worktree forge trunk false .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 rust github linked-worktree forge trunk false .github/workflows/release-plz.yml 84cb9c22d18b1dd5a42244bf814e0273f9c5bfc1513b308549e218b248c1864a
 rust github linked-worktree forge trunk false .pre-commit-config.yaml 2ccaa36ef2cfdb4c5512e7f49f1b6fcadc4150903fc9a46a9f0764e82c473ec5
-rust github linked-worktree forge trunk false AGENTS.md 0114f6f97be37df9ebd9d135ce1391f15de61e304da1197e948adfb6cc1edb72
+rust github linked-worktree forge trunk false AGENTS.md 19dcf839226d3dc6fa8aadbf72876961b5f3966f7ffb1908c2da54db0acf53bd
 rust github linked-worktree forge trunk false GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust github linked-worktree forge trunk false SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 rust github linked-worktree forge trunk false dist-workspace.toml 84b6e8a7658c4c3e1c9bfa12f44c8ffe021bc259d2e306c11b56734baa8f9cd6
@@ -971,7 +971,7 @@ rust github linked-worktree forge trunk false .release-kit/manifest.json e160f57
 rust github linked-worktree forge trunk true .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 rust github linked-worktree forge trunk true .github/workflows/release-plz.yml 84cb9c22d18b1dd5a42244bf814e0273f9c5bfc1513b308549e218b248c1864a
 rust github linked-worktree forge trunk true .pre-commit-config.yaml 2ccaa36ef2cfdb4c5512e7f49f1b6fcadc4150903fc9a46a9f0764e82c473ec5
-rust github linked-worktree forge trunk true AGENTS.md 0114f6f97be37df9ebd9d135ce1391f15de61e304da1197e948adfb6cc1edb72
+rust github linked-worktree forge trunk true AGENTS.md 19dcf839226d3dc6fa8aadbf72876961b5f3966f7ffb1908c2da54db0acf53bd
 rust github linked-worktree forge trunk true GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust github linked-worktree forge trunk true SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 rust github linked-worktree forge trunk true dist-workspace.toml 84b6e8a7658c4c3e1c9bfa12f44c8ffe021bc259d2e306c11b56734baa8f9cd6
@@ -984,7 +984,7 @@ rust github linked-worktree forge trunk true .release-kit/manifest.json c7781d2a
 rust github linked-worktree forge trunk withheld-shape .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 rust github linked-worktree forge trunk withheld-shape .github/workflows/release-plz.yml 84cb9c22d18b1dd5a42244bf814e0273f9c5bfc1513b308549e218b248c1864a
 rust github linked-worktree forge trunk withheld-shape .pre-commit-config.yaml 2ccaa36ef2cfdb4c5512e7f49f1b6fcadc4150903fc9a46a9f0764e82c473ec5
-rust github linked-worktree forge trunk withheld-shape AGENTS.md 0114f6f97be37df9ebd9d135ce1391f15de61e304da1197e948adfb6cc1edb72
+rust github linked-worktree forge trunk withheld-shape AGENTS.md 19dcf839226d3dc6fa8aadbf72876961b5f3966f7ffb1908c2da54db0acf53bd
 rust github linked-worktree forge trunk withheld-shape GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust github linked-worktree forge trunk withheld-shape SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 rust github linked-worktree forge trunk withheld-shape dist-workspace.toml 84b6e8a7658c4c3e1c9bfa12f44c8ffe021bc259d2e306c11b56734baa8f9cd6
@@ -994,7 +994,7 @@ rust github linked-worktree forge trunk withheld-shape .release-kit/manifest.jso
 rust github linked-worktree forge trunk withheld-flake .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 rust github linked-worktree forge trunk withheld-flake .github/workflows/release-plz.yml 84cb9c22d18b1dd5a42244bf814e0273f9c5bfc1513b308549e218b248c1864a
 rust github linked-worktree forge trunk withheld-flake .pre-commit-config.yaml 2ccaa36ef2cfdb4c5512e7f49f1b6fcadc4150903fc9a46a9f0764e82c473ec5
-rust github linked-worktree forge trunk withheld-flake AGENTS.md 0114f6f97be37df9ebd9d135ce1391f15de61e304da1197e948adfb6cc1edb72
+rust github linked-worktree forge trunk withheld-flake AGENTS.md 19dcf839226d3dc6fa8aadbf72876961b5f3966f7ffb1908c2da54db0acf53bd
 rust github linked-worktree forge trunk withheld-flake GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust github linked-worktree forge trunk withheld-flake SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 rust github linked-worktree forge trunk withheld-flake dist-workspace.toml 84b6e8a7658c4c3e1c9bfa12f44c8ffe021bc259d2e306c11b56734baa8f9cd6
@@ -1005,7 +1005,7 @@ rust github linked-worktree forge trunk withheld-flake .release-kit/manifest.jso
 rust github linked-worktree forge lines false .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 rust github linked-worktree forge lines false .github/workflows/release-plz.yml 540ad4552746ee620f03851547e298fa23b5a67f03be5ca3c8b02173adf1b0f9
 rust github linked-worktree forge lines false .pre-commit-config.yaml 2ccaa36ef2cfdb4c5512e7f49f1b6fcadc4150903fc9a46a9f0764e82c473ec5
-rust github linked-worktree forge lines false AGENTS.md 0114f6f97be37df9ebd9d135ce1391f15de61e304da1197e948adfb6cc1edb72
+rust github linked-worktree forge lines false AGENTS.md 19dcf839226d3dc6fa8aadbf72876961b5f3966f7ffb1908c2da54db0acf53bd
 rust github linked-worktree forge lines false GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust github linked-worktree forge lines false SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 rust github linked-worktree forge lines false dist-workspace.toml 84b6e8a7658c4c3e1c9bfa12f44c8ffe021bc259d2e306c11b56734baa8f9cd6
@@ -1015,7 +1015,7 @@ rust github linked-worktree forge lines false .release-kit/manifest.json faa8954
 rust github linked-worktree forge lines true .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 rust github linked-worktree forge lines true .github/workflows/release-plz.yml 540ad4552746ee620f03851547e298fa23b5a67f03be5ca3c8b02173adf1b0f9
 rust github linked-worktree forge lines true .pre-commit-config.yaml 2ccaa36ef2cfdb4c5512e7f49f1b6fcadc4150903fc9a46a9f0764e82c473ec5
-rust github linked-worktree forge lines true AGENTS.md 0114f6f97be37df9ebd9d135ce1391f15de61e304da1197e948adfb6cc1edb72
+rust github linked-worktree forge lines true AGENTS.md 19dcf839226d3dc6fa8aadbf72876961b5f3966f7ffb1908c2da54db0acf53bd
 rust github linked-worktree forge lines true GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust github linked-worktree forge lines true SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 rust github linked-worktree forge lines true dist-workspace.toml 84b6e8a7658c4c3e1c9bfa12f44c8ffe021bc259d2e306c11b56734baa8f9cd6
@@ -1028,7 +1028,7 @@ rust github linked-worktree forge lines true .release-kit/manifest.json 1f585c4e
 rust github linked-worktree forge lines withheld-shape .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 rust github linked-worktree forge lines withheld-shape .github/workflows/release-plz.yml 540ad4552746ee620f03851547e298fa23b5a67f03be5ca3c8b02173adf1b0f9
 rust github linked-worktree forge lines withheld-shape .pre-commit-config.yaml 2ccaa36ef2cfdb4c5512e7f49f1b6fcadc4150903fc9a46a9f0764e82c473ec5
-rust github linked-worktree forge lines withheld-shape AGENTS.md 0114f6f97be37df9ebd9d135ce1391f15de61e304da1197e948adfb6cc1edb72
+rust github linked-worktree forge lines withheld-shape AGENTS.md 19dcf839226d3dc6fa8aadbf72876961b5f3966f7ffb1908c2da54db0acf53bd
 rust github linked-worktree forge lines withheld-shape GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust github linked-worktree forge lines withheld-shape SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 rust github linked-worktree forge lines withheld-shape dist-workspace.toml 84b6e8a7658c4c3e1c9bfa12f44c8ffe021bc259d2e306c11b56734baa8f9cd6
@@ -1038,7 +1038,7 @@ rust github linked-worktree forge lines withheld-shape .release-kit/manifest.jso
 rust github linked-worktree forge lines withheld-flake .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 rust github linked-worktree forge lines withheld-flake .github/workflows/release-plz.yml 540ad4552746ee620f03851547e298fa23b5a67f03be5ca3c8b02173adf1b0f9
 rust github linked-worktree forge lines withheld-flake .pre-commit-config.yaml 2ccaa36ef2cfdb4c5512e7f49f1b6fcadc4150903fc9a46a9f0764e82c473ec5
-rust github linked-worktree forge lines withheld-flake AGENTS.md 0114f6f97be37df9ebd9d135ce1391f15de61e304da1197e948adfb6cc1edb72
+rust github linked-worktree forge lines withheld-flake AGENTS.md 19dcf839226d3dc6fa8aadbf72876961b5f3966f7ffb1908c2da54db0acf53bd
 rust github linked-worktree forge lines withheld-flake GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust github linked-worktree forge lines withheld-flake SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 rust github linked-worktree forge lines withheld-flake dist-workspace.toml 84b6e8a7658c4c3e1c9bfa12f44c8ffe021bc259d2e306c11b56734baa8f9cd6
@@ -1049,7 +1049,7 @@ rust github linked-worktree forge lines withheld-flake .release-kit/manifest.jso
 rust github linked-worktree local trunk false .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 rust github linked-worktree local trunk false .github/workflows/release-plz.yml 930367c1fa6e4d04e335c35a228c18a8d2d613a2a08bfad8118e3a9bc9f391d0
 rust github linked-worktree local trunk false .pre-commit-config.yaml 57f335fd96353b5c743012a6e019735dd609fb96d4932a0504e16451fb2fff30
-rust github linked-worktree local trunk false AGENTS.md 7e3065ebfc525e526d5ba58faa7d8c15adaaf696157815acd6fde67495e80f4d
+rust github linked-worktree local trunk false AGENTS.md 6324449636c6632c4b68a46d6fed60589d1a9d902446a642f74ae00e694bafc7
 rust github linked-worktree local trunk false GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust github linked-worktree local trunk false SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 rust github linked-worktree local trunk false dist-workspace.toml 84b6e8a7658c4c3e1c9bfa12f44c8ffe021bc259d2e306c11b56734baa8f9cd6
@@ -1059,7 +1059,7 @@ rust github linked-worktree local trunk false .release-kit/manifest.json 45a82d6
 rust github linked-worktree local trunk true .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 rust github linked-worktree local trunk true .github/workflows/release-plz.yml 930367c1fa6e4d04e335c35a228c18a8d2d613a2a08bfad8118e3a9bc9f391d0
 rust github linked-worktree local trunk true .pre-commit-config.yaml 57f335fd96353b5c743012a6e019735dd609fb96d4932a0504e16451fb2fff30
-rust github linked-worktree local trunk true AGENTS.md 7e3065ebfc525e526d5ba58faa7d8c15adaaf696157815acd6fde67495e80f4d
+rust github linked-worktree local trunk true AGENTS.md 6324449636c6632c4b68a46d6fed60589d1a9d902446a642f74ae00e694bafc7
 rust github linked-worktree local trunk true GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust github linked-worktree local trunk true SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 rust github linked-worktree local trunk true dist-workspace.toml 84b6e8a7658c4c3e1c9bfa12f44c8ffe021bc259d2e306c11b56734baa8f9cd6
@@ -1072,7 +1072,7 @@ rust github linked-worktree local trunk true .release-kit/manifest.json 9feb98b0
 rust github linked-worktree local trunk withheld-shape .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 rust github linked-worktree local trunk withheld-shape .github/workflows/release-plz.yml 930367c1fa6e4d04e335c35a228c18a8d2d613a2a08bfad8118e3a9bc9f391d0
 rust github linked-worktree local trunk withheld-shape .pre-commit-config.yaml 57f335fd96353b5c743012a6e019735dd609fb96d4932a0504e16451fb2fff30
-rust github linked-worktree local trunk withheld-shape AGENTS.md 7e3065ebfc525e526d5ba58faa7d8c15adaaf696157815acd6fde67495e80f4d
+rust github linked-worktree local trunk withheld-shape AGENTS.md 6324449636c6632c4b68a46d6fed60589d1a9d902446a642f74ae00e694bafc7
 rust github linked-worktree local trunk withheld-shape GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust github linked-worktree local trunk withheld-shape SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 rust github linked-worktree local trunk withheld-shape dist-workspace.toml 84b6e8a7658c4c3e1c9bfa12f44c8ffe021bc259d2e306c11b56734baa8f9cd6
@@ -1082,7 +1082,7 @@ rust github linked-worktree local trunk withheld-shape .release-kit/manifest.jso
 rust github linked-worktree local trunk withheld-flake .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 rust github linked-worktree local trunk withheld-flake .github/workflows/release-plz.yml 930367c1fa6e4d04e335c35a228c18a8d2d613a2a08bfad8118e3a9bc9f391d0
 rust github linked-worktree local trunk withheld-flake .pre-commit-config.yaml 57f335fd96353b5c743012a6e019735dd609fb96d4932a0504e16451fb2fff30
-rust github linked-worktree local trunk withheld-flake AGENTS.md 7e3065ebfc525e526d5ba58faa7d8c15adaaf696157815acd6fde67495e80f4d
+rust github linked-worktree local trunk withheld-flake AGENTS.md 6324449636c6632c4b68a46d6fed60589d1a9d902446a642f74ae00e694bafc7
 rust github linked-worktree local trunk withheld-flake GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust github linked-worktree local trunk withheld-flake SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 rust github linked-worktree local trunk withheld-flake dist-workspace.toml 84b6e8a7658c4c3e1c9bfa12f44c8ffe021bc259d2e306c11b56734baa8f9cd6
@@ -1093,7 +1093,7 @@ rust github linked-worktree local trunk withheld-flake .release-kit/manifest.jso
 rust github linked-worktree local lines false .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 rust github linked-worktree local lines false .github/workflows/release-plz.yml 540ad4552746ee620f03851547e298fa23b5a67f03be5ca3c8b02173adf1b0f9
 rust github linked-worktree local lines false .pre-commit-config.yaml 57f335fd96353b5c743012a6e019735dd609fb96d4932a0504e16451fb2fff30
-rust github linked-worktree local lines false AGENTS.md 7e3065ebfc525e526d5ba58faa7d8c15adaaf696157815acd6fde67495e80f4d
+rust github linked-worktree local lines false AGENTS.md 6324449636c6632c4b68a46d6fed60589d1a9d902446a642f74ae00e694bafc7
 rust github linked-worktree local lines false GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust github linked-worktree local lines false SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 rust github linked-worktree local lines false dist-workspace.toml 84b6e8a7658c4c3e1c9bfa12f44c8ffe021bc259d2e306c11b56734baa8f9cd6
@@ -1103,7 +1103,7 @@ rust github linked-worktree local lines false .release-kit/manifest.json 2c503ee
 rust github linked-worktree local lines true .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 rust github linked-worktree local lines true .github/workflows/release-plz.yml 540ad4552746ee620f03851547e298fa23b5a67f03be5ca3c8b02173adf1b0f9
 rust github linked-worktree local lines true .pre-commit-config.yaml 57f335fd96353b5c743012a6e019735dd609fb96d4932a0504e16451fb2fff30
-rust github linked-worktree local lines true AGENTS.md 7e3065ebfc525e526d5ba58faa7d8c15adaaf696157815acd6fde67495e80f4d
+rust github linked-worktree local lines true AGENTS.md 6324449636c6632c4b68a46d6fed60589d1a9d902446a642f74ae00e694bafc7
 rust github linked-worktree local lines true GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust github linked-worktree local lines true SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 rust github linked-worktree local lines true dist-workspace.toml 84b6e8a7658c4c3e1c9bfa12f44c8ffe021bc259d2e306c11b56734baa8f9cd6
@@ -1116,7 +1116,7 @@ rust github linked-worktree local lines true .release-kit/manifest.json 5d97c1e7
 rust github linked-worktree local lines withheld-shape .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 rust github linked-worktree local lines withheld-shape .github/workflows/release-plz.yml 540ad4552746ee620f03851547e298fa23b5a67f03be5ca3c8b02173adf1b0f9
 rust github linked-worktree local lines withheld-shape .pre-commit-config.yaml 57f335fd96353b5c743012a6e019735dd609fb96d4932a0504e16451fb2fff30
-rust github linked-worktree local lines withheld-shape AGENTS.md 7e3065ebfc525e526d5ba58faa7d8c15adaaf696157815acd6fde67495e80f4d
+rust github linked-worktree local lines withheld-shape AGENTS.md 6324449636c6632c4b68a46d6fed60589d1a9d902446a642f74ae00e694bafc7
 rust github linked-worktree local lines withheld-shape GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust github linked-worktree local lines withheld-shape SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 rust github linked-worktree local lines withheld-shape dist-workspace.toml 84b6e8a7658c4c3e1c9bfa12f44c8ffe021bc259d2e306c11b56734baa8f9cd6
@@ -1126,7 +1126,7 @@ rust github linked-worktree local lines withheld-shape .release-kit/manifest.jso
 rust github linked-worktree local lines withheld-flake .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 rust github linked-worktree local lines withheld-flake .github/workflows/release-plz.yml 540ad4552746ee620f03851547e298fa23b5a67f03be5ca3c8b02173adf1b0f9
 rust github linked-worktree local lines withheld-flake .pre-commit-config.yaml 57f335fd96353b5c743012a6e019735dd609fb96d4932a0504e16451fb2fff30
-rust github linked-worktree local lines withheld-flake AGENTS.md 7e3065ebfc525e526d5ba58faa7d8c15adaaf696157815acd6fde67495e80f4d
+rust github linked-worktree local lines withheld-flake AGENTS.md 6324449636c6632c4b68a46d6fed60589d1a9d902446a642f74ae00e694bafc7
 rust github linked-worktree local lines withheld-flake GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust github linked-worktree local lines withheld-flake SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 rust github linked-worktree local lines withheld-flake dist-workspace.toml 84b6e8a7658c4c3e1c9bfa12f44c8ffe021bc259d2e306c11b56734baa8f9cd6
@@ -1137,7 +1137,7 @@ rust github linked-worktree local lines withheld-flake .release-kit/manifest.jso
 rust github main-worktree forge trunk false .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 rust github main-worktree forge trunk false .github/workflows/release-plz.yml 84cb9c22d18b1dd5a42244bf814e0273f9c5bfc1513b308549e218b248c1864a
 rust github main-worktree forge trunk false .pre-commit-config.yaml 49050c24a9629eceba0e6ee23e3cf5b358aeee29c9037745a92aee47fa4bc743
-rust github main-worktree forge trunk false AGENTS.md 1ec5d2ac253410291da0d49d39300771ba3e0ea68201165e3bb83265a7ba0262
+rust github main-worktree forge trunk false AGENTS.md b080de96289b51fa21468ae3a63ea908d438081259f8ec5586393d3f2bd1957b
 rust github main-worktree forge trunk false GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust github main-worktree forge trunk false SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 rust github main-worktree forge trunk false dist-workspace.toml 84b6e8a7658c4c3e1c9bfa12f44c8ffe021bc259d2e306c11b56734baa8f9cd6
@@ -1147,7 +1147,7 @@ rust github main-worktree forge trunk false .release-kit/manifest.json a3e2007b0
 rust github main-worktree forge trunk true .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 rust github main-worktree forge trunk true .github/workflows/release-plz.yml 84cb9c22d18b1dd5a42244bf814e0273f9c5bfc1513b308549e218b248c1864a
 rust github main-worktree forge trunk true .pre-commit-config.yaml 49050c24a9629eceba0e6ee23e3cf5b358aeee29c9037745a92aee47fa4bc743
-rust github main-worktree forge trunk true AGENTS.md 1ec5d2ac253410291da0d49d39300771ba3e0ea68201165e3bb83265a7ba0262
+rust github main-worktree forge trunk true AGENTS.md b080de96289b51fa21468ae3a63ea908d438081259f8ec5586393d3f2bd1957b
 rust github main-worktree forge trunk true GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust github main-worktree forge trunk true SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 rust github main-worktree forge trunk true dist-workspace.toml 84b6e8a7658c4c3e1c9bfa12f44c8ffe021bc259d2e306c11b56734baa8f9cd6
@@ -1160,7 +1160,7 @@ rust github main-worktree forge trunk true .release-kit/manifest.json e6097c4596
 rust github main-worktree forge trunk withheld-shape .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 rust github main-worktree forge trunk withheld-shape .github/workflows/release-plz.yml 84cb9c22d18b1dd5a42244bf814e0273f9c5bfc1513b308549e218b248c1864a
 rust github main-worktree forge trunk withheld-shape .pre-commit-config.yaml 49050c24a9629eceba0e6ee23e3cf5b358aeee29c9037745a92aee47fa4bc743
-rust github main-worktree forge trunk withheld-shape AGENTS.md 1ec5d2ac253410291da0d49d39300771ba3e0ea68201165e3bb83265a7ba0262
+rust github main-worktree forge trunk withheld-shape AGENTS.md b080de96289b51fa21468ae3a63ea908d438081259f8ec5586393d3f2bd1957b
 rust github main-worktree forge trunk withheld-shape GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust github main-worktree forge trunk withheld-shape SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 rust github main-worktree forge trunk withheld-shape dist-workspace.toml 84b6e8a7658c4c3e1c9bfa12f44c8ffe021bc259d2e306c11b56734baa8f9cd6
@@ -1170,7 +1170,7 @@ rust github main-worktree forge trunk withheld-shape .release-kit/manifest.json 
 rust github main-worktree forge trunk withheld-flake .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 rust github main-worktree forge trunk withheld-flake .github/workflows/release-plz.yml 84cb9c22d18b1dd5a42244bf814e0273f9c5bfc1513b308549e218b248c1864a
 rust github main-worktree forge trunk withheld-flake .pre-commit-config.yaml 49050c24a9629eceba0e6ee23e3cf5b358aeee29c9037745a92aee47fa4bc743
-rust github main-worktree forge trunk withheld-flake AGENTS.md 1ec5d2ac253410291da0d49d39300771ba3e0ea68201165e3bb83265a7ba0262
+rust github main-worktree forge trunk withheld-flake AGENTS.md b080de96289b51fa21468ae3a63ea908d438081259f8ec5586393d3f2bd1957b
 rust github main-worktree forge trunk withheld-flake GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust github main-worktree forge trunk withheld-flake SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 rust github main-worktree forge trunk withheld-flake dist-workspace.toml 84b6e8a7658c4c3e1c9bfa12f44c8ffe021bc259d2e306c11b56734baa8f9cd6
@@ -1181,7 +1181,7 @@ rust github main-worktree forge trunk withheld-flake .release-kit/manifest.json 
 rust github main-worktree forge lines false .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 rust github main-worktree forge lines false .github/workflows/release-plz.yml 540ad4552746ee620f03851547e298fa23b5a67f03be5ca3c8b02173adf1b0f9
 rust github main-worktree forge lines false .pre-commit-config.yaml 49050c24a9629eceba0e6ee23e3cf5b358aeee29c9037745a92aee47fa4bc743
-rust github main-worktree forge lines false AGENTS.md 1ec5d2ac253410291da0d49d39300771ba3e0ea68201165e3bb83265a7ba0262
+rust github main-worktree forge lines false AGENTS.md b080de96289b51fa21468ae3a63ea908d438081259f8ec5586393d3f2bd1957b
 rust github main-worktree forge lines false GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust github main-worktree forge lines false SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 rust github main-worktree forge lines false dist-workspace.toml 84b6e8a7658c4c3e1c9bfa12f44c8ffe021bc259d2e306c11b56734baa8f9cd6
@@ -1191,7 +1191,7 @@ rust github main-worktree forge lines false .release-kit/manifest.json fbe4c8f28
 rust github main-worktree forge lines true .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 rust github main-worktree forge lines true .github/workflows/release-plz.yml 540ad4552746ee620f03851547e298fa23b5a67f03be5ca3c8b02173adf1b0f9
 rust github main-worktree forge lines true .pre-commit-config.yaml 49050c24a9629eceba0e6ee23e3cf5b358aeee29c9037745a92aee47fa4bc743
-rust github main-worktree forge lines true AGENTS.md 1ec5d2ac253410291da0d49d39300771ba3e0ea68201165e3bb83265a7ba0262
+rust github main-worktree forge lines true AGENTS.md b080de96289b51fa21468ae3a63ea908d438081259f8ec5586393d3f2bd1957b
 rust github main-worktree forge lines true GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust github main-worktree forge lines true SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 rust github main-worktree forge lines true dist-workspace.toml 84b6e8a7658c4c3e1c9bfa12f44c8ffe021bc259d2e306c11b56734baa8f9cd6
@@ -1204,7 +1204,7 @@ rust github main-worktree forge lines true .release-kit/manifest.json ab0896cb72
 rust github main-worktree forge lines withheld-shape .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 rust github main-worktree forge lines withheld-shape .github/workflows/release-plz.yml 540ad4552746ee620f03851547e298fa23b5a67f03be5ca3c8b02173adf1b0f9
 rust github main-worktree forge lines withheld-shape .pre-commit-config.yaml 49050c24a9629eceba0e6ee23e3cf5b358aeee29c9037745a92aee47fa4bc743
-rust github main-worktree forge lines withheld-shape AGENTS.md 1ec5d2ac253410291da0d49d39300771ba3e0ea68201165e3bb83265a7ba0262
+rust github main-worktree forge lines withheld-shape AGENTS.md b080de96289b51fa21468ae3a63ea908d438081259f8ec5586393d3f2bd1957b
 rust github main-worktree forge lines withheld-shape GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust github main-worktree forge lines withheld-shape SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 rust github main-worktree forge lines withheld-shape dist-workspace.toml 84b6e8a7658c4c3e1c9bfa12f44c8ffe021bc259d2e306c11b56734baa8f9cd6
@@ -1214,7 +1214,7 @@ rust github main-worktree forge lines withheld-shape .release-kit/manifest.json 
 rust github main-worktree forge lines withheld-flake .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 rust github main-worktree forge lines withheld-flake .github/workflows/release-plz.yml 540ad4552746ee620f03851547e298fa23b5a67f03be5ca3c8b02173adf1b0f9
 rust github main-worktree forge lines withheld-flake .pre-commit-config.yaml 49050c24a9629eceba0e6ee23e3cf5b358aeee29c9037745a92aee47fa4bc743
-rust github main-worktree forge lines withheld-flake AGENTS.md 1ec5d2ac253410291da0d49d39300771ba3e0ea68201165e3bb83265a7ba0262
+rust github main-worktree forge lines withheld-flake AGENTS.md b080de96289b51fa21468ae3a63ea908d438081259f8ec5586393d3f2bd1957b
 rust github main-worktree forge lines withheld-flake GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust github main-worktree forge lines withheld-flake SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 rust github main-worktree forge lines withheld-flake dist-workspace.toml 84b6e8a7658c4c3e1c9bfa12f44c8ffe021bc259d2e306c11b56734baa8f9cd6
@@ -1225,7 +1225,7 @@ rust github main-worktree forge lines withheld-flake .release-kit/manifest.json 
 rust github main-worktree local trunk false .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 rust github main-worktree local trunk false .github/workflows/release-plz.yml 930367c1fa6e4d04e335c35a228c18a8d2d613a2a08bfad8118e3a9bc9f391d0
 rust github main-worktree local trunk false .pre-commit-config.yaml 901d66d1ee93f0be1359791141bac49afab7ed0838b9a865222648df0db65078
-rust github main-worktree local trunk false AGENTS.md a80abcb79a28a642c1aeb494b8fe72af6d883e054f5d58e4cda333daf9ddb70d
+rust github main-worktree local trunk false AGENTS.md 6ce2478b61c723a3a628c9d9cca62e5c42067932914e67e40492d6f2e6838d1b
 rust github main-worktree local trunk false GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust github main-worktree local trunk false SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 rust github main-worktree local trunk false dist-workspace.toml 84b6e8a7658c4c3e1c9bfa12f44c8ffe021bc259d2e306c11b56734baa8f9cd6
@@ -1235,7 +1235,7 @@ rust github main-worktree local trunk false .release-kit/manifest.json 381f5da00
 rust github main-worktree local trunk true .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 rust github main-worktree local trunk true .github/workflows/release-plz.yml 930367c1fa6e4d04e335c35a228c18a8d2d613a2a08bfad8118e3a9bc9f391d0
 rust github main-worktree local trunk true .pre-commit-config.yaml 901d66d1ee93f0be1359791141bac49afab7ed0838b9a865222648df0db65078
-rust github main-worktree local trunk true AGENTS.md a80abcb79a28a642c1aeb494b8fe72af6d883e054f5d58e4cda333daf9ddb70d
+rust github main-worktree local trunk true AGENTS.md 6ce2478b61c723a3a628c9d9cca62e5c42067932914e67e40492d6f2e6838d1b
 rust github main-worktree local trunk true GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust github main-worktree local trunk true SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 rust github main-worktree local trunk true dist-workspace.toml 84b6e8a7658c4c3e1c9bfa12f44c8ffe021bc259d2e306c11b56734baa8f9cd6
@@ -1248,7 +1248,7 @@ rust github main-worktree local trunk true .release-kit/manifest.json 02779b0d0a
 rust github main-worktree local trunk withheld-shape .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 rust github main-worktree local trunk withheld-shape .github/workflows/release-plz.yml 930367c1fa6e4d04e335c35a228c18a8d2d613a2a08bfad8118e3a9bc9f391d0
 rust github main-worktree local trunk withheld-shape .pre-commit-config.yaml 901d66d1ee93f0be1359791141bac49afab7ed0838b9a865222648df0db65078
-rust github main-worktree local trunk withheld-shape AGENTS.md a80abcb79a28a642c1aeb494b8fe72af6d883e054f5d58e4cda333daf9ddb70d
+rust github main-worktree local trunk withheld-shape AGENTS.md 6ce2478b61c723a3a628c9d9cca62e5c42067932914e67e40492d6f2e6838d1b
 rust github main-worktree local trunk withheld-shape GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust github main-worktree local trunk withheld-shape SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 rust github main-worktree local trunk withheld-shape dist-workspace.toml 84b6e8a7658c4c3e1c9bfa12f44c8ffe021bc259d2e306c11b56734baa8f9cd6
@@ -1258,7 +1258,7 @@ rust github main-worktree local trunk withheld-shape .release-kit/manifest.json 
 rust github main-worktree local trunk withheld-flake .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 rust github main-worktree local trunk withheld-flake .github/workflows/release-plz.yml 930367c1fa6e4d04e335c35a228c18a8d2d613a2a08bfad8118e3a9bc9f391d0
 rust github main-worktree local trunk withheld-flake .pre-commit-config.yaml 901d66d1ee93f0be1359791141bac49afab7ed0838b9a865222648df0db65078
-rust github main-worktree local trunk withheld-flake AGENTS.md a80abcb79a28a642c1aeb494b8fe72af6d883e054f5d58e4cda333daf9ddb70d
+rust github main-worktree local trunk withheld-flake AGENTS.md 6ce2478b61c723a3a628c9d9cca62e5c42067932914e67e40492d6f2e6838d1b
 rust github main-worktree local trunk withheld-flake GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust github main-worktree local trunk withheld-flake SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 rust github main-worktree local trunk withheld-flake dist-workspace.toml 84b6e8a7658c4c3e1c9bfa12f44c8ffe021bc259d2e306c11b56734baa8f9cd6
@@ -1269,7 +1269,7 @@ rust github main-worktree local trunk withheld-flake .release-kit/manifest.json 
 rust github main-worktree local lines false .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 rust github main-worktree local lines false .github/workflows/release-plz.yml 540ad4552746ee620f03851547e298fa23b5a67f03be5ca3c8b02173adf1b0f9
 rust github main-worktree local lines false .pre-commit-config.yaml 901d66d1ee93f0be1359791141bac49afab7ed0838b9a865222648df0db65078
-rust github main-worktree local lines false AGENTS.md a80abcb79a28a642c1aeb494b8fe72af6d883e054f5d58e4cda333daf9ddb70d
+rust github main-worktree local lines false AGENTS.md 6ce2478b61c723a3a628c9d9cca62e5c42067932914e67e40492d6f2e6838d1b
 rust github main-worktree local lines false GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust github main-worktree local lines false SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 rust github main-worktree local lines false dist-workspace.toml 84b6e8a7658c4c3e1c9bfa12f44c8ffe021bc259d2e306c11b56734baa8f9cd6
@@ -1279,7 +1279,7 @@ rust github main-worktree local lines false .release-kit/manifest.json 73023f02f
 rust github main-worktree local lines true .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 rust github main-worktree local lines true .github/workflows/release-plz.yml 540ad4552746ee620f03851547e298fa23b5a67f03be5ca3c8b02173adf1b0f9
 rust github main-worktree local lines true .pre-commit-config.yaml 901d66d1ee93f0be1359791141bac49afab7ed0838b9a865222648df0db65078
-rust github main-worktree local lines true AGENTS.md a80abcb79a28a642c1aeb494b8fe72af6d883e054f5d58e4cda333daf9ddb70d
+rust github main-worktree local lines true AGENTS.md 6ce2478b61c723a3a628c9d9cca62e5c42067932914e67e40492d6f2e6838d1b
 rust github main-worktree local lines true GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust github main-worktree local lines true SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 rust github main-worktree local lines true dist-workspace.toml 84b6e8a7658c4c3e1c9bfa12f44c8ffe021bc259d2e306c11b56734baa8f9cd6
@@ -1292,7 +1292,7 @@ rust github main-worktree local lines true .release-kit/manifest.json a88e212bc2
 rust github main-worktree local lines withheld-shape .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 rust github main-worktree local lines withheld-shape .github/workflows/release-plz.yml 540ad4552746ee620f03851547e298fa23b5a67f03be5ca3c8b02173adf1b0f9
 rust github main-worktree local lines withheld-shape .pre-commit-config.yaml 901d66d1ee93f0be1359791141bac49afab7ed0838b9a865222648df0db65078
-rust github main-worktree local lines withheld-shape AGENTS.md a80abcb79a28a642c1aeb494b8fe72af6d883e054f5d58e4cda333daf9ddb70d
+rust github main-worktree local lines withheld-shape AGENTS.md 6ce2478b61c723a3a628c9d9cca62e5c42067932914e67e40492d6f2e6838d1b
 rust github main-worktree local lines withheld-shape GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust github main-worktree local lines withheld-shape SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 rust github main-worktree local lines withheld-shape dist-workspace.toml 84b6e8a7658c4c3e1c9bfa12f44c8ffe021bc259d2e306c11b56734baa8f9cd6
@@ -1302,7 +1302,7 @@ rust github main-worktree local lines withheld-shape .release-kit/manifest.json 
 rust github main-worktree local lines withheld-flake .github/workflows/pr-title.yml 972336ac17d76fa11d785a8dfb381b3bdc7dc8af318ae9225a4855c08bc1b13c
 rust github main-worktree local lines withheld-flake .github/workflows/release-plz.yml 540ad4552746ee620f03851547e298fa23b5a67f03be5ca3c8b02173adf1b0f9
 rust github main-worktree local lines withheld-flake .pre-commit-config.yaml 901d66d1ee93f0be1359791141bac49afab7ed0838b9a865222648df0db65078
-rust github main-worktree local lines withheld-flake AGENTS.md a80abcb79a28a642c1aeb494b8fe72af6d883e054f5d58e4cda333daf9ddb70d
+rust github main-worktree local lines withheld-flake AGENTS.md 6ce2478b61c723a3a628c9d9cca62e5c42067932914e67e40492d6f2e6838d1b
 rust github main-worktree local lines withheld-flake GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust github main-worktree local lines withheld-flake SECURITY.md 75e681eb3b8f50639d687e0728ac83f1be6f7bcc9a7f0011c415095547fe8f9d
 rust github main-worktree local lines withheld-flake dist-workspace.toml 84b6e8a7658c4c3e1c9bfa12f44c8ffe021bc259d2e306c11b56734baa8f9cd6
@@ -1313,7 +1313,7 @@ rust github main-worktree local lines withheld-flake .release-kit/manifest.json 
 rust gitlab linked-worktree forge trunk false .gitlab-ci.yml 86bf265a0cbcc265d604635ff9524d91396e8e687a54ec6b404bc90077e2c8f9
 rust gitlab linked-worktree forge trunk false .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 rust gitlab linked-worktree forge trunk false .pre-commit-config.yaml 2ccaa36ef2cfdb4c5512e7f49f1b6fcadc4150903fc9a46a9f0764e82c473ec5
-rust gitlab linked-worktree forge trunk false AGENTS.md 0114f6f97be37df9ebd9d135ce1391f15de61e304da1197e948adfb6cc1edb72
+rust gitlab linked-worktree forge trunk false AGENTS.md 19dcf839226d3dc6fa8aadbf72876961b5f3966f7ffb1908c2da54db0acf53bd
 rust gitlab linked-worktree forge trunk false GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust gitlab linked-worktree forge trunk false SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 rust gitlab linked-worktree forge trunk false release-plz.toml e935bc983876f765525d4f2e098e0d87b72086e2f85c9ecd46325ad2883d6b41
@@ -1322,7 +1322,7 @@ rust gitlab linked-worktree forge trunk false .release-kit/manifest.json c081e22
 rust gitlab linked-worktree forge trunk true .gitlab-ci.yml 86bf265a0cbcc265d604635ff9524d91396e8e687a54ec6b404bc90077e2c8f9
 rust gitlab linked-worktree forge trunk true .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 rust gitlab linked-worktree forge trunk true .pre-commit-config.yaml 2ccaa36ef2cfdb4c5512e7f49f1b6fcadc4150903fc9a46a9f0764e82c473ec5
-rust gitlab linked-worktree forge trunk true AGENTS.md 0114f6f97be37df9ebd9d135ce1391f15de61e304da1197e948adfb6cc1edb72
+rust gitlab linked-worktree forge trunk true AGENTS.md 19dcf839226d3dc6fa8aadbf72876961b5f3966f7ffb1908c2da54db0acf53bd
 rust gitlab linked-worktree forge trunk true GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust gitlab linked-worktree forge trunk true SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 rust gitlab linked-worktree forge trunk true flake.lock ae64d1c0732c7113e70609ad21e637e0381d6e711ad2b16478873db865b03c15
@@ -1334,7 +1334,7 @@ rust gitlab linked-worktree forge trunk true .release-kit/manifest.json 30af0be9
 rust gitlab linked-worktree forge trunk withheld-shape .gitlab-ci.yml 86bf265a0cbcc265d604635ff9524d91396e8e687a54ec6b404bc90077e2c8f9
 rust gitlab linked-worktree forge trunk withheld-shape .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 rust gitlab linked-worktree forge trunk withheld-shape .pre-commit-config.yaml 2ccaa36ef2cfdb4c5512e7f49f1b6fcadc4150903fc9a46a9f0764e82c473ec5
-rust gitlab linked-worktree forge trunk withheld-shape AGENTS.md 0114f6f97be37df9ebd9d135ce1391f15de61e304da1197e948adfb6cc1edb72
+rust gitlab linked-worktree forge trunk withheld-shape AGENTS.md 19dcf839226d3dc6fa8aadbf72876961b5f3966f7ffb1908c2da54db0acf53bd
 rust gitlab linked-worktree forge trunk withheld-shape GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust gitlab linked-worktree forge trunk withheld-shape SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 rust gitlab linked-worktree forge trunk withheld-shape release-plz.toml e935bc983876f765525d4f2e098e0d87b72086e2f85c9ecd46325ad2883d6b41
@@ -1343,7 +1343,7 @@ rust gitlab linked-worktree forge trunk withheld-shape .release-kit/manifest.jso
 rust gitlab linked-worktree forge trunk withheld-flake .gitlab-ci.yml 86bf265a0cbcc265d604635ff9524d91396e8e687a54ec6b404bc90077e2c8f9
 rust gitlab linked-worktree forge trunk withheld-flake .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 rust gitlab linked-worktree forge trunk withheld-flake .pre-commit-config.yaml 2ccaa36ef2cfdb4c5512e7f49f1b6fcadc4150903fc9a46a9f0764e82c473ec5
-rust gitlab linked-worktree forge trunk withheld-flake AGENTS.md 0114f6f97be37df9ebd9d135ce1391f15de61e304da1197e948adfb6cc1edb72
+rust gitlab linked-worktree forge trunk withheld-flake AGENTS.md 19dcf839226d3dc6fa8aadbf72876961b5f3966f7ffb1908c2da54db0acf53bd
 rust gitlab linked-worktree forge trunk withheld-flake GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust gitlab linked-worktree forge trunk withheld-flake SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 rust gitlab linked-worktree forge trunk withheld-flake nix/package.nix bd1537cc2c4ef5e46c29d65a9149bdeaafbc448632f9fabd37aeff6deeb2a3eb
@@ -1353,7 +1353,7 @@ rust gitlab linked-worktree forge trunk withheld-flake .release-kit/manifest.jso
 rust gitlab linked-worktree forge lines false .gitlab-ci.yml 71ccfef8b0494edf4d2890aba5d2ac7bf87939980ce3938becec9488176fb197
 rust gitlab linked-worktree forge lines false .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 rust gitlab linked-worktree forge lines false .pre-commit-config.yaml 2ccaa36ef2cfdb4c5512e7f49f1b6fcadc4150903fc9a46a9f0764e82c473ec5
-rust gitlab linked-worktree forge lines false AGENTS.md 0114f6f97be37df9ebd9d135ce1391f15de61e304da1197e948adfb6cc1edb72
+rust gitlab linked-worktree forge lines false AGENTS.md 19dcf839226d3dc6fa8aadbf72876961b5f3966f7ffb1908c2da54db0acf53bd
 rust gitlab linked-worktree forge lines false GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust gitlab linked-worktree forge lines false SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 rust gitlab linked-worktree forge lines false release-plz.toml e935bc983876f765525d4f2e098e0d87b72086e2f85c9ecd46325ad2883d6b41
@@ -1362,7 +1362,7 @@ rust gitlab linked-worktree forge lines false .release-kit/manifest.json 7cde401
 rust gitlab linked-worktree forge lines true .gitlab-ci.yml 71ccfef8b0494edf4d2890aba5d2ac7bf87939980ce3938becec9488176fb197
 rust gitlab linked-worktree forge lines true .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 rust gitlab linked-worktree forge lines true .pre-commit-config.yaml 2ccaa36ef2cfdb4c5512e7f49f1b6fcadc4150903fc9a46a9f0764e82c473ec5
-rust gitlab linked-worktree forge lines true AGENTS.md 0114f6f97be37df9ebd9d135ce1391f15de61e304da1197e948adfb6cc1edb72
+rust gitlab linked-worktree forge lines true AGENTS.md 19dcf839226d3dc6fa8aadbf72876961b5f3966f7ffb1908c2da54db0acf53bd
 rust gitlab linked-worktree forge lines true GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust gitlab linked-worktree forge lines true SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 rust gitlab linked-worktree forge lines true flake.lock ae64d1c0732c7113e70609ad21e637e0381d6e711ad2b16478873db865b03c15
@@ -1374,7 +1374,7 @@ rust gitlab linked-worktree forge lines true .release-kit/manifest.json 99a7e174
 rust gitlab linked-worktree forge lines withheld-shape .gitlab-ci.yml 71ccfef8b0494edf4d2890aba5d2ac7bf87939980ce3938becec9488176fb197
 rust gitlab linked-worktree forge lines withheld-shape .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 rust gitlab linked-worktree forge lines withheld-shape .pre-commit-config.yaml 2ccaa36ef2cfdb4c5512e7f49f1b6fcadc4150903fc9a46a9f0764e82c473ec5
-rust gitlab linked-worktree forge lines withheld-shape AGENTS.md 0114f6f97be37df9ebd9d135ce1391f15de61e304da1197e948adfb6cc1edb72
+rust gitlab linked-worktree forge lines withheld-shape AGENTS.md 19dcf839226d3dc6fa8aadbf72876961b5f3966f7ffb1908c2da54db0acf53bd
 rust gitlab linked-worktree forge lines withheld-shape GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust gitlab linked-worktree forge lines withheld-shape SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 rust gitlab linked-worktree forge lines withheld-shape release-plz.toml e935bc983876f765525d4f2e098e0d87b72086e2f85c9ecd46325ad2883d6b41
@@ -1383,7 +1383,7 @@ rust gitlab linked-worktree forge lines withheld-shape .release-kit/manifest.jso
 rust gitlab linked-worktree forge lines withheld-flake .gitlab-ci.yml 71ccfef8b0494edf4d2890aba5d2ac7bf87939980ce3938becec9488176fb197
 rust gitlab linked-worktree forge lines withheld-flake .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 rust gitlab linked-worktree forge lines withheld-flake .pre-commit-config.yaml 2ccaa36ef2cfdb4c5512e7f49f1b6fcadc4150903fc9a46a9f0764e82c473ec5
-rust gitlab linked-worktree forge lines withheld-flake AGENTS.md 0114f6f97be37df9ebd9d135ce1391f15de61e304da1197e948adfb6cc1edb72
+rust gitlab linked-worktree forge lines withheld-flake AGENTS.md 19dcf839226d3dc6fa8aadbf72876961b5f3966f7ffb1908c2da54db0acf53bd
 rust gitlab linked-worktree forge lines withheld-flake GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust gitlab linked-worktree forge lines withheld-flake SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 rust gitlab linked-worktree forge lines withheld-flake nix/package.nix bd1537cc2c4ef5e46c29d65a9149bdeaafbc448632f9fabd37aeff6deeb2a3eb
@@ -1393,7 +1393,7 @@ rust gitlab linked-worktree forge lines withheld-flake .release-kit/manifest.jso
 rust gitlab linked-worktree local trunk false .gitlab-ci.yml 86bf265a0cbcc265d604635ff9524d91396e8e687a54ec6b404bc90077e2c8f9
 rust gitlab linked-worktree local trunk false .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 rust gitlab linked-worktree local trunk false .pre-commit-config.yaml 57f335fd96353b5c743012a6e019735dd609fb96d4932a0504e16451fb2fff30
-rust gitlab linked-worktree local trunk false AGENTS.md 7e3065ebfc525e526d5ba58faa7d8c15adaaf696157815acd6fde67495e80f4d
+rust gitlab linked-worktree local trunk false AGENTS.md 6324449636c6632c4b68a46d6fed60589d1a9d902446a642f74ae00e694bafc7
 rust gitlab linked-worktree local trunk false GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust gitlab linked-worktree local trunk false SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 rust gitlab linked-worktree local trunk false release-plz.toml e935bc983876f765525d4f2e098e0d87b72086e2f85c9ecd46325ad2883d6b41
@@ -1402,7 +1402,7 @@ rust gitlab linked-worktree local trunk false .release-kit/manifest.json 025686a
 rust gitlab linked-worktree local trunk true .gitlab-ci.yml 86bf265a0cbcc265d604635ff9524d91396e8e687a54ec6b404bc90077e2c8f9
 rust gitlab linked-worktree local trunk true .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 rust gitlab linked-worktree local trunk true .pre-commit-config.yaml 57f335fd96353b5c743012a6e019735dd609fb96d4932a0504e16451fb2fff30
-rust gitlab linked-worktree local trunk true AGENTS.md 7e3065ebfc525e526d5ba58faa7d8c15adaaf696157815acd6fde67495e80f4d
+rust gitlab linked-worktree local trunk true AGENTS.md 6324449636c6632c4b68a46d6fed60589d1a9d902446a642f74ae00e694bafc7
 rust gitlab linked-worktree local trunk true GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust gitlab linked-worktree local trunk true SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 rust gitlab linked-worktree local trunk true flake.lock ae64d1c0732c7113e70609ad21e637e0381d6e711ad2b16478873db865b03c15
@@ -1414,7 +1414,7 @@ rust gitlab linked-worktree local trunk true .release-kit/manifest.json fccb81b7
 rust gitlab linked-worktree local trunk withheld-shape .gitlab-ci.yml 86bf265a0cbcc265d604635ff9524d91396e8e687a54ec6b404bc90077e2c8f9
 rust gitlab linked-worktree local trunk withheld-shape .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 rust gitlab linked-worktree local trunk withheld-shape .pre-commit-config.yaml 57f335fd96353b5c743012a6e019735dd609fb96d4932a0504e16451fb2fff30
-rust gitlab linked-worktree local trunk withheld-shape AGENTS.md 7e3065ebfc525e526d5ba58faa7d8c15adaaf696157815acd6fde67495e80f4d
+rust gitlab linked-worktree local trunk withheld-shape AGENTS.md 6324449636c6632c4b68a46d6fed60589d1a9d902446a642f74ae00e694bafc7
 rust gitlab linked-worktree local trunk withheld-shape GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust gitlab linked-worktree local trunk withheld-shape SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 rust gitlab linked-worktree local trunk withheld-shape release-plz.toml e935bc983876f765525d4f2e098e0d87b72086e2f85c9ecd46325ad2883d6b41
@@ -1423,7 +1423,7 @@ rust gitlab linked-worktree local trunk withheld-shape .release-kit/manifest.jso
 rust gitlab linked-worktree local trunk withheld-flake .gitlab-ci.yml 86bf265a0cbcc265d604635ff9524d91396e8e687a54ec6b404bc90077e2c8f9
 rust gitlab linked-worktree local trunk withheld-flake .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 rust gitlab linked-worktree local trunk withheld-flake .pre-commit-config.yaml 57f335fd96353b5c743012a6e019735dd609fb96d4932a0504e16451fb2fff30
-rust gitlab linked-worktree local trunk withheld-flake AGENTS.md 7e3065ebfc525e526d5ba58faa7d8c15adaaf696157815acd6fde67495e80f4d
+rust gitlab linked-worktree local trunk withheld-flake AGENTS.md 6324449636c6632c4b68a46d6fed60589d1a9d902446a642f74ae00e694bafc7
 rust gitlab linked-worktree local trunk withheld-flake GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust gitlab linked-worktree local trunk withheld-flake SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 rust gitlab linked-worktree local trunk withheld-flake nix/package.nix bd1537cc2c4ef5e46c29d65a9149bdeaafbc448632f9fabd37aeff6deeb2a3eb
@@ -1433,7 +1433,7 @@ rust gitlab linked-worktree local trunk withheld-flake .release-kit/manifest.jso
 rust gitlab linked-worktree local lines false .gitlab-ci.yml 71ccfef8b0494edf4d2890aba5d2ac7bf87939980ce3938becec9488176fb197
 rust gitlab linked-worktree local lines false .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 rust gitlab linked-worktree local lines false .pre-commit-config.yaml 57f335fd96353b5c743012a6e019735dd609fb96d4932a0504e16451fb2fff30
-rust gitlab linked-worktree local lines false AGENTS.md 7e3065ebfc525e526d5ba58faa7d8c15adaaf696157815acd6fde67495e80f4d
+rust gitlab linked-worktree local lines false AGENTS.md 6324449636c6632c4b68a46d6fed60589d1a9d902446a642f74ae00e694bafc7
 rust gitlab linked-worktree local lines false GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust gitlab linked-worktree local lines false SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 rust gitlab linked-worktree local lines false release-plz.toml e935bc983876f765525d4f2e098e0d87b72086e2f85c9ecd46325ad2883d6b41
@@ -1442,7 +1442,7 @@ rust gitlab linked-worktree local lines false .release-kit/manifest.json c49bcdf
 rust gitlab linked-worktree local lines true .gitlab-ci.yml 71ccfef8b0494edf4d2890aba5d2ac7bf87939980ce3938becec9488176fb197
 rust gitlab linked-worktree local lines true .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 rust gitlab linked-worktree local lines true .pre-commit-config.yaml 57f335fd96353b5c743012a6e019735dd609fb96d4932a0504e16451fb2fff30
-rust gitlab linked-worktree local lines true AGENTS.md 7e3065ebfc525e526d5ba58faa7d8c15adaaf696157815acd6fde67495e80f4d
+rust gitlab linked-worktree local lines true AGENTS.md 6324449636c6632c4b68a46d6fed60589d1a9d902446a642f74ae00e694bafc7
 rust gitlab linked-worktree local lines true GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust gitlab linked-worktree local lines true SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 rust gitlab linked-worktree local lines true flake.lock ae64d1c0732c7113e70609ad21e637e0381d6e711ad2b16478873db865b03c15
@@ -1454,7 +1454,7 @@ rust gitlab linked-worktree local lines true .release-kit/manifest.json 8bf0e420
 rust gitlab linked-worktree local lines withheld-shape .gitlab-ci.yml 71ccfef8b0494edf4d2890aba5d2ac7bf87939980ce3938becec9488176fb197
 rust gitlab linked-worktree local lines withheld-shape .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 rust gitlab linked-worktree local lines withheld-shape .pre-commit-config.yaml 57f335fd96353b5c743012a6e019735dd609fb96d4932a0504e16451fb2fff30
-rust gitlab linked-worktree local lines withheld-shape AGENTS.md 7e3065ebfc525e526d5ba58faa7d8c15adaaf696157815acd6fde67495e80f4d
+rust gitlab linked-worktree local lines withheld-shape AGENTS.md 6324449636c6632c4b68a46d6fed60589d1a9d902446a642f74ae00e694bafc7
 rust gitlab linked-worktree local lines withheld-shape GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust gitlab linked-worktree local lines withheld-shape SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 rust gitlab linked-worktree local lines withheld-shape release-plz.toml e935bc983876f765525d4f2e098e0d87b72086e2f85c9ecd46325ad2883d6b41
@@ -1463,7 +1463,7 @@ rust gitlab linked-worktree local lines withheld-shape .release-kit/manifest.jso
 rust gitlab linked-worktree local lines withheld-flake .gitlab-ci.yml 71ccfef8b0494edf4d2890aba5d2ac7bf87939980ce3938becec9488176fb197
 rust gitlab linked-worktree local lines withheld-flake .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 rust gitlab linked-worktree local lines withheld-flake .pre-commit-config.yaml 57f335fd96353b5c743012a6e019735dd609fb96d4932a0504e16451fb2fff30
-rust gitlab linked-worktree local lines withheld-flake AGENTS.md 7e3065ebfc525e526d5ba58faa7d8c15adaaf696157815acd6fde67495e80f4d
+rust gitlab linked-worktree local lines withheld-flake AGENTS.md 6324449636c6632c4b68a46d6fed60589d1a9d902446a642f74ae00e694bafc7
 rust gitlab linked-worktree local lines withheld-flake GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust gitlab linked-worktree local lines withheld-flake SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 rust gitlab linked-worktree local lines withheld-flake nix/package.nix bd1537cc2c4ef5e46c29d65a9149bdeaafbc448632f9fabd37aeff6deeb2a3eb
@@ -1473,7 +1473,7 @@ rust gitlab linked-worktree local lines withheld-flake .release-kit/manifest.jso
 rust gitlab main-worktree forge trunk false .gitlab-ci.yml 86bf265a0cbcc265d604635ff9524d91396e8e687a54ec6b404bc90077e2c8f9
 rust gitlab main-worktree forge trunk false .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 rust gitlab main-worktree forge trunk false .pre-commit-config.yaml 49050c24a9629eceba0e6ee23e3cf5b358aeee29c9037745a92aee47fa4bc743
-rust gitlab main-worktree forge trunk false AGENTS.md 1ec5d2ac253410291da0d49d39300771ba3e0ea68201165e3bb83265a7ba0262
+rust gitlab main-worktree forge trunk false AGENTS.md b080de96289b51fa21468ae3a63ea908d438081259f8ec5586393d3f2bd1957b
 rust gitlab main-worktree forge trunk false GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust gitlab main-worktree forge trunk false SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 rust gitlab main-worktree forge trunk false release-plz.toml e935bc983876f765525d4f2e098e0d87b72086e2f85c9ecd46325ad2883d6b41
@@ -1482,7 +1482,7 @@ rust gitlab main-worktree forge trunk false .release-kit/manifest.json ad6166aef
 rust gitlab main-worktree forge trunk true .gitlab-ci.yml 86bf265a0cbcc265d604635ff9524d91396e8e687a54ec6b404bc90077e2c8f9
 rust gitlab main-worktree forge trunk true .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 rust gitlab main-worktree forge trunk true .pre-commit-config.yaml 49050c24a9629eceba0e6ee23e3cf5b358aeee29c9037745a92aee47fa4bc743
-rust gitlab main-worktree forge trunk true AGENTS.md 1ec5d2ac253410291da0d49d39300771ba3e0ea68201165e3bb83265a7ba0262
+rust gitlab main-worktree forge trunk true AGENTS.md b080de96289b51fa21468ae3a63ea908d438081259f8ec5586393d3f2bd1957b
 rust gitlab main-worktree forge trunk true GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust gitlab main-worktree forge trunk true SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 rust gitlab main-worktree forge trunk true flake.lock ae64d1c0732c7113e70609ad21e637e0381d6e711ad2b16478873db865b03c15
@@ -1494,7 +1494,7 @@ rust gitlab main-worktree forge trunk true .release-kit/manifest.json 7efac2778e
 rust gitlab main-worktree forge trunk withheld-shape .gitlab-ci.yml 86bf265a0cbcc265d604635ff9524d91396e8e687a54ec6b404bc90077e2c8f9
 rust gitlab main-worktree forge trunk withheld-shape .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 rust gitlab main-worktree forge trunk withheld-shape .pre-commit-config.yaml 49050c24a9629eceba0e6ee23e3cf5b358aeee29c9037745a92aee47fa4bc743
-rust gitlab main-worktree forge trunk withheld-shape AGENTS.md 1ec5d2ac253410291da0d49d39300771ba3e0ea68201165e3bb83265a7ba0262
+rust gitlab main-worktree forge trunk withheld-shape AGENTS.md b080de96289b51fa21468ae3a63ea908d438081259f8ec5586393d3f2bd1957b
 rust gitlab main-worktree forge trunk withheld-shape GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust gitlab main-worktree forge trunk withheld-shape SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 rust gitlab main-worktree forge trunk withheld-shape release-plz.toml e935bc983876f765525d4f2e098e0d87b72086e2f85c9ecd46325ad2883d6b41
@@ -1503,7 +1503,7 @@ rust gitlab main-worktree forge trunk withheld-shape .release-kit/manifest.json 
 rust gitlab main-worktree forge trunk withheld-flake .gitlab-ci.yml 86bf265a0cbcc265d604635ff9524d91396e8e687a54ec6b404bc90077e2c8f9
 rust gitlab main-worktree forge trunk withheld-flake .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 rust gitlab main-worktree forge trunk withheld-flake .pre-commit-config.yaml 49050c24a9629eceba0e6ee23e3cf5b358aeee29c9037745a92aee47fa4bc743
-rust gitlab main-worktree forge trunk withheld-flake AGENTS.md 1ec5d2ac253410291da0d49d39300771ba3e0ea68201165e3bb83265a7ba0262
+rust gitlab main-worktree forge trunk withheld-flake AGENTS.md b080de96289b51fa21468ae3a63ea908d438081259f8ec5586393d3f2bd1957b
 rust gitlab main-worktree forge trunk withheld-flake GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust gitlab main-worktree forge trunk withheld-flake SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 rust gitlab main-worktree forge trunk withheld-flake nix/package.nix bd1537cc2c4ef5e46c29d65a9149bdeaafbc448632f9fabd37aeff6deeb2a3eb
@@ -1513,7 +1513,7 @@ rust gitlab main-worktree forge trunk withheld-flake .release-kit/manifest.json 
 rust gitlab main-worktree forge lines false .gitlab-ci.yml 71ccfef8b0494edf4d2890aba5d2ac7bf87939980ce3938becec9488176fb197
 rust gitlab main-worktree forge lines false .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 rust gitlab main-worktree forge lines false .pre-commit-config.yaml 49050c24a9629eceba0e6ee23e3cf5b358aeee29c9037745a92aee47fa4bc743
-rust gitlab main-worktree forge lines false AGENTS.md 1ec5d2ac253410291da0d49d39300771ba3e0ea68201165e3bb83265a7ba0262
+rust gitlab main-worktree forge lines false AGENTS.md b080de96289b51fa21468ae3a63ea908d438081259f8ec5586393d3f2bd1957b
 rust gitlab main-worktree forge lines false GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust gitlab main-worktree forge lines false SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 rust gitlab main-worktree forge lines false release-plz.toml e935bc983876f765525d4f2e098e0d87b72086e2f85c9ecd46325ad2883d6b41
@@ -1522,7 +1522,7 @@ rust gitlab main-worktree forge lines false .release-kit/manifest.json 5a6fb8fe6
 rust gitlab main-worktree forge lines true .gitlab-ci.yml 71ccfef8b0494edf4d2890aba5d2ac7bf87939980ce3938becec9488176fb197
 rust gitlab main-worktree forge lines true .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 rust gitlab main-worktree forge lines true .pre-commit-config.yaml 49050c24a9629eceba0e6ee23e3cf5b358aeee29c9037745a92aee47fa4bc743
-rust gitlab main-worktree forge lines true AGENTS.md 1ec5d2ac253410291da0d49d39300771ba3e0ea68201165e3bb83265a7ba0262
+rust gitlab main-worktree forge lines true AGENTS.md b080de96289b51fa21468ae3a63ea908d438081259f8ec5586393d3f2bd1957b
 rust gitlab main-worktree forge lines true GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust gitlab main-worktree forge lines true SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 rust gitlab main-worktree forge lines true flake.lock ae64d1c0732c7113e70609ad21e637e0381d6e711ad2b16478873db865b03c15
@@ -1534,7 +1534,7 @@ rust gitlab main-worktree forge lines true .release-kit/manifest.json 4c4d8e474b
 rust gitlab main-worktree forge lines withheld-shape .gitlab-ci.yml 71ccfef8b0494edf4d2890aba5d2ac7bf87939980ce3938becec9488176fb197
 rust gitlab main-worktree forge lines withheld-shape .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 rust gitlab main-worktree forge lines withheld-shape .pre-commit-config.yaml 49050c24a9629eceba0e6ee23e3cf5b358aeee29c9037745a92aee47fa4bc743
-rust gitlab main-worktree forge lines withheld-shape AGENTS.md 1ec5d2ac253410291da0d49d39300771ba3e0ea68201165e3bb83265a7ba0262
+rust gitlab main-worktree forge lines withheld-shape AGENTS.md b080de96289b51fa21468ae3a63ea908d438081259f8ec5586393d3f2bd1957b
 rust gitlab main-worktree forge lines withheld-shape GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust gitlab main-worktree forge lines withheld-shape SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 rust gitlab main-worktree forge lines withheld-shape release-plz.toml e935bc983876f765525d4f2e098e0d87b72086e2f85c9ecd46325ad2883d6b41
@@ -1543,7 +1543,7 @@ rust gitlab main-worktree forge lines withheld-shape .release-kit/manifest.json 
 rust gitlab main-worktree forge lines withheld-flake .gitlab-ci.yml 71ccfef8b0494edf4d2890aba5d2ac7bf87939980ce3938becec9488176fb197
 rust gitlab main-worktree forge lines withheld-flake .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 rust gitlab main-worktree forge lines withheld-flake .pre-commit-config.yaml 49050c24a9629eceba0e6ee23e3cf5b358aeee29c9037745a92aee47fa4bc743
-rust gitlab main-worktree forge lines withheld-flake AGENTS.md 1ec5d2ac253410291da0d49d39300771ba3e0ea68201165e3bb83265a7ba0262
+rust gitlab main-worktree forge lines withheld-flake AGENTS.md b080de96289b51fa21468ae3a63ea908d438081259f8ec5586393d3f2bd1957b
 rust gitlab main-worktree forge lines withheld-flake GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust gitlab main-worktree forge lines withheld-flake SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 rust gitlab main-worktree forge lines withheld-flake nix/package.nix bd1537cc2c4ef5e46c29d65a9149bdeaafbc448632f9fabd37aeff6deeb2a3eb
@@ -1553,7 +1553,7 @@ rust gitlab main-worktree forge lines withheld-flake .release-kit/manifest.json 
 rust gitlab main-worktree local trunk false .gitlab-ci.yml 86bf265a0cbcc265d604635ff9524d91396e8e687a54ec6b404bc90077e2c8f9
 rust gitlab main-worktree local trunk false .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 rust gitlab main-worktree local trunk false .pre-commit-config.yaml 901d66d1ee93f0be1359791141bac49afab7ed0838b9a865222648df0db65078
-rust gitlab main-worktree local trunk false AGENTS.md a80abcb79a28a642c1aeb494b8fe72af6d883e054f5d58e4cda333daf9ddb70d
+rust gitlab main-worktree local trunk false AGENTS.md 6ce2478b61c723a3a628c9d9cca62e5c42067932914e67e40492d6f2e6838d1b
 rust gitlab main-worktree local trunk false GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust gitlab main-worktree local trunk false SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 rust gitlab main-worktree local trunk false release-plz.toml e935bc983876f765525d4f2e098e0d87b72086e2f85c9ecd46325ad2883d6b41
@@ -1562,7 +1562,7 @@ rust gitlab main-worktree local trunk false .release-kit/manifest.json c3236bc68
 rust gitlab main-worktree local trunk true .gitlab-ci.yml 86bf265a0cbcc265d604635ff9524d91396e8e687a54ec6b404bc90077e2c8f9
 rust gitlab main-worktree local trunk true .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 rust gitlab main-worktree local trunk true .pre-commit-config.yaml 901d66d1ee93f0be1359791141bac49afab7ed0838b9a865222648df0db65078
-rust gitlab main-worktree local trunk true AGENTS.md a80abcb79a28a642c1aeb494b8fe72af6d883e054f5d58e4cda333daf9ddb70d
+rust gitlab main-worktree local trunk true AGENTS.md 6ce2478b61c723a3a628c9d9cca62e5c42067932914e67e40492d6f2e6838d1b
 rust gitlab main-worktree local trunk true GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust gitlab main-worktree local trunk true SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 rust gitlab main-worktree local trunk true flake.lock ae64d1c0732c7113e70609ad21e637e0381d6e711ad2b16478873db865b03c15
@@ -1574,7 +1574,7 @@ rust gitlab main-worktree local trunk true .release-kit/manifest.json 0ce0846e2a
 rust gitlab main-worktree local trunk withheld-shape .gitlab-ci.yml 86bf265a0cbcc265d604635ff9524d91396e8e687a54ec6b404bc90077e2c8f9
 rust gitlab main-worktree local trunk withheld-shape .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 rust gitlab main-worktree local trunk withheld-shape .pre-commit-config.yaml 901d66d1ee93f0be1359791141bac49afab7ed0838b9a865222648df0db65078
-rust gitlab main-worktree local trunk withheld-shape AGENTS.md a80abcb79a28a642c1aeb494b8fe72af6d883e054f5d58e4cda333daf9ddb70d
+rust gitlab main-worktree local trunk withheld-shape AGENTS.md 6ce2478b61c723a3a628c9d9cca62e5c42067932914e67e40492d6f2e6838d1b
 rust gitlab main-worktree local trunk withheld-shape GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust gitlab main-worktree local trunk withheld-shape SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 rust gitlab main-worktree local trunk withheld-shape release-plz.toml e935bc983876f765525d4f2e098e0d87b72086e2f85c9ecd46325ad2883d6b41
@@ -1583,7 +1583,7 @@ rust gitlab main-worktree local trunk withheld-shape .release-kit/manifest.json 
 rust gitlab main-worktree local trunk withheld-flake .gitlab-ci.yml 86bf265a0cbcc265d604635ff9524d91396e8e687a54ec6b404bc90077e2c8f9
 rust gitlab main-worktree local trunk withheld-flake .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 rust gitlab main-worktree local trunk withheld-flake .pre-commit-config.yaml 901d66d1ee93f0be1359791141bac49afab7ed0838b9a865222648df0db65078
-rust gitlab main-worktree local trunk withheld-flake AGENTS.md a80abcb79a28a642c1aeb494b8fe72af6d883e054f5d58e4cda333daf9ddb70d
+rust gitlab main-worktree local trunk withheld-flake AGENTS.md 6ce2478b61c723a3a628c9d9cca62e5c42067932914e67e40492d6f2e6838d1b
 rust gitlab main-worktree local trunk withheld-flake GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust gitlab main-worktree local trunk withheld-flake SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 rust gitlab main-worktree local trunk withheld-flake nix/package.nix bd1537cc2c4ef5e46c29d65a9149bdeaafbc448632f9fabd37aeff6deeb2a3eb
@@ -1593,7 +1593,7 @@ rust gitlab main-worktree local trunk withheld-flake .release-kit/manifest.json 
 rust gitlab main-worktree local lines false .gitlab-ci.yml 71ccfef8b0494edf4d2890aba5d2ac7bf87939980ce3938becec9488176fb197
 rust gitlab main-worktree local lines false .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 rust gitlab main-worktree local lines false .pre-commit-config.yaml 901d66d1ee93f0be1359791141bac49afab7ed0838b9a865222648df0db65078
-rust gitlab main-worktree local lines false AGENTS.md a80abcb79a28a642c1aeb494b8fe72af6d883e054f5d58e4cda333daf9ddb70d
+rust gitlab main-worktree local lines false AGENTS.md 6ce2478b61c723a3a628c9d9cca62e5c42067932914e67e40492d6f2e6838d1b
 rust gitlab main-worktree local lines false GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust gitlab main-worktree local lines false SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 rust gitlab main-worktree local lines false release-plz.toml e935bc983876f765525d4f2e098e0d87b72086e2f85c9ecd46325ad2883d6b41
@@ -1602,7 +1602,7 @@ rust gitlab main-worktree local lines false .release-kit/manifest.json 713af4c8e
 rust gitlab main-worktree local lines true .gitlab-ci.yml 71ccfef8b0494edf4d2890aba5d2ac7bf87939980ce3938becec9488176fb197
 rust gitlab main-worktree local lines true .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 rust gitlab main-worktree local lines true .pre-commit-config.yaml 901d66d1ee93f0be1359791141bac49afab7ed0838b9a865222648df0db65078
-rust gitlab main-worktree local lines true AGENTS.md a80abcb79a28a642c1aeb494b8fe72af6d883e054f5d58e4cda333daf9ddb70d
+rust gitlab main-worktree local lines true AGENTS.md 6ce2478b61c723a3a628c9d9cca62e5c42067932914e67e40492d6f2e6838d1b
 rust gitlab main-worktree local lines true GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust gitlab main-worktree local lines true SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 rust gitlab main-worktree local lines true flake.lock ae64d1c0732c7113e70609ad21e637e0381d6e711ad2b16478873db865b03c15
@@ -1614,7 +1614,7 @@ rust gitlab main-worktree local lines true .release-kit/manifest.json c8c1ab15d0
 rust gitlab main-worktree local lines withheld-shape .gitlab-ci.yml 71ccfef8b0494edf4d2890aba5d2ac7bf87939980ce3938becec9488176fb197
 rust gitlab main-worktree local lines withheld-shape .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 rust gitlab main-worktree local lines withheld-shape .pre-commit-config.yaml 901d66d1ee93f0be1359791141bac49afab7ed0838b9a865222648df0db65078
-rust gitlab main-worktree local lines withheld-shape AGENTS.md a80abcb79a28a642c1aeb494b8fe72af6d883e054f5d58e4cda333daf9ddb70d
+rust gitlab main-worktree local lines withheld-shape AGENTS.md 6ce2478b61c723a3a628c9d9cca62e5c42067932914e67e40492d6f2e6838d1b
 rust gitlab main-worktree local lines withheld-shape GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust gitlab main-worktree local lines withheld-shape SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 rust gitlab main-worktree local lines withheld-shape release-plz.toml e935bc983876f765525d4f2e098e0d87b72086e2f85c9ecd46325ad2883d6b41
@@ -1623,7 +1623,7 @@ rust gitlab main-worktree local lines withheld-shape .release-kit/manifest.json 
 rust gitlab main-worktree local lines withheld-flake .gitlab-ci.yml 71ccfef8b0494edf4d2890aba5d2ac7bf87939980ce3938becec9488176fb197
 rust gitlab main-worktree local lines withheld-flake .gitlab/ci/mr-title.yml 60a53556691f1b480184343c42f7583cefa1ac4c69cc82b50cf0c985789cac43
 rust gitlab main-worktree local lines withheld-flake .pre-commit-config.yaml 901d66d1ee93f0be1359791141bac49afab7ed0838b9a865222648df0db65078
-rust gitlab main-worktree local lines withheld-flake AGENTS.md a80abcb79a28a642c1aeb494b8fe72af6d883e054f5d58e4cda333daf9ddb70d
+rust gitlab main-worktree local lines withheld-flake AGENTS.md 6ce2478b61c723a3a628c9d9cca62e5c42067932914e67e40492d6f2e6838d1b
 rust gitlab main-worktree local lines withheld-flake GLOSSARY.md 7e64f23e2021b383d6471ae524cd5ecd489a393e09ed6750feafe89b695a0a98
 rust gitlab main-worktree local lines withheld-flake SECURITY.md 0654681c04a246eaaa87e90e1f44078e375898890958bd1d7e585ba32cc46371
 rust gitlab main-worktree local lines withheld-flake nix/package.nix bd1537cc2c4ef5e46c29d65a9149bdeaafbc448632f9fabd37aeff6deeb2a3eb
@@ -1639,6 +1639,6 @@ rust github linked-worktree trunk semgrep-record .release-kit/manifest.json 1a31
 rust gitlab linked-worktree trunk semgrep .gitlab/ci/code-scanning-semgrep.yml 90071cc03bce02d8625b45ad49192b067a502eec580808e1c0baec0ba35259d4
 rust gitlab linked-worktree trunk semgrep-record .release-kit/manifest.json 40522114586eccf342b1bb0a76a83e6eca4454e7a0e516167a6512e9462237d5
 rust github linked-worktree trunk occupied .pre-commit-config.yaml 9f15461c11102cdce62acb432b5773cbb87b0559010fef9d140f9f265a06e5ad
-rust github linked-worktree trunk occupied AGENTS.md e1704a15c558d9fb183aaf8ffbd46707071b8fe0e727c7e4c2b2817900edde4f
+rust github linked-worktree trunk occupied AGENTS.md f8079d06bdd8ae042194de30019659ea25245a0e2f60997d63095ed3213c369c
 rust github linked-worktree trunk occupied GLOSSARY.md 262a9882affc4548395737959666b578059917d259510b8706524183ad159733
 rust github linked-worktree trunk occupied .release-kit/config.toml be780f0cbfd79eff41217810ee0a9fe2225d74c112334fb77769d837f753a57d

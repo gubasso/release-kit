@@ -28,6 +28,13 @@ use crate::profile::{CapabilityRequests, ProfileSnapshot, ReleaseMode};
 // predating the key behaves exactly as it did.
 
 /// A policy boolean as the JSON word a forge body carries.
+/// The compact JSON text of one answer, so the proof fields read alike
+/// whatever type holds them. A value that cannot serialize reads as
+/// empty, which no real answer is.
+fn canonical<T: serde::Serialize>(value: &T) -> String {
+    serde_json::to_string(value).unwrap_or_default()
+}
+
 const fn bool_word(value: bool) -> &'static str {
     if value { "true" } else { "false" }
 }
@@ -407,7 +414,7 @@ impl Ctx {
             return Ok(());
         };
         let calls = steps.iter().any(|step| {
-            step.forge_cli.contains(&forge) && crate::commands::setup::stance(self, step).acts()
+            step.forge_cli.contains(&forge) && crate::setup::report::stance(self, step).acts()
         });
         if calls && self.cli.as_os_str().is_empty() {
             self.cli = resolve_cli(forge)?;
@@ -637,6 +644,47 @@ impl Ctx {
             self.required_check.as_deref().unwrap_or_default(),
             &self.title_check,
         )
+    }
+
+    /// The setup answers a proof is judged against, by name: everything
+    /// that decides which steps run and what each one asserts, and
+    /// nothing about the host the run happened on. Each value is its
+    /// canonical text, so two runs that resolve the same target produce
+    /// the same map.
+    ///
+    /// SATISFIES setup-proof:the-proof-carries-no-secret-or-machine-coordinate
+    #[must_use]
+    pub fn proof_fields(&self) -> std::collections::BTreeMap<String, String> {
+        let mut fields = std::collections::BTreeMap::new();
+        let mut put = |key: &str, value: String| {
+            fields.insert(key.to_owned(), value);
+        };
+        put("forge", self.declared_forge.clone().unwrap_or_default());
+        put("host", self.host.clone().unwrap_or_default());
+        put("repo", self.repo.clone());
+        put("profile", canonical(&self.profile));
+        put("capabilities", canonical(&self.capabilities));
+        put("trunk", self.trunk.clone());
+        put("line_prefix", self.line_prefix.clone());
+        put("retired_branches", canonical(&self.retired_branches));
+        put("release_lines", bool_word(self.release_lines).to_owned());
+        put("integration", canonical(&self.integration));
+        put(
+            "required_check",
+            self.required_check.clone().unwrap_or_default(),
+        );
+        put(
+            "required_workflow",
+            self.required_workflow.clone().unwrap_or_default(),
+        );
+        put("bot_app_id", self.bot_app_id.clone().unwrap_or_default());
+        put("trunk_ruleset", self.trunk_ruleset.clone());
+        put("safety_ruleset", self.safety_ruleset.clone());
+        put("tag_ruleset", self.tag_ruleset.clone());
+        put("lines_ruleset", self.lines_ruleset.clone());
+        put("title_check", self.title_check.clone());
+        put("protection", canonical(&self.protection));
+        fields
     }
 
     /// The floored policy this target states, already judged at load.

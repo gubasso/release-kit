@@ -10,6 +10,8 @@ Which steps apply is the profile's answer before it is the operator's. A step re
 
 A project may run part of this chapter rather than all of it. The common shape takes the trunk half — one permanent branch, a short-lived branch per change, a squash back — and none of the release half, because it publishes nothing. Such a project names the steps it does not run in its own committed configuration, each against the reason it does not run them, and the check then judges the model the project stated: every excluded step is reported with its reason and the verdict counts the rest. An exclusion is stated rather than dropped, because a reader must be able to tell a chosen subset from an incomplete setup, and a check that can never read clean stops being a gate — a real regression arrives as one more line in a report that already carries several permanent ones. What a project excludes changes no policy: the floors below bind every step it still runs.
 
+A complete observation is worth keeping. `rk setup checkpoint` observes every step the way `rk setup check` does and, only where every applicable step holds, writes `.release-kit/setup-proof.json`: which setup contract was observed, when, by which `rk`, and each step's normalized result, with no secret and no path of the machine that ran it. The project commits it beside the setup it proves. Five records then answer five questions, and none substitutes for another: the configuration is the desired state, the landing record is what landed, the proof is the last complete observation, the run journal is what one run did on one host, and `rk setup check` is what the forge answers now. `rk setup status` judges the proof against the target offline, so a runtime that cannot hold the bot's key still learns whether the last complete observation describes this target. A step that runtime cannot observe is unknown, which proves nothing wrong. The proof never becomes current truth: a check that holds the credentials and finds a step wrong supersedes it. A forge-stored workflow secret cannot be read back either, so a green release run corroborates the setup without proving every step.
+
 ## 0. Gate the package metadata
 
 Run the registry's dry-run packaging check first, before anything that needs credentials. It catches the common rejects — a missing description, an invalid category — with no token and no remote configuration, and every later step assumes the package is publishable.
@@ -54,7 +56,7 @@ Register owner, repository, and the publish workflow's filename with the registr
 
 ## 7. Prove the automated path
 
-Cut one release end to end through [operate](./03-operate.md). Its verify step passing — the registry serves the new version, the tag and the trunk name the same commit, and the provenance verifies where the binding declares it — is the proof the next step depends on.
+Cut one release end to end through [operate](./03-operate.md). Its verify step passing — the registry serves the new version, the tag and the trunk name the same commit, and the provenance verifies where the binding declares it — is the proof the next step depends on. Then record the setup proof from a host that holds the bot's key, and commit it.
 
 ## 8. Require trusted publishing
 

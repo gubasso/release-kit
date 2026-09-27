@@ -74,11 +74,14 @@ pub enum Reason {
     PostconditionFailed,
     /// Another run holds the target, and this one wrote nothing.
     TargetBusy,
+    /// A read-only observation could not decide a step from where it ran,
+    /// and found no step wrong.
+    ObservationIncomplete,
 }
 
 /// Every reason, in declaration order; a test asserts against this so an
 /// addition is deliberate and a rename impossible.
-pub const REASONS: [Reason; 24] = [
+pub const REASONS: [Reason; 25] = [
     Reason::Usage,
     Reason::TargetNotFound,
     Reason::ForgeUndetected,
@@ -103,6 +106,7 @@ pub const REASONS: [Reason; 24] = [
     Reason::PlanNotReady,
     Reason::PostconditionFailed,
     Reason::TargetBusy,
+    Reason::ObservationIncomplete,
 ];
 
 impl Reason {
@@ -134,6 +138,7 @@ impl Reason {
             Self::PlanNotReady => "plan-not-ready",
             Self::PostconditionFailed => "postcondition-failed",
             Self::TargetBusy => "target-busy",
+            Self::ObservationIncomplete => "observation-incomplete",
         }
     }
 }
@@ -290,6 +295,7 @@ mod tests {
                 "plan-not-ready",
                 "postcondition-failed",
                 "target-busy",
+                "observation-incomplete",
             ]
         );
     }

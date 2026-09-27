@@ -28,6 +28,8 @@ use crate::setup::context::{Ctx, SECRET_VARS};
 use crate::setup::journal::Journal;
 use crate::setup::observe::{self, StepState};
 use crate::setup::process::{self, Exec, Outcome};
+use crate::setup::proof::{self, Standing};
+use crate::setup::report::{Report, Row, Stance, stance};
 use crate::setup::secrets;
 use crate::setup::steps::{Mutates, STEPS, StepSpec, spec};
 
@@ -45,54 +47,48 @@ pub fn run(args: &SetupArgs) -> Result<(), RkError> {
             forge,
             required_check,
             json,
-        }) => {
-            let mut ctx = Ctx::resolve(
+        }) => check(
+            Output::new(*json),
+            observing(
                 target,
                 repo.as_deref(),
                 forge.as_deref(),
                 required_check.as_deref(),
-            )?;
-            reject_check_flag_on_gitlab(&ctx)?;
-            // A check observes every step the target runs, so it needs the
-            // forge CLI for each one that asks the forge a question.
-            let all: Vec<&StepSpec> = STEPS.iter().collect();
-            ctx.require_cli(&all)?;
-            check(Output::new(*json), ctx)
-        }
-        Some(SetupAction::Step {
-            name,
+            )?,
+        ),
+        Some(SetupAction::Checkpoint {
             target,
             repo,
             forge,
             required_check,
-            apply,
             json,
-        }) => {
-            let selected = spec(name).ok_or_else(|| {
-                RkError::Usage(format!("unknown step '{name}'; rk setup --list names them"))
-            })?;
-            let mut ctx = Ctx::resolve(
+        }) => checkpoint(
+            Output::new(*json),
+            observing(
                 target,
                 repo.as_deref(),
                 forge.as_deref(),
                 required_check.as_deref(),
-            )?;
-            reject_check_flag_on_gitlab(&ctx)?;
-            if *apply {
-                refuse_an_excluded_step(&ctx, selected)?;
-                require_check_for(&ctx, &[selected])?;
-                // Every argument refusal has been given, so what remains
-                // is the call itself and its one prerequisite.
-                ctx.require_cli(&[selected])?;
-                execute(Output::new(*json), ctx, &[selected], "setup step")
-            } else {
-                // A preview writes nothing, but it names the command it
-                // would run, so a forge CLI it could never find is worth
-                // saying now rather than at the apply.
-                ctx.require_cli(&[selected])?;
-                preview(Output::new(*json), &ctx, &[selected])
-            }
-        }
+            )?,
+        ),
+        // No forge CLI is resolved and no run opens: the status reads a
+        // committed file and this target's own configuration alone.
+        Some(SetupAction::Status {
+            target,
+            repo,
+            forge,
+            required_check,
+            json,
+        }) => status(
+            Output::new(*json),
+            &Ctx::resolve(
+                target,
+                repo.as_deref(),
+                forge.as_deref(),
+                required_check.as_deref(),
+            )?,
+        ),
+        Some(action @ SetupAction::Step { .. }) => step(action),
         None if args.list => list(args.forge.as_deref()),
         None => {
             let target = args.target.clone().ok_or_else(|| {
@@ -130,90 +126,60 @@ pub fn run(args: &SetupArgs) -> Result<(), RkError> {
     }
 }
 
-/// Where one step stands at this target, before anything runs.
-///
-/// Applicability is the profile's answer and carries no operator reason;
-/// an exclusion is the operator's own statement about a step that does
-/// apply. An exclusion declared for a step that does not apply is
-/// redundant: it is reported as such and turns the step into no work.
-///
-/// SATISFIES forge-setup:applicability-follows-the-target-configuration
-#[derive(Debug, Clone)]
-pub(crate) enum Stance {
-    /// The step applies and the run acts on it.
-    Applies,
-    /// The target configuration does not select it, with the value that
-    /// decided so.
-    NotApplicable(String),
-    /// The target declared it does not run it, with its stated reason.
-    Excluded(String),
-    /// The target excluded a step that does not apply here.
-    Redundant {
-        /// The reason the target stated.
-        reason: String,
-        /// Why the step does not apply either way.
-        inapplicable: String,
-    },
-}
-
-impl Stance {
-    /// The word a report and an event use.
-    const fn word(&self) -> &'static str {
-        match self {
-            Self::Applies => "applicable",
-            Self::NotApplicable(_) => "not-applicable",
-            Self::Excluded(_) => "excluded",
-            Self::Redundant { .. } => "redundant",
-        }
-    }
-
-    /// Whether the run acts on the step.
-    pub(crate) const fn acts(&self) -> bool {
-        matches!(self, Self::Applies)
-    }
-
-    /// The reason alone, as an event and a check line carry it.
-    fn detail(&self) -> String {
-        match self {
-            Self::Applies => String::new(),
-            Self::NotApplicable(reason) | Self::Excluded(reason) => reason.clone(),
-            Self::Redundant {
-                reason,
-                inapplicable,
-            } => format!("{inapplicable}; the stated reason was {reason}"),
-        }
-    }
-
-    /// The same, framed by what decided it, as a preview and an apply
-    /// name it.
-    fn framed(&self) -> String {
-        match self {
-            Self::Applies => String::new(),
-            Self::NotApplicable(reason) => format!("not applicable: {reason}"),
-            Self::Excluded(reason) => {
-                format!("excluded by {}: {reason}", crate::config::CONFIG_PATH)
-            }
-            Self::Redundant { .. } => format!(
-                "{} excludes a step that does not apply here: {}",
-                crate::config::CONFIG_PATH,
-                self.detail()
-            ),
-        }
+/// `rk setup step`: preview one step, or run it under `--apply`.
+fn step(action: &SetupAction) -> Result<(), RkError> {
+    let SetupAction::Step {
+        name,
+        target,
+        repo,
+        forge,
+        required_check,
+        apply,
+        json,
+    } = action
+    else {
+        unreachable!("the dispatch routes only a step here");
+    };
+    let selected = spec(name).ok_or_else(|| {
+        RkError::Usage(format!("unknown step '{name}'; rk setup --list names them"))
+    })?;
+    let mut ctx = Ctx::resolve(
+        target,
+        repo.as_deref(),
+        forge.as_deref(),
+        required_check.as_deref(),
+    )?;
+    reject_check_flag_on_gitlab(&ctx)?;
+    if *apply {
+        refuse_an_excluded_step(&ctx, selected)?;
+        require_check_for(&ctx, &[selected])?;
+        // Every argument refusal has been given, so what remains
+        // is the call itself and its one prerequisite.
+        ctx.require_cli(&[selected])?;
+        execute(Output::new(*json), ctx, &[selected], "setup step")
+    } else {
+        // A preview writes nothing, but it names the command it
+        // would run, so a forge CLI it could never find is worth
+        // saying now rather than at the apply.
+        ctx.require_cli(&[selected])?;
+        preview(Output::new(*json), &ctx, &[selected])
     }
 }
 
-/// Where `step` stands at this target.
-pub(crate) fn stance(ctx: &Ctx, step: &StepSpec) -> Stance {
-    let inapplicable = (step.applies)(ctx);
-    match (ctx.excluded(step.name).map(str::to_owned), inapplicable) {
-        (Some(reason), Some(inapplicable)) => Stance::Redundant {
-            reason,
-            inapplicable,
-        },
-        (Some(reason), None) => Stance::Excluded(reason),
-        (None, Some(reason)) => Stance::NotApplicable(reason),
-        (None, None) => Stance::Applies,
-    }
+/// The context of a run that observes every step: a check and a
+/// checkpoint. Each asks the forge for every step the target runs, so it
+/// needs the forge CLI for each one that asks a question.
+fn observing(
+    target: &camino::Utf8PathBuf,
+    repo: Option<&str>,
+    forge: Option<&str>,
+    required_check: Option<&str>,
+) -> Result<Ctx, RkError> {
+    let mut ctx = Ctx::resolve(target, repo, forge, required_check)?;
+    reject_check_flag_on_gitlab(&ctx)?;
+    let all: Vec<&StepSpec> = STEPS.iter().collect();
+    ctx.require_cli(&all)?;
+    Ok(ctx)
 }
 
 /// Whether a full run skips this step at this target.
@@ -401,6 +367,11 @@ struct Engine {
     key: Option<secrets::KeyFile>,
     /// The run's App JWT, minted at most once; see [`app_jwt_for`].
     app_jwt: Option<String>,
+    /// Whether an unreachable key file is an observation boundary rather
+    /// than a refusal: true for a read-only check alone.
+    key_boundary: bool,
+    /// Why the named key file was unreachable, once a check found it so.
+    key_unavailable: Option<String>,
     seq: u64,
     command: &'static str,
     run_id: String,
@@ -452,6 +423,8 @@ impl Engine {
             secrets: Ctx::secret_values(),
             key: None,
             app_jwt: None,
+            key_boundary: false,
+            key_unavailable: None,
             seq: 0,
             command,
             run_id,
@@ -1369,10 +1342,21 @@ fn observe_with(engine: &mut Engine, step: &str) -> Result<StepState, RkError> {
 /// no replacement between steps can split the two. The bytes become a
 /// redaction needle the moment they are read.
 fn key_file_for(engine: &mut Engine) -> Result<Option<&secrets::KeyFile>, RkError> {
-    if engine.key.is_none() {
-        engine.key = secrets::resolve_key_file(&engine.ctx.target)?;
-        if let Some(key) = &engine.key {
-            engine.secrets.push(key.bytes.clone());
+    if engine.key.is_none() && engine.key_unavailable.is_none() {
+        match secrets::look_up_key_file(&engine.ctx.target)? {
+            secrets::KeyLookup::Absent => {}
+            secrets::KeyLookup::Found(key) => {
+                engine.secrets.push(key.bytes.clone());
+                engine.key = Some(key);
+            }
+            // A check reads the forge and changes nothing, so a key this
+            // runtime cannot reach leaves the one step that needs it
+            // undecided and lets every other step run. A run that would
+            // mutate, or record a proof, still needs the key and refuses.
+            secrets::KeyLookup::Unavailable(unavailable) if engine.key_boundary => {
+                engine.key_unavailable = Some(unavailable.message);
+            }
+            secrets::KeyLookup::Unavailable(unavailable) => return Err(unavailable.refusal()),
         }
     }
     Ok(engine.key.as_ref())
@@ -1393,6 +1377,12 @@ fn app_jwt_for(engine: &mut Engine) -> Result<Result<String, String>, RkError> {
     }
     let app_id = app_jwt::app_id(engine.ctx.bot_app_id())?;
     let key_bytes = key_file_for(engine)?.map(|key| key.bytes.clone());
+    if let Some(unreachable) = &engine.key_unavailable {
+        return Ok(Err(format!(
+            "the installation is readable only to the App itself, and this runtime cannot reach the key {} names: {unreachable}; a host that holds the key re-verifies it",
+            secrets::PRIVATE_KEY_FILE
+        )));
+    }
     let (Some(app_id), Some(key_bytes)) = (app_id, key_bytes) else {
         return Ok(Err(format!(
             "the installation is readable only to the App itself; {}",
@@ -1419,12 +1409,7 @@ fn app_jwt_for(engine: &mut Engine) -> Result<Result<String, String>, RkError> {
 }
 
 fn state_detail(state: &StepState) -> String {
-    match state {
-        StepState::Satisfied { detail, .. }
-        | StepState::Unsatisfied { detail }
-        | StepState::Inapplicable { detail }
-        | StepState::Unknown { detail } => detail.clone(),
-    }
+    state.detail().to_owned()
 }
 
 /// Materialize the step's script into the run's private directory, prove
@@ -1559,13 +1544,13 @@ fn attach_progress(
     }
 }
 
-/// `rk setup check`: observe and verify every step, report per step, and
-/// judge at the end. The mutating half is unreachable from this path: it
-/// calls only the observe functions.
-fn check(out: Output, ctx: Ctx) -> Result<(), RkError> {
-    let mut engine = Engine::open(out, ctx, "setup check", false)?;
-    let mut unsatisfied = 0usize;
-    let mut unverifiable = 0usize;
+/// Observe every step once, in table order, and render each row as it
+/// lands, so a person reads the forge calls beside the step that made
+/// them. The rows it returns are the only source of every later verdict.
+///
+/// SATISFIES setup-proof:one-report-owns-every-classification
+fn observe_all(engine: &mut Engine) -> Result<Report, RkError> {
+    let mut report = Report::default();
     for step in &STEPS {
         let clock = Instant::now();
         // A step the target declared it does not run is stated and judged
@@ -1573,86 +1558,226 @@ fn check(out: Output, ctx: Ctx) -> Result<(), RkError> {
         // code. The reason travels with it, so a reader can tell a chosen
         // subset from an incomplete setup.
         let stance = stance(&engine.ctx, step);
-        if !stance.acts() {
-            engine.out.result_line(format!(
-                "{} {} — {}",
-                stance.word(),
-                step.name,
-                stance.detail()
-            ));
-            let mut finished = engine.event(EventKind::StepFinished, Some(step.name));
-            finished.status = Some(stance.word().into());
-            finished.detail = Some(stance.detail());
-            finished.duration_ms = Some(elapsed_ms(clock));
-            engine.emit(&finished);
-            continue;
-        }
-        let state = observe_with(&mut engine, step.name)?;
-        let (label, wire) = match &state {
-            StepState::Satisfied { .. } => ("ok", "satisfied"),
-            // An optional step whose condition does not hold is stated, not
-            // judged: nothing is wrong and nothing was skipped silently.
-            StepState::Inapplicable { .. } => ("skipped", "skipped"),
-            StepState::Unsatisfied { .. } => {
-                unsatisfied += 1;
-                ("unsatisfied", "unsatisfied")
-            }
-            // A step the check cannot verify has not passed: an unreadable
-            // forge answer must never read as a clean setup.
-            StepState::Unknown { .. } => {
-                unverifiable += 1;
-                ("unknown", "unknown")
-            }
+        let row = if stance.acts() {
+            let state = observe_with(engine, step.name)?;
+            Row::observed(step, stance, &state)
+        } else {
+            Row::stated(step, stance)
         };
-        let mut line = format!("{label} {} — {}", step.name, state_detail(&state));
-        if let StepState::Satisfied {
-            limitation: Some(limit),
-            ..
-        } = &state
-        {
-            use std::fmt::Write as _;
-            let _ = write!(line, " (limitation: {limit})");
-        }
-        engine.out.result_line(line);
+        engine.out.result_line(row.line());
+        let (status, detail) = row.event_fields();
         let mut finished = engine.event(EventKind::StepFinished, Some(step.name));
-        finished.status = Some(wire.into());
-        finished.detail = Some(state_detail(&state));
+        finished.status = Some(status);
+        finished.detail = Some(detail);
         finished.duration_ms = Some(elapsed_ms(clock));
         engine.emit(&finished);
+        report.rows.push(row);
     }
-    let judged = STEPS
-        .iter()
-        .filter(|step| stance(&engine.ctx, step).acts())
-        .count();
-    if judged < STEPS.len() {
+    if report.judged() < STEPS.len() {
         engine.out.result_line(format!(
             "{} judged; the rest do not apply to this target or {} excludes them",
-            step_count(judged),
+            step_count(report.judged()),
             crate::config::CONFIG_PATH
         ));
     }
-    if unsatisfied > 0 || unverifiable > 0 {
-        let error = RkError::check_failed(
-            Diagnostic::new(
-                Reason::StateDrift,
-                format!(
-                    "{} {} not satisfied and {unverifiable} could not be verified",
-                    step_count(unsatisfied),
-                    if unsatisfied == 1 { "is" } else { "are" }
-                ),
-            )
-            .expected("every step's proof column to hold and to be readable")
-            .action(format!(
-                "rk setup --target {} --apply re-asserts them",
-                engine.ctx.target
-            )),
-        );
+    Ok(report)
+}
+
+/// `rk setup check`: observe and verify every step, report per step, and
+/// judge at the end. The mutating half is unreachable from this path: it
+/// calls only the observe functions.
+fn check(out: Output, ctx: Ctx) -> Result<(), RkError> {
+    let mut engine = Engine::open(out, ctx, "setup check", false)?;
+    engine.key_boundary = true;
+    let report = observe_all(&mut engine)?;
+    if !report.checkpointable() {
+        let error = verdict(&engine.ctx, &report);
         return Err(fail(&mut engine, error));
     }
     engine
         .out
         .next(&["rk guide release orders the first release".to_owned()]);
     engine.finish(0, None);
+    Ok(())
+}
+
+/// The check's failure, by what it found. An unsatisfied step is drift,
+/// and applying the setup is its remedy. An unknown step is an
+/// observation this runtime could not make, which proves nothing wrong,
+/// so it prescribes no apply: it names where the observation can be
+/// repeated, and what the committed proof says meanwhile. A proof never
+/// masks a step found wrong now.
+///
+/// SATISFIES setup-proof:an-unavailable-credential-is-an-observation-boundary
+/// SATISFIES setup-proof:current-evidence-overrides-the-proof
+fn verdict(ctx: &Ctx, report: &Report) -> RkError {
+    let unsatisfied = report.unsatisfied();
+    let unknown = report.unknown();
+    let standing = proof::judge(&ctx.target, &proof::subject(ctx));
+    let proven = match &standing {
+        Standing::Compatible(proof) => Some(proof),
+        _ => None,
+    };
+    if unsatisfied == 0 {
+        let state = proven.map_or_else(
+            || {
+                format!(
+                    "no setup defect was inferred; no compatible {} is committed, so the current state is unverified",
+                    proof::PROOF_PATH
+                )
+            },
+            |proof| {
+                format!(
+                    "no setup defect was inferred; the committed setup proof from {} by rk {} still matches this target's setup contract",
+                    proof.verified_at, proof.rk_version
+                )
+            },
+        );
+        return RkError::check_failed(
+            Diagnostic::new(
+                Reason::ObservationIncomplete,
+                format!(
+                    "{} could not be verified from this runtime, and none is unsatisfied",
+                    step_count(unknown)
+                ),
+            )
+            .expected("every applicable step readable from where the check runs")
+            .action("rerun rk setup check where each unknown step can be observed; its line names what it needs")
+            .target_state(state),
+        );
+    }
+    let mut message = format!(
+        "{} {} not satisfied",
+        step_count(unsatisfied),
+        if unsatisfied == 1 { "is" } else { "are" }
+    );
+    let mut action = format!(
+        "rk setup --target {} --apply re-asserts the unsatisfied ones",
+        ctx.target
+    );
+    if unknown > 0 {
+        use std::fmt::Write as _;
+        let _ = write!(
+            message,
+            ", and {unknown} could not be verified from this runtime"
+        );
+        action.push_str("; the unknown ones need a runtime that can observe what each line names");
+    }
+    let mut diagnostic = Diagnostic::new(Reason::StateDrift, message)
+        .expected("every step's proof column to hold")
+        .action(action);
+    if let Some(proof) = proven {
+        diagnostic = diagnostic.target_state(format!(
+            "this observation supersedes the committed setup proof from {} by rk {}",
+            proof.verified_at, proof.rk_version
+        ));
+    }
+    RkError::check_failed(diagnostic)
+}
+
+/// `rk setup checkpoint`: observe every step as `check` does, and commit
+/// the result only where the observation is complete. An incomplete one
+/// writes nothing, so an earlier proof stays byte for byte.
+///
+/// SATISFIES setup-proof:a-checkpoint-records-only-a-complete-observation
+fn checkpoint(out: Output, ctx: Ctx) -> Result<(), RkError> {
+    let mut engine = Engine::open(out, ctx, "setup checkpoint", false)?;
+    let report = observe_all(&mut engine)?;
+    let Some(proof) = proof::of(&engine.ctx, &report, crate::applog::now_utc()) else {
+        let error = RkError::check_failed(
+            Diagnostic::new(
+                Reason::StateDrift,
+                format!(
+                    "the observation is incomplete: {} not satisfied and {} could not be verified",
+                    step_count(report.unsatisfied()),
+                    report.unknown()
+                ),
+            )
+            .expected("every applicable step observed and holding")
+            .action(format!(
+                "rk setup check --target {} names each gap; checkpoint again once none remains",
+                engine.ctx.target
+            ))
+            .target_state(format!("{} was not written", proof::PROOF_PATH)),
+        );
+        return Err(fail(&mut engine, error));
+    };
+    if let Err(source) = proof::write(&engine.ctx.target, &proof) {
+        let error = RkError::refusal(
+            Diagnostic::new(
+                Reason::Io,
+                format!("{} cannot be written: {source}", proof::PROOF_PATH),
+            )
+            .expected("a writable .release-kit directory in the target")
+            .target_state("the earlier proof, where one exists, is unchanged"),
+        );
+        return Err(fail(&mut engine, error));
+    }
+    engine.out.result_line(format!(
+        "wrote {}: {} proven at {} by rk {}",
+        proof::PROOF_PATH,
+        step_count(proof.steps.len()),
+        proof.verified_at,
+        proof.rk_version
+    ));
+    engine.out.next(&[
+        format!("commit {} with the setup it proves", proof::PROOF_PATH),
+        format!(
+            "rk setup status --target {} reads it offline",
+            engine.ctx.target
+        ),
+    ]);
+    engine.finish(0, None);
+    Ok(())
+}
+
+/// `rk setup status`: where the committed proof stands against this
+/// target's contract now. It reads a file and resolves configuration,
+/// and nothing else: no forge, no key, no journal.
+///
+/// SATISFIES setup-proof:the-status-reads-the-proof-offline
+fn status(out: Output, ctx: &Ctx) -> Result<(), RkError> {
+    let standing = proof::judge(&ctx.target, &proof::subject(ctx));
+    out.emit(&proof::StatusDocument::of(&standing))?;
+    match &standing {
+        Standing::Absent => out.result_line(format!(
+            "setup proof: absent — {} does not exist, so no complete observation is on record",
+            proof::PROOF_PATH
+        )),
+        Standing::Compatible(proof) => out.result_line(format!(
+            "setup proof: compatible — proven {} by rk {}, and this target's setup contract has not changed since",
+            proof.verified_at, proof.rk_version
+        )),
+        Standing::Stale { proof, differences } => out.result_line(format!(
+            "setup proof: stale — proven {} by rk {}, and the setup contract changed since: {}",
+            proof.verified_at,
+            proof.rk_version,
+            differences.join(", ")
+        )),
+        Standing::Invalid { detail, .. } => {
+            out.result_line(format!("setup proof: invalid — {detail}"));
+        }
+    }
+    if let Standing::Compatible(proof) | Standing::Stale { proof, .. } = &standing {
+        for step in &proof.steps {
+            let limitation = step
+                .limitation
+                .as_ref()
+                .map_or_else(String::new, |limit| format!(" (limitation: {limit})"));
+            out.result_line(format!("  {} {}{limitation}", step.state, step.name));
+        }
+    }
+    let next = match standing {
+        Standing::Compatible(_) => format!(
+            "rk setup check --target {} observes the forge now, where this runtime can",
+            ctx.target
+        ),
+        _ => format!(
+            "rk setup checkpoint --target {}, from a host that can observe every step, records a proof",
+            ctx.target
+        ),
+    };
+    out.next(&[next]);
     Ok(())
 }
 
