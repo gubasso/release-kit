@@ -252,6 +252,9 @@ pub struct Ctx {
     /// every prerequisite — so a run cannot install one shape and then
     /// fault its own result for not being another.
     protection: crate::config::Protection,
+    /// The destinations the landing record names, or `None` where nothing
+    /// landed here. The package check claims them as release-kit's own.
+    landed: Option<Vec<String>>,
     /// Which authority carries an implementation onto this target's trunk.
     /// A local-integration trunk takes the direct push that mode's
     /// integrations end in, so the protection a run installs is not the
@@ -344,6 +347,12 @@ impl Ctx {
             .map_or_else(crate::landing::manifest::integration_forge, |held| {
                 held.git.integration
             });
+        let landed = record.as_ref().map(|held| {
+            held.files
+                .iter()
+                .map(|file| file.destination.clone())
+                .collect()
+        });
         let stated = config.as_ref().map(|held| &held.protection);
         let protection = effective_protection(stated, integration);
         Ok(Self {
@@ -366,6 +375,7 @@ impl Ctx {
             title_check: protection.title_check.clone(),
             protection,
             integration,
+            landed,
             trunk,
             line_prefix: resolved.line_prefix().to_owned(),
             profile: resolved.profile().clone(),
@@ -423,6 +433,7 @@ impl Ctx {
             // The forge-integration shape, which is what every observer
             // and request-body test here asserts; a local-mode case states it.
             integration: crate::landing::Integration::Forge,
+            landed: None,
             target,
             repo,
             forge: Some(forge),
@@ -461,6 +472,13 @@ impl Ctx {
             title_check: defaults.title_check.clone(),
             protection: defaults,
         }
+    }
+
+    /// The destinations the landing record names, or `None` where nothing
+    /// landed here.
+    #[must_use]
+    pub fn landed_destinations(&self) -> Option<&[String]> {
+        self.landed.as_deref()
     }
 
     /// Whether the run has a forge adapter to act through.

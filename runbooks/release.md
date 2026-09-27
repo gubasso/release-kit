@@ -42,7 +42,7 @@ Four traps, and the chapter's [own warnings](../method/03-operate.md) explain th
 
 ## 1. Land the work
 
-Release intent captured in the squash titles, the local check suite green, and the package still publishable — a failure found here costs seconds where the same failure after the merge costs the recovery chapter. Where the check runs a pre-commit sweep from the trunk's checkout, name the commit-time branch guard out of it: `SKIP=no-commit-to-branch`, the same form the landed hook block's comment gives a CI sweep.
+Release intent captured in the squash titles, each on a change the bot attributes to the package as [the binding](../bindings/README.md) defines, the local check suite green, and the package still publishable — a failure found here costs seconds where the same failure after the merge costs the recovery chapter. Where the check runs a pre-commit sweep from the trunk's checkout, name the commit-time branch guard out of it: `SKIP=no-commit-to-branch`, the same form the landed hook block's comment gives a CI sweep.
 
 ```bash
 just check                                    # or the binding's check command

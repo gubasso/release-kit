@@ -9,6 +9,7 @@
 
 use serde_json::Value;
 
+use crate::cargo_package::{self, Answer, POLICY_DESTINATION, Probe};
 use crate::detect::Forge;
 use crate::error::RkError;
 use crate::setup::app_jwt::{self, AppApi};
@@ -142,11 +143,6 @@ pub fn observe(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkE
     }
 }
 
-/// The policy a consumer must find in the artifact they downloaded. A
-/// reporting policy readable on the forge alone is a policy the consumer
-/// who has only the package cannot follow.
-const POLICY_DESTINATION: &str = "SECURITY.md";
-
 /// What Python's check cannot answer. PEP 517 lets a project choose its
 /// build backend, and an sdist and a wheel can carry different files, so
 /// one `python3 -m build` run supplies no listing contract across both
@@ -211,96 +207,101 @@ fn cargo_exec(ctx: &Ctx, program: &str, args: &[&str]) -> Exec {
     }
 }
 
-/// Whether the published crate carries the root policy, for the one shape
-/// Cargo answers unambiguously.
+/// Whether the published crate carries the root policy and none of
+/// release-kit's own files, for the one shape Cargo answers unambiguously.
 ///
-/// `cargo package --list` prints one path per line for one package and
-/// emits no stable delimiter when it selects several, and a nested package
-/// cannot include a file above its own root. So the listing runs only for a
-/// sole selected default member whose manifest is the target's own
-/// `Cargo.toml`; a virtual workspace, several default members, and a sole
-/// nested member each keep the successful publishability result and name
-/// the limitation instead of claiming a reach they cannot prove.
+/// [`cargo_package::probe`] lists files only for a sole selected default
+/// member whose manifest is the target's own `Cargo.toml`; a virtual
+/// workspace, several default members, and a sole nested member each keep
+/// the successful publishability result and name the limitation instead of
+/// claiming a reach they cannot prove.
+///
+/// release-plz attributes a commit to the crate when the commit changes a
+/// file the crate ships, so a packaged file every landing rewrites makes
+/// every upgrade a release with no code change. The fault names each such
+/// path and the `exclude` entry that removes it, and edits nothing.
+///
+/// SATISFIES forge-setup:a-package-check-states-policy-reach
 fn policy_in_the_crate(ctx: &Ctx, run: &mut Runner, built: &str) -> Result<StepState, RkError> {
-    let metadata = run(&cargo_exec(
-        ctx,
-        "cargo",
-        &["metadata", "--no-deps", "--format-version", "1"],
-    ))?;
-    if !metadata.success() {
-        return Ok(StepState::unknown(format!(
-            "{built}, and the policy check could not run: cargo metadata failed: {}",
-            last_line(&metadata.stderr)
-        )));
-    }
     let root_manifest = ctx.target.as_std_path().join("Cargo.toml");
-    let selected = sole_root_package(&metadata.stdout, &root_manifest);
-    let Some(manifest) = selected else {
-        return Ok(StepState::ok_with_limitation(
-            built,
-            format!(
-                "{POLICY_DESTINATION} inclusion is unproved: the package check lists files only for a single default package rooted at the target, and this workspace selects a different shape; inspect the published archive before releasing"
-            ),
-        ));
+    let probe = cargo_package::probe(&root_manifest, &[], |args| {
+        run(&cargo_exec(ctx, "cargo", args)).map(|outcome| Answer {
+            success: outcome.success(),
+            stdout: outcome.stdout,
+            stderr: outcome.stderr,
+        })
+    })?;
+    let listing = match probe {
+        Probe::Listed(listing) => listing,
+        Probe::OtherShape => {
+            return Ok(StepState::ok_with_limitation(
+                built,
+                format!(
+                    "{POLICY_DESTINATION} inclusion and the absence of release-kit's own files are unproved: the package check lists files only for a single default package rooted at the target, and this workspace selects a different shape; inspect the published archive before releasing"
+                ),
+            ));
+        }
+        Probe::MetadataFailed(stderr) => {
+            return Ok(StepState::unknown(format!(
+                "{built}, and the listing check could not run: cargo metadata failed: {}",
+                last_line(&stderr)
+            )));
+        }
+        Probe::ListingFailed(stderr) => {
+            return Ok(StepState::unknown(format!(
+                "{built}, and the listing check could not run: cargo package --list failed: {}",
+                last_line(&stderr)
+            )));
+        }
     };
-    let listing = run(&cargo_exec(
-        ctx,
-        "cargo",
-        &[
-            "package",
-            "--list",
-            "--allow-dirty",
-            "--manifest-path",
-            &manifest,
-        ],
-    ))?;
-    if !listing.success() {
-        return Ok(StepState::unknown(format!(
-            "{built}, and the policy check could not run: cargo package --list failed: {}",
-            last_line(&listing.stderr)
-        )));
-    }
-    // An exact line, never a substring: `docs/SECURITY.md` and
-    // `SECURITY.md.bak` are different files and neither is the policy.
-    let carried = String::from_utf8_lossy(&listing.stdout)
-        .lines()
-        .any(|line| line.trim() == POLICY_DESTINATION);
-    Ok(if carried {
-        StepState::ok(format!(
-            "{built}, and the published package carries {POLICY_DESTINATION}"
-        ))
-    } else {
-        StepState::not(format!(
-            "{built}, but the published package omits {POLICY_DESTINATION}: add /{POLICY_DESTINATION} to [package].include, remove the [package].exclude entry matching it, or stop ignoring the file"
-        ))
-    })
+    let forbidden = cargo_package::release_kit_paths(ctx.landed_destinations());
+    let shipped = listing.shipped(&forbidden);
+    Ok(boundary_state(
+        built,
+        listing.carries(POLICY_DESTINATION),
+        &shipped,
+    ))
 }
 
-/// The manifest path of the one selected default package rooted at the
-/// target, or `None` for every other workspace shape.
-fn sole_root_package(metadata: &[u8], root_manifest: &std::path::Path) -> Option<String> {
-    let document: Value = serde_json::from_slice(metadata).ok()?;
-    let defaults: Vec<&str> = document
-        .get("workspace_default_members")?
-        .as_array()?
-        .iter()
-        .filter_map(Value::as_str)
-        .collect();
-    let [only] = defaults.as_slice() else {
-        return None;
+/// The verdict over one listing: the policy must ship, and no file
+/// release-kit lands or owns may. Both faults share one detail, because a
+/// step reports one line.
+fn boundary_state(built: &str, carried: bool, shipped: &[&str]) -> StepState {
+    const WHY: &str = "and release-plz attributes every commit touching one of them to the package, so a landing that rewrites one asks for a release with no code change";
+    let policy_fix = format!(
+        "add /{POLICY_DESTINATION} to [package].include, remove the [package].exclude entry matching it, or stop ignoring the file"
+    );
+    let own = || {
+        let entries = cargo_package::exclude_entries(shipped)
+            .iter()
+            .map(|entry| format!("\"{entry}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        (
+            shipped.join(", "),
+            format!("add {entries} to [package].exclude, or drop them from [package].include"),
+        )
     };
-    let manifest = document
-        .get("packages")?
-        .as_array()?
-        .iter()
-        .find(|package| package.get("id").and_then(Value::as_str) == Some(*only))?
-        .get("manifest_path")?
-        .as_str()?;
-    // Compare what each path resolves to, so a symlinked or
-    // differently-spelled target directory still reads as the root.
-    let same =
-        std::fs::canonicalize(manifest).ok()? == std::fs::canonicalize(root_manifest).ok()?;
-    same.then(|| manifest.to_owned())
+    match (carried, shipped.is_empty()) {
+        (true, true) => StepState::ok(format!(
+            "{built}, and the published package carries {POLICY_DESTINATION} and no file release-kit lands or owns"
+        )),
+        (false, true) => StepState::not(format!(
+            "{built}, but the published package omits {POLICY_DESTINATION}: {policy_fix}"
+        )),
+        (true, false) => {
+            let (list, fix) = own();
+            StepState::not(format!(
+                "{built}, but the published package ships files release-kit lands or owns ({list}), {WHY}: {fix}"
+            ))
+        }
+        (false, false) => {
+            let (list, fix) = own();
+            StepState::not(format!(
+                "{built}, but the published package omits {POLICY_DESTINATION} and ships files release-kit lands or owns ({list}), {WHY}: {policy_fix}; and {fix}"
+            ))
+        }
+    }
 }
 
 /// §1: the post-merge reminder hook, judged from the target's own files;

@@ -17,6 +17,11 @@ exclude = [
     "/tests",
     "/AGENTS.md",
     "/CLAUDE.md",
+    # release-kit's own landing record and configuration, and the glossary
+    # block it lands: release-plz counts a commit touching a packaged file
+    # toward a release, so shipping them makes every landing a release.
+    "/.release-kit",
+    "/GLOSSARY.md",
     # The flake stays excluded on purpose: crates.io consumers build with
     # cargo, and the flake serves the consumers who fetch the repository.
     "/flake.nix",

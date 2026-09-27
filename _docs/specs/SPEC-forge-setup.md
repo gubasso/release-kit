@@ -306,18 +306,18 @@ Verify: `cargo nextest run -E 'binary(cli) and test(private_reporting)'`
 
 ### `forge-setup:a-package-check-states-policy-reach` — A package check states policy reach
 
-The `package-check` step MUST judge whether the published artifact carries the landed reporting policy wherever the binding has a deterministic, credential-free listing command, and MUST otherwise keep its successful publishability result and name the inclusion as unproved. The judgment MUST rest on an exact path match in that listing, never a substring, and a listing that cannot run MUST leave the reach unknown rather than reported either way. This rule owns the assertion because no forge supplies this evidence, so `forge-setup:a-check-reports-what-the-forge-enforces` does not reach it.
+The `package-check` step MUST judge whether the published artifact carries the landed reporting policy wherever the binding has a deterministic, credential-free listing command, and MUST otherwise keep its successful publishability result and name the inclusion as unproved. From that same listing it MUST fault every packaged path release-kit lands or owns other than the reporting policy (the target configuration, the landing record, and every destination the record names, or the first two alone where no record exists), naming each path and the `[package].exclude` entry that removes it, because a release bot that attributes a commit by the files it changes counts a landing that rewrites one of them as a release. Each judgment MUST rest on an exact path match in that listing, never a substring, and a listing that cannot run MUST leave both judgments unknown rather than reported either way. This rule owns the assertion because no forge supplies this evidence, so `forge-setup:a-check-reports-what-the-forge-enforces` does not reach it.
 
 #### Scenario: A sole Cargo package rooted at the target
 
 - GIVEN a Rust target whose workspace selects one default package at the repository root
 - WHEN `package-check` observes after a successful dry run
-- THEN the listing runs and an exact `SECURITY.md` line reports satisfied, its absence reports unsatisfied naming `include`, `exclude`, and ignored files, and a failed listing reports unknown while keeping the dry-run result
+- THEN the listing runs; an exact `SECURITY.md` line with no release-kit path reports satisfied; an absent policy names `include`, `exclude`, and ignored files, a packaged release-kit path names itself and its `exclude` entry, and the two together report unsatisfied in one detail; and a failed listing reports unknown while keeping the dry-run result
 
 #### Scenario: A shape whose reach no command proves
 
 - GIVEN a Rust workspace with no sole root package, a Python project, or a Bash project
 - WHEN `package-check` observes
-- THEN no listing command runs, the packaging result stays satisfied, and the report names policy inclusion as unproved with the release-time inspection that answers it
+- THEN no listing command runs, the packaging result stays satisfied, and the report names policy inclusion, and for Cargo the absence of release-kit's own files, as unproved with the release-time inspection that answers it
 
 Verify: `cargo nextest run -E 'binary(cli) and test(package_check)'`

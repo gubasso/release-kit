@@ -20,7 +20,7 @@ An implementation reaches the trunk through a short-lived branch, as one validat
 
 The release request always integrates at the forge. Its bot branch carries the computed version and the rewritten changelog, and merging it is the only event that authorizes the tag, the registry publish, the provenance, and the artifacts. Local implementation integration removes the forge from nothing in the release path.
 
-The trunk therefore carries one ordinary commit per implementation in either mode. A later push may carry several of them at once, and the release bot reads each one's release intent separately, so a batch of local integrations produces the changelog a sequence of forge merges would have produced.
+The trunk therefore carries one ordinary commit per implementation in either mode. A later push may carry several of them at once, and the release bot reads each one's release intent separately, counting only a commit [its binding](../bindings/README.md) attributes to the package, so a batch of local integrations produces the changelog a sequence of forge merges would have produced.
 
 ## The gate boundary
 

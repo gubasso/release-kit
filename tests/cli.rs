@@ -782,6 +782,25 @@ fn the_published_crate_carries_every_root() {
             "{retired}: the published crate still carries it"
         );
     }
+    // The package check this binary runs against every consumer, run
+    // against itself: no file release-kit lands or owns ships here.
+    let root = camino::Utf8Path::new(env!("CARGO_MANIFEST_DIR"));
+    let landed: Vec<String> = release_kit::landing::manifest::load(root)
+        .expect("the record reads")
+        .map(|record| {
+            record
+                .files
+                .into_iter()
+                .map(|file| file.destination)
+                .collect()
+        })
+        .unwrap_or_default();
+    let forbidden = release_kit::cargo_package::release_kit_paths(Some(&landed));
+    let shipped = release_kit::cargo_package::Listing::parse(&out.stdout).shipped(&forbidden);
+    assert!(
+        shipped.is_empty(),
+        "the published crate ships release-kit's own files: {shipped:?}"
+    );
 }
 
 #[test]
@@ -4825,6 +4844,61 @@ impl ForgeFixture {
         self.target.path().join("Cargo.toml")
     }
 
+    /// A landing record for a Rust crate on GitHub naming `destinations`,
+    /// so the package check reads what release-kit landed here.
+    fn seed_record(&self, destinations: &[&str]) {
+        let files: Vec<serde_json::Value> = destinations
+            .iter()
+            .map(|destination| {
+                serde_json::json!({
+                    "destination": destination,
+                    "kind": "rendered",
+                    "sha256": "0".repeat(64),
+                })
+            })
+            .collect();
+        std::fs::create_dir_all(self.target.path().join(".release-kit"))
+            .expect("the record dir creates");
+        std::fs::write(
+            self.target.path().join(".release-kit/manifest.json"),
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schema_version": 10,
+                "rk_version": "0.0.0",
+                "origin": "init",
+                "landed_at": "2026-09-15T00:00:00Z",
+                "profile": {
+                    "technologies": ["rust"],
+                    "forge": "github",
+                    "release": {
+                        "mode": "automatic",
+                        "driver": "rust",
+                        "style": "trunk",
+                        "line_prefix": "release/",
+                    },
+                },
+                "git": {
+                    "trunk": "master",
+                    "checkout_mode": "linked-worktree",
+                    "integration": "forge",
+                },
+                "capabilities": {
+                    "nix_packaging": false,
+                    "reporting_policy": true,
+                    "scorecard": false,
+                },
+                "parameters": {
+                    "repo": "acme/widget",
+                    "security_contact": "",
+                    "security_response": "best-effort",
+                },
+                "files": files,
+                "pins": {},
+            }))
+            .expect("the record serializes"),
+        )
+        .expect("the record writes");
+    }
+
     /// The same command with the mock directory ahead of `PATH`, so the
     /// packaging gate spawns the stand-ins rather than a real toolchain.
     fn rk_with_cargo(&self, args: &[&str]) -> Command {
@@ -5668,9 +5742,118 @@ fn the_package_check_preview_names_its_commands_and_its_boundary() {
         "cargo metadata --no-deps --format-version 1",
         "cargo package --list --allow-dirty",
         "single default package rooted at the target",
+        "none of release-kit's own files",
     ] {
         assert!(text.contains(expected), "{expected} absent: {text}");
     }
+}
+
+/// A crate that ships release-kit's own files faults, naming each path and
+/// the `exclude` entry that removes it, because a landing that rewrites
+/// one makes release-plz ask for a release with no code change. The
+/// match is exact, so a near miss ships nothing of release-kit's.
+///
+/// SATISFIES forge-setup:a-package-check-states-policy-reach
+#[test]
+fn package_check_faults_a_crate_that_ships_release_kits_own_files() {
+    let fixture = ForgeFixture::new();
+    fixture.seed_record(&["GLOSSARY.md", "nix/package.nix", "SECURITY.md"]);
+    fixture.seed_cargo(
+        &[("widget 0.1.0", fixture.root_manifest())],
+        "Cargo.toml\nSECURITY.md\nsrc/main.rs\n.release-kit/config.toml\n.release-kit/manifest.json\nGLOSSARY.md\nnix/package.nix\n",
+    );
+    let line = package_check_line(&fixture);
+    assert!(line.starts_with("unsatisfied package-check"), "{line}");
+    for expected in [
+        ".release-kit/config.toml",
+        ".release-kit/manifest.json",
+        "GLOSSARY.md",
+        "nix/package.nix",
+        "\"/.release-kit\"",
+        "\"/GLOSSARY.md\"",
+        "\"/nix/package.nix\"",
+        "[package].exclude",
+        "release-plz",
+    ] {
+        assert!(line.contains(expected), "{expected} absent: {line}");
+    }
+    assert!(!line.contains("\"/.release-kit/config.toml\""), "{line}");
+    assert!(!line.contains("\"/SECURITY.md\""), "{line}");
+    assert!(!line.contains("omits SECURITY.md"), "{line}");
+
+    let fixture = ForgeFixture::new();
+    fixture.seed_record(&["GLOSSARY.md"]);
+    fixture.seed_cargo(
+        &[("widget 0.1.0", fixture.root_manifest())],
+        "Cargo.toml\nSECURITY.md\ndocs/GLOSSARY.md\nGLOSSARY.md.bak\n",
+    );
+    let line = package_check_line(&fixture);
+    assert!(line.starts_with("ok package-check"), "{line}");
+}
+
+/// The reporting policy is the one landed file a crate must ship, so the
+/// record naming it claims nothing the crate should drop.
+///
+/// SATISFIES forge-setup:a-package-check-states-policy-reach
+#[test]
+fn package_check_lets_the_reporting_policy_ship() {
+    let fixture = ForgeFixture::new();
+    fixture.seed_record(&["SECURITY.md", "GLOSSARY.md"]);
+    fixture.seed_cargo(
+        &[("widget 0.1.0", fixture.root_manifest())],
+        "Cargo.toml\nSECURITY.md\nsrc/main.rs\n",
+    );
+    let line = package_check_line(&fixture);
+    assert!(line.starts_with("ok package-check"), "{line}");
+    assert!(
+        line.contains("carries SECURITY.md and no file release-kit lands or owns"),
+        "{line}"
+    );
+}
+
+/// A crate that omits the policy and ships release-kit's files reports
+/// both faults in its one line, each with its own fix.
+///
+/// SATISFIES forge-setup:a-package-check-states-policy-reach
+#[test]
+fn package_check_names_both_faults_in_one_detail() {
+    let fixture = ForgeFixture::new();
+    fixture.seed_record(&["GLOSSARY.md"]);
+    fixture.seed_cargo(
+        &[("widget 0.1.0", fixture.root_manifest())],
+        "Cargo.toml\n.release-kit/manifest.json\nGLOSSARY.md\n",
+    );
+    let line = package_check_line(&fixture);
+    assert!(line.starts_with("unsatisfied package-check"), "{line}");
+    for expected in [
+        "omits SECURITY.md",
+        "[package].include",
+        "ignoring",
+        "\"/.release-kit\"",
+        "\"/GLOSSARY.md\"",
+    ] {
+        assert!(line.contains(expected), "{expected} absent: {line}");
+    }
+}
+
+/// With no record, release-kit has landed nothing here, so it claims its
+/// two own files alone and never a file the target wrote itself.
+///
+/// SATISFIES forge-setup:a-package-check-states-policy-reach
+#[test]
+fn package_check_claims_only_its_own_two_files_without_a_record() {
+    let fixture = ForgeFixture::new();
+    std::fs::create_dir_all(fixture.target.path().join(".release-kit"))
+        .expect("the config dir creates");
+    fixture.seed_cargo(
+        &[("widget 0.1.0", fixture.root_manifest())],
+        "Cargo.toml\nSECURITY.md\nGLOSSARY.md\nnix/package.nix\n.release-kit/config.toml\n",
+    );
+    let line = package_check_line(&fixture);
+    assert!(line.starts_with("unsatisfied package-check"), "{line}");
+    assert!(line.contains("\"/.release-kit\""), "{line}");
+    assert!(!line.contains("\"/GLOSSARY.md\""), "{line}");
+    assert!(!line.contains("\"/nix/package.nix\""), "{line}");
 }
 
 /// A check against an unconfigured forge reports per step and exits 1.
@@ -31573,7 +31756,25 @@ fn a_local_step_runs_without_the_forge_cli() {
 /// with nothing to do: this fixture's subject is the transaction, not the
 /// project's own checks.
 fn integrate_fixture() -> (tempfile::TempDir, PathBuf) {
+    integrate_fixture_with(&serde_json::json!({ "mode": "none" }), false)
+}
+
+/// The integrate fixture with the record's release intent as given, and,
+/// where `crate_root` is set, a `Cargo.toml` on the trunk so the seat is a
+/// crate the listing can answer for.
+fn integrate_fixture_with(
+    release: &serde_json::Value,
+    crate_root: bool,
+) -> (tempfile::TempDir, PathBuf) {
     let (parent, repo) = seatable_fixture();
+    if crate_root {
+        std::fs::write(
+            repo.join("Cargo.toml"),
+            "[package]\nname = \"widget\"\nversion = \"0.1.0\"\n",
+        )
+        .expect("the crate manifest writes");
+    }
+    let technologies: Vec<&str> = if crate_root { vec!["rust"] } else { vec![] };
     std::fs::write(repo.join(".pre-commit-config.yaml"), "repos: []\n")
         .expect("the hook file writes");
     std::fs::create_dir_all(repo.join(".release-kit")).expect("the record dir creates");
@@ -31592,7 +31793,7 @@ fn integrate_fixture() -> (tempfile::TempDir, PathBuf) {
             "rk_version": "0.0.0",
             "origin": "init",
             "landed_at": "2026-09-15T00:00:00Z",
-            "profile": { "technologies": [], "release": { "mode": "none" } },
+            "profile": { "technologies": technologies, "release": release },
             "git": {
                 "trunk": "master",
                 "checkout_mode": "linked-worktree",
@@ -31633,6 +31834,170 @@ fn pre_commit_present() -> bool {
         .arg("--version")
         .output()
         .is_ok_and(|out| out.status.success())
+}
+
+/// A release driven by release-plz, as a record states it.
+fn rust_release() -> serde_json::Value {
+    serde_json::json!({
+        "mode": "automatic",
+        "driver": "rust",
+        "style": "trunk",
+        "line_prefix": "release/",
+    })
+}
+
+/// A cargo stand-in for the listing the integrate warning reads: the sole
+/// package is the seat's own crate, and it ships `listing`. The returned
+/// directory goes first on `PATH` and holds the call log.
+fn integrate_cargo(repo: &Path, listing: &str) -> tempfile::TempDir {
+    let mock = tempfile::tempdir().expect("a scratch mock dir exists");
+    let cargo = mock.path().join("cargo");
+    std::fs::write(
+        &cargo,
+        MOCK_CARGO.replace("__STATE__", &mock.path().to_string_lossy()),
+    )
+    .expect("the mock writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&cargo, std::fs::Permissions::from_mode(0o755))
+            .expect("the mock is executable");
+    }
+    let manifest = repo
+        .parent()
+        .expect("a parent")
+        .join("widget@feat-greeting/Cargo.toml");
+    std::fs::write(
+        mock.path().join("cargo_metadata"),
+        serde_json::json!({
+            "workspace_default_members": ["widget 0.1.0"],
+            "packages": [{ "id": "widget 0.1.0", "manifest_path": manifest }],
+        })
+        .to_string(),
+    )
+    .expect("the metadata seeds");
+    std::fs::write(mock.path().join("cargo_listing"), listing).expect("the listing seeds");
+    mock
+}
+
+/// One integrate preview with the mock cargo first on `PATH`.
+fn integrate_with_cargo(repo: &Path, mock: &Path, message: &str) -> std::process::Output {
+    let path = std::env::var("PATH").unwrap_or_default();
+    rk_scrubbed()
+        .env("PATH", format!("{}:{path}", mock.to_string_lossy()))
+        .args(["integrate", "feat/greeting", "--target"])
+        .arg(repo)
+        .args(["-m", message])
+        .assert()
+        .success()
+        .get_output()
+        .clone()
+}
+
+/// A feature whose squash changes no packaged file is invisible to
+/// release-plz, so the preview says so and still writes nothing.
+///
+/// SATISFIES git:a-local-integration-warns-of-an-uncounted-release
+#[test]
+fn integrate_warns_of_a_release_the_bot_will_not_count() {
+    let (_parent, repo) = integrate_fixture_with(&rust_release(), true);
+    let before = rev_parse(&repo, "master");
+    let mock = integrate_cargo(&repo, "Cargo.toml\nsrc/main.rs\n");
+    let out = integrate_with_cargo(&repo, mock.path(), "feat(greeting): add it");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("warning: the message states a feat type"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("release-plz will neither list the commit in the changelog"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("the squash would change"), "{stderr}");
+    let log = std::fs::read_to_string(mock.path().join("log")).unwrap_or_default();
+    assert!(log.contains("--locked --offline"), "{log}");
+    assert_eq!(rev_parse(&repo, "master"), before);
+}
+
+/// A message that states no release intent spawns no cargo at all.
+///
+/// SATISFIES git:a-local-integration-warns-of-an-uncounted-release
+#[test]
+fn integrate_stays_silent_for_a_type_that_states_no_release() {
+    let (_parent, repo) = integrate_fixture_with(&rust_release(), true);
+    let mock = integrate_cargo(&repo, "Cargo.toml\n");
+    let out = integrate_with_cargo(&repo, mock.path(), "docs(greeting): add it");
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("warning:"));
+    assert!(!mock.path().join("log").exists(), "no cargo call ran");
+}
+
+/// A squash that changes a packaged file is one release-plz counts.
+///
+/// SATISFIES git:a-local-integration-warns-of-an-uncounted-release
+#[test]
+fn integrate_stays_silent_when_the_squash_changes_a_packaged_file() {
+    let (_parent, repo) = integrate_fixture_with(&rust_release(), true);
+    let mock = integrate_cargo(&repo, "Cargo.toml\ngreeting.txt\n");
+    let out = integrate_with_cargo(&repo, mock.path(), "feat(greeting): add it");
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("warning:"));
+}
+
+/// Another release driver is not release-plz, so its listing is not read.
+///
+/// SATISFIES git:a-local-integration-warns-of-an-uncounted-release
+#[test]
+fn integrate_stays_silent_for_another_release_driver() {
+    let (_parent, repo) = integrate_fixture();
+    let mock = integrate_cargo(&repo, "Cargo.toml\n");
+    let out = integrate_with_cargo(&repo, mock.path(), "feat(greeting): add it");
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("warning:"));
+    assert!(!mock.path().join("log").exists(), "no cargo call ran");
+}
+
+/// A listing that cannot run proves nothing, so nothing is said.
+///
+/// SATISFIES git:a-local-integration-warns-of-an-uncounted-release
+#[test]
+fn integrate_stays_silent_when_the_listing_cannot_run() {
+    let (_parent, repo) = integrate_fixture_with(&rust_release(), true);
+    let mock = integrate_cargo(&repo, "Cargo.toml\n");
+    std::fs::write(mock.path().join("cargo_package_fail"), "1").expect("the failure seeds");
+    let out = integrate_with_cargo(&repo, mock.path(), "feat(greeting): add it");
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("warning:"));
+}
+
+/// On apply the warning comes before the gate, and the integration still
+/// lands exactly one squash commit.
+///
+/// SATISFIES git:a-local-integration-warns-of-an-uncounted-release
+#[test]
+fn integrate_warns_before_the_gate_on_apply() {
+    if !pre_commit_present() {
+        return;
+    }
+    let (_parent, repo) = integrate_fixture_with(&rust_release(), true);
+    let before = rev_parse(&repo, "master");
+    let mock = integrate_cargo(&repo, "Cargo.toml\n");
+    let path = std::env::var("PATH").unwrap_or_default();
+    let out = rk_scrubbed()
+        .env("PATH", format!("{}:{path}", mock.path().to_string_lossy()))
+        .args(["integrate", "feat/greeting", "--apply", "--target"])
+        .arg(&repo)
+        .args(["-m", "feat(greeting): add it"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("the squash changes no file"), "{stderr}");
+    let after = rev_parse(&repo, "master");
+    assert_eq!(
+        git_out(
+            &repo,
+            &["rev-list", "--count", &format!("{before}..{after}")]
+        ),
+        "1"
+    );
 }
 
 /// One local integration end to end: one squash commit on the trunk whose

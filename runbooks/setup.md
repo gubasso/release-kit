@@ -67,7 +67,7 @@ Before anything that needs credentials or cannot be undone; the binding names wh
 rk binding <tech>
 # check: what the registry rejects, for the release driver this project runs
 rk setup step package-check --target .
-# check: exits 0; the package is publishable with no token spent
+# check: exits 0; the package is publishable with no token spent and ships none of release-kit's own files
 ```
 
 ## 1. Make the trunk the sole long-lived branch

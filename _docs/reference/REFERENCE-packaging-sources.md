@@ -1,8 +1,8 @@
 # Packaging Sources
 
-External sources behind the consumer-pin rules of `SPEC-packaging.md` and the artifact-reach half of `SPEC-forge-setup.md`: what the Nix CLI, direnv, the forge, each venue `rk` publishes to, and each binding's packaging tool promise, and which rule each promise bears on.
+External sources behind the consumer-pin rules of `SPEC-packaging.md` and the artifact-reach half of `SPEC-forge-setup.md`: what the Nix CLI, direnv, the forge, each venue `rk` publishes to, and each binding's packaging tool promise, the release bot's package boundary, and which rule each promise bears on.
 
-Verified against the listed sources on 2026-09-04, the packaging-tool sections on 2026-09-11, the venue sections on 2026-09-12, and the exact-version install section on 2026-09-14.
+Verified against the listed sources on 2026-09-04, the packaging-tool sections on 2026-09-11, the venue sections on 2026-09-12, the exact-version install section on 2026-09-14, and the release-plz section on 2026-09-27.
 
 ## Venue `crates`, on `cargo install` and the mise cargo backend
 
@@ -84,6 +84,16 @@ Bearing: `packaging:the-consumer-pin-has-two-facts-and-one-mover` — discovery 
 - <https://doc.rust-lang.org/cargo/reference/manifest.html#the-exclude-and-include-fields>
 
 Bearing: `forge-setup:a-package-check-states-policy-reach` — the metadata call decides whether exactly one default package is rooted at the target, which is the one shape whose listing is unambiguous, and the listing then answers policy inclusion by exact path.
+
+## release-plz, on which commits count toward a package
+
+For each package, release-plz walks the commits since its last release and keeps a commit only when the files it changes intersect the files `cargo package --list` prints for that package at that commit. A kept commit is listed in the package's changelog and is what makes a release necessary. No configuration option admits a commit that changes only files outside the package, and the FAQ gives the same answer for a release request that opens too often. `release_commits` narrows the kept commits further by a message pattern; with it unset, every kept commit asks for a release, whatever its type.
+
+- <https://github.com/release-plz/release-plz/blob/release-plz-v0.3.160/crates/release_plz_core/src/command/update/updater.rs#L834-L865>
+- <https://release-plz.dev/docs/faq>
+- <https://release-plz.dev/docs/config#the-release_commits-field>
+
+Bearing: `forge-setup:a-package-check-states-policy-reach` — a packaged file a landing rewrites makes that landing a release, so the check faults each packaged release-kit path — and `git:a-local-integration-warns-of-an-uncounted-release` — a release-intent message on a change the listing does not reach is invisible to the bot.
 
 ## Python packaging, on the sdist and the wheel
 

@@ -14,6 +14,7 @@
   - [`git:the-manual-stage-is-the-pre-integrate-contract` — The manual stage is the pre-integrate contract](#gitthe-manual-stage-is-the-pre-integrate-contract--the-manual-stage-is-the-pre-integrate-contract)
   - [`git:a-check-declares-where-it-runs` — A check declares where it runs](#gita-check-declares-where-it-runs--a-check-declares-where-it-runs)
   - [`git:a-local-integration-is-a-transaction` — A local integration is a transaction](#gita-local-integration-is-a-transaction--a-local-integration-is-a-transaction)
+  - [`git:a-local-integration-warns-of-an-uncounted-release` — A local integration warns of an uncounted release](#gita-local-integration-warns-of-an-uncounted-release--a-local-integration-warns-of-an-uncounted-release)
   - [`git:git-and-forge-terms-stay-explicit` — Git and forge terms stay explicit](#gitgit-and-forge-terms-stay-explicit--git-and-forge-terms-stay-explicit)
   - [`git:concurrent-pull-and-merge-requests-carry-the-tested-trunk` — Concurrent pull and merge requests carry the tested trunk](#gitconcurrent-pull-and-merge-requests-carry-the-tested-trunk--concurrent-pull-and-merge-requests-carry-the-tested-trunk)
 
@@ -162,6 +163,24 @@ A local integration MUST leave the trunk where it stood unless every check passe
 - THEN it ignores the entry and the branch keeps everything, because the proof is the trunk carrying the work and never the ledger saying so
 
 Verify: `cargo nextest run -E 'test(integrate)'`
+
+### `git:a-local-integration-warns-of-an-uncounted-release` — A local integration warns of an uncounted release
+
+When a local integration previews or applies a trunk message that states release intent (a `feat` or `fix` type, a breaking `!`, or a `BREAKING CHANGE` footer) under a record naming an automatic release whose driver's bot attributes a commit to a package by the files it changes, and the squash changes no path that driver's credential-free listing prints for the sole package rooted at the target, `rk integrate` MUST warn before its gate that the bot will neither list the commit in the changelog nor count it toward a release, and MUST name both fixes: change a file the package ships, or retype the message with a type that states no release intent. The warning MUST leave the transaction exactly as it runs without it, and a listing that cannot run, another workspace shape, or another driver MUST leave the integration silent, because a warning built on an unproved listing teaches the operator to ignore it. The Rust driver is the one such driver today: release-plz reads `cargo package --list`.
+
+#### Scenario: A feature changes only excluded files
+
+- GIVEN a record whose release driver is `rust`, and a `feat` message whose squash changes only paths the crate excludes
+- WHEN `rk integrate` previews or applies it
+- THEN it warns naming the changelog, the release, and both fixes, and the preview writes nothing while the apply still integrates
+
+#### Scenario: Nothing proves the commit uncounted
+
+- GIVEN the same target whose `cargo package --list` fails, or a `docs` message, or a record naming another driver
+- WHEN `rk integrate` runs
+- THEN no warning is printed and the integration's outcome is unchanged
+
+Verify: `cargo nextest run -E 'binary(cli) and (test(integrate_warns) or test(integrate_stays_silent))'`
 
 ### `git:git-and-forge-terms-stay-explicit` — Git and forge terms stay explicit
 

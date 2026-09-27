@@ -226,9 +226,89 @@ pub fn short(oid: &str) -> String {
     oid.chars().take(7).collect()
 }
 
+/// The release intent a Conventional Commit message states, as the phrase
+/// a warning names it by, or `None` for a type that states none.
+///
+/// A breaking `!` on the subject's type or a `BREAKING CHANGE:` footer
+/// states a breaking change whatever the type; otherwise `feat` and `fix`
+/// are the two types a release bot bumps for.
+#[must_use]
+pub fn release_intent(message: &str) -> Option<&'static str> {
+    let mut lines = message.lines();
+    let subject = lines.next()?.trim();
+    let (head, _) = subject.split_once(':')?;
+    let footer = lines
+        .any(|line| line.starts_with("BREAKING CHANGE:") || line.starts_with("BREAKING-CHANGE:"));
+    if head.ends_with('!') || footer {
+        return Some("a breaking change");
+    }
+    let kind = head.split_once('(').map_or(head, |(kind, _)| kind);
+    match kind {
+        "feat" => Some("a feat type"),
+        "fix" => Some("a fix type"),
+        _ => None,
+    }
+}
+
+/// The warning for a release-intent message over a change the package's
+/// listing does not reach: release-plz will neither list the commit nor
+/// count it toward a release.
+///
+/// SATISFIES git:a-local-integration-warns-of-an-uncounted-release
+#[must_use]
+pub fn uncounted_release(intent: &str, previewed: bool) -> String {
+    let changes = if previewed {
+        "the squash would change"
+    } else {
+        "the squash changes"
+    };
+    format!(
+        "the message states {intent} and release-plz drives this target's release, but {changes} no file cargo package --list prints for the crate, so release-plz will neither list the commit in the changelog nor count it toward a release: change a file the crate ships, or retype the message with a type that states no release intent, such as docs, chore, or ci"
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Entry, Ledger, refuse_branch_name, refuse_moved_trunk, refuse_trunk_state};
+    use super::{
+        Entry, Ledger, refuse_branch_name, refuse_moved_trunk, refuse_trunk_state, release_intent,
+        uncounted_release,
+    };
+
+    #[test]
+    fn release_intent_reads_the_type_the_bang_and_the_footer() {
+        assert_eq!(release_intent("feat(cli): add it"), Some("a feat type"));
+        assert_eq!(release_intent("fix(cli): mend it"), Some("a fix type"));
+        assert_eq!(
+            release_intent("docs(cli)!: rename it"),
+            Some("a breaking change")
+        );
+        assert_eq!(
+            release_intent("chore(cli): move it\n\nBREAKING CHANGE: the flag is gone"),
+            Some("a breaking change")
+        );
+        assert_eq!(
+            release_intent("chore(cli): move it\n\nBREAKING-CHANGE: the flag is gone"),
+            Some("a breaking change")
+        );
+        assert_eq!(release_intent("docs(cli): explain it"), None);
+        assert_eq!(release_intent("refactor(cli): tidy it"), None);
+        assert_eq!(release_intent("no shape at all"), None);
+    }
+
+    #[test]
+    fn the_uncounted_release_warning_names_both_fixes() {
+        let preview = uncounted_release("a feat type", true);
+        assert!(preview.contains("the squash would change"), "{preview}");
+        let applied = uncounted_release("a fix type", false);
+        assert!(applied.contains("the squash changes no file"), "{applied}");
+        for needle in [
+            "neither list the commit in the changelog nor count it toward a release",
+            "change a file the crate ships",
+            "retype the message",
+        ] {
+            assert!(applied.contains(needle), "{applied}");
+        }
+    }
 
     fn entry(branch: &str, tip: &str) -> Entry {
         Entry {

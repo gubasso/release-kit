@@ -16,6 +16,7 @@
 //!
 //! SATISFIES git:a-local-integration-is-a-transaction
 //! SATISFIES git:the-manual-stage-is-the-pre-integrate-contract
+//! SATISFIES git:a-local-integration-warns-of-an-uncounted-release
 
 use camino::{Utf8Path, Utf8PathBuf};
 use serde::Serialize;
@@ -223,6 +224,13 @@ fn request_commands(seat: &Utf8Path, trunk: &str, branch: &str) -> Vec<String> {
 fn preview(args: &IntegrateArgs, out: Output, run: &LocalRun<'_>) -> Result<(), RkError> {
     let mut steps = Vec::new();
     let trunk_before = rev_parse(run.seat, run.trunk)?;
+    warn_if_uncounted(
+        out,
+        run,
+        args.message.as_deref().unwrap_or_default(),
+        &[&format!("{trunk_before}...{}", args.branch)],
+        true,
+    );
     steps.push("no fetch and no lock: a preview refreshes nothing".to_owned());
     steps.push(format!(
         "would rebase {} onto {}, or onto whatever the fetch brings",
@@ -301,6 +309,10 @@ fn local_path(args: &IntegrateArgs, out: Output, run: &LocalRun<'_>) -> Result<(
     // is re-observed below: a commit landing in the seat under the gate
     // would otherwise be squashed without having passed it.
     let branch_tip = rev_parse(run.seat, &args.branch)?;
+
+    // Before the gate, so the operator reads it while the trunk still
+    // stands where it stood and can stop to retype the message.
+    warn_if_uncounted(out, run, message, &[&trunk_before, &branch_tip], false);
 
     // The gate. One line, one stage, no hook identifier read.
     let gate = gate(run.seat)?;
@@ -552,6 +564,84 @@ fn moved(trunk: &str, expected: &str, now: &str) -> RkError {
             "{trunk} stands where it stood; the staged evidence names a commit it does not reach, which every prune ignores"
         )),
     )
+}
+
+/// Warn where the message states release intent and the squash changes no
+/// file the crate ships, under a record whose release bot is release-plz.
+///
+/// release-plz attributes a commit to a package only where the commit
+/// changes a file `cargo package --list` prints, so such a commit reaches
+/// neither the changelog nor a release. The checks run cheapest first, so a
+/// message stating no intent or a target another driver releases spawns no
+/// cargo. Anything that cannot answer leaves the integration silent: a
+/// warning built on an unproved listing teaches the operator to ignore it.
+/// The listing runs `--locked --offline`, so it writes nothing into the
+/// tree the gate judges.
+///
+/// SATISFIES git:a-local-integration-warns-of-an-uncounted-release
+fn warn_if_uncounted(
+    out: Output,
+    run: &LocalRun<'_>,
+    message: &str,
+    range: &[&str],
+    previewed: bool,
+) {
+    let Some(intent) = integrate::release_intent(message) else {
+        return;
+    };
+    let rust_release = crate::landing::manifest::load(run.target)
+        .ok()
+        .flatten()
+        .is_some_and(|record| {
+            let release = &record.profile.release;
+            release.mode == crate::profile::ReleaseMode::Automatic
+                && release.driver.as_deref() == Some("rust")
+        });
+    if !rust_release {
+        return;
+    }
+    let mut diff = vec!["diff", "--name-only", "--no-renames", "-z"];
+    diff.extend_from_slice(range);
+    let Ok(changed) = git(run.seat, &diff) else {
+        return;
+    };
+    if !changed.status.success() {
+        return;
+    }
+    let changed = String::from_utf8_lossy(&changed.stdout).into_owned();
+    let changed: Vec<&str> = changed
+        .split('\0')
+        .filter(|path| !path.is_empty())
+        .collect();
+    let root_manifest = run.seat.as_std_path().join("Cargo.toml");
+    let probe = crate::cargo_package::probe(&root_manifest, &["--locked", "--offline"], |args| {
+        cargo_in(run.seat, args)
+    });
+    let Ok(crate::cargo_package::Probe::Listed(listing)) = probe else {
+        return;
+    };
+    if !listing.touched_by(changed.iter().copied()) {
+        out.warn(integrate::uncounted_release(intent, previewed));
+    }
+}
+
+/// One cargo call in the seat, for the listing the warning reads.
+fn cargo_in(seat: &Utf8Path, args: &[&str]) -> Result<crate::cargo_package::Answer, ()> {
+    let mut command = std::process::Command::new("cargo");
+    for var in GIT_HOOK_VARS {
+        command.env_remove(var);
+    }
+    command
+        .current_dir(seat.as_std_path())
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map(|output| crate::cargo_package::Answer {
+            success: output.status.success(),
+            stdout: output.stdout,
+            stderr: output.stderr,
+        })
+        .map_err(|_| ())
 }
 
 /// Run the pre-integrate gate: one stage, one command.

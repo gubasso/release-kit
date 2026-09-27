@@ -14,6 +14,7 @@ pub mod applog;
 pub mod assess;
 pub mod atomic;
 pub mod branches;
+pub mod cargo_package;
 pub mod cli;
 pub mod commands;
 pub mod config;
