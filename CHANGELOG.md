@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.6](https://github.com/gubasso/release-kit/compare/v0.8.5...v0.8.6) - 2026-09-27
+
+### Fixed
+
+- *(setup/package-check)* ask no reporting policy of a target that opted out
+
 ## [0.8.5](https://github.com/gubasso/release-kit/compare/v0.8.4...v0.8.5) - 2026-09-27
 
 ### Fixed
