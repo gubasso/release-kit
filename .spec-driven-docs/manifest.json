@@ -1,6 +1,6 @@
 {
   "schema_version": 3,
-  "canon_version": "0.14.0",
+  "canon_version": "0.14.1",
   "canon_source": "https://github.com/gubasso/spec-driven-docs",
   "profile": "knowledge-base",
   "docs_root": "_docs",
@@ -76,7 +76,7 @@
     {
       "source": "_docs/specs/SPEC-spec-to-code.md",
       "destination": "_docs/specs/SPEC-spec-to-code.md",
-      "sha256": "078a8bde85b0894763c49081dcb505b3646b93327e792b857a078a61df1b9f93",
+      "sha256": "9dbc4cf57855073b75832342b85e0fd9865d14492e5af66c76b137199f795e6b",
       "baseline_sha256": "9dbc4cf57855073b75832342b85e0fd9865d14492e5af66c76b137199f795e6b"
     },
     {
