@@ -1,34 +1,41 @@
-# Missing receipt without history: a best-effort heuristic
+# Missing receipt without history: a best-effort adoption
 
 - case: missing-receipt-without-history
+- classification: adopt
+- intent: upgrade
+- provision: no
+- tasks: `adopt`
 - landing: yes
 - receipt: missing
 - history: none
 - legacy: none
-- stage: kept
+- stage: cleaned
 
 ## Situation
 
-A shallow clone with no `.release-kit/manifest.json` and one squashed commit, holding workflows that look like the convention's. `rk assess --target .` reports `brownfield`.
+A shallow clone of a repository an older release landed, with no record and no useful history. `rk status --target . --json` reads `classification` `adopt`. The operator asked to upgrade it.
+
+## Gate
+
+Present "State: `adopt`. Request: upgrade. Tasks: `adopt`. Proceed?" and wait for the operator.
 
 ## Route
 
-1. `rk guide landing` step 1a: run `rk --version` and `rk self-depend status --target .`. The installed version is the one the operator chose. No step selects, fetches, or installs another.
-2. `rk assess --target .`: `brownfield`. The migration inventory is written first.
-3. `rk guide landing` step 1c: run `rk stage --target .` and hold `<stage>` for the whole task.
-4. `rk guide landing` step 2a: read `<stage>/stage.json`, `<stage>/artifacts/`, and `<stage>/reference/`. Every present file is a `collision` line, because no receipt names it and the bytes differ.
-5. `rk guide landing` step 2b: diff each artifact against the working tree, read `.release-kit/manifest.json`, and read `git log` and `git diff` for each differing destination. `git log` shows one commit and attributes nothing.
-6. State the evidence class: neither receipt nor history, a best-effort heuristic. Report every collision as an uncertain ownership decision and ask the operator about each one. No automatic overwrite: nothing is brought to the candidate without an answer, and the production verb refuses every unattributed collision until then.
-7. `rk guide landing` step 2d: bring only the files the operator answered for to the candidate's bytes.
-8. `rk guide landing` step 3: preview `rk init --target .`, then run `rk init --target . --apply` only for a tree whose every collision the operator answered. Where it still names collisions, it exits 73 with nothing written, and the finding returns to the inventory.
-9. `rk guide landing` step 4b: `rk status --check --target .` reports the landing, or reports none where the apply refused, and the report is quoted as it stands.
-10. The task ends with questions open. `rk guide landing` step 5a is not reached. The task leaves the stage in place as recoverable evidence and says so, with its path.
+1. General pre-flight: run the pre-flight gate, then read `rk status --target . --json`, `rk self-depend status --target . --json`, and `rk setup status --target . --json`.
+2. `adopt` pre-flight: run `rk profile --target . --json`, and ask the release style explicitly.
+3. Stage, `rk guide landing` step 1c: run `rk stage --target . --json --release-style trunk` and hold `<root>`.
+4. Compare, `rk guide landing` step 2b: run `rk stage compare <root> --target . --json`. Git cannot answer, so `history.available` is false and every differing row reads `unknown`. The class is a best-effort heuristic: ask the operator about each file, and no automatic overwrite happens.
+5. Land, `rk guide landing` step 4: preview `rk adopt --stage <root> --target .`, quote every word, then run it with `--apply` and one `--replace <path>` per answered file as a gated step.
+6. Prove, `rk guide landing` step 5a: run `rk stage compare <root> --target . --json` again. Every `rendered` and `region` row reads `equal`.
+7. General post-flight: run `rk status --check --target .`, then `pre-commit run --hook-stage manual --all-files`.
+8. Clean: print `rk stage clean <root>`, wait, and run it only because the request's authority includes cleanup.
+9. Report: fill the template from observation, with every answer the operator gave.
 
 ## Authority
 
 - The request authorizes the file changes and the `rk` verbs it names. Branch, commit, push, and pull request actions are the operator's unless the request named them.
-- Nothing is copied out of `<stage>/artifacts/` into the target, and `stage.json` is offered to no verb. Production renders afresh.
-- Every uncertain ownership decision is shown to the operator, and none is taken silently.
+- Nothing is copied out of `<stage>/artifacts/` into the target, and `stage.json` is offered to no verb but through `--stage <root>`, which reads its parameters alone. Production renders afresh from the stage's parameters.
+- Every uncertain ownership decision is shown to the operator, and no file is replaced without an answer.
 
 ## Documentation
 

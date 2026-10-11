@@ -29,6 +29,10 @@ pub const SCHEMA_VERSION: i64 = 2;
 pub struct Config {
     /// Version of the authored configuration shape.
     pub schema_version: i64,
+    /// N: the open migration's identifier, which `rk migrate archive`
+    /// sets and `rk migrate close` removes. Absent while none is open, so
+    /// a closed migration leaves the file a greenfield landing writes.
+    pub migration: Option<String>,
     /// Project identity.
     pub project: Project,
     /// What the project is.
@@ -43,12 +47,15 @@ pub struct Config {
     pub setup: Setup,
     /// Names and floored policy.
     pub protection: Protection,
+    /// How every host obtains `rk`, where no manager file pins it.
+    pub acquisition: Option<Acquisition>,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
             schema_version: SCHEMA_VERSION,
+            migration: None,
             project: Project::default(),
             profile: Profile::default(),
             git: Git::default(),
@@ -56,8 +63,68 @@ impl Default for Config {
             security: Security::default(),
             setup: Setup::default(),
             protection: Protection::default(),
+            acquisition: None,
         }
     }
+}
+
+/// Where every host obtains `rk`, where no manager file records a pin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AcquisitionSource {
+    /// Each host installs `rk` itself, at the minimum or newer.
+    Host,
+}
+
+impl AcquisitionSource {
+    /// The word the file spells.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Host => "host",
+        }
+    }
+}
+
+/// The `acquisition` table: the host-install answer.
+///
+/// A project gives it where it obtains `rk` from each host's own install.
+/// A manager file records its own pin, so only the one method that leaves
+/// no file behind needs this table.
+///
+/// SATISFIES target-config:a-host-install-is-a-recorded-answer
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Acquisition {
+    /// P: how every host obtains the binary.
+    pub source: AcquisitionSource,
+    /// P: the lowest `rk` release a host may run against this project.
+    pub minimum: String,
+}
+
+impl Acquisition {
+    /// A host answer whose minimum is this binary's own release.
+    #[must_use]
+    pub fn host_at_this_release() -> Self {
+        Self {
+            source: AcquisitionSource::Host,
+            minimum: env!("CARGO_PKG_VERSION").to_owned(),
+        }
+    }
+}
+
+/// Whether a value is a release version: three numeric parts, then an
+/// optional pre-release or build suffix.
+fn is_release_version(value: &str) -> bool {
+    let core = value.split(['-', '+']).next().unwrap_or_default();
+    let parts: Vec<&str> = core.split('.').collect();
+    parts.len() == 3
+        && parts
+            .iter()
+            .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()))
+        && value[core.len()..]
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '+'))
 }
 
 /// The `project` table: identity.
@@ -127,6 +194,9 @@ pub struct Capabilities {
     /// The value stays a string here so an absent key and an explicit `off`
     /// stay distinguishable; the resolution parses it.
     pub code_scanning: Option<String>,
+    /// P: opt-in workflow guards: the agent and commit policy lines, the
+    /// glossary, the workflow hooks, and the two workflow setup steps.
+    pub workflow_guards: Option<bool>,
 }
 
 /// The compiled trunk, used where neither a configuration nor a record answers.
@@ -552,8 +622,29 @@ fn parse(text: &str) -> Result<Config, RkError> {
         canonical_response(response).map_err(invalid)?;
     }
     exclusions(&config.setup.excluded_steps)?;
+    if let Some(acquisition) = &config.acquisition
+        && !is_release_version(&acquisition.minimum)
+    {
+        return Err(invalid(format!(
+            "acquisition.minimum is {}, which is no release version; write one such as {}",
+            acquisition.minimum,
+            env!("CARGO_PKG_VERSION")
+        )));
+    }
+    migration_key(&config)?;
     floors::check(&config)?;
     Ok(config)
+}
+
+/// Judge the open migration's key: it names a workspace below the state
+/// root, so only an identifier the archive writes may stand there.
+fn migration_key(config: &Config) -> Result<(), RkError> {
+    match &config.migration {
+        Some(id) if !crate::migrate::is_id(id) => Err(invalid(format!(
+            "migration is {id}, which is no migration identifier; rk migrate archive writes one such as 20261009T140205Z (target-config:an-open-migration-is-one-top-level-key)"
+        ))),
+        _ => Ok(()),
+    }
 }
 
 /// Judge the declared exclusions: every id names a step this binary runs,
@@ -609,11 +700,19 @@ fn distance(left: &str, right: &str) -> usize {
 /// Write the authored template with TOML-escaped scalar substitutions.
 ///
 /// # Errors
-/// Returns invalid configuration or I/O failures before or during the atomic write.
+/// Returns invalid configuration, a configuration path a symlink redirects,
+/// or I/O failures before or during the atomic write.
 pub fn write(target: &Path, config: &Config) -> Result<(), RkError> {
     let bytes = render(config)?;
     parse(&String::from_utf8_lossy(&bytes))?;
-    crate::atomic::write(&target.join(CONFIG_PATH), &bytes)?;
+    write_checked(target, &bytes)
+}
+
+/// Write `bytes` as the target's configuration, once
+/// [`check_writable`] holds.
+fn write_checked(target: &Path, bytes: &[u8]) -> Result<(), RkError> {
+    check_writable(target)?;
+    crate::atomic::write(&target.join(CONFIG_PATH), bytes)?;
     Ok(())
 }
 
@@ -768,6 +867,16 @@ fn fields(config: &Config) -> Result<Vec<(&'static str, Option<toml_edit::Value>
             ),
         ),
         (
+            "RK_CONFIG_CAPABILITIES_WORKFLOW_GUARDS",
+            Some(
+                config
+                    .capabilities
+                    .workflow_guards
+                    .ok_or_else(|| invalid("capabilities.workflow_guards is unresolved"))?
+                    .into(),
+            ),
+        ),
+        (
             "RK_CONFIG_SECURITY_ADVISORIES",
             Some(config.security.advisories.clone().into()),
         ),
@@ -809,6 +918,20 @@ fn fields(config: &Config) -> Result<Vec<(&'static str, Option<toml_edit::Value>
         (
             "RK_CONFIG_SETUP_BOT_APP_ID",
             Some(config.setup.bot.app_id.clone().into()),
+        ),
+        (
+            "RK_CONFIG_ACQUISITION_SOURCE",
+            config
+                .acquisition
+                .as_ref()
+                .map(|answer| answer.source.as_str().into()),
+        ),
+        (
+            "RK_CONFIG_ACQUISITION_MINIMUM",
+            config
+                .acquisition
+                .as_ref()
+                .map(|answer| answer.minimum.clone().into()),
         ),
     ];
     fields.extend(
@@ -991,7 +1114,7 @@ const DERIVED_POLICY_KEYS: [&str; 3] = [
 ];
 
 /// The keys a landing writes back: every class P answer.
-const PARAMETER_KEYS: [&str; 22] = [
+const PARAMETER_KEYS: [&str; 23] = [
     "project.repo",
     "profile.technologies",
     "profile.forge",
@@ -1012,6 +1135,7 @@ const PARAMETER_KEYS: [&str; 22] = [
     "capabilities.reporting_policy",
     "capabilities.scorecard",
     "capabilities.code_scanning",
+    "capabilities.workflow_guards",
     "security.contact",
     "security.response",
     // The release gate's two answers. One names the check the gate
@@ -1021,16 +1145,217 @@ const PARAMETER_KEYS: [&str; 22] = [
     "schema_version",
 ];
 
+/// The configuration text with the acquisition answer recorded, and
+/// whether that changes anything.
+///
+/// An existing file keeps every byte but the `acquisition` table. A target
+/// with no file gets one holding the schema and the answer alone: every
+/// other table takes its compiled default, and the landing that follows
+/// rewrites the file rather than replacing it, so the answer survives it.
+///
+/// # Errors
+/// Returns a config-invalid refusal for a file that does not parse, and
+/// preserves I/O errors.
+pub fn with_acquisition(target: &Path, answer: &Acquisition) -> Result<(String, bool), RkError> {
+    let path = target.join(CONFIG_PATH);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(error.into()),
+    };
+    if text.is_empty() {
+        let template = crate::embedded::BLOCKS
+            .get_file("acquisition-config.toml.in")
+            .and_then(include_dir::File::contents_utf8)
+            .ok_or_else(|| invalid("the binary lacks its acquisition template"))?;
+        let mut fresh = template.as_bytes().to_vec();
+        for (token, value) in [
+            (
+                "RK_CONFIG_SCHEMA_VERSION",
+                toml_edit::Value::from(SCHEMA_VERSION),
+            ),
+            (
+                "RK_CONFIG_ACQUISITION_SOURCE",
+                toml_edit::Value::from(answer.source.as_str()),
+            ),
+            (
+                "RK_CONFIG_ACQUISITION_MINIMUM",
+                toml_edit::Value::from(answer.minimum.clone()),
+            ),
+        ] {
+            fresh =
+                crate::landing::substitute(&fresh, token.as_bytes(), value.to_string().as_bytes());
+        }
+        let fresh = String::from_utf8(fresh).map_err(|error| invalid(error.to_string()))?;
+        parse(&fresh)?;
+        return Ok((fresh, true));
+    }
+    let held = parse(&text)?;
+    if held.acquisition.as_ref() == Some(answer) {
+        return Ok((text, false));
+    }
+    let text = current_text(&text)?;
+    let mut document = text
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|error| invalid(error.to_string()))?;
+    if !document.contains_table("acquisition") {
+        let mut table = toml_edit::Table::new();
+        table.decor_mut().set_prefix("\n");
+        document.insert("acquisition", toml_edit::Item::Table(table));
+    }
+    let table = document
+        .get_mut("acquisition")
+        .and_then(toml_edit::Item::as_table_mut)
+        .ok_or_else(|| invalid("acquisition must be a table"))?;
+    for (key, value, note) in [
+        (
+            "source",
+            answer.source.as_str().to_owned(),
+            " P: host where every host installs rk itself; absent where a manager file pins it",
+        ),
+        (
+            "minimum",
+            answer.minimum.clone(),
+            " P: the lowest rk release a host may run against this project",
+        ),
+    ] {
+        let kept = table
+            .get(key)
+            .and_then(toml_edit::Item::as_value)
+            .map(|held| held.decor().clone());
+        let mut value = toml_edit::Value::from(value);
+        match kept {
+            Some(decor) => *value.decor_mut() = decor,
+            None => value.decor_mut().set_suffix(format!(" #{note}")),
+        }
+        table.insert(key, toml_edit::Item::Value(value));
+    }
+    let next = document.to_string();
+    parse(&next)?;
+    Ok((next, true))
+}
+
+impl Config {
+    /// Whether this configuration states an open migration and nothing
+    /// else: the file the archive writes where none existed.
+    #[must_use]
+    pub fn states_only_a_migration(&self) -> bool {
+        self.migration.is_some()
+            && Self {
+                migration: None,
+                ..self.clone()
+            } == Self::default()
+    }
+}
+
+/// The text with the top-level `migration` key set, or removed where `id`
+/// is `None`, every other byte kept.
+///
+/// # Errors
+///
+/// Refuses text that is not TOML or not a configuration.
+pub fn with_migration(text: &str, id: Option<&str>) -> Result<String, RkError> {
+    let mut document = text
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|error| invalid(error.to_string()))?;
+    let root = document.as_table_mut();
+    match id {
+        Some(id) => {
+            root.insert("migration", toml_edit::value(id));
+            // The key sits beside `schema_version`, ahead of every table.
+            root.sort_values_by(|a, _, b, _| {
+                let rank = |key: &toml_edit::Key| match key.get() {
+                    "schema_version" => 0,
+                    "migration" => 1,
+                    _ => 2,
+                };
+                rank(a).cmp(&rank(b))
+            });
+        }
+        None => {
+            root.remove("migration");
+        }
+    }
+    let next = document.to_string();
+    parse(&next)?;
+    Ok(next)
+}
+
+/// Refuse a configuration path that does not lead straight into the
+/// target.
+///
+/// A symlinked directory or file would carry a write out of the target,
+/// and a directory or file of another kind stands in its way.
+///
+/// # Errors
+///
+/// A `state-drift` refusal naming the path.
+pub fn check_writable(target: &Path) -> Result<(), RkError> {
+    let file = target.join(CONFIG_PATH);
+    for (path, directory) in [(file.parent(), true), (Some(file.as_path()), false)] {
+        let Some(path) = path else { continue };
+        let Ok(metadata) = std::fs::symlink_metadata(path) else {
+            continue;
+        };
+        let kind = metadata.file_type();
+        let fits = if directory {
+            kind.is_dir()
+        } else {
+            kind.is_file()
+        };
+        if !fits {
+            return Err(RkError::refusal(
+                Diagnostic::new(
+                    Reason::StateDrift,
+                    format!(
+                        "{} is a symlink or not a regular {}, so a configuration write would not stay in the target",
+                        path.display(),
+                        if directory { "directory" } else { "file" }
+                    ),
+                )
+                .expected(format!("{CONFIG_PATH} as a regular file in a regular directory"))
+                .action("replace the symlink with the directory or file it stands for")
+                .target_state("unchanged"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Set or remove the open migration in the target's configuration,
+/// writing a file that states the key alone where none exists.
+///
+/// # Errors
+///
+/// Refuses a configuration path a symlink redirects, an invalid
+/// configuration, and propagates a write failure.
+pub fn set_migration(target: &Path, id: Option<&str>) -> Result<(), RkError> {
+    check_writable(target)?;
+    let path = target.join(CONFIG_PATH);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if id.is_none() {
+                return Ok(());
+            }
+            format!("schema_version = {SCHEMA_VERSION}\n")
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let next = with_migration(&current_text(&text)?, id)?;
+    write_checked(target, next.as_bytes())
+}
+
 /// Change one landing parameter while preserving comments and table ordering.
 ///
 /// # Errors
-/// Refuses an invalid key, invalid resulting content, or unreadable file; writes atomically.
+/// Refuses an invalid key, invalid resulting content, an unreadable file, or
+/// a configuration path a symlink redirects; writes atomically.
 pub fn rewrite_key(target: &Path, key: &str, value: toml_edit::Value) -> Result<(), RkError> {
     let path = target.join(CONFIG_PATH);
     let text = std::fs::read_to_string(&path)?;
     let next = rewrite_text(&text, key, Some(value))?;
-    crate::atomic::write(&path, next.as_bytes())?;
-    Ok(())
+    write_checked(target, next.as_bytes())
 }
 
 /// The text with `key` set to `value`, or removed where `value` is
@@ -1364,7 +1689,7 @@ fn apply_key(
         item = &mut item[segment];
     }
     if let Some(old) = item.get(last).and_then(toml_edit::Item::as_value) {
-        if old.to_string().trim() == value.to_string().trim() {
+        if same_value(old, &value) {
             return Ok(false);
         }
         *value.decor_mut() = old.decor().clone();
@@ -1378,6 +1703,16 @@ fn apply_key(
     }
     item[last] = toml_edit::Item::Value(value);
     Ok(true)
+}
+
+/// Whether two values carry the same data however each is spelled: the
+/// quote style, an escape, and the decor do not count, so an equal value
+/// keeps the operator's own text.
+fn same_value(old: &toml_edit::Value, new: &toml_edit::Value) -> bool {
+    let parsed = |value: &toml_edit::Value| {
+        format!("v = {}", value.to_string().trim()).parse::<toml::Table>()
+    };
+    matches!((parsed(old), parsed(new)), (Ok(old), Ok(new)) if old == new)
 }
 
 /// Resolved landing input, including every key a preview would write.
@@ -1453,6 +1788,7 @@ impl Plan {
                     .map_or("off", crate::landing::Provider::as_str)
                     .to_owned(),
             ),
+            workflow_guards: Some(params.workflow_guards()),
         };
         resolved.security.contact = Some(params.security_contact().to_owned());
         resolved.security.response = Some(params.security_response().to_owned());
@@ -1462,10 +1798,17 @@ impl Plan {
         params
             .required_workflow()
             .clone_into(&mut resolved.setup.required_workflow);
-        let content = if let Some(text) = text.filter(|_| existing.is_some()) {
+        // A file that states an open migration and nothing else is the one
+        // the archive wrote ahead of the landing: the landing renders the
+        // template a greenfield target takes and keeps the key, so closing
+        // the migration leaves exactly the greenfield file.
+        let bare = existing.is_some_and(Config::states_only_a_migration);
+        let content = if let Some(text) = text.filter(|_| existing.is_some() && !bare) {
             rewrite_all(text, parameter_values(&resolved))?
         } else {
-            String::from_utf8(render(&resolved)?).map_err(|e| invalid(e.to_string()))?
+            let rendered =
+                String::from_utf8(render(&resolved)?).map_err(|e| invalid(e.to_string()))?;
+            with_migration(&rendered, resolved.migration.as_deref())?
         };
         parse(&content)?;
         Ok(Self {
@@ -1482,10 +1825,10 @@ impl Plan {
     /// Write the prepared configuration before the landing record.
     ///
     /// # Errors
-    /// Propagates an atomic write failure.
+    /// Refuses a configuration path a symlink redirects, and propagates an
+    /// atomic write failure.
     pub fn apply(&self, target: &Path) -> Result<(), RkError> {
-        crate::atomic::write(&target.join(CONFIG_PATH), self.content.as_bytes())?;
-        Ok(())
+        write_checked(target, self.content.as_bytes())
     }
 }
 
@@ -1573,6 +1916,9 @@ fn parameter_values(config: &Config) -> Vec<(&'static str, Option<toml_edit::Val
     }
     if let Some(value) = config.capabilities.code_scanning.clone() {
         values.push(("capabilities.code_scanning", Some(value.into())));
+    }
+    if let Some(value) = config.capabilities.workflow_guards {
+        values.push(("capabilities.workflow_guards", Some(value.into())));
     }
     // An empty contact is an answer, not an absence: it resets the landed
     // policy to the forge's own prose, so it projects like any other value.
@@ -1735,7 +2081,7 @@ pub fn line_prefix_of(target: &Path) -> Result<String, RkError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CONFIG_PATH, Config, load, parse, rewrite_key, trunk_of, write};
+    use super::{CONFIG_PATH, Config, load, parse, rewrite_key, set_migration, trunk_of, write};
     use crate::landing::{CheckoutMode, Integration, Style};
     use crate::profile::ReleaseMode;
 
@@ -1766,6 +2112,7 @@ mod tests {
                 reporting_policy: Some(true),
                 scorecard: Some(false),
                 code_scanning: Some("off".to_owned()),
+                workflow_guards: Some(false),
             },
             // Writing states both security answers, so a reader sees the
             // policy the target landed rather than an implied one.
@@ -1783,6 +2130,41 @@ mod tests {
             },
             ..Config::default()
         }
+    }
+
+    /// A symlinked configuration directory or file would carry a write out
+    /// of the target, so every writer refuses it and writes nothing.
+    #[test]
+    fn a_symlinked_configuration_path_refuses_every_writer() {
+        let outside = tempfile::tempdir().expect("an outside directory exists");
+        let text = "schema_version = 2\n";
+        std::fs::write(outside.path().join("config.toml"), text).expect("writes");
+        let linked_dir = tempfile::tempdir().expect("a tempdir");
+        std::os::unix::fs::symlink(outside.path(), linked_dir.path().join(".release-kit"))
+            .expect("links the directory");
+        let linked_file = tempfile::tempdir().expect("a tempdir");
+        std::fs::create_dir_all(linked_file.path().join(".release-kit")).expect("mkdir");
+        std::os::unix::fs::symlink(
+            outside.path().join("config.toml"),
+            linked_file.path().join(CONFIG_PATH),
+        )
+        .expect("links the file");
+        for dir in [&linked_dir, &linked_file] {
+            let target = dir.path();
+            let refusals = [
+                write(target, &resolved_defaults()).expect_err("write refuses"),
+                rewrite_key(target, "git.trunk", "main".into()).expect_err("rewrite refuses"),
+                set_migration(target, Some("20261009T140205Z")).expect_err("the key refuses"),
+            ];
+            for error in refusals {
+                assert_eq!(error.exit_code(), 73, "{error}");
+                assert!(error.to_string().contains("symlink"), "{error}");
+            }
+        }
+        assert_eq!(
+            std::fs::read_to_string(outside.path().join("config.toml")).expect("reads"),
+            text
+        );
     }
 
     #[test]
@@ -1932,6 +2314,7 @@ mod tests {
         config.capabilities.reporting_policy = Some(false);
         config.capabilities.scorecard = Some(true);
         config.capabilities.code_scanning = Some("semgrep".to_owned());
+        config.capabilities.workflow_guards = Some(true);
         // The escaping subject moved to the one unrestricted string in this
         // table: `contact` is now a class P value the reader holds to a
         // single control-free line, so it can carry neither.
@@ -2132,6 +2515,25 @@ mod tests {
         );
     }
 
+    /// An equal value spelled another way is no change: the quote style
+    /// and an escape stay the operator's.
+    #[test]
+    fn an_equal_value_keeps_its_spelling() {
+        let original = "schema_version = 2\n\n[profile.release]\nmode = 'automatic'\nstyle = 'tr\\u0075nk' # ours\n";
+        let original = original.replace("'tr\\u0075nk'", "\"tr\\u0075nk\"");
+        let text = super::rewrite_text(&original, "profile.release.style", Some("trunk".into()))
+            .expect("the style rewrites");
+        assert_eq!(text, original, "an equal value is rewritten");
+        let quoted =
+            "schema_version = 2\n\n[profile.release]\nmode = 'automatic'\nstyle = 'trunk' # ours\n";
+        let text = super::rewrite_text(quoted, "profile.release.style", Some("trunk".into()))
+            .expect("the style rewrites");
+        assert_eq!(
+            text, quoted,
+            "a literal string equal to the value is rewritten"
+        );
+    }
+
     #[test]
     fn rewrite_key_preserves_comments() {
         let dir = tempfile::tempdir().expect("a target exists");
@@ -2241,6 +2643,33 @@ mod tests {
             .expect_err("the reader refuses it too")
             .to_string();
         assert!(refusal.contains("security.response"), "{refusal}");
+    }
+
+    /// SATISFIES target-config:an-open-migration-is-one-top-level-key
+    /// The key names a workspace below the state root, so a value that is
+    /// no identifier refuses before any verb joins it to a path.
+    #[test]
+    fn a_migration_key_that_is_no_identifier_refuses() {
+        for id in ["20261009T140205Z", "20261009T140205Z-2"] {
+            let config = parse(&format!("schema_version = 2\nmigration = '{id}'\n"))
+                .expect("an identifier parses");
+            assert_eq!(config.migration.as_deref(), Some(id));
+        }
+        for id in [
+            "../../elsewhere",
+            "20261009T140205Z-1",
+            "",
+            "20261009T140205\u{e9}",
+            "\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}",
+        ] {
+            let refusal = parse(&format!("schema_version = 2\nmigration = '{id}'\n"))
+                .expect_err("a value that is no identifier refuses")
+                .to_string();
+            assert!(
+                refusal.contains("no migration identifier"),
+                "{id}: {refusal}"
+            );
+        }
     }
 
     /// SATISFIES target-config:an-unanswered-key-is-absent-and-not-empty

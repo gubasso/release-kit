@@ -1,6 +1,6 @@
 {
-  "schema_version": 10,
-  "rk_version": "0.8.6",
+  "schema_version": 11,
+  "rk_version": "0.8.7",
   "origin": "adopt",
   "landed_at": "2026-08-30T00:14:29Z",
   "profile": {
@@ -24,7 +24,8 @@
     "nix_packaging": false,
     "reporting_policy": true,
     "scorecard": true,
-    "code_scanning": "codeql"
+    "code_scanning": "codeql",
+    "workflow_guards": true
   },
   "parameters": {
     "repo": "gubasso/release-kit",
@@ -63,7 +64,7 @@
     {
       "destination": "AGENTS.md",
       "kind": "rendered",
-      "sha256": "34873bcfae40e988c756e03fa42759756e038a22abbfbb8204985d63cbb75541",
+      "sha256": "68aff6f88f758755ce2d066d6bcbdba5562589bdc7945db4e6e8cab3ef1ae5c3",
       "placement": "region"
     },
     {

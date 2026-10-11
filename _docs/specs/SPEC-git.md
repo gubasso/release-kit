@@ -76,7 +76,7 @@ Verify: `cargo nextest run -E 'test(the_trunk_branch_comes_from_the_config) or t
 
 ### `git:checkout-mode-selects-where-a-topic-branch-opens` — Checkout mode selects where a topic branch opens
 
-The checkout mode, `git.checkout_mode`, MUST be one of `linked-worktree` and `main-worktree`, MUST decide only which working tree a topic branch opens in, and MUST change no branch semantics: neither the branching method, nor the rebase policy, nor the merge policy.
+The checkout mode, `git.checkout_mode`, MUST be one of `linked-worktree` and `main-worktree`, MUST decide only which working tree a topic branch opens in, as the default of the helper verbs and, under the workflow guards, as whether the location guard lands, and MUST change no branch semantics: neither the branching method, nor the rebase policy, nor the merge policy. A landing MUST NOT ask for it, because it renders nothing the release process needs, and it stays a configuration value with its compiled default.
 
 #### Scenario: The mode value is renamed in the configuration vocabulary
 

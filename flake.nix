@@ -7,8 +7,8 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    # This repository's docs gate, taken as a dev dependency the way rk depend
-    # serves the fragment. The tag in this URL is the version and flake.lock is
+    # This repository's docs gate, taken as a dev dependency through a flake
+    # input. The tag in this URL is the version and flake.lock is
     # the content pin; nothing else in this repository names an sdd version.
     # The predecessor was a revision installed by a CI step, because the last
     # release then carried neither a Nix package nor the gates this instance
@@ -17,7 +17,7 @@
     # spec-driven-docs, with the URL's tag moved to match, followed by sdd
     # upgrade where the release moves the canon.
     spec-driven-docs = {
-      url = "github:gubasso/spec-driven-docs/v0.8.1";
+      url = "github:gubasso/spec-driven-docs/v0.14.0";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };

@@ -35,9 +35,18 @@ pub enum Mutates {
 /// check, and an apply all answer alike.
 pub type Applies = fn(&Ctx) -> Option<String>;
 
-/// Every step applies wherever the run stands: the local ones.
-const fn always(_: &Ctx) -> Option<String> {
-    None
+/// A step that only shapes how the project works applies only where the
+/// target opted into the workflow guards.
+fn needs_workflow_guards(ctx: &Ctx) -> Option<String> {
+    (!ctx.capabilities.workflow_guards()).then(|| {
+        "capabilities.workflow_guards is false, so the workflow guards are not selected".to_owned()
+    })
+}
+
+/// The forge's merge cleanup serves the workflow guards at a forge this
+/// release drives.
+fn needs_adapter_and_guards(ctx: &Ctx) -> Option<String> {
+    needs_adapter(ctx).or_else(|| needs_workflow_guards(ctx))
 }
 
 /// A step that calls the forge applies only where the profile names one
@@ -182,7 +191,7 @@ pub const STEPS: [StepSpec; 15] = [
         optional: false,
         forge_cli: &[Forge::Github, Forge::Gitlab],
         prereqs: &["default-branch"],
-        applies: needs_adapter,
+        applies: needs_adapter_and_guards,
     },
     StepSpec {
         name: "branch-reminder",
@@ -193,7 +202,7 @@ pub const STEPS: [StepSpec; 15] = [
         optional: false,
         forge_cli: &[],
         prereqs: &[],
-        applies: always,
+        applies: needs_workflow_guards,
     },
     StepSpec {
         name: "ci-permissions",
@@ -349,6 +358,29 @@ mod tests {
             .filter(|step| (step.applies)(&ctx).is_none())
             .map(|step| step.name)
             .collect()
+    }
+
+    /// The two workflow steps follow the workflow guards: without them,
+    /// each reports why it does not apply, and every other step answers
+    /// as before.
+    #[test]
+    fn the_workflow_steps_follow_the_workflow_guards() {
+        let mut ctx = ctx(Some("github"), ReleaseMode::Automatic);
+        ctx.capabilities.workflow_guards = Some(false);
+        for name in ["merge-cleanup", "branch-reminder"] {
+            let step = spec(name).expect("the step exists");
+            let reason = (step.applies)(&ctx).expect("the step does not apply");
+            assert!(reason.contains("capabilities.workflow_guards"), "{reason}");
+        }
+        for name in [
+            "default-branch",
+            "single-trunk",
+            "protect-trunk",
+            "auto-merge",
+        ] {
+            let step = spec(name).expect("the step exists");
+            assert_eq!((step.applies)(&ctx), None, "{name}");
+        }
     }
 
     /// SATISFIES forge-setup:applicability-follows-the-target-configuration

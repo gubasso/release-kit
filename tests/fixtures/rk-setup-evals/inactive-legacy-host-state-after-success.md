@@ -1,6 +1,10 @@
-# Inactive legacy state: named after a passing landing
+# Inactive legacy host state: removed by name after a green landing
 
 - case: inactive-legacy-host-state-after-success
+- classification: upgrade
+- intent: upgrade
+- provision: no
+- tasks: `upgrade`
 - landing: yes
 - receipt: present
 - history: useful
@@ -9,26 +13,30 @@
 
 ## Situation
 
-The operator updated `rk` from a 0.4.x release after `rk guide landing` step 1b found no active operation. The state root still holds inactive stored plans, results, run journals, and a release cache. The request's authority includes cleanup.
+A target landed by a 0.4.x release whose stored plans are all inactive. `rk status --target . --json` reads `classification` `upgrade`, and `legacy_state` lists each path with `active` false. The operator asked to upgrade, with cleanup.
+
+## Gate
+
+Present "State: `upgrade`. Request: upgrade. Tasks: `upgrade`. Proceed?" and wait for the operator.
 
 ## Route
 
-1. `rk guide landing` step 1a: run `rk --version` and `rk self-depend status --target .`. The installed version is the one the operator chose. No step selects, fetches, or installs another.
-2. `rk guide landing` step 1b, recorded before the update: no active operation, and each inactive path written down as local evidence, with why it is obsolete: each stored plan at `<state root>/plans/<plan-id>/` from `rk reconcile list`, each run journal at `<state root>/runs/<run-id>/` from `rk runs list`, and the release cache at `<state root>/release/`, listed directly.
-3. `rk guide landing` step 1c: run `rk stage --target .` and hold `<stage>` for the whole task.
-4. `rk guide landing` step 2a: read `<stage>/stage.json`, `<stage>/artifacts/`, and `<stage>/reference/`.
-5. `rk guide landing` step 2b: diff each artifact against the working tree, read `.release-kit/manifest.json`, and read `git log` and `git diff` for each differing destination.
-6. State the evidence class: receipt plus useful history.
-7. `rk guide landing` step 3: preview `rk upgrade --target .`, then run `rk upgrade --target . --apply`.
-8. `rk guide landing` step 4: compare `git diff --stat` with `<stage>/artifacts/`, then run `rk status --check --target .`, `rk setup check --target .`, and the project's checks.
-9. `rk guide landing` step 5a: show `rk stage clean <stage>`. Run it only because the request's authority includes cleanup.
-10. `rk guide landing` step 5b: show each recorded exact path, every `<state root>/plans/<plan-id>/`, every `<state root>/runs/<run-id>/`, and `<state root>/release/`, and why each is obsolete. Confirm again that no active old operation remains. For each path, resolve it, confirm it sits under one of those three classes, print its complete contents with `find`, and have the operator review that list. Remove each by name, one at a time, only under the explicit cleanup authorization the request carries. No `rk` verb removes this state, and no verb takes a directory as a recursive target.
+1. General pre-flight: run the pre-flight gate, then read `rk status --target . --json`, `rk self-depend status --target . --json`, and `rk setup status --target . --json`.
+2. `upgrade` pre-flight: read `config.pending` and `legacy_state` in the status report.
+3. Stage, `rk guide landing` step 1c: run `rk stage --target . --json` and hold `<root>`.
+4. Compare, `rk guide landing` step 2b: run `rk stage compare <root> --target . --json`. Every differing `rendered` row reads `attributed`, so the landing refreshes it.
+5. Land, `rk guide landing` step 4: preview `rk upgrade --stage <root> --target .`, quote every word, then run it with `--apply` as a gated step.
+6. Prove, `rk guide landing` step 5a: run `rk stage compare <root> --target . --json` again. Every `rendered` and `region` row reads `equal`.
+7. `upgrade` post-flight: show each inactive legacy path by its exact path, with why each is obsolete. Remove each by name only under explicit cleanup authorization, after confirming that no active old operation remains, as `rk guide landing` 5b carries it. No `rk` verb removes this state.
+8. General post-flight: run `rk status --check --target .`, then `pre-commit run --hook-stage manual --all-files`.
+9. Clean: print `rk stage clean <root>`, wait, and run it only because the request's authority includes cleanup.
+10. Report: fill the template from observation, with every answer the operator gave.
 
 ## Authority
 
 - The request authorizes the file changes and the `rk` verbs it names. Branch, commit, push, and pull request actions are the operator's unless the request named them.
-- Nothing is copied out of `<stage>/artifacts/` into the target, and `stage.json` is offered to no verb. Production renders afresh.
-- Inactive legacy state is named by exact path and is never removed without explicit cleanup authorization.
+- Nothing is copied out of `<stage>/artifacts/` into the target, and `stage.json` is offered to no verb but through `--stage <root>`, which reads its parameters alone. Production renders afresh from the stage's parameters.
+- Legacy state is never removed without explicit cleanup authorization.
 
 ## Documentation
 

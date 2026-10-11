@@ -51,6 +51,26 @@ pub struct UpgradeArgs {
     #[arg(long, value_name = "PROVIDER")]
     pub code_scanning: Option<String>,
 
+    /// Land the answers a stage resolved, read from its receipt and
+    /// never its bytes; refuses a stage another binary wrote or one taken
+    /// for another target.
+    #[arg(long, value_name = "ROOT")]
+    pub stage: Option<Utf8PathBuf>,
+
+    /// Save a copy of this conflict, then replace it: an unattributed
+    /// file, or a recorded rendered file someone edited. Repeatable;
+    /// every conflict not named still refuses.
+    #[arg(long = "replace", value_name = "PATH")]
+    pub replace: Vec<String>,
+
+    /// Change the recorded workflow guards: `on` keeps or adds their
+    /// lines, glossary, and hooks, and `off` drops them. A record that
+    /// predates the capability carries a pending answer, which this
+    /// upgrade reports and answers `on` unless this flag says otherwise.
+    /// Omitted, configuration precedes the recorded choice.
+    #[arg(long, value_name = "on|off")]
+    pub workflow_guards: Option<String>,
+
     /// Write the upgrade; without it every file's action is listed and
     /// nothing is touched. `rk stage` is the full-byte comparison surface.
     #[arg(long)]

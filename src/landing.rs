@@ -189,20 +189,21 @@ mod tests {
         .collect()
     }
 
-    fn routing_block(mode: CheckoutMode) -> String {
-        projection::routing_block(mode, Integration::Forge).expect("the binary embeds the block")
-    }
-
-    fn routing_block_for(mode: CheckoutMode, integration: Integration) -> String {
-        projection::routing_block(mode, integration).expect("the binary embeds the block")
+    fn routing_block(workflow_guards: bool) -> String {
+        projection::routing_block(workflow_guards).expect("the binary embeds the block")
     }
 
     fn hooks_block(mode: CheckoutMode) -> String {
-        projection::hooks_block(mode, Integration::Forge).expect("the binary embeds the block")
+        projection::hooks_block(mode, Integration::Forge, true)
+            .expect("the binary embeds the block")
     }
 
     fn hooks_block_for(mode: CheckoutMode, integration: Integration) -> String {
-        projection::hooks_block(mode, integration).expect("the binary embeds the block")
+        projection::hooks_block(mode, integration, true).expect("the binary embeds the block")
+    }
+
+    fn unguarded_hooks_block(mode: CheckoutMode, integration: Integration) -> String {
+        projection::hooks_block(mode, integration, false).expect("the binary embeds the block")
     }
 
     fn glossary_block() -> String {
@@ -501,6 +502,7 @@ mod tests {
                                     reporting_policy: true,
                                     scorecard,
                                     code_scanning,
+                                    workflow_guards: Some(true),
                                 },
                                 parameters: manifest::Parameters {
                                     repo: "acme/team/widget".to_owned(),
@@ -594,6 +596,7 @@ mod tests {
                 reporting_policy: None,
                 scorecard: Some(scorecard),
                 code_scanning: Some(code_scanning),
+                workflow_guards: Some(true),
             },
             None,
             None,
@@ -960,14 +963,18 @@ mod tests {
             assert!(block.contains(term), "{term} is missing from {block}");
         }
         assert!(
-            routing_block(CheckoutMode::LinkedWorktree).contains(GLOSSARY_DESTINATION),
+            routing_block(true).contains(GLOSSARY_DESTINATION),
             "the routing block must name the destination it indexes"
+        );
+        assert!(
+            !routing_block(false).contains(GLOSSARY_DESTINATION),
+            "a target without the workflow guards lands no glossary to route to"
         );
     }
 
     #[test]
     fn the_block_splices_into_every_agents_shape() {
-        let owned = routing_block(CheckoutMode::MainWorktree);
+        let owned = routing_block(false);
         let block = owned.as_str();
         let fresh = spliced(None, block);
         assert_eq!(fresh, format!("{block}\n"));
@@ -1094,27 +1101,94 @@ mod tests {
             guard_line > name_line,
             "the guard lands directly after rk-branch-name"
         );
+    }
 
-        let worktree_routing = routing_block(CheckoutMode::LinkedWorktree);
-        let branches_routing = routing_block(CheckoutMode::MainWorktree);
-        assert!(worktree_routing.contains("This project works in worktrees"));
-        assert!(branches_routing.contains("Branches are worked in the main checkout"));
-        for block in [&worktree_routing, &branches_routing] {
-            assert!(block.contains("Create or remove a worktree"));
-            assert!(block.contains("`rk worktree add <branch>`"));
-            assert!(!block.contains("RK_WORKFLOW_LINE"), "{block}");
-            assert!(!block.contains("RK_INTEGRATION_LINE"), "{block}");
+    /// The routing block carries what the release process needs in every
+    /// capability state, and the workflow guards add only their two
+    /// policy fragments. No state carries a line that tells the project
+    /// how to integrate, start work, or lay out its working copies.
+    #[test]
+    fn the_routing_block_adds_only_the_policy_lines_under_the_guards() {
+        let guarded = routing_block(true);
+        let plain = routing_block(false);
+        for block in [&guarded, &plain] {
+            for token in ["RK_AGENT_POLICY", "RK_COMMIT_POLICY"] {
+                assert!(!block.contains(token), "{token} survived: {block}");
+            }
+            for kept in [
+                "runs the release-kit convention",
+                "MUST be a scoped Conventional Commit",
+                "Never author a tag",
+                "Run `rk status` before changing",
+                "`rk method --list`",
+            ] {
+                assert!(block.contains(kept), "{kept}: {block}");
+            }
+            for gone in [
+                "`rk integrate <branch>`",
+                "squash-merged pull request",
+                "`rk issue start <issue>`",
+                "`rk worktree add <branch>`",
+                "Branches are worked in the main checkout",
+            ] {
+                assert!(!block.contains(gone), "{gone}: {block}");
+            }
         }
-        let differing: Vec<(&str, &str)> = worktree_routing
-            .lines()
-            .zip(branches_routing.lines())
-            .filter(|(a, b)| a != b)
-            .collect();
-        assert_eq!(
-            differing.len(),
-            1,
-            "exactly one routing line differs per mode: {differing:?}"
-        );
+        assert!(guarded.contains("guides and never drives"), "{guarded}");
+        assert!(guarded.contains("`GLOSSARY.md`"), "{guarded}");
+        assert!(guarded.contains("Every commit follows the same scoped convention"));
+        assert!(!plain.contains("guides and never drives"), "{plain}");
+        assert!(!plain.contains("Every commit follows"), "{plain}");
+        // The guards insert lines and change none: the plain block is the
+        // guarded one with the fragments taken out.
+        let mut guarded_lines = guarded.lines();
+        for line in plain.lines() {
+            assert!(
+                guarded_lines.any(|other| other == line),
+                "the guards changed a line the plain block carries: {line}"
+            );
+        }
+    }
+
+    /// Without the workflow guards, the hook block carries the two hooks
+    /// the release process needs and nothing that shapes how the project
+    /// works, under either integration mode and either checkout mode.
+    #[test]
+    fn the_hook_block_without_the_guards_keeps_the_release_hooks_alone() {
+        for mode in [CheckoutMode::LinkedWorktree, CheckoutMode::MainWorktree] {
+            for integration in [Integration::Forge, Integration::Local] {
+                let block = unguarded_hooks_block(mode, integration);
+                for kept in ["- id: rk-no-hand-authored-tag", "- id: rk-status-check"] {
+                    assert!(block.contains(kept), "{kept}: {block}");
+                }
+                for gone in [
+                    "conventional-pre-commit",
+                    "rk-message",
+                    "rk-branch-name",
+                    "rk-worktree-location",
+                    "rk-no-push-to-trunk",
+                    "no-commit-to-branch",
+                ] {
+                    assert!(!block.contains(gone), "{gone}: {block}");
+                }
+                assert!(block.contains("A CI sweep needs no SKIP here"), "{block}");
+                for token in [
+                    "RK_MESSAGE_GUARDS",
+                    "RK_BRANCH_NAME_GUARD",
+                    "RK_WORKTREE_GUARD",
+                    "RK_TRUNK_COMMIT_GUARD",
+                    "RK_TRUNK_PUSH_GUARD",
+                    "RK_SWEEP_NOTE",
+                ] {
+                    assert!(!block.contains(token), "{token} survived: {block}");
+                }
+                assert_eq!(
+                    block.contains("--hook-stage manual"),
+                    integration == Integration::Local,
+                    "{block}"
+                );
+            }
+        }
     }
 
     /// The integration axis decides exactly which trunk guards render,
@@ -1175,19 +1249,6 @@ mod tests {
             hooks_block_for(CheckoutMode::MainWorktree, Integration::Local)
                 .contains("A CI sweep needs no SKIP here")
         );
-        // The routing block differs by exactly the integration line.
-        for mode in [CheckoutMode::LinkedWorktree, CheckoutMode::MainWorktree] {
-            let forge = routing_block_for(mode, Integration::Forge);
-            let local = routing_block_for(mode, Integration::Local);
-            assert!(forge.contains("squash-merged pull request"), "{forge}");
-            assert!(local.contains("`rk integrate <branch>`"), "{local}");
-            let differing = forge
-                .lines()
-                .zip(local.lines())
-                .filter(|(a, b)| a != b)
-                .count();
-            assert_eq!(differing, 1, "exactly one routing line differs per mode");
-        }
     }
 
     /// Both sweep notes invite the project to name its own local-only

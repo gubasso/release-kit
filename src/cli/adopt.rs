@@ -45,11 +45,28 @@ pub struct AdoptArgs {
     #[arg(long)]
     pub scorecard: bool,
 
+    /// The target runs the workflow guards: the candidate includes their
+    /// lines, glossary, and hooks, and the record carries the request.
+    #[arg(long)]
+    pub workflow_guards: bool,
+
     /// The target runs code scanning under this provider: codeql or
     /// semgrep. The candidate includes its workflow and the record carries
     /// the request.
     #[arg(long, value_name = "PROVIDER")]
     pub code_scanning: Option<String>,
+
+    /// Land the answers a stage resolved, read from its receipt and
+    /// never its bytes; refuses a stage another binary wrote or one taken
+    /// for another target.
+    #[arg(long, value_name = "ROOT")]
+    pub stage: Option<Utf8PathBuf>,
+
+    /// Save a copy of this conflict, then replace it: an unattributed
+    /// file, or a recorded rendered file someone edited. Repeatable;
+    /// every conflict not named still refuses.
+    #[arg(long = "replace", value_name = "PATH")]
+    pub replace: Vec<String>,
 
     /// Write the config and record; without it verification runs and nothing is
     /// touched.

@@ -9,6 +9,8 @@
 //! clean verb removes one directory whose own receipt names it, through
 //! held descriptors, and refuses everything else.
 
+use std::fmt::Write as _;
+
 use camino::{Utf8Path, Utf8PathBuf};
 use serde::Serialize;
 
@@ -63,8 +65,57 @@ struct CleanReport {
 pub fn run(args: &StageArgs) -> Result<(), RkError> {
     match &args.action {
         Some(StageAction::Clean { path, json }) => remove(Output::new(*json), path),
+        Some(StageAction::Compare { root, target, json }) => {
+            compare(Output::new(*json), root, target)
+        }
         None => create(args),
     }
+}
+
+/// Compare a stage with its target, row by row.
+fn compare(out: Output, root: &Utf8Path, target: &Utf8Path) -> Result<(), RkError> {
+    if !target.is_dir() {
+        return Err(RkError::missing(
+            Diagnostic::new(
+                Reason::TargetNotFound,
+                format!("target {target} is not a directory"),
+            )
+            .expected("the repository the stage was taken for"),
+        ));
+    }
+    let report = stage::compare::compare(root, target)?;
+    out.result_line(format!("stage: {}", report.stage_root));
+    out.result_line(format!("target: {}", report.target));
+    if let Some(reason) = &report.history.reason {
+        out.result_line(format!("history: {reason}"));
+    }
+    for row in &report.rows {
+        let mut line = format!("{} {} ({}, {})", row.state, row.path, row.kind, row.word);
+        if let Some(provenance) = row.provenance {
+            let _ = write!(line, ", provenance {provenance}");
+        }
+        if let Some(edited) = row.edited_after_added {
+            line.push_str(if edited {
+                ", edited after the commit that brought it"
+            } else {
+                ", untouched since the commit that brought it"
+            });
+        }
+        out.result_line(line);
+    }
+    let next = if stage::compare::rendered_equal(&report) {
+        vec!["every rendered destination is equal: the landing is proven".to_owned()]
+    } else {
+        vec![
+            "a conflict reads collision: answer it, then name it with --replace <path> on the landing verb".to_owned(),
+            format!(
+                "rk init, rk upgrade, or rk adopt --stage {} --target {} previews the landing",
+                report.stage_root, report.target
+            ),
+        ]
+    };
+    out.next(&next);
+    out.emit(&report)
 }
 
 fn create(args: &StageArgs) -> Result<(), RkError> {
@@ -99,6 +150,7 @@ fn create(args: &StageArgs) -> Result<(), RkError> {
             nix: args.nix_packaging.then_some(true),
             reporting_policy: args.reporting_policy.then_some(true),
             scorecard: args.scorecard.then_some(true),
+            workflow_guards: args.workflow_guards.then_some(true),
             code_scanning: args
                 .code_scanning
                 .as_deref()
@@ -108,11 +160,7 @@ fn create(args: &StageArgs) -> Result<(), RkError> {
         },
         config.as_ref(),
         record.as_ref(),
-        if record.is_some() {
-            landing::Purpose::Upgrade
-        } else {
-            landing::Purpose::Init
-        },
+        stage::purpose(&target, config.as_ref(), record.is_some())?,
     )?;
     let evidence = TargetEvidence::gather(&target, record.as_ref())?;
     let projection = Projection::compute(&ProjectionInput {
@@ -296,6 +344,7 @@ mod tests {
                     reporting_policy: true,
                     scorecard: false,
                     code_scanning: None,
+                    workflow_guards: Some(false),
                 },
                 repo: "acme/widget".into(),
                 security_contact: String::new(),
@@ -322,7 +371,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.stage/5","rk_version":"0.0.0","target":"/tmp/t","stage_root":"/tmp/s","parameters":{"profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","line_prefix":"release/"}},"git":{"trunk":"main","checkout_mode":"main-worktree","integration":"local"},"capabilities":{"nix_packaging":true,"reporting_policy":true,"scorecard":false},"repo":"acme/widget","security_contact":"","security_response":"best-effort","required_check":"","required_workflow":""},"capabilities":[],"receipt_schema_version":null,"candidates":[],"omissions":[],"collisions":[],"retired":[],"seeded_present":[],"state_present":[],"reference":["CHANGELOG.md"],"output_source":"--output","next":["rk stage clean /tmp/s removes the stage once the landing is verified"]}"#
+            r#"{"schema":"rk.stage/6","rk_version":"0.0.0","target":"/tmp/t","stage_root":"/tmp/s","parameters":{"profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","line_prefix":"release/"}},"git":{"trunk":"main","checkout_mode":"main-worktree","integration":"local"},"capabilities":{"nix_packaging":true,"reporting_policy":true,"scorecard":false,"workflow_guards":false},"repo":"acme/widget","security_contact":"","security_response":"best-effort","required_check":"","required_workflow":""},"capabilities":[],"receipt_schema_version":null,"candidates":[],"omissions":[],"collisions":[],"retired":[],"seeded_present":[],"state_present":[],"reference":["CHANGELOG.md"],"output_source":"--output","next":["rk stage clean /tmp/s removes the stage once the landing is verified"]}"#
         );
     }
 

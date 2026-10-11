@@ -16,7 +16,7 @@ use crate::detect::Forge;
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
 use crate::skills::record::{RECORD_PATH, Record};
-use crate::skills::{AGENTS_ROOT, CLAUDE_ROOT, Digest, SHARED_ROOT};
+use crate::skills::{AGENTS_ROOT, CLAUDE_ROOT, Digest};
 
 /// How a failure weighs at the doctor level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -353,7 +353,7 @@ fn state_root() -> ProbeResult {
 }
 
 /// The destinations `rk skill install` writes accept writes: the two agent
-/// roots and the shared root, all under the invoking user's home.
+/// roots under the invoking user's home.
 ///
 /// A root can exist and still refuse, which is what a read-only bind of an
 /// agent directory produces, so what is tested is the nearest existing
@@ -372,7 +372,7 @@ fn skill_roots() -> ProbeResult {
         );
     };
     let mut refused = Vec::new();
-    for root in [CLAUDE_ROOT, AGENTS_ROOT, SHARED_ROOT] {
+    for root in [CLAUDE_ROOT, AGENTS_ROOT] {
         let root = home.join(root);
         let Some(existing) = nearest_existing(&root) else {
             refused.push(format!("no ancestor of {root} exists"));
@@ -398,37 +398,37 @@ fn skill_roots() -> ProbeResult {
     }
 }
 
-/// The artifacts every skill shares are installed, and are this binary's.
+/// Every installed package carries the gates, and they are this binary's.
 ///
-/// This is the probe that answers the one failure a shared home produces.
-/// The agent roots and the shared root are separate directories, so a
-/// container, a sandbox, or a sync that carries one and not the other
-/// leaves every skill resolvable by name and unable to read the gates it is
-/// told to read first. A skill that cannot read them runs neither its
-/// pre-flight nor its plan phase, which is the whole reason they are files
-/// rather than prose.
+/// This is the probe that answers the one failure a package without its
+/// gates produces: the skill stays resolvable by name and cannot read the
+/// gates it is told to read first. A skill that cannot read them runs
+/// neither its pre-flight nor its plan phase, which is the whole reason they
+/// are files rather than prose.
 fn skill_gate() -> ProbeResult {
     let id = SKILL_PROBES[1];
-    let Ok(home) = crate::skills::home() else {
+    let Some(context) = installed_context(id) else {
+        return no_home(id);
+    };
+    let (home, packages, record) = match context {
+        Ok(context) => context,
+        Err(failed) => return failed,
+    };
+    let planned = installed_files(&home, &packages, true);
+    if planned.is_empty() {
         return ProbeResult::failed(
             id,
             ProbeClass::Soft,
-            "neither HOME nor USERPROFILE is set, so the shared root does not resolve",
-            "export HOME",
+            format!("no agent skill root exists under {home}"),
+            "rk skill install --apply",
         );
-    };
-    let root = home.join(SHARED_ROOT);
-    let record = Record::load(&home.join(RECORD_PATH));
-    let planned: Vec<(Utf8PathBuf, &'static [u8])> = crate::skills::shared()
-        .into_iter()
-        .map(|artifact| (root.join(&artifact.path), artifact.bytes))
-        .collect();
+    }
     let found = judge(planned, &record);
     if let Some(first) = found.missing.first() {
         return ProbeResult::failed(
             id,
             ProbeClass::Soft,
-            format!("a shared artifact every skill reads before acting is not installed: {first}"),
+            format!("a gate every skill reads before acting is missing from its package: {first}"),
             "rk skill install --apply",
         );
     }
@@ -437,8 +437,9 @@ fn skill_gate() -> ProbeResult {
             id,
             ProbeClass::Soft,
             format!(
-                "{} shared artifact(s) under {root} are not this binary's",
-                found.differing.len()
+                "{} installed gate copies are not this binary's; rk is {}",
+                found.differing.len(),
+                env!("CARGO_PKG_VERSION")
             ),
             reinstall(found.all_recorded),
         );
@@ -446,7 +447,7 @@ fn skill_gate() -> ProbeResult {
     ProbeResult::ok(
         id,
         ProbeClass::Soft,
-        format!("{root} holds this binary's shared artifacts"),
+        format!("{} installed gate copies are this binary's", found.matching),
     )
 }
 
@@ -457,40 +458,18 @@ fn skill_gate() -> ProbeResult {
 /// shared with a container, a sandbox, or another machine can hold skills
 /// some other build installed. The probe names that drift rather than
 /// leaving an agent to follow instructions the binary no longer answers.
+/// It judges each `SKILL.md` and the skill's own reference files, and leaves
+/// the gate copies to `skill-gate`.
 fn skill_sources() -> ProbeResult {
     let id = SKILL_PROBES[2];
-    let Ok(home) = crate::skills::home() else {
-        return ProbeResult::failed(
-            id,
-            ProbeClass::Soft,
-            "neither HOME nor USERPROFILE is set, so no agent root resolves",
-            "export HOME",
-        );
+    let Some(context) = installed_context(id) else {
+        return no_home(id);
     };
-    let Ok(skills) = crate::skills::all() else {
-        return ProbeResult::failed(
-            id,
-            ProbeClass::Soft,
-            "this binary's embedded skills do not read",
-            "reinstall rk; the sources it was built from are defective",
-        );
+    let (home, packages, record) = match context {
+        Ok(context) => context,
+        Err(failed) => return failed,
     };
-    let record = Record::load(&home.join(RECORD_PATH));
-    let mut planned = Vec::new();
-    for root in [CLAUDE_ROOT, AGENTS_ROOT] {
-        let root = home.join(root);
-        // An absent agent root is a choice, not a defect: `--agent` selects
-        // one family and leaves the other's root untouched.
-        if !root.is_dir() {
-            continue;
-        }
-        for skill in &skills {
-            planned.push((
-                root.join(&skill.name).join("SKILL.md"),
-                skill.text.as_bytes(),
-            ));
-        }
-    }
+    let planned = installed_files(&home, &packages, false);
     if planned.is_empty() {
         return ProbeResult::failed(
             id,
@@ -505,7 +484,7 @@ fn skill_sources() -> ProbeResult {
             id,
             ProbeClass::Soft,
             format!(
-                "{} of this binary's skills are not installed, the first at {first}",
+                "{} of this binary's skill files are not installed, the first at {first}",
                 found.missing.len()
             ),
             "rk skill install --apply",
@@ -516,7 +495,7 @@ fn skill_sources() -> ProbeResult {
             id,
             ProbeClass::Soft,
             format!(
-                "{} installed skill(s) are not this binary's; rk is {}",
+                "{} installed skill file(s) are not this binary's; rk is {}",
                 found.differing.len(),
                 env!("CARGO_PKG_VERSION")
             ),
@@ -531,6 +510,61 @@ fn skill_sources() -> ProbeResult {
             found.matching
         ),
     )
+}
+
+/// What both skill probes read: the home, the embedded packages, and the
+/// record.
+type SkillContext = (Utf8PathBuf, Vec<crate::skills::Package>, Record);
+
+/// The home, the embedded packages, and the record both skill probes read,
+/// or the failure that stops them: `None` when no home resolves.
+fn installed_context(id: &'static str) -> Option<Result<SkillContext, ProbeResult>> {
+    let home = crate::skills::home().ok()?;
+    let Ok(packages) = crate::skills::packages() else {
+        return Some(Err(ProbeResult::failed(
+            id,
+            ProbeClass::Soft,
+            "this binary's embedded skills do not read",
+            "reinstall rk; the sources it was built from are defective",
+        )));
+    };
+    let record = Record::load(&home.join(RECORD_PATH));
+    Some(Ok((home, packages, record)))
+}
+
+/// The probe result when no home directory resolves.
+fn no_home(id: &'static str) -> ProbeResult {
+    ProbeResult::failed(
+        id,
+        ProbeClass::Soft,
+        "neither HOME nor USERPROFILE is set, so no agent root resolves",
+        "export HOME",
+    )
+}
+
+/// Every package file under each agent root that exists: the gate copies
+/// when `shared` is set, the skill's own files otherwise.
+///
+/// An absent agent root is a choice, not a defect: `--agent` selects one
+/// family and leaves the other's root untouched.
+fn installed_files(
+    home: &Utf8Path,
+    packages: &[crate::skills::Package],
+    shared: bool,
+) -> Vec<(Utf8PathBuf, &'static [u8])> {
+    let mut planned = Vec::new();
+    for root in [CLAUDE_ROOT, AGENTS_ROOT] {
+        let root = home.join(root);
+        if !root.is_dir() {
+            continue;
+        }
+        for package in packages {
+            for file in package.files.iter().filter(|file| file.shared == shared) {
+                planned.push((root.join(&package.name).join(&file.path), file.bytes));
+            }
+        }
+    }
+    planned
 }
 
 /// What sits at each destination the embedded skills name.

@@ -1,156 +1,127 @@
 ---
 name: rk-setup
-description: Lands the release-kit workflow in a project through the rk CLI, and keeps a landed project current from the version the operator installed. Use when asked to set up a release workflow, release automation, trusted publishing, release-plz, release-please, git-cliff, changelog automation, or trunk-based release automation, to migrate a project that already releases through another tool onto release-kit, to stage, upgrade, or adopt a landing, or to adapt the release-kit convention to a project's technology. Triggers include vulnerability reporting, SECURITY.md, release-kit, rk init, rk stage, rk upgrade, rk adopt, release setup, migrate to release-kit, adopt release-kit, upgrade release-kit, setup drift, and release workflow setup.
+description: Lands the release-kit release workflow in a project through the rk CLI, migrates, adopts, upgrades, repairs, and configures it, sets up the forge and the registry it releases through, and provisions the rk binary it runs on. Use when asked to set up a release workflow, release automation, trusted publishing, release-plz, release-please, git-cliff, changelog automation, or trunk-based release automation, to migrate a project that already releases through another tool onto release-kit, to take a landed project to the installed release, to repair setup drift, to change a recorded answer or an opt-in capability, or to install or pin rk for a project. Triggers include release-kit, rk init, rk stage, rk upgrade, rk adopt, rk setup, release setup, migrate to release-kit, adopt release-kit, upgrade release-kit, setup drift, vulnerability reporting, SECURITY.md, and pin rk.
 license: CC-BY-4.0
-compatibility: Requires the rk binary on PATH; install with cargo install release-kit or cargo binstall release-kit. Landing files into a target needs write access to that repository. Forge mutations need the forge CLI authenticated with administration rights; the operator supplies credentials and registry actions.
+compatibility: Provisions the rk binary where the host lacks it. Landing files into a target needs write access to that repository. Forge mutations need the forge CLI authenticated with administration rights; the operator supplies credentials and registry actions.
 ---
 
 # rk-setup
 
-Land the release-kit convention in a project, or take a landed project to the release the operator installed. One arrival path serves a first landing, an adoption, and an upgrade: the installed `rk` stages its own candidate, this skill studies the stage against the working tree, the receipt, and Git, and the same `rk` renders again into production. `rk method landing` owns the why, and `rk guide landing` owns the commands by step number. This skill runs the gates, reads the evidence, prepares what the landing needs, and reports what each verb returned.
+Set up the release-kit convention in a project, keep a landed project current with the installed `rk`, and provision the `rk` it runs on. The state of the target decides which tasks are possible, the request picks among them, and the operator confirms each task before it runs.
 
-## Before acting
+## Pre-flight
 
-Read two shared files before the first action of a task, in this order, and hold both for the whole task.
+1. Before any other action, read `references/pre-flight-gate.md` and run it whatever the request carries. No flag skips it.
+2. Stop on any row below. State the evidence and the operator's step, and write nothing. The evidence comes from `rk status --target . --json` unless the row names another source.
 
-1. `~/.local/state/release-kit/skills/shared/pre-flight-gate.md` — run it whatever the request carries. It checks this host with `rk doctor`, reads the installed version and the target's record, and stops the task on what no plan can work around. No flag skips it.
-2. `~/.local/state/release-kit/skills/shared/plan-gate.md` — it binds three phases: plan and present the plan for approval, validate that plan against every preview and read-only source phase 2 names, then execute it.
+| Stop                                     | Owner       | Evidence                      | Operator's step                  |
+| ---------------------------------------- | ----------- | ----------------------------- | -------------------------------- |
+| A failed `hard` probe                    | shared gate | `rk doctor`                   | its `next` line                  |
+| A failed `skill-gate` or `skill-sources` | shared gate | `rk doctor`                   | its `next` line                  |
+| A failed `skill-roots` probe             | shared gate | `rk doctor`                   | install on the host that owns it |
+| Not the repository the request means     | shared gate | `git remote get-url origin`   | name the repository              |
+| A diagnostic, not a report               | this skill  | the command exits on `reason` | repair the file it names         |
+| Not a non-bare Git work tree             | this skill  | `git_work_tree` is false      | make the target a Git work tree  |
 
-The two gates are why this skill is safe to run: every verb below writes files, changes a forge, or publishes a version, the pre-flight says whether this host can run it at all, and the plan gate states which of those steps stay the operator's own.
+An unreadable record never counts as an absent one, so never land over it.
 
-When the request carries `--no-plan`, skip the plan gate's approval turn only. Still run the pre-flight, still state the ordered plan before acting, and still validate it as phase 2 directs.
+1. Hold these observations for the gate. None of them ends the run. Read `alignment` before `classification`, because a record newer than the binary reads `classification` null.
 
-## Route to the canon
+| Observation                                            | Evidence                                  | Routes to                               |
+| ------------------------------------------------------ | ----------------------------------------- | --------------------------------------- |
+| No `rk` on PATH                                        | `command -v rk`, by hand                  | `provision`, then this pre-flight again |
+| A record newer than the binary                         | `alignment` `target-newer`                | `provision`                             |
+| No pin and no host decision, at `setup` or `migration` | `rk self-depend status --target . --json` | `provision`, offered first              |
+| A pin with no sync line, at `setup` or `migration`     | `wired` and `envrc_sync` in that report   | `provision`, offered first              |
+| The state of the target                                | `classification`                          | the gate                                |
+| The setup steps and the setup proof                    | `rk setup status --target . --json`       | `forge-settings` and `publish`          |
 
-| Need                                                            | Command                                             |
-| --------------------------------------------------------------- | --------------------------------------------------- |
-| Judge this host                                                 | `rk doctor`                                         |
-| List method chapters, read one                                  | `rk method --list`, `rk method <chapter>`           |
-| List bindings, read one                                         | `rk binding --list`, `rk binding <tech>`            |
-| Read a forge's specifics                                        | `rk forge <name>`                                   |
-| The stage, investigate, land, verify, clean procedure           | `rk guide landing`                                  |
-| The setup procedure around a first landing, as commands         | `rk guide setup`                                    |
-| The migration procedure around a landing, as commands           | `rk guide migration`                                |
-| The installed version, and the state it reports                 | `rk --version`, `rk status --target .`              |
-| What the target resolves to, and what a landing selects         | `rk profile --target .`                             |
-| Classify a target that carries no record                        | `rk assess --target .`                              |
-| Write this binary's candidate and its knowledge into a stage    | `rk stage --target .`                               |
-| Remove one stage that names itself                              | `rk stage clean <path>`                             |
-| Land, upgrade, or record a target, previewed then applied       | `rk init`, `rk upgrade`, `rk adopt`, with `--apply` |
-| List the landable files, print one                              | `rk snippet --list`, `rk snippet <tech>/<path>`     |
-| Print the pinned-tool registry                                  | `rk versions`                                       |
-| List the executable setup steps                                 | `rk setup --list`                                   |
-| Judge a message against the content guards                      | `rk message --check`                                |
-| The merged branches this clone still holds                      | `rk branches prune`                                 |
-| The worktree lifecycle, as commands                             | `rk guide worktree`                                 |
-| Start work an issue names, and its procedure                    | `rk issue start <issue>`, `rk guide issue`          |
-| The release line's whole life, and its verbs                    | `rk guide release-lines`, `rk lines --help`         |
-| The working-copy forms and the mode                             | `rk method worktrees`                               |
-| How this project obtains `rk`, per manager                      | `rk self-depend status`                             |
-| The fragments for one manager and venue pair, and the seed file | `rk self-depend add`                                |
-| The predecessor bump mechanism's removal                        | `rk self-depend clean`                              |
-| Another project as a dependency                                 | `rk depend assess`                                  |
+1. Hand the gate the status report, each failed `soft` probe as a plan constraint, and the self-depend and setup reports. The gate reads nothing else.
 
-## Installation scope
+## General rules
 
-Skills and the agent setup install at user scope only — `rk skill install --apply`, once per user; no system mode exists, by decision. The setup runbook's prerequisites own the step and the two roots. Where a file lands for a third-party application is the target project's own decision, made against that application's documentation with a dated citation — never generalized from another application.
+1. Route, never restate. Find the why with `rk method <chapter>`, the commands with `rk guide <runbook>`, a technology with `rk binding <tech>`, a forge with `rk forge <name>`, and the whole command surface with `rk usage`.
+2. Decide from the `--json` output of a verb, never from its human text. Never read "already current" from the words of an upgrade preview.
+3. Leave rendered bytes to release-kit. Never edit a file or a region `rk` renders, and never hand-edit a generated artifact workflow: change its configuration and regenerate, as the binding directs. Never author a tag.
+4. Use an `rk` verb first. Where no verb covers a step, use the forge CLI and say that the step runs outside the convention.
+5. Report from observation. Report each step's outcome from what a check observed, never from the operator's word alone. A credential this runtime cannot reach leaves a step `unknown`, which is an observation boundary. Never ask for a secret so that a check can pass.
+6. Keep one record per repository and the skills at user scope. A target carries one release-kit record at its root and no skill file, because `rk skill install` puts the skills under the user's home.
+7. Let the repository record how it obtains `rk`. The `provision` task proposes the method, the operator picks it, and every install runs as a gated step.
+8. Keep no state of your own, with one exception. The target, its record, the stage receipt, and Git are the records, and a later run reads the state from `rk status --target . --json`. A migration's workspace is the exception: it keeps the archived files, the snapshots, and the registry across runs.
 
-## Start work an issue names
+## Gate
 
-A request naming an issue — an issue URL, or "fix", "address", "implement", or "work on" plus an issue — starts from `rk issue start <issue>`, and the plan's first step is that command. The forge names the branch and rk seats it the way the project's recorded workflow mode says. Three rules bind this.
+Read the state from `classification`, never from the request, and the intent from the request. A cell is one ordered task list, and its tasks share one plan and one approval.
 
-- Never write a predicted branch name into the plan. The name is whatever the forge mints, and stating a guess is the mistake this verb exists to prevent. Write "the branch the forge mints for issue <n>".
-- The preview is what the plan presents for approval, and the apply is what execution runs. That is the plan gate's own two-phase shape, so no new gate appears here.
-- Minting a branch at the forge is a forge action, so it happens only where the operator's request named starting work on that issue.
+| State            | set up or none                      | upgrade   | fix       | change a setting            | forge setup                         | pin or environment |
+| ---------------- | ----------------------------------- | --------- | --------- | --------------------------- | ----------------------------------- | ------------------ |
+| `setup`          | `forge-settings`, `land`, `publish` | ask       | ask       | `land`                      | `forge-settings`, `land`, `publish` | `provision`        |
+| `migration`      | `migrate`                           | ask       | ask       | `migrate`                   | `migrate`                           | `provision`        |
+| `needs-decision` | ask                                 | ask       | ask       | ask                         | ask                                 | `provision`        |
+| `adopt`          | `adopt`, then the setup tasks       | `adopt`   | `adopt`   | `adopt`, then `configure`   | `adopt`, then the setup tasks       | `provision`        |
+| `upgrade`        | `upgrade`                           | `upgrade` | `upgrade` | `upgrade`, then `configure` | `upgrade`, then the setup tasks     | `provision`        |
+| `drift`          | `repair`                            | `repair`  | `repair`  | `repair`, then `configure`  | `repair`, then the setup tasks      | `provision`        |
+| `current`        | the setup tasks, else done          | done      | done      | `configure`                 | the setup tasks                     | `provision`        |
 
-## The five steps
+- Put `provision` first where an observation routes to it. With no `rk`, it is the only task. After it, run the pre-flight again and read this table in the same run.
+- On a first landing, keep the order `rk guide setup` takes: `forge-settings` covers its §0 to §3, `land` its §4, and `publish` its §5 to §8. On a recorded target, the landing task comes first, then `configure`, then `forge-settings`, then `publish`, because `configure` needs a record at the binary's version.
+- The setup tasks are `forge-settings` where the setup report names a step that is not `satisfied`, then `publish` where it reads the proof `absent` or `stale`. `migrate` runs both itself, once its branch merged.
+- Ask: state the evidence and the options, wait, then read this table again with no new pre-flight. For `needs-decision`, the operator says what the tags or the second branch are.
+- Hand off: a release, a release line, or a release recovery goes to the `rk-release` skill.
+- Out of scope: starting work, integrating a branch, and pruning are the project's own workflow. Say so in one line, and name the helper verb that exists: `rk issue start`, `rk integrate`, `rk worktree`, or `rk branches prune`.
+- Done: report from observation. For an upgrade asked at `current`, state "The record matches `rk <version>`. To move further, ask to move the pin.", which is a request that runs `provision`, then `upgrade`.
 
-1. Run the gates. The pre-flight gate's closing lines hand over the installed version, the record's `rk_version`, and whether the target carries a record.
-2. Read the version and stop where no update was authorized. `rk guide landing` step 1a reads how the project obtains `rk`. This skill never chooses, installs, updates, downgrades, or fetches a version: where the request did not authorize an update, report the installed state and end the task before any migration work. Where the installed binary is a 0.4.x release the operator will replace, `rk guide landing` step 1b runs first, with that binary.
-3. Read the profile, stage, and investigate: `rk profile --target .`, then `rk guide landing` steps 1c and 2. Keep the stage path for the whole task. Name the evidence class from the section below before proposing any edit, and prepare the target only within the request's authority.
-4. Land, `rk guide landing` step 3. The production verb renders again from the binary and the target. Read each word it prints and quote them, and take a refusal back to the investigation, never to a flag.
-5. Verify and clean, `rk guide landing` steps 4 and 5. Compare the real diff with the stage, run the checks, and repair through another fresh production run. Keep an inventory of every stage path the task created. Show the exact `rk stage clean <path>` for each one only after everything passed, and run them only where the request's authority includes cleanup. Then raise the decision below, before the task closes.
+The operator confirms every step:
 
-## How the target obtains `rk`
+1. Present "State: <state>. Request: <intent>. Tasks: <list>. Proceed?" and wait. A redirect reads this table again with the new intent.
+2. Before each task, print "Next: <task>. It will <one line>. Proceed?" and wait. Print one progress line at each move between the pre-flight, the execution, and the post-flight of a task.
+3. After the task pre-flights of the cell, read `references/plan-gate.md` and hold it for the rest of the run. The plan names each task, the verbs it runs, and the files it writes.
 
-A landing that leaves this unasked leaves the pin where it found it. A target with a pin and no line keeps the release it pinned until somebody bumps it by hand. A target with no manager takes whatever version the host installed, for every project on that machine. `rk self-depend status` reports both, this is the only place that reads it, and the report carries the operator's answer either way.
+## Tasks
 
-- Raise it where the landing recorded the target for the first time, through `rk init` or `rk adopt`. An upgrade of a recorded target asks nothing: the question was answered once, and repeating it is noise.
-- Read `rk self-depend status --target . --json` and hold `state`, `wired`, `envrc`, and `envrc_sync`. The report is the only source: no manager list of this skill's own.
-- Where `state` is `no-manager`, nothing pins `rk` here. Preview `rk self-depend add --manager <candidate> --target . --json` for each manager the status listed, and keep the ones whose `support` is not `manual`. A manual pair names a reason and writes nothing, so offering it offers a refusal.
-- Ask with `AskUserQuestion` and offer three answers: one of the managers that survived, which puts the version in the repository where a diff shows it; a host install, which serves one version to every project on that machine; and the operator wiring it themselves, which ends the question. Say what each costs before the operator picks. On a manager, preview `rk self-depend add --manager <chosen> --target . --json` with the answer and not with `wired`, because a no-manager report names no `wired` manager to reuse. Then run the same call with `--apply` as a gated step, which seeds the manager file, and read `rk self-depend status` back: it names the chosen manager under `wired`, or the wiring did not happen.
-- One candidate would answer the second question by itself. The flake pair's apply seeds an `.envrc` carrying the sync line where the target has none, so it wires the pin and places the line in one move. Say that, and ask the freshness question before that apply rather than after it. Where the operator wants the pin without the line, they drop the line from the seeded file, and the status reports `envrc_sync` false again.
-- Where `wired` names a manager and `envrc_sync` is false, the pin is there and nothing moves it. Ask with `AskUserQuestion`, and state what the line does: on directory entry, at most once a day, it asks the wired manager's pin to move forward, and it leaves a diff to review. How many files that diff carries is the manager's own answer, which the sync report names. Do not predict it.
-- Where the operator accepts, run `rk self-depend add --manager <wired> --target . --json` with the manager the report named. An unqualified call resolves the manager from the files present, so it refuses a target carrying more than one.
-- Place the served line as a gated step: print the exact edit, wait, then apply it. The verb writes only a file the target lacks, so an `.envrc` already there takes the line by the operator's approval alone.
-- The binary may serve the line and may not place it, so nothing else in this loop asks. A refusal ends the decision and goes in the report.
-- Ask once. An answer already recorded closes the question for this landing, whichever answer it was.
+After the gate picks a task, read its file into this context. A task file holds the pre-flight, the execution, and the post-flight of one task, and it links no other file.
 
-## What the profile answers, and what to ask
+- If the run includes `provision`, read `references/provision.md`.
+- If the run includes `land`, read `references/land.md`.
+- If the run includes `migrate`, read `references/migrate.md`.
+- If the run includes `adopt`, read `references/adopt.md`.
+- If the run includes `upgrade`, read `references/upgrade.md`.
+- If the run includes `repair`, read `references/repair.md`.
+- If the run includes `configure`, read `references/configure.md`.
+- If the run includes `forge-settings`, read `references/forge-settings.md`.
+- If the run includes `publish`, read `references/publish.md`.
+- If the run includes `land`, `migrate`, `adopt`, `upgrade`, `repair`, or `configure`, read `references/landing.md`, the pipeline they share.
 
-`rk profile --target .` reports every value with the source that answered it, what the observation proposed, and which capabilities the catalog selects with the destinations they land. Explain it by domain — project identity, profile, Git workflow, capability requests, setup declaration, protection policy — and restate no matrix of your own. Ask only what the report leaves open: the technologies and the forge where the observation named none, the release mode and, for an automatic release, its driver and style, the trunk name, the checkout mode, the integration mode, and each capability request. Where the report names an ambiguous proposal, the driver is the one answer an apply refuses without. Render the landing command from that report with the canonical flags alone, and let the apply persist the answers rather than hand-editing the configuration.
+Compose them this way:
 
-Never ask the operator to choose a development method: Git and trunk-based development are prerequisites `rk method invariants` states, and a target that is not a non-bare Git repository is a failed prerequisite reported before any plan. Say pull request or merge request in shared prose and the forge's own term in forge-specific instructions. Say checkout mode for where a topic branch opens — `linked-worktree` gives the branch its own linked working tree, `main-worktree` switches the original one to it — and never call it a branching mode. Say integration mode for which authority moves an implementation onto the trunk, `local` through `rk integrate` or `forge` through a request; the two axes are independent and every pairing works. Ask the integration question with its consequence stated, because the default is the cheaper answer and not always the right one: a single-writer project takes `local` and pays no forge round trip, and a project with more than one writer and a review requirement takes `forge`, because no local gate substitutes for a second person reading a diff. Say that the release request integrates at the forge either way. Then ask the project to research and assign its own hooks rather than answering for it, on two axes. The moment: each check on the earliest native `pre-commit` stage that can run it, the suite an integration must pass on the `manual` stage, and the project's own continuous integration invoking those same stages. The scope: `both` for a check that runs at a desk and in continuous integration, `local-only` for one that is meaningless in CI, whose hook id joins the sweep's `SKIP`, and `ci-only` for one that is meaningless at a desk, which is not a hook and declares the remote boundary it guards and why. A check classified `both` needs a local path and a remote path of equivalent coverage, not identical commands, and a check that is neither a hook nor a recorded `ci-only` check is unclassified. Ask for the scope and the reason; never derive either from a workflow file. Release-kit invokes `pre-commit run --hook-stage manual --all-files`, reads no hook identifier, and judges no parity with a forge workflow file. `rk method integration` states both paths.
+- `land`, `adopt`, `upgrade`, `repair`, and `configure` run their task pre-flight, then the Stage, Compare, Prepare, Land, and Prove steps of the pipeline, then their task post-flight. `migrate` runs the pipeline inside its own Land step.
+- Where the gate composes `configure` after a landing task, its answers join that task's Stage step, so the run lands once. `configure` runs its own landing only at `current`.
 
-Continue on zero technologies, an absent forge, and a category this release does not know: each is a valid profile, and the report says what it selects. Stop on a failed fixed prerequisite, a malformed release intent, a projection conflict, or an operation that requires a capability this release does not carry.
+## Post-flight
 
-## Which chapter the arrival loads
+Run these once, after the last task post-flight, in this order.
 
-- `greenfield`, from `rk assess`: `rk method setup` and `rk guide setup`. The landing is that runbook's step 4a. Steps 1 to 3 surround it on the forge side and steps 5 to 8 on the registry side. How the project obtains `rk` is none of them: `rk guide setup` carries it in the Prerequisites, with the whole pin order. The gate job and the required check are step 3c's decision. A `package-check` limitation is read out, not treated as done; `rk method setup` owns why and `rk binding <tech>` names the inspection.
-- `brownfield`, from `rk assess`: `rk method migration` and `rk guide migration`. The stage's collision, retired, and omitted lines are the inventory's first entries, one per finding with its disposition, and that runbook's step 1 reports the rest. The landing is its step 2, taken through `rk guide landing`, and the migration runbook owns everything around it. Before approval, state that the plan can need the gated steps below, each a `rk setup step` outside the landing.
-- `needs-decision`, from `rk assess`: stop and ask. The operator says what the tags or the second branch are before any plan claims to know, and `rk method migration` owns the verdict.
-- `recorded`, from `rk status`: `rk method landing` alone, through `rk upgrade`. A preview that prints only `matched` and `preserved` words means the target is at this release: stop and say so. The changelog and the guidance in the stage's `reference/` are the operator's reading for the releases between.
-- `newer`, a record whose `rk_version` is above the binary's: stop. `rk upgrade` refuses and names the version to install, and installing it is the operator's move.
+1. Check. Run `rk status --check --target .`, then `pre-commit run --hook-stage manual --all-files`, the suite every integration runs. Where the pre-flight found no `pre-commit`, skip the second command and state in the report that the suite did not run.
+2. Clean. Where this run staged and every check passed, print `rk stage clean <path>`, wait, and run it on a yes. It removes the stage alone. Saved copies, forge snapshots, and a migration workspace stay, and the report lists each path.
+3. Report. Fill the template from observation, with every answer the operator gave.
 
-## What the evidence allows
+On a failed check, keep the stage, report, and route: an `rk` violation goes to a new run, whose gate picks `repair`, and a failing project check is the project's own. Never repair inside the post-flight.
 
-State one class from `rk method landing` before the first edit, and let it bound what the plan can propose.
+```text
+Result: <the exact rk status --check line, or the first failing line>
+Tasks:
+  - <task>: <files written or removed>; proof: <task post-flight evidence>
+Answers recorded:
+  - <question>: <answer>
+Git and forge actions:
+  - <action>: <run under the request | printed for the operator>
+Setup proof: <compatible | stale | absent | unknown, because <reason>>
+Saved before changing:
+  - <path>: <what it holds>
+Still the operator's:
+  - <exact command>: <what it changes>
+Stage: <cleaned | kept at <path>, because <reason>>
+Next: <one action>
+```
 
-- Receipt and useful history: propose bringing each collision to the candidate, with its author and reason quoted from `git log`.
-- Receipt without useful history: propose by kind and digest, and show every edit since the record as a question.
-- History without receipt: propose only what the log attributes, and ask about every file it does not.
-- Neither: a best-effort report. Every uncertain ownership decision is a question with `AskUserQuestion`, and no file is brought to the candidate without an answer.
-
-Under every class: never copy the stage tree into the target, and never offer `stage.json` or the stage path to `rk init`, `rk upgrade`, or `rk adopt`. Candidate documentation under `artifacts/` is an ordinary destination. The `reference/` tree teaches this skill and is copied into no project.
-
-## The opt-in capabilities
-
-Each one is a recorded request, off by default, and `rk profile` reports which the catalog can select here. Offer those, with the consequence named, and let the operator answer before the plan is approved. A capability nobody asked for lands nothing and reports nothing; one the catalog reports unavailable at this target's driver and forge is not offered at all.
-
-- `--scorecard`, GitHub only: a workflow that publishes an OpenSSF Scorecard result to a public API. Read out what `rk forge github` says a run scores here, so the operator hears the ceiling before it lands.
-- `--code-scanning <provider>`: one static analysis workflow. Read the binding's own paragraph out first: `codeql` reads the declared licence and refuses a pair its terms do not cover, `semgrep` carries no such condition, and `codeql` is GitHub's alone.
-- `--nix-packaging`: the seeded package expression and the seed flake pair. `rk method model` and `rk binding <driver>` own the consequence.
-- `--reporting-policy`: the landed `SECURITY.md`. An automatic release requests it by default; a release-less profile asks for it here.
-
-Where the target already runs its own workflow for one of these, settle it at the stage: the diff says whether the target's copy is the same proof under another name. Bring it to the candidate, or leave the capability out and say the target keeps its own. Never land beside it.
-
-## Legacy operation state, from a 0.4.x release
-
-- Before the update, with the installed binary: finish every active stored operation, or record the operator's decision to abandon it, per `rk guide landing` step 1b. Abandonment is that decision and no command. An active operation stops the update.
-- Record every inactive plan, result, run journal, and release cache path under the state root as local evidence, with why each is obsolete. Do not describe their contents, and teach the new binary nothing about them.
-- After the landing passed, show those exact paths. Remove them only under explicit cleanup authorization, only after confirming no active old operation remains, and only by name, per `rk guide landing` step 5b. No `rk` verb removes them.
-
-## What waits for the operator, under the brownfield arrival
-
-Gate each of these: print the exact command, say what it changes and why, wait, then re-observe before continuing.
-
-- Removing a protection from a live branch, on any forge — `rk guide migration` steps 3a and 5a.
-- `rk setup step single-trunk --apply` — that runbook's step 5b; destructive, and its ancestry guard refusing is a stop, not an obstacle.
-- `install-bot` and `bot-secrets` — the bot identity and its credentials; `rk forge <name>` carries the walkthrough.
-- Registry actions: the first hand publish, registering the trusted publisher, turning on enforcement. `rk guide setup` names each with its reason.
-- The integration mode, on a record that predates it: such a record reads as `forge`, and `rk upgrade --integration local --apply` rewrites the hook block and the routing block to change it.
-- The release style, on a record that predates it and whose config leaves it unanswered: `rk upgrade` refuses until `--release-style` answers it, and arming an existing project's request changes what a green trunk does.
-- The development environment, where the project obtains `rk` by a host install or a hand-rolled bump — `rk guide migration` step 6, with the replacement as the default; the migration is not done while the cleanup's `leftovers` list is non-empty.
-- Regenerating what a landed configuration generates — `rk guide landing` step 4b names the order, and `rk guide setup` step 4b carries the command.
-- The predecessor's removal itself, a retired destination's removal, and every other removal: what it removes is committed first, per the migration chapter's recoverability section.
-
-## Defaults
-
-- Never run the setup steps out of order; each one names what the next depends on.
-- Never author a tag, and never edit a generated artifact workflow by hand; change its configuration and regenerate, as the binding directs.
-- Never propose a second request-reporting workflow as a gated check; `needs` resolves inside one file, so the gate reaches a job only in its own.
-- Never answer provenance with a signing scheme of your own; take what the channel offers by default, and where it offers nothing, say so.
-- Prefer an rk verb over a raw forge call; where no verb covers the gap, use the forge CLI and say that the loop is outside the convention there.
-- Report every gated step's outcome from observation, never from the operator's word alone, and leave the repository releasable at every stop. Read a setup gap in four words. A current failure, from a check that could observe it, supersedes any proof. A current unknown proves nothing wrong. A compatible last proof, from `rk setup status`, still describes the target, and no proof means absent, stale, or invalid. Only the first is a missing setup, and no secret is asked for so a check can pass here.
-- Never widen an approved scope inline: a mode or style change, a second branch, a workspace promotion — whose layout is `rk method worktrees` and whose commands are `rk guide worktree` step 5, run by the operator alone — is its own plan, and a gap the stage reports that the inventory does not name returns to planning first.
-- A refusal from `rk init`, `rk upgrade`, or `rk adopt` is a finding for the investigation, never a flag to add.
+Print "Git and forge actions" and "Saved before changing" only where the run has an entry for them.

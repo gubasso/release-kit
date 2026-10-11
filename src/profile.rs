@@ -131,6 +131,22 @@ pub struct CapabilityRequests {
     /// The code scanning workflow, by provider.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code_scanning: Option<Provider>,
+    /// The workflow guards: the agent and commit policy lines, the
+    /// glossary, the workflow hooks, and two setup steps. A record that
+    /// predates the capability carries no key: that is the pending answer,
+    /// and it reads as kept until the operator answers it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_guards: Option<bool>,
+}
+
+impl CapabilityRequests {
+    /// Whether the workflow guards land. The pending answer of a record
+    /// that predates the capability reads as kept, because every such
+    /// target carries them.
+    #[must_use]
+    pub fn workflow_guards(&self) -> bool {
+        self.workflow_guards.unwrap_or(true)
+    }
 }
 
 /// Where a resolved value came from.
@@ -251,6 +267,8 @@ pub struct Inputs<'a> {
     /// Code scanning override: `Some(None)` turns it off, and absence
     /// leaves the configuration and the record to answer.
     pub code_scanning: Option<Option<Provider>>,
+    /// Workflow guards request override.
+    pub workflow_guards: Option<bool>,
 }
 
 /// Compatibility policy for a landing candidate.
@@ -462,6 +480,12 @@ impl Params {
         self.capabilities.code_scanning
     }
 
+    /// Whether the workflow guards land for this landing.
+    #[must_use]
+    pub fn workflow_guards(&self) -> bool {
+        self.capabilities.workflow_guards()
+    }
+
     /// The project path used by parameter-bearing files, empty where the
     /// target has no forge repository.
     #[must_use]
@@ -593,6 +617,9 @@ impl Params {
         if self.capabilities.scorecard {
             out.push_str(" --scorecard");
         }
+        if self.workflow_guards() {
+            out.push_str(" --workflow-guards");
+        }
         // The provider flag takes a value, so `off` is a statable answer and
         // is stated: a committed `capabilities.code_scanning` would
         // otherwise re-enable on replay exactly what this preview turned
@@ -618,13 +645,14 @@ impl Params {
     pub fn capability_toggles(&self) -> String {
         let word = |on: bool| if on { "on" } else { "off" };
         format!(
-            " --nix-packaging {} --reporting-policy {} --scorecard {} --code-scanning {}",
+            " --nix-packaging {} --reporting-policy {} --scorecard {} --code-scanning {} --workflow-guards {}",
             word(self.capabilities.nix_packaging),
             word(self.capabilities.reporting_policy),
             word(self.capabilities.scorecard),
             self.capabilities
                 .code_scanning
-                .map_or("off", Provider::as_str)
+                .map_or("off", Provider::as_str),
+            word(self.workflow_guards())
         )
     }
 }
@@ -657,6 +685,7 @@ impl Params {
                 reporting_policy: true,
                 scorecard: false,
                 code_scanning: None,
+                workflow_guards: Some(true),
             },
             repo: repo.to_owned(),
             security_contact: String::new(),
@@ -728,6 +757,11 @@ impl Params {
     /// The same set with the code scanning provider answered.
     pub(crate) const fn set_code_scanning_for_test(&mut self, provider: Option<Provider>) {
         self.capabilities.code_scanning = provider;
+    }
+
+    /// The same set with the workflow guards answered.
+    pub(crate) const fn set_workflow_guards_for_test(&mut self, on: bool) {
+        self.capabilities.workflow_guards = Some(on);
     }
 }
 
@@ -1234,6 +1268,25 @@ pub fn resolve(
     ])
     .unwrap_or((None, Source::Default));
     sources.insert("capabilities.code_scanning", source);
+    // The workflow guards are off for a fresh landing. A record that
+    // predates the capability carries the pending answer, which keeps
+    // them: no record is stripped of guards it landed without a question.
+    // An adoption states them with its flag where the target carries them.
+    let (workflow_guards, source) = answered([
+        (flags.workflow_guards, Source::Flag),
+        (
+            config.and_then(|c| c.capabilities.workflow_guards),
+            Source::Config,
+        ),
+        (
+            record.map(|r| r.capabilities.workflow_guards()),
+            Source::Record,
+        ),
+        (None, Source::Observation),
+        (Some(false), Source::Default),
+    ])
+    .unwrap_or((false, Source::Default));
+    sources.insert("capabilities.workflow_guards", source);
     // A requested scanner this release cannot land at these dimensions is
     // an unavailable optional capability, not a malformed request. The
     // catalog reports it and the landing omits it, which is what
@@ -1384,6 +1437,7 @@ pub fn resolve(
                 reporting_policy,
                 scorecard,
                 code_scanning,
+                workflow_guards: Some(workflow_guards),
             },
             repo,
             security_contact,

@@ -117,7 +117,7 @@ impl StepState {
 }
 
 /// One read-only forge API answer.
-enum Api {
+pub(crate) enum Api {
     /// The call succeeded and parsed.
     Ok(Value),
     /// The forge answered 404: the thing is not there.
@@ -548,7 +548,7 @@ fn gitlab_candidate_guard(
 }
 
 /// One captured, read-only forge API call.
-fn api_get(ctx: &Ctx, run: &mut Runner, path: &str) -> Result<Api, RkError> {
+pub(crate) fn api_get(ctx: &Ctx, run: &mut Runner, path: &str) -> Result<Api, RkError> {
     let exec = Exec {
         program: ctx.cli.clone().into_os_string(),
         args: vec!["api".into(), path.into()],

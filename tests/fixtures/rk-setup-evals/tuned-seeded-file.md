@@ -1,6 +1,10 @@
-# Tuned seeded file: the target's configuration survives
+# Tuned seeded file: the project's edit to its own file survives
 
 - case: tuned-seeded-file
+- classification: upgrade
+- intent: upgrade
+- provision: no
+- tasks: `upgrade`
 - landing: yes
 - receipt: present
 - history: useful
@@ -9,24 +13,29 @@
 
 ## Situation
 
-A landed target whose `release-plz.toml` the operator filled after the first landing. The receipt records it as `seeded`.
+A target landed by an older `rk` whose seeded `release-plz.toml` the project tuned. `rk status --target . --json` reads `classification` `upgrade`, and seeded drift is informational.
+
+## Gate
+
+Present "State: `upgrade`. Request: upgrade. Tasks: `upgrade`. Proceed?" and wait for the operator.
 
 ## Route
 
-1. `rk guide landing` step 1a: run `rk --version` and `rk self-depend status --target .`. The installed version is the one the operator chose. No step selects, fetches, or installs another.
-2. `rk guide landing` step 1c: run `rk stage --target .` and hold `<stage>` for the whole task.
-3. `rk guide landing` step 2a: read `<stage>/stage.json`, `<stage>/artifacts/`, and `<stage>/reference/`. The stage lists the file under `seeded present`, so a landing keeps it.
-4. `rk guide landing` step 2b: diff each artifact against the working tree, read `.release-kit/manifest.json`, and read `git log` and `git diff` for each differing destination. The artifact differs from the disk, and the difference is the operator's tuning.
-5. State the evidence class: receipt plus useful history. Propose no change to the file. The landing will print `drift` or `preserved` and carry the current digest into the receipt.
-6. `rk guide landing` step 3: preview `rk upgrade --target .`, read `drift` for the file and no `replaced`, then run `rk upgrade --target . --apply`.
-7. `rk guide landing` step 4: compare `git diff --stat` with `<stage>/artifacts/`, then run `rk status --check --target .`, `rk setup check --target .`, and the project's checks. The tuned bytes differ from the artifact by design, and the check reports the seeded drift as informational.
-8. `rk guide landing` step 5a: show `rk stage clean <stage>`. Run it only because the request's authority includes cleanup.
+1. General pre-flight: run the pre-flight gate, then read `rk status --target . --json`, `rk self-depend status --target . --json`, and `rk setup status --target . --json`.
+2. `upgrade` pre-flight: read `config.pending` and `legacy_state` in the status report.
+3. Stage, `rk guide landing` step 1c: run `rk stage --target . --json` and hold `<root>`.
+4. Compare, `rk guide landing` step 2b: run `rk stage compare <root> --target . --json`. The seeded row reads `differs` with the word `drift`: the landing keeps the project's bytes, so nothing is asked.
+5. Land, `rk guide landing` step 4: preview `rk upgrade --stage <root> --target .`, quote every word, then run it with `--apply` as a gated step.
+6. Prove, `rk guide landing` step 5a: run `rk stage compare <root> --target . --json` again. Every `rendered` and `region` row reads `equal`.
+7. General post-flight: run `rk status --check --target .`, then `pre-commit run --hook-stage manual --all-files`.
+8. Clean: print `rk stage clean <root>`, wait, and run it only because the request's authority includes cleanup.
+9. Report: fill the template from observation, with every answer the operator gave.
 
 ## Authority
 
 - The request authorizes the file changes and the `rk` verbs it names. Branch, commit, push, and pull request actions are the operator's unless the request named them.
-- Nothing is copied out of `<stage>/artifacts/` into the target, and `stage.json` is offered to no verb. Production renders afresh.
-- The tuning is never brought to the artifact's bytes: a seeded file is the target's after the first landing.
+- Nothing is copied out of `<stage>/artifacts/` into the target, and `stage.json` is offered to no verb but through `--stage <root>`, which reads its parameters alone. Production renders afresh from the stage's parameters.
+- A seeded file is the project's own and is never brought to the candidate.
 
 ## Documentation
 

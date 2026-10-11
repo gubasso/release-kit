@@ -10,6 +10,7 @@
   - [`project-profile:an-unknown-category-is-preserved` — An unknown category is preserved](#project-profilean-unknown-category-is-preserved--an-unknown-category-is-preserved)
   - [`project-profile:availability-belongs-to-a-capability-at-its-dimensions` — Availability belongs to a capability at its dimensions](#project-profileavailability-belongs-to-a-capability-at-its-dimensions--availability-belongs-to-a-capability-at-its-dimensions)
   - [`project-profile:a-capability-is-available-only-when-complete` — A capability is available only when complete](#project-profilea-capability-is-available-only-when-complete--a-capability-is-available-only-when-complete)
+  - [`project-profile:the-workflow-rules-are-one-opt-in` — The workflow rules are one opt-in](#project-profilethe-workflow-rules-are-one-opt-in--the-workflow-rules-are-one-opt-in)
   - [`project-profile:every-field-resolves-by-one-precedence` — Every field resolves by one precedence](#project-profileevery-field-resolves-by-one-precedence--every-field-resolves-by-one-precedence)
   - [`project-profile:a-record-is-source-free` — A record is source-free](#project-profilea-record-is-source-free--a-record-is-source-free)
   - [`project-profile:the-observation-proposes-a-release-mode` — The observation proposes a release mode](#project-profilethe-observation-proposes-a-release-mode--the-observation-proposes-a-release-mode)
@@ -97,6 +98,18 @@ A capability MUST be selected only where its whole contribution lands active, an
 - THEN the title fragment lands, the root pipeline is withheld naming the `include` line the operator adds, the target's pipeline is untouched, and the landing succeeds
 
 Verify: `cargo nextest run -E 'test(an_occupied_gitlab_root_pipeline_withholds_the_title_gate)'`
+
+### `project-profile:the-workflow-rules-are-one-opt-in` — The workflow rules are one opt-in
+
+The catalog MUST hold every landed rule that only shapes how a project works in one capability, `git.workflow-guards`, requested by `capabilities.workflow_guards` and off for a fresh landing: the agent policy and commit policy lines of the routing block, the glossary, the hooks `conventional-pre-commit`, `rk-message`, `rk-branch-name`, `rk-worktree-location`, `rk-no-push-to-trunk`, and `no-commit-to-branch`, and the setup steps `merge-cleanup` and `branch-reminder`. The always-selected `git.guards` MUST keep only what the release process needs: the routing lines, the scoped title of the trunk commit, the tag, generated-workflow, status, and secret rules, and the hooks `rk-no-hand-authored-tag` and `rk-status-check`. A tool intervenes in a project's workflow as little as it can, so a rule that exists only to shape that workflow lands where the operator asks for it by name.
+
+#### Scenario: A fresh landing asks for nothing
+
+- GIVEN a target with no record and no answer for the workflow guards
+- WHEN `rk init --apply` runs
+- THEN the routing block and the hook block land with the release lines and hooks alone, no glossary lands, and `git.workflow-guards` reports `not-requested`
+
+Verify: `cargo nextest run -E 'test(a_fresh_landing_lands_none_of_the_workflow_guards) or test(the_workflow_guards_are_selected_only_when_requested) or test(the_workflow_guards_land_only_where_requested)'`
 
 ### `project-profile:every-field-resolves-by-one-precedence` — Every field resolves by one precedence
 

@@ -10,3 +10,5 @@ Bugzilla = "Bugzilla"
 dprint = "dprint"
 lychee = "lychee"
 md-toc = "md-toc"
+# An author surname in the skill format sources.
+Sclar = "Sclar"

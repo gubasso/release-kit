@@ -51,7 +51,7 @@ Verify: `cargo nextest run -E 'test(fresh_init_preview_is_read_only_and_apply_wr
 
 ### `landing:a-record-states-its-schema` — A record states its schema
 
-The receipt MUST carry an integer `schema_version`, and a receipt at a version this binary does not know MUST refuse by that record schema alone, naming the record and independent of any other schema, never a best-effort read, because commands make decisions from it and must be able to say when they cannot, and at schema 10 the receipt MUST name the producing `rk_version`, the origin, the resolved target configuration by domain — the source-free profile snapshot, the Git workflow including the integration authority, and the capability requests — the remaining render parameters, and per destination the path, the kind, the placement where the destination is a marked region, and the digest of the bytes or region now present, and this binary MUST read a receipt at schemas 1 through 9 through one bounded conversion that ignores the two retired digest fields, reads the one recorded technology as the sole technology and the automatic release driver, moves each flat parameter into the domain that owns it, and reads a Git workflow naming no integration authority as `forge`, which is the authority such a receipt landed, and write schema 10 at the next successful landing.
+The receipt MUST carry an integer `schema_version`, and a receipt at a version this binary does not know MUST refuse by that record schema alone, naming the record and independent of any other schema, never a best-effort read, because commands make decisions from it and must be able to say when they cannot, and at schema 10 the receipt MUST name the producing `rk_version`, the origin, the resolved target configuration by domain — the source-free profile snapshot, the Git workflow including the integration authority, and the capability requests — the remaining render parameters, and per destination the path, the kind, the placement where the destination is a marked region, and the digest of the bytes or region now present, and this binary MUST read a receipt at schemas 1 through 9 through one bounded conversion that ignores the two retired digest fields, reads the one recorded technology as the sole technology and the automatic release driver, moves each flat parameter into the domain that owns it, and reads a Git workflow naming no integration authority as `forge`, which is the authority such a receipt landed, and write schema 10 at the next successful landing, and a receipt that does not parse MUST refuse with the reason `record-invalid`, an action, and exit 73, because the receipt is the target's file to restore and never a defect of this binary.
 
 #### Scenario: A schema 3 receipt and a schema 999 receipt meet this binary
 
@@ -59,7 +59,7 @@ The receipt MUST carry an integer `schema_version`, and a receipt at a version t
 - WHEN `rk upgrade --apply` runs against each
 - THEN the first loads with no other release resolved and rewrites as schema 10 carrying neither retired field and stating its domains, and the second exits 73 naming the record and the version it found with nothing written
 
-Verify: `cargo nextest run -E 'test(receipt_schemas_1_through_7_load_without_a_release_source_and_rewrite_as_schema_8) or test(an_upgrade_migrates_a_schema_1_record_to_the_current_schema) or test(a_receipt_newer_than_the_binary_refuses_by_record_schema) or test(production_outputs_carry_no_plan_bundle_or_release_selection_field)'`
+Verify: `cargo nextest run -E 'test(receipt_schemas_1_through_7_load_without_a_release_source_and_rewrite_as_schema_8) or test(an_upgrade_migrates_a_schema_1_record_to_the_current_schema) or test(a_receipt_newer_than_the_binary_refuses_by_record_schema) or test(production_outputs_carry_no_plan_bundle_or_release_selection_field) or test(a_broken_or_alien_record_fails_by_its_taxonomy)'`
 
 ### `landing:a-rendered-file-is-reproducible` — A rendered file is reproducible
 
@@ -99,15 +99,15 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `landing:ownership-is-elementary` — Ownership is elementary
 
-When `rk init --apply` or `rk upgrade --apply` lands, it MUST decide each destination by its recorded kind alone: an absent candidate destination is created, a destination the receipt records as a `rendered` whole file is replaced from this binary's projection even where its bytes changed, a recorded `seeded` or `state` file is preserved with its current digest entering the new receipt, a recorded marked region is replaced alone with every byte outside it preserved, a whole-file destination absent from the receipt and already holding the candidate's bytes is recorded as matched, and a whole-file destination present on disk, absent from the receipt, and differing from the candidate refuses before any write. A recorded file is replaced because the operator and the agent authorized the migration and Git holds the recovery. A refusal collects every unattributed collision and every malformed, doubled, or unmatched marker in one pass and routes to `rk stage` and the `rk-setup` skill. The verbs offer no force flag: an unattributed file becomes landable through the agent's migration alone, which brings the target to the projection or records it through `rk adopt`.
+When `rk init --apply` or `rk upgrade --apply` lands, it MUST decide each destination by its recorded kind alone: an absent candidate destination is created, a recorded `rendered` whole file or marked region whose bytes the receipt vouches for, or which already holds the candidate's bytes, is replaced from this binary's projection with every byte outside a region preserved, a recorded `seeded` or `state` file is preserved with its current digest entering the new receipt, a whole-file destination absent from the receipt and already holding the candidate's bytes is recorded as matched, and every conflict refuses before any write. A conflict is a whole-file destination present on disk, absent from the receipt, and differing from the candidate, or a recorded `rendered` file or region whose bytes the receipt no longer vouches for. A refusal collects every conflict and every malformed, doubled, or unmatched marker in one pass and routes to `rk stage compare` and the `rk-setup` skill. No flag forces past a refusal: only `--replace <path>`, repeatable, passes the conflict it names, after the verb saves that file's bytes to `replaced/<path>` under `$XDG_STATE_HOME/release-kit/snapshots/<repo>/<timestamp>/` and the report names where, and a name that is no conflict is a usage error. A saved copy never lives inside a stage, and the verb never overwrites one with other bytes.
 
 #### Scenario: An edited owned file and an unattributed file meet an upgrade
 
 - GIVEN a landed target whose recorded workflow was edited by hand and whose `SECURITY.md` exists with no receipt entry
-- WHEN `rk upgrade --apply` runs
-- THEN it exits 73 naming `SECURITY.md` before any write, and once the agent records or removes that file a rerun replaces the workflow from the projection and preserves the tuned seeded files
+- WHEN `rk upgrade --apply` runs, then runs again with `--replace` naming each conflict
+- THEN the first run exits 73 naming both before any write, and the second saves both files' bytes where its report names, replaces them from the projection, and preserves the tuned seeded files
 
-Verify: `cargo nextest run -E 'test(an_upgrade_replaces_a_recorded_generated_file_whose_bytes_differ) or test(seeded_and_state_files_survive_and_their_current_digests_enter_the_receipt) or test(a_marked_region_upgrades_and_the_surrounding_bytes_survive) or test(every_unattributed_collision_and_malformed_marker_is_collected_before_the_first_write)'`
+Verify: `cargo nextest run -E 'test(an_upgrade_refuses_an_edited_rendered_file_until_replace_names_it) or test(seeded_and_state_files_survive_and_their_current_digests_enter_the_receipt) or test(a_marked_region_upgrades_and_the_surrounding_bytes_survive) or test(every_unattributed_collision_and_malformed_marker_is_collected_before_the_first_write) or test(a_saved_copy_is_never_overwritten_with_other_bytes)'`
 
 ### `landing:a-partial-landing-is-visible-and-rerunnable` — A partial landing is visible and rerunnable
 
@@ -123,7 +123,7 @@ Verify: `cargo nextest run -E 'test(a_failpoint_at_every_write_boundary_leaves_w
 
 ### `landing:a-missing-receipt-is-a-classification` — A missing receipt is a classification
 
-Where a target carries no receipt, `rk init` MUST create absent candidates, record a present whole file whose bytes equal the candidate as matched, and refuse a differing unattributed file, `rk adopt` MUST record only a target the agent already brought to the installed projection, `rk upgrade` MUST refuse naming the missing receipt, and each of them MUST read the receipt and the tree alone, routing the best-effort migration to `rk stage` and the `rk-setup` skill.
+Where a target carries no receipt, `rk init` MUST create absent candidates, record a present whole file whose bytes equal the candidate as matched, and refuse a differing unattributed file the operator did not name, `rk adopt` MUST record only a target at the installed projection once the destinations the operator named are replaced, `rk upgrade` MUST refuse naming the missing receipt, and each of them MUST read the receipt and the tree alone, routing the best-effort migration to `rk stage` and the `rk-setup` skill.
 
 #### Scenario: A target lost its receipt and its history
 
@@ -183,7 +183,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `landing:status-judges-only-under-check` — Status judges only under check
 
-Plain `rk status` MUST report and exit 0 for every reportable state — drift, staleness, unresolved sentinels, invariant failures, a pending projection, and no landing at all — and `rk status --check` MUST compute the identical report and exit 1 exactly on a violation: drift to a `rendered` file, a record whose own parameters do not reproduce its recorded bytes or its recorded destination set, an invalid or missing landing, an unresolved judgment sentinel, or an invariant failure under `landing:a-seeded-file-still-carries-the-invariants`. Seeded drift, pin staleness, a pending projection, and committed configuration the landing verbs have yet to take up stay informational in both modes. A pending projection is what the report MUST route an upgrade from, counted as the destinations this binary's projection under the recorded parameters would add, drop, reclassify, or rewrite; the recorded `rk_version` names the binary that wrote the record and MUST prompt nothing on its own, because a release that changes no landed file leaves the target with nothing to take and the two facts answer different questions.
+Plain `rk status` MUST report and exit 0 for every reportable state — drift, staleness, unresolved sentinels, invariant failures, a pending projection, and no landing at all — and `rk status --check` MUST compute the identical report and exit 1 exactly on a violation: drift to a `rendered` file, a record whose own parameters do not reproduce its recorded bytes or its recorded destination set, an invalid or missing landing, an unresolved judgment sentinel, or an invariant failure under `landing:a-seeded-file-still-carries-the-invariants`. Seeded drift, pin staleness, a pending projection, and committed configuration the landing verbs have yet to take up stay informational in both modes. A pending projection is what the report MUST route an upgrade from, counted as the destinations this binary's projection under the recorded parameters would add, drop, reclassify, or rewrite; the recorded `rk_version` names the binary that wrote the record and MUST prompt nothing on its own, because a release that changes no landed file leaves the target with nothing to take and the two facts answer different questions. In both modes the report MUST also state whether the target is a non-bare Git work tree, each unresolved sentinel by file and line beside the count, and each path a 0.4.x release left under the state root with whether it holds an operation that release could still apply, so a reader stops on a field and never searches the disk by hand.
 
 #### Scenario: The same target, judged and not
 
@@ -195,27 +195,27 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `landing:a-landing-classifies-its-target-first` — A landing classifies its target first
 
-Where a setup or migration task finds no landing record at a target, the skills and the shared pre-flight gate MUST route by `rk assess`, which MUST report its evidence and exactly one verdict — `brownfield` where another tool's release marker or a landed destination is already present, `greenfield` where no release mechanism and no release history exists, and `needs-decision` where tags or a second long-lived branch exist with no mechanism behind them — writing nothing, touching no network, and exiting 0 on every verdict, because a target already releasing somehow that reads as a fresh start is how a repository ends up with two release paths.
+`rk status --json` MUST report exactly one `classification` by one rule, writing nothing, touching no network, and exiting 0 on every value: with no record, `adopt` where a release-kit marked region or a rendered file holding this binary's bytes is present, else `migration` where another tool's release marker or a landed destination is present, `needs-decision` where tags or a second long-lived branch exist with no mechanism behind them, and `setup` where none of these holds; with a record, `upgrade` where this binary is newer than the record, `drift` where `rk status --check` fails, `current` where it passes, and null where the record is newer than this binary. An open migration reads `migration` before every other value, with or without a record, except a record newer than this binary, which still reads null. `rk assess` MUST apply the same rule to a target with no record and report its evidence with the verdicts `greenfield`, `brownfield`, and `needs-decision`, because a target already releasing somehow that reads as a fresh start is how a repository ends up with two release paths.
 
-#### Scenario: A target releasing through another tool carries no record
+#### Scenario: A landing lost its record and gained a changelog
 
-- GIVEN a repository holding a release tool's configuration and no `.release-kit/manifest.json`
-- WHEN `rk assess --target . --json` runs
-- THEN the report classifies `brownfield`, names the marker, and exits 0, so the routing skill loads the migration procedure instead of landing the convention beside the tool
+- GIVEN a repository holding release-kit's marked regions, a `CHANGELOG.md`, and no `.release-kit/manifest.json`
+- WHEN `rk status --target . --json` runs
+- THEN it classifies `adopt` and exits 0, because the release-kit regions outrank the changelog that alone would read as another tool's
 
-Verify: `cargo nextest run -E 'test(/^assess_/)'`
+Verify: `cargo nextest run -E 'test(/^assess_/) or test(status_reports_each_of_the_seven_classifications)'`
 
 ### `landing:an-adoption-writes-the-record-and-nothing-else` — An adoption writes the record and nothing else
 
-`rk adopt` MUST verify every `rendered` destination byte for byte against this binary's projection, refuse listing every mismatch and every missing expected file in one run, and end a successful pass by writing only inside `.release-kit/`, the config and then the receipt, last, with its origin stating the adoption, leaving every landed destination untouched.
+`rk adopt` MUST verify every `rendered` destination byte for byte against this binary's projection, refuse listing every mismatch and every missing expected file the operator did not name with `--replace` in one run, save each named file's bytes before it writes the candidate there, and end a successful pass with the config and then the receipt, last, inside `.release-kit/`, with its origin stating the adoption, leaving every destination the operator did not name untouched.
 
-#### Scenario: A pre-record target is adopted
+#### Scenario: A target an older release landed is adopted
 
-- GIVEN a repository running the convention with no record, matching what this binary renders
-- WHEN `rk adopt --apply` runs
-- THEN the manifest appears with `origin` set to `adopt`, the config appears beside it, every landed destination stays unchanged, and `rk status` then reports the landing
+- GIVEN a repository running the convention with no record, one workflow holding an older release's bytes, and a stage taken for it
+- WHEN `rk adopt --stage <root> --apply` runs, then runs again with `--replace` naming the workflow
+- THEN the first run refuses naming the workflow, and the second saves its bytes, writes the candidate there, writes the manifest with `origin` set to `adopt`, and leaves every other destination unchanged
 
-Verify: `cargo nextest run -E 'binary(cli)'`
+Verify: `cargo nextest run -E 'test(an_adoption_replaces_only_the_named_file_and_the_copy_outlives_the_stage) or test(a_missing_receipt_routes_init_adopt_and_upgrade_by_classification)'`
 
 ### `landing:a-block-destination-owns-its-marked-lines-alone` — A block destination owns its marked lines alone
 
@@ -231,19 +231,19 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `landing:a-landed-hook-serves-the-release-convention-alone` — A landed hook serves the release convention alone
 
-The hook block MUST carry only hooks enforcing the release convention's own rules — the commit contract and the local mirrors of the forge protections — never general hygiene, which stays the target's own, and every third-party hook it names MUST be pinned in `versions.toml`.
+The hook block MUST carry the two hooks the release process needs, the tag guard and the status check, and only under the workflow guards the commit contract and the local mirrors of the forge protections, never general hygiene, which stays the target's own, and every third-party hook it names MUST be pinned in `versions.toml`.
 
 #### Scenario: The block's hooks are enumerated
 
 - GIVEN a landed `.pre-commit-config.yaml` block
 - WHEN its hooks are read beside `rk versions`
-- THEN each hook maps to a rule the method states, and each third-party repository the block names carries a registry pin
+- THEN each hook maps to a rule the method states, the workflow hooks appear only where the record selects the workflow guards, and each third-party repository the block names carries a registry pin
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `landing:the-landed-guards-hold-the-message-content` — The landed guards hold the message content
 
-The landed commit-msg hook MUST refuse a message referencing a git-ignored path, carrying agent attribution, or naming a scope outside the one shape the landed title check admits, exempting only the release bot's request, recognized by exactly the title shape the landed title check admits for the bot. The scope's shape is a gate and its vocabulary is not: no landing records a scope list, the landed hooks require that a scope is present, and the routing block carries the guidance an author reads to choose the word. Where the forge carries the request's description onto the trunk, the landed required check MUST refuse a body matching the same patterns — the bot's request exempt whole, since the check has no ignore rules to consult — and the two pattern copies MUST be held equal by test.
+Where the target selects the workflow guards, the landed commit-msg hook MUST refuse a message referencing a git-ignored path, carrying agent attribution, or naming a scope outside the one shape the landed title check admits, exempting only the release bot's request, recognized by exactly the title shape the landed title check admits for the bot. The scope's shape is a gate and its vocabulary is not: no landing records a scope list, the landed hooks require that a scope is present, and the routing block carries the guidance an author reads to choose the word. Where the forge carries the request's description onto the trunk, the landed required check MUST refuse a body matching the same patterns — the bot's request exempt whole, since the check has no ignore rules to consult — and the two pattern copies MUST be held equal by test.
 
 #### Scenario: A message references an internal planning artifact
 
@@ -279,13 +279,13 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `landing:the-routing-block-bounds-the-agents-initiative` — The routing block bounds the agent's initiative and reads as plain prose
 
-The routing block MUST state that an agent acting in the target guides and never drives: that a request to change code authorizes the file changes alone, and that a git or forge action — creating, switching or deleting a branch, creating or removing a worktree, committing, pushing, tagging, and opening, updating or merging a pull request among them — happens only where the operator's request named that action. It is the one landed line no mechanism enforces — a hook and a forge protection bound the end state and cannot tell an agent from a person — so the target carries it as a sentence rather than leaving an agent to discover it by refusal. Every line of the block MUST also read as plain prose — a simple tense, no contraction, no modal outside can, will and must, no semicolon, no dash splicing two statements, and no sentence over 25 words — because the target owns none of these lines, so a prose gate the target runs over its own `AGENTS.md` finds a defect it cannot repair and the renderer is the only place that can answer it. The block MUST name the glossary destination and list the terms release-kit owns there, because a separate file loads into no session on its own and a term the agent cannot see is a term the operator cannot use.
+The routing block MUST carry no line that tells the project how to start work, integrate a branch, or lay out its working copies, in any capability state, because that workflow is the project's own, and where the target selects the workflow guards, the block MUST state that an agent acting in the target guides and never drives: that a request to change code authorizes the file changes alone, and that a git or forge action — creating, switching or deleting a branch, creating or removing a worktree, committing, pushing, tagging, and opening, updating or merging a pull request among them — happens only where the operator's request named that action. It is the one landed line no mechanism enforces — a hook and a forge protection bound the end state and cannot tell an agent from a person — so the target carries it as a sentence rather than leaving an agent to discover it by refusal. Every line of the block MUST also read as plain prose — a simple tense, no contraction, no modal outside can, will and must, no semicolon, no dash splicing two statements, and no sentence over 25 words — because the target owns none of these lines, so a prose gate the target runs over its own `AGENTS.md` finds a defect it cannot repair and the renderer is the only place that can answer it. Under the workflow guards, the block MUST name the glossary destination and list the terms release-kit owns there, because a separate file loads into no session on its own and a term the agent cannot see is a term the operator cannot use.
 
 #### Scenario: The block is read for what it authorizes
 
 - GIVEN the routing block release-kit renders into a target's `AGENTS.md`
 - WHEN the test suite reads it
-- THEN it carries the line bounding the agent's initiative, no line ordering an agent to branch, commit, or merge on its own, and no line a prose gate would report
+- THEN the guarded block carries the line bounding the agent's initiative, no block carries a line ordering an agent to branch, commit, or merge on its own or naming a workflow helper, and no line a prose gate would report
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 
@@ -303,15 +303,15 @@ Verify: `cargo nextest run -E 'test(python_on_gitlab_reports_unavailable_and_app
 
 ### `landing:the-nix-capability-is-a-recorded-opt-in` — An opt-in capability is a recorded landing parameter
 
-A landing MUST include an opt-in capability's destinations only under an explicit request recorded under `capabilities`, defaulting off, with a record predating the parameter reading as opt-out, because the projection must stay reproducible from the record: without the parameter, `status` cannot tell an absent-because-not-wanted file from a drifted one, and `upgrade` cannot decide whether to add the files. Three capabilities are bound by this rule: the Nix destinations, the OpenSSF Scorecard workflow, which posts to a public API and reads repository metadata, and the code scanning workflow, whose parameter names the analyzer. Each stays a target's choice rather than a guard this method requires. A capability whose files are technology-independent and which one forge alone can run MUST ship them in that forge's shared zone, so the parameter records the target's answer on either forge and the projection lands nothing the forge cannot execute; a capability whose files read one language MUST ship them in that binding's own pair instead, and a landing for a binding that ships none MUST report the capability unavailable by name and omit its destinations, per [the project profile specification](./SPEC-project-profile.md). A capability whose parameter names a provider MUST land exactly the destination that provider owns, and where a provider the target's dimensions can land carries terms that bind the codebase it runs over, the landing MUST read the licence the binding declares and refuse the pair by name, writing nothing and naming a provider that carries no such condition, because a workflow whose terms the codebase does not satisfy is a licence violation this convention does not commit on a target's behalf; a licence that lapses after the landing MUST report as a warning under a stable code that `rk status --check` exits 0 on, because the target is not broken and the licensing decision is the operator's.
+A landing MUST include an opt-in capability's destinations only under an explicit request recorded under `capabilities`, defaulting off, with a record predating the parameter reading as opt-out, except the workflow guards, because the projection must stay reproducible from the record: without the parameter, `status` cannot tell an absent-because-not-wanted file from a drifted one, and `upgrade` cannot decide whether to add the files. Four capabilities are bound by this rule: the Nix destinations, the OpenSSF Scorecard workflow, which posts to a public API and reads repository metadata, the code scanning workflow, whose parameter names the analyzer, and the workflow guards. Each stays a target's choice rather than a guard this method requires. The workflow guards are the one capability whose old record does not read as opt-out: a record predating the parameter carries a pending answer that reads as kept, `rk upgrade` MUST report it once with its default and keep the guards unless the operator answers off, and the rewritten record MUST state the answer, because every target that landed before the capability carries the guards and no record is stripped of them without a question. A capability whose files are technology-independent and which one forge alone can run MUST ship them in that forge's shared zone, so the parameter records the target's answer on either forge and the projection lands nothing the forge cannot execute; a capability whose files read one language MUST ship them in that binding's own pair instead, and a landing for a binding that ships none MUST report the capability unavailable by name and omit its destinations, per [the project profile specification](./SPEC-project-profile.md). A capability whose parameter names a provider MUST land exactly the destination that provider owns, and where a provider the target's dimensions can land carries terms that bind the codebase it runs over, the landing MUST read the licence the binding declares and refuse the pair by name, writing nothing and naming a provider that carries no such condition, because a workflow whose terms the codebase does not satisfy is a licence violation this convention does not commit on a target's behalf; a licence that lapses after the landing MUST report as a warning under a stable code that `rk status --check` exits 0 on, because the target is not broken and the licensing decision is the operator's.
 
 #### Scenario: An old record meets a newer binary
 
-- GIVEN a landed target whose record predates either parameter
+- GIVEN a landed target whose record predates the Nix, Scorecard, code scanning, and workflow guards parameters
 - WHEN `rk upgrade` runs
-- THEN no destination of that capability joins the landing, and the rewritten record states the opt-out explicitly
+- THEN no destination of the first three joins the landing, the workflow guards stay with their pending answer reported, and the rewritten record states each answer explicitly
 
-Verify: `cargo nextest run -E 'test(a_pre_nix_record_upgrades_to_nothing_unrequested) or test(/scorecard/)'`
+Verify: `cargo nextest run -E 'test(a_pre_nix_record_upgrades_to_nothing_unrequested) or test(/scorecard/) or test(an_upgrade_keeps_the_guards_of_a_record_that_predates_them)'`
 
 ### `landing:the-flake-pair-lands-all-or-nothing` — The flake pair lands all-or-nothing
 

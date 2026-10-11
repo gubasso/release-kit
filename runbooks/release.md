@@ -9,7 +9,7 @@ On github:
 ```bash
 # 1. land the work through squash-merged pull requests
 just check                                    # or the binding's check command
-rk setup step package-check --target .
+rk setup step package-check --target . --apply
 # 2. read the release request the bot keeps open
 gh pr list --repo <repo> --state open
 # 3. hold it, or correct the changelog on an unarmed request
@@ -26,7 +26,7 @@ On gitlab:
 ```bash
 # 1. land the work through squash-merged merge requests
 just check                                    # or the binding's check command
-rk setup step package-check --target .
+rk setup step package-check --target . --apply
 # 2. read the release request the bot keeps open
 glab mr list
 # 3. hold it, or correct the changelog on an unarmed request
@@ -46,7 +46,7 @@ Release intent captured in the squash titles, each on a change the bot attribute
 
 ```bash
 just check                                    # or the binding's check command
-rk setup step package-check --target .
+rk setup step package-check --target . --apply
 # check: both exit 0; the trunk is releasable
 ```
 
@@ -157,7 +157,16 @@ glab mr view <release mr>
 # check: still open under the same number
 ```
 
-A new number means the bot reopened the request and took the fix: redo the correction on the new request and merge without waiting.
+Then read the entry the request carries now, because a refresh regenerates it:
+
+```bash
+git fetch origin "<bot branch>"
+git show FETCH_HEAD:CHANGELOG.md | sed -n '/^## \[<version>\]/,/^## \[/p'
+# CHANGELOG.md, or the changelog file the binding writes
+# check: the entry carries the correction you pushed in 3d
+```
+
+A new number, or an entry without the correction, means a refresh took the fix: redo the correction on the request it left and merge without waiting.
 
 ## 4. Let it merge, or merge it
 

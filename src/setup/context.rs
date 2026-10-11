@@ -460,6 +460,7 @@ impl Ctx {
                 reporting_policy: true,
                 scorecard: false,
                 code_scanning: None,
+                workflow_guards: Some(true),
             },
             host: None,
             required_check: None,

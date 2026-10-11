@@ -1,30 +1,44 @@
-# Two release-bearing technologies: the driver is the operator's answer
+# An ambiguous release observation: the driver is the one answer asked
 
 - case: an-ambiguous-release-observation
-- landing: no
+- classification: setup
+- intent: change a setting
+- provision: no
+- tasks: `land`
+- landing: yes
 - receipt: missing
 - history: none
 - legacy: none
-- stage: none
+- stage: cleaned
 
 ## Situation
 
-A repository carrying both `Cargo.toml` and `pyproject.toml`, with no committed configuration and no record. The operator asked for the release workflow to be set up. `rk profile --target .` reports the observation as ambiguous and names both candidates: nothing in the tree says which one states the version the tag mirrors.
+A repository whose version files name two technologies that each have a release driver. `rk profile --target . --json` names an ambiguous proposal, and the driver is the one answer an apply refuses without.
+
+## Gate
+
+Present "State: `setup`. Request: land the convention with these answers. Tasks: `land`. Proceed?" and wait for the operator.
 
 ## Route
 
-1. `rk guide landing` step 1a: run `rk --version`. The installed version is the one the operator chose.
-2. `rk profile --target .`: the report names the ambiguity and the flag that answers it. Read it out rather than picking: a driver chosen for the operator is a release convention imposed on the wrong artifact.
-3. Ask with `AskUserQuestion` which technology states the version and takes the bot, offering each candidate the report named and what each one implies for the registry and the artifacts. Stop here until the answer arrives: an apply refuses without it, and no stage is written for a landing nobody can yet describe.
-4. `rk guide landing` step 1c is the next step once the operator answers, and the plan says so rather than running it.
+1. General pre-flight: run the pre-flight gate, then read `rk status --target . --json`, `rk self-depend status --target . --json`, and `rk setup status --target . --json`.
+2. `land` pre-flight: run `rk profile --target . --json`, and ask only what it leaves open, one default each, with its consequence stated.
+3. Stage, `rk guide landing` step 1c: run `rk stage --target . --json --technology rust --technology python --release-driver python --release-style lines` and hold `<root>`.
+4. Compare, `rk guide landing` step 2b: run `rk stage compare <root> --target . --json`. Every row reads `absent` with the word `created`. With neither a receipt nor useful history, the class is a best-effort heuristic, and no automatic overwrite can happen.
+5. Land, `rk guide landing` step 4: preview `rk init --stage <root> --target .`, quote every word, then run it with `--apply` as a gated step.
+6. Prove, `rk guide landing` step 5a: run `rk stage compare <root> --target . --json` again. Every `rendered` and `region` row reads `equal`.
+7. `land` post-flight: answer each sentinel `sentinel_locations` names, and state that the landed files reach the trunk through the project's own workflow.
+8. General post-flight: run `rk status --check --target .`, then `pre-commit run --hook-stage manual --all-files`.
+9. Clean: print `rk stage clean <root>`, wait, and run it only because the request's authority includes cleanup.
+10. Report: fill the template from observation, with every answer the operator gave.
 
 ## Authority
 
-- The request authorizes the file changes and the `rk` verbs it names; nothing is written while the driver is unanswered.
-- Never infer the driver from file order, repository name, or the larger tree.
-- No stage is created here, so none is cleaned.
+- The request authorizes the file changes and the `rk` verbs it names. Branch, commit, push, and pull request actions are the operator's unless the request named them.
+- Nothing is copied out of `<stage>/artifacts/` into the target, and `stage.json` is offered to no verb but through `--stage <root>`, which reads its parameters alone. Production renders afresh from the stage's parameters.
+- The driver is asked with `AskUserQuestion` before the stage, and never guessed.
 
 ## Documentation
 
-- project documentation: none is proposed while the profile is unanswered.
-- reference corpus: `<stage>/reference/bindings` is what the answer will be read against once the driver is named, and is not copied into the project.
+- project documentation: `SECURITY.md` and the routing block in `AGENTS.md` are candidates under `<stage>/artifacts/`, and the production verb lands them by their recorded kind.
+- reference corpus: `<stage>/reference/` is read for the changelog, the guidance, and the chapters the comparison raises. It is not copied into the project.

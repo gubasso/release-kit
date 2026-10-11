@@ -1,6 +1,10 @@
-# Clean attributed upgrade: receipt and history agree
+# Clean attributed upgrade: every row is the record's own
 
 - case: clean-attributed-upgrade
+- classification: upgrade
+- intent: upgrade
+- provision: no
+- tasks: `upgrade`
 - landing: yes
 - receipt: present
 - history: useful
@@ -9,24 +13,28 @@
 
 ## Situation
 
-A landed target whose receipt names every destination and whose `git log` shows release-kit's landings alone touching them. The installed binary is newer than the record's `rk_version`, and the operator authorized the upgrade with cleanup.
+A target landed by an older `rk`, untouched since, with its record and a useful history. `rk status --target . --json` reads `alignment` `binary-newer` and `classification` `upgrade`. The operator asked to upgrade, with cleanup.
+
+## Gate
+
+Present "State: `upgrade`. Request: upgrade. Tasks: `upgrade`. Proceed?" and wait for the operator.
 
 ## Route
 
-1. `rk guide landing` step 1a: run `rk --version` and `rk self-depend status --target .`. The installed version is the one the operator chose. No step selects, fetches, or installs another.
-2. `rk guide landing` step 1c: run `rk stage --target .` and hold `<stage>` for the whole task.
-3. `rk guide landing` step 2a: read `<stage>/stage.json`, `<stage>/artifacts/`, and `<stage>/reference/`.
-4. `rk guide landing` step 2b: diff each artifact against the working tree, read `.release-kit/manifest.json`, and read `git log` and `git diff` for each differing destination. Every differing destination is a recorded generated file, and its last author is the previous landing commit.
-5. State the evidence class: receipt plus useful history, an attributed migration.
-6. `rk guide landing` step 2c: read `<stage>/reference/CHANGELOG.md` and `<stage>/reference/guidance/` for the releases between the record and the binary.
-7. `rk guide landing` step 3: preview `rk upgrade --target .`, read the `replaced`, `preserved`, and `matched` words, then run `rk upgrade --target . --apply`.
-8. `rk guide landing` step 4: compare `git diff --stat` with `<stage>/artifacts/`, then run `rk status --check --target .`, `rk setup check --target .`, and the project's checks.
-9. `rk guide landing` step 5a: show `rk stage clean <stage>`. Run it only because the request's authority includes cleanup.
+1. General pre-flight: run the pre-flight gate, then read `rk status --target . --json`, `rk self-depend status --target . --json`, and `rk setup status --target . --json`.
+2. `upgrade` pre-flight: read `config.pending` and `legacy_state` in the status report.
+3. Stage, `rk guide landing` step 1c: run `rk stage --target . --json` and hold `<root>`.
+4. Compare, `rk guide landing` step 2b: run `rk stage compare <root> --target . --json`. Every differing `rendered` row reads `attributed` with the word `replaced`, so the landing refreshes it and nothing is asked.
+5. Land, `rk guide landing` step 4: preview `rk upgrade --stage <root> --target .`, quote every word, then run it with `--apply` as a gated step.
+6. Prove, `rk guide landing` step 5a: run `rk stage compare <root> --target . --json` again. Every `rendered` and `region` row reads `equal`.
+7. General post-flight: run `rk status --check --target .`, then `pre-commit run --hook-stage manual --all-files`.
+8. Clean: print `rk stage clean <root>`, wait, and run it only because the request's authority includes cleanup.
+9. Report: fill the template from observation, with every answer the operator gave.
 
 ## Authority
 
 - The request authorizes the file changes and the `rk` verbs it names. Branch, commit, push, and pull request actions are the operator's unless the request named them.
-- Nothing is copied out of `<stage>/artifacts/` into the target, and `stage.json` is offered to no verb. Production renders afresh.
+- Nothing is copied out of `<stage>/artifacts/` into the target, and `stage.json` is offered to no verb but through `--stage <root>`, which reads its parameters alone. Production renders afresh from the stage's parameters.
 
 ## Documentation
 

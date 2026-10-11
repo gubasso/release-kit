@@ -41,10 +41,14 @@ struct StatusReport<'a> {
     schema: &'static str,
     /// The target, canonical.
     target: &'a str,
-    /// The rollup: `ready`, `superseded`, `no-manager`, `not-wired`,
-    /// `unpinned`, `ambiguous-pin`, or `pending-recovery`. It describes
-    /// and never judges: every state exits 0.
+    /// The rollup: `ready`, `superseded`, `host`, `no-manager`,
+    /// `not-wired`, `unpinned`, `ambiguous-pin`, or `pending-recovery`. It
+    /// describes and never judges: every state exits 0.
     state: &'static str,
+    /// The host-install answer the configuration records, where it records
+    /// one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    acquisition: Option<&'a crate::config::Acquisition>,
     /// The one manager whose file names release-kit, where exactly one does.
     #[serde(skip_serializing_if = "Option::is_none")]
     wired: Option<Manager>,
@@ -278,6 +282,12 @@ fn status(args: &StatusArgs) -> Result<(), RkError> {
     if let Some(wired) = observed.wired {
         out.result_line(format!("wired through {}", wired.as_str()));
     }
+    if let Some(answer) = &observed.acquisition {
+        out.result_line(format!(
+            "host install recorded, at rk {} or newer",
+            answer.minimum
+        ));
+    }
     for entry in &managers {
         out.result_line(manager_line(entry));
     }
@@ -302,6 +312,7 @@ fn status(args: &StatusArgs) -> Result<(), RkError> {
         schema: "rk.self-depend-status/2",
         target: observed.target.as_str(),
         state,
+        acquisition: observed.acquisition.as_ref(),
         wired: observed.wired,
         managers: &managers,
         envrc: observed.envrc,
@@ -310,6 +321,96 @@ fn status(args: &StatusArgs) -> Result<(), RkError> {
         pending: observed.pending,
         host,
         leftovers: &observed.leftovers,
+        next: &next,
+    })
+}
+
+/// The `rk.self-depend-add-host/1` document.
+#[derive(Debug, Serialize)]
+struct AddHostReport<'a> {
+    /// The shape version of this document.
+    schema: &'static str,
+    /// `preview` or `apply`.
+    mode: &'static str,
+    /// The target, canonical.
+    target: &'a str,
+    /// The answer the configuration carries, or would.
+    acquisition: &'a crate::config::Acquisition,
+    /// Whether the target carried a configuration before the run.
+    config: Presence,
+    /// Whether this run wrote the configuration.
+    written: bool,
+    /// What plausibly follows.
+    next: &'a [String],
+}
+
+/// Record that every host installs release-kit itself.
+///
+/// The answer goes into `.release-kit/config.toml`, every comment kept, at
+/// this binary's release as the minimum. A target with no configuration
+/// yet gets one holding the answer alone, and the landing that follows
+/// keeps it, because every landing verb rewrites an existing configuration
+/// rather than replacing it.
+///
+/// SATISFIES packaging:a-host-install-reads-as-a-decision
+fn add_host(args: &AddArgs) -> Result<(), RkError> {
+    let out = Output::new(args.json);
+    let observed = self_depend::observe(&args.target)?;
+    // Any manager naming release-kit refuses, not only a lone one: two
+    // pins leave `wired` unset because the wiring is ambiguous, and a
+    // host answer beside them would be a third mechanism.
+    let pinning: Vec<&str> = observed
+        .managers
+        .iter()
+        .filter(|entry| entry.read.names())
+        .map(|entry| entry.manager.as_str())
+        .collect();
+    if !pinning.is_empty() {
+        return Err(RkError::refusal(
+            Diagnostic::new(
+                Reason::DestructiveRefusal,
+                format!(
+                    "the target already pins release-kit through {}; a host install beside a pin is a second mechanism",
+                    pinning.join(" and ")
+                ),
+            )
+            .expected("no manager naming release-kit, or no host answer")
+            .target_state("nothing was written"),
+        ));
+    }
+    let answer = crate::config::Acquisition::host_at_this_release();
+    let config = Presence::of(&observed.target.join(crate::config::CONFIG_PATH));
+    let (content, changed) =
+        crate::config::with_acquisition(observed.target.as_std_path(), &answer)?;
+    let written = args.apply && changed;
+    if written {
+        crate::atomic::write(
+            observed
+                .target
+                .join(crate::config::CONFIG_PATH)
+                .as_std_path(),
+            content.as_bytes(),
+        )?;
+        out.result_line(format!("wrote {}", crate::config::CONFIG_PATH));
+    } else if !args.apply {
+        out.result_line("DRY RUN: --apply records the answer");
+    }
+    out.result_line(format!(
+        "acquisition: every host installs rk {} or newer",
+        answer.minimum
+    ));
+    let target = &observed.target;
+    let next = vec![format!(
+        "rk self-depend status --target {target} reports the state host once the answer is recorded"
+    )];
+    out.next(&next);
+    out.emit(&AddHostReport {
+        schema: "rk.self-depend-add-host/1",
+        mode: if args.apply { "apply" } else { "preview" },
+        target: observed.target.as_str(),
+        acquisition: &answer,
+        config,
+        written,
         next: &next,
     })
 }
@@ -340,6 +441,9 @@ fn leftover_line(leftover: &Leftover) -> String {
     reason = "one pass from the observation to the report, so every refusal is judged before any write"
 )]
 fn add(args: &AddArgs) -> Result<(), RkError> {
+    if args.host {
+        return add_host(args);
+    }
     let out = Output::new(args.json);
     let observed = self_depend::observe(&args.target)?;
     let (tag, tag_source) = resolve_tag(args.tag.as_deref())?;
@@ -1425,6 +1529,13 @@ fn status_next(observed: &Observed) -> Vec<String> {
         "pending-recovery" => vec![format!(
             "rk self-depend sync --caller operator --target {target} recovers the interrupted run"
         )],
+        "host" => vec![format!(
+            "each host installs rk {} or newer itself; rk self-depend add --target {target} --manager <manager> moves the project onto a pin",
+            observed
+                .acquisition
+                .as_ref()
+                .map_or("", |answer| answer.minimum.as_str())
+        )],
         "no-manager" | "not-wired" | "unpinned" => vec![format!(
             "rk self-depend add --target {target} prints the fragments; --apply seeds the files a target lacks"
         )],
@@ -1443,7 +1554,8 @@ fn status_next(observed: &Observed) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AddReport, CleanReport, Host, Manual, Mode, StatusReport, Step, SyncReport, Venue,
+        AddHostReport, AddReport, CleanReport, Host, Manual, Mode, StatusReport, Step, SyncReport,
+        Venue,
     };
 
     /// The complete `rk.self-depend-sync/1` shape, held by snapshot.
@@ -1691,6 +1803,7 @@ mod tests {
             schema: "rk.self-depend-status/2",
             target: "/srv/widget",
             state: "ready",
+            acquisition: None,
             wired: Some(Manager::Flake),
             managers: &managers,
             envrc: Presence::Present,
@@ -1712,6 +1825,7 @@ mod tests {
             schema: "rk.self-depend-status/2",
             target: "/srv/widget",
             state: "no-manager",
+            acquisition: None,
             wired: None,
             managers: &[],
             envrc: Presence::Absent,
@@ -1729,6 +1843,50 @@ mod tests {
             serde_json::to_string(&bare).expect("a report serializes"),
             r#"{"schema":"rk.self-depend-status/2","target":"/srv/widget","state":"no-manager","managers":[],"envrc":"absent","envrc_sync":false,"pending":false,"host":{"nix":"failed","direnv":"failed"},"leftovers":[],"next":[]}"#,
             "an unknown value must be omitted, not serialized as null"
+        );
+    }
+
+    /// The host state and the host answer, held by snapshot.
+    #[test]
+    fn the_host_answer_schema_snapshots_hold() {
+        let answer = crate::config::Acquisition {
+            source: crate::config::AcquisitionSource::Host,
+            minimum: "0.8.7".to_owned(),
+        };
+        let host = StatusReport {
+            schema: "rk.self-depend-status/2",
+            target: "/srv/widget",
+            state: "host",
+            acquisition: Some(&answer),
+            wired: None,
+            managers: &[],
+            envrc: Presence::Absent,
+            envrc_sync: false,
+            stamp: None,
+            pending: false,
+            host: Host {
+                nix: "failed",
+                direnv: "failed",
+            },
+            leftovers: &[],
+            next: &[],
+        };
+        assert_eq!(
+            serde_json::to_string(&host).expect("a report serializes"),
+            r#"{"schema":"rk.self-depend-status/2","target":"/srv/widget","state":"host","acquisition":{"source":"host","minimum":"0.8.7"},"managers":[],"envrc":"absent","envrc_sync":false,"pending":false,"host":{"nix":"failed","direnv":"failed"},"leftovers":[],"next":[]}"#
+        );
+        let added = AddHostReport {
+            schema: "rk.self-depend-add-host/1",
+            mode: "apply",
+            target: "/srv/widget",
+            acquisition: &answer,
+            config: Presence::Absent,
+            written: true,
+            next: &[],
+        };
+        assert_eq!(
+            serde_json::to_string(&added).expect("a report serializes"),
+            r#"{"schema":"rk.self-depend-add-host/1","mode":"apply","target":"/srv/widget","acquisition":{"source":"host","minimum":"0.8.7"},"config":"absent","written":true,"next":[]}"#
         );
     }
 }

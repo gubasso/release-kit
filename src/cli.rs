@@ -6,7 +6,6 @@ pub mod adopt;
 pub mod assess;
 pub mod branches;
 pub mod completions;
-pub mod depend;
 pub mod doctor;
 pub mod guide;
 pub mod init;
@@ -14,9 +13,11 @@ pub mod integrate;
 pub mod issue;
 pub mod lines;
 pub mod message;
+pub mod migrate;
 pub mod profile;
 pub mod profile_flags;
 pub mod read;
+pub mod release;
 pub mod runs;
 pub mod self_depend;
 pub mod setup;
@@ -73,11 +74,15 @@ pub enum Commands {
     Branches(branches::BranchesArgs),
     /// Open, inventory, and retire the release lines.
     Lines(lines::LinesArgs),
+    /// Report where the release stands: the request, the last release, the lines, and every symptom.
+    Release(release::ReleaseArgs),
     /// Move one implementation onto the trunk, through the recorded authority.
     Integrate(integrate::IntegrateArgs),
 
     /// Judge a commit message, title, or body against the content guards.
     Message(message::MessageArgs),
+    /// Carry a target off another release tool: inventory, archive, map, and close.
+    Migrate(migrate::MigrateArgs),
     /// Inspect, create, and prune the linked worktrees beside a checkout.
     Worktree(worktree::WorktreeArgs),
     /// Start work from a forge issue, with the forge naming the branch.
@@ -88,8 +93,6 @@ pub enum Commands {
     Skill(skill::SkillArgs),
     /// Wire release-kit as a consumer's dependency and keep its pin fresh.
     SelfDepend(self_depend::SelfDependArgs),
-    /// Add another project as a dependency of a target, from how the source distributes itself.
-    Depend(depend::DependArgs),
     /// Run every environment probe and report by class.
     Doctor(doctor::DoctorArgs),
     /// Print the whole command surface in one call.

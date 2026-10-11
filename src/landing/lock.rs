@@ -238,9 +238,29 @@ fn busy(target: &str) -> RkError {
 mod tests {
     use std::os::unix::fs::PermissionsExt as _;
 
-    use super::{acquire_in, rootless};
+    use super::{TargetLock, acquire_in, rootless};
     use crate::diagnostic::Reason;
     use crate::digest::Digest;
+
+    /// Take the target once every copy of the last holder's descriptor
+    /// closed. Under `cargo test` another test thread can fork while a
+    /// lock is held, and its child keeps a copy of the descriptor until it
+    /// executes, so a drop frees the target only once that child has.
+    fn acquire_freed(locks: &std::path::Path, target: &camino::Utf8Path) -> TargetLock {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            match acquire_in(locks, target) {
+                Ok(lock) => return lock,
+                Err(error)
+                    if error.reason() == Reason::TargetBusy
+                        && std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(error) => panic!("the target is never freed: {error:?}"),
+            }
+        }
+    }
 
     fn utf8(dir: &tempfile::TempDir) -> camino::Utf8PathBuf {
         camino::Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).expect("a utf-8 path")
@@ -270,7 +290,7 @@ mod tests {
             Some("unchanged")
         );
         drop(first);
-        acquire_in(locks.path(), &path).expect("the target is free again");
+        acquire_freed(locks.path(), &path);
     }
 
     /// Two targets are two locks, so one landing does not block another.
@@ -296,11 +316,11 @@ mod tests {
             .expect("the first run takes the target")
             .path()
             .to_path_buf();
-        drop(acquire_in(locks.path(), &path));
+        drop(acquire_freed(locks.path(), &path));
         std::fs::write(&held, "4242\n/some/target\n").expect("the corpse's line writes");
         assert!(held.exists(), "a killed run leaves its lock file");
 
-        let taken = acquire_in(locks.path(), &path).expect("the next run takes the target");
+        let taken = acquire_freed(locks.path(), &path);
         assert_eq!(taken.path(), held, "it is the same lock file");
         assert_eq!(
             std::fs::read_to_string(&held).expect("the lock file reads"),

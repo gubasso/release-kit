@@ -15,7 +15,7 @@ Taking another project as a dependency had no verb and no owner: the devshell pi
 
 Chosen option: `a read-only assessment and an add verb that serves fragments, seeds only an absent file, and prints the native command for a library`. `rk depend assess` reads both sides offline and exits 0 on every verdict; `rk depend add` renders the pair from authored blocks, seeds a manager file only where the target has none, refuses over an owned one, and for a prod dependency prints `cargo add`, `uv add`, or `npm install`. An unjudgeable pair is manual with a closed reason. A URL is refused; the clone is the operator's step.
 
-Enforced by `dependencies:add-edits-no-file-the-target-owns`, `dependencies:a-prod-dependency-lands-through-the-native-command`, and `dependencies:an-unjudgeable-pair-is-manual-with-its-reason`.
+Enforced by no live rule; see [its successor](./ADR-land-no-other-project.md).
 
 ## Consequences
 
@@ -25,4 +25,4 @@ Enforced by `dependencies:add-edits-no-file-the-target-owns`, `dependencies:a-pr
 
 ## Status
 
-Implemented; `src/depend/`, `src/commands/depend.rs`, `method/11-dependencies.md`, `runbooks/dependencies.md`, and `skills/rk-depend/SKILL.md` enact it.
+Superseded by [its successor](./ADR-land-no-other-project.md).

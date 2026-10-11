@@ -375,6 +375,9 @@ struct Engine {
     seq: u64,
     command: &'static str,
     run_id: String,
+    /// The run's snapshot directory, opened by the first step that saves
+    /// a before-state.
+    snapshot: Option<crate::snapshot::Snapshot>,
 }
 
 impl Engine {
@@ -428,6 +431,7 @@ impl Engine {
             seq: 0,
             command,
             run_id,
+            snapshot: None,
         };
         let opening = Event::opening(
             engine.next_seq(),
@@ -1273,6 +1277,9 @@ fn run_forge_step_with(
     stdin: Option<Zeroizing<Vec<u8>>>,
     extra_env: Vec<(OsString, OsString)>,
 ) -> Result<Done, RkError> {
+    if crate::setup::before_state::destructive(step.name) {
+        save_before_state(engine, step)?;
+    }
     let (outcome, _) = run_script_with(engine, step, stdin, extra_env)?;
     if !outcome.success() {
         return Err(classify_failure(engine, step, &outcome));
@@ -1315,6 +1322,188 @@ fn run_forge_step_with(
             .step(step.name),
         )),
     }
+}
+
+/// Save what `step` is about to change, before its script runs, and name
+/// the path in the human report and the event stream.
+///
+/// SATISFIES forge-setup:a-step-is-idempotent
+fn save_before_state(engine: &mut Engine, step: &StepSpec) -> Result<(), RkError> {
+    // During a migration the archive took the before-state of every
+    // destructive step, on a host that could read the forge. The step runs
+    // only where the registry holds that snapshot, and the archive's copy
+    // stays the record of what the forge held before the migration.
+    if let Some(held) = migration_snapshot(&engine.ctx.target, step.name)? {
+        engine.out.result_line(format!(
+            "the migration holds the before-state of {} at {held}",
+            step.name
+        ));
+        let mut event = engine.event(EventKind::Snapshot, Some(step.name));
+        event.detail = Some(held);
+        engine.emit(&event);
+        return Ok(());
+    }
+    let snapshot = if let Some(snapshot) = &engine.snapshot {
+        snapshot.clone()
+    } else {
+        let canonical = std::fs::canonicalize(engine.ctx.target.as_std_path())?;
+        let snapshot = crate::snapshot::Snapshot::begin(&canonical)?;
+        engine.snapshot = Some(snapshot.clone());
+        snapshot
+    };
+    let ctx = clone_ctx(&engine.ctx);
+    let mut runner = |exec: &Exec| engine.exec(exec, false);
+    let path = crate::setup::before_state::save(&ctx, step.name, &snapshot, &mut runner)?;
+    let path = path.display().to_string();
+    engine
+        .out
+        .result_line(format!("saved the before-state of {} to {path}", step.name));
+    let mut event = engine.event(EventKind::Snapshot, Some(step.name));
+    event.detail = Some(path);
+    engine.emit(&event);
+    Ok(())
+}
+
+/// The registry id of a destructive step's forge snapshot.
+#[must_use]
+pub fn forge_snapshot_id(step: &str) -> String {
+    format!("forge-{step}")
+}
+
+/// Where an open migration holds the before-state of `step`, or `None`
+/// where no migration is open.
+///
+/// # Errors
+///
+/// A `destructive-refusal` while a migration is open and its registry
+/// holds no intact snapshot of the step, and a refusal where the workspace is not
+/// on this host.
+fn migration_snapshot(target: &camino::Utf8Path, step: &str) -> Result<Option<String>, RkError> {
+    let Some(id) = crate::migrate::open_id(target)? else {
+        return Ok(None);
+    };
+    let Some(workspace) = crate::migrate::open_workspace(target)? else {
+        return Err(crate::migrate::none_open());
+    };
+    if !workspace.join(crate::migrate::REGISTRY_FILE).is_file() {
+        return Err(crate::migrate::workspace_missing(&id, &workspace));
+    }
+    let registry = crate::migrate::registry::load(&workspace)?;
+    let wanted = forge_snapshot_id(step);
+    // A snapshot whose file is gone or altered restores nothing, so it
+    // licenses nothing either; one that cannot be read stops the step.
+    let found = registry
+        .snapshots
+        .iter()
+        .find(|snapshot| snapshot.id == wanted);
+    let intact = match found {
+        Some(snapshot) => {
+            crate::migrate::registry::integrity(&workspace, snapshot)?
+                == crate::migrate::registry::Integrity::Intact
+        }
+        None => false,
+    };
+    let Some(snapshot) = found.filter(|_| intact) else {
+        return Err(RkError::refusal(
+            Diagnostic::new(
+                Reason::DestructiveRefusal,
+                format!(
+                    "{step} changes forge state, and the migration {id} holds no intact snapshot of it (migration:a-destructive-step-waits-for-its-snapshot)"
+                ),
+            )
+            .expected("the step's before-state in the migration registry")
+            .action("rk migrate archive --apply --target . takes the missing forge snapshots on a host that holds the forge credentials")
+            .target_state("unchanged")
+            .step(step),
+        ));
+    };
+    Ok(Some(workspace.join(&snapshot.file).to_string()))
+}
+
+/// One destructive step's forge snapshot, as the archive took it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ForgeSnapshot {
+    /// The before-state is saved at this path.
+    Taken(PathBuf),
+    /// The before-state could not be read from where this ran.
+    Unknown(String),
+}
+
+/// Take the before-state of every destructive step this target runs into
+/// `snapshot`, for a migration's archive.
+///
+/// A step whose state this host cannot read reads unknown and stays
+/// refused until a host that can takes it; `skip` names the steps already
+/// held.
+///
+/// # Errors
+///
+/// A target configuration that does not resolve.
+pub fn migration_snapshots(
+    target: &camino::Utf8PathBuf,
+    snapshot: &crate::snapshot::Snapshot,
+    skip: &[String],
+) -> Result<Vec<(&'static str, ForgeSnapshot)>, RkError> {
+    let mut ctx = Ctx::resolve(target, None, None, None)?;
+    let steps: Vec<&StepSpec> = STEPS
+        .iter()
+        .filter(|step| {
+            crate::setup::before_state::destructive(step.name)
+                && stance(&ctx, step).acts()
+                && !skip.contains(&forge_snapshot_id(step.name))
+        })
+        .collect();
+    if steps.is_empty() {
+        return Ok(Vec::new());
+    }
+    if let Err(error) = ctx.require_cli(&steps) {
+        return Ok(steps
+            .iter()
+            .map(|step| (step.name, ForgeSnapshot::Unknown(error.to_string())))
+            .collect());
+    }
+    // The archive's own report is the result; the engine's framing goes
+    // to stderr and its events nowhere, so a JSON report stays one object.
+    let mut engine = Engine::open(Output::new(false), ctx, "migrate", false)?;
+    let mut out = Vec::new();
+    for step in steps {
+        let ctx = clone_ctx(&engine.ctx);
+        let mut runner = |exec: &Exec| engine.exec(exec, false);
+        let taken = match crate::setup::before_state::save(&ctx, step.name, snapshot, &mut runner) {
+            Ok(path) => ForgeSnapshot::Taken(path),
+            Err(error) => ForgeSnapshot::Unknown(error.to_string()),
+        };
+        out.push((step.name, taken));
+    }
+    Ok(out)
+}
+
+/// The destructive steps this target runs, offline: the steps whose
+/// before-state a migration must hold.
+///
+/// # Errors
+///
+/// A target configuration that does not resolve.
+pub fn destructive_steps(target: &camino::Utf8PathBuf) -> Result<Vec<&'static str>, RkError> {
+    let ctx = Ctx::resolve(target, None, None, None)?;
+    Ok(STEPS
+        .iter()
+        .filter(|step| {
+            crate::setup::before_state::destructive(step.name) && stance(&ctx, step).acts()
+        })
+        .map(|step| step.name)
+        .collect())
+}
+
+/// Where the committed setup proof stands against this target, offline:
+/// `absent`, `compatible`, `stale`, or `invalid`.
+///
+/// # Errors
+///
+/// A target configuration that does not resolve.
+pub fn proof_word(target: &camino::Utf8PathBuf) -> Result<&'static str, RkError> {
+    let ctx = Ctx::resolve(target, None, None, None)?;
+    Ok(proof::judge(&ctx.target, &proof::subject(&ctx)).word())
 }
 
 /// Observe one step through the engine's executor.
@@ -1590,6 +1779,15 @@ fn check(out: Output, ctx: Ctx) -> Result<(), RkError> {
     let mut engine = Engine::open(out, ctx, "setup check", false)?;
     engine.key_boundary = true;
     let report = observe_all(&mut engine)?;
+    // The milestones are information the publish task resumes from; none
+    // weighs on the verdict below.
+    for milestone in crate::setup::milestones::observe(&engine.ctx) {
+        engine.out.result_line(milestone.line());
+        let mut event = engine.event(EventKind::Milestone, Some(milestone.id));
+        event.status = Some(milestone.status.to_owned());
+        event.detail = Some(milestone.detail);
+        engine.emit(&event);
+    }
     if !report.checkpointable() {
         let error = verdict(&engine.ctx, &report);
         return Err(fail(&mut engine, error));

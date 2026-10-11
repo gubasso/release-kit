@@ -44,6 +44,10 @@ pub struct StageArgs {
     #[arg(long)]
     pub scorecard: bool,
 
+    /// Stage the workflow guards too.
+    #[arg(long)]
+    pub workflow_guards: bool,
+
     /// Stage the code scanning capability under this provider: codeql or
     /// semgrep.
     #[arg(long, value_name = "PROVIDER")]
@@ -69,6 +73,19 @@ pub enum StageAction {
         /// The stage directory, as `rk stage` printed it. No glob, no
         /// parent, no link.
         path: Utf8PathBuf,
+        /// Emit one JSON object on stdout instead of the human report.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Compare a stage with the target: one row per destination, its
+    /// state, its kind, its provenance, and the word the landing prints.
+    Compare {
+        /// The stage directory, as `rk stage` printed it.
+        root: Utf8PathBuf,
+        /// The repository the stage was taken for.
+        #[arg(long, default_value = ".")]
+        target: Utf8PathBuf,
         /// Emit one JSON object on stdout instead of the human report.
         #[arg(long)]
         json: bool,

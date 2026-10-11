@@ -1,218 +1,127 @@
 # Migration runbook
 
-The steps of [migration](../method/10-migration.md) as commands, in the chapter's order: the chapter owns each step's why, this page owns its how. Every step is a gap an observation reported, and every step ends by rerunning the observation that found it; a step whose observation already reads green is recorded as satisfied and skipped. Where `rk setup` executes a step, the `Automated:` line names the verb, and [the setup runbook](./setup.md) carries its check; nothing there is restated here. `rk guide migration` fills in the project path, forge, and technology where detection resolves them. The commands are the operator's to run: an agent serves a runbook and states the command, and runs one only where the operator's request named that step.
+The steps of [migration](../method/10-migration.md) as commands, in the chapter's order: the chapter owns each step's why, this page owns its how. Steps 1 to 5 run on a branch the operator owns, and step 6 runs after that branch merges. Where `rk setup` executes a step, the `Automated:` line names the verb, and [the setup runbook](./setup.md) carries its check; nothing there is restated here. `rk guide migration` fills in the project path, forge, and technology where detection resolves them. The commands are the operator's to run: an agent serves a runbook and states the command, and runs one only where the operator's request named that step.
 
 ## Prerequisites
 
-The setup runbook's prerequisites, unchanged: `rk` on `PATH`, this binary's skills installed at user scope, the forge CLI authenticated, and a clean working tree. A migration adds one: the plan. The findings inventory the chapter shapes is written and approved before the first `--apply` below, and every gated step is in it with its exact command.
-
-## 1. Classify the target and read what it runs
+The setup runbook's prerequisites, unchanged: `rk` on `PATH`, this binary's skills installed at user scope, the forge CLI authenticated, and a clean working tree. A migration adds two. The target classifies as brownfield, and the work runs on the operator's own branch, so the trunk keeps releasing through the predecessor until that branch merges.
 
 ```bash
 rk assess --target .
-# check: the verdict and its evidence; brownfield is this runbook's subject, greenfield takes rk guide setup instead, and needs-decision is the operator's answer before any plan
+# check: brownfield; greenfield takes rk guide setup instead, and needs-decision is the operator's answer before anything runs
 rk status --target .
-# check: none, or the landing with its version, drift, sentinels, and invariants. A recorded target routes by this report to rk guide landing, not by the verdict
-rk setup check --target .
-# check: what the forge enforces today, step by step
-rk versions --check
-# check: each pin against its source; an update is a review item, never an incident
-rk self-depend status --target .
-# check: how the project obtains rk, and every leftover of a predecessor bump mechanism by file and line
+# check: no landing record; a recorded target routes by this report to rk guide landing instead
 ```
 
-Every line of those reports that is not green is one entry in the inventory. Nothing below runs without its entry.
-
-## 2. Record the landing
-
-### 2a. Adopt a target with no record
-
-Adoption verifies the disk against one rendered candidate and never blesses the disk. `git.checkout_mode` and `profile.release.style` in `.release-kit/config.toml` choose the candidate, and invocation flags override them. An automatic release requires the style from one of those inputs.
-
-The adoption is the whole landing procedure: [the landing runbook](./landing.md) steps 1 to 5, with `rk adopt` as the front in its step 3. Its step 2b is where each destination the stage names as a collision is compared with the candidate, and its step 2d is where the target is brought to the candidate's bytes before the front runs (check: the front's preview prints `matches` for every rendered destination).
-
-- a refusal naming a destination as `expected and missing` or differing: the alignment is still owed. Return to the landing runbook's step 2d for that destination, then rerun. No flag forces past it.
-- `branches` is the default when neither the config nor a flag answers workflow, the compatibility-safe reading of a pre-record target. The mode change to `worktree`, where wanted, is its own entry through 2c.
-
-### 2b. Upgrade a recorded target
-
-The upgrade is the whole landing procedure: [the landing runbook](./landing.md) steps 1 to 5, with `rk upgrade` as the front in its step 3. Its steps 1 and 2 carry the stage and the investigation, and its step 2d carries the collision, the tuned seeded file, the edited generated file, and the retired destination. Its steps 4 and 5 carry the verification and the cleanup (check: the front's preview prints one word per destination, and no `collision` line).
-
-- an edited generated file: the landing replaces it and prints `replaced`. Only an unattributed differing file refuses, and no flag forces past that refusal. The landing runbook's steps 2d and 3 carry both.
-- a record without the style parameter: answer `profile.release.style` in the config or pass `--release-style <style>`, asked of the operator only where the config is silent, because arming an existing project's release request changes what a green trunk does.
-- an absent config: the upgrade seeds it from the record. Where the projection is unchanged, only that file is added.
-- a hook block lacking the `rk-message` content guard: the upgrade re-renders the block. A hand-edited block is brought to the candidate first, per 2d.
-
-### 2c. Change a landing parameter
-
-Edit `git.checkout_mode` or `profile.release.style` in `.release-kit/config.toml` (check: `rk status --check` reports the key as pending and exits 0 on an otherwise healthy landing). Then take the whole landing procedure, [the landing runbook](./landing.md) steps 1 to 5, with `rk upgrade` as the front in its step 3 and `--checkout-mode <mode>` or `--release-style <style>` passed to both the stage and the front. The flag overrides the file and writes back on apply (check: the affected rendered files, the config, and the record moved, and the committed diff is the visible change).
-
-On worktree:
-
-The transition for branches open across the change is [the worktree runbook](./worktree.md) step 1c, one adoption per open bare branch, after the change reaches the trunk.
-
-### 2d. Settle the hooks and answer the sentinels
-
-Before the block lands into an existing `.pre-commit-config.yaml`, [the setup runbook](./setup.md) step 4d owns that choice: a hook already doing one of the block's jobs is the operator's choice, never a second hook on one job.
+## 1. Inventory
 
 ```bash
-grep -rn 'TODO(release-kit)' . --exclude-dir=.git
-# check: prints nothing once each sentinel is answered from the project
-rk status --check --target .
-# check: exits 0; every drift, missing file, sentinel, and invariant line is an entry until it does
+rk migrate inventory --target .
+# check: every predecessor file with its tool and kind, and the root files listed as in place; a predecessor file it does not list is a finding for the operator before the archive
 ```
 
-### 2e. Regenerate what a landed file generates
+## 2. Archive
 
-A seeded configuration a tool consumes is not in effect until that tool runs, and a brownfield target arrives with the tool's previous output already committed; [the setup runbook](./setup.md) step 4b regenerates it at the pin.
+### 2a. Land every listed file on the trunk
+
+An edit to a predecessor file integrates onto the trunk before the archive, through the project's own path, and the local trunk branch is brought up to date.
 
 ```bash
-rk status --check --target .
-# check: no invariant line names .github/workflows/release.yml
-# a workflow-action-stale or workflow-attestation-missing line: the committed workflow predates the landed configuration, and the regenerate is what closes it
+git status --porcelain
+# check: empty
+git diff --name-only master
+# check: names no file the inventory listed; the archive refuses a listed file whose bytes differ from its copy on the trunk, because the trunk must hold every byte it moves
 ```
 
-### 2f. Prove the landed files where the default branch is today
+### 2b. Open the migration
 
-The project's own checks run on the landed files before any branch moves; [the setup runbook](./setup.md) step 4c lands them where the trunk takes a direct write, and step 4f where it does not.
-
-## 3. Take the trunk
-
-A repository already on one branch has this step satisfied; `rk assess` reports the long-lived branches it found.
-
-### 3a. Remove the old release-branch protection
-
-Gated: the operator runs this. The old protection's pull-request-only rule refuses the fast-forward in 3b, and removing a protection from a live branch is never an agent's move.
-
-On github:
+Gated: the operator runs this. The forge half needs the forge CLI authenticated; where it is not, the forge snapshots read unknown and are taken in step 3b.
 
 ```bash
-gh api "repos/<repo>/rulesets" -q '.[] | "\(.id) \(.name)"'
-# check: names the ruleset guarding the retired release branch
-gh api "repos/<repo>/rulesets/<id>" -q '.conditions.ref_name'
-# check: the include list names the retired branch alone; a ruleset that also names a live branch is edited, never deleted
-gh api "repos/<repo>/rulesets/<id>" > ../ruleset-<id>.json
-# check: the whole ruleset is held outside the repository, so a deletion can be recreated from it
-gh api -X DELETE "repos/<repo>/rulesets/<id>"
-gh api "repos/<repo>/branches/<old-release-branch>/protection" >/dev/null 2>&1 && gh api -X DELETE "repos/<repo>/branches/<old-release-branch>/protection"
-# check: the ruleset list no longer names it, and the classic protection read 404s
+rk migrate archive --target .
+# check: the preview names every file it moves and the workspace it opens, and writes nothing
+rk migrate archive --target . --apply
+# check: the predecessor files left the target, .release-kit/config.toml names the migration, and each forge row reads taken or unknown
+rk status --target .
+# check: classification: migration
 ```
 
-- the ruleset also names a live branch: keep it, and update it in place instead of deleting it. The update body carries only the writable fields, with the retired branch taken out of the include list:
+- a refusal naming files that differ from the trunk's copy: integrate their edits onto the trunk, update the local trunk branch, then run the archive again from the migration branch.
+
+### 2c. Rebuild the archived files on another clone
+
+Only where this host holds no workspace for the open migration, and the archive's configuration change is committed.
 
 ```bash
-jq '{name, target, enforcement, bypass_actors, conditions, rules} | .conditions.ref_name.include -= ["refs/heads/<old-release-branch>"]' ../ruleset-<id>.json | gh api -X PUT "repos/<repo>/rulesets/<id>" --input -
-gh api "repos/<repo>/rulesets/<id>" -q '.conditions.ref_name.include'
-# check: names only live branches; the saved JSON still recreates the ruleset as it stood
+rk migrate archive --rebuild --target .
+# check: would rebuild names every archived file, and nothing is written
+rk migrate archive --rebuild --apply --target .
+# check: rebuilt names every archived file, recreated from Git at the base commit, the registry's or the parent of the commit that recorded the key, which a squash integration keeps; a snapshot has no second copy and is not rebuilt
 ```
 
-On gitlab:
+## 3. Land
+
+### 3a. Land the greenfield instance
+
+The landing is the whole landing procedure: [the landing runbook](./landing.md) steps 1 to 5, with `rk init` as the front in its step 4. The archive left no collision, so no `--replace` passes it. A predecessor bump mechanism is removed first through `rk self-depend clean`, as [the setup runbook](./setup.md)'s prerequisites carry it (check: `rk status --target .` reports the landing, and still `classification: migration`).
+
+### 3b. Take the snapshots the landing adds
+
+The landed profile can run destructive steps the unlanded target did not.
 
 ```bash
-glab api "projects/:id/protected_branches"
-# check: names the retired release branch
-glab api -X DELETE "projects/:id/protected_branches/<old-release-branch>"
-# check: the list no longer names it
+rk migrate status --target .
+# check: no line names a missing forge snapshot
+rk migrate archive --target . --apply
+# check: each forge row reads taken; run it on a host that holds the forge credentials where a row reads unknown
 ```
 
-### 3b. Fast-forward the trunk to the integrated tip
+## 4. Map
 
-Step 2 spliced the hooks into the target's configuration, so a target that already installed the pre-push hook type refuses this push. It is the one write the trunk takes before step 4 protects it, and `SKIP` names the single rule that write sets aside. Where the hook type is not installed, the same command runs unchanged, so the step reads one way on every target.
+The agent reads one predecessor tool's sources together, from the workspace's `sources/`, and proposes a fate for each. The operator approves the map before anything is marked.
 
 ```bash
-git fetch origin
-git switch master && git merge --ff-only origin/<old-default-branch>
-SKIP=rk-no-push-to-trunk git push origin master
-# check: the push lands, and CI proves the landing on the trunk rather than on the old branch
-# rejected: --no-verify, which disables every pre-push hook the target owns
+rk migrate mark <source> mapped --group <group> --target .
+rk migrate mark <source> dropped --reason "<why>" --target .
+rk migrate status --target .
+# check: every source is mapped or dropped, and every mapped source names its group
 ```
 
-- the merge refuses: the trunk holds a commit the old default does not, so the two diverged; that is a finding for the inventory, not a `--no-ff` to add.
+## 5. Loop
 
-### 3c. Make the trunk the default
+One group at a time: write what the group carries into its destinations, then read each destination against its sources.
 
-Automated: `rk setup step default-branch --target . --apply`; [the setup runbook](./setup.md) step 1a carries its check.
+```bash
+rk migrate mark <group> written --destination <path> --target .
+rk migrate mark <group> verified --target .
+rk migrate status --target .
+# check: the group's sources read verified, and their checksums read same
+```
 
-## 4. Protect the trunk and the tags
+Then the branch merges inside the request's authority (check: `rk status --target .` on the trunk reports the landing).
 
-Automated, in order: `rk setup step protect-trunk --target . --apply --required-check <name>`, then `protect-tags`, then `protect-release-lines` only where an older line exists, then `auto-merge`; [the setup runbook](./setup.md) step 3 carries each check and the GitHub ordering that lands the title check first. A squash title or message source that is not the request's title and body is re-asserted by the same `protect-trunk` apply.
+## 6. Forge
+
+After the branch merges. Automated, in the order of [the setup runbook](./setup.md) steps 1 and 3: `rk setup --target . --apply`. Each destructive step uses the before-state the migration holds, and refuses where the registry holds none. Where the old protection on a retired branch keeps `single-trunk` from deleting it, its removal is the operator's, gated, and the migration's forge snapshot holds what it removed.
 
 ```bash
 rk setup check --target .
 # check: every step reports satisfied, or the limitation the forge document names
+rk setup checkpoint --target .
+# check: wrote .release-kit/setup-proof.json, from a host that holds the bot's key
 ```
 
-## 5. Retire every other long-lived branch
+Then publish through [the setup runbook](./setup.md) steps 5 to 7 where the setup proof is not current.
 
-### 5a. Remove the old integration branch's protection
-
-Gated, exactly as 3a, against the integration branch: `single-trunk` cannot delete a branch its protection keeps.
-
-### 5b. Close the one-way door
-
-Gated: the operator runs this. Automated: `rk setup step single-trunk --target . --apply` — its guard deletes a candidate only when it is an ancestor of the trunk and fails closed on anything else; a refusal is the next finding, never an obstacle.
+## 7. Close
 
 ```bash
-rk setup step single-trunk --target .
-# check: the preview names each candidate and whether the trunk holds it
-rk setup step single-trunk --target . --apply
-# check: prints nothing for the retired branches
-```
-
-### 5c. Keep the trunk sole
-
-Automated: `rk setup step merge-cleanup --target . --apply`, then `rk setup step branch-reminder --target . --apply`; [the setup runbook](./setup.md) steps 1c and 1d carry the checks.
-
-```bash
-rk branches prune --target .
-# check: the clone's own copies of the retired branches are candidates; deleting each is the operator's call
-```
-
-## 6. Wire the development environment
-
-### 6a. Replace the predecessor bump mechanism
-
-Only where `rk self-depend status` reported a predecessor, and gated: what the cleanup removes is committed first.
-
-```bash
-git status --porcelain
-# check: empty; the cleanup removes committed files, so nothing it touches is uncommitted
-rk self-depend clean --target .
-rk self-depend clean --target . --apply
-# check: the scripts and suites are removed; every manual entry is edited by hand, and the rerun reports an empty leftovers list
-```
-
-### 6b. Pin rk in the devshell
-
-[The setup runbook](./setup.md)'s prerequisites carry the pin's whole order: add, apply the fragments, commit the pair, sync, allow.
-
-```bash
-rk self-depend status --target . --json
-# check: ready, with an empty leftovers list; nothing else in the tree names an rk version
-```
-
-### 6c. Install this binary's skills
-
-```bash
-rk skill install
-rk skill install --apply
-# check: rk doctor reports the three skill probes ok
-```
-
-## 7. Close on evidence
-
-```bash
-rk status --check --target .
-rk setup check --target .
-rk versions --check
-rk self-depend status --target .
-# check: each exits 0 with nothing left to name; the inventory's every entry is satisfied by an observation, not by a word
-pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push
-# check: the three hook types are installed in this clone
+rk migrate close --target .
+# check: the migration can close; a refusal lists every unfinished source and a setup proof that is not current
+rk migrate close --target . --apply
+# check: .release-kit/config.toml names no migration, and rk status no longer reads migration
 rk guide release
 # check: one release cut end to end, with its verify step passing, is the migration's proof
 ```
 
-### 7a. The divergent rerun
-
-An interrupted migration resumes from the inventory: rerun step 1 in full, mark every entry an observation now satisfies, and continue from the first that is not. A gap step 1 reports that the inventory does not name returns to planning before anything runs.
+The workspace stays. Removing it is the operator's call, once the first release proved the new path.

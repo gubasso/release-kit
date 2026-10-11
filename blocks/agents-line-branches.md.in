@@ -1,1 +1,0 @@
-- Branches are worked in the main checkout or in linked worktrees (`rk worktree add <branch>`). Parallel work takes worktrees, one branch one writer, and `rk worktree prune` retires a merged worktree.

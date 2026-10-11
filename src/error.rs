@@ -163,6 +163,12 @@ mod tests {
                 RkError::refusal(Diagnostic::new(Reason::TargetNotFound, "no target")),
                 73,
             ),
+            // A record that does not parse is the target's file to
+            // repair, refused like an invalid configuration.
+            (
+                RkError::refusal(Diagnostic::new(Reason::RecordInvalid, "bad record")),
+                73,
+            ),
             (
                 RkError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "gone")),
                 66,

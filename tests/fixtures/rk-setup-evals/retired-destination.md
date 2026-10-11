@@ -1,6 +1,10 @@
-# Retired destination: a file the release stops producing
+# Retired destination: a file this release no longer lands
 
 - case: retired-destination
+- classification: upgrade
+- intent: upgrade
+- provision: no
+- tasks: `upgrade`
 - landing: yes
 - receipt: present
 - history: useful
@@ -9,25 +13,29 @@
 
 ## Situation
 
-A landed target whose receipt names a workflow this binary's projection no longer produces.
+A target landed by an older `rk` whose record names a workflow this release no longer produces. `rk status --target . --json` reads `classification` `upgrade`.
+
+## Gate
+
+Present "State: `upgrade`. Request: upgrade. Tasks: `upgrade`. Proceed?" and wait for the operator.
 
 ## Route
 
-1. `rk guide landing` step 1a: run `rk --version` and `rk self-depend status --target .`. The installed version is the one the operator chose. No step selects, fetches, or installs another.
-2. `rk guide landing` step 1c: run `rk stage --target .` and hold `<stage>` for the whole task.
-3. `rk guide landing` step 2a: read `<stage>/stage.json`, `<stage>/artifacts/`, and `<stage>/reference/`. The stage prints a `retired` line for the workflow: recorded, no longer produced, target-owned from the next landing.
-4. `rk guide landing` step 2b: diff each artifact against the working tree, read `.release-kit/manifest.json`, and read `git log` and `git diff` for each differing destination.
-5. `rk guide landing` step 2c: read `<stage>/reference/CHANGELOG.md` and `<stage>/reference/guidance/` for the releases between the record and the binary. The changelog entry names why the destination left.
-6. `rk guide landing` step 2d: the file stays on disk and leaves the receipt at the landing. Whether the migration removes it is an inventory entry for the operator, and production never deletes it.
-7. `rk guide landing` step 3: preview `rk upgrade --target .`, read `released` for the file, then run `rk upgrade --target . --apply`.
-8. `rk guide landing` step 4: compare `git diff --stat` with `<stage>/artifacts/`, then run `rk status --check --target .`, `rk setup check --target .`, and the project's checks. The file is still on disk and `rk status` no longer lists it.
-9. `rk guide landing` step 5a: show `rk stage clean <stage>`. Run it only because the request's authority includes cleanup.
+1. General pre-flight: run the pre-flight gate, then read `rk status --target . --json`, `rk self-depend status --target . --json`, and `rk setup status --target . --json`.
+2. `upgrade` pre-flight: read `config.pending` and `legacy_state` in the status report.
+3. Stage, `rk guide landing` step 1c: run `rk stage --target . --json` and hold `<root>`.
+4. Compare, `rk guide landing` step 2b: run `rk stage compare <root> --target . --json`. The workflow reads `retired` with the word `released`. Ask whether to remove it, as a gated step after a commit, or keep it as the project's own. The operator keeps it, and it leaves the record.
+5. Land, `rk guide landing` step 4: preview `rk upgrade --stage <root> --target .`, quote every word, then run it with `--apply` as a gated step.
+6. Prove, `rk guide landing` step 5a: run `rk stage compare <root> --target . --json` again. Every `rendered` and `region` row reads `equal`.
+7. General post-flight: run `rk status --check --target .`, then `pre-commit run --hook-stage manual --all-files`.
+8. Clean: print `rk stage clean <root>`, wait, and run it only because the request's authority includes cleanup.
+9. Report: fill the template from observation, with every answer the operator gave.
 
 ## Authority
 
 - The request authorizes the file changes and the `rk` verbs it names. Branch, commit, push, and pull request actions are the operator's unless the request named them.
-- Nothing is copied out of `<stage>/artifacts/` into the target, and `stage.json` is offered to no verb. Production renders afresh.
-- Removing the retired file is a removal, so what it removes is committed first and the operator's request names it.
+- Nothing is copied out of `<stage>/artifacts/` into the target, and `stage.json` is offered to no verb but through `--stage <root>`, which reads its parameters alone. Production renders afresh from the stage's parameters.
+- Production never deletes a retired file: its removal is the operator's decision, recorded in the report.
 
 ## Documentation
 

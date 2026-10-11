@@ -40,6 +40,13 @@ pub struct InitArgs {
     #[arg(long)]
     pub scorecard: bool,
 
+    /// Opt the landing into the workflow guards: the agent and commit
+    /// policy lines, the glossary, the workflow hooks, and the two workflow
+    /// setup steps. Off by default, because they shape how a project works
+    /// rather than what its release needs.
+    #[arg(long)]
+    pub workflow_guards: bool,
+
     /// Opt the landing into code scanning, naming the provider: codeql,
     /// GitHub's own analyzer, whose terms cover an open-source codebase so
     /// the landing reads the driver's declared licence and refuses the pair
@@ -48,6 +55,18 @@ pub struct InitArgs {
     /// request; off by default, because a scanning surface is a decision.
     #[arg(long, value_name = "PROVIDER")]
     pub code_scanning: Option<String>,
+
+    /// Land the answers a stage resolved, read from its receipt and
+    /// never its bytes; refuses a stage another binary wrote or one taken
+    /// for another target.
+    #[arg(long, value_name = "ROOT")]
+    pub stage: Option<Utf8PathBuf>,
+
+    /// Save a copy of this conflict, then replace it: an unattributed
+    /// file, or a recorded rendered file someone edited. Repeatable;
+    /// every conflict not named still refuses.
+    #[arg(long = "replace", value_name = "PATH")]
+    pub replace: Vec<String>,
 
     /// Write the files; without it the destinations are listed and nothing
     /// is touched.

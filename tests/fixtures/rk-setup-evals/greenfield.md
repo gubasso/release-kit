@@ -1,6 +1,10 @@
-# Greenfield: a bare repository takes the convention
+# Greenfield: a first landing with nothing pinned
 
 - case: greenfield
+- classification: setup
+- intent: set up or none
+- provision: first
+- tasks: `forge-settings`, `land`, `publish`
 - landing: yes
 - receipt: missing
 - history: none
@@ -9,26 +13,33 @@
 
 ## Situation
 
-A Rust repository with no release mechanism, no tag, no second long-lived branch, and no `.release-kit/manifest.json`. `rk assess --target .` reports `greenfield`. The operator asked for the release workflow to be set up, with cleanup. `rk profile --target .` names one technology, the forge from the remote, and an automatic release driven by rust; the operator answered the checkout mode and the release style.
+A GitHub repository with a crate, no release mechanism, no tag, and no `.release-kit/manifest.json`. `rk status --target . --json` reads `classification` `setup` and `git_work_tree` true. `rk self-depend status --target . --json` reads `no-manager`, and no host decision is recorded. The operator asked for the release workflow to be set up, with cleanup.
+
+## Gate
+
+Present "State: `setup`. Request: set up. Tasks: `provision`, `forge-settings`, `land`, `publish`. Proceed?" and wait for the operator.
 
 ## Route
 
-1. `rk guide landing` step 1a: run `rk --version` and `rk self-depend status --target .`. The installed version is the one the operator chose. No step selects, fetches, or installs another. The report names no wired manager on a bare tree, so no freshness offer is raised here: there is no pin for a line to move. The acquisition question is raised instead, last.
-2. `rk assess --target .`: the verdict is `greenfield`, so the arrival loads `rk method setup` and `rk guide setup`. The landing is that runbook's step 4a.
-3. `rk guide landing` step 1c: run `rk stage --target . --checkout-mode <mode> --release-style <style>` and hold `<stage>`.
-4. `rk guide landing` step 2a: read `<stage>/stage.json`, `<stage>/artifacts/`, and `<stage>/reference/`. Every candidate is a creation, because no destination exists yet.
-5. `rk guide landing` step 2b: the evidence class is neither receipt nor history, which on a bare tree is a best-effort heuristic with nothing uncertain: no destination is present, so no ownership question arises and no automatic overwrite can happen.
-6. `rk guide landing` step 3: preview the command `rk profile` rendered, `rk init --technology rust --forge <forge> --repo <repo> --release-mode automatic --release-driver rust --release-style <style> --trunk <trunk> --checkout-mode <mode> --target .`, read every `created` word, then run it with `--apply`.
-7. `rk guide landing` step 4: compare `git diff --stat` with `<stage>/artifacts/`, then run `rk status --check --target .`, `rk setup check --target .`, and the project's checks.
-8. `rk guide landing` step 5a: show `rk stage clean <stage>`. Run it only because the request's authority includes cleanup.
-9. The landing is green and nothing here pins `rk`. Ask the operator how the project obtains it before the task closes, offering a manager the binary can wire, a host install, and their own wiring, with what each one costs. The operator answers that they wire it themselves. Record that answer in the report and close: the question is asked once per landing, and an answer already recorded is not asked again.
+1. General pre-flight: run the pre-flight gate, then read `rk status --target . --json`, `rk self-depend status --target . --json`, and `rk setup status --target . --json`.
+2. `provision` runs first, because nothing pins `rk` here. Ask the operator how the project obtains it, with the cost of each answer. The operator picks a native host install, so gate `rk self-depend add --host --target . --apply`. An answer already recorded is not asked again.
+3. `forge-settings`: list the steps `rk setup status --target . --json` reads as not `satisfied`, preview each with `rk setup step <name> --target . --json`, and run each with `--apply` as a gated step, in the runbook's order. `install-bot` reads `unknown` without the App key, which is no question.
+4. `land` pre-flight: run `rk profile --target . --json` and ask only what it leaves open, one default each: the release style, the integration mode, and each capability, the workflow guards listed before the question.
+5. Stage, `rk guide landing` step 1c: run `rk stage --target . --json --technology rust --release-style trunk --integration local` and hold `<root>`.
+6. Compare, `rk guide landing` step 2b: run `rk stage compare <root> --target . --json`. Every row reads `absent` with the word `created`, so nothing is decided. With neither a receipt nor useful history, the class is a best-effort heuristic, and no automatic overwrite can happen.
+7. Land, `rk guide landing` step 4: preview `rk init --stage <root> --target .`, quote every word, then run it with `--apply` as a gated step.
+8. Prove, `rk guide landing` step 5a: run `rk stage compare <root> --target . --json` again. Every `rendered` and `region` row reads `equal`.
+9. `land` post-flight: answer each sentinel `sentinel_locations` names, take `rk guide setup` 4b and 4d, and state that the landed files reach the trunk through the project's own workflow.
+10. `publish`: ask, stated plainly, before the first upload, because it is permanent. Print 5b and 5c for the operator, then §6. Stop at 7d with "Next: cut one release with the `rk-release` skill".
+11. General post-flight: run `rk status --check --target .`, then `pre-commit run --hook-stage manual --all-files`.
+12. Clean: print `rk stage clean <root>`, wait, and run it only because the request's authority includes cleanup.
+13. Report: fill the template from observation, with every answer the operator gave.
 
 ## Authority
 
 - The request authorizes the file changes and the `rk` verbs it names. Branch, commit, push, and pull request actions are the operator's unless the request named them.
-- Nothing is copied out of `<stage>/artifacts/` into the target, and `stage.json` is offered to no verb. Production renders afresh.
-- The forge steps of `rk guide setup` steps 1 to 3 stay gated with their exact commands.
-- Every uncertain ownership decision is shown to the operator, and a bare tree raises none.
+- Nothing is copied out of `<stage>/artifacts/` into the target, and `stage.json` is offered to no verb but through `--stage <root>`, which reads its parameters alone. Production renders afresh from the stage's parameters.
+- The first upload, the trusted publisher, and every credential step are printed for the operator and never run by the agent.
 
 ## Documentation
 

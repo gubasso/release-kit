@@ -5,6 +5,8 @@
 - [Purpose](#purpose)
 - [Requirements](#requirements)
   - [`staging:production-never-reads-a-stage` — Production never reads a stage](#stagingproduction-never-reads-a-stage--production-never-reads-a-stage)
+  - [`staging:a-landing-reads-the-stage-parameters` — A landing reads the stage parameters](#staginga-landing-reads-the-stage-parameters--a-landing-reads-the-stage-parameters)
+  - [`staging:the-comparison-is-the-landing-decision` — The comparison is the landing decision](#stagingthe-comparison-is-the-landing-decision--the-comparison-is-the-landing-decision)
   - [`staging:a-stage-is-one-target-specific-candidate` — A stage is one target-specific candidate](#staginga-stage-is-one-target-specific-candidate--a-stage-is-one-target-specific-candidate)
   - [`staging:the-output-path-has-one-precedence` — The output path has one precedence](#stagingthe-output-path-has-one-precedence--the-output-path-has-one-precedence)
   - [`staging:a-visible-stage-is-complete` — A visible stage is complete](#staginga-visible-stage-is-complete--a-visible-stage-is-complete)
@@ -24,7 +26,7 @@ Rules governing the candidate stage: the disposable directory `rk stage` writes 
 
 ### `staging:production-never-reads-a-stage` — Production never reads a stage
 
-`rk init`, `rk upgrade`, `rk adopt`, and `rk status` MUST render from the installed binary and the target alone, and MUST leave every stage unread, unnamed, and in place.
+`rk init`, `rk upgrade`, `rk adopt`, and `rk status` MUST render from the installed binary and the target alone, MUST read no byte of a stage beyond the receipt a `--stage` flag names, and MUST leave every stage in place.
 
 #### Scenario: A stage sits under the state root while production lands
 
@@ -33,6 +35,30 @@ Rules governing the candidate stage: the disposable directory `rk stage` writes 
 - THEN neither opens a file under the stage, neither output names the stage, and the stage survives byte for byte
 
 Verify: `cargo nextest run -E 'test(production_commands_neither_read_nor_remove_a_stage)'`
+
+### `staging:a-landing-reads-the-stage-parameters` — A landing reads the stage parameters
+
+When `rk init`, `rk upgrade`, or `rk adopt` runs with `--stage <root>`, it MUST take every answer from the receipt at that root, render again from the binary and the target, refuse a receipt another binary wrote or one taken for another target, refuse where the answers it resolves differ from the receipt's, and refuse an answer flag given beside it as a usage error.
+
+#### Scenario: A stage taken under a checkout mode lands
+
+- GIVEN a stage taken with `--integration local` and `--checkout-mode main-worktree`, and a second target
+- WHEN `rk init --stage <root> --apply` runs against the staged target, and against the second
+- THEN the first records both answers with no flag given, and the second exits 73 naming the target the stage was taken for
+
+Verify: `cargo nextest run -E 'test(a_landing_reads_the_stage_parameters_and_refuses_a_foreign_stage)'`
+
+### `staging:the-comparison-is-the-landing-decision` — The comparison is the landing decision
+
+`rk stage compare <root> --target .` MUST report one row per destination the stage carries or the record names, with its state (`equal`, `absent`, `differs`, or `retired`), its kind (`rendered`, `region`, `seeded`, or `state`), its provenance where it differs or is retired (`attributed` where the receipt vouches for its bytes and Git touched the path, `reduced` where one holds, `unknown` where neither does), whether the receipt vouches for its bytes, the word the production verb prints, computed by the production decision itself, and whether that verb accepts `--replace` for it, true only for a `collision` the same decision marks replaceable, and MUST state where Git cannot answer and why.
+
+#### Scenario: A file someone edited after the landing is compared
+
+- GIVEN a landed and committed target whose recorded workflow was edited afterwards
+- WHEN `rk stage compare` runs against a stage of the same answers
+- THEN the workflow reads `differs` with provenance `reduced` and the word `collision`, which is what `rk upgrade` prints for it
+
+Verify: `cargo nextest run -E 'test(stage_compare_reports_each_state_kind_and_provenance) or test(stage_compare_reads_the_history_of_a_target_with_no_receipt)'`
 
 ### `staging:a-stage-is-one-target-specific-candidate` — A stage is one target-specific candidate
 
@@ -84,7 +110,7 @@ Verify: `cargo nextest run -E 'test(a_stage_holds_every_projected_artifact_byte_
 
 ### `staging:the-reference-tree-is-the-installed-knowledge` — The reference tree is the installed knowledge
 
-The `reference/` tree MUST hold `CHANGELOG.md`, `guidance/`, `method/`, `bindings/`, `runbooks/`, `forges/`, the `rk-setup` skill, and the shared resources that skill routes to, copied from the installed binary and from nowhere else.
+The `reference/` tree MUST hold `CHANGELOG.md`, `guidance/`, `method/`, `bindings/`, `runbooks/`, `forges/`, and every skill package as an install writes it, under `skills/`, copied from the installed binary and from nowhere else.
 
 #### Scenario: An agent asks what the stage may teach it
 
@@ -96,13 +122,13 @@ Verify: `cargo nextest run -E 'test(a_stage_holds_every_projected_artifact_byte_
 
 ### `staging:the-stage-receipt-is-explanatory-metadata` — The stage receipt is explanatory metadata
 
-`stage.json` MUST declare `schema: "rk.stage/3"` and carry the installed `rk` version, the canonical target identity, the resolved `stage_root`, the resolved parameters, the current receipt version where readable, and one entry per candidate or omission, and every landing command MUST refuse it as input.
+`stage.json` MUST declare its `rk.stage` schema and carry the installed `rk` version, the canonical target identity, the resolved `stage_root`, the resolved parameters, the current receipt version where readable, and one entry per candidate or omission, and a landing command MUST read it only through `--stage <root>`, for its parameters alone.
 
 #### Scenario: A stage receipt is offered to a landing verb
 
 - GIVEN a complete stage
-- WHEN an operator passes its path or its receipt to `rk init`, `rk upgrade`, or `rk adopt`
-- THEN no flag takes it, and the landing renders afresh from the binary and the target
+- WHEN an operator passes the receipt file itself, or any other flag naming it, to `rk init`, `rk upgrade`, or `rk adopt`
+- THEN no other flag takes it, `--stage` given the receipt file refuses because it names no stage root, and the landing renders afresh from the binary and the target
 
 Verify: `cargo nextest run -E 'test(the_stage_receipt_and_human_output_snapshot_hold) or test(a_stage_receipt_is_accepted_by_no_landing_command)'`
 

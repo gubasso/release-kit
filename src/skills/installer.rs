@@ -22,7 +22,7 @@ use serde::Serialize;
 use crate::atomic;
 use crate::error::RkError;
 use crate::skills::record::Record;
-use crate::skills::{Digest, Skill};
+use crate::skills::{Digest, Package};
 
 /// One thing an install or uninstall did, or — in a preview — would do.
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -30,12 +30,12 @@ use crate::skills::{Digest, Skill};
 pub enum Action {
     /// The embedded bytes land at this destination.
     Write {
-        /// The `SKILL.md` path written.
+        /// The package file written.
         destination: Utf8PathBuf,
     },
     /// The destination already holds the embedded bytes.
     Unchanged {
-        /// The `SKILL.md` path left alone.
+        /// The package file left alone.
         destination: Utf8PathBuf,
     },
     /// A recorded leftover the embedded skills no longer name is removed.
@@ -52,13 +52,14 @@ pub enum Action {
     },
     /// An installed destination is removed.
     Remove {
-        /// The `SKILL.md` path removed.
+        /// The package file removed.
         destination: Utf8PathBuf,
     },
     /// A destination holding bytes neither the embedded skills nor the record
-    /// accounts for is the user's now, and an uninstall leaves it.
+    /// accounts for is the user's now: an uninstall leaves it, and so does
+    /// the sweep of the root an earlier release shared the gates from.
     KeptEdited {
-        /// The edited `SKILL.md` path left in place.
+        /// The edited file left in place.
         destination: Utf8PathBuf,
     },
     /// A directory survives a removal because something else lives in it.
@@ -82,63 +83,56 @@ struct Planned {
     bytes: &'static [u8],
 }
 
-/// Where one run writes: the agent roots, the shared root, and the record.
+/// Where one run writes: the agent roots and the record, plus the root an
+/// earlier release shared the gates from.
 ///
-/// The shared root is not an agent root and no `--agent` selects it. Every
-/// skill names its artifacts by one absolute path, so one copy serves both
-/// agent families, and an install writes it whichever family it was asked
-/// for.
+/// Each package carries its own copy of the gates, so no install writes
+/// outside the agent roots. The legacy root is scanned only so the copies an
+/// earlier release wrote there are swept, and only by a run that covers
+/// every agent root: an older manual under a root the run leaves alone
+/// still reads the gates there.
 #[derive(Debug, Clone)]
 pub struct Layout {
     /// The agent skill roots this run was asked to touch.
     pub roots: Vec<Utf8PathBuf>,
-    /// Every agent skill root, whichever this run selected.
-    pub every_root: Vec<Utf8PathBuf>,
-    /// The root holding what the skills share.
-    pub shared: Utf8PathBuf,
+    /// The root an earlier release installed the shared gates to, where
+    /// this run sweeps it.
+    pub legacy_shared: Option<Utf8PathBuf>,
     /// The user-scope digest record.
     pub record: Utf8PathBuf,
 }
 
-/// Every skill destination under `roots`, root by root and skill by skill.
-fn plan_roots(roots: &[Utf8PathBuf], skills: &[Skill]) -> Vec<Planned> {
+/// Every package file under `roots`, root by root, skill by skill, and
+/// file by file.
+fn plan_roots(roots: &[Utf8PathBuf], packages: &[Package]) -> Vec<Planned> {
     let mut planned = Vec::new();
     for root in roots {
-        for skill in skills {
-            planned.push(Planned {
-                destination: root.join(&skill.name).join("SKILL.md"),
-                bytes: skill.text.as_bytes(),
-            });
+        for package in packages {
+            for file in &package.files {
+                planned.push(Planned {
+                    destination: root.join(&package.name).join(&file.path),
+                    bytes: file.bytes,
+                });
+            }
         }
     }
     planned
 }
 
-/// Every shared destination under `shared`.
-fn plan_shared(shared: &Utf8Path) -> Vec<Planned> {
-    crate::skills::shared()
-        .into_iter()
-        .map(|artifact| Planned {
-            destination: shared.join(&artifact.path),
-            bytes: artifact.bytes,
-        })
-        .collect()
-}
-
-/// Refuse a shared root reached through a symlink this installer would
-/// follow.
+/// Refuse a legacy shared root reached through a symlink this installer
+/// would follow.
 ///
-/// The chain from the state directory down to the shared root is this tool's
-/// own — nothing here ever creates a symlink in it, so one found there
-/// redirects every shared write and removal somewhere else, and
-/// [`check_destination`] cannot see it: the final component it checks is not
-/// itself a link. The directories above the state directory are the user's
-/// layout and stay unjudged.
-fn check_shared_root(shared: &Utf8Path, record: &Utf8Path) -> Result<(), RkError> {
-    let Some(state_dir) = record.parent() else {
+/// The chain from the state directory down to that root is this tool's own:
+/// nothing here ever creates a symlink in it, so one found there redirects
+/// every sweep somewhere else, and [`check_destination`] cannot see it,
+/// because the final component it checks is not itself a link. The
+/// directories above the state directory are the user's layout and stay
+/// unjudged.
+fn check_legacy_root(legacy: Option<&Utf8Path>, record: &Utf8Path) -> Result<(), RkError> {
+    let (Some(legacy), Some(state_dir)) = (legacy, record.parent()) else {
         return Ok(());
     };
-    let mut current = Some(shared);
+    let mut current = Some(legacy);
     while let Some(dir) = current {
         if !dir.starts_with(state_dir) {
             break;
@@ -151,6 +145,22 @@ fn check_shared_root(shared: &Utf8Path, record: &Utf8Path) -> Result<(), RkError
         current = dir.parent();
     }
     Ok(())
+}
+
+/// Files under the legacy shared root that the record cannot vouch for.
+///
+/// The sweep takes back only bytes the record says this tool wrote. Anything
+/// else there is the user's, so it stays, and the run names it rather than
+/// leaving it unexplained.
+fn legacy_kept(legacy: Option<&Utf8Path>, swept: &[Utf8PathBuf]) -> Vec<Utf8PathBuf> {
+    let Some(legacy) = legacy else {
+        return Vec::new();
+    };
+    crate::skills::shared()
+        .into_iter()
+        .map(|artifact| legacy.join(&artifact.path))
+        .filter(|path| path.is_file() && !path.is_symlink() && !swept.contains(path))
+        .collect()
 }
 
 /// Refuse a destination this installer must not write through or replace.
@@ -223,21 +233,48 @@ fn write_file(path: &Utf8Path, bytes: &[u8]) -> std::io::Result<()> {
     atomic::write(path.as_std_path(), bytes)
 }
 
-/// Remove one installed destination, and its directory when nothing else is
-/// left there.
+/// Remove installed files, then every directory they leave empty.
 ///
-/// Returns the directory kept because something else lives in it, so
-/// whatever a user put beside a skill survives its removal.
-fn remove_installed(destination: &Utf8Path) -> Result<Option<Utf8PathBuf>, RkError> {
-    fs::remove_file(destination)?;
-    let Some(directory) = destination.parent() else {
-        return Ok(None);
-    };
-    if fs::read_dir(directory)?.next().is_none() {
-        fs::remove_dir(directory)?;
-        return Ok(None);
+/// A directory is pruned up to, and never including, the root that holds
+/// it: an agent root or the state directory. Returns the parent directories
+/// kept because something else lives in them, so whatever a user put beside
+/// a skill survives its removal. A removal that fails stops the run at that
+/// file.
+fn remove_installed(
+    destinations: &[Utf8PathBuf],
+    stops: &[Utf8PathBuf],
+) -> Result<Vec<Utf8PathBuf>, (Utf8PathBuf, std::io::Error)> {
+    let mut parents: BTreeSet<Utf8PathBuf> = BTreeSet::new();
+    for destination in destinations {
+        fs::remove_file(destination).map_err(|source| (destination.clone(), source))?;
+        if let Some(parent) = destination.parent() {
+            parents.insert(parent.to_owned());
+        }
     }
-    Ok(Some(directory.to_owned()))
+    // Deepest first, so a package's `references/` empties before the skill
+    // directory holding it is judged.
+    let mut candidates: Vec<Utf8PathBuf> = Vec::new();
+    for parent in &parents {
+        let mut current = Some(parent.as_path());
+        while let Some(dir) = current {
+            if stops.iter().any(|stop| stop == dir)
+                || !stops.iter().any(|stop| dir.starts_with(stop))
+            {
+                break;
+            }
+            if !candidates.iter().any(|seen| seen == dir) {
+                candidates.push(dir.to_owned());
+            }
+            current = dir.parent();
+        }
+    }
+    candidates.sort_by_key(|dir| std::cmp::Reverse(dir.components().count()));
+    for dir in &candidates {
+        if fs::read_dir(dir).is_ok_and(|mut entries| entries.next().is_none()) {
+            let _ = fs::remove_dir(dir);
+        }
+    }
+    Ok(parents.into_iter().filter(|dir| dir.is_dir()).collect())
 }
 
 /// Restore every backed-up destination, returning those that would not go back.
@@ -278,26 +315,30 @@ fn abort(unrestored: &[Utf8PathBuf], cause: &str) -> RkError {
     ))
 }
 
-/// Install every embedded skill under each root, previewing by default.
+/// Install every embedded skill package under each root, previewing by
+/// default.
 ///
 /// `record_path` names the user-scope digest record: read to tell a stale copy
 /// this tool wrote from a file the user edited, and rewritten after a
 /// successful apply. Failing to write it is not a failure of the install — the
 /// files landed — so it costs only the benefit of the doubt next time.
 ///
+/// The first apply after the shared gates moved into each package takes back
+/// the copies an earlier release wrote to the legacy shared root, where the
+/// record vouches for them, and names any it cannot vouch for.
+///
 /// # Errors
 ///
-/// Returns [`RkError::Refused`] when the shared root is reached through a
-/// symlink, when a destination cannot be touched, when one holds bytes neither
-/// reference accounts for and `force` is unset, or when a write fails partway,
-/// in which case the destinations are restored first.
+/// Returns [`RkError::Refused`] when the legacy shared root is reached
+/// through a symlink, when a destination cannot be touched, when one holds
+/// bytes neither reference accounts for and `force` is unset, or when a write
+/// fails partway, in which case the destinations are restored first.
 /// Returns [`RkError::Io`] when a destination exists but cannot be read.
 pub fn install(layout: &Layout, apply: bool, force: bool) -> Result<Vec<Action>, RkError> {
-    check_shared_root(&layout.shared, &layout.record)?;
+    check_legacy_root(layout.legacy_shared.as_deref(), &layout.record)?;
     let record_path = layout.record.as_path();
-    let skills = crate::skills::all()?;
-    let mut planned = plan_roots(&layout.roots, &skills);
-    planned.extend(plan_shared(&layout.shared));
+    let packages = crate::skills::packages()?;
+    let planned = plan_roots(&layout.roots, &packages);
     for entry in &planned {
         check_destination(&entry.destination)?;
     }
@@ -308,8 +349,9 @@ pub fn install(layout: &Layout, apply: bool, force: bool) -> Result<Vec<Action>,
         .map(|entry| entry.destination.clone())
         .collect();
     let mut scanned = layout.roots.clone();
-    scanned.push(layout.shared.clone());
+    scanned.extend(layout.legacy_shared.clone());
     let stale = leftovers(&scanned, &record, &covered);
+    let kept = legacy_kept(layout.legacy_shared.as_deref(), &stale);
 
     if !apply {
         let mut actions: Vec<Action> = covered
@@ -320,6 +362,10 @@ pub fn install(layout: &Layout, apply: bool, force: bool) -> Result<Vec<Action>,
             stale
                 .into_iter()
                 .map(|destination| Action::Sweep { destination }),
+        );
+        actions.extend(
+            kept.into_iter()
+                .map(|destination| Action::KeptEdited { destination }),
         );
         return Ok(actions);
     }
@@ -336,20 +382,7 @@ pub fn install(layout: &Layout, apply: bool, force: bool) -> Result<Vec<Action>,
 
     // Back up every destination before the first write, so a failure on the
     // second root cannot leave the first one upgraded.
-    let mut backups: BTreeMap<Utf8PathBuf, Option<Vec<u8>>> = BTreeMap::new();
-    for entry in &planned {
-        let previous = if entry.destination.is_file() {
-            Some(fs::read(&entry.destination).map_err(|source| {
-                RkError::Refused(format!(
-                    "cannot back up {}, and nothing was written: {source}",
-                    entry.destination
-                ))
-            })?)
-        } else {
-            None
-        };
-        backups.insert(entry.destination.clone(), previous);
-    }
+    let backups = back_up(&planned)?;
 
     let mut actions = Vec::new();
     for entry in &planned {
@@ -374,21 +407,30 @@ pub fn install(layout: &Layout, apply: bool, force: bool) -> Result<Vec<Action>,
     // Sweep after the writes, never before: a refusal must leave the home
     // exactly as it found it, and a leftover is harmless until the install
     // superseding it has actually landed.
+    let stops = sweep_stops(layout);
     for destination in &stale {
-        match remove_installed(destination) {
-            Ok(kept) => {
+        match remove_installed(std::slice::from_ref(destination), &stops) {
+            Ok(kept_dirs) => {
                 actions.push(Action::Sweep {
                     destination: destination.clone(),
                 });
-                actions.extend(kept.map(|directory| Action::KeptDirectory { directory }));
+                actions.extend(
+                    kept_dirs
+                        .into_iter()
+                        .map(|directory| Action::KeptDirectory { directory }),
+                );
                 record.written.remove(destination);
             }
-            Err(source) => actions.push(Action::SweepFailed {
+            Err((_, source)) => actions.push(Action::SweepFailed {
                 destination: destination.clone(),
                 error: source.to_string(),
             }),
         }
     }
+    actions.extend(
+        kept.into_iter()
+            .map(|destination| Action::KeptEdited { destination }),
+    );
 
     for entry in &planned {
         record
@@ -403,7 +445,38 @@ pub fn install(layout: &Layout, apply: bool, force: bool) -> Result<Vec<Action>,
     Ok(actions)
 }
 
-/// Remove every installed skill under each root, previewing by default.
+/// The bytes each planned destination holds before an apply, or `None` for
+/// one that does not exist yet.
+fn back_up(planned: &[Planned]) -> Result<BTreeMap<Utf8PathBuf, Option<Vec<u8>>>, RkError> {
+    let mut backups = BTreeMap::new();
+    for entry in planned {
+        let previous = if entry.destination.is_file() {
+            Some(fs::read(&entry.destination).map_err(|source| {
+                RkError::Refused(format!(
+                    "cannot back up {}, and nothing was written: {source}",
+                    entry.destination
+                ))
+            })?)
+        } else {
+            None
+        };
+        backups.insert(entry.destination.clone(), previous);
+    }
+    Ok(backups)
+}
+
+/// The directories a removal never prunes: every agent root this run
+/// touches, and the state directory above the legacy shared root.
+fn sweep_stops(layout: &Layout) -> Vec<Utf8PathBuf> {
+    let mut stops = layout.roots.clone();
+    if let Some(state_dir) = layout.record.parent() {
+        stops.push(state_dir.to_owned());
+    }
+    stops
+}
+
+/// Remove every installed skill package under each root, previewing by
+/// default.
 ///
 /// Only bytes this tool can vouch for go: a destination holding the embedded
 /// bytes or bytes the record says it wrote, plus the recorded leftovers, and a
@@ -412,25 +485,25 @@ pub fn install(layout: &Layout, apply: bool, force: bool) -> Result<Vec<Action>,
 /// destination is a no-op, so a re-run succeeds. Removed destinations leave
 /// the record too; what is gone cannot be vouched for.
 ///
+/// Each package carries its own gates, so an uninstall of one agent family
+/// takes that family's copies and leaves the other's.
+///
 /// # Errors
 ///
-/// Returns [`RkError::Refused`] when the shared root is reached through a
-/// symlink, or when a destination is a symlink or not a regular file, and
-/// [`RkError::Io`] when a removal fails.
+/// Returns [`RkError::Refused`] when the legacy shared root is reached
+/// through a symlink, or when a destination is a symlink or not a regular
+/// file, and [`RkError::Io`] when a removal fails.
 pub fn uninstall(layout: &Layout, apply: bool) -> Result<Vec<Action>, RkError> {
-    check_shared_root(&layout.shared, &layout.record)?;
+    check_legacy_root(layout.legacy_shared.as_deref(), &layout.record)?;
     let record_path = layout.record.as_path();
-    let skills = crate::skills::all()?;
+    let packages = crate::skills::packages()?;
     let record_found = Record::load(record_path);
     let mut removable: Vec<Utf8PathBuf> = Vec::new();
     let mut edited: Vec<Utf8PathBuf> = Vec::new();
-    let classify = |entry: &Planned,
-                    removable: &mut Vec<Utf8PathBuf>,
-                    edited: &mut Vec<Utf8PathBuf>|
-     -> Result<(), RkError> {
+    for entry in &plan_roots(&layout.roots, &packages) {
         check_destination(&entry.destination)?;
         if !entry.destination.is_file() {
-            return Ok(());
+            continue;
         }
         // The same two references an install trusts decide what goes: the
         // bytes, or bytes the record vouches this tool wrote.
@@ -442,35 +515,16 @@ pub fn uninstall(layout: &Layout, apply: bool) -> Result<Vec<Action>, RkError> {
         } else {
             edited.push(entry.destination.clone());
         }
-        Ok(())
-    };
-
-    let selected = plan_roots(&layout.roots, &skills);
-    for entry in &selected {
-        classify(entry, &mut removable, &mut edited)?;
-    }
-
-    // The shared artifacts serve every agent root, so they go only once no
-    // root still holds a skill that reads them. Taking them during an
-    // `--agent codex` uninstall would leave the Claude skills naming a file
-    // that is no longer there.
-    let going: BTreeSet<&Utf8Path> = removable.iter().map(Utf8PathBuf::as_path).collect();
-    let retained = plan_roots(&layout.every_root, &skills)
-        .iter()
-        .any(|entry| !going.contains(entry.destination.as_path()) && entry.destination.is_file());
-    let mut scanned = layout.roots.clone();
-    if !retained {
-        for entry in plan_shared(&layout.shared) {
-            classify(&entry, &mut removable, &mut edited)?;
-        }
-        scanned.push(layout.shared.clone());
     }
 
     let mut record = record_found;
+    let mut scanned = layout.roots.clone();
+    scanned.extend(layout.legacy_shared.clone());
     // A skill this binary has since dropped is still ours to take back, and an
     // uninstall leaving it behind is the leftover an agent keeps offering. The
     // record is what names it; the embedded skills no longer can.
     let stale = leftovers(&scanned, &record, &removable);
+    edited.extend(legacy_kept(layout.legacy_shared.as_deref(), &stale));
 
     if !apply {
         let mut actions: Vec<Action> = removable
@@ -491,15 +545,20 @@ pub fn uninstall(layout: &Layout, apply: bool) -> Result<Vec<Action>, RkError> {
     }
 
     removable.extend(stale);
-    let mut actions = Vec::new();
+    let kept_dirs = remove_installed(&removable, &sweep_stops(layout))
+        .map_err(|(_, source)| RkError::Io(source))?;
+    let mut actions: Vec<Action> = Vec::new();
     for destination in &removable {
-        let kept = remove_installed(destination)?;
         actions.push(Action::Remove {
             destination: destination.clone(),
         });
-        actions.extend(kept.map(|directory| Action::KeptDirectory { directory }));
         record.written.remove(destination);
     }
+    actions.extend(
+        kept_dirs
+            .into_iter()
+            .map(|directory| Action::KeptDirectory { directory }),
+    );
     actions.extend(
         edited
             .into_iter()
@@ -531,7 +590,7 @@ mod tests {
 
     use super::{Action, Layout, install, leftovers, uninstall};
     use crate::skills::record::{RECORD_PATH, Record};
-    use crate::skills::{Digest, all};
+    use crate::skills::{Digest, all, packages};
 
     /// A scratch home, plus the roots and record path it implies.
     struct Home {
@@ -563,8 +622,16 @@ mod tests {
             self.path().join(root).join(skill).join("SKILL.md")
         }
 
-        fn shared(&self) -> Utf8PathBuf {
+        fn legacy_shared(&self) -> Utf8PathBuf {
             self.path().join(".local/state/release-kit/skills/shared")
+        }
+
+        /// A gate copy inside one installed package.
+        fn gate(&self, root: &str, skill: &str) -> Utf8PathBuf {
+            self.path()
+                .join(root)
+                .join(skill)
+                .join("references/plan-gate.md")
         }
 
         /// The layout for every agent root.
@@ -572,20 +639,25 @@ mod tests {
             self.layout_for(self.roots())
         }
 
-        /// The layout for a subset of the agent roots.
+        /// The layout for a subset of the agent roots, which sweeps the
+        /// legacy root only when the subset is every root.
         fn layout_for(&self, roots: Vec<Utf8PathBuf>) -> Layout {
+            let every = roots == self.roots();
             Layout {
                 roots,
-                every_root: self.roots(),
-                shared: self.shared(),
+                legacy_shared: every.then(|| self.legacy_shared()),
                 record: self.record(),
             }
         }
     }
 
-    /// How many shared artifacts every install writes, whatever the agent.
-    fn shared_count() -> usize {
-        crate::skills::shared().len()
+    /// How many files every package carries together, per agent root.
+    fn package_files() -> usize {
+        packages()
+            .expect("the packages compose")
+            .iter()
+            .map(|package| package.files.len())
+            .sum()
     }
 
     fn first_skill() -> String {
@@ -596,8 +668,7 @@ mod tests {
     fn a_preview_lists_every_destination_and_writes_nothing() {
         let home = Home::new();
         let actions = install(&home.layout(), false, false).unwrap();
-        let count = all().unwrap().len();
-        assert_eq!(actions.len(), count * 2 + shared_count(), "{actions:?}");
+        assert_eq!(actions.len(), package_files() * 2, "{actions:?}");
         assert!(
             actions
                 .iter()
@@ -626,10 +697,7 @@ mod tests {
             "{second:?}"
         );
         let record = Record::load(&home.record());
-        assert_eq!(
-            record.written.len(),
-            all().unwrap().len() * 2 + shared_count()
-        );
+        assert_eq!(record.written.len(), package_files() * 2);
     }
 
     /// The defect the record exists for: bytes a previous release wrote are
@@ -728,8 +796,7 @@ mod tests {
         // A regular file where the second root's skill directory belongs: the
         // directory cannot be created, so that root's write fails.
         let blocked = home.path().join(".agents/skills").join(first_skill());
-        std::fs::remove_file(blocked.join("SKILL.md")).unwrap();
-        std::fs::remove_dir(&blocked).unwrap();
+        std::fs::remove_dir_all(&blocked).unwrap();
         std::fs::write(&blocked, "in the way\n").unwrap();
 
         let message = install(&home.layout(), true, false)
@@ -872,71 +939,141 @@ mod tests {
         assert!(!home.destination(".claude/skills", &first_skill()).exists());
     }
 
-    /// Every agent reads the same shared artifacts, so an install writes them
-    /// whichever family it was asked for.
+    /// Each package carries its own gates, so an install for either agent
+    /// family lands them inside that family's packages and nowhere else.
     #[test]
-    fn either_agent_alone_still_lands_the_shared_artifacts() {
-        for root in [".claude/skills", ".agents/skills"] {
+    fn either_agent_alone_lands_the_gates_in_its_packages() {
+        for (root, other) in [
+            (".claude/skills", ".agents/skills"),
+            (".agents/skills", ".claude/skills"),
+        ] {
             let home = Home::new();
             let one = home.layout_for(vec![home.path().join(root)]);
             install(&one, true, false).unwrap();
-            assert!(
-                home.shared().join("plan-gate.md").is_file(),
-                "{root}: the shared gate did not land"
-            );
+            for skill in all().unwrap() {
+                assert!(
+                    home.gate(root, &skill.name).is_file(),
+                    "{root}/{}: the gate did not land",
+                    skill.name
+                );
+                assert!(!home.gate(other, &skill.name).exists());
+            }
+            assert!(!home.legacy_shared().exists());
         }
     }
 
-    /// The defect this guards: taking the shared artifacts while another root
-    /// still holds skills leaves those skills naming a file that is gone.
+    /// The defect a shared root had: one family's uninstall had to keep the
+    /// gates for the other. A package owns its copies, so each family's
+    /// uninstall takes its own and leaves the other's.
     #[test]
-    fn the_shared_artifacts_stay_while_another_root_still_holds_skills() {
+    fn an_uninstall_of_one_family_leaves_the_other_family_its_gates() {
         let home = Home::new();
         install(&home.layout(), true, false).unwrap();
-        let gate = home.shared().join("plan-gate.md");
-        assert!(gate.is_file());
-
         let codex = home.layout_for(vec![home.path().join(".agents/skills")]);
         uninstall(&codex, true).unwrap();
-        assert!(!home.destination(".agents/skills", &first_skill()).exists());
         assert!(
-            gate.is_file(),
-            "the Claude skills still read the gate, so it must stay"
+            !home
+                .path()
+                .join(".agents/skills")
+                .join(first_skill())
+                .exists()
         );
-
-        let claude = home.layout_for(vec![home.path().join(".claude/skills")]);
-        let actions = uninstall(&claude, true).unwrap();
-        assert!(
-            !gate.exists(),
-            "the last uninstall takes the gate: {actions:?}"
-        );
+        assert!(home.gate(".claude/skills", &first_skill()).is_file());
     }
 
-    /// A preview of that last uninstall names the gate before it removes it.
+    /// The first install after the gates moved into the packages takes back
+    /// the copies an earlier release wrote to the shared root, and the
+    /// directories they leave empty.
     #[test]
-    fn the_last_uninstall_previews_the_shared_artifacts() {
+    fn an_install_sweeps_the_legacy_shared_root_it_vouches_for() {
         let home = Home::new();
-        install(&home.layout(), true, false).unwrap();
-        let actions = uninstall(&home.layout(), false).unwrap();
+        let legacy = home.legacy_shared().join("plan-gate.md");
+        std::fs::create_dir_all(home.legacy_shared()).unwrap();
+        std::fs::write(&legacy, "an earlier release's gate\n").unwrap();
+        let mut record = Record::default();
+        record
+            .written
+            .insert(legacy.clone(), Digest::of(b"an earlier release's gate\n"));
+        std::fs::create_dir_all(home.record().parent().unwrap()).unwrap();
+        std::fs::write(home.record(), record.to_text()).unwrap();
+
+        let preview = install(&home.layout(), false, false).unwrap();
         assert!(
-            actions.iter().any(|action| matches!(
+            preview.contains(&Action::Sweep {
+                destination: legacy.clone()
+            }),
+            "{preview:?}"
+        );
+        install(&home.layout(), true, false).unwrap();
+        assert!(!legacy.exists());
+        assert!(!home.legacy_shared().exists());
+        assert!(
+            !home.legacy_shared().parent().unwrap().exists(),
+            "the emptied skills directory goes too"
+        );
+        assert!(!Record::load(&home.record()).written.contains_key(&legacy));
+    }
+
+    /// A run limited to one agent family leaves the legacy root alone,
+    /// because an older manual under the other family's root still reads
+    /// the gates there; the uninstall of that family leaves it too.
+    #[test]
+    fn a_one_family_install_keeps_the_legacy_gates() {
+        let home = Home::new();
+        let legacy = home.legacy_shared().join("plan-gate.md");
+        std::fs::create_dir_all(home.legacy_shared()).unwrap();
+        std::fs::write(&legacy, "an earlier release's gate\n").unwrap();
+        let mut record = Record::default();
+        record
+            .written
+            .insert(legacy.clone(), Digest::of(b"an earlier release's gate\n"));
+        std::fs::create_dir_all(home.record().parent().unwrap()).unwrap();
+        std::fs::write(home.record(), record.to_text()).unwrap();
+        let codex = home.layout_for(vec![home.path().join(".agents/skills")]);
+
+        let preview = install(&codex, false, false).unwrap();
+        assert!(
+            !preview.iter().any(|action| matches!(
                 action,
-                Action::Remove { destination } if destination.file_name() == Some("plan-gate.md")
+                Action::Sweep { destination } if destination == &legacy
             )),
+            "{preview:?}"
+        );
+        install(&codex, true, false).unwrap();
+        assert!(legacy.is_file());
+        uninstall(&codex, true).unwrap();
+        assert!(legacy.is_file());
+        assert!(Record::load(&home.record()).written.contains_key(&legacy));
+    }
+
+    /// Bytes under the legacy root the record cannot vouch for are the
+    /// user's: the sweep leaves them and names them.
+    #[test]
+    fn an_install_leaves_and_names_an_unvouched_legacy_gate() {
+        let home = Home::new();
+        let legacy = home.legacy_shared().join("plan-gate.md");
+        std::fs::create_dir_all(home.legacy_shared()).unwrap();
+        std::fs::write(&legacy, "the user's own gate\n").unwrap();
+
+        let actions = install(&home.layout(), true, false).unwrap();
+        assert!(
+            actions.contains(&Action::KeptEdited {
+                destination: legacy.clone()
+            }),
             "{actions:?}"
         );
-        assert!(
-            home.shared().join("plan-gate.md").is_file(),
-            "a preview writes nothing"
+        assert_eq!(
+            std::fs::read_to_string(&legacy).unwrap(),
+            "the user's own gate\n"
         );
     }
 
-    /// A shared artifact the user edited is theirs, exactly as a skill is.
+    /// A gate copy the user edited is theirs, exactly as a skill is.
     #[test]
-    fn an_edited_shared_artifact_refuses_an_install_and_survives_an_uninstall() {
+    fn an_edited_gate_copy_refuses_an_install_and_survives_an_uninstall() {
         let home = Home::new();
         install(&home.layout(), true, false).unwrap();
-        let gate = home.shared().join("plan-gate.md");
+        let gate = home.gate(".claude/skills", &first_skill());
         std::fs::write(&gate, b"mine now").unwrap();
 
         let message = install(&home.layout(), true, false)
@@ -955,13 +1092,13 @@ mod tests {
         assert_eq!(std::fs::read(&gate).unwrap(), b"mine now");
     }
 
-    /// A symlinked shared destination refuses before anything is written, the
-    /// same as a symlinked skill.
+    /// A symlinked gate copy refuses before anything is written, the same as
+    /// a symlinked skill.
     #[test]
-    fn a_symlinked_shared_destination_refuses_before_writing() {
+    fn a_symlinked_gate_copy_refuses_before_writing() {
         let home = Home::new();
-        let gate = home.shared().join("plan-gate.md");
-        std::fs::create_dir_all(home.shared()).unwrap();
+        let gate = home.gate(".agents/skills", &first_skill());
+        std::fs::create_dir_all(gate.parent().unwrap()).unwrap();
         std::os::unix::fs::symlink("/etc/passwd", &gate).unwrap();
 
         let message = install(&home.layout(), true, false)
@@ -974,9 +1111,9 @@ mod tests {
         );
     }
 
-    /// A shared root reached through a symlinked directory refuses both verbs:
-    /// the write would land, and the removal would delete, wherever the link
-    /// points, and no per-destination check can see it.
+    /// A legacy shared root reached through a symlinked directory refuses
+    /// both verbs: the sweep would delete wherever the link points, and no
+    /// per-destination check can see it.
     #[test]
     fn a_symlinked_shared_root_refuses_install_and_uninstall() {
         for symlinked in ["skills", "skills/shared"] {

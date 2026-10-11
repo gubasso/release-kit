@@ -2,7 +2,7 @@
 
 The steps of [landing](../method/13-landing.md) as commands, in the chapter's order: the chapter owns each step's why, this page owns its how. `rk guide landing` prints this page and fills in the project path, forge, and technology where detection resolves them. The commands are the operator's to run: an agent serves a runbook and states the command, and runs one only where the operator's request named that step.
 
-Every stage is kept from step 1 through step 4. Nothing below copies a byte out of a stage into the target, and no command below takes a stage as input. Where a step below names `<stage>`, that is a path `rk stage` printed. Keep an inventory of every such path the task creates, because step 5 cleans each one by name.
+Every stage is kept from step 1 through step 5 and the checks after it. Nothing below copies a byte out of a stage into the target: the production verb's `--stage` reads the stage's parameters alone. Where a step below names `<stage>`, that is a path `rk stage` printed. Keep an inventory of every such path the task creates, because the close after step 5 cleans each one by name.
 
 ## Prerequisites
 
@@ -56,41 +56,40 @@ rk stage --target .
 # check: prints stage: <stage>, the parameters, the landing record's schema, one candidate line per destination, and the omitted, collision, retired, seeded present, and state present lines
 # a first landing: pass --technology, --release-mode, and the checkout-mode, release-style, and capability flags the request answers, so the stage renders the candidate the landing will render
 # an exact directory wanted: pass --output <dir>. It must be absent or empty, and RK_STAGE_ROOT is the base otherwise
-# exit 73 naming an existing nonempty output: choose another directory, or clean the old stage through step 5a first
+# exit 73 naming an existing nonempty output: choose another directory, or clean the old stage through the close first
 ```
 
 Add `<stage>` to the inventory of stage paths, and hold it for every step below.
 
-## 2. Investigate
+## 2. Compare
 
 ### 2a. Read the stage
 
 ```bash
 cat <stage>/stage.json
-# check: schema is rk.stage/4, rk_version is the binary's, and target is this repository
+# check: schema is rk.stage/5, rk_version is the binary's, and target is this repository
 # check: each candidates entry carries destination, kind, placement, sha256, sources, and region_sha256 where the placement is region
 # check: each omissions and collisions entry carries destination and reason, and each retired entry is a destination alone
 ls -R <stage>/artifacts <stage>/reference
-# check: artifacts/ holds each candidate at its target-relative path. reference/ holds CHANGELOG.md, guidance/, method/, bindings/, runbooks/, forges/, skills/rk-setup, and skill-shared/
+# check: artifacts/ holds each candidate at its target-relative path. reference/ holds CHANGELOG.md, guidance/, method/, bindings/, runbooks/, forges/, and skills/ with one package per skill
 rk profile --target .
 # check: every domain value with its source, each capability with its status, and the destinations the selected ones land
 rk binding <tech>
 # check: the release driver's own four axes and the registry facts the candidate rests on
 ```
 
-### 2b. Compare the candidate with the working tree
+### 2b. Compare the candidate with the target
 
 ```bash
-for f in $(cd <stage>/artifacts && find . -type f | sed 's|^\./||'); do diff -uN -- "$f" "<stage>/artifacts/$f"; done
-# check: an absent file prints the whole candidate, because -N reads it as empty. A differing file prints the edit the landing will replace or refuse. No output means the file already holds the candidate's bytes
-cat .release-kit/manifest.json
-# check: present or absent. Where present, each destination's kind says whether the landing replaces or preserves it
+rk stage compare <stage> --target .
+# check: one row per destination the stage carries or the record names, each with its state (equal, absent, differs, retired), its kind (rendered, region, seeded, state), its provenance where it differs, and the word the landing will print
+# check: history names whether Git answered. Where it did not, every differing row reads reduced or unknown, and the report says why
 git log --oneline -- <path>
 git diff HEAD -- <path>
-# check: for each differing destination, who wrote it and why. An edit with no story is shown to the operator as such
+# check: for each row that reads collision, who wrote the file and why. An edit with no story is shown to the operator as such
 ```
 
-State the evidence class the chapter names: receipt and history, receipt alone, history alone, or neither. Under history alone or neither, every ownership decision is a question for the operator and no file is brought to the candidate silently.
+Judge only a row whose word is `collision`. Where its `replaceable` is true, ask the operator about it: keep the edit, which saves a copy and then replaces the file, or discard it, which replaces it. Where it is false, the landing refuses the path whatever is named, and the operator fixes it by hand first. Provenance explains a row and never makes it a conflict. A row with no receipt entry says whether its history shows an edit after the commit that brought it: the group of untouched files takes one answer, and each edited file takes its own.
 
 ### 2c. Read the release's knowledge
 
@@ -109,82 +108,56 @@ ls <stage>/reference/guidance
 
 The `destinations` field of each guidance file decides which files this target reads, and the changelog prose decides nothing about that. Read `<stage>/reference/method`, `bindings`, `runbooks`, and `forges` only for the topics the comparison raised. The source at the exact release tag is the last resort, and trunk never stands in for the installed release.
 
-### 2d. Prepare the target
+## 3. Prepare
 
-Each edit here stays inside the request's authority, and each is one inventory entry. A collision the stage named is a file the landing refuses: bring it to the candidate's bytes by hand where the operator owns the edit, keep the operator's content in the target's own configuration where a class P key carries it, or record a target already at the projection through `rk adopt` in step 3. Copy nothing out of `<stage>/artifacts` wholesale, and offer `stage.json` to no verb.
+Each edit here stays inside the request's authority, and each is one inventory entry. Gather the operator's answer for every conflict step 2b raised, and the task's own items. Keep the operator's content in the target's own configuration where a class P key carries it. Copy nothing out of `<stage>/artifacts`, and offer `stage.json` to no verb but through `--stage`.
 
 ```bash
 git status --porcelain
 # check: every preparation edit is visible, and nothing here is committed on the trunk
 ```
 
-- a retired destination: it stays on disk and leaves the receipt at step 3. Removing it is the operator's decision, recorded in the inventory.
+- a conflict the operator keeps or discards: name it with `--replace <path>` in step 4. The landing saves its bytes first, then replaces it, and the report names where the copy went.
+- a retired destination: it stays on disk and leaves the receipt at step 4. Removing it is the operator's decision, recorded in the inventory.
 - a hook already doing one of the block's jobs: [the setup runbook](./setup.md) step 4d owns that choice.
-- a recorded generated file the target edited: the landing replaces it and prints `replaced`. Show the operator the edit that will go, and move its intent into the target's own configuration or a class P key before step 3.
 
-## 3. Land
+## 4. Land
 
-The production verb renders again from the binary and the target. It never opens `<stage>`.
+The production verb renders again from the binary and the target, with the answers `--stage` reads from the stage's receipt. It reads no byte of `<stage>`.
 
 ```bash
-rk init --target .                                # a target with no record and no release mechanism
-rk upgrade --target .                             # a recorded target
-# check: the preview lists each destination with its word: created, replaced, matched, preserved, drift, or released. A collision line names a file step 2d still owes
-rk init --target . --apply                        # or rk upgrade --target . --apply
-# check: the same words, then added or updated .release-kit/config.toml, then wrote or rewrote .release-kit/manifest.json last. Every sentinel left to fill is listed
-rk adopt --target . --checkout-mode <mode> --release-style <style>   # a target already at the candidate, with no record
+rk init --stage <stage> --target .                # a target with no record and no release mechanism
+rk upgrade --stage <stage> --target .             # a recorded target
+# check: the preview lists each destination with its word: created, replaced, matched, preserved, drift, or released. A collision line names a conflict step 3 has not answered
+rk init --stage <stage> --target . --apply        # or rk upgrade, adding --replace <path> for each answered conflict
+# check: the same words, then added or updated .release-kit/config.toml, then wrote or rewrote .release-kit/manifest.json last. Every replaced conflict prints where its bytes were saved, and every sentinel left to fill is listed
+rk adopt --stage <stage> --target .               # a target landed before the record existed
 # check: matches for each rendered and seeded destination that holds the candidate's bytes, differs for a seeded file the target tuned, and state for a state file. No sentinel is listed, because adoption writes no candidate file
-rk adopt --target . --checkout-mode <mode> --release-style <style> --apply
-# check: wrote .release-kit/manifest.json and added .release-kit/config.toml, and nothing else. Every landed destination is unchanged
+rk adopt --stage <stage> --target . --apply       # adding --replace <path> for each answered conflict
+# check: wrote .release-kit/manifest.json and added .release-kit/config.toml. Only the named files changed, each copy saved first
 ```
 
-- exit 73 naming collisions: nothing was written. Return to step 2d with the named files.
-- exit 73 from `rk adopt` naming a destination as `expected and missing` or differing: the target is not at the candidate. Return to step 2d, or land through `rk init` where the target holds no release mechanism.
+- exit 73 naming collisions: nothing was written. Return to step 3 with the named conflicts.
+- exit 64 naming `--replace <path>`: the path is no conflict this landing has. Read the row in step 2b again.
+- exit 73 naming the stage's version or target: the stage came from another binary or another target. Stage again with this binary, then compare.
+- exit 73 from `rk adopt` naming a destination as `expected and missing` or differing: the operator has not named it. Return to step 3, or land through `rk init` where the target holds no release mechanism.
 - exit 64 naming the style: a pre-style record. Pass `--release-style <style>`, asked of the operator where the config is silent.
 - exit 73 naming the release automation: the profile asks for a release this binary does not carry at its driver and forge. The refusal names the tuples it does carry; the answer is an available pair or another release mode, never a flag that forces past it.
 - exit 73 naming a newer `rk_version`: the target is ahead of this binary, and the operator installs the named version.
 - exit 74 naming completed paths: a rename stopped part way. Whole files stand beside the previous receipt. Read `git status`, then run the same command again.
 
-## 4. Verify
+## 5. Prove
 
-### 4a. Compare the real diff with the staged benchmark
-
-```bash
-git status --porcelain
-git diff --stat
-# check: the changed paths are the created and replaced destinations step 3 printed, plus .release-kit/config.toml and .release-kit/manifest.json
-for f in $(cd <stage>/artifacts && find . -type f | sed 's|^\./||'); do diff -q -- "$f" "<stage>/artifacts/$f"; done
-# check: silent for every created and replaced destination. A preserved or drift file can differ, because the landing kept the target's bytes
-```
-
-- a created or replaced destination differs from its artifact: a preparation edit or a parameter changed between the stage and the landing. Inspect the difference. Where the benchmark itself must be refreshed, stage again with `rk stage --target . --output <dir>`, and add that path to the inventory of stage paths too. Every path in the inventory is cleaned in step 5a.
-
-### 4b. Run the checks
+### 5a. Compare again
 
 ```bash
-grep -rn 'TODO(release-kit)' . --exclude-dir=.git
-# check: prints nothing once each sentinel is answered
-rk status --check --target .
-# check: exits 0. A drift, missing, sentinel, or invariant line is the next finding
-rk setup check --target .
-# check: what the forge enforces still matches the landed files. A fault here is a finding, and the setup runbook carries its step
+rk stage compare <stage> --target .
+# check: every rendered and region row reads equal. A preserved or drift row can differ, because the landing kept the target's bytes, and so can a retired row, which the landing released to the target
+rk status --target . --json
+# check: classification is current, or drift where a sentinel is still unanswered
 ```
 
-Then run the project's own checks. A landed configuration another tool generates from is regenerated first, per [the setup runbook](./setup.md) step 4b.
-
-- a check fails: repair the finding in the target, then run the production verb of step 3 again. Production renders afresh every time, so a repair is never a hand copy from the stage.
-
-## 5. Clean
-
-### 5a. Remove every stage
-
-Only after step 4 passed in full, and only where the request's authority includes cleanup. Until then each stage is recoverable evidence. Run the command once per path in the inventory of stage paths, the one `rk stage` printed in 1c and every one 4a added.
-
-```bash
-rk stage clean <stage>
-# check: prints removed <stage> and the recovery command that stages the candidate again. Repeat for the next path in the inventory until none is left
-# exit 73 naming the path: it is a symlink, a repository root, a home or filesystem root, a directory without stage.json, or a receipt whose stage_root differs from the argument. Nothing was removed
-```
+- a rendered row still differs: a preparation edit or an answer changed between the stage and the landing. Stage again with `rk stage --target . --output <dir>`, add that path to the inventory of stage paths, and land from it.
 
 ### 5b. Remove inactive legacy state
 
@@ -219,4 +192,23 @@ remove_legacy_path "<path>"
 # exit 1 naming the path: refused by the same guard, and nothing was removed
 ```
 
-Repeat for each recorded path, one at a time. Then commit the landed files, the receipt included, through the trunk's one path. The stage and the legacy state are not among them.
+Repeat for each recorded path, one at a time.
+
+## After the landing
+
+The checks every run ends with, and the stage cleanup after them. The setup skill's general post-flight runs them.
+
+```bash
+rk status --check --target .
+# check: exits 0. A drift, missing, sentinel, or invariant line is the next finding, repaired through another fresh production invocation
+```
+
+Then run the project's own checks. A landed configuration another tool generates from is regenerated first, per [the setup runbook](./setup.md) step 4b. Only after every check passed, and only where the request's authority includes cleanup, remove each stage. Saved copies and snapshots live outside the stage and stay.
+
+```bash
+rk stage clean <stage>
+# check: prints removed <stage> and the recovery command that stages the candidate again. Repeat for the next path in the inventory until none is left
+# exit 73 naming the path: it is a symlink, a repository root, a home or filesystem root, a directory without stage.json, or a receipt whose stage_root differs from the argument. Nothing was removed
+```
+
+The landed files, the receipt included, reach the trunk through the project's own workflow. The stage, the saved copies, and the legacy state are not among them.

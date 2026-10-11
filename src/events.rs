@@ -29,6 +29,11 @@ pub enum EventKind {
     ChildOutput,
     /// The run ended.
     RunFinished,
+    /// One publish milestone a check read back, with its status.
+    Milestone,
+    /// A step saved the state it is about to change; the detail names
+    /// where.
+    Snapshot,
 }
 
 /// Which of a child's streams a chunk came from.

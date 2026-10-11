@@ -144,13 +144,187 @@ pub struct Evidence {
 /// without a repository.
 #[must_use]
 pub const fn classify(evidence: &Evidence) -> Classification {
-    if !evidence.release_markers.is_empty() || !evidence.collisions.is_empty() {
+    verdict(
+        evidence.release_markers.as_slice(),
+        evidence.collisions.as_slice(),
+        evidence.tags,
+        evidence.long_lived_branches.as_slice(),
+    )
+}
+
+/// The one rule both readers apply: a mechanism in place outranks
+/// unexplained activity, and nothing at all is a fresh start.
+const fn verdict(
+    release_markers: &[String],
+    collisions: &[String],
+    tags: usize,
+    long_lived_branches: &[String],
+) -> Classification {
+    if !release_markers.is_empty() || !collisions.is_empty() {
         return Classification::Brownfield;
     }
-    if evidence.tags > 0 || !evidence.long_lived_branches.is_empty() {
+    if tags > 0 || !long_lived_branches.is_empty() {
         return Classification::NeedsDecision;
     }
     Classification::Greenfield
+}
+
+/// What marks release-kit's own landing at a target that carries no
+/// record: the evidence the adoption detector reads.
+#[derive(Debug, Default, Serialize)]
+pub struct OwnLanding {
+    /// Block destinations whose release-kit marked region is present.
+    pub regions: Vec<String>,
+    /// Whole-file rendered destinations holding exactly the bytes this
+    /// binary renders for them at this target.
+    pub rendered: Vec<String>,
+}
+
+impl OwnLanding {
+    /// Whether any of release-kit's own landing is present.
+    #[must_use]
+    pub const fn present(&self) -> bool {
+        !self.regions.is_empty() || !self.rendered.is_empty()
+    }
+}
+
+/// Where a target with no record stands, by the one rule above and the
+/// adoption detector before it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unrecorded {
+    /// release-kit's own landing is present and only the record is
+    /// missing.
+    Adopt,
+    /// Everything else, by the assessment's verdict.
+    Assessed(Classification),
+}
+
+/// Classify a target with no record.
+///
+/// Pure, so the precedence is testable without a repository:
+/// release-kit's own landing outranks every other mechanism, because its
+/// marked regions and its rendered files are what a landing made before
+/// the record existed leaves behind, and they would otherwise read as
+/// another tool's collisions.
+#[must_use]
+pub const fn classify_unrecorded(facts: &Facts, own: &OwnLanding) -> Unrecorded {
+    if own.present() {
+        return Unrecorded::Adopt;
+    }
+    Unrecorded::Assessed(verdict(
+        facts.release_markers.as_slice(),
+        facts.collisions.as_slice(),
+        facts.tags,
+        facts.long_lived_branches.as_slice(),
+    ))
+}
+
+/// Where a target with no record stands, by the precedence `rk status`
+/// reads it with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Standing {
+    /// A migration is open: its archive emptied the target on purpose,
+    /// and this outranks every other reading until it closes.
+    Migrating,
+    /// No migration is open, so the adoption detector and the rule.
+    Unrecorded(Unrecorded),
+}
+
+/// Read where a target with no record stands: an open migration first,
+/// then the adoption detector and the assessment's rule.
+///
+/// # Errors
+///
+/// [`RkError::Io`] for a read of the target that fails for a reason
+/// other than absence.
+pub fn standing(
+    target: &Utf8Path,
+    config: Option<&crate::config::Config>,
+) -> Result<Standing, RkError> {
+    if config.is_some_and(|config| config.migration.is_some()) {
+        return Ok(Standing::Migrating);
+    }
+    let facts = gather_facts(target)?;
+    let own = own_landing(target, config)?;
+    Ok(Standing::Unrecorded(classify_unrecorded(&facts, &own)))
+}
+
+/// Find release-kit's own landing at `target`, reading and never
+/// writing.
+///
+/// A marked region carries release-kit's own name, so its presence
+/// alone is the evidence. A whole file is release-kit's only where it
+/// holds exactly the bytes this binary renders for it here, because a
+/// file at the same path from another tool is a migration's business.
+/// Where this binary cannot resolve the parameters a render needs, the
+/// rendered half reads as empty rather than failing: the regions still
+/// answer.
+///
+/// # Errors
+///
+/// [`RkError::Io`] for a read that fails for a reason other than
+/// absence.
+pub fn own_landing(
+    target: &Utf8Path,
+    config: Option<&crate::config::Config>,
+) -> Result<OwnLanding, RkError> {
+    let mut own = OwnLanding::default();
+    for destination in landing::BLOCK_DESTINATIONS {
+        if landing::read_recorded(target, destination)?.is_some() {
+            own.regions.push(destination.to_owned());
+        }
+    }
+    let params = landing::Params::resolve(
+        target,
+        &landing::Inputs::default(),
+        config,
+        None,
+        landing::Purpose::Preview,
+    );
+    let Ok(params) = params else {
+        return Ok(own);
+    };
+    let Ok(evidence) = crate::projection::TargetEvidence::gather(target, None) else {
+        return Ok(own);
+    };
+    let Ok(projection) =
+        crate::projection::Projection::compute(&crate::projection::ProjectionInput {
+            params,
+            evidence,
+        })
+    else {
+        return Ok(own);
+    };
+    for candidate in &projection.candidates {
+        if candidate.kind != landing::Kind::Rendered || candidate.region.is_some() {
+            continue;
+        }
+        if landing::read_recorded(target, &candidate.destination)?.as_deref()
+            == Some(candidate.bytes.as_slice())
+        {
+            own.rendered.push(candidate.destination.clone());
+        }
+    }
+    own.rendered.sort();
+    Ok(own)
+}
+
+/// Whether `target` sits in a non-bare Git work tree.
+///
+/// A directory Git reports as no repository, and a bare repository,
+/// answer `false`: both are facts the setup skill stops on, because the
+/// method lands files a work tree commits.
+///
+/// # Errors
+///
+/// [`RkError::Subprocess`] where git does not run or refuses for a
+/// reason other than the target not being a repository.
+pub fn git_work_tree(target: &Utf8Path) -> Result<bool, RkError> {
+    match git_lines(target, &["rev-parse", "--is-inside-work-tree"]) {
+        Ok(lines) => Ok(lines.first().is_some_and(|line| line == "true")),
+        Err(GitFailure::NotARepository) => Ok(false),
+        Err(GitFailure::Other(error)) => Err(error),
+    }
 }
 
 /// The repository's facts alone, with no record read: what the planner

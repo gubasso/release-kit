@@ -86,6 +86,22 @@ pub struct ProfileFlags {
 }
 
 impl ProfileFlags {
+    /// Whether no flag answered anything.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.technology.is_empty()
+            && self.forge.is_none()
+            && self.repo.is_none()
+            && self.release_mode.is_none()
+            && self.release_driver.is_none()
+            && self.release_style.is_none()
+            && self.trunk.is_none()
+            && self.checkout_mode.is_none()
+            && self.integration.is_none()
+            && self.required_check.is_none()
+            && self.required_workflow.is_none()
+    }
+
     /// The parsed answers, as the resolution takes them.
     ///
     /// # Errors

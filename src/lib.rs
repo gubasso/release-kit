@@ -6,9 +6,9 @@
 //! argument surface, `commands` the handlers, `projection` the one pure
 //! candidate tree over the embedded sources, `landing` the parameters and
 //! the direct writes into a target, `stage` the disposable candidate
-//! stage over the projection, `self_depend` the consumer pin, `depend`
-//! the dependency matrix, `skills` the user-scope skill install, `digest`
-//! the one hash type, and `error` the one exit-code matrix.
+//! stage over the projection, `self_depend` the consumer pin, `skills`
+//! the user-scope skill install, `digest` the one hash type, and `error`
+//! the one exit-code matrix.
 
 pub mod applog;
 pub mod assess;
@@ -18,7 +18,6 @@ pub mod cargo_package;
 pub mod cli;
 pub mod commands;
 pub mod config;
-pub mod depend;
 pub mod detect;
 pub mod diagnostic;
 pub mod digest;
@@ -31,13 +30,16 @@ pub mod integrate;
 pub mod issue;
 pub mod landing;
 pub mod maintenance;
+pub mod migrate;
 pub mod output;
 pub mod probes;
 pub mod profile;
 pub mod projection;
 pub mod registry;
+pub mod release_state;
 pub mod self_depend;
 pub mod setup;
 pub mod skills;
+pub mod snapshot;
 pub mod stage;
 pub mod worktree;

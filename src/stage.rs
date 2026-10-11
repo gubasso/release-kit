@@ -5,9 +5,8 @@
 //! gathers the target's evidence, computes the one pure [`Projection`],
 //! and writes the complete proposed bytes of every candidate under
 //! `artifacts/`, the installed binary's changelog, guidance, method,
-//! bindings, runbooks, forge notes, setup skill, and the shared resources
-//! that skill routes to under `reference/`, and one explanatory receipt,
-//! `stage.json`. It writes nothing inside the target. Production landing
+//! bindings, runbooks, forge notes, and every skill package as installed
+//! under `reference/`, and one explanatory receipt, `stage.json`. It writes nothing inside the target. Production landing
 //! reads no byte of it, and only `rk stage clean` removes it.
 //!
 //! The stage is built whole under a fresh sibling of its resolved path and
@@ -16,6 +15,8 @@
 //! receipt are created owner-only.
 
 pub mod clean;
+pub mod compare;
+pub mod read;
 
 use std::borrow::Cow;
 use std::fs::{self, File};
@@ -38,7 +39,7 @@ use crate::projection::{Placement, Projection};
 use crate::skills;
 
 /// The shape version of the stage receipt and of the `rk stage` report.
-pub const STAGE_SCHEMA: &str = "rk.stage/5";
+pub const STAGE_SCHEMA: &str = "rk.stage/6";
 
 /// The receipt's name at the stage root.
 pub const RECEIPT_NAME: &str = "stage.json";
@@ -55,25 +56,20 @@ pub const ARTIFACTS_DIR: &str = "artifacts";
 /// The directory below the stage root holding the installed knowledge.
 pub const REFERENCE_DIR: &str = "reference";
 
-/// The skill whose installed text and routed resources the reference
-/// tree carries.
-pub const SETUP_SKILL: &str = "rk-setup";
-
 /// The interruption proof's seam: the stage-relative path after which a
 /// materialization stops on purpose, as if the write after it had failed.
 pub const INTERRUPT_VAR: &str = "RK_STAGE_INTERRUPT_AT";
 
 /// Every reference root a stage writes, in the order the receipt lists
 /// them.
-pub const REFERENCE_ROOTS: [&str; 8] = [
+pub const REFERENCE_ROOTS: [&str; 7] = [
     "CHANGELOG.md",
     "guidance",
     "method",
     "bindings",
     "runbooks",
     "forges",
-    "skills/rk-setup",
-    "skill-shared",
+    "skills",
 ];
 
 /// The explanatory receipt a stage carries, and the document `rk stage
@@ -629,8 +625,8 @@ pub fn compose(
 ///
 /// From the embedded sources and from nowhere else: the changelog, every
 /// guidance file, the method, the bindings, the runbooks, the forge
-/// documents, the setup skill as installed, and the shared resources that
-/// skill names.
+/// documents, and every skill package as installed, its references and its
+/// gate copies included.
 #[must_use]
 pub fn reference_files() -> Vec<(String, &'static [u8])> {
     let mut out: Vec<(String, &'static [u8])> =
@@ -646,19 +642,11 @@ pub fn reference_files() -> Vec<(String, &'static [u8])> {
             out.push((format!("{root}/{path}"), bytes));
         }
     }
-    let prefix = format!("{SETUP_SKILL}/");
-    let mut skill_text = String::new();
-    for (path, bytes) in embedded::walk(&embedded::SKILLS) {
-        if path.starts_with(&prefix) {
-            if path == format!("{prefix}SKILL.md") {
-                skill_text = String::from_utf8_lossy(bytes).into_owned();
-            }
-            out.push((format!("skills/{path}"), bytes));
-        }
-    }
-    for artifact in skills::shared() {
-        if skill_text.contains(&artifact.path) {
-            out.push((format!("skill-shared/{}", artifact.path), artifact.bytes));
+    // A defect in the embedded skills fails the build's own tests, so a
+    // stage carries whatever composes rather than refusing to stage.
+    for package in skills::packages().unwrap_or_default() {
+        for file in package.files {
+            out.push((format!("skills/{}/{}", package.name, file.path), file.bytes));
         }
     }
     out
@@ -910,6 +898,32 @@ fn write_into(temp: &Temp, composed: &Composed, stop: Option<&Path>) -> std::io:
     Ok(())
 }
 
+/// The purpose a stage resolves its answers under.
+///
+/// It is the purpose of the landing verb that follows, so the stage
+/// previews that verb's defaults and refusals rather than another verb's.
+/// A recorded target is upgraded; one `rk status` classifies as adopt is
+/// adopted, by the same precedence, so an open migration that keeps a
+/// marked block still lands as a first landing; anything else is one.
+///
+/// # Errors
+///
+/// [`RkError::Io`] where the adoption detector cannot read the target.
+pub fn purpose(
+    target: &Utf8Path,
+    config: Option<&crate::config::Config>,
+    recorded: bool,
+) -> Result<crate::landing::Purpose, RkError> {
+    use crate::assess::{Standing, Unrecorded};
+    Ok(if recorded {
+        crate::landing::Purpose::Upgrade
+    } else if crate::assess::standing(target, config)? == Standing::Unrecorded(Unrecorded::Adopt) {
+        crate::landing::Purpose::Adopt
+    } else {
+        crate::landing::Purpose::Init
+    })
+}
+
 /// The `schema_version` the target's landing record declares, read
 /// leniently: `None` where no record exists or it does not parse as a
 /// JSON object carrying an integer there. Explanatory, never a gate.
@@ -958,6 +972,7 @@ mod tests {
                 reporting_policy: true,
                 scorecard: false,
                 code_scanning: None,
+                workflow_guards: Some(false),
             },
             repo: "acme/widget".into(),
             security_contact: String::new(),
@@ -967,7 +982,7 @@ mod tests {
         }
     }
 
-    /// The complete `rk.stage/4` receipt shape, held by snapshot: a field
+    /// The complete `rk.stage/6` receipt shape, held by snapshot: a field
     /// rename or removal fails here and becomes a schema-version bump.
     #[test]
     fn the_stage_receipt_schema_snapshot_holds() {
@@ -1014,7 +1029,7 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&receipt).expect("a receipt serializes"),
             format!(
-                r#"{{"schema":"rk.stage/5","rk_version":"0.0.0","target":"/tmp/t","stage_root":"/tmp/s","parameters":{{"profile":{{"technologies":["rust"],"forge":"github","release":{{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}}}},"git":{{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"}},"capabilities":{{"nix_packaging":false,"reporting_policy":true,"scorecard":false}},"repo":"acme/widget","security_contact":"","security_response":"best-effort","required_check":"","required_workflow":""}},"capabilities":[],"receipt_schema_version":6,"candidates":[{{"destination":"AGENTS.md","kind":"rendered","placement":"region","sha256":"{}","region_sha256":"{}","sources":["blocks/routing.md.in"]}},{{"destination":"release-plz.toml","kind":"seeded","placement":"whole","sha256":"{}","sources":["snippets/rust/github/release-plz.toml"]}}],"omissions":[{{"destination":"flake.nix","reason":"the target already carries flake.nix"}}],"collisions":[],"retired":["old.yml"],"seeded_present":["release-plz.toml"],"state_present":[],"reference":["CHANGELOG.md","guidance","method","bindings","runbooks","forges","skills/rk-setup","skill-shared"]}}"#,
+                r#"{{"schema":"rk.stage/6","rk_version":"0.0.0","target":"/tmp/t","stage_root":"/tmp/s","parameters":{{"profile":{{"technologies":["rust"],"forge":"github","release":{{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}}}},"git":{{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"}},"capabilities":{{"nix_packaging":false,"reporting_policy":true,"scorecard":false,"workflow_guards":false}},"repo":"acme/widget","security_contact":"","security_response":"best-effort","required_check":"","required_workflow":""}},"capabilities":[],"receipt_schema_version":6,"candidates":[{{"destination":"AGENTS.md","kind":"rendered","placement":"region","sha256":"{}","region_sha256":"{}","sources":["blocks/routing.md.in"]}},{{"destination":"release-plz.toml","kind":"seeded","placement":"whole","sha256":"{}","sources":["snippets/rust/github/release-plz.toml"]}}],"omissions":[{{"destination":"flake.nix","reason":"the target already carries flake.nix"}}],"collisions":[],"retired":["old.yml"],"seeded_present":["release-plz.toml"],"state_present":[],"reference":["CHANGELOG.md","guidance","method","bindings","runbooks","forges","skills"]}}"#,
                 Digest::of(b"a"),
                 Digest::of(b"r"),
                 Digest::of(b"b")

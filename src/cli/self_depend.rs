@@ -54,6 +54,10 @@ pub struct AddArgs {
     #[arg(long)]
     pub tag: Option<String>,
 
+    /// Record that every host installs rk itself, at this release or newer, instead of pinning it in a manager file.
+    #[arg(long, conflicts_with_all = ["tag", "manager", "venue"])]
+    pub host: bool,
+
     /// The target's tool manager; required when the target carries several, the flake when it carries none.
     #[arg(long, value_enum)]
     pub manager: Option<Manager>,

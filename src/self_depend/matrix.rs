@@ -7,9 +7,7 @@
 //! pairs that consume one of those render; the pairs that need a nixpkgs
 //! attribute, a source hash, or an asdf plugin nobody publishes are
 //! `manual` with that reason, and the report says so instead of
-//! inventing one. The dependency matrix in `src/depend/matrix.rs` has
-//! the same shape over an arbitrary source, and its reasons are about
-//! that source, so nothing is imported from it.
+//! inventing one.
 
 use serde::Serialize;
 

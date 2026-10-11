@@ -377,6 +377,42 @@ mod tests {
         assert!(!gitlab.contains("gh pr list"));
     }
 
+    /// The setup runbook's protected-path proof follows the integration
+    /// mode alone: a GitHub target that integrates locally reads the local
+    /// push and no request merge.
+    #[test]
+    fn the_setup_proof_on_github_and_local_names_no_request_merge() {
+        let text = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("runbooks/setup.md"),
+        )
+        .expect("the setup runbook reads");
+        let render_for = |integration: &str| {
+            render(
+                &text,
+                &Forge::Value("github".to_owned()),
+                None,
+                None,
+                None,
+                None,
+                Some(integration),
+            )
+        };
+        let local = render_for("local");
+        let proof = &local
+            [local.find("### 7a.").expect("step 7a")..local.find("### 7b.").expect("step 7b")];
+        assert!(proof.contains("git push origin master"), "{proof}");
+        assert!(!proof.contains("gh pr merge"), "{proof}");
+        assert!(!proof.contains("--forge"), "{proof}");
+        let forge = render_for("forge");
+        let proof = &forge
+            [forge.find("### 7a.").expect("step 7a")..forge.find("### 7b.").expect("step 7b")];
+        assert!(
+            proof.contains("rk integrate <type>/<slug> --forge --apply"),
+            "{proof}"
+        );
+        assert!(!proof.contains("git push origin master"), "{proof}");
+    }
+
     /// A paragraph variant is selected the same way a fenced one is.
     #[test]
     fn a_paragraph_variant_renders() {

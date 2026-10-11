@@ -6,7 +6,7 @@ The steps of [setup](../method/02-setup.md) as commands, once per repository, in
 
 Every step below assumes these; each is a probe, not a change.
 
-- `rk` on `PATH`: `rk --version`. Two ways to get it there: a host install, `cargo install release-kit`, which serves one version to the whole host; or the devshell pin below, which gives each project its own `rk` from its flake and keeps the pin fresh. One project runs one of the two, never both.
+- `rk` on `PATH`: `rk --version`. Two ways to get it there: a host install, `cargo install release-kit`, which serves one version to the whole host; or the devshell pin below, which gives each project its own `rk` from its flake and keeps the pin fresh. One project runs one of the two, never both. A host install is recorded as the configuration's acquisition answer: `rk self-depend add --host --apply`, and `rk self-depend status --target .` then reports `state host`.
 - This binary's skills, installed once per user, at user scope — the only mode there is: `rk doctor` reports the skill probes ok, and `rk skill install --apply` is the repair. The two roots are `~/.claude/skills`, which Claude Code reads, and `~/.agents/skills`, which Codex, Gemini CLI, and Copilot CLI read. No system-wide mode exists, by decision rather than gap. Every install channel takes the same step: `just install` runs it as its second line; cargo, the curl-pipe installer, and a packaged `rk` leave it to the operator.
 - The forge CLI, `openssl`, and `curl`: `rk doctor` reports each ok
 - OS keyring where the forge bootstrap needs one: `secret-tool --version`, on a host shell and never in a container
@@ -39,7 +39,7 @@ A target already wired to another manager takes the `add` step alone, and the bl
 
 Decide the wire before a first landing closes, with an agent or without one. Without the line the pin holds its release until somebody bumps it by hand. To accept, place the served line in `.envrc`, run `direnv allow`, and commit the file. To refuse, record the reason where the project keeps its own decisions, so a later reader tells a choice from an omission. Either answer closes the landing.
 
-Decide the same way where the status reports `state no-manager`, because then nothing pins `rk` here at all. Three answers close it. Wire a manager, which puts the version in the repository where a diff shows it. Keep the host install, which serves one version to every project on this machine. Wire it by hand outside this convention, and write down where. Answer before the first landing closes, and record the answer either way.
+Decide the same way where the status reports `state no-manager`, because then nothing pins `rk` here at all. Three answers close it. Wire a manager, which puts the version in the repository where a diff shows it. Keep the host install, which serves one version to every project on this machine: `rk self-depend add --host --apply` records it in `.release-kit/config.toml` at this binary's version as the minimum, before or after the first landing, and the status then reports `state host` rather than `no-manager`. Wire it by hand outside this convention, and write down where. Answer before the first landing closes, and record the answer either way.
 
 To wire a manager, pass `--manager` to `add` with the manager chosen. The block above is the flake route, and an unqualified `add` picks the flake on a target that carries none. The flake route would answer the wire question by itself, because its apply seeds the `.envrc` with the sync line already in it. Decide the wire before running it. On a refusal, drop the sync line from the seeded `.envrc` and commit the file without it. `rk self-depend status --target . --json` then reports the manager under `wired` and `envrc_sync` false, which is the refusal recorded in the tree. Preview first: a pair the matrix cannot wire reports `manual` with its reason and writes nothing. Then rerun the same call with `--apply`, which seeds the manager file. Read `rk self-depend status --target .` back. It names the chosen manager under `wired`, or the wiring did not happen.
 
@@ -66,7 +66,7 @@ Before anything that needs credentials or cannot be undone; the binding names wh
 ```bash
 rk binding <tech>
 # check: what the registry rejects, for the release driver this project runs
-rk setup step package-check --target .
+rk setup step package-check --target . --apply
 # check: exits 0; the package is publishable with no token spent and ships none of release-kit's own files
 ```
 
@@ -132,7 +132,7 @@ gh api "repos/<repo>/git/ref/heads/<candidate>"
 
 ### 1c. Delete every branch its merge retires
 
-Automated: `rk setup step merge-cleanup --apply`. One switch on the repository, so it holds however anyone merges; a merged branch left behind becomes another long-lived branch, which is what 1b just paid a destructive guard to remove.
+Under the workflow guards alone; without them `rk setup` reports the step not applicable, and the project's own workflow decides. Automated: `rk setup step merge-cleanup --apply`. One switch on the repository, so it holds however anyone merges; a merged branch left behind becomes another long-lived branch, which is what 1b just paid a destructive guard to remove.
 
 On github:
 
@@ -143,7 +143,7 @@ gh api "repos/<repo>" -q .delete_branch_on_merge
 
 ### 1d. Remind this clone after a pull
 
-Automated: `rk setup step branch-reminder --apply`. 1c deletes the remote copy; this clone's own copy survives with its upstream marked gone, and no forge can reach it. The step writes a post-merge hook that runs `rk branches prune --quiet` and `rk worktree prune --quiet` after every pull: silent when the clone is clean, a report naming the retired branches and worktrees otherwise, and never a deletion — the `--apply` forms are the operator's own call. Each call sits behind a capability probe on its own verb, `rk <verb> --help`, so an `rk` that is missing or too old for a verb keeps the hook silent while a genuine refusal still reaches the operator. The step refuses over an existing post-merge hook it did not write; merge by hand there, guarding each call behind its probe as below. It is local work alone and calls no forge, so it runs whether or not the forge CLI is installed.
+Under the workflow guards alone, as 1c. Automated: `rk setup step branch-reminder --apply`. 1c deletes the remote copy; this clone's own copy survives with its upstream marked gone, and no forge can reach it. The step writes a post-merge hook that runs `rk branches prune --quiet` and `rk worktree prune --quiet` after every pull: silent when the clone is clean, a report naming the retired branches and worktrees otherwise, and never a deletion — the `--apply` forms are the operator's own call. Each call sits behind a capability probe on its own verb, `rk <verb> --help`, so an `rk` that is missing or too old for a verb keeps the hook silent while a genuine refusal still reaches the operator. The step refuses over an existing post-merge hook it did not write; merge by hand there, guarding each call behind its probe as below. It is local work alone and calls no forge, so it runs whether or not the forge CLI is installed.
 
 ```bash
 hook="$(git rev-parse --git-path hooks)/post-merge"
@@ -339,24 +339,24 @@ Where the forge enforces less than a step claims, the check names the weaker gua
 
 ### 4a. Land the files
 
-The apply names no scope vocabulary. The title check holds a scope to lowercase letters, digits, and `_ . / -`, the commit hook requires that a scope is there, and the landed `AGENTS.md` block tells the author how to pick the word. `--checkout-mode` chooses where a topic branch opens and defaults to `linked-worktree` — every code-changing branch in a linked worktree, the main checkout commits nothing; `--checkout-mode main-worktree` leaves branches workable in the original working tree, with worktrees optional beside it. `--integration` chooses which authority moves an implementation onto the trunk and defaults to `local` — the checkout squashes and records it through `rk integrate`, with no forge round trip; `--integration forge` keeps a pull request or merge request as the integration, which is what a project with more than one writer and a review requirement wants. Ask for this answer rather than assuming it: a project that never answered has the answer it did not choose. The release request integrates at the forge either way. `--release-style` chooses the release style of an automatic release and defaults to `trunk` — the bot's request carries auto-merge from creation, so a green trunk ships itself; `--release-style lines` leaves every request unarmed, for a project that keeps older lines and validates a candidate by hand (check: `rk status` prints the checkout mode, the integration mode, and the style).
+The apply names no scope vocabulary. The title check holds a scope to lowercase letters, digits, and `_ . / -`. `--workflow-guards` adds the opt-in workflow guards: the agent and commit policy lines of the landed `AGENTS.md` block, `GLOSSARY.md`, the commit-message, branch-name, worktree, and trunk hooks, and steps 1c and 1d. A fresh landing takes none of them, because they shape how the project works rather than what its release needs, and `rk upgrade --workflow-guards on` or `off` changes the answer later. The checkout mode is not asked: `git.checkout_mode` keeps its default, `linked-worktree`, which sets where the helper verbs open a topic branch and, under the workflow guards, whether the location hook lands. `--integration` chooses which authority moves an implementation onto the trunk and defaults to `local` — the checkout squashes and records it through `rk integrate`, with no forge round trip; `--integration forge` keeps a pull request or merge request as the integration, which is what a project with more than one writer and a review requirement wants. Ask for this answer rather than assuming it: a project that never answered has the answer it did not choose. The release request integrates at the forge either way. `--release-style` chooses the release style of an automatic release and defaults to `trunk` — the bot's request carries auto-merge from creation, so a green trunk ships itself; `--release-style lines` leaves every request unarmed, for a project that keeps older lines and validates a candidate by hand (check: `rk status` prints the checkout mode, the integration mode, and the style).
 
 The landed block is release-kit's own hooks alone. The project owns everything in `.pre-commit-config.yaml` outside the markers, and this is where it decides what goes where: each check on the earliest native stage that can run it, the suite that must pass before an integration on the `manual` stage, and the project's own continuous integration invoking those same stages. Release-kit invokes `pre-commit run --hook-stage manual --all-files` and reads no hook identifier, so the assignment stays the project's. [Integration](../method/12-integration.md) owns the rule.
 
-The landing is staged, investigated, rendered, and verified: [the landing runbook](./landing.md) steps 1 and 2 carry the stage and the investigation before the front below, which is that runbook's step 3, and its steps 4 and 5 carry the verification and the cleanup after it.
+The landing is staged, compared, prepared, rendered, and proven: [the landing runbook](./landing.md) steps 1 to 3 carry the stage, the comparison, and the preparation before the front below, which is that runbook's step 4, and its step 5 and the close after it carry the proof, the checks, and the cleanup.
 
 ```bash
 rk profile --target .                        # what the target resolves to, and what the catalog selects
-rk init --target .                           # preview every destination
-rk init --target . --apply                   # write the files and the landing record
+rk init --stage <stage> --target .           # preview every destination, with the answers the stage resolved
+rk init --stage <stage> --target . --apply   # write the files and the landing record
 # check: the apply reports each written file, including SECURITY.md, and every sentinel left to fill
 # already landed: the apply refuses; rk upgrade --target . --apply takes an existing landing to the installed binary's projection
 # a record from before the style parameter: the upgrade refuses until --release-style names one
 ```
 
-Check `SECURITY.md` after landing: its project path must name this target and its instructions must describe the intended private reporting channel; return to 4a with the correct repository parameter if it does not. Existing landings receive the policy through `rk upgrade`. This rendered policy is release-kit-owned: an upgrade replaces a hand edit, so the two facts only this project knows are landing parameters instead. Set `security.contact` in `.release-kit/config.toml` to one line naming who receives a report when the forge channel is unavailable — an address, a URL, a person, or a team — and leave it empty to keep the forge's own wording. Set `security.response` to `best-effort`, or to `1 day`, `<n> days`, `1 business day`, or `<n> business days` to promise that the maintainers acknowledge a report within that window; the value promises acknowledgment alone and never remediation or disclosure. Both are class P: `rk status` reports an edited key as pending configuration, and the next `rk upgrade --apply` takes it and records it (check: `rk status` lists the key under pending, and the applied policy states the new wording).
+Check `SECURITY.md` after landing: its project path must name this target and its instructions must describe the intended private reporting channel; return to 4a with the correct repository parameter if it does not. Existing landings receive the policy through `rk upgrade`. This rendered policy is release-kit-owned: an upgrade refuses a hand edit until the operator names it with `--replace`, and then replaces it after saving a copy, so the two facts only this project knows are landing parameters instead. Set `security.contact` in `.release-kit/config.toml` to one line naming who receives a report when the forge channel is unavailable — an address, a URL, a person, or a team — and leave it empty to keep the forge's own wording. Set `security.response` to `best-effort`, or to `1 day`, `<n> days`, `1 business day`, or `<n> business days` to promise that the maintainers acknowledge a report within that window; the value promises acknowledgment alone and never remediation or disclosure. Both are class P: `rk status` reports an edited key as pending configuration, and the next `rk upgrade --apply` takes it and records it (check: `rk status` lists the key under pending, and the applied policy states the new wording).
 
-After the policy is published on the target through step 4c or 4f, check that the hosted file is visible and that the reporter can reach the intended private form. On GitLab, open this project's new issue form on its own instance and verify confidentiality is selected; do not guess a host for the policy. On private GitHub, verify the stated existing private conversation is available instead. Submit no report for this check. If the channel is unavailable, return to 3g; if the hosted file is absent, return to 4c or 4f.
+After the policy is published on the target through step 4c, check that the hosted file is visible and that the reporter can reach the intended private form. On GitLab, open this project's new issue form on its own instance and verify confidentiality is selected; do not guess a host for the policy. On private GitHub, verify the stated existing private conversation is available instead. Submit no report for this check. If the channel is unavailable, return to 3g; if the hosted file is absent, return to 4c.
 
 Then answer every reported sentinel and confirm the record:
 
@@ -375,81 +375,22 @@ On github, add the release proofs to the project's own gated workflow first, the
 
 ### 4c. Put the files on the trunk
 
-While step 3's protection does not stand yet, the trunk takes this one direct write.
+The landed files reach the trunk through the project's own workflow: a direct commit while no protection stands, or the project's usual change path once one does. Release-kit prescribes neither.
 
 ```bash
-git add -A && git commit -m 'chore(<scope>): land the release workflow files'
-git push origin master
-# check: the push lands
-# rejected: a protection already stands, so land this through 4f instead
+git fetch origin
+git log -1 --format='%h %s' origin/master -- .release-kit/manifest.json
+# check: prints the commit that put the landed record on the trunk
 ```
 
 ### 4d. Install the hooks, last
 
-Last, because two of them refuse exactly what 4c just did. The landing splices a marked block of release-convention hooks into `.pre-commit-config.yaml`, under `repos:`, leaving the rest of the file the target's own — the commit-shape hooks, and the `rk-message` content guard that refuses a message carrying agent attribution or a reference to a git-ignored path, the release bot's request exempt by its title. A hook already doing one of these jobs — `committed`, `commitlint`, `gitlint`, another conventional-commit or branch-guard hook — is a duplicate to name, and the choice between it and the landed hook is the operator's, never a silent second hook doing the same job. On an existing config, verify the top level carries `default_install_hook_types: [pre-commit, commit-msg, pre-push]` — the splice cannot add a top-level key. Where the target's CI runs a `pre-commit run` sweep, set `SKIP=no-commit-to-branch` in that job's environment — and on a worktree-mode target the pair `SKIP=no-commit-to-branch,rk-worktree-location`, because a CI checkout is commonly detached on the main worktree: CI commits nothing, so the commit-time guards would refuse every trunk checkout they sweep. That value is a list the project owns the tail of: append the id of every check it classifies `local-only`, and have the sweep invoke the same stages the project assigned, so a check runs on both sides of the boundary or says why it cannot.
+Last, because under the workflow guards two of them refuse a direct write to the trunk. The landing splices a marked block of release-convention hooks into `.pre-commit-config.yaml`, under `repos:`, leaving the rest of the file the target's own: the tag guard and the status check always, and under the workflow guards the commit-shape hooks and the `rk-message` content guard that refuses a message carrying agent attribution or a reference to a git-ignored path, the release bot's request exempt by its title. A hook already doing one of these jobs — `committed`, `commitlint`, `gitlint`, another conventional-commit or branch-guard hook — is a duplicate to name, and the choice between it and the landed hook is the operator's, never a silent second hook doing the same job. On an existing config, verify the top level carries `default_install_hook_types: [pre-commit, commit-msg, pre-push]` — the splice cannot add a top-level key. Under the workflow guards, where the target's CI runs a `pre-commit run` sweep, set the `SKIP` value the block's comment names in that job's environment, because a CI checkout is commonly detached on the main worktree and commits nothing, so the commit-time guards would refuse every trunk checkout they sweep. That value is a list the project owns the tail of: append the id of every check it classifies `local-only`, and have the sweep invoke the same stages the project assigned, so a check runs on both sides of the boundary or says why it cannot.
 
 ```bash
 pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push
 # check: reports each of the three hook types installed
 ```
-
-### 4e. Configure this clone
-
-Two settings, local to this clone, that match the convention's history to the way git is asked to move it.
-
-```bash
-git config --local pull.rebase true
-git config --local fetch.prune true
-git config --local --get-regexp '^(pull\.rebase|fetch\.prune)$'
-# check: prints both keys as true, whether this run set them or found them set
-```
-
-- `pull.rebase` replays a topic branch onto the trunk rather than merging back, which is what keeps one pull request one commit.
-- `fetch.prune` drops the remote-tracking ref 1c taught the forge to delete, so a merged branch stops appearing in this clone — which is what marks the local copy gone for the reminder 1d installed.
-- Neither applies to the trunk itself: the trunk is never pulled, only reset, which 4g does.
-
-### 4f. Land one change through the trunk's one path
-
-From 3c on, the trunk is unwritable by hand: every later change reaches it through this path, so prove it once now. The request's title becomes the trunk commit's subject — squash is the only merge method — so write it as a Conventional Commit carrying the strongest intent of everything in the branch: one `!` anywhere makes the title breaking. On github the request's description becomes the commit's body and lands with the title, so it obeys the same content rules the hook enforces locally: no agent attribution, no reference to an internal planning artifact. On gitlab the `%{title}` template puts only the title on the trunk, and the description stays on the request. Spell the title out rather than filling it from a commit: `--fill-first` takes the first commit's subject, the intent of one commit out of however many the branch holds.
-
-```bash
-git switch -c fix/<slug>
-git push -u origin "$(git branch --show-current)"
-```
-
-On github:
-
-```bash
-gh pr create --repo <repo> --base master --head "$(git branch --show-current)" --title '<type>(<scope>): <subject>' --body '<what changed, and why>'
-gh pr checks --watch
-# check: the required check reports success; it and pr-title are the only contexts that hold the merge
-gh pr merge --squash --delete-branch
-# check: reports the pull request squashed and merged
-```
-
-- nothing to land: the working tree is clean and the trunk already holds the work, so go to 4g and confirm it.
-- `GH013: Repository rule violations found` on the push: the branch is `master`, which takes no direct push; branch first and push that branch instead.
-- the check never appears: the job id is not the one the ruleset names, and 3a's prerequisite has moved; nothing merges until the ruleset and the workflow agree on the name.
-
-### 4g. Take the local trunk to the merge
-
-The squash writes one commit that is not the branch's commit, so the local trunk never advances by the merge alone; reset takes it there in one move whichever way the clone stands.
-
-```bash
-git switch master
-git fetch origin
-git status -sb
-# check: behind by the merge and ahead by nothing
-git reset --hard origin/master
-git rev-parse HEAD origin/master
-# check: two identical SHAs
-git branch -D fix/<slug>
-# check: reports the branch deleted; the forge already deleted its remote by 1c
-```
-
-- ahead as well as behind: the clone committed to the trunk directly before branching, so the trunk holds those commits twice — once each and once squashed. `git diff --stat HEAD origin/master` prints nothing, which is the proof the reset discards duplicates only, and `git reflog` still names each one.
-- `not possible to fast-forward` from the merge command: that is the ahead-as-well-as-behind case, reported by the local update the merge attempts, and this substep is its repair.
-- `-D` rather than `-d` on the topic branch, and not for haste: the squash gave the work a commit no branch is an ancestor of, so `-d` refuses every branch this path produces.
 
 ## 5. Publish the first version by hand
 
@@ -463,7 +404,7 @@ git status --porcelain
 # check: empty
 git rev-parse HEAD origin/master
 # check: two identical SHAs; HEAD is what the publish packages
-# they differ: the trunk takes no direct push, so land the commits through 4f and rerun
+# they differ: the trunk takes no direct push, so land the commits through the project's own change path and rerun
 ```
 
 On rust:
@@ -506,7 +447,30 @@ Manual — registry web UI, no API, once per package; the binding walks the form
 
 ## 7. Prove the automated path
 
-### 7a. Prove the publish workflow runs
+### 7a. Prove the protected path
+
+From 3c on, the trunk takes a change only through its protected path, and the recorded integration mode names it: under `local`, `rk integrate` squashes the branch in the checkout and a repository administrator fast-forwards the trunk; under `forge`, a request whose required checks pass is squashed onto the trunk. Prove it once with one real change, through [the integration runbook](./integration.md)'s variant for the recorded mode. The squash title becomes the trunk commit's subject, so write it as a scoped Conventional Commit carrying the strongest intent of the branch: one `!` anywhere makes the title breaking. On github a request's description becomes the commit's body, so it carries no agent attribution and no reference to an internal planning artifact.
+
+On local:
+
+```bash
+rk integrate <type>/<slug> -m '<type>(<scope>): <subject>' --apply
+# check: the report names the trunk's new commit and records the integration
+git push origin master
+# check: a fast-forward, pushed as a repository administrator; never --force
+```
+
+On forge:
+
+```bash
+rk integrate <type>/<slug> --forge --apply
+# check: the report names the request command for this forge; open the request with it
+# check: the required check reports success, and the forge squashes the request onto the trunk once it is merged
+```
+
+- the check never appears: the job id is not the one the ruleset names, and 3a's prerequisite has moved; nothing merges until the ruleset and the workflow agree on the name.
+
+### 7b. Prove the publish workflow runs
 
 On github:
 
@@ -515,14 +479,14 @@ gh run list --repo <repo> --workflow <publish workflow> --limit 1 --json conclus
 # check: the newest run on the trunk concluded success; the binding names the workflow file
 ```
 
-### 7b. Prove it produced a release request
+### 7c. Prove it produced a release request
 
 On github:
 
 ```bash
 gh pr list --repo <repo> --state open --json number,title
 # check: a release request from the bot is open, proposing the next version
-# none open: the trunk matches the version step 5 published, so there is nothing to propose; land one change through 4f and rerun
+# none open: the trunk matches the version step 5 published, so there is nothing to propose; land one change through 7a and rerun
 ```
 
 On gitlab:
@@ -532,7 +496,7 @@ glab mr list
 # check: a release request from the bot is open, proposing the next version
 ```
 
-### 7c. Cut one release end to end
+### 7d. Cut one release end to end
 
 ```bash
 rk guide release
@@ -540,7 +504,7 @@ rk guide release
 
 The chapter names its passing verify step as the proof the next step depends on.
 
-### 7d. Record the setup proof
+### 7e. Record the setup proof
 
 From a host that holds the bot's key, once every step reports satisfied:
 
@@ -551,7 +515,7 @@ rk setup status --target .
 # check: setup proof: compatible
 ```
 
-Commit `.release-kit/setup-proof.json` through the trunk's one path, 4f. A runtime without the key reads `rk setup status` instead of repeating the check. After any change to the setup configuration, `rk setup status` names the changed field, and this substep runs again.
+Commit `.release-kit/setup-proof.json` through the trunk's protected path, as 7a. A runtime without the key reads `rk setup status` instead of repeating the check. After any change to the setup configuration, `rk setup status` names the changed field, and this substep runs again.
 
 ## 8. Require trusted publishing
 

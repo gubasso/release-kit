@@ -28,6 +28,7 @@ nix_packaging = false # P: opt-in Nix capability
 reporting_policy = true # P: the landed vulnerability reporting policy
 scorecard = true # P: opt-in OpenSSF Scorecard workflow, github only
 code_scanning = "codeql" # P: opt-in code scanning provider: codeql, semgrep, or off
+workflow_guards = true # P: opt-in workflow guards: the agent and commit policy lines, the glossary, the workflow hooks, merge-cleanup, and branch-reminder
 
 [security]
 advisories = "" # N: project receiving vulnerability reports

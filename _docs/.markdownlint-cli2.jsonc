@@ -1,0 +1,57 @@
+// The documentation root's Markdown lint configuration, managed by
+// spec-driven-docs: an upgrade rewrites this file, so change the project's
+// own configuration at the repository root instead.
+//
+// markdownlint-cli2 discovers this file for every Markdown file under this
+// directory and merges it over the project's `.markdownlint-cli2.*`, so the
+// project's rules still judge these files. It sets only what a delivered
+// rule requires. A `.markdownlint.*` file in this directory, or any
+// markdownlint configuration beneath `specs/` or `decisions/`, would replace
+// these settings, and `sdd verify` fails on one
+// (instance:the-lint-configuration-composes).
+{
+  "config": {
+    // docs-format:prose-stays-unwrapped keeps a paragraph on one line, which
+    // the default 80-column limit refuses.
+    "MD013": false,
+    // docs-format:fence-declares-a-language
+    "MD040": true
+  },
+  "overrides": [
+    {
+      // docs-specs:a-spec-follows-the-heading-shape. `?` is the one varying
+      // title. `+` covers the requirement and scenario headings, and fails a
+      // spec with no requirement. Case is matched, because a spec headed
+      // `## purpose` would otherwise pass a gate whose job is the shape.
+      "filter": ["specs/SPEC-*.md"],
+      "config": {
+        "MD043": {
+          "headings": ["?", "## Purpose", "## Requirements", "+"],
+          "match_case": true
+        }
+      },
+      "combine": "merge"
+    },
+    {
+      // decision-records:a-record-follows-the-heading-shape. The five
+      // sections are the whole record, so a sixth fails. A record is frozen
+      // history, so the relative-links rule does not judge its links.
+      "filter": ["decisions/ADR-*.md"],
+      "config": {
+        "MD043": {
+          "headings": [
+            "?",
+            "## Context and Problem Statement",
+            "## Considered Options",
+            "## Decision Outcome",
+            "## Consequences",
+            "## Status"
+          ],
+          "match_case": true
+        },
+        "relative-links": false
+      },
+      "combine": "merge"
+    }
+  ]
+}

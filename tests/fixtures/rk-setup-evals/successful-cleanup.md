@@ -1,6 +1,10 @@
-# Successful cleanup: the stage goes last
+# Successful cleanup: the stage goes last, after every check
 
 - case: successful-cleanup
+- classification: upgrade
+- intent: upgrade
+- provision: no
+- tasks: `upgrade`
 - landing: yes
 - receipt: present
 - history: useful
@@ -9,25 +13,29 @@
 
 ## Situation
 
-A landed target whose upgrade landed and whose every check passed. The operator's request carried cleanup.
+A target landed by an older `rk`, whose upgrade lands cleanly and whose checks pass. The operator asked to upgrade and named cleanup in the request.
+
+## Gate
+
+Present "State: `upgrade`. Request: upgrade. Tasks: `upgrade`. Proceed?" and wait for the operator.
 
 ## Route
 
-1. `rk guide landing` step 1a: run `rk --version` and `rk self-depend status --target .`. The installed version is the one the operator chose. No step selects, fetches, or installs another.
-2. `rk guide landing` step 1c: run `rk stage --target .` and hold `<stage>` for the whole task.
-3. `rk guide landing` step 2a: read `<stage>/stage.json`, `<stage>/artifacts/`, and `<stage>/reference/`.
-4. `rk guide landing` step 2b: diff each artifact against the working tree, read `.release-kit/manifest.json`, and read `git log` and `git diff` for each differing destination.
-5. State the evidence class: receipt plus useful history.
-6. `rk guide landing` step 3: preview `rk upgrade --target .`, then run `rk upgrade --target . --apply`.
-7. `rk guide landing` step 4: compare `git diff --stat` with `<stage>/artifacts/`, then run `rk status --check --target .`, `rk setup check --target .`, and the project's checks. Every check passes.
-8. `rk guide landing` step 5a: show the exact `rk stage clean <stage>`. Run it, because the request's authority includes cleanup. Read `removed <stage>` and the recovery command it prints.
-9. Report the landed files for the operator to commit through the trunk's one path. The stage is not among them.
+1. General pre-flight: run the pre-flight gate, then read `rk status --target . --json`, `rk self-depend status --target . --json`, and `rk setup status --target . --json`.
+2. `upgrade` pre-flight: read `config.pending` and `legacy_state` in the status report.
+3. Stage, `rk guide landing` step 1c: run `rk stage --target . --json` and hold `<root>`.
+4. Compare, `rk guide landing` step 2b: run `rk stage compare <root> --target . --json`. Every differing `rendered` row reads `attributed`, so the landing refreshes it.
+5. Land, `rk guide landing` step 4: preview `rk upgrade --stage <root> --target .`, quote every word, then run it with `--apply` as a gated step.
+6. Prove, `rk guide landing` step 5a: run `rk stage compare <root> --target . --json` again. Every `rendered` and `region` row reads `equal`.
+7. General post-flight: run `rk status --check --target .`, then `pre-commit run --hook-stage manual --all-files`.
+8. Clean: print `rk stage clean <root>`, wait, and run it only because the request's authority includes cleanup.
+9. Report: fill the template from observation, with every answer the operator gave.
 
 ## Authority
 
 - The request authorizes the file changes and the `rk` verbs it names. Branch, commit, push, and pull request actions are the operator's unless the request named them.
-- Nothing is copied out of `<stage>/artifacts/` into the target, and `stage.json` is offered to no verb. Production renders afresh.
-- Without cleanup in the request, the command is shown and not run, and the stage stays with its path reported.
+- Nothing is copied out of `<stage>/artifacts/` into the target, and `stage.json` is offered to no verb but through `--stage <root>`, which reads its parameters alone. Production renders afresh from the stage's parameters.
+- Saved copies and snapshots live outside the stage, so the cleanup removes the stage alone.
 
 ## Documentation
 

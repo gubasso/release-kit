@@ -36,6 +36,10 @@ pub struct ProfileArgs {
     #[arg(long)]
     pub scorecard: bool,
 
+    /// Resolve with the workflow guards requested.
+    #[arg(long)]
+    pub workflow_guards: bool,
+
     /// Resolve with code scanning requested under this provider.
     #[arg(long, value_name = "PROVIDER")]
     pub code_scanning: Option<String>,

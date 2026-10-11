@@ -26,7 +26,7 @@ use crate::output::Output;
 use crate::profile::{CapabilityRequests, GitWorkflow, ProfileSnapshot, ReleaseMode};
 use crate::projection::{Candidate, Projection, ProjectionInput, TargetEvidence};
 use crate::stage::CapabilityNote;
-use crate::{embedded, registry};
+use crate::{assess, embedded, registry};
 
 /// Drift counts by owned kind; `state` files are never compared.
 #[derive(Debug, Serialize)]
@@ -64,6 +64,147 @@ struct Warning {
 /// The code a lapsed code scanning licence reports under.
 const CODE_SCANNING_LICENCE: &str = "code-scanning-licence";
 
+/// Where a target stands for the setup skill's gate: one word computed by
+/// the CLI's own rule, so no reader branches on five fields by hand.
+///
+/// SATISFIES landing:a-landing-classifies-its-target-first
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Classification {
+    /// No record, no release mechanism, and no release history.
+    Setup,
+    /// No record and another release mechanism in place.
+    Migration,
+    /// No record and release activity no mechanism explains.
+    NeedsDecision,
+    /// No record, and release-kit's own landing is present.
+    Adopt,
+    /// A record older than this binary.
+    Upgrade,
+    /// A record at this binary's version that `--check` fails.
+    Drift,
+    /// A record at this binary's version that `--check` passes.
+    Current,
+}
+
+impl Classification {
+    /// The kebab-case word, as the JSON serializes it.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Setup => "setup",
+            Self::Migration => "migration",
+            Self::NeedsDecision => "needs-decision",
+            Self::Adopt => "adopt",
+            Self::Upgrade => "upgrade",
+            Self::Drift => "drift",
+            Self::Current => "current",
+        }
+    }
+}
+
+/// The classification of a target with no record, from the assessment's
+/// rule and the adoption detector.
+const fn unrecorded(class: assess::Unrecorded) -> Classification {
+    match class {
+        assess::Unrecorded::Adopt => Classification::Adopt,
+        assess::Unrecorded::Assessed(assess::Classification::Greenfield) => Classification::Setup,
+        assess::Unrecorded::Assessed(assess::Classification::Brownfield) => {
+            Classification::Migration
+        }
+        assess::Unrecorded::Assessed(assess::Classification::NeedsDecision) => {
+            Classification::NeedsDecision
+        }
+    }
+}
+
+/// The classification of a recorded target. A record newer than this
+/// binary has none: that is an observation the setup skill routes to
+/// provisioning, not a state this binary can judge.
+const fn recorded(alignment: Alignment, clean: bool) -> Option<Classification> {
+    match alignment {
+        Alignment::TargetNewer => None,
+        Alignment::BinaryNewer => Some(Classification::Upgrade),
+        Alignment::Aligned if clean => Some(Classification::Current),
+        Alignment::Aligned => Some(Classification::Drift),
+    }
+}
+
+/// One unfilled judgment sentinel, located.
+#[derive(Debug, Clone, Serialize)]
+struct SentinelAt {
+    /// The landed file that carries it.
+    file: String,
+    /// Its line, counted from one.
+    line: usize,
+    /// The line's text, trimmed.
+    text: String,
+}
+
+/// One path a 0.4.x release left under the state root.
+#[derive(Debug, Serialize)]
+struct LegacyPath {
+    /// The absolute path.
+    path: String,
+    /// `plan` for a stored plan, `release-cache` for the release cache.
+    kind: &'static str,
+    /// Whether it holds an operation the old binary could still apply.
+    active: bool,
+}
+
+/// The state a 0.4.x release stored under the state root, each path with
+/// whether an operation is active. No later release writes `plans/` or
+/// `release/`, so what is there is the old binary's.
+///
+/// A stored plan reads as active while its own document says an apply
+/// may run it, and while it cannot be read at all, because only the
+/// operator can retire an operation the old binary owns. The release
+/// cache holds no operation.
+fn legacy_state() -> Vec<LegacyPath> {
+    let Some(root) = crate::applog::state_root() else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(root.join(LEGACY_PLANS)) {
+        let mut plans: Vec<std::path::PathBuf> = entries
+            .flatten()
+            .filter(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir())
+            .collect();
+        plans.sort();
+        for plan in plans {
+            let active = std::fs::read(plan.join("plan.json"))
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+                .is_none_or(|document| document["readiness"].as_str() == Some("ready"));
+            found.push(LegacyPath {
+                path: plan.display().to_string(),
+                kind: "plan",
+                active,
+            });
+        }
+    }
+    let cache = root.join(LEGACY_RELEASE_CACHE);
+    if cache.is_dir() {
+        found.push(LegacyPath {
+            path: cache.display().to_string(),
+            kind: "release-cache",
+            active: false,
+        });
+    }
+    found
+}
+
+/// Where a 0.4.x release stored its plans, under the state root.
+const LEGACY_PLANS: &str = "plans";
+
+/// Where a 0.4.x release cached fetched releases, under the state root.
+const LEGACY_RELEASE_CACHE: &str = "release";
+
+/// The status report's shape version.
+const SCHEMA: &str = "rk.status/13";
+
 /// Configuration is informational, independent of every drift comparison.
 #[derive(Debug, serde::Serialize)]
 struct ConfigState {
@@ -94,8 +235,13 @@ fn config_state(config: Option<&crate::config::Config>, record: Option<&Manifest
 struct Report {
     /// The shape version of this document.
     schema: &'static str,
-    /// Whether a landing record exists; every other field needs one.
+    /// Whether a landing record exists; most other fields need one.
     landed: bool,
+    /// Where the target stands for the setup skill's gate; null where the
+    /// record is newer than this binary.
+    classification: Option<Classification>,
+    /// Whether the target sits in a non-bare Git work tree.
+    git_work_tree: bool,
     config: ConfigState,
     /// What the record says the project is.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -126,6 +272,9 @@ struct Report {
     /// Unresolved judgment sentinels across the landed files.
     #[serde(skip_serializing_if = "Option::is_none")]
     sentinels: Option<usize>,
+    /// Each unresolved sentinel, by file and line.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sentinel_locations: Option<Vec<SentinelAt>>,
     /// Record-set disagreements between the recorded parameters'
     /// projection and the recorded destinations — its own count, because
     /// no file was edited and the kind counts must stay honest.
@@ -150,15 +299,82 @@ struct Report {
     /// Present only under `--check`: what the judgment failed on.
     #[serde(skip_serializing_if = "Option::is_none")]
     violations: Option<Vec<String>>,
+    /// The state a 0.4.x release left under the state root.
+    legacy_state: Vec<LegacyPath>,
+    /// The open migration, where the configuration names one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    migration: Option<OpenMigration>,
+}
+
+/// An open migration, as the status reports it.
+#[derive(Debug, Serialize)]
+struct OpenMigration {
+    /// The identifier the configuration names.
+    id: String,
+    /// The workspace on this host, absent where this host holds none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    workspace: Option<String>,
+    /// How many sources are neither verified nor dropped, absent where
+    /// this host holds no registry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    unfinished: Option<usize>,
+}
+
+/// The open migration the configuration names, read from this host's
+/// workspace where it holds one.
+///
+/// SATISFIES migration:the-configuration-names-the-open-migration
+fn open_migration(
+    target: &camino::Utf8Path,
+    config: Option<&crate::config::Config>,
+) -> Option<OpenMigration> {
+    let id = config.and_then(|config| config.migration.clone())?;
+    let workspace = crate::migrate::open_workspace(target).ok().flatten();
+    let unfinished = workspace
+        .as_ref()
+        .filter(|workspace| workspace.join(crate::migrate::REGISTRY_FILE).is_file())
+        .and_then(|workspace| crate::migrate::registry::load(workspace).ok())
+        .map(|registry| {
+            registry
+                .sources
+                .iter()
+                .filter(|source| !source.status.finished())
+                .count()
+        });
+    Some(OpenMigration {
+        id,
+        workspace: workspace.map(|workspace| workspace.to_string()),
+        unfinished,
+    })
+}
+
+/// The line a human report carries for an open migration.
+fn render_migration(out: Output, migration: Option<&OpenMigration>) {
+    if let Some(migration) = migration {
+        out.result_line(format!(
+            "migration {} is open; rk migrate status reads it",
+            migration.id
+        ));
+    }
 }
 
 fn report_absent(
     out: Output,
     args: &StatusArgs,
     config: Option<&crate::config::Config>,
+    git_work_tree: bool,
 ) -> Result<(), RkError> {
+    let migration = open_migration(&args.target, config);
+    let classification = match assess::standing(&args.target, config)? {
+        assess::Standing::Migrating => Classification::Migration,
+        assess::Standing::Unrecorded(class) => unrecorded(class),
+    };
+    let legacy = legacy_state();
     out.result_line(format!("config: {}", config_state(config, None).state));
     out.result_line(format!("no landing at {}", args.target));
+    out.result_line(format!("classification: {}", classification.as_str()));
+    render_migration(out, migration.as_ref());
+    render_context(out, git_work_tree, &legacy);
     out.next(&[
         format!(
             "rk profile --target {} reports what a landing would select",
@@ -175,8 +391,10 @@ fn report_absent(
         ),
     ]);
     out.emit(&Report {
-        schema: "rk.status/12",
+        schema: SCHEMA,
         landed: false,
+        classification: Some(classification),
+        git_work_tree,
         config: config_state(config, None),
         profile: None,
         git: None,
@@ -189,11 +407,14 @@ fn report_absent(
         missing: None,
         stale_pins: None,
         sentinels: None,
+        sentinel_locations: None,
         record_drift: None,
         invariant_failures: None,
         warnings: None,
         pending: None,
         violations: args.check.then(|| vec!["no landing".to_owned()]),
+        legacy_state: legacy,
+        migration,
     })?;
     if args.check {
         return Err(RkError::check_failed(
@@ -260,10 +481,12 @@ pub fn run(args: &StatusArgs) -> Result<(), RkError> {
         ));
     }
     let config = crate::config::load(args.target.as_std_path())?;
+    let git_work_tree = assess::git_work_tree(&args.target)?;
     let Some(manifest) = manifest::load(&args.target)? else {
-        return report_absent(out, args, config.as_ref());
+        return report_absent(out, args, config.as_ref(), git_work_tree);
     };
 
+    let migration = open_migration(&args.target, config.as_ref());
     let config = config_state(config.as_ref(), Some(&manifest));
     out.result_line(format!("config: {}", config.state));
     for key in &config.pending {
@@ -276,9 +499,29 @@ pub fn run(args: &StatusArgs) -> Result<(), RkError> {
     render_human(out, args, &manifest, alignment, &observed);
 
     let violations = violations_of(&observed);
+    // A record newer than this binary is no state it can judge, an open
+    // migration included; below that, the open migration outranks the
+    // record until it closes.
+    let classification = if migration.is_some() && alignment != Alignment::TargetNewer {
+        Some(Classification::Migration)
+    } else {
+        recorded(alignment, violations.is_empty())
+    };
+    out.result_line(format!(
+        "classification: {}",
+        classification.map_or(
+            "none: the record is newer than this binary",
+            Classification::as_str
+        )
+    ));
+    render_migration(out, migration.as_ref());
+    let legacy = legacy_state();
+    render_context(out, git_work_tree, &legacy);
     out.emit(&Report {
-        schema: "rk.status/12",
+        schema: SCHEMA,
         landed: true,
+        classification,
+        git_work_tree,
         config,
         profile: Some(manifest.profile.clone()),
         git: Some(manifest.git.clone()),
@@ -295,10 +538,23 @@ pub fn run(args: &StatusArgs) -> Result<(), RkError> {
         missing: Some(observed.missing.clone()),
         stale_pins: Some(observed.stale),
         sentinels: Some(observed.sentinels.len()),
+        sentinel_locations: Some(
+            observed
+                .sentinels
+                .iter()
+                .map(|(file, line, text)| SentinelAt {
+                    file: file.clone(),
+                    line: *line,
+                    text: text.clone(),
+                })
+                .collect(),
+        ),
         invariant_failures: Some(observed.invariants),
         warnings: Some(observed.warnings),
         pending: observed.pending.as_ref().map(Vec::len),
         violations: args.check.then(|| violations.clone()),
+        legacy_state: legacy,
+        migration,
     })?;
 
     if args.check && !violations.is_empty() {
@@ -317,6 +573,23 @@ pub fn run(args: &StatusArgs) -> Result<(), RkError> {
         ));
     }
     Ok(())
+}
+
+/// The human lines every report carries, landed or not: whether the
+/// target is a work tree the method can land in, and each path a 0.4.x
+/// release left under the state root.
+fn render_context(out: Output, git_work_tree: bool, legacy: &[LegacyPath]) {
+    if !git_work_tree {
+        out.result_line("not a non-bare Git work tree: the method lands files a work tree commits");
+    }
+    for entry in legacy {
+        out.result_line(format!(
+            "LEGACY {} ({}, {})",
+            entry.path,
+            entry.kind,
+            if entry.active { "active" } else { "inactive" }
+        ));
+    }
 }
 
 /// The check-mode violation lines: rendered drift, missing recorded
@@ -760,20 +1033,31 @@ fn render_human(
 
 #[cfg(test)]
 mod tests {
-    use super::{Drift, InvariantFailure, Report, StalePin};
+    use super::{
+        Classification, Drift, InvariantFailure, LegacyPath, OpenMigration, Report, SentinelAt,
+        StalePin,
+    };
+    use crate::assess::{self, Facts, OwnLanding, Unrecorded};
     use crate::landing::CheckoutMode;
     use crate::landing::Integration;
+    use crate::landing::manifest::Alignment;
     use crate::profile::{
         CapabilityRequests, GitWorkflow, ProfileSnapshot, ReleaseIntent, ReleaseMode,
     };
 
-    /// The complete `rk.status/12` shape, held by snapshot in both the
+    /// The complete `rk.status/13` shape, held by snapshot in both the
     /// landed and absent forms.
     #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the snapshot states every field of both forms in one place"
+    )]
     fn the_status_report_schema_snapshot_holds() {
         let landed = Report {
-            schema: "rk.status/12",
+            schema: super::SCHEMA,
             landed: true,
+            classification: Some(Classification::Upgrade),
+            git_work_tree: true,
             config: super::ConfigState {
                 state: "pending",
                 pending: vec!["profile.release.style".into()],
@@ -798,6 +1082,7 @@ mod tests {
                 reporting_policy: true,
                 scorecard: false,
                 code_scanning: Some(crate::landing::Provider::Semgrep),
+                workflow_guards: Some(false),
             }),
             selection: Some(vec![]),
             rk_version: Some("0.1.0".into()),
@@ -814,6 +1099,11 @@ mod tests {
                 available: "0.3.170".into(),
             }]),
             sentinels: Some(1),
+            sentinel_locations: Some(vec![SentinelAt {
+                file: "release-plz.toml".into(),
+                line: 18,
+                text: "# TODO(release-kit): keep false for a binary-only crate".into(),
+            }]),
             record_drift: Some(0),
             invariant_failures: Some(vec![InvariantFailure {
                 code: "attestations-disabled",
@@ -827,13 +1117,27 @@ mod tests {
             }]),
             pending: Some(2),
             violations: None,
+            legacy_state: vec![LegacyPath {
+                path: "/state/release-kit/plans/0123456789abcdef".into(),
+                kind: "plan",
+                active: true,
+            }],
+            migration: Some(OpenMigration {
+                id: "20261009T140205Z".into(),
+                workspace: Some(
+                    "/state/release-kit/migrations/widget-0123456789ab/20261009T140205Z".into(),
+                ),
+                unfinished: Some(2),
+            }),
         };
         assert_eq!(
             serde_json::to_string(&landed).expect("a report serializes"),
-            r#"{"schema":"rk.status/12","landed":true,"config":{"state":"pending","pending":["profile.release.style"]},"profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"},"capabilities":{"nix_packaging":true,"reporting_policy":true,"scorecard":false,"code_scanning":"semgrep"},"selection":[],"rk_version":"0.1.0","binary_version":"0.2.0","alignment":"binary-newer","drift":{"rendered":0,"seeded":1},"missing":[],"stale_pins":[{"tool":"release-plz","landed":"0.3.160","available":"0.3.170"}],"sentinels":1,"record_drift":0,"invariant_failures":[{"code":"attestations-disabled","destination":"dist-workspace.toml","reason":"github-attestations is not effectively true","remediation":"set github-attestations = true in [dist]"}],"warnings":[{"code":"code-scanning-licence","reason":"the target's license, LicenseRef-proprietary, does not state a codebase this release recognizes as open source"}],"pending":2}"#
+            r##"{"schema":"rk.status/13","landed":true,"classification":"upgrade","git_work_tree":true,"config":{"state":"pending","pending":["profile.release.style"]},"profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"},"capabilities":{"nix_packaging":true,"reporting_policy":true,"scorecard":false,"code_scanning":"semgrep","workflow_guards":false},"selection":[],"rk_version":"0.1.0","binary_version":"0.2.0","alignment":"binary-newer","drift":{"rendered":0,"seeded":1},"missing":[],"stale_pins":[{"tool":"release-plz","landed":"0.3.160","available":"0.3.170"}],"sentinels":1,"sentinel_locations":[{"file":"release-plz.toml","line":18,"text":"# TODO(release-kit): keep false for a binary-only crate"}],"record_drift":0,"invariant_failures":[{"code":"attestations-disabled","destination":"dist-workspace.toml","reason":"github-attestations is not effectively true","remediation":"set github-attestations = true in [dist]"}],"warnings":[{"code":"code-scanning-licence","reason":"the target's license, LicenseRef-proprietary, does not state a codebase this release recognizes as open source"}],"pending":2,"legacy_state":[{"path":"/state/release-kit/plans/0123456789abcdef","kind":"plan","active":true}],"migration":{"id":"20261009T140205Z","workspace":"/state/release-kit/migrations/widget-0123456789ab/20261009T140205Z","unfinished":2}}"##
         );
         let absent = Report {
             landed: false,
+            classification: Some(Classification::Setup),
+            git_work_tree: false,
             config: super::ConfigState {
                 state: "absent",
                 pending: vec![],
@@ -849,17 +1153,107 @@ mod tests {
             missing: None,
             stale_pins: None,
             sentinels: None,
+            sentinel_locations: None,
             record_drift: None,
             invariant_failures: None,
             warnings: None,
             pending: None,
             violations: None,
+            legacy_state: vec![],
+            migration: None,
             ..landed
         };
         assert_eq!(
             serde_json::to_string(&absent).expect("a report serializes"),
-            r#"{"schema":"rk.status/12","landed":false,"config":{"state":"absent","pending":[]}}"#,
-            "an absent landing reports one field a caller can branch on"
+            r#"{"schema":"rk.status/13","landed":false,"classification":"setup","git_work_tree":false,"config":{"state":"absent","pending":[]},"legacy_state":[]}"#,
+            "an absent landing reports the fields a caller can branch on"
         );
+        let newer = Report {
+            classification: None,
+            ..absent
+        };
+        assert!(
+            serde_json::to_string(&newer)
+                .expect("a report serializes")
+                .contains(r#""classification":null"#),
+            "no classification is stated as null, never omitted"
+        );
+    }
+
+    fn facts() -> Facts {
+        Facts {
+            technologies: Vec::new(),
+            forge: None,
+            repo: None,
+            release_markers: Vec::new(),
+            collisions: Vec::new(),
+            git: true,
+            tags: 0,
+            long_lived_branches: Vec::new(),
+        }
+    }
+
+    /// Each value the gate reads has one rule that earns it: the
+    /// assessment's three for a target with no record, the adoption
+    /// detector before them, and the alignment and the check for a
+    /// recorded one.
+    #[test]
+    fn every_classification_has_its_rule() {
+        let none = OwnLanding::default();
+        let classify = |facts: &Facts, own: &OwnLanding| {
+            super::unrecorded(assess::classify_unrecorded(facts, own))
+        };
+        assert_eq!(classify(&facts(), &none), Classification::Setup);
+        let marked = Facts {
+            release_markers: vec![".goreleaser.yaml".into()],
+            ..facts()
+        };
+        assert_eq!(classify(&marked, &none), Classification::Migration);
+        let tagged = Facts { tags: 3, ..facts() };
+        assert_eq!(classify(&tagged, &none), Classification::NeedsDecision);
+        // release-kit's own regions read as collisions to the assessment,
+        // and the detector outranks them.
+        let own = OwnLanding {
+            regions: vec!["AGENTS.md".into()],
+            rendered: Vec::new(),
+        };
+        let colliding = Facts {
+            collisions: vec!["AGENTS.md".into()],
+            release_markers: vec!["CHANGELOG.md".into()],
+            ..facts()
+        };
+        assert_eq!(classify(&colliding, &own), Classification::Adopt);
+        assert_eq!(
+            assess::classify_unrecorded(&colliding, &own),
+            Unrecorded::Adopt
+        );
+        assert_eq!(
+            super::recorded(Alignment::BinaryNewer, false),
+            Some(Classification::Upgrade)
+        );
+        assert_eq!(
+            super::recorded(Alignment::Aligned, false),
+            Some(Classification::Drift)
+        );
+        assert_eq!(
+            super::recorded(Alignment::Aligned, true),
+            Some(Classification::Current)
+        );
+        assert_eq!(super::recorded(Alignment::TargetNewer, true), None);
+        for (class, word) in [
+            (Classification::Setup, "setup"),
+            (Classification::Migration, "migration"),
+            (Classification::NeedsDecision, "needs-decision"),
+            (Classification::Adopt, "adopt"),
+            (Classification::Upgrade, "upgrade"),
+            (Classification::Drift, "drift"),
+            (Classification::Current, "current"),
+        ] {
+            assert_eq!(class.as_str(), word);
+            assert_eq!(
+                serde_json::to_string(&class).expect("serializes"),
+                format!("\"{word}\"")
+            );
+        }
     }
 }

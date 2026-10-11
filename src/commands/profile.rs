@@ -122,6 +122,9 @@ pub fn describe(
     if capabilities.scorecard {
         requested.push("scorecard");
     }
+    if capabilities.workflow_guards() {
+        requested.push("workflow_guards");
+    }
     let scanning = capabilities.code_scanning.map(Provider::as_str);
     format!(
         "technologies {technologies}; forge {}; repo {}; release {release}; trunk {}; checkout mode {}; integration {}; requests {}{}",
@@ -174,6 +177,7 @@ pub fn run(args: &ProfileArgs) -> Result<(), RkError> {
             nix: args.nix_packaging.then_some(true),
             reporting_policy: args.reporting_policy.then_some(true),
             scorecard: args.scorecard.then_some(true),
+            workflow_guards: args.workflow_guards.then_some(true),
             code_scanning: args
                 .code_scanning
                 .as_deref()
@@ -299,7 +303,7 @@ pub fn run(args: &ProfileArgs) -> Result<(), RkError> {
     ));
     out.next(&next);
     out.emit(&Report {
-        schema: "rk.profile/2",
+        schema: "rk.profile/3",
         target: args.target.to_string(),
         profile: params.profile().clone(),
         git: params.git().clone(),
@@ -337,7 +341,7 @@ mod tests {
     #[test]
     fn the_profile_report_schema_snapshot_holds() {
         let report = Report {
-            schema: "rk.profile/2",
+            schema: "rk.profile/3",
             target: "/tmp/t".into(),
             profile: ProfileSnapshot {
                 technologies: vec!["python".into(), "rust".into()],
@@ -359,6 +363,7 @@ mod tests {
                 reporting_policy: true,
                 scorecard: false,
                 code_scanning: None,
+                workflow_guards: Some(false),
             },
             repo: "acme/widget".into(),
             security: Security {
@@ -391,7 +396,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.profile/2","target":"/tmp/t","profile":{"technologies":["python","rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"},"capabilities":{"nix_packaging":false,"reporting_policy":true,"scorecard":false},"repo":"acme/widget","security":{"contact":"","response":"best-effort"},"setup":{"required_check":"","required_workflow":""},"sources":{"profile.technologies":"observation"},"unknown":[],"proposal":{"state":"ambiguous","drivers":["python","rust"]},"selection":[{"id":"git.guards","status":"selected","destinations":["AGENTS.md"]}],"omissions":[{"destination":".gitlab-ci.yml","reason":"the target owns it","action":"add the include"}],"collisions":[],"next":["rk init --target /tmp/t previews the landing"]}"#
+            r#"{"schema":"rk.profile/3","target":"/tmp/t","profile":{"technologies":["python","rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"},"capabilities":{"nix_packaging":false,"reporting_policy":true,"scorecard":false,"workflow_guards":false},"repo":"acme/widget","security":{"contact":"","response":"best-effort"},"setup":{"required_check":"","required_workflow":""},"sources":{"profile.technologies":"observation"},"unknown":[],"proposal":{"state":"ambiguous","drivers":["python","rust"]},"selection":[{"id":"git.guards","status":"selected","destinations":["AGENTS.md"]}],"omissions":[{"destination":".gitlab-ci.yml","reason":"the target owns it","action":"add the include"}],"collisions":[],"next":["rk init --target /tmp/t previews the landing"]}"#
         );
     }
 }

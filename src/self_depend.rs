@@ -94,6 +94,9 @@ pub struct Observed {
     pub stamp: Option<String>,
     /// What a predecessor bump mechanism left in the target.
     pub leftovers: Vec<leftovers::Leftover>,
+    /// The host-install answer the target configuration records, where it
+    /// records one.
+    pub acquisition: Option<crate::config::Acquisition>,
 }
 
 impl Observed {
@@ -120,6 +123,18 @@ impl Observed {
         if self.pending {
             return "pending-recovery";
         }
+        let named: Vec<&manager::Entry> = self
+            .managers
+            .iter()
+            .filter(|entry| entry.read.names())
+            .collect();
+        // A recorded host install is a decision, not a gap: no manager names
+        // release-kit because the project chose that none does.
+        //
+        // SATISFIES packaging:a-host-install-reads-as-a-decision
+        if named.is_empty() && self.acquisition.is_some() {
+            return "host";
+        }
         if self
             .managers
             .iter()
@@ -127,11 +142,6 @@ impl Observed {
         {
             return "no-manager";
         }
-        let named: Vec<&manager::Entry> = self
-            .managers
-            .iter()
-            .filter(|entry| entry.read.names())
-            .collect();
         let entry = match named.as_slice() {
             [] => return "not-wired",
             [one] => *one,
@@ -211,6 +221,10 @@ pub fn observe(target: &Utf8Path) -> Result<Observed, RkError> {
     let pending = marker_path(&key).is_some_and(|marker| txn::marker_is_pending(&marker));
     let stamp = read_stamp(&key);
     let leftovers = leftovers::scan(&target)?;
+    // A configuration this binary cannot read refuses here as it does for
+    // every verb that reads one, rather than reading as no answer.
+    let acquisition =
+        crate::config::load(target.as_std_path())?.and_then(|config| config.acquisition);
     Ok(Observed {
         target,
         flake,
@@ -226,6 +240,7 @@ pub fn observe(target: &Utf8Path) -> Result<Observed, RkError> {
         pending,
         stamp,
         leftovers,
+        acquisition,
     })
 }
 

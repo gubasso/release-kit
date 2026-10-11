@@ -46,28 +46,28 @@ pub fn run(args: &LinesArgs) -> Result<(), RkError> {
 }
 
 /// One line's row in the inventory.
-#[derive(Debug, Serialize)]
-struct LineRow {
+#[derive(Debug, Clone, Serialize)]
+pub struct LineRow {
     /// The `<major>.<minor>` name.
-    line: String,
+    pub line: String,
     /// The branch, `release/<line>`.
-    branch: String,
+    pub branch: String,
     /// Where the branch exists: `local`, `remote`, or `both`.
-    presence: &'static str,
+    pub presence: &'static str,
     /// The newest `v<line>.*` release tag, absent while none exists.
     #[serde(skip_serializing_if = "Option::is_none")]
-    newest_release: Option<String>,
+    pub newest_release: Option<String>,
     /// The newest `v<line>.*-rc.*` candidate tag, absent while none exists.
     #[serde(skip_serializing_if = "Option::is_none")]
-    newest_candidate: Option<String>,
+    pub newest_candidate: Option<String>,
     /// Whether every commit the local branch holds beyond the trunk is
     /// reachable from a tag — what makes a retirement safe. Absent for a
     /// remote-only line, which this clone cannot judge.
     #[serde(skip_serializing_if = "Option::is_none")]
-    tag_covered: Option<bool>,
+    pub tag_covered: Option<bool>,
     /// The worktree seating the branch, where one exists.
     #[serde(skip_serializing_if = "Option::is_none")]
-    seat: Option<String>,
+    pub seat: Option<String>,
 }
 
 /// The machine form of `rk lines list`.
@@ -80,6 +80,42 @@ struct ListReport {
 }
 
 fn list(target: &Utf8Path, out: Output) -> Result<(), RkError> {
+    let rows = rows(target)?;
+    if rows.is_empty() {
+        out.result_line("no release lines; the trunk is the only line alive");
+    }
+    for row in &rows {
+        let mut parts = vec![format!("{} ({})", row.branch, row.presence)];
+        if let Some(tag) = &row.newest_release {
+            parts.push(format!("newest release {tag}"));
+        }
+        if let Some(tag) = &row.newest_candidate {
+            parts.push(format!("newest candidate {tag}"));
+        }
+        match row.tag_covered {
+            Some(true) => parts.push("tag-covered".to_owned()),
+            Some(false) => parts.push("commits beyond the tags; not retirable".to_owned()),
+            None => {}
+        }
+        if let Some(seat) = &row.seat {
+            parts.push(format!("seated at {seat}"));
+        }
+        out.result_line(parts.join(" — "));
+    }
+    out.emit(&ListReport {
+        schema: "rk.lines-list/1",
+        lines: rows,
+    })
+}
+
+/// Every release line at `target`, sorted by name, read offline from the
+/// clone: the inventory `rk lines list` prints and `rk release status`
+/// reports.
+///
+/// # Errors
+///
+/// A configuration that does not load, and a git call that fails.
+pub fn rows(target: &Utf8Path) -> Result<Vec<LineRow>, RkError> {
     let prefix = crate::config::line_prefix_of(target.as_std_path())?;
     let local = ref_names(target, &format!("refs/heads/{prefix}"))?;
     let remote: Vec<String> = ref_names(target, &format!("refs/remotes/origin/{prefix}"))?
@@ -118,31 +154,7 @@ fn list(target: &Utf8Path, out: Output) -> Result<(), RkError> {
                 .map(|seat| seat.path.to_string()),
         });
     }
-    if rows.is_empty() {
-        out.result_line("no release lines; the trunk is the only line alive");
-    }
-    for row in &rows {
-        let mut parts = vec![format!("{} ({})", row.branch, row.presence)];
-        if let Some(tag) = &row.newest_release {
-            parts.push(format!("newest release {tag}"));
-        }
-        if let Some(tag) = &row.newest_candidate {
-            parts.push(format!("newest candidate {tag}"));
-        }
-        match row.tag_covered {
-            Some(true) => parts.push("tag-covered".to_owned()),
-            Some(false) => parts.push("commits beyond the tags; not retirable".to_owned()),
-            None => {}
-        }
-        if let Some(seat) = &row.seat {
-            parts.push(format!("seated at {seat}"));
-        }
-        out.result_line(parts.join(" — "));
-    }
-    out.emit(&ListReport {
-        schema: "rk.lines-list/1",
-        lines: rows,
-    })
+    Ok(rows)
 }
 
 /// The machine form of `rk lines open`, on every path: the seat is the

@@ -1,6 +1,10 @@
-# Failed verification: the stage stays as evidence
+# Failed verification: the stage stays for the diagnosis
 
 - case: failed-verification-with-stage-retained
+- classification: upgrade
+- intent: upgrade
+- provision: no
+- tasks: `upgrade`
 - landing: yes
 - receipt: present
 - history: useful
@@ -9,24 +13,29 @@
 
 ## Situation
 
-A landed target whose upgrade landed, and whose `rk status --check --target .` then reports an invariant failure in `dist-workspace.toml` that the project must decide on.
+A target landed by an older `rk` whose upgrade lands cleanly, and whose own test suite then fails on the manual stage. The operator asked to upgrade, with cleanup.
+
+## Gate
+
+Present "State: `upgrade`. Request: upgrade. Tasks: `upgrade`. Proceed?" and wait for the operator.
 
 ## Route
 
-1. `rk guide landing` step 1a: run `rk --version` and `rk self-depend status --target .`. The installed version is the one the operator chose. No step selects, fetches, or installs another.
-2. `rk guide landing` step 1c: run `rk stage --target .` and hold `<stage>` for the whole task.
-3. `rk guide landing` step 2a: read `<stage>/stage.json`, `<stage>/artifacts/`, and `<stage>/reference/`.
-4. `rk guide landing` step 2b: diff each artifact against the working tree, read `.release-kit/manifest.json`, and read `git log` and `git diff` for each differing destination.
-5. State the evidence class: receipt plus useful history.
-6. `rk guide landing` step 3: preview `rk upgrade --target .`, then run `rk upgrade --target . --apply`.
-7. `rk guide landing` step 4b: `rk status --check --target .` exits 1 and names the invariant, the destination, and the remediation. Report the finding and the exact remediation. Repair it in the target where the request authorizes the edit, then run `rk upgrade --target . --apply` again, because a repair is a fresh production run and never a hand copy from the stage.
-8. The check still fails on a decision the operator owns. `rk guide landing` step 5a is not reached. The task leaves the stage in place as recoverable evidence and says so, with its path.
+1. General pre-flight: run the pre-flight gate, then read `rk status --target . --json`, `rk self-depend status --target . --json`, and `rk setup status --target . --json`.
+2. `upgrade` pre-flight: read `config.pending` and `legacy_state` in the status report.
+3. Stage, `rk guide landing` step 1c: run `rk stage --target . --json` and hold `<root>`.
+4. Compare, `rk guide landing` step 2b: run `rk stage compare <root> --target . --json`. Every differing `rendered` row reads `attributed`, so the landing refreshes it.
+5. Land, `rk guide landing` step 4: preview `rk upgrade --stage <root> --target .`, quote every word, then run it with `--apply` as a gated step.
+6. Prove, `rk guide landing` step 5a: run `rk stage compare <root> --target . --json` again. Every `rendered` and `region` row reads `equal`.
+7. General post-flight: `rk status --check --target .` passes, and `pre-commit run --hook-stage manual --all-files` fails on the project's own test.
+8. The check failed, so the run leaves the stage in place as recoverable evidence, at `<root>`, and the cleanup is not shown.
+9. Report: the first failing line, the stage kept at `<root>` because a check failed, and the failing check routed to the project.
 
 ## Authority
 
 - The request authorizes the file changes and the `rk` verbs it names. Branch, commit, push, and pull request actions are the operator's unless the request named them.
-- Nothing is copied out of `<stage>/artifacts/` into the target, and `stage.json` is offered to no verb. Production renders afresh.
-- `rk stage clean <stage>` is not shown while a check fails. The stage remains recoverable evidence until every check passes.
+- Nothing is copied out of `<stage>/artifacts/` into the target, and `stage.json` is offered to no verb but through `--stage <root>`, which reads its parameters alone. Production renders afresh from the stage's parameters.
+- A failing project check is the project's own: no fix is invented, and nothing is repaired inside the post-flight.
 
 ## Documentation
 

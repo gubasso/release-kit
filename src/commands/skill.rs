@@ -15,7 +15,7 @@ use crate::output::Output;
 use crate::skills;
 use crate::skills::installer::{self, Action, Layout};
 use crate::skills::record::RECORD_PATH;
-use crate::skills::{AGENTS_ROOT, CLAUDE_ROOT, SHARED_ROOT, home};
+use crate::skills::{AGENTS_ROOT, CLAUDE_ROOT, LEGACY_SHARED_ROOT, home};
 
 /// The machine form of an install or uninstall report.
 #[derive(Debug, Serialize)]
@@ -187,8 +187,7 @@ fn layout(agent: Agent, scope: Scope) -> Result<Layout, RkError> {
     let home = home()?;
     Ok(Layout {
         roots: roots(&home, agent),
-        every_root: roots(&home, Agent::All),
-        shared: home.join(SHARED_ROOT),
+        legacy_shared: matches!(agent, Agent::All).then(|| home.join(LEGACY_SHARED_ROOT)),
         record: home.join(RECORD_PATH),
     })
 }

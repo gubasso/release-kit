@@ -6,10 +6,11 @@
 //! the writer lands the files and the receipt last under one target lock.
 //! Dry-run by default: without `--apply` the destinations and what a
 //! fresh production invocation would do with them are listed and nothing
-//! is touched; `rk stage` is the full-byte comparison surface. A
-//! whole-file destination present on disk with no receipt naming it
-//! refuses before any write, every collision collected in one pass, and
-//! no force flag exists.
+//! is touched; `rk stage` is the full-byte comparison surface, and
+//! `--stage` lands the answers a stage resolved. A whole-file destination
+//! present on disk with no receipt naming it is a conflict: it refuses
+//! before any write, every collision collected in one pass, unless
+//! `--replace` names it, which saves its bytes first.
 //!
 //! SATISFIES landing:a-landing-leaves-a-record
 //! SATISFIES landing:a-missing-receipt-is-a-classification
@@ -22,7 +23,7 @@ use crate::diagnostic::{Diagnostic, Reason};
 use crate::embedded;
 use crate::error::RkError;
 use crate::held;
-use crate::landing::apply::{self, Action, Collision, Prepared};
+use crate::landing::apply::{self, Action, Collision, Prepared, Replaced};
 use crate::landing::manifest::{self, Provider};
 use crate::landing::{self, lock};
 use crate::output::Output;
@@ -90,6 +91,9 @@ struct Report {
     /// absent where there is none. A preview lists them and exits 0.
     #[serde(skip_serializing_if = "Option::is_none")]
     collisions: Option<Vec<Collision>>,
+    /// The conflicts `--replace` named, each with where its bytes were
+    /// saved; empty where none was named.
+    replaced: Vec<Replaced>,
     config: crate::config::Plan,
     /// Every destination, with its kind and action.
     files: Vec<FileEntry>,
@@ -156,35 +160,56 @@ pub fn run(args: &InitArgs) -> Result<(), RkError> {
     // The proof's pause: the target is held, and nothing has been read.
     held::pause(apply::PAUSE_VAR, "held", "proceed-held");
     let config = crate::config::load(held.base().as_std_path())?;
-    let params = landing::Params::resolve(
-        held.base(),
-        &landing::Inputs {
-            nix: args.nix_packaging.then_some(true),
-            reporting_policy: args.reporting_policy.then_some(true),
-            scorecard: args.scorecard.then_some(true),
-            code_scanning: args
-                .code_scanning
-                .as_deref()
-                .map(Provider::parse)
-                .transpose()?,
-            ..args.profile.inputs()?
-        },
-        config.as_ref(),
-        None,
-        if args.apply {
-            landing::Purpose::Init
-        } else {
-            landing::Purpose::Preview
-        },
-    )?;
+    let purpose = if args.apply {
+        landing::Purpose::Init
+    } else {
+        landing::Purpose::Preview
+    };
+    let params = if let Some(root) = args.stage.as_deref() {
+        if answered(args) {
+            return Err(crate::stage::read::answered_twice());
+        }
+        let canonical = std::fs::canonicalize(args.target.as_std_path())?;
+        let receipt = crate::stage::read::load(root, &canonical)?;
+        let params = landing::Params::resolve(
+            held.base(),
+            &crate::stage::read::inputs(&receipt.parameters),
+            config.as_ref(),
+            None,
+            purpose,
+        )?;
+        crate::stage::read::confirm(&params, &receipt, root)?;
+        params
+    } else {
+        landing::Params::resolve(
+            held.base(),
+            &landing::Inputs {
+                nix: args.nix_packaging.then_some(true),
+                reporting_policy: args.reporting_policy.then_some(true),
+                scorecard: args.scorecard.then_some(true),
+                workflow_guards: args.workflow_guards.then_some(true),
+                code_scanning: args
+                    .code_scanning
+                    .as_deref()
+                    .map(Provider::parse)
+                    .transpose()?,
+                ..args.profile.inputs()?
+            },
+            config.as_ref(),
+            None,
+            purpose,
+        )?
+    };
     if let Some(lock) = lock {
         refuse_a_recorded_target(&held)?;
-        let prepared = apply::prepare(&held, None, &params, config.as_ref())?;
+        let mut prepared = apply::prepare(&held, None, &params, config.as_ref())?;
+        apply::name_replacements(&mut prepared, &args.replace)?;
         let landed = apply::land(&held, None, &prepared, apply::Origin::Init, &lock)?;
         drop(lock);
         report_apply(out, args, &held, &params, &prepared, &landed)
     } else {
-        let prepared = apply::prepare(&held, None, &params, config.as_ref())?;
+        let mut prepared = apply::prepare(&held, None, &params, config.as_ref())?;
+        apply::name_replacements(&mut prepared, &args.replace)?;
         let repo = (params.repo() != landing::REPO_PLACEHOLDER && !params.repo().is_empty())
             .then(|| params.repo().to_owned());
         if params.repo() == landing::REPO_PLACEHOLDER {
@@ -194,6 +219,19 @@ pub fn run(args: &InitArgs) -> Result<(), RkError> {
         }
         preview(out, args, &params, repo, &prepared)
     }
+}
+
+/// The report's shape version.
+const SCHEMA: &str = "rk.init/11";
+
+/// Whether any answer flag was given, which `--stage` refuses beside it.
+const fn answered(args: &InitArgs) -> bool {
+    !args.profile.is_empty()
+        || args.nix_packaging
+        || args.reporting_policy
+        || args.scorecard
+        || args.workflow_guards
+        || args.code_scanning.is_some()
 }
 
 /// The capability notes a report carries, in catalog order.
@@ -255,7 +293,7 @@ fn preview(
     if !prepared.collisions.is_empty() {
         next.insert(
             0,
-            "resolve each collision above through the rk-setup skill; the apply refuses until then"
+            "answer each collision above: --replace <path> saves a copy of a conflict and replaces it; the apply refuses every one not named"
                 .to_owned(),
         );
     }
@@ -310,7 +348,7 @@ fn preview(
     }
     out.next(&next);
     out.emit(&Report {
-        schema: "rk.init/10",
+        schema: SCHEMA,
         config: prepared.config.clone(),
         mode: "preview",
         target: args.target.to_string(),
@@ -323,6 +361,7 @@ fn preview(
         licence_refusal: prepared.projection.licence_refusal.clone(),
         withheld: withheld_of(prepared),
         collisions: (!prepared.collisions.is_empty()).then(|| prepared.collisions.clone()),
+        replaced: apply::previewed_replacements(prepared),
         files: prepared
             .decisions
             .iter()
@@ -419,6 +458,11 @@ fn report_apply(
             });
         }
     }
+    for entry in &landed.replaced {
+        if let Some(saved) = &entry.saved_to {
+            out.result_line(format!("saved {} to {saved}", entry.path));
+        }
+    }
     out.result_line(format!("wrote {}", manifest::MANIFEST_PATH));
     debug_assert_eq!(
         landed.completed.last().map(String::as_str),
@@ -454,7 +498,7 @@ fn report_apply(
     }
     out.next(&next);
     out.emit(&Report {
-        schema: "rk.init/10",
+        schema: SCHEMA,
         config: prepared.config.clone(),
         mode: "apply",
         target: args.target.to_string(),
@@ -467,6 +511,7 @@ fn report_apply(
         licence_refusal: prepared.projection.licence_refusal.clone(),
         withheld: withheld_of(prepared),
         collisions: None,
+        replaced: landed.replaced.clone(),
         files: file_entries,
         sentinels: Some(sentinels),
         next,
@@ -549,13 +594,13 @@ mod tests {
     };
     use crate::stage::CapabilityNote;
 
-    /// The complete `rk.init/10` shape, held by snapshot in both modes: a
+    /// The complete `rk.init/11` shape, held by snapshot in both modes: a
     /// field rename or removal fails here and becomes a schema-version
     /// bump instead of a silent parser break at some agent.
     #[test]
     fn the_init_report_schema_snapshot_holds() {
         let apply = Report {
-            schema: "rk.init/10",
+            schema: super::SCHEMA,
             config: crate::config::Plan {
                 action: "added",
                 changes: vec![],
@@ -583,6 +628,7 @@ mod tests {
                 reporting_policy: true,
                 scorecard: true,
                 code_scanning: Some(crate::landing::Provider::CodeQl),
+                workflow_guards: Some(false),
             },
             repo: Some("acme/widget".into()),
             selection: vec![CapabilityNote {
@@ -599,6 +645,7 @@ mod tests {
                 reason: "the target already carries flake.nix".into(),
             }]),
             collisions: None,
+            replaced: vec![],
             files: vec![FileEntry {
                 path: "release-plz.toml".into(),
                 kind: "seeded",
@@ -613,7 +660,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&apply).expect("a report serializes"),
-            r##"{"schema":"rk.init/10","mode":"apply","target":"/tmp/t","profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"},"capabilities":{"nix_packaging":true,"reporting_policy":true,"scorecard":true,"code_scanning":"codeql"},"repo":"acme/widget","selection":[{"id":"git.guards","status":"selected","destinations":["AGENTS.md"]}],"withheld":[{"path":"flake.nix","reason":"the target already carries flake.nix"}],"config":{"action":"added","changes":[],"content":"schema_version = 2\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"created"}],"sentinels":[{"path":"/tmp/t/release-plz.toml","line":3,"text":"# TODO(release-kit): keep false for a binary-only crate"}],"next":["commit the landed files, the receipt included"]}"##
+            r##"{"schema":"rk.init/11","mode":"apply","target":"/tmp/t","profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"},"capabilities":{"nix_packaging":true,"reporting_policy":true,"scorecard":true,"code_scanning":"codeql","workflow_guards":false},"repo":"acme/widget","selection":[{"id":"git.guards","status":"selected","destinations":["AGENTS.md"]}],"withheld":[{"path":"flake.nix","reason":"the target already carries flake.nix"}],"replaced":[],"config":{"action":"added","changes":[],"content":"schema_version = 2\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"created"}],"sentinels":[{"path":"/tmp/t/release-plz.toml","line":3,"text":"# TODO(release-kit): keep false for a binary-only crate"}],"next":["commit the landed files, the receipt included"]}"##
         );
         let preview = Report {
             sentinels: None,
@@ -624,6 +671,7 @@ mod tests {
                 reporting_policy: false,
                 scorecard: false,
                 code_scanning: None,
+                workflow_guards: Some(false),
             },
             selection: vec![],
             release_unavailable: Some(
@@ -634,12 +682,17 @@ mod tests {
             collisions: Some(vec![super::Collision {
                 path: "SECURITY.md".into(),
                 reason: "exists, and no receipt attributes it to release-kit".into(),
+                replaceable: true,
             }]),
+            replaced: vec![super::Replaced {
+                path: "SECURITY.md".into(),
+                saved_to: None,
+            }],
             ..apply
         };
         assert_eq!(
             serde_json::to_string(&preview).expect("a report serializes"),
-            r#"{"schema":"rk.init/10","mode":"preview","target":"/tmp/t","profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"},"capabilities":{"nix_packaging":false,"reporting_policy":false,"scorecard":false},"selection":[],"release_unavailable":"the release automation at (python, gitlab) has no landable files","licence_refusal":"the target's Cargo.toml declares no license field","collisions":[{"path":"SECURITY.md","reason":"exists, and no receipt attributes it to release-kit"}],"config":{"action":"added","changes":[],"content":"schema_version = 2\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"created"}],"next":["commit the landed files, the receipt included"]}"#,
+            r#"{"schema":"rk.init/11","mode":"preview","target":"/tmp/t","profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"},"capabilities":{"nix_packaging":false,"reporting_policy":false,"scorecard":false,"workflow_guards":false},"selection":[],"release_unavailable":"the release automation at (python, gitlab) has no landable files","licence_refusal":"the target's Cargo.toml declares no license field","collisions":[{"path":"SECURITY.md","reason":"exists, and no receipt attributes it to release-kit","replaceable":true}],"replaced":[{"path":"SECURITY.md","saved_to":null}],"config":{"action":"added","changes":[],"content":"schema_version = 2\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"created"}],"next":["commit the landed files, the receipt included"]}"#,
             "a preview omits the sentinels, the unresolved repo, and an empty withheld list rather than serializing null"
         );
     }

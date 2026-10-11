@@ -1,6 +1,10 @@
-# An unknown forge: readable, local, and honest about the rest
+# An unknown forge: the remote names a host no adapter serves
 
 - case: an-unknown-forge
+- classification: setup
+- intent: change a setting
+- provision: no
+- tasks: `land`
 - landing: yes
 - receipt: missing
 - history: none
@@ -9,27 +13,32 @@
 
 ## Situation
 
-A repository whose origin remote is a forge this release has no adapter for. The operator asked for the commit contract and the branch guards, with cleanup. `rk profile --target .` preserves the forge name, reports every forge capability as unknown with that name in the reason, and selects the local guards.
+A repository whose origin remote names a self-hosted host that is neither GitHub nor GitLab. `rk profile --target . --json` reports no forge, which is a valid profile, and the operator asked for the hooks and the routing block.
+
+## Gate
+
+Present "State: `setup`. Request: land the convention with these answers. Tasks: `land`. Proceed?" and wait for the operator.
 
 ## Route
 
-1. `rk guide landing` step 1a: run `rk --version`. The installed version is the one the operator chose.
-2. `rk profile --target .`: read the capability selection out to the operator, naming the forge the profile carries and saying that this release drives github and gitlab. The value is preserved rather than refused, so the target stays describable.
-3. `rk guide landing` step 1c: run `rk stage --target . --release-mode none` and hold `<stage>`.
-4. `rk guide landing` step 2a: read `<stage>/stage.json`. The candidates are the local guards alone.
-5. `rk guide landing` step 2b: with neither a receipt nor useful history the class is a best-effort heuristic. Every candidate is absent or a marked region, so no ownership question arises and no automatic overwrite can happen.
-6. `rk guide landing` step 3: preview `rk init --release-mode none --target .`, read every `created` word, then run it with `--apply`. Production renders afresh.
-7. `rk guide landing` step 4: compare `git diff --stat` with `<stage>/artifacts/`, then run `rk status --check --target .`, which reads the unknown forge as recorded rather than as drift.
-8. `rk guide landing` step 5a: show `rk stage clean <stage>`. Run it only because the request's authority includes cleanup.
+1. General pre-flight: run the pre-flight gate, then read `rk status --target . --json`, `rk self-depend status --target . --json`, and `rk setup status --target . --json`.
+2. `land` pre-flight: run `rk profile --target . --json`, and ask only what it leaves open, one default each, with its consequence stated.
+3. Stage, `rk guide landing` step 1c: run `rk stage --target . --json --technology rust --release-mode none --workflow-guards` and hold `<root>`.
+4. Compare, `rk guide landing` step 2b: run `rk stage compare <root> --target . --json`. Every row reads `absent` with the word `created`. With neither a receipt nor useful history, the class is a best-effort heuristic, and no automatic overwrite can happen.
+5. Land, `rk guide landing` step 4: preview `rk init --stage <root> --target .`, quote every word, then run it with `--apply` as a gated step.
+6. Prove, `rk guide landing` step 5a: run `rk stage compare <root> --target . --json` again. Every `rendered` and `region` row reads `equal`.
+7. `land` post-flight: answer each sentinel `sentinel_locations` names, and state that the landed files reach the trunk through the project's own workflow.
+8. General post-flight: run `rk status --check --target .`, then `pre-commit run --hook-stage manual --all-files`.
+9. Clean: print `rk stage clean <root>`, wait, and run it only because the request's authority includes cleanup.
+10. Report: fill the template from observation, with every answer the operator gave.
 
 ## Authority
 
-- The request authorizes the file changes and the `rk` verbs it names.
-- Propose no forge operation: `rk setup` reports each as not applicable, and naming one by hand refuses and says which adapters exist.
-- Every uncertain ownership decision is shown to the operator, and an absent destination raises none.
-- Nothing is copied out of `<stage>/artifacts/`, and `stage.json` is offered to no verb.
+- The request authorizes the file changes and the `rk` verbs it names. Branch, commit, push, and pull request actions are the operator's unless the request named them.
+- Nothing is copied out of `<stage>/artifacts/` into the target, and `stage.json` is offered to no verb but through `--stage <root>`, which reads its parameters alone. Production renders afresh from the stage's parameters.
+- An unknown forge is not guessed: no forge step is proposed until the operator names a forge this release drives.
 
 ## Documentation
 
-- project documentation: the routing block and the glossary are the whole landing, and the production verb lands them by their recorded kind.
-- reference corpus: `<stage>/reference/` is read and not copied into the project.
+- project documentation: `SECURITY.md` and the routing block in `AGENTS.md` are candidates under `<stage>/artifacts/`, and the production verb lands them by their recorded kind.
+- reference corpus: `<stage>/reference/` is read for the changelog, the guidance, and the chapters the comparison raises. It is not copied into the project.

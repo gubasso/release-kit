@@ -175,7 +175,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `distribution:a-skill-obeys-the-portable-format` — A skill obeys the portable format
 
-Every skill MUST carry only the portable Agent Skills frontmatter fields on plain single-line values, a `name` equal to its directory name, and a body at or below 150 lines.
+Every skill MUST carry only the portable Agent Skills frontmatter fields on plain single-line values, and a `name` equal to its directory name. Its size is counted in characters, by `skill-format:size-is-counted-in-characters`.
 
 #### Scenario: A skill gains an agent-specific field
 
@@ -187,19 +187,19 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `distribution:a-skill-plans-before-it-acts` — A skill plans before it acts
 
-Every skill MUST route to the shared plan gate in a section preceding every other section, and MUST state what `--no-plan` changes, because each one drives operations that write files, mutate a forge, or publish a version, and an agent that starts acting before it has stated the sequence has no point left at which the operator can stop it. The gate itself MUST bound what a request authorizes — the file writes and `rk` verbs it names — leaving every branch, commit, push, tag, and pull request action to the operator unless their request named it, because a plan the operator approves states a shape and grants no standing licence over the repository's git and forge state. Where a request carries a term the target's glossary defines, the gate MUST read that term's action list as actions the request named, and MUST plan each one as a step, because the expansion is the operator's own writing and the boundary is what the operator asked for in one word.
+Every skill MUST open its pre-flight section by reading the shared pre-flight gate before any other action, and MUST read the shared plan gate in its gate section, after the task pre-flights its gate picked and before the first write, because each one drives operations that write files, mutate a forge, or publish a version, and an agent that starts acting before it has stated the sequence has no point left at which the operator can stop it. The plan gate owns what `--no-plan` changes, so no skill restates it. The gate itself MUST bound what a request authorizes — the file writes and `rk` verbs it names — leaving every branch, commit, push, tag, and pull request action to the operator unless their request named it, because a plan the operator approves states a shape and grants no standing licence over the repository's git and forge state. Where a request carries a term the target's glossary defines, which only a target that opted into the workflow guards carries, the gate MUST read that term's action list as actions the request named, and MUST plan each one as a step, because the expansion is the operator's own writing and the boundary is what the operator asked for in one word.
 
-#### Scenario: A skill is authored with its steps ahead of the gate
+#### Scenario: A skill is authored with its steps ahead of the pre-flight
 
-- GIVEN a skill whose first section is a step list rather than the gate
+- GIVEN a skill whose pre-flight section does not open by reading the pre-flight gate, or whose gate section never reads the plan gate
 - WHEN the test suite runs
-- THEN the conformance test fails and names the skill, because an agent reading top to bottom would act before reaching the gate
+- THEN the conformance test fails and names the skill, because an agent reading top to bottom would act before reaching a gate
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `distribution:a-skill-checks-its-host-before-it-plans` — A skill checks its host before it plans
 
-The distribution MUST carry a shared pre-flight gate as its own artifact beside the plan gate, and every skill MUST route to it ahead of the plan gate, because a skill routes to verbs whose dependencies live outside the repository — a forge CLI, a signing tool, the skills and shared artifacts installed under the home — and a plan written without observing them fails at the step nobody checked. It MUST be shared rather than authored per skill, because `distribution:a-skill-plans-before-it-acts` puts the gate section ahead of every other section, so a per-skill pre-flight would be either unreachable or ahead of the gate bounding it. It MUST run whatever the request carries, and no flag MUST waive it — `--no-plan` moves the plan gate's approval turn and nothing else — because a check a request can decline is one no skill can rely on having run. It MUST name every probe judging the skill installation itself, so the catalog and the gate cannot drift into checking different things, and it MUST hand the task to the plan gate, so the two are one sequence rather than two entry points.
+The distribution MUST carry a shared pre-flight gate as its own artifact beside the plan gate, and every skill MUST route to it ahead of the plan gate, because a skill routes to verbs whose dependencies live outside the repository — a forge CLI, a signing tool, the skills and shared artifacts installed under the home — and a plan written without observing them fails at the step nobody checked. It MUST be shared rather than authored per skill, so every skill checks the same host facts the same way. It MUST check the host alone, report a missing `rk` instead of stopping on it, and hand the status report or its diagnostic back to the skill, judging nothing in either, because a setup skill provisions the binary it runs on and only the skill knows what a finding means for its tasks. It MUST run whatever the request carries, and no flag MUST waive it, because a check a request can decline is one no skill can rely on having run. It MUST name every probe judging the skill installation itself, so the catalog and the gate cannot drift into checking different things.
 
 #### Scenario: A skill probe is added to the catalog and the pre-flight is not updated
 
@@ -209,33 +209,33 @@ The distribution MUST carry a shared pre-flight gate as its own artifact beside 
 
 #### Scenario: A skill routes to both gates
 
-- GIVEN a skill's gate section
-- WHEN the test suite reads it
-- THEN it names both shared artifacts by the absolute path they install to, and states that no flag skips the pre-flight
+- GIVEN a skill's pre-flight and gate sections
+- WHEN the test suite reads them
+- THEN the pre-flight opens with the pre-flight gate and the gate section reads the plan gate, each by the path relative to the skill root, `references/<file>`, and the pre-flight states that no flag skips it
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `distribution:shared-skill-artifacts-have-one-home` — Shared skill artifacts have one home
 
-The distribution MUST install what the skills share once, outside the agent skill roots and under the invoking user's home, whichever agent a run selects; and `rk skill uninstall --apply` MUST keep those artifacts while any agent root still holds a skill that names them. A skill MUST name each of them by that absolute path, because the two agent roots make no relative path reach one file from both.
+The distribution MUST author what the skills share once, under `skill-shared/`, and `rk skill install` MUST copy it into every package as `references/<file>`, so each installed package carries every file it reads and a skill names each shared artifact by a path relative to its own root. A package is the unit every skill installer writes and the format defines no location two skills share, so a read outside the skill directory is a hop a sandboxed agent can prompt on and an agent with no home access cannot take (`../reference/REFERENCE-skill-format-sources.md`). Copies the installer writes from one embedded source keep one authored file, so a fix still lands once. The first apply that copies them into every agent root removes the copies an earlier release installed once under `~/.local/state/release-kit/skills/shared/`, where the record vouches for them, and names any it cannot vouch for rather than removing it. A run limited to one agent family leaves that root alone, because an older manual under the other family's root still reads the gates there.
 
 #### Scenario: One agent family is uninstalled while the other stays
 
 - GIVEN a home carrying the skills under both agent roots
 - WHEN `rk skill uninstall --agent codex --apply` runs
-- THEN the shared artifacts remain, because the skills under `.claude/skills` still name them, and a later uninstall of the last root removes them
+- THEN the packages under `.claude/skills` still carry their gate copies, because each package owns its own
 
-Verify: `cargo nextest run -E 'binary(cli)'`
+Verify: `cargo nextest run -E 'binary(cli) or test(a_one_family_install_keeps_the_legacy_gates)'`
 
 ### `distribution:the-doctor-answers-for-the-installed-skills` — The doctor answers for the installed skills
 
-The probe catalog MUST report whether the shared artifacts and the skills installed under the invoking user's home are the ones the running binary carries, and whether the roots an install writes accept writes at all, because one binary serves every repository while its skills sit in three directories under a home that can be carried between machines in part. A difference the record vouches for is a stale install and its remediation MUST be the plain apply; a difference the record cannot account for is the operator's own and its remediation MUST be the forcing one, per `distribution:a-stale-skill-is-not-a-conflict`. An absent agent root MUST NOT be a failure on its own, because `--agent` selects one family and leaves the other's root untouched. These probes MUST NOT create any destination they judge, because a preview must still be able to report a root as absent.
+The probe catalog MUST report whether each package installed under the invoking user's home, its gate copies included, is the one the running binary carries, and whether the roots an install writes accept writes at all, because one binary serves every repository while its skills sit in two agent roots under a home that can be carried between machines in part. `skill-gate` MUST judge the gate copies inside each installed package, and `skill-sources` MUST judge each `SKILL.md` and the skill's own reference files. A difference the record vouches for is a stale install and its remediation MUST be the plain apply; a difference the record cannot account for is the operator's own and its remediation MUST be the forcing one, per `distribution:a-stale-skill-is-not-a-conflict`. An absent agent root MUST NOT be a failure on its own, because `--agent` selects one family and leaves the other's root untouched. These probes MUST NOT create any destination they judge, because a preview must still be able to report a root as absent.
 
-#### Scenario: A home carries the skills and not what they share
+#### Scenario: A package lacks a gate
 
-- GIVEN a home whose agent roots hold the skills while the shared root does not
+- GIVEN a home whose packages hold every `SKILL.md` while one package's `references/plan-gate.md` is gone
 - WHEN `rk doctor` runs
-- THEN the gate probe fails, names the missing artifact, and gives the install that lands it, while the `skill-sources` probe still reports the skills as installed
+- THEN the gate probe fails, names the missing copy, and gives the install that lands it, while the `skill-sources` probe still reports the skills as installed
 
 #### Scenario: An installed skill is not the running binary's
 
@@ -295,7 +295,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `distribution:a-skill-destination-is-a-regular-file` — A skill destination is a regular file
 
-Where a destination is a symlink, is not a regular file, or sits under a shared root reached through a symlinked directory, `rk skill install` and `rk skill uninstall` MUST refuse before writing or removing anything, whatever `--force` was given.
+Where a destination is a symlink, is not a regular file, or sits under the legacy shared root reached through a symlinked directory, `rk skill install` and `rk skill uninstall` MUST refuse before writing or removing anything, whatever `--force` was given.
 
 #### Scenario: A destination is symlinked out of the home
 
@@ -303,9 +303,9 @@ Where a destination is a symlink, is not a regular file, or sits under a shared 
 - WHEN `rk skill install --apply --force` runs
 - THEN it exits 73 naming the symlink, and the file it points at is unchanged
 
-#### Scenario: The shared root is reached through a symlinked directory
+#### Scenario: The legacy shared root is reached through a symlinked directory
 
-- GIVEN `~/.local/state/release-kit/skills` symlinked to a directory elsewhere, so every shared destination under it resolves outside the home
+- GIVEN `~/.local/state/release-kit/skills` symlinked to a directory elsewhere, so every legacy destination the sweep would remove resolves outside the home
 - WHEN `rk skill install --apply --force` runs
 - THEN it exits 73 naming the symlink, and the directory it points at is unchanged, because the destination check sees only the final component and cannot see the link above it
 

@@ -1,6 +1,10 @@
-# Missing receipt with history: a history-guided heuristic
+# Missing receipt with history: an older landing, adopted
 
 - case: missing-receipt-with-history
+- classification: adopt
+- intent: set up or none
+- provision: no
+- tasks: `adopt`, then the setup tasks
 - landing: yes
 - receipt: missing
 - history: useful
@@ -9,26 +13,30 @@
 
 ## Situation
 
-A repository running the convention with no `.release-kit/manifest.json`, whose `git log` shows when each workflow arrived and who touched it since. `rk assess --target .` reports `brownfield`, so the arrival loads `rk method migration` and `rk guide migration`.
+A repository an older release landed before the record existed: its marked regions and its rendered files are present, and `.release-kit/manifest.json` is not. `rk status --target . --json` reads `classification` `adopt`. `rk setup status --target . --json` reads every step `satisfied` and the proof `compatible`, so no setup task follows. The operator asked to set it up.
+
+## Gate
+
+Present "State: `adopt`. Request: set up. Tasks: `adopt`. Proceed?" and wait for the operator.
 
 ## Route
 
-1. `rk guide landing` step 1a: run `rk --version` and `rk self-depend status --target .`. The installed version is the one the operator chose. No step selects, fetches, or installs another.
-2. `rk assess --target .`: `brownfield`. The findings inventory of `rk guide migration` step 1 is written before any apply.
-3. `rk guide landing` step 1c: run `rk stage --target .` and hold `<stage>` for the whole task.
-4. `rk guide landing` step 2a: read `<stage>/stage.json`, `<stage>/artifacts/`, and `<stage>/reference/`. The stage prints a `collision` line for each present file whose bytes differ from the candidate, because no receipt names them.
-5. `rk guide landing` step 2b: diff each artifact against the working tree, read `.release-kit/manifest.json`, and read `git log` and `git diff` for each differing destination. `git log` attributes each file's arrival and each later edit.
-6. State the evidence class: history without receipt, a history-guided heuristic. Propose bringing to the candidate only the files the log attributes to the convention's landing, and ask about every file it does not. No automatic overwrite: the production verb refuses every unattributed collision, and the plan names each file before the operator answers.
-7. `rk guide landing` step 2d: bring the attributed files to the candidate's bytes by hand, within the request's authority.
-8. `rk guide landing` step 3: preview `rk adopt --target . --checkout-mode <mode> --release-style <style>`, read `matches` for every rendered destination, then run it with `--apply`. Where a file still differs, `rk init` and `rk adopt` refuse and the finding returns to the inventory.
-9. `rk guide landing` step 4: compare `git diff --stat` with `<stage>/artifacts/`, then run `rk status --check --target .`, `rk setup check --target .`, and the project's checks.
-10. `rk guide landing` step 5a: show `rk stage clean <stage>`. Run it only because the request's authority includes cleanup.
+1. General pre-flight: run the pre-flight gate, then read `rk status --target . --json`, `rk self-depend status --target . --json`, and `rk setup status --target . --json`.
+2. `adopt` pre-flight: run `rk profile --target . --json`, and ask the release style explicitly.
+3. Stage, `rk guide landing` step 1c: run `rk stage --target . --json --release-style trunk` and hold `<root>`.
+4. Compare, `rk guide landing` step 2b: run `rk stage compare <root> --target . --json`. No receipt exists, so provenance comes from Git alone, a history-guided heuristic. Group the rows by `edited_after_added`: the untouched group takes one answer, replace them all with each copy saved, and the one file edited after it gets its own question. No automatic overwrite happens.
+5. Land, `rk guide landing` step 4: preview `rk adopt --stage <root> --target .`, quote every word, then run it with `--apply` and one `--replace <path>` per answered file as a gated step.
+6. Prove, `rk guide landing` step 5a: run `rk stage compare <root> --target . --json` again. Every `rendered` and `region` row reads `equal`.
+7. `adopt` post-flight: `rk status --target . --json` reads `classification` `current`, so no `upgrade` follows.
+8. General post-flight: run `rk status --check --target .`, then `pre-commit run --hook-stage manual --all-files`.
+9. Clean: print `rk stage clean <root>`, wait, and run it only because the request's authority includes cleanup.
+10. Report: fill the template from observation, with every answer the operator gave.
 
 ## Authority
 
 - The request authorizes the file changes and the `rk` verbs it names. Branch, commit, push, and pull request actions are the operator's unless the request named them.
-- Nothing is copied out of `<stage>/artifacts/` into the target, and `stage.json` is offered to no verb. Production renders afresh.
-- Every file the log does not attribute is a question, asked with `AskUserQuestion` and its consequence stated.
+- Nothing is copied out of `<stage>/artifacts/` into the target, and `stage.json` is offered to no verb but through `--stage <root>`, which reads its parameters alone. Production renders afresh from the stage's parameters.
+- Every saved copy is named in the report under "Saved before changing".
 
 ## Documentation
 

@@ -1,0 +1,6 @@
+      - id: rk-branch-name
+        name: rk branch name
+        language: system
+        always_run: true
+        pass_filenames: false
+        entry: sh -c 'branch=$(git symbolic-ref --quiet --short HEAD) || exit 0; [ "$branch" = RK_TRUNK_BRANCH ] && exit 0; printf %s "$branch" | grep -Eq "RK_BRANCH_GRAMMAR" && exit 0; echo "branch $branch is neither <type>/<slug> nor <issue-id>-<slug>; gh issue develop <issue> --checkout or its glab counterpart mints the linked form" >&2; exit 1'

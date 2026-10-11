@@ -101,7 +101,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `maintenance:the-workflow-mode-is-a-landing-parameter` — The workflow mode is a landing parameter
 
-The working-copy mode MUST be recorded in the manifest, rendered into the landed blocks, reported by every parameter-bearing report, judged by `rk status --check`, and taken from committed configuration or an invocation flag by the landing verbs; a record predating the field MUST read as `branches`, and adoption with neither configuration nor a flag answering the mode MUST default to `branches`, so no upgrade or adoption ever imposes a guard the project did not choose.
+The working-copy mode MUST be recorded in the manifest, rendered into the landed hook block where the target selects the workflow guards, reported by every parameter-bearing report, judged by `rk status --check`, and taken from committed configuration or an invocation flag by the landing verbs; a record predating the field MUST read as `branches`, and adoption with neither configuration nor a flag answering the mode MUST default to `branches`, so no upgrade or adoption ever imposes a guard the project did not choose.
 
 #### Scenario: A pre-mode record upgrades
 
@@ -113,7 +113,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `maintenance:worktree-mode-guards-the-main-checkout` — Worktree mode guards the main checkout
 
-In the worktree mode the landed hook block MUST refuse every commit in the main checkout, detached HEAD included — `master` through the trunk guard, everything else through the location guard — and MUST pass every linked worktree by topology; the mirror is desk-level, honest about `--no-verify`, and its one named escape is the sweep-skip pair the block's comment states.
+Where the target selects the workflow guards, in the worktree mode the landed hook block MUST refuse every commit in the main checkout, detached HEAD included — `master` through the trunk guard, everything else through the location guard — and MUST pass every linked worktree by topology; the mirror is desk-level, honest about `--no-verify`, and its one named escape is the sweep-skip pair the block's comment states.
 
 #### Scenario: The main checkout tries a detached commit
 

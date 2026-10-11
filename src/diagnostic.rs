@@ -77,11 +77,13 @@ pub enum Reason {
     /// A read-only observation could not decide a step from where it ran,
     /// and found no step wrong.
     ObservationIncomplete,
+    /// The landing record exists and does not parse as one.
+    RecordInvalid,
 }
 
 /// Every reason, in declaration order; a test asserts against this so an
 /// addition is deliberate and a rename impossible.
-pub const REASONS: [Reason; 25] = [
+pub const REASONS: [Reason; 26] = [
     Reason::Usage,
     Reason::TargetNotFound,
     Reason::ForgeUndetected,
@@ -107,6 +109,7 @@ pub const REASONS: [Reason; 25] = [
     Reason::PostconditionFailed,
     Reason::TargetBusy,
     Reason::ObservationIncomplete,
+    Reason::RecordInvalid,
 ];
 
 impl Reason {
@@ -139,6 +142,7 @@ impl Reason {
             Self::PostconditionFailed => "postcondition-failed",
             Self::TargetBusy => "target-busy",
             Self::ObservationIncomplete => "observation-incomplete",
+            Self::RecordInvalid => "record-invalid",
         }
     }
 }
@@ -296,6 +300,7 @@ mod tests {
                 "postcondition-failed",
                 "target-busy",
                 "observation-incomplete",
+                "record-invalid",
             ]
         );
     }

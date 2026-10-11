@@ -1,0 +1,8 @@
+# The committed answers this project gives release-kit. The landing that
+# follows completes this file and keeps the answer below.
+
+schema_version = RK_CONFIG_SCHEMA_VERSION
+
+[acquisition]
+source = RK_CONFIG_ACQUISITION_SOURCE # P: host where every host installs rk itself; absent where a manager file pins it
+minimum = RK_CONFIG_ACQUISITION_MINIMUM # P: the lowest rk release a host may run against this project

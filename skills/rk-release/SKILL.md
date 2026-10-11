@@ -1,70 +1,95 @@
 ---
 name: rk-release
-description: Operates a release in a project that carries the release-kit workflow, from landing the work to verifying the published version, including changelog correction and recovery. Use when asked to cut a release, ship a version, fix a changelog entry before release, recover a stuck or failed release, backport a fix to an older line, yank a version, or hand-publish while CI is down. Triggers include release, cut a release, publish a version, backport, yank, and release recovery.
+description: Runs the release-kit release process in a project where release-kit already landed, covering cutting a release, holding it or correcting its changelog, release lines with their backports and candidates, and recovery from a release that failed or stalled. Use when asked to cut or ship a release, hold a release, fix a changelog entry before release, backport a fix to an older line, cut or promote a release candidate, retire a release line, recover a release that published nothing or lost its artifacts, withdraw a version, or hand-publish while CI is down. Triggers include release, cut a release, publish a version, release request, backport, release line, release candidate, yank, and release recovery.
 license: CC-BY-4.0
-compatibility: Requires the rk binary on PATH; install with cargo install release-kit or cargo binstall release-kit. Operating a release needs push access to the repository and its forge CLI authenticated.
+compatibility: Requires the rk binary on PATH, which the rk-setup skill provisions. Operating a release needs the forge CLI authenticated, and push access where a changelog correction or a merge is the operator's request.
 ---
 
 # rk-release
 
-Cut a release through the release-kit convention. The sequence is `rk method operate`; the technology's concrete commands are in `rk binding <tech>`; when something goes wrong, `rk method recovery` owns the way back.
+Run release-kit's own release process in a project where release-kit already landed: a release, its release lines, and its recovery. The release state comes from `rk release status`, the request picks the task, and the operator confirms each task before it runs.
 
-## Before acting
+## Pre-flight
 
-Read two shared files before the first action of a task, in this order, and hold both for the whole task.
+1. Before any other action, read `references/pre-flight-gate.md` and run it whatever the request carries. No flag skips it.
+2. Hand off or stop on any row below, and write nothing. The evidence comes from `rk status --target . --json` unless the row names another source.
 
-1. `~/.local/state/release-kit/skills/shared/pre-flight-gate.md` — run it whatever the request carries. It checks this host with `rk doctor` and stops the task on what no plan can work around. No flag skips it.
-2. `~/.local/state/release-kit/skills/shared/plan-gate.md` — it binds three phases: plan and present the plan for approval, validate that plan against every preview and read-only source phase 2 names, then execute it.
+| Finding                                   | Evidence                          | What follows                                                |
+| ----------------------------------------- | --------------------------------- | ----------------------------------------------------------- |
+| No `rk` on PATH                           | `command -v rk`, by hand          | hand off to the `rk-setup` skill, which provisions it       |
+| A record newer than the binary            | `classification` null             | hand off to `rk-setup`, which provisions the pinned version |
+| No record, or a setup that is not current | `classification` is not `current` | hand off to `rk-setup`                                      |
+| An unreadable record                      | a diagnostic instead of a report  | stop, and repair the file the diagnostic names              |
 
-The two gates are why this skill is safe to run: every verb below writes files, changes a forge, or publishes a version, the pre-flight says whether this host can run it at all, and the plan gate states which of those steps stay the operator's own.
+1. Run `rk release status --target . --json`, and hand its report to the gate. The gate reads nothing else.
 
-When the request carries `--no-plan`, skip the plan gate's approval turn only. Still run the pre-flight, still state the ordered plan before acting, and still validate it as phase 2 directs.
+## General rules
 
-## The shape
+1. Run a release action only where the request names it: merging or disarming the release request, re-running a publish or artifact job, or withdrawing a version. Otherwise print the exact command for the operator.
+2. Route, never restate. The sequence is `rk method operate`, the commands are `rk guide release`, `rk guide backport`, and `rk guide release-lines`, and the way back is `rk method recovery`. Never copy one into a plan.
+3. Never author a tag. Automation tags every version, a candidate included, and a published version is never re-authored.
+4. Never push the trunk. Work reaches it through the project's own workflow.
+5. Never re-arm a request the operator disarmed. A disarm is a decision, and the next bot refresh may re-arm the request, which the report states.
 
-One pull request. The bot maintains the release request against the trunk — the version bump and the changelog — and merging it is the release: the bump push tags and publishes. Whether that merge is yours or the forge's is the project's recorded release style, read from `rk status`: under `trunk` the request stands armed and merges itself on the last green check; under `lines` it waits for a human. Never author a tag, never push the trunk directly, never re-author a published version.
+## Gate
 
-## Cut a release
+Read the intent from the request and the state from `rk release status --target . --json`, never from the forge by hand. A field the runtime's credentials cannot read reads `unknown`: report it, and never ask for a secret to fill it.
 
-1. Read the sequence once per session: `rk method operate`. Then follow `rk guide release`, which renders it as commands with the project path and technology filled in and the forge's variants selected.
-2. Run `rk status --check --target .` before anything ships: drift on a file release-kit owns, or an unfilled sentinel, is fixed before a release, not during one.
-3. Follow the guide's six steps in order and by number, running each check it prints; this skill adds no step of its own. The merge in its step 4 is the release itself, so it stays the operator's unless their request named it — and under `trunk` there is no merge to run: the operator's equivalent decision is whether to hold, which the guide's step 3b carries as one disarm command. Route the changelog correction and any checkout by the project's workflow mode, read from `rk status`: under `worktree` the request's branch takes `rk worktree add "<bot branch>" --apply`, under `branches` the forge CLI's checkout — `rk guide release` renders the right form.
-4. An older line takes `rk guide backport` for the fix crossing over and `rk guide release-lines` for the line's own life, the same way.
+| Intent                                            | Tasks     |
+| ------------------------------------------------- | --------- |
+| release, ship, hold, or correct the changelog     | `release` |
+| a release line: open, patch, candidate, or retire | `lines`   |
+| something broke or stalled                        | `recover` |
+| none named, and `symptoms` is not empty           | `recover` |
+| none named, and nothing pending                   | done      |
+| start work, integrate a branch, or prune          | none      |
 
-## Start work an issue names
+- Done: report the state from observation.
+- None: answer in one line that this is the project's own workflow, and that `rk issue start`, `rk integrate`, and `rk worktree prune` exist as its helpers. Run none of them as a task.
 
-A request naming an issue — an issue URL, or "fix", "address", "implement", or "work on" plus an issue — starts from `rk issue start <issue>`, and the plan's first step is that command. The forge names the branch and rk seats it the way the project's recorded workflow mode says. Three rules bind this.
+The operator confirms every step:
 
-- Never write a predicted branch name into the plan. The name is whatever the forge mints, and stating a guess is the mistake this verb exists to prevent. Write "the branch the forge mints for issue <n>".
-- The preview is what the plan presents for approval, and the apply is what execution runs. That is the plan gate's own two-phase shape, so no new gate appears here.
-- Minting a branch at the forge is a forge action, so it happens only where the operator's request named starting work on that issue.
+1. Present "State: <request and last release>. Request: <intent>. Tasks: <list>. Proceed?" and wait. A redirect reads this table again with the new intent.
+2. Before each task, print "Next: <task>. It will <one line>. Proceed?" and wait. Print one progress line at each move between the pre-flight, the execution, and the post-flight of a task.
+3. After the task pre-flight, read `references/plan-gate.md` and hold it for the rest of the run. The plan names each task, the commands it runs, and the release actions it prints or runs.
 
-`rk guide issue` renders the whole procedure, and `rk method model` owns why the name comes from the forge.
+## Tasks
 
-A release request behind the trunk waits for the bot's recomputation and refreshed checks. Follow `rk method operate` and its drawn model before treating that wait as a stalled release; an ordinary request takes the branch update the chapter names.
+After the gate picks a task, read its file into this context. A task file holds the pre-flight, the execution, and the post-flight of one task, and it links no other task file.
 
-## When it goes wrong
+- If the run includes `release`, read `references/release.md`.
+- If the run includes `lines`, read `references/lines.md`.
+- If the run includes `recover`, read `references/recover.md`.
 
-Route by symptom through `rk method recovery`:
+Compose them this way:
 
-| Symptom                                          | Path                                                                |
-| ------------------------------------------------ | ------------------------------------------------------------------- |
-| A release must not ship                          | Disarm before the last check goes green; merged, it is a withdrawal |
-| A published version is defective                 | Fix forward, then withdraw the bad version                          |
-| The release request merged and nothing published | Re-run the release job on the same trunk commit                     |
-| The changelog shipped wrong                      | Amend on the trunk; ships next release                              |
-| An older line needs a patch                      | Cut release/<major>.<minor> from the tag, cherry-pick               |
-| CI is down and the release cannot wait           | The three-move hand-publish, enforcement off first                  |
-| The release page is empty                        | Re-run the artifact workflow on the same tag                        |
-| A released artifact has no attestation           | Re-run the artifact workflow on the same tag                        |
+- Releasing a line runs `release` with the line as its trunk and the line's own release request.
+- A release that must not ship is the hold of `release`, and a fix an older line needs is `lines`. `recover` takes only the paths no other task covers.
+- Where `release/*` is not protected, `lines` hands the `protect-release-lines` step to `rk-setup` before it opens or patches a line.
 
-A release line flows one direction: fix on the trunk first, cherry-pick only the fix, never merge the line back, and let automation tag the line's patch. `rk method branch-for-release` owns the walkthrough and the four ways the pattern breaks.
+## Post-flight
 
-## Defaults
+Run these once, after the last task post-flight, in this order.
 
-- Work landing while the release request is open ships in the next refresh or the next release; that is never a reason to rush a merge.
-- A verify step that fails right after the release merge is usually timing: the artifact builder creates the release page minutes after the tag.
-- Prefer the smallest recovery that returns to the happy path; never surgery on tags, published versions, or the trunk.
-- A hand-uploaded artifact carries no provenance, even when CI built the file. Treat that release as unfinished and re-run the artifact workflow on its tag once CI is back.
-- Never re-arm a request the operator disarmed. A disarm is a decision, the next bot refresh may re-arm it, and saying so is part of the report.
-- After a release merges, `rk branches prune` reports the retired local branch and `rk worktree prune --verify` confirms the retired worktree; state each command and let the operator run the `--apply`.
+1. Check. Run `rk status --check --target .`.
+2. Report. Fill the template from observation, with every answer the operator gave.
+
+On a failed check, report and route: a violation on a file release-kit owns goes to `rk-setup`. Never repair inside the post-flight.
+
+```text
+Result: <the exact rk status --check line, or the first failing line>
+Tasks:
+  - <task>: <files written or removed>; proof: <task post-flight evidence>
+Answers recorded:
+  - <question>: <answer>
+Git and forge actions:
+  - <action>: <run under the request | printed for the operator>
+Release: <v<version> · published · artifacts verified | held at <step> | failed: <symptom> | <line> opened at <tag> | <line> adopted, base not checked | <line> retired>
+Saved before changing:
+  - <path>: <what it holds>
+Still the operator's:
+  - <exact command>: <what it changes>
+Next: <one action>
+```
+
+Print "Git and forge actions" and "Saved before changing" only where the run has an entry for them.

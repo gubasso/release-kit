@@ -17,17 +17,35 @@ use release_kit::skills::Digest;
 use release_kit::skills::record::{RECORD_PATH, Record};
 
 /// Every skill the binary carries, and the roots an install writes them to.
-const SKILLS: [&str; 3] = ["rk-depend", "rk-release", "rk-setup"];
+const SKILLS: [&str; 2] = ["rk-release", "rk-setup"];
 const ROOTS: [&str; 2] = [".claude/skills", ".agents/skills"];
 
-/// What every skill shares, installed once outside the agent roots, in the
-/// sorted order the embed walks them.
+/// What every skill shares, authored once and copied into each package's
+/// `references/`, in the sorted order the embed walks them.
 const SHARED: [&str; 2] = ["plan-gate.md", "pre-flight-gate.md"];
-const SHARED_ROOT: &str = ".local/state/release-kit/skills/shared";
 
-/// The same root as the skills themselves name it: an absolute path under the
-/// home, because no relative path reaches it from both agent roots.
-const SHARED_ROOT_HOME: &str = "~/.local/state/release-kit/skills/shared";
+/// Where an earlier release installed the shared gates, which an install now
+/// sweeps where the record vouches for them.
+const LEGACY_SHARED_ROOT: &str = ".local/state/release-kit/skills/shared";
+
+/// Every file one installed package carries, relative to its skill
+/// directory, `SKILL.md` first.
+fn package_paths(name: &str) -> Vec<String> {
+    release_kit::skills::packages()
+        .expect("the packages compose")
+        .into_iter()
+        .find(|package| package.name == name)
+        .unwrap_or_else(|| panic!("{name}: no such package"))
+        .files
+        .into_iter()
+        .map(|file| file.path)
+        .collect()
+}
+
+/// How many files every package carries together, per agent root.
+fn package_file_count() -> usize {
+    SKILLS.iter().map(|name| package_paths(name).len()).sum()
+}
 
 fn rk() -> Command {
     // Scrubbed of the variables a running git hook exports: a suite that
@@ -94,8 +112,13 @@ impl Home {
         self.path().join(RECORD_PATH)
     }
 
-    fn shared_gate(&self) -> PathBuf {
-        self.path().join(SHARED_ROOT).join(SHARED[0])
+    /// One shared gate's copy inside one installed package.
+    fn gate(&self, root: &str, skill: &str, artifact: &str) -> PathBuf {
+        self.path()
+            .join(root)
+            .join(skill)
+            .join("references")
+            .join(artifact)
     }
 
     fn load_record(&self) -> Record {
@@ -163,6 +186,7 @@ fn record_params(
             reporting_policy: true,
             scorecard: false,
             code_scanning: None,
+            workflow_guards: Some(true),
         },
     )
 }
@@ -317,6 +341,23 @@ fn land_rust(target: &Path) -> assert_cmd::assert::Assert {
             "acme/widget",
             "--integration",
             "forge",
+            "--target",
+        ])
+        .arg(target)
+        .arg("--apply")
+        .assert()
+}
+
+/// The same landing with the workflow guards, for the tests that read
+/// what the guards land.
+fn land_rust_guarded(target: &Path) -> assert_cmd::assert::Assert {
+    rk().args(["init", "--tech", "rust", "--forge", "github"])
+        .args([
+            "--repo",
+            "acme/widget",
+            "--integration",
+            "forge",
+            "--workflow-guards",
             "--target",
         ])
         .arg(target)
@@ -847,6 +888,7 @@ fn init_preview_human_lines_are_snapshot_held() {
         "DRY RUN: rk init writes these files into {path}; re-run with --apply\n\
          profile: technologies rust; forge github; repo unresolved; release automatic (driver rust, style trunk, line prefix release/); trunk master; checkout mode linked-worktree; integration local; requests reporting_policy\n\
          capability git.guards: selected\n\
+         capability git.workflow-guards: not-requested (capabilities.workflow_guards is false)\n\
          capability git.title-check: selected\n\
          capability security.reporting-policy: selected\n\
          capability release.automation: selected\n\
@@ -857,7 +899,6 @@ fn init_preview_human_lines_are_snapshot_held() {
          created .github/workflows/release-plz.yml\n\
          created .pre-commit-config.yaml\n\
          created AGENTS.md\n\
-         created GLOSSARY.md\n\
          created SECURITY.md\n\
          created dist-workspace.toml\n\
          created release-plz.toml\n\
@@ -905,7 +946,7 @@ fn init_json_emits_one_object_and_nothing_else() {
             .stdout
             .clone();
         let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-        assert_eq!(report["schema"], "rk.init/10");
+        assert_eq!(report["schema"], "rk.init/11");
         assert_eq!(report["mode"], mode);
         assert!(
             report["files"].as_array().is_some_and(|f| !f.is_empty()),
@@ -1139,16 +1180,24 @@ fn skill_install_apply_and_uninstall_round_trip() {
         .success();
     for root in ROOTS {
         for name in SKILLS {
-            assert!(home.destination(root, name).is_file());
+            for path in package_paths(name) {
+                assert!(
+                    home.path().join(root).join(name).join(&path).is_file(),
+                    "{root}/{name}/{path}"
+                );
+            }
+            for artifact in SHARED {
+                assert!(
+                    home.gate(root, name, artifact).is_file(),
+                    "an apply lands {artifact} inside the {name} package"
+                );
+            }
         }
     }
-    assert!(
-        home.shared_gate().is_file(),
-        "an apply lands the shared plan gate the skills name"
-    );
+    assert!(!home.path().join(LEGACY_SHARED_ROOT).exists());
     assert_eq!(
         home.load_record().written.len(),
-        ROOTS.len() * SKILLS.len() + SHARED.len(),
+        ROOTS.len() * package_file_count(),
         "an apply records every destination it wrote"
     );
 
@@ -1164,7 +1213,7 @@ fn skill_install_apply_and_uninstall_round_trip() {
         .success();
     for root in ROOTS {
         for name in SKILLS {
-            assert!(!home.destination(root, name).exists());
+            assert!(!home.path().join(root).join(name).exists(), "{root}/{name}");
         }
     }
     assert!(!home.record().exists(), "an emptied record is removed");
@@ -1173,6 +1222,42 @@ fn skill_install_apply_and_uninstall_round_trip() {
         .args(["skill", "uninstall", "--apply"])
         .assert()
         .success();
+}
+
+/// A home an earlier release installed holds the gates once, under the
+/// shared root. The first install that copies them into each package takes
+/// that root back, because the record vouches for what it wrote there.
+#[test]
+fn skill_install_removes_the_shared_root_an_earlier_release_wrote() {
+    let home = Home::new();
+    let legacy = home.path().join(LEGACY_SHARED_ROOT);
+    std::fs::create_dir_all(&legacy).expect("the legacy root creates");
+    let mut record = Record::default();
+    for artifact in SHARED {
+        let bytes =
+            std::fs::read(repo_path(&format!("skill-shared/{artifact}"))).expect("the gate reads");
+        std::fs::write(legacy.join(artifact), &bytes).expect("the legacy gate writes");
+        record
+            .written
+            .insert(utf8(&legacy.join(artifact)), Digest::of(&bytes));
+    }
+    home.write_record(&record);
+
+    home.rk()
+        .args(["skill", "install", "--apply"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("plan-gate.md"));
+    assert!(!legacy.exists(), "the legacy shared root is taken back");
+    for artifact in SHARED {
+        assert!(home.gate(ROOTS[0], SKILLS[0], artifact).is_file());
+        assert!(
+            !home
+                .load_record()
+                .written
+                .contains_key(&utf8(&legacy.join(artifact)))
+        );
+    }
 }
 
 #[test]
@@ -1434,22 +1519,22 @@ fn skill_install_preview_human_lines_are_snapshot_held() {
     let home = Home::new();
     let mut expected =
         String::from("DRY RUN: rk skill install writes these files; re-run with --apply\n");
+    // Root by root, skill by skill, and file by file: `SKILL.md` first,
+    // then the references in sorted order, the gate copies among them.
     for root in ROOTS {
         for name in SKILLS {
-            expected.push_str(&home.destination(root, name).to_string_lossy());
-            expected.push('\n');
+            for path in package_paths(name) {
+                expected.push_str(
+                    &home
+                        .path()
+                        .join(root)
+                        .join(name)
+                        .join(path)
+                        .to_string_lossy(),
+                );
+                expected.push('\n');
+            }
         }
-    }
-    // The shared artifacts follow the skills, in the embed's sorted order.
-    for artifact in SHARED {
-        expected.push_str(
-            &home
-                .path()
-                .join(SHARED_ROOT)
-                .join(artifact)
-                .to_string_lossy(),
-        );
-        expected.push('\n');
     }
     expected.push_str("Next:\n  rk skill install --apply\n");
     home.rk()
@@ -1475,7 +1560,7 @@ fn skill_install_json_reports_typed_actions() {
     assert_eq!(report["command"], "install");
     assert_eq!(report["mode"], "apply");
     let actions = report["actions"].as_array().expect("an action list");
-    assert_eq!(actions.len(), ROOTS.len() * SKILLS.len() + SHARED.len());
+    assert_eq!(actions.len(), ROOTS.len() * package_file_count());
     assert!(
         actions.iter().all(|action| action["action"] == "write"),
         "{actions:?}"
@@ -1736,11 +1821,10 @@ fn probe(report: &serde_json::Value, id: &str) -> serde_json::Value {
         .clone()
 }
 
-/// The agent roots and the shared root are separate directories, so a home
-/// can carry the skills and not the gate they are told to read first — which
-/// is what a container sharing one and not the other produces. The probe
-/// names that home before an agent acts in it, and clears once the gate is
-/// where the skills look for it.
+/// A package whose `references/` lost a gate still resolves by name and
+/// cannot read the gate it is told to read first. The probe names that home
+/// before an agent acts in it, and clears once the gate is back where the
+/// skill looks for it.
 #[test]
 fn the_gate_probe_names_a_home_whose_skills_cannot_read_their_gate() {
     let home = Home::new();
@@ -1750,9 +1834,10 @@ fn the_gate_probe_names_a_home_whose_skills_cannot_read_their_gate() {
         .success();
     assert_eq!(probe(&skill_probes(&home), "skill-gate")["status"], "ok");
 
-    // The one difference between a working home and the failing one: the
-    // shared root is gone while every agent root stays.
-    std::fs::remove_dir_all(home.path().join(SHARED_ROOT)).expect("the shared root removes");
+    // The one difference between a working home and the failing one: one
+    // package lacks its plan gate while every skill stays.
+    std::fs::remove_file(home.gate(ROOTS[0], SKILLS[0], "plan-gate.md"))
+        .expect("the gate copy removes");
     let report = skill_probes(&home);
     let gate = probe(&report, "skill-gate");
     assert_eq!(gate["status"], "failed");
@@ -1991,8 +2076,6 @@ fn usage_dumps_every_verb_in_one_call() {
         "rk self-depend add",
         "rk self-depend clean",
         "rk self-depend sync",
-        "rk depend assess",
-        "rk depend add",
         "rk status",
         "rk upgrade",
         "rk adopt",
@@ -2155,58 +2238,153 @@ fn every_skill_carries_the_portable_frontmatter() {
             fields.contains_key("description"),
             "{name}: no description for an agent to route on"
         );
-        let body = lines.count();
-        assert!(body <= 150, "{name}: the body runs {body} lines, over 150");
         seen += 1;
     }
     assert_eq!(seen, SKILLS.len(), "the authored skills changed");
 }
 
-/// Every skill drives operations that write files, mutate a forge, or publish
-/// a version, so each one routes to both shared gates before it acts, and
-/// states the one flag that changes the plan gate's shape. The test holds the
-/// instruction's presence; no test can hold a model to it.
+/// The body of one `## ` section of a skill file, without its heading.
+fn section_of<'a>(text: &'a str, heading: &str) -> Option<&'a str> {
+    let marker = format!("\n## {heading}\n");
+    let start = text.find(&marker)? + marker.len();
+    let rest = &text[start..];
+    Some(rest.find("\n## ").map_or(rest, |end| &rest[..end]))
+}
+
+/// The body of a skill file after its frontmatter.
+fn body_of(text: &str) -> &str {
+    text.strip_prefix("---\n")
+        .and_then(|rest| rest.split_once("\n---\n"))
+        .map_or(text, |(_, body)| body)
+}
+
+/// SATISFIES distribution:a-skill-plans-before-it-acts
+/// SATISFIES distribution:a-skill-checks-its-host-before-it-plans
+///
+/// Every skill reads the pre-flight gate before any other action and the
+/// plan gate in its gate section, each by the path relative to the skill
+/// root, and no skill restates what `--no-plan` changes, because the plan
+/// gate owns it. The test holds the instruction's presence; no test can
+/// hold a model to it.
 #[test]
-fn every_skill_routes_to_the_plan_gate_before_acting() {
+fn every_skill_runs_the_gates_in_order() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("skills");
     for name in SKILLS {
         let text =
             std::fs::read_to_string(root.join(name).join("SKILL.md")).expect("the skill reads");
-        let gate = text
-            .find("## Before acting")
-            .unwrap_or_else(|| panic!("{name}: no '## Before acting' section"));
-        // Both shared artifacts are named, by the absolute path they install
-        // to: the two agent roots make no relative path reach one file from
-        // both, so the skills name them the one way that resolves.
-        for artifact in SHARED {
-            let named = format!("{SHARED_ROOT_HOME}/{artifact}");
-            assert!(
-                text[gate..].contains(&named),
-                "{name}: the gate section does not name {named}"
-            );
-        }
-        assert!(
-            text[gate..].contains("--no-plan"),
-            "{name}: the gate section does not state the --no-plan rule"
-        );
-        assert!(
-            text[gate..].contains("No flag skips it"),
-            "{name}: the gate section does not state that the pre-flight is unconditional"
-        );
-        // Every other section is an acting section, so the gate leads.
-        let first = text
-            .find("\n## ")
-            .expect("a skill carries at least one section");
+        let pre_flight =
+            section_of(&text, "Pre-flight").unwrap_or_else(|| panic!("{name}: no pre-flight"));
+        let first = pre_flight
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or_default();
         assert_eq!(
-            first + 1,
-            gate,
-            "{name}: a section precedes the plan gate, so acting can start before it is read"
+            first,
+            "1. Before any other action, read `references/pre-flight-gate.md` and run it whatever the request carries. No flag skips it.",
+            "{name}: the pre-flight does not open with the pre-flight gate"
+        );
+        let gate = section_of(&text, "Gate").unwrap_or_else(|| panic!("{name}: no gate"));
+        assert!(
+            gate.lines().any(|line| line
+                .contains("read `references/plan-gate.md` and hold it for the rest of the run")),
+            "{name}: the gate section does not read the plan gate"
+        );
+        assert!(
+            !text.contains("--no-plan"),
+            "{name}: restates --no-plan, which the plan gate owns"
         );
     }
 }
 
-/// The shared artifacts are files, carried by the binary and installed once,
-/// so correcting one corrects every skill under every agent root. Each has its
+/// SATISFIES skill-format:the-manual-follows-the-stage-order
+///
+/// Every manual carries the five stages as its sections, in the order a
+/// run takes them, and no other section.
+#[test]
+fn every_manual_follows_the_stage_order() {
+    for (skill, path, text) in package_texts() {
+        if path != "SKILL.md" {
+            continue;
+        }
+        let headings: Vec<&str> = body_of(&text)
+            .lines()
+            .filter_map(|line| line.strip_prefix("## "))
+            .collect();
+        assert_eq!(
+            headings,
+            [
+                "Pre-flight",
+                "General rules",
+                "Gate",
+                "Tasks",
+                "Post-flight"
+            ],
+            "{skill}: the sections are not the five stages in order"
+        );
+    }
+}
+
+/// SATISFIES skill-format:size-is-counted-in-characters
+#[test]
+fn every_manual_stays_within_12000_characters() {
+    for (skill, path, text) in package_texts() {
+        if path != "SKILL.md" {
+            continue;
+        }
+        let count = body_of(&text).chars().count();
+        assert!(
+            count <= 12_000,
+            "{skill}: the body runs {count} characters, over 12,000"
+        );
+    }
+}
+
+/// SATISFIES skill-format:size-is-counted-in-characters
+#[test]
+fn every_reference_file_stays_within_32000_characters() {
+    for (skill, path, text) in package_texts() {
+        if path == "SKILL.md" {
+            continue;
+        }
+        let count = text.chars().count();
+        assert!(
+            count <= 32_000,
+            "{skill}/{path} runs {count} characters, over 32,000"
+        );
+    }
+}
+
+/// SATISFIES skill-format:size-is-counted-in-characters
+///
+/// A reference file over 8,000 characters opens with a bulleted list of
+/// its `##` sections, because an agent previews only its head.
+#[test]
+fn a_long_reference_file_opens_with_its_sections() {
+    for (skill, path, text) in package_texts() {
+        if path == "SKILL.md" || text.chars().count() <= 8_000 {
+            continue;
+        }
+        let sections: Vec<&str> = text
+            .lines()
+            .filter_map(|line| line.strip_prefix("## "))
+            .collect();
+        let opening: Vec<&str> = text
+            .lines()
+            .skip(1)
+            .skip_while(|line| !line.starts_with("- "))
+            .take_while(|line| line.starts_with("- "))
+            .collect();
+        for section in sections {
+            assert!(
+                opening.iter().any(|line| line.contains(section)),
+                "{skill}/{path} runs over 8,000 characters and its opening list omits {section}"
+            );
+        }
+    }
+}
+
+/// The shared artifacts are files, carried by the binary and authored once,
+/// so correcting one corrects every package under every agent root. Each has its
 /// own duty and the binary carries both.
 #[test]
 fn the_binary_carries_the_shared_plan_gate() {
@@ -2253,9 +2431,430 @@ fn the_binary_carries_the_shared_plan_gate() {
         "the pre-flight gate does not state that it is unconditional"
     );
     assert!(
-        pre_flight.contains("plan-gate.md"),
-        "the pre-flight gate does not hand the task to the plan gate"
+        pre_flight.contains("Hand the report, or the diagnostic, back to the skill."),
+        "the pre-flight gate does not hand its findings back to the skill"
     );
+    assert!(
+        !pre_flight.contains("plan-gate.md"),
+        "the pre-flight gate names another file of the package"
+    );
+    assert!(
+        plan.contains("opens after the task pre-flights of the cell have run"),
+        "the plan gate does not open after the task pre-flights"
+    );
+    assert!(
+        plan.contains(
+            "Only a target that opted into the workflow guards carries the workflow terms"
+        ),
+        "the plan gate reads the glossary where the target never opted into it"
+    );
+}
+
+/// Every installed package file, as `(skill, path, text)`, from the
+/// binary's own composition.
+fn package_texts() -> Vec<(String, String, String)> {
+    let mut out = Vec::new();
+    for package in release_kit::skills::packages().expect("the packages compose") {
+        for file in package.files {
+            let text = String::from_utf8(file.bytes.to_vec()).expect("a package file is UTF-8");
+            out.push((package.name.clone(), file.path, text));
+        }
+    }
+    out
+}
+
+/// SATISFIES skill-format:a-package-holds-the-manual-and-its-references
+#[test]
+fn every_skill_directory_holds_the_manual_and_its_references() {
+    let root = repo_path("skills");
+    for name in SKILLS {
+        let mut found = Vec::new();
+        for entry in walkdir_files(&root.join(name)) {
+            let relative = entry
+                .strip_prefix(root.join(name))
+                .expect("under the skill")
+                .to_string_lossy()
+                .into_owned();
+            found.push(relative);
+        }
+        assert!(
+            found.contains(&"SKILL.md".to_owned()),
+            "{name}: no SKILL.md"
+        );
+        for path in &found {
+            let listed = path == "SKILL.md"
+                || path.strip_prefix("references/").is_some_and(|file| {
+                    !file.contains('/')
+                        && Path::new(file)
+                            .extension()
+                            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+                });
+            assert!(
+                listed,
+                "{name}/{path}: a package holds SKILL.md and Markdown files directly under references/"
+            );
+        }
+    }
+}
+
+/// Every regular file under `dir`, recursively.
+fn walkdir_files(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(current) = stack.pop() {
+        for entry in std::fs::read_dir(&current).expect("the directory reads") {
+            let path = entry.expect("an entry reads").path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                out.push(path);
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// SATISFIES skill-format:the-manual-links-every-reference-directly
+#[test]
+fn every_reference_file_is_linked_from_its_manual() {
+    let texts = package_texts();
+    for (skill, path, _) in texts.iter().filter(|(_, path, _)| path != "SKILL.md") {
+        let manual = &texts
+            .iter()
+            .find(|(name, file, _)| name == skill && file == "SKILL.md")
+            .expect("every package carries its manual")
+            .2;
+        assert!(
+            manual.contains(&format!("`{path}`")),
+            "{skill}: SKILL.md does not link {path}"
+        );
+    }
+}
+
+/// SATISFIES skill-format:the-manual-links-every-reference-directly
+#[test]
+fn no_reference_file_links_another() {
+    let texts = package_texts();
+    for (skill, path, text) in texts.iter().filter(|(_, path, _)| path != "SKILL.md") {
+        for (other_skill, other, _) in &texts {
+            if other_skill != skill || other == path || other == "SKILL.md" {
+                continue;
+            }
+            let name = other.trim_start_matches("references/");
+            assert!(
+                !text.contains(&format!("references/{name}")),
+                "{skill}/{path} links {other}; only SKILL.md links a reference file"
+            );
+        }
+    }
+}
+
+/// SATISFIES skill-format:a-reference-link-carries-its-condition
+#[test]
+fn every_reference_link_carries_its_condition() {
+    let texts = package_texts();
+    for (skill, path, _) in texts.iter().filter(|(_, path, _)| path != "SKILL.md") {
+        let manual = &texts
+            .iter()
+            .find(|(name, file, _)| name == skill && file == "SKILL.md")
+            .expect("every package carries its manual")
+            .2;
+        let named = format!("`{path}`");
+        let gate = SHARED
+            .iter()
+            .find(|artifact| *path == format!("references/{artifact}"));
+        if let Some(artifact) = gate {
+            // The pre-flight gate opens the pre-flight, and the plan gate
+            // is read in the gate section, each by a sentence that says
+            // when.
+            let (section, opening) = if *artifact == "pre-flight-gate.md" {
+                ("Pre-flight", "Before ")
+            } else {
+                ("Gate", "After ")
+            };
+            let body = section_of(manual, section)
+                .unwrap_or_else(|| panic!("{skill}: no '## {section}' section"));
+            let linked = body.lines().any(|line| {
+                let line = line.trim_start().trim_start_matches(|c: char| {
+                    c.is_ascii_digit() || matches!(c, '.' | '-' | ' ')
+                });
+                line.starts_with(opening) && line.contains(&named)
+            });
+            assert!(
+                linked,
+                "{skill}: '## {section}' does not name {path} with its condition"
+            );
+            continue;
+        }
+        let linked = manual.lines().any(|line| {
+            let line = line.trim_start();
+            let line = line.strip_prefix("- ").unwrap_or(line);
+            line.starts_with("If ") && line.contains(&format!(", read {named}"))
+        });
+        assert!(
+            linked,
+            "{skill}: no line reads 'If <condition>, read {named}'"
+        );
+    }
+}
+
+/// SATISFIES skill-format:shared-content-is-authored-once
+#[test]
+fn no_skill_names_an_absolute_path() {
+    for (skill, path, text) in package_texts() {
+        for (index, line) in text.lines().enumerate() {
+            let absolute = line.contains("~/")
+                || line.contains("$HOME")
+                || line
+                    .split('`')
+                    .skip(1)
+                    .step_by(2)
+                    .any(|code| code.starts_with('/'));
+            assert!(
+                !absolute,
+                "{skill}/{path}:{}: names a path outside the skill directory: {line}",
+                index + 1
+            );
+        }
+    }
+}
+
+/// The words in capitals a skill file may carry: names of things, never
+/// emphasis.
+const SKILL_ACRONYMS: [&str; 15] = [
+    "API", "CI", "CLI", "EARS", "HTTP", "HTTPS", "ID", "JSON", "OIDC", "PATH", "SSH", "TOML",
+    "URL", "UTF", "YAML",
+];
+
+/// Drop the frontmatter, every fenced block, indented ones included, every
+/// code span, and every link target, which quote rather than instruct.
+fn prose_only(text: &str) -> String {
+    let text = text.strip_prefix("---\n").map_or(text, |rest| {
+        rest.split_once("\n---\n").map_or(rest, |(_, body)| body)
+    });
+    let mut kept = Vec::new();
+    let mut fenced = false;
+    for line in text.lines() {
+        if line.trim_start().starts_with("```") {
+            fenced = !fenced;
+            continue;
+        }
+        if fenced {
+            continue;
+        }
+        let spans: Vec<&str> = line.split('`').collect();
+        let mut prose = spans
+            .iter()
+            .step_by(2)
+            .copied()
+            .collect::<Vec<_>>()
+            .join(" ");
+        for (open, close) in [("](", ')'), ("<http", '>')] {
+            while let Some(at) = prose.find(open) {
+                let end = prose[at..]
+                    .find(close)
+                    .map_or(prose.len(), |end| at + end + 1);
+                prose.replace_range(at..end, " ");
+            }
+        }
+        kept.push(prose);
+    }
+    kept.join("\n")
+}
+
+/// Every word in capitals of `line`: a maximal run of ASCII letters and
+/// digits holding two letters or more, every one of them uppercase.
+fn words_in_capitals(line: &str) -> Vec<&str> {
+    line.split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|word| {
+            word.chars().filter(char::is_ascii_alphabetic).count() >= 2
+                && !word.chars().any(|c| c.is_ascii_lowercase())
+        })
+        .collect()
+}
+
+/// SATISFIES skill-format:a-hard-rule-is-a-check-not-capitals
+#[test]
+fn no_skill_file_uses_capitals_for_emphasis() {
+    for (skill, path, text) in package_texts() {
+        for (index, line) in prose_only(&text).lines().enumerate() {
+            for word in words_in_capitals(line) {
+                assert!(
+                    SKILL_ACRONYMS.contains(&word),
+                    "{skill}/{path}:{}: '{word}' is written in capitals; write it as a word, or make the rule a check (skill-format:a-hard-rule-is-a-check-not-capitals)",
+                    index + 1
+                );
+            }
+        }
+    }
+}
+
+/// The capitals contract, case by case: each input and the words the check
+/// rejects in it.
+#[test]
+fn the_capitals_contract_holds_its_cases() {
+    let cases: [(&str, &[&str]); 6] = [
+        ("Never write MUST-NOT here.", &["MUST", "NOT"]),
+        ("Step A1 runs first.", &[]),
+        ("Read [the gate](#NEVER) first.", &[]),
+        ("Run it:\n\n  ```text\n  NEVER\n  ```\n", &[]),
+        ("Write the JSON report.", &[]),
+        ("Stage the candidate, then Compare it.", &[]),
+    ];
+    for (input, rejected) in cases {
+        let prose = prose_only(input);
+        let found: Vec<&str> = prose
+            .lines()
+            .flat_map(words_in_capitals)
+            .filter(|word| !SKILL_ACRONYMS.contains(word))
+            .collect();
+        assert_eq!(found, rejected, "{input}");
+    }
+}
+
+/// SATISFIES skill-format:the-description-says-what-then-when
+#[test]
+fn every_skill_description_says_what_then_when() {
+    for (skill, path, text) in package_texts() {
+        if path != "SKILL.md" {
+            continue;
+        }
+        let description = text
+            .lines()
+            .find_map(|line| line.strip_prefix("description: "))
+            .unwrap_or_else(|| panic!("{skill}: no description"));
+        assert!(
+            description.chars().count() <= 1024,
+            "{skill}: the description runs {} characters",
+            description.chars().count()
+        );
+        assert!(
+            !description.contains('<') && !description.contains('>'),
+            "{skill}: the description carries an angle bracket"
+        );
+        let first = description.split_whitespace().next().unwrap_or_default();
+        assert!(
+            first != "Use" && first.ends_with('s'),
+            "{skill}: the description opens with '{first}', not a third-person verb"
+        );
+        let what_end = description
+            .find(". ")
+            .unwrap_or_else(|| panic!("{skill}: the description is one sentence"));
+        assert!(
+            description[what_end..].contains("Use when"),
+            "{skill}: 'Use when' does not follow what the skill does"
+        );
+    }
+}
+
+/// The release skill's text, by its path inside the package.
+fn release_skill(file: &str) -> String {
+    std::fs::read_to_string(repo_path(&format!("skills/rk-release/{file}")))
+        .unwrap_or_else(|_| panic!("rk-release/{file} reads"))
+}
+
+/// The gate names a task only where its file exists, so it can never pick a
+/// task the agent has no procedure for.
+#[test]
+fn the_release_gate_names_only_tasks_whose_file_exists() {
+    let manual = release_skill("SKILL.md");
+    let gate = section_of(&manual, "Gate").expect("a gate section");
+    let mut named = Vec::new();
+    for row in gate.lines().filter(|line| line.starts_with('|')).skip(2) {
+        let cell = row.split('|').nth(2).unwrap_or_default();
+        for (index, token) in cell.split('`').enumerate() {
+            if index % 2 == 1 {
+                named.push(token.to_owned());
+            }
+        }
+    }
+    named.sort();
+    named.dedup();
+    assert_eq!(named, ["lines", "recover", "release"]);
+    for task in named {
+        let reference = format!("references/{task}.md");
+        assert!(
+            repo_path("skills/rk-release").join(&reference).is_file(),
+            "the gate names {task}, and the package carries no {reference}"
+        );
+    }
+}
+
+/// Starting work, integrating a branch, and pruning are the project's own
+/// workflow: the skill names their helpers on its one out-of-scope line and
+/// holds no task, question, or rule for them.
+#[test]
+fn the_release_skill_holds_no_workflow_task() {
+    for file in [
+        "SKILL.md",
+        "references/release.md",
+        "references/lines.md",
+        "references/recover.md",
+    ] {
+        let text = release_skill(file);
+        for line in text.lines() {
+            for helper in [
+                "rk issue start",
+                "rk integrate",
+                "rk worktree prune",
+                "rk branches prune",
+            ] {
+                assert!(
+                    !line.contains(helper) || line.contains("the project's own workflow"),
+                    "rk-release/{file} names {helper} outside the out-of-scope line: {line}"
+                );
+            }
+        }
+        assert!(
+            !text.contains("Never write a predicted branch name"),
+            "rk-release/{file} still carries the issue procedure"
+        );
+    }
+}
+
+/// Each phrase is read from the file that owns it.
+#[test]
+fn the_release_skill_keeps_each_rule_in_its_owner() {
+    let manual = release_skill("SKILL.md");
+    for held in [
+        "Never re-arm a request the operator disarmed",
+        "Never author a tag",
+        "Never push the trunk",
+        "Run a release action only where the request names it",
+        "hand off to the `rk-setup` skill",
+        "Release: <v<version> · published · artifacts verified | held at <step> | failed: <symptom> | <line> opened at <tag> | <line> adopted, base not checked | <line> retired>",
+    ] {
+        assert!(manual.contains(held), "SKILL.md does not state '{held}'");
+    }
+    let release = release_skill("references/release.md");
+    for held in [
+        "rk setup step package-check --target . --apply",
+        "rk release status --target . --wait <sha> --json",
+        "never by recency",
+        "the artifact page lags the tag",
+        "Work that lands while the request is open ships",
+    ] {
+        assert!(release.contains(held), "release.md does not state '{held}'");
+    }
+    let lines = release_skill("references/lines.md");
+    for held in [
+        "Never merge the line back",
+        "rk lines open <line> --base <tag>",
+        "rk method branch-for-release",
+    ] {
+        assert!(lines.contains(held), "lines.md does not state '{held}'");
+    }
+    let recover = release_skill("references/recover.md");
+    for held in [
+        "request-merged-nothing-published",
+        "published-no-artifacts",
+        "artifact-without-attestation",
+        "smallest fix that works",
+        "carries no provenance",
+    ] {
+        assert!(recover.contains(held), "recover.md does not state '{held}'");
+    }
 }
 
 fn setup_skill() -> String {
@@ -2267,11 +2866,12 @@ fn pre_flight_gate() -> String {
         .expect("the pre-flight gate reads")
 }
 
-/// One router serves every arrival: the migration skill is absorbed, so
-/// the binary carries three skills and `rk skill list` names exactly them.
+/// One router serves every arrival: the migration skill is absorbed and
+/// the dependency skill is gone, so the binary carries two skills and `rk
+/// skill list` names exactly them.
 #[test]
-fn the_binary_carries_three_skills() {
-    assert_eq!(SKILLS.len(), 3);
+fn the_binary_carries_two_skills() {
+    assert_eq!(SKILLS.len(), 2);
     let mut listed: Vec<String> = std::fs::read_dir(repo_path("skills"))
         .expect("the skills root reads")
         .map(|entry| {
@@ -2285,7 +2885,7 @@ fn the_binary_carries_three_skills() {
     listed.sort();
     assert_eq!(
         listed, SKILLS,
-        "the authored skills are the three the router leaves"
+        "the authored skills are the two the router leaves"
     );
     let out = rk()
         .args(["skill", "list"])
@@ -2365,55 +2965,236 @@ fn the_skill_installer_reports_a_skill_the_binary_no_longer_carries() {
     assert!(!kept.exists() && kept.parent().unwrap().join("notes.md").exists());
 }
 
-/// The router is five steps, asserted by its headings, so a sixth step or
-/// a restated procedure shows up as a changed shape.
-#[test]
-fn the_setup_skill_names_the_five_steps() {
-    let text = setup_skill();
-    let start = text
-        .find("## The five steps")
-        .expect("the five-steps section");
-    let end = text[start + 1..]
-        .find("\n## ")
-        .map_or(text.len(), |i| start + 1 + i);
-    let steps: Vec<&str> = text[start..end]
-        .lines()
-        .filter(|line| line.chars().next().is_some_and(|c| c.is_ascii_digit()))
+/// A file of the setup skill's package, as authored.
+fn setup_reference(name: &str) -> String {
+    std::fs::read_to_string(repo_path(&format!("skills/rk-setup/references/{name}")))
+        .unwrap_or_else(|_| panic!("references/{name} reads"))
+}
+
+/// The task files of the setup skill, by task name.
+const SETUP_TASKS: [&str; 9] = [
+    "provision",
+    "land",
+    "migrate",
+    "adopt",
+    "upgrade",
+    "repair",
+    "configure",
+    "forge-settings",
+    "publish",
+];
+
+/// The rows of the setup skill's gate table, as `(state, cells)`, the
+/// cells in the column order of the header.
+fn setup_gate_rows() -> (Vec<String>, Vec<(String, Vec<String>)>) {
+    let skill = setup_skill();
+    let gate = section_of(&skill, "Gate").expect("the gate section");
+    let mut rows = gate.lines().filter(|line| line.starts_with("| "));
+    let cells = |line: &str| -> Vec<String> {
+        line.trim()
+            .trim_matches('|')
+            .split('|')
+            .map(|cell| cell.trim().to_owned())
+            .collect()
+    };
+    let header = cells(rows.next().expect("a header row"));
+    let body = rows
+        .filter(|line| !line.starts_with("| ---"))
+        .map(|line| {
+            let mut row = cells(line);
+            let state = row.remove(0).trim_matches('`').to_owned();
+            (state, row)
+        })
         .collect();
-    assert_eq!(steps.len(), 5, "five numbered steps: {steps:?}");
-    for (step, opening) in steps.iter().zip([
-        "1. Run the gates",
-        "2. Read the version and stop where no update was authorized",
-        "3. Read the profile, stage, and investigate",
-        "4. Land, `rk guide landing` step 3",
-        "5. Verify and clean, `rk guide landing` steps 4 and 5",
-    ]) {
-        assert!(step.starts_with(opening), "{step}");
+    (header[1..].to_vec(), body)
+}
+
+/// The landing pipeline carries the five steps the landing chapter and
+/// runbook take, in order, so the skill and the canon share one spine.
+#[test]
+fn the_landing_pipeline_names_its_five_steps() {
+    let landing = setup_reference("landing.md");
+    let headings: Vec<&str> = landing
+        .lines()
+        .filter(|line| line.starts_with("## "))
+        .collect();
+    assert_eq!(
+        headings,
+        [
+            "## 1. Stage",
+            "## 2. Compare",
+            "## 3. Prepare",
+            "## 4. Land",
+            "## 5. Prove"
+        ]
+    );
+    assert!(landing.contains("Never copy the stage tree into the target"));
+    assert!(landing.contains("both answers name the path with `--replace`"));
+    // Only the decision's own flag says which collision `--replace`
+    // passes, in the pipeline and in the adoption's grouping alike.
+    assert!(landing.contains("For a `collision` whose `replaceable` is true"));
+    let repair = setup_reference("repair.md");
+    assert!(
+        repair.contains("one `--replace <path>` per answered collision")
+            && repair.contains("`collision` whose `replaceable` is true"),
+        "{repair}"
+    );
+    let adopt = setup_reference("adopt.md");
+    assert!(
+        adopt.contains("`collision`, `replaceable` false"),
+        "{adopt}"
+    );
+    assert!(
+        !adopt.contains("| `differs`"),
+        "the adoption groups collisions, not every differing row: {adopt}"
+    );
+}
+
+/// Every task file but the provisioning one splits into the same three
+/// stages, and the provisioning file names its two questions.
+#[test]
+fn every_setup_task_file_has_its_three_stages() {
+    for task in SETUP_TASKS {
+        let text = setup_reference(&format!("{task}.md"));
+        let headings: Vec<&str> = text
+            .lines()
+            .filter_map(|line| line.strip_prefix("## "))
+            .collect();
+        let expected: Vec<&str> = if task == "provision" {
+            vec![
+                "Pre-flight",
+                "Step A: how the project obtains rk",
+                "Step B: how the dev environment loads",
+                "Post-flight",
+            ]
+        } else {
+            vec!["Pre-flight", "Execution", "Post-flight"]
+        };
+        assert_eq!(headings, expected, "{task}.md");
     }
 }
 
-/// Every arrival the skill can meet has one line in the router naming
-/// the chapter it loads: the three `rk assess` verdicts, the recorded
-/// target `rk status` reports, and the record newer than the binary.
+/// Every cell of the gate names only tasks whose file exists, and the
+/// manual links each task file with its condition.
 #[test]
-fn the_setup_skill_routes_each_arrival_to_its_chapter() {
-    let text = setup_skill();
-    let start = text
-        .find("## Which chapter the arrival loads")
-        .expect("the arrival section");
-    let section = &text[start..];
-    for (word, chapter) in [
-        ("greenfield", "`rk method setup`"),
-        ("brownfield", "`rk method migration`"),
-        ("needs-decision", "stop and ask"),
-        ("recorded", "`rk method landing`"),
-        ("newer", "stop"),
-    ] {
-        let line = section
-            .lines()
-            .find(|line| line.starts_with(&format!("- `{word}`")))
-            .unwrap_or_else(|| panic!("no line for the {word} arrival"));
-        assert!(line.contains(chapter), "{word} routes to {chapter}: {line}");
+fn every_setup_gate_cell_names_a_task_whose_file_exists() {
+    let (_, rows) = setup_gate_rows();
+    let skill = setup_skill();
+    for (state, cells) in &rows {
+        for cell in cells {
+            for (index, part) in cell.split('`').enumerate() {
+                if index % 2 == 0 {
+                    continue;
+                }
+                assert!(
+                    SETUP_TASKS.contains(&part),
+                    "{state}: the cell '{cell}' names `{part}`, which has no task file"
+                );
+            }
+        }
+    }
+    for task in SETUP_TASKS {
+        assert!(
+            skill.contains(&format!(
+                "- If the run includes `{task}`, read `references/{task}.md`."
+            )),
+            "the manual does not link {task}.md with its condition"
+        );
+    }
+}
+
+/// The gate has one row for each classification `rk status` reports, so
+/// no state the CLI can name falls through the table.
+#[test]
+fn the_setup_gate_routes_each_classification() {
+    let (intents, rows) = setup_gate_rows();
+    let states: Vec<&str> = rows.iter().map(|(state, _)| state.as_str()).collect();
+    assert_eq!(
+        states,
+        [
+            "setup",
+            "migration",
+            "needs-decision",
+            "adopt",
+            "upgrade",
+            "drift",
+            "current"
+        ]
+    );
+    assert_eq!(
+        intents,
+        [
+            "set up or none",
+            "upgrade",
+            "fix",
+            "change a setting",
+            "forge setup",
+            "pin or environment"
+        ]
+    );
+    for (state, cells) in &rows {
+        assert_eq!(
+            cells.last().map(String::as_str),
+            Some("`provision`"),
+            "{state}: a pin or environment request provisions in every state"
+        );
+    }
+}
+
+/// With no `rk` on PATH, the only task the skill can propose is
+/// `provision`, and the pre-flight runs again with the binary after it.
+#[test]
+fn the_setup_skill_proposes_provision_alone_without_rk() {
+    let skill = setup_skill();
+    let pre_flight = section_of(&skill, "Pre-flight").expect("the pre-flight");
+    let row = pre_flight
+        .lines()
+        .find(|line| line.starts_with("| No `rk` on PATH"))
+        .expect("the missing binary is an observation");
+    assert!(
+        row.contains("`command -v rk`") && row.contains("`provision`, then this pre-flight again"),
+        "{row}"
+    );
+    let gate = section_of(&skill, "Gate").expect("the gate");
+    assert!(
+        gate.contains("With no `rk`, it is the only task."),
+        "the gate does not keep provision alone without the binary"
+    );
+    assert!(
+        pre_flight.contains("An unreadable record never counts as an absent one"),
+        "the pre-flight lands over an unreadable record"
+    );
+}
+
+/// No skill holds a task, a question, or a rule for starting work,
+/// integrating a branch, or pruning: those are the project's own
+/// workflow, and a skill names their helper verbs on one out-of-scope
+/// line alone.
+#[test]
+fn no_skill_owns_starting_work_integrating_or_pruning() {
+    for (skill, path, text) in package_texts() {
+        for retired in [
+            "rk issue start <issue>",
+            "Never write a predicted branch name into the plan",
+            "`rk branches prune` reports",
+            "rk worktree prune --verify",
+        ] {
+            assert!(
+                !text.contains(retired),
+                "{skill}/{path} still holds a workflow rule: {retired}"
+            );
+        }
+        for line in text.lines() {
+            let names_a_helper = ["`rk issue start`", "`rk integrate`", "`rk branches prune`"]
+                .iter()
+                .any(|verb| line.contains(verb));
+            if names_a_helper {
+                assert!(
+                    line.contains("the project's own workflow"),
+                    "{skill}/{path} names a workflow helper outside the out-of-scope line: {line}"
+                );
+            }
+        }
     }
 }
 
@@ -2433,26 +3214,34 @@ fn the_pre_flight_gate_dispatches_to_no_skill() {
     assert!(text.contains("No field routes to another skill"));
 }
 
-/// Step 6 of the pre-flight reads the installed version and the target's
-/// record, and asks `rk` to select, fetch, or install nothing: the
-/// operator chose the version, per
-/// `packaging:the-operator-selects-the-installed-version`.
+/// The pre-flight gate checks the host alone: it reports a missing `rk`
+/// instead of stopping, hands the status report or its diagnostic back
+/// to the skill, and judges nothing in either.
 #[test]
-fn the_pre_flight_gate_reads_the_installed_version_and_the_record() {
+fn the_pre_flight_gate_checks_the_host_alone() {
     let text = pre_flight_gate();
-    let step = text
-        .lines()
-        .find(|line| line.starts_with("6. "))
-        .expect("the gate has a sixth step");
+    let step = |n: &str| {
+        text.lines()
+            .find(|line| line.starts_with(&format!("{n}. ")))
+            .unwrap_or_else(|| panic!("the gate has a step {n}"))
+            .to_owned()
+    };
+    assert!(step("1").contains("`command -v rk`"));
+    assert!(step("1").contains("report that there is no `rk` on PATH"));
+    let last = step("7");
     for phrase in [
-        "`rk --version`",
         "`rk status --target . --json`",
-        "`rk_version`",
-        "no step selects, fetches, or installs another",
-        "A record newer than the binary is a stop",
+        "an unreadable record is never an absent one",
+        "Judge nothing in either",
         "No field routes to another skill",
     ] {
-        assert!(step.contains(phrase), "step 6 carries '{phrase}': {step}");
+        assert!(last.contains(phrase), "step 7 carries '{phrase}': {last}");
+    }
+    for retired in ["rk --version", "plan gate", "rk assess"] {
+        assert!(
+            !text.contains(retired),
+            "the pre-flight gate reaches past the host: {retired}"
+        );
     }
     for retired in RETIRED_SURFACE {
         assert!(
@@ -2462,62 +3251,69 @@ fn the_pre_flight_gate_reads_the_installed_version_and_the_record() {
     }
 }
 
-/// The migration classification declares, before approval, the three
-/// destructive steps a migration may need, each gated outside the plan.
+/// The destructive steps are declared where they run: the forge task
+/// gives each its own approval and reads the snapshot it saved, and the
+/// migration holds every destructive forge step to its snapshot.
 #[test]
 fn the_setup_skill_declares_its_destructive_steps() {
-    let text = setup_skill();
-    let start = text
-        .find("## What waits for the operator, under the brownfield arrival")
-        .expect("the gated section");
-    let section = &text[start..];
+    let forge = setup_reference("forge-settings.md");
     for phrase in [
-        "Removing a protection from a live branch",
-        "`rk setup step single-trunk --apply`",
-        "The predecessor's removal itself",
+        "Give a destructive step its own approval",
+        "`single-trunk` deletes branches",
+        "a refusal from its ancestry guard is a stop, never an obstacle",
+        "a step that removes or replaces forge state saves what it found first",
     ] {
-        assert!(section.contains(phrase), "the gated list carries: {phrase}");
+        assert!(forge.contains(phrase), "forge-settings.md drops '{phrase}'");
     }
-    let route = text
-        .lines()
-        .find(|line| line.starts_with("- `brownfield`"))
-        .expect("the brownfield route");
-    assert!(
-        route.contains("Before approval") && route.contains("`rk setup step`"),
-        "the migration route declares the gated steps before approval: {route}"
-    );
+    let migrate = setup_reference("migrate.md");
+    for phrase in [
+        "Each destructive step refuses while the registry holds no snapshot for it",
+        "saves the forge state and a bundle of every long-lived branch",
+    ] {
+        assert!(migrate.contains(phrase), "migrate.md drops '{phrase}'");
+    }
 }
 
-/// `distribution:a-skill-routes-and-never-restates`, asserted: every
-/// section cites a served document or verb, no section carries a command
-/// block or a runbook's check line, and no route line restates a step
-/// beyond its number.
+/// `distribution:a-skill-routes-and-never-restates`, asserted over the
+/// setup package: no file carries a runbook's command block or check
+/// line, the manual's one fence is the report template, every section
+/// of the manual names a served verb, and a numbered runbook step is
+/// cited beside the guide that serves it.
 #[test]
 fn the_setup_skill_restates_no_procedure() {
-    let text = setup_skill();
-    assert!(!text.contains("```"), "a command block is a restated step");
-    assert!(
-        !text.contains("# check:"),
-        "a check line belongs to a runbook"
-    );
-    let body = &text[text.find("\n## ").expect("sections")..];
+    for (skill, path, text) in package_texts() {
+        if skill != "rk-setup" || path.ends_with("-gate.md") {
+            continue;
+        }
+        assert!(
+            !text.contains("# check:"),
+            "{path}: a check line belongs to a runbook"
+        );
+        let fences = text.matches("```").count();
+        let allowed = if path == "SKILL.md" { 2 } else { 0 };
+        assert_eq!(
+            fences, allowed,
+            "{path}: a command block is a restated step"
+        );
+        for line in text.lines() {
+            let numbered = line
+                .match_indices("step ")
+                .any(|(at, _)| line[at + 5..].starts_with(|c: char| c.is_ascii_digit()));
+            if numbered {
+                assert!(
+                    line.contains("`rk guide "),
+                    "{path}: a numbered step cited outside its guide: {line}"
+                );
+            }
+        }
+    }
+    let skill = setup_skill();
+    let body = body_of(&skill);
     for section in body.split("\n## ").skip(1) {
         let (heading, rest) = section.split_once('\n').unwrap_or((section, ""));
         assert!(
-            rest.contains("`rk ") || rest.contains("`rk\n"),
-            "section '{heading}' names no served document or verb"
-        );
-    }
-    // A step is cited by number: every "step N" is beside the guide that
-    // serves it, and the numbered procedure of a served runbook is never
-    // spelled out here.
-    for line in text.lines().filter(|line| line.contains(" step ")) {
-        assert!(
-            line.contains("`rk guide ")
-                || line.contains("runbook")
-                || line.contains("the plan's first step")
-                || line.contains("gated step"),
-            "a step named outside its guide: {line}"
+            rest.contains("`rk ") || rest.contains("`references/"),
+            "section '{heading}' names no served verb or reference"
         );
     }
 }
@@ -2595,91 +3391,141 @@ fn eval_section<'a>(text: &'a str, heading: &str) -> &'a str {
     rest.find("\n## ").map_or(rest, |end| &rest[..end])
 }
 
-/// The skill and every shared resource it routes to, as `(name, text)`.
-fn skill_and_shared_resources() -> Vec<(&'static str, String)> {
-    vec![
-        ("skills/rk-setup/SKILL.md", setup_skill()),
-        ("skill-shared/pre-flight-gate.md", pre_flight_gate()),
-        (
-            "skill-shared/plan-gate.md",
-            std::fs::read_to_string(repo_path("skill-shared/plan-gate.md"))
-                .expect("the plan gate reads"),
-        ),
-    ]
+/// The setup skill's package and every shared resource it routes to, as
+/// `(name, text)`.
+fn skill_and_shared_resources() -> Vec<(String, String)> {
+    package_texts()
+        .into_iter()
+        .filter(|(skill, _, _)| skill == "rk-setup")
+        .map(|(skill, path, text)| (format!("{skill}/{path}"), text))
+        .collect()
 }
 
-/// Every named situation has one fixture of the declared shape, and every
-/// fixture routes through the landing runbook by step number.
+/// Every named situation has one fixture of the declared shape: a
+/// classification `rk status` reports, an intent the gate reads, the
+/// confirmation the gate presents, and a route that cites the landing
+/// runbook by step number wherever it lands.
 #[test]
 fn every_setup_eval_has_the_declared_shape() {
     let evals = setup_evals();
     let stems: Vec<&str> = evals.iter().map(|(stem, _)| stem.as_str()).collect();
     assert_eq!(stems, SETUP_EVALS, "the evaluation set changed");
+    let (intents, rows) = setup_gate_rows();
     for (stem, text) in &evals {
         assert_eq!(
             eval_field(text, "case"),
             stem,
             "{stem}: the case names its file"
         );
+        let state = eval_field(text, "classification");
         assert!(
-            ["yes", "no"].contains(&eval_field(text, "landing")),
-            "{stem}: landing is yes or no"
+            rows.iter().any(|(row, _)| row == state),
+            "{stem}: {state} is no classification the gate reads"
         );
         assert!(
-            ["present", "missing"].contains(&eval_field(text, "receipt")),
-            "{stem}: receipt is present or missing"
+            intents
+                .iter()
+                .any(|intent| intent == eval_field(text, "intent")),
+            "{stem}: the intent is no column of the gate"
         );
         assert!(
-            ["useful", "none"].contains(&eval_field(text, "history")),
-            "{stem}: history is useful or none"
+            ["first", "only", "no"].contains(&eval_field(text, "provision")),
+            "{stem}"
         );
-        assert!(
-            ["none", "active", "inactive"].contains(&eval_field(text, "legacy")),
-            "{stem}: legacy is none, active, or inactive"
-        );
-        assert!(
-            ["cleaned", "kept", "none"].contains(&eval_field(text, "stage")),
-            "{stem}: stage is cleaned, kept, or none"
-        );
-        for heading in ["Situation", "Route", "Authority", "Documentation"] {
+        for (key, values) in [
+            ("landing", &["yes", "no"][..]),
+            ("receipt", &["present", "missing"][..]),
+            ("history", &["useful", "none"][..]),
+            ("legacy", &["none", "active", "inactive"][..]),
+            ("stage", &["cleaned", "kept", "none"][..]),
+        ] {
+            assert!(values.contains(&eval_field(text, key)), "{stem}: {key}");
+        }
+        for heading in ["Situation", "Gate", "Route", "Authority", "Documentation"] {
             assert!(
                 !eval_section(text, heading).trim().is_empty(),
                 "{stem}: the {heading} section is empty"
             );
         }
         assert!(
-            eval_section(text, "Route").contains("`rk guide landing` step"),
-            "{stem}: the route names no landing runbook step"
+            eval_section(text, "Gate").contains(&format!("\"State: `{state}`.")),
+            "{stem}: the gate does not present the state"
         );
+        if eval_field(text, "landing") == "yes" {
+            assert!(
+                eval_section(text, "Route").contains("`rk guide landing` step"),
+                "{stem}: the route names no landing runbook step"
+            );
+        }
     }
 }
 
-/// No skill, shared resource, or fixture asks `rk` to install, select,
-/// fetch, or move to a release: the operator chose the installed version,
-/// per `packaging:the-operator-selects-the-installed-version`.
+/// Every fixture's task list is the cell the gate table holds for its
+/// classification and intent, so a fixture and the manual cannot route
+/// one situation two ways.
+#[test]
+fn every_eval_reads_its_tasks_from_the_gate_table() {
+    let (intents, rows) = setup_gate_rows();
+    for (stem, text) in setup_evals() {
+        let state = eval_field(&text, "classification");
+        let intent = eval_field(&text, "intent");
+        let column = intents
+            .iter()
+            .position(|header| header == intent)
+            .unwrap_or_else(|| panic!("{stem}: no column {intent}"));
+        let cell = &rows
+            .iter()
+            .find(|(row, _)| row == state)
+            .unwrap_or_else(|| panic!("{stem}: no row {state}"))
+            .1[column];
+        assert_eq!(
+            eval_field(&text, "tasks"),
+            cell,
+            "{stem}: the tasks are not the gate's cell"
+        );
+        let gate = eval_section(&text, "Gate");
+        let provision = eval_field(&text, "provision");
+        if provision == "first" {
+            assert!(
+                gate.contains("Tasks: `provision`, "),
+                "{stem}: provision leads"
+            );
+        }
+    }
+}
+
+/// No file of the setup package and no fixture asks `rk` to select or
+/// fetch another release of itself, per
+/// `packaging:the-operator-selects-the-installed-version`. Installing
+/// `rk` is the provision task's gated step through the manager the
+/// operator picked, and moving the pin is a gated step the operator
+/// approves.
 #[test]
 fn no_skill_shared_resource_or_eval_asks_rk_to_install_or_select_a_release() {
-    let mut texts: Vec<(String, String)> = skill_and_shared_resources()
-        .into_iter()
-        .map(|(name, text)| (name.to_owned(), text))
-        .collect();
+    let mut texts = skill_and_shared_resources();
     for (stem, text) in setup_evals() {
         texts.push((format!("tests/fixtures/rk-setup-evals/{stem}.md"), text));
     }
     for (name, text) in &texts {
-        for retired in ["rk self-depend sync", "--release"] {
-            // The whole flag, not a prefix of one: `--release-style` and
-            // `--release-mode` name the project's own release intent,
-            // which is a different subject from selecting a release of rk.
-            let named = text.match_indices(retired).any(|(at, _)| {
-                text[at + retired.len()..]
-                    .chars()
-                    .next()
-                    .is_none_or(|c| !c.is_ascii_alphanumeric() && c != '-')
-            });
+        // The whole flag, not a prefix of one: `--release-style` and
+        // `--release-mode` name the project's own release intent.
+        let named = text.match_indices("--release").any(|(at, _)| {
+            text[at + "--release".len()..]
+                .chars()
+                .next()
+                .is_none_or(|c| !c.is_ascii_alphanumeric() && c != '-')
+        });
+        assert!(
+            !named,
+            "{name} asks rk to select or install a release: --release"
+        );
+        for line in text
+            .lines()
+            .filter(|line| line.contains("rk self-depend sync"))
+        {
             assert!(
-                !named,
-                "{name} asks rk to select or install a release: {retired}"
+                line.contains("gated step"),
+                "{name} moves the pin outside a gated step: {line}"
             );
         }
         let hits = retired_hits(name, text);
@@ -2691,17 +3537,18 @@ fn no_skill_shared_resource_or_eval_asks_rk_to_install_or_select_a_release() {
     }
     let skill = setup_skill();
     assert!(
-        skill.contains("never chooses, installs, updates, downgrades, or fetches a version"),
-        "the skill states that the version is the operator's"
+        skill.contains("Let the repository record how it obtains `rk`"),
+        "the skill states who records the version"
     );
     assert!(
-        skill.contains("report the installed state and end the task before any migration work"),
-        "the skill stops where no update was authorized"
+        skill.contains("every install runs as a gated step"),
+        "the skill gates every install"
     );
 }
 
-/// Every landing fixture stages first, keeps the stage through the
-/// verification, and either cleans it last or leaves it explicitly.
+/// Every landing fixture stages, compares, lands from the stage, proves
+/// against it, and then checks, and either cleans the stage last or
+/// leaves it explicitly.
 #[test]
 fn every_landing_eval_stages_first_and_cleans_last_or_keeps_the_stage() {
     for (stem, text) in setup_evals() {
@@ -2709,54 +3556,48 @@ fn every_landing_eval_stages_first_and_cleans_last_or_keeps_the_stage() {
         if eval_field(&text, "landing") == "no" {
             assert_eq!(eval_field(&text, "stage"), "none", "{stem}");
             assert!(!route.contains("rk stage"), "{stem}: no landing, no stage");
-            assert!(!route.contains("--apply"), "{stem}: no landing, no apply");
+            assert!(
+                !route.contains("--apply` as a gated step"),
+                "{stem}: no landing, no apply"
+            );
             continue;
         }
-        let staged = route
-            .find("rk stage --target .")
-            .unwrap_or_else(|| panic!("{stem}: the route never stages"));
-        let applied = route
-            .find("--apply")
-            .unwrap_or_else(|| panic!("{stem}: the route never lands"));
+        // Each step is looked up after the one before it, so finding all
+        // of them proves their order.
+        let mut cursor = 0;
+        let mut after = |needle: &str| {
+            let found = route[cursor..].find(needle).map_or_else(
+                || panic!("{stem}: no {needle} after the step before it"),
+                |offset| cursor + offset,
+            );
+            cursor = found + needle.len();
+            found
+        };
+        after("rk stage --target .");
+        after("rk stage compare <root>");
+        after("--stage <root> --target .");
+        after("--apply");
+        after("Prove");
+        let checked = after("rk status --check");
+        let at = |needle: &str| {
+            route
+                .find(needle)
+                .unwrap_or_else(|| panic!("{stem}: the route never runs {needle}"))
+        };
         assert!(
-            staged < applied,
-            "{stem}: the stage comes before the landing"
-        );
-        let verified = route
-            .find("rk status --check")
-            .unwrap_or_else(|| panic!("{stem}: the route never verifies"));
-        assert!(
-            applied < verified,
-            "{stem}: the verification follows the landing"
-        );
-        assert!(
-            route.contains("Production renders afresh")
-                || text.contains("Production renders afresh"),
+            text.contains("Production renders afresh from the stage's parameters"),
             "{stem}: the fixture states that production renders afresh"
         );
         match eval_field(&text, "stage") {
             "cleaned" => {
-                let cleaned = route
-                    .find("rk stage clean")
-                    .unwrap_or_else(|| panic!("{stem}: a cleaned stage names the command"));
-                assert!(
-                    verified < cleaned,
-                    "{stem}: the cleanup follows the verification"
-                );
-                let after = &route[cleaned..];
+                let cleaned = at("rk stage clean");
+                assert!(checked < cleaned, "{stem}: the cleanup follows the checks");
                 for verb in ["rk init", "rk upgrade", "rk adopt", "rk stage --target"] {
                     assert!(
-                        !after.contains(verb),
+                        !route[cleaned..].contains(verb),
                         "{stem}: {verb} runs after the cleanup"
                     );
                 }
-                // Every stage the route created is cleaned by its own path:
-                // one cleanup per creation, no stage left unnamed.
-                assert_eq!(
-                    route.matches("rk stage --target").count(),
-                    route.matches("rk stage clean").count(),
-                    "{stem}: each stage the route creates is cleaned by name"
-                );
                 assert!(
                     route.contains("authority includes cleanup"),
                     "{stem}: the cleanup names its authority"
@@ -2764,12 +3605,12 @@ fn every_landing_eval_stages_first_and_cleans_last_or_keeps_the_stage() {
             }
             "kept" => {
                 assert!(
-                    !route.contains("rk stage clean") || text.contains("is not shown"),
-                    "{stem}: a kept stage is not cleaned"
+                    route.contains("leaves the stage in place as recoverable evidence"),
+                    "{stem}: a kept stage is left explicitly"
                 );
                 assert!(
-                    route.contains("leaves the stage in place as recoverable evidence"),
-                    "{stem}: a kept stage is left explicitly, with its path"
+                    route.contains("the cleanup is not shown"),
+                    "{stem}: a kept stage is not cleaned"
                 );
             }
             other => panic!("{stem}: a landing fixture's stage is cleaned or kept, not {other}"),
@@ -2777,40 +3618,32 @@ fn every_landing_eval_stages_first_and_cleans_last_or_keeps_the_stage() {
     }
 }
 
-/// No fixture copies staged bytes into production or offers the stage or
-/// its receipt to a landing verb, per `staging:production-never-reads-a-stage`.
+/// No fixture copies staged bytes into production, and a landing verb
+/// meets the stage only through `--stage <root>`, which reads its
+/// parameters, per `staging:a-landing-reads-the-stage-parameters`.
 #[test]
 fn no_eval_copies_staged_bytes_or_offers_the_stage_as_input() {
     for (stem, text) in setup_evals() {
         for line in text.lines() {
-            for copy in [
-                "cp -",
-                "cp <stage>",
-                "rsync",
-                "mv <stage>",
-                "--from-stage",
-                "--stage ",
-            ] {
+            for copy in ["cp -", "cp <stage>", "rsync", "mv <stage>", "--from-stage"] {
                 assert!(
                     !line.contains(copy),
                     "{stem}: a staged byte is copied: {line}"
                 );
             }
-            if line.contains("stage.json") || line.contains("<stage>/artifacts") {
-                for verb in ["rk init", "rk upgrade", "rk adopt"] {
+            for verb in ["rk init", "rk upgrade", "rk adopt"] {
+                if line.contains(verb) && line.contains("<stage>") {
                     assert!(
-                        !line.contains(verb)
-                            || line.contains("offered to no verb")
-                            || line.contains("never opens"),
-                        "{stem}: the stage meets a landing verb on one line: {line}"
+                        line.contains("--stage <root>"),
+                        "{stem}: a landing verb takes the stage another way: {line}"
                     );
                 }
             }
         }
         if eval_field(&text, "landing") == "yes" {
             assert!(
-                text.contains("`stage.json` is offered to no verb"),
-                "{stem}: the receipt is stated as no verb's input"
+                text.contains("`stage.json` is offered to no verb but through `--stage <root>`"),
+                "{stem}: the receipt is stated as no verb's input but through --stage"
             );
             assert!(
                 text.contains("Nothing is copied out of `<stage>/artifacts/`"),
@@ -2818,21 +3651,19 @@ fn no_eval_copies_staged_bytes_or_offers_the_stage_as_input() {
             );
         }
     }
-    let skill = setup_skill();
+    let landing = setup_reference("landing.md");
     assert!(
-        skill.contains("never copy the stage tree into the target"),
-        "the skill forbids the wholesale copy"
+        landing.contains("Never copy the stage tree into the target"),
+        "the pipeline forbids the wholesale copy"
     );
     assert!(
-        skill.contains(
-            "never offer `stage.json` or the stage path to `rk init`, `rk upgrade`, or `rk adopt`"
-        ),
-        "the skill forbids the stage as apply input"
+        landing.contains("Run the task's landing verb with `--stage <root>`"),
+        "the pipeline lands through the stage's parameters"
     );
 }
 
-/// Missing provenance produces a bounded heuristic report and never an
-/// automatic overwrite, per `landing:a-missing-receipt-is-a-classification`.
+/// Missing provenance produces a bounded heuristic and never an automatic
+/// overwrite, per `landing:a-missing-receipt-is-a-classification`.
 #[test]
 fn missing_provenance_produces_a_bounded_heuristic_and_no_automatic_overwrite() {
     let mut seen = 0;
@@ -2853,31 +3684,25 @@ fn missing_provenance_produces_a_bounded_heuristic_and_no_automatic_overwrite() 
         if eval_field(&text, "history") == "none" {
             assert!(
                 route.contains("best-effort"),
-                "{stem}: neither source is a best-effort heuristic"
-            );
-            assert!(
-                text.contains("shown to the operator") || text.contains("ask the operator"),
-                "{stem}: every uncertain decision reaches the operator"
+                "{stem}: neither source is best-effort"
             );
         } else {
             assert!(
-                route.contains("history-guided"),
-                "{stem}: history alone is a history-guided heuristic"
+                route.contains("history-guided") && route.contains("edited_after_added"),
+                "{stem}: history alone groups the rows by its own evidence"
             );
         }
     }
     assert_eq!(
-        seen, 9,
-        "every fixture that lands with no receipt: greenfield, the wired target, the two missing-receipt cases, and the five profile arrivals"
+        seen, 10,
+        "every fixture that lands with no receipt: greenfield, the wired first landing, the six profile arrivals, and the two adoptions"
     );
-    let skill = setup_skill();
-    for class in [
-        "Receipt and useful history",
-        "Receipt without useful history",
-        "History without receipt",
-        "Neither: a best-effort report",
-    ] {
-        assert!(skill.contains(class), "the skill names the class: {class}");
+    let landing = setup_reference("landing.md");
+    for class in ["`attributed`", "`reduced`", "`unknown`"] {
+        assert!(
+            landing.contains(class),
+            "the pipeline names the class {class}"
+        );
     }
 }
 
@@ -2889,30 +3714,27 @@ fn legacy_state_stops_the_update_or_is_named_and_never_removed_without_authority
     let mut active = 0;
     let mut inactive = 0;
     for (stem, text) in setup_evals() {
+        let route = eval_section(&text, "Route");
         match eval_field(&text, "legacy") {
             "active" => {
                 active += 1;
-                assert_eq!(
-                    eval_field(&text, "landing"),
-                    "no",
-                    "{stem}: an active operation stops the update"
-                );
-                let route = eval_section(&text, "Route");
-                assert!(route.contains("stops the update"), "{stem}");
-                assert!(
-                    route.contains("with the installed binary"),
-                    "{stem}: the old binary closes its own work"
-                );
-                assert!(
-                    route.contains("Remove nothing"),
-                    "{stem}: nothing is removed before the update"
-                );
+                assert_eq!(eval_field(&text, "landing"), "no", "{stem}");
+                for phrase in [
+                    "the update waits for the answer",
+                    "finishes it with the installed 0.4.x binary",
+                    "Remove nothing",
+                    "stops the update",
+                ] {
+                    assert!(
+                        route.contains(phrase),
+                        "{stem}: the route carries '{phrase}'"
+                    );
+                }
             }
             "inactive" => {
                 inactive += 1;
-                let route = eval_section(&text, "Route");
                 for phrase in [
-                    "exact path",
+                    "by its exact path",
                     "why each is obsolete",
                     "no active old operation remains",
                     "explicit cleanup authorization",
@@ -2941,13 +3763,13 @@ fn legacy_state_stops_the_update_or_is_named_and_never_removed_without_authority
         }
     }
     assert_eq!((active, inactive), (1, 1));
-    let skill = setup_skill();
+    let upgrade = setup_reference("upgrade.md");
     for phrase in [
-        "An active operation stops the update",
-        "No `rk` verb removes them",
+        "The update waits for the answer",
+        "No `rk` verb removes this state",
         "only under explicit cleanup authorization",
     ] {
-        assert!(skill.contains(phrase), "the skill states: {phrase}");
+        assert!(upgrade.contains(phrase), "upgrade.md states: {phrase}");
     }
 }
 
@@ -2974,105 +3796,98 @@ fn every_eval_keeps_project_documentation_and_the_reference_corpus_distinct() {
             "{stem}: project documentation names the reference tree"
         );
     }
-    let skill = setup_skill();
-    assert!(
-        skill.contains("The `reference/` tree teaches this skill and is copied into no project"),
-        "the skill keeps the corpus out of the project"
-    );
 }
 
-/// A landing cannot close over a pin nobody moves, per
-/// `packaging:the-setup-offers-the-freshness-wire`. The skill reads the
-/// gap from the status report, asks the operator, and gates the edit into
-/// the file the target owns.
+/// A pin nothing moves is a question the provision task asks, per
+/// `packaging:the-setup-offers-the-freshness-wire`: it reads the gap from
+/// the status report, asks the operator, and gates the edit into the file
+/// the target owns.
 #[test]
 fn the_setup_skill_offers_the_freshness_wire_to_a_wired_target() {
-    let skill = setup_skill();
-    let start = skill
-        .find("## How the target obtains `rk`")
-        .expect("the acquisition section");
-    let section = &skill[start..];
-    let end = section[1..]
-        .find("\n## ")
-        .map_or(section.len(), |offset| offset + 1);
-    let section = &section[..end];
+    let provision = setup_reference("provision.md");
+    let step_b = provision
+        .split("## Step B: how the dev environment loads")
+        .nth(1)
+        .expect("step B");
     for phrase in [
-        "rk self-depend status --target . --json",
-        "`wired`, `envrc`, and `envrc_sync`",
         "Where `wired` names a manager and `envrc_sync` is false",
         "AskUserQuestion",
         "rk self-depend add --manager <wired> --target . --json",
-        "as a gated step",
+        "as a gated edit",
         "writes only a file the target lacks",
+        "How many files that diff carries is the manager's own answer",
+        "ask this question before that apply rather than after it",
     ] {
-        assert!(
-            section.contains(phrase),
-            "the acquisition section drops '{phrase}': {section}"
-        );
+        assert!(step_b.contains(phrase), "step B drops '{phrase}'");
     }
-    // The manager is the report's answer, not this skill's: the section
-    // predicts no file count and names no manager of its own.
-    assert!(
-        section.contains("How many files that diff carries is the manager's own answer"),
-        "the section predicts the shape of a bump: {section}"
-    );
-    assert!(
-        skill.contains("Then raise the decision below, before the task closes"),
-        "the last of the five steps routes to the decision"
-    );
-
     let wired = setup_evals()
         .into_iter()
         .find(|(stem, _)| stem == "wired-target-without-the-sync-line")
         .expect("the wired fixture");
     let route = eval_section(&wired.1, "Route");
     assert!(
-        route.contains("Ask the operator about the freshness wire before the task closes"),
+        route.contains("ask the operator about the freshness line"),
         "the wired route raises the decision: {route}"
     );
-    let landed = route.find("--apply").expect("the landing");
-    let asked = route
-        .find("Ask the operator about the freshness wire")
-        .expect("the decision");
-    assert!(landed < asked, "the offer follows the landing: {route}");
     assert!(
         route.contains("On a refusal, record the answer in the report"),
         "a refusal is a recorded answer: {route}"
     );
+    // The rule binds a first landing: the gate routes a pin with no sync
+    // line there to provision, which asks before the landing closes, and
+    // asks nothing about the method the pin already answers.
+    assert_eq!(eval_field(&wired.1, "classification"), "setup");
+    let skill = setup_skill();
+    let pre_flight = section_of(&skill, "Pre-flight").expect("the pre-flight");
+    assert!(
+        pre_flight.contains("A pin with no sync line, at `setup` or `migration`"),
+        "the pre-flight routes a wired first landing to provision"
+    );
+    let asked = route
+        .find("ask the operator about the freshness line")
+        .expect("the freshness question");
+    let landed = route.find("--apply` as a gated step").expect("the landing");
+    assert!(
+        asked < landed,
+        "the question comes before the landing: {route}"
+    );
+    assert!(
+        provision.contains("Where `wired` names a manager or `state` reads `host`, and the request does not change that answer, an answer already closed this question"),
+        "an answered method is not asked again, unless the request changes it"
+    );
+}
 
-    // The negative branch, stated by a fixture rather than inferred: the
-    // bare tree names no wired manager, so this phase raises nothing. The
-    // acquisition route for such a target is the case this phase refuses
-    // to own. The acquisition question it raises instead is the other
-    // requirement's, asserted below.
-    let bare = setup_evals()
-        .into_iter()
-        .find(|(stem, _)| stem == "greenfield")
-        .expect("the greenfield fixture");
-    let bare_route = eval_section(&bare.1, "Route");
+/// With no `rk` on the host, the gate routes to provision alone, and
+/// provision obtains a first binary before any step that runs one.
+///
+/// VERIFIES distribution:a-skill-checks-its-host-before-it-plans
+#[test]
+fn the_provision_task_obtains_rk_before_it_runs_rk() {
+    let provision = setup_reference("provision.md");
+    let pre_flight = provision
+        .split("## Pre-flight")
+        .nth(1)
+        .and_then(|rest| rest.split("## Step A").next())
+        .expect("the pre-flight precedes step A");
+    let bootstrap = pre_flight
+        .find("Where no `rk` runs on this host")
+        .expect("the pre-flight obtains a first rk");
+    let first_verb = pre_flight
+        .find("rk self-depend")
+        .expect("the pre-flight reads the self-depend status");
     assert!(
-        bare_route.contains("names no wired manager")
-            && bare_route.contains("no freshness offer is raised here"),
-        "the bare route states the absent manager and the silence: {bare_route}"
+        bootstrap < first_verb,
+        "the bootstrap comes before the first verb of the binary: {pre_flight}"
     );
-    assert!(
-        !bare_route.contains("Ask the operator about the freshness wire"),
-        "the bare route raises the offer: {bare_route}"
-    );
-
-    // An upgrade of a recorded target asks nothing, which the plan left
-    // for a later decision and this phase does not take.
-    assert!(
-        section.contains("An upgrade of a recorded target asks nothing"),
-        "the section bounds itself to a first landing: {section}"
-    );
-    for (stem, text) in setup_evals() {
-        if eval_field(&text, "receipt") == "present" {
-            assert!(
-                !text.contains("freshness"),
-                "{stem}: a recorded target carries the offer"
-            );
-        }
+    for phrase in [
+        "AskUserQuestion",
+        "as a gated step",
+        "Then run this pre-flight again",
+    ] {
+        assert!(
+            pre_flight.contains(phrase),
+            "the bootstrap drops '{phrase}'"
+        );
     }
 }
 
@@ -3163,96 +3978,35 @@ fn an_unwired_target_takes_the_chosen_manager_and_reports_it_back() {
     );
 }
 
-/// A first landing cannot close over a target nothing pins, per
-/// `packaging:the-setup-offers-the-acquisition-route`. The skill reads
-/// `state` from the status report, offers three answers with what each
-/// costs, records the one it gets, and asks once.
+/// A first landing over a target nothing pins offers the provision task
+/// first, per `packaging:the-setup-offers-the-acquisition-route`: it reads
+/// the status report, offers each answer with its cost, records the one
+/// it gets, and asks once.
 #[test]
 fn the_setup_skill_offers_the_acquisition_route_to_an_unwired_target() {
+    let provision = setup_reference("provision.md");
+    let step_a = provision
+        .split("## Step A: how the project obtains rk")
+        .nth(1)
+        .and_then(|rest| rest.split("## Step B").next())
+        .expect("step A");
+    for phrase in [
+        "State the cost of each option before the operator picks",
+        "rk self-depend add --manager <manager> --target . --json",
+        "offer only the ones whose `support` is not `manual`",
+        "gate the same command with `--apply`",
+        "rk self-depend add --host --target . --apply",
+        "record the decline as a host decision",
+    ] {
+        assert!(step_a.contains(phrase), "step A drops '{phrase}'");
+    }
     let skill = setup_skill();
-    let start = skill
-        .find("## How the target obtains `rk`")
-        .expect("the acquisition section");
-    let section = &skill[start..];
-    let end = section[1..]
-        .find("\n## ")
-        .map_or(section.len(), |offset| offset + 1);
-    let section = &section[..end];
-    for phrase in [
-        "Where `state` is `no-manager`",
-        "rk self-depend add --manager <candidate> --target . --json",
-        "a host install, which serves one version to every project on that machine",
-        "the operator wiring it themselves",
-        "Say what each costs before the operator picks",
-        "Ask once",
-    ] {
-        assert!(
-            section.contains(phrase),
-            "the acquisition section drops '{phrase}': {section}"
-        );
-    }
-    // A pair the matrix cannot wire is a refusal, so it is never one of
-    // the answers. The skill reads that from the add report, not from a
-    // list of its own.
+    let pre_flight = section_of(&skill, "Pre-flight").expect("the pre-flight");
     assert!(
-        section.contains("keep the ones whose `support` is not `manual`"),
-        "the section offers a manual pair as an answer: {section}"
+        pre_flight.contains("No pin and no host decision, at `setup` or `migration`")
+            && pre_flight.contains("`provision`, offered first"),
+        "the pre-flight routes an unpinned first landing to provision"
     );
-    // The chosen manager is the operator's answer. A no-manager report
-    // carries no `wired` value to reuse, so the apply takes the answer.
-    assert!(
-        section.contains("rk self-depend add --manager <chosen> --target . --json")
-            && section.contains("not with `wired`"),
-        "the acceptance path reuses a manager the report does not carry: {section}"
-    );
-    // A preview writes nothing, so the accepted answer needs the apply
-    // and the read-back that proves it landed.
-    for phrase in [
-        "Then run the same call with `--apply` as a gated step",
-        "it names the chosen manager under `wired`, or the wiring did not happen",
-        "The flake pair's apply seeds an `.envrc` carrying the sync line",
-        "ask the freshness question before that apply rather than after it",
-    ] {
-        assert!(
-            section.contains(phrase),
-            "the acceptance path stops at the preview, dropping '{phrase}': {section}"
-        );
-    }
-    // The preview is not ceremony: the status lists every manager in the
-    // enum for a target that carries none, and at least one of them is
-    // manual at its own default venue. Offering the status list whole
-    // would offer a refusal.
-    let manual = release_kit::self_depend::manager::Manager::ALL
-        .into_iter()
-        .filter(|manager| {
-            matches!(
-                release_kit::self_depend::matrix::support(
-                    *manager,
-                    release_kit::self_depend::matrix::default_venue(*manager),
-                ),
-                release_kit::self_depend::matrix::Support::Manual(_)
-            )
-        })
-        .count();
-    assert!(
-        manual > 0,
-        "no manager is manual, so the preview the skill requires proves nothing"
-    );
-
-    // A reader following the classification reaches the section that
-    // answers it, which is the runbook's prerequisites and no numbered
-    // step of it.
-    let greenfield = skill
-        .lines()
-        .find(|line| line.starts_with("- `greenfield`"))
-        .expect("the greenfield route");
-    assert!(
-        greenfield.contains("`rk guide setup` carries it in the Prerequisites"),
-        "the classification cites the section that answers it: {greenfield}"
-    );
-
-    // The bare tree raises the question, takes an answer, and asks no
-    // second time.
     let bare = setup_evals()
         .into_iter()
         .find(|(stem, _)| stem == "greenfield")
@@ -3261,28 +4015,12 @@ fn the_setup_skill_offers_the_acquisition_route_to_an_unwired_target() {
     let asked = route
         .find("Ask the operator how the project obtains it")
         .expect("the acquisition question");
-    let landed = route.find("--apply").expect("the landing");
-    assert!(landed < asked, "the question follows the landing: {route}");
-    for phrase in [
-        "The operator answers that they wire it themselves",
-        "Record that answer in the report",
-        "an answer already recorded is not asked again",
-    ] {
-        assert!(
-            route.contains(phrase),
-            "the bare route drops '{phrase}': {route}"
-        );
-    }
-
-    // An upgrade of a recorded target asks neither question.
-    for (stem, text) in setup_evals() {
-        if eval_field(&text, "receipt") == "present" {
-            assert!(
-                !text.contains("how the project obtains"),
-                "{stem}: a recorded target carries the acquisition offer"
-            );
-        }
-    }
+    let landed = route.find("--apply` as a gated step").expect("the landing");
+    assert!(asked < landed, "provision runs before the landing: {route}");
+    assert!(
+        route.contains("An answer already recorded is not asked again"),
+        "the question is asked once: {route}"
+    );
 }
 
 /// The skill restates no projection or manager matrix the CLI owns: the
@@ -3328,15 +4066,9 @@ fn the_setup_skill_restates_no_projection_or_manager_matrix() {
 /// carries no sentence ordering one to branch, commit, or merge on its own.
 #[test]
 fn the_routing_block_bounds_the_agents_initiative() {
-    for workflow in [
-        release_kit::landing::CheckoutMode::LinkedWorktree,
-        release_kit::landing::CheckoutMode::MainWorktree,
-    ] {
-        let block = release_kit::projection::routing_block(
-            workflow,
-            release_kit::landing::Integration::Forge,
-        )
-        .expect("the binary embeds the block");
+    {
+        let block =
+            release_kit::projection::routing_block(true).expect("the binary embeds the block");
         for phrase in [
             "guides and never drives",
             "unless the operator's request named that action",
@@ -3590,17 +4322,11 @@ fn the_prose_checks_catch_every_class_they_name() {
 /// gate runs over its `AGENTS.md` are held here, at the renderer.
 #[test]
 fn the_routing_block_reads_as_plain_prose() {
-    for workflow in [
-        release_kit::landing::CheckoutMode::LinkedWorktree,
-        release_kit::landing::CheckoutMode::MainWorktree,
-    ] {
+    for workflow_guards in [true, false] {
         let rendered = release_kit::landing::render(
-            release_kit::projection::routing_block(
-                workflow,
-                release_kit::landing::Integration::Forge,
-            )
-            .expect("the binary embeds the block")
-            .as_bytes(),
+            release_kit::projection::routing_block(workflow_guards)
+                .expect("the binary embeds the block")
+                .as_bytes(),
             &render_params("acme/widget", None),
         );
         let text = String::from_utf8(rendered).expect("the block is text");
@@ -3902,7 +4628,6 @@ fn the_runbooks_match_their_method_chapters() {
         ("method/09-release-lines.md", "runbooks/release-lines.md"),
         ("method/08-worktrees.md", "runbooks/worktree.md"),
         ("method/10-migration.md", "runbooks/migration.md"),
-        ("method/11-dependencies.md", "runbooks/dependencies.md"),
         ("method/13-landing.md", "runbooks/landing.md"),
     ] {
         let rendered = std::fs::read_to_string(repo_path(runbook)).expect("reads");
@@ -3984,7 +4709,6 @@ fn guide_lists_and_serves_byte_identically_when_nothing_resolves() {
     rk().args(["guide", "--list"]).assert().success().stdout(
         predicate::str::contains("release")
             .and(predicate::str::contains("migration"))
-            .and(predicate::str::contains("dependencies"))
             .and(predicate::str::contains("landing"))
             .and(predicate::str::contains("setup"))
             .and(predicate::str::contains("backport")),
@@ -4265,15 +4989,17 @@ fn scan_for_tokens(path: &Path, deny: &[String], offenders: &mut Vec<String>) {
 
 /// The embedded sources carry no trace of the retired branch model: no
 /// second long-lived branch as a word, no back-merge, and no gate job — the
-/// mechanical half of the cleanup promise. Two exemptions: the single-trunk
-/// scripts, whose candidate list legitimately names the branches they
-/// retire, and the forge subcommand that generates a branch from an issue,
-/// whose name collides with the retired branch's without meaning it. The
-/// tokens are assembled at run time so this file cannot trip its own scan.
+/// mechanical half of the cleanup promise. Three exemptions: the
+/// single-trunk scripts, whose candidate list legitimately names the
+/// branches they retire, and the forge subcommand that generates a branch
+/// from an issue and the Nix command that enters a dev shell, whose names
+/// collide with the retired branch's without meaning it. The tokens are
+/// assembled at run time so this file cannot trip its own scan.
 #[test]
 fn the_embedded_sources_carry_no_retired_branch_model() {
     let branch = format!("dev{}", "elop");
     let issue_subcommand = format!("issue dev{}", "elop");
+    let nix_shell = format!("nix dev{}", "elop");
     let substrings = [
         format!("back{}merge", "-"),
         format!("open-release{}gate", "-"),
@@ -4302,7 +5028,8 @@ fn the_embedded_sources_carry_no_retired_branch_model() {
             let exempt =
                 path.ends_with("github/single-trunk") || path.ends_with("gitlab/single-trunk");
             for (idx, line) in text.lines().enumerate() {
-                let linked = line.contains(issue_subcommand.as_str());
+                let linked =
+                    line.contains(issue_subcommand.as_str()) || line.contains(nix_shell.as_str());
                 let stale = substrings.iter().any(|token| line.contains(token.as_str()))
                     || (!exempt && !linked && word_hit(line));
                 if stale {
@@ -4367,6 +5094,12 @@ case "$*" in
   *"--input -"*) stdin="$(cat)"; printf '%s\n' "$stdin" >> "$STATE/stdin-log";;
 esac
 cmd="$1"; shift
+# Replace a state file whole: a concurrent reader sees the old bytes or
+# the new ones, never the empty file a truncating redirect leaves.
+put_state() {
+  local tmp="$STATE/.put.$$"
+  printf '%s\n' "$2" > "$tmp" && mv -f "$tmp" "$STATE/$1"
+}
 branch_json() {
   if [[ -f "$STATE/branch_$1" ]]; then
     sha="$(cat "$STATE/branch_$1")"
@@ -4390,7 +5123,7 @@ secret)
 repo)
   sub="$1"; shift
   if [[ "$sub" == edit ]]; then
-    while (($#)); do [[ "$1" == --default-branch ]] && echo "$2" > "$STATE/default_branch"; shift; done
+    while (($#)); do [[ "$1" == --default-branch ]] && put_state default_branch "$2"; shift; done
     exit 0
   fi
   cat "$STATE/default_branch"; exit 0;;
@@ -4409,6 +5142,8 @@ api)
     shift
   done
   path="${path#/}"; path="${path%%\?*}"
+  calls="$(cat "$STATE/api_calls" 2>/dev/null || echo 0)"; calls=$((calls + 1)); put_state api_calls "$calls"
+  if [[ -f "$STATE/fail_call_$calls" ]]; then echo "gh: Internal Server Error (HTTP 500)" >&2; exit 1; fi
   case "$method $path" in
   "GET repos/acme/widget/private-vulnerability-reporting")
     if [[ -f "$STATE/reporting_get_error" ]]; then echo "HTTP $(cat "$STATE/reporting_get_error")" >&2; exit 1; fi
@@ -4418,14 +5153,14 @@ api)
   "PUT repos/acme/widget/private-vulnerability-reporting")
     if [[ -f "$STATE/reporting_put_error" ]]; then echo 'HTTP 403' >&2; exit 1; fi
     touch "$STATE/reporting_written"
-    [[ -f "$STATE/reporting_no_change" ]] || echo true > "$STATE/reporting_enabled"
-    if [[ -f "$STATE/reporting_readback_error" ]]; then echo 500 > "$STATE/reporting_get_error"; fi
+    [[ -f "$STATE/reporting_no_change" ]] || put_state reporting_enabled true
+    if [[ -f "$STATE/reporting_readback_error" ]]; then put_state reporting_get_error 500; fi
     exit 0;;
   "GET repos/acme/widget")
     if [[ -f "$STATE/visibility_error" ]]; then echo "HTTP $(cat "$STATE/visibility_error")" >&2; exit 1; fi
     if [[ -f "$STATE/visibility_body" ]]; then cat "$STATE/visibility_body"; exit 0; fi
     private="$(cat "$STATE/private" 2>/dev/null || echo false)"
-    if [[ "$query" == .private && -f "$STATE/visibility_change" ]]; then private=true; echo true > "$STATE/private"; fi
+    if [[ "$query" == .private && -f "$STATE/visibility_change" ]]; then private=true; put_state private true; fi
     if [[ -f "$STATE/fail_repo" ]]; then echo "gh: Internal Server Error (HTTP 500)" >&2; exit 1; fi
     deleting="$(cat "$STATE/delete_branch_on_merge" 2>/dev/null || echo false)"
     self_merging="$(cat "$STATE/allow_auto_merge" 2>/dev/null || echo false)"
@@ -4443,10 +5178,10 @@ api)
   "PATCH repos/acme/widget")
     for f in "${fields[@]}"; do
       case "$f" in
-        delete_branch_on_merge=*) echo "${f#delete_branch_on_merge=}" > "$STATE/delete_branch_on_merge";;
-        allow_auto_merge=*) echo "${f#allow_auto_merge=}" > "$STATE/allow_auto_merge";;
-        squash_merge_commit_title=*) echo "${f#squash_merge_commit_title=}" > "$STATE/squash_merge_commit_title";;
-        squash_merge_commit_message=*) echo "${f#squash_merge_commit_message=}" > "$STATE/squash_merge_commit_message";;
+        delete_branch_on_merge=*) put_state delete_branch_on_merge "${f#delete_branch_on_merge=}";;
+        allow_auto_merge=*) put_state allow_auto_merge "${f#allow_auto_merge=}";;
+        squash_merge_commit_title=*) put_state squash_merge_commit_title "${f#squash_merge_commit_title=}";;
+        squash_merge_commit_message=*) put_state squash_merge_commit_message "${f#squash_merge_commit_message=}";;
       esac
     done
     echo '{}';;
@@ -4455,7 +5190,7 @@ api)
   "POST repos/"*"/git/refs")
     ref=""; sha=""
     for f in "${fields[@]}"; do case "$f" in ref=*) ref="${f#ref=}";; sha=*) sha="${f#sha=}";; esac; done
-    echo "$sha" > "$STATE/branch_${ref##*/}"
+    put_state "branch_${ref##*/}" "$sha"
     echo '{}';;
   "DELETE repos/"*"/git/refs/heads/"*)
     rm -f "$STATE/branch_${path##*/heads/}";;
@@ -4467,7 +5202,7 @@ api)
     if [[ "$status" == "error" ]]; then echo "gh: Internal Server Error (HTTP 500)" >&2; exit 1; fi
     if [[ "$query" == ".status" ]]; then echo "$status"; else echo "{\"status\":\"$status\"}"; fi;;
   "PUT repos/"*"/actions/permissions/workflow")
-    echo "write true" > "$STATE/perms";;
+    put_state perms "write true";;
   "GET repos/"*"/actions/permissions/workflow")
     perms="none false"; [[ -f "$STATE/perms" ]] && perms="$(cat "$STATE/perms")"
     if [[ -n "$query" ]]; then echo "$perms"; else
@@ -4503,12 +5238,12 @@ api)
   "POST repos/acme/widget/rulesets")
     name="$(grep -o '"name": "[^"]*"' <<<"$stdin" | head -1 | cut -d'"' -f4)"
     echo "$name" >> "$STATE/rulesets.index"
-    printf '%s\n' "$stdin" > "$STATE/ruleset_$name"
+    put_state "ruleset_$name" "$stdin"
     echo '{}';;
   "PUT repos/acme/widget/rulesets/"*)
     n="${path##*/}"
     name="$(sed -n "${n}p" "$STATE/rulesets.index")"
-    printf '%s\n' "$stdin" > "$STATE/ruleset_$name"
+    put_state "ruleset_$name" "$stdin"
     echo '{}';;
   "GET repos/acme/widget/rulesets/"*)
     n="${path##*/}"
@@ -7900,7 +8635,7 @@ fn a_landing_writes_the_record_with_its_identity() {
         .success()
         .stdout(predicate::str::contains("wrote .release-kit/manifest.json"));
     let manifest = read_manifest(target.path());
-    assert_eq!(manifest["schema_version"], 10);
+    assert_eq!(manifest["schema_version"], 11);
     assert_eq!(manifest["rk_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(manifest["origin"], "init");
     assert_eq!(manifest["profile"]["release"]["driver"], "rust");
@@ -7970,7 +8705,7 @@ fn the_routing_block_splices_and_is_recorded() {
         "# Widget\n\nHouse rules.\n",
     )
     .expect("the target's own AGENTS.md writes");
-    land_rust(target.path()).success();
+    land_rust_guarded(target.path()).success();
     let agents = std::fs::read_to_string(target.path().join("AGENTS.md")).expect("AGENTS.md reads");
     assert!(agents.starts_with("# Widget\n\nHouse rules.\n"));
     assert!(agents.contains("<!-- BEGIN release-kit -->"));
@@ -7987,12 +8722,13 @@ fn the_routing_block_splices_and_is_recorded() {
     );
 }
 
-/// A fresh landing writes the glossary at the target root and records
-/// it, and the block carries the three terms the routing block names.
+/// A landing with the workflow guards writes the glossary at the target
+/// root and records it, and the block carries the three terms the routing
+/// block names.
 #[test]
-fn init_lands_the_glossary() {
+fn a_landing_with_the_workflow_guards_lands_the_glossary() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
-    land_rust(target.path()).success();
+    land_rust_guarded(target.path()).success();
 
     let glossary =
         std::fs::read_to_string(target.path().join("GLOSSARY.md")).expect("GLOSSARY.md landed");
@@ -8017,13 +8753,160 @@ fn init_lands_the_glossary() {
     assert!(agents.contains("full-implement"), "{agents}");
 }
 
+/// A fresh landing lands what the release process needs and none of the
+/// workflow guards: no glossary, no policy lines, no workflow hooks. The
+/// record and the configuration both state the answer.
+#[test]
+fn a_fresh_landing_lands_none_of_the_workflow_guards() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(target.path()).success();
+    assert!(!target.path().join("GLOSSARY.md").exists());
+    let agents = std::fs::read_to_string(target.path().join("AGENTS.md")).expect("AGENTS.md reads");
+    for gone in [
+        "guides and never drives",
+        "GLOSSARY.md",
+        "Every commit follows the same scoped convention",
+        "squash-merged pull request",
+        "rk issue start",
+    ] {
+        assert!(!agents.contains(gone), "{gone}: {agents}");
+    }
+    assert!(
+        agents.contains("MUST be a scoped Conventional Commit"),
+        "{agents}"
+    );
+    let hooks = std::fs::read_to_string(target.path().join(".pre-commit-config.yaml"))
+        .expect("the hook file reads");
+    for gone in [
+        "conventional-pre-commit",
+        "rk-message",
+        "rk-branch-name",
+        "rk-worktree-location",
+        "rk-no-push-to-trunk",
+        "no-commit-to-branch",
+    ] {
+        assert!(!hooks.contains(gone), "{gone}: {hooks}");
+    }
+    for kept in ["rk-no-hand-authored-tag", "rk-status-check"] {
+        assert!(hooks.contains(kept), "{kept}: {hooks}");
+    }
+    let manifest = read_manifest(target.path());
+    assert_eq!(manifest["capabilities"]["workflow_guards"], false);
+    let config = std::fs::read_to_string(target.path().join(".release-kit/config.toml"))
+        .expect("the config reads");
+    assert!(config.contains("workflow_guards = false"), "{config}");
+    rk().args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .stdout(predicate::str::contains("GLOSSARY").not());
+}
+
+/// A record that predates the workflow guards carries the pending answer.
+/// The upgrade reports it once, keeps the guards by default, and records
+/// the answer, so the next upgrade has nothing pending. An explicit `off`
+/// drops them.
+#[test]
+fn an_upgrade_keeps_the_guards_of_a_record_that_predates_them() {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust_guarded(target.path()).success();
+    // Stand in for a landing that predates the capability: neither the
+    // record nor the configuration answers it.
+    let mut manifest = read_manifest(target.path());
+    manifest["capabilities"]
+        .as_object_mut()
+        .expect("a capabilities object")
+        .remove("workflow_guards");
+    manifest["schema_version"] = serde_json::json!(10);
+    write_manifest(target.path(), &manifest);
+    let config = target.path().join(".release-kit/config.toml");
+    let text = std::fs::read_to_string(&config).expect("the config reads");
+    let older: String = text
+        .lines()
+        .filter(|line| !line.starts_with("workflow_guards ="))
+        .flat_map(|line| [line, "\n"])
+        .collect();
+    assert_ne!(older, text, "the key is removed");
+    std::fs::write(&config, older).expect("the older config writes");
+
+    rk().args(["upgrade", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("pending capabilities.workflow_guards")
+                .and(predicate::str::contains("this upgrade answers on")),
+        );
+    let out = rk()
+        .args(["upgrade", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["schema"], "rk.upgrade/11");
+    assert_eq!(report["pending"][0]["key"], "capabilities.workflow_guards");
+    assert_eq!(report["pending"][0]["default"], "on");
+    assert_eq!(report["capabilities"]["workflow_guards"], true);
+
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    assert!(target.path().join("GLOSSARY.md").is_file());
+    let hooks = std::fs::read_to_string(target.path().join(".pre-commit-config.yaml"))
+        .expect("the hook file reads");
+    assert!(hooks.contains("conventional-pre-commit"), "{hooks}");
+    assert_eq!(
+        read_manifest(target.path())["capabilities"]["workflow_guards"],
+        true
+    );
+    assert!(
+        std::fs::read_to_string(&config)
+            .expect("the config reads")
+            .contains("workflow_guards = true")
+    );
+    // Answered once: the next upgrade has nothing pending.
+    rk().args(["upgrade", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("pending").not());
+
+    // The other answer drops the guards from the blocks and the record.
+    rk().args(["upgrade", "--workflow-guards", "off", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let hooks = std::fs::read_to_string(target.path().join(".pre-commit-config.yaml"))
+        .expect("the hook file reads");
+    assert!(!hooks.contains("conventional-pre-commit"), "{hooks}");
+    let agents = std::fs::read_to_string(target.path().join("AGENTS.md")).expect("AGENTS.md reads");
+    assert!(!agents.contains("guides and never drives"), "{agents}");
+    let manifest = read_manifest(target.path());
+    assert_eq!(manifest["capabilities"]["workflow_guards"], false);
+    assert!(
+        !manifest["files"]
+            .as_array()
+            .expect("files")
+            .iter()
+            .any(|file| file["destination"] == "GLOSSARY.md"),
+        "the glossary leaves the record: {manifest}"
+    );
+    assert!(
+        target.path().join("GLOSSARY.md").is_file(),
+        "a dropped destination stays the target's"
+    );
+}
+
 /// A target recorded before the destination existed reports it as a
 /// pending candidate, takes it on upgrade, and keeps every line the
 /// operator wrote below the end marker through a later upgrade.
 #[test]
 fn upgrade_takes_the_glossary_and_keeps_the_operators_terms() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
-    land_rust(target.path()).success();
+    land_rust_guarded(target.path()).success();
 
     // Stand in for an older release that shipped no glossary: the file
     // is gone and the record never named it.
@@ -8121,7 +9004,7 @@ fn upgrade_takes_the_glossary_and_keeps_the_operators_terms() {
 #[test]
 fn status_check_judges_the_glossary_block() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
-    land_rust(target.path()).success();
+    land_rust_guarded(target.path()).success();
     let path = target.path().join("GLOSSARY.md");
 
     // The seeded file's sentinel is the target's own judgment to make,
@@ -8177,7 +9060,7 @@ fn the_hook_block_splices_and_lands_whole_and_refuses_reposless() {
     let own = "repos:\n  - repo: https://example.com/own\n    rev: v1\n    hooks:\n      - id: own-hook\n";
     std::fs::write(target.path().join(".pre-commit-config.yaml"), own)
         .expect("the target's own config writes");
-    land_rust(target.path()).success();
+    land_rust_guarded(target.path()).success();
     let config = std::fs::read_to_string(target.path().join(".pre-commit-config.yaml"))
         .expect("the config reads");
     assert!(
@@ -8403,7 +9286,7 @@ fn status_json_is_one_object_over_a_fresh_landing() {
         .stdout
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["schema"], "rk.status/12");
+    assert_eq!(report["schema"], "rk.status/13");
     assert_eq!(report["landed"], true);
     assert_eq!(report["profile"]["release"]["driver"], "rust");
     assert_eq!(report["profile"]["release"]["style"], "trunk");
@@ -8415,7 +9298,238 @@ fn status_json_is_one_object_over_a_fresh_landing() {
         report["sentinels"], 1,
         "the seeded judgment sentinel reports: {report}"
     );
+    // The unanswered sentinel is a violation, so a fresh landing reads as
+    // drift until the project answers it.
+    assert_eq!(report["classification"], "drift", "{report}");
 }
+
+/// A status fixture: a scratch repository with one commit, so Git reads
+/// it as a non-bare work tree with history.
+fn status_repo() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("a scratch repo exists");
+    git_in(dir.path(), &["init", "-q", "-b", "master"]);
+    git_in(dir.path(), &["config", "user.email", "rk@example.invalid"]);
+    git_in(dir.path(), &["config", "user.name", "rk test"]);
+    std::fs::write(dir.path().join("README.md"), "# widget\n").expect("the seed writes");
+    git_in(dir.path(), &["add", "README.md"]);
+    git_in(dir.path(), &["commit", "-qm", "chore: seed"]);
+    dir
+}
+
+/// The status report as JSON, from a run that must succeed.
+fn status_json(target: &Path) -> serde_json::Value {
+    let out = rk()
+        .args(["status", "--json", "--target"])
+        .arg(target)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    serde_json::from_slice(&out).expect("one JSON object")
+}
+
+/// SATISFIES landing:a-landing-classifies-its-target-first
+///
+/// Each of the seven classifications on a fixture that earns it: the
+/// assessment's three with no record, the adoption detector's, and the
+/// three a record earns by its alignment and its check.
+#[test]
+fn status_reports_each_of_the_seven_classifications() {
+    let setup = status_repo();
+    assert_eq!(status_json(setup.path())["classification"], "setup");
+
+    let migration = status_repo();
+    std::fs::write(migration.path().join(".goreleaser.yaml"), "version: 2\n")
+        .expect("the predecessor writes");
+    assert_eq!(status_json(migration.path())["classification"], "migration");
+
+    let decision = status_repo();
+    git_in(decision.path(), &["tag", "v0.1.0"]);
+    assert_eq!(
+        status_json(decision.path())["classification"],
+        "needs-decision"
+    );
+
+    // A landing that lost its record: the marked regions survive, and so
+    // does a changelog, which alone would read as another tool's.
+    let adopt = status_repo();
+    land_rust(adopt.path()).success();
+    std::fs::remove_dir_all(adopt.path().join(".release-kit")).expect("the record removes");
+    std::fs::write(adopt.path().join("CHANGELOG.md"), "# Changelog\n").expect("writes");
+    let report = status_json(adopt.path());
+    assert_eq!(report["classification"], "adopt", "{report}");
+    assert_eq!(report["landed"], false);
+
+    let upgrade = status_repo();
+    land_rust(upgrade.path()).success();
+    let mut manifest = read_manifest(upgrade.path());
+    manifest["rk_version"] = serde_json::Value::from("0.0.1");
+    write_manifest(upgrade.path(), &manifest);
+    assert_eq!(status_json(upgrade.path())["classification"], "upgrade");
+
+    let drift = status_repo();
+    land_rust(drift.path()).success();
+    assert_eq!(status_json(drift.path())["classification"], "drift");
+
+    let current = status_repo();
+    land_rust(current.path()).success();
+    let seeded = current.path().join("release-plz.toml");
+    let tuned: String = std::fs::read_to_string(&seeded)
+        .expect("reads")
+        .lines()
+        .filter(|line| !line.contains("TODO(release-kit)"))
+        .fold(String::new(), |mut tuned, line| {
+            tuned.push_str(line);
+            tuned.push('\n');
+            tuned
+        });
+    std::fs::write(&seeded, tuned).expect("the answer writes");
+    let report = status_json(current.path());
+    assert_eq!(report["classification"], "current", "{report}");
+    assert_eq!(report["git_work_tree"], true);
+
+    // A record from a newer binary is no classification this one can
+    // judge: the field is null, never absent.
+    let newer = status_repo();
+    land_rust(newer.path()).success();
+    let mut manifest = read_manifest(newer.path());
+    manifest["rk_version"] = serde_json::Value::from("999.0.0");
+    write_manifest(newer.path(), &manifest);
+    let report = status_json(newer.path());
+    assert!(report["classification"].is_null(), "{report}");
+
+    // An open migration does not lift that: the record is still a newer
+    // binary's, which this one cannot judge.
+    let config = newer.path().join(".release-kit/config.toml");
+    let text = std::fs::read_to_string(&config).expect("the configuration reads");
+    let (first, rest) = text.split_once('\n').expect("a first line");
+    std::fs::write(
+        &config,
+        format!("{first}\nmigration = \"20261010T120000Z\"\n{rest}"),
+    )
+    .expect("the migration opens");
+    let report = status_json(newer.path());
+    assert!(report["classification"].is_null(), "{report}");
+}
+
+/// The report says whether the target is a non-bare Git work tree, so
+/// the skill stops on a field rather than running git by hand.
+#[test]
+fn status_says_whether_the_target_is_a_git_work_tree() {
+    let plain = tempfile::tempdir().expect("a scratch dir exists");
+    let report = status_json(plain.path());
+    assert_eq!(report["git_work_tree"], false, "{report}");
+    assert_eq!(report["landed"], false);
+    rk().args(["status", "--target"])
+        .arg(plain.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("not a non-bare Git work tree"));
+
+    let bare = tempfile::tempdir().expect("a scratch dir exists");
+    git_in(bare.path(), &["init", "-q", "--bare"]);
+    assert_eq!(status_json(bare.path())["git_work_tree"], false);
+
+    let repo = status_repo();
+    assert_eq!(status_json(repo.path())["git_work_tree"], true);
+}
+
+/// Every unfilled sentinel is listed by file and line beside the count.
+#[test]
+fn status_lists_each_unfilled_sentinel_by_file_and_line() {
+    let target = status_repo();
+    land_rust(target.path()).success();
+    let seeded = target.path().join("release-plz.toml");
+    let mut text = std::fs::read_to_string(&seeded).expect("reads");
+    text.push_str("# TODO(release-kit): name the second answer\n");
+    std::fs::write(&seeded, &text).expect("the second sentinel writes");
+    let report = status_json(target.path());
+    assert_eq!(report["sentinels"], 2, "{report}");
+    let located = report["sentinel_locations"]
+        .as_array()
+        .expect("the locations list");
+    assert_eq!(located.len(), 2, "{report}");
+    let lines: Vec<usize> = text
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| line.contains("TODO(release-kit)"))
+        .map(|(idx, _)| idx + 1)
+        .collect();
+    for (entry, line) in located.iter().zip(lines) {
+        assert_eq!(entry["file"], "release-plz.toml", "{entry}");
+        assert_eq!(entry["line"], line, "{entry}");
+        assert!(
+            entry["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("TODO(release-kit)")),
+            "{entry}"
+        );
+    }
+}
+
+// RETIRED VOCABULARY BEGIN: the 0.4.x state rk status inventories.
+/// The state a 0.4.x release left under the state root is listed with
+/// whether each path holds an active operation: a plan the old binary
+/// could still apply is active, a blocked one and the release cache are
+/// not.
+#[test]
+fn status_reports_the_state_a_0_4_release_left() {
+    let target = status_repo();
+    let state = tempfile::tempdir().expect("a scratch state root exists");
+    let root = state.path().join("release-kit");
+    for (id, readiness) in [("aaaa", "ready"), ("bbbb", "blocked")] {
+        let plan = root.join("plans").join(id);
+        std::fs::create_dir_all(&plan).expect("the plan dir creates");
+        std::fs::write(
+            plan.join("plan.json"),
+            format!(r#"{{"schema":"rk.plan/3","readiness":"{readiness}"}}"#),
+        )
+        .expect("the plan writes");
+    }
+    std::fs::create_dir_all(root.join("release")).expect("the cache creates");
+    let out = rk()
+        .env("XDG_STATE_HOME", state.path())
+        .args(["status", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    let legacy = report["legacy_state"].as_array().expect("the legacy list");
+    let found: Vec<(String, String, bool)> = legacy
+        .iter()
+        .map(|entry| {
+            (
+                entry["path"].as_str().expect("a path").to_owned(),
+                entry["kind"].as_str().expect("a kind").to_owned(),
+                entry["active"].as_bool().expect("a flag"),
+            )
+        })
+        .collect();
+    let path = |rest: &str| root.join(rest).display().to_string();
+    assert_eq!(
+        found,
+        vec![
+            (path("plans/aaaa"), "plan".to_owned(), true),
+            (path("plans/bbbb"), "plan".to_owned(), false),
+            (path("release"), "release-cache".to_owned(), false),
+        ],
+        "{report}"
+    );
+    rk().env("XDG_STATE_HOME", state.path())
+        .args(["status", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!(
+            "LEGACY {} (plan, active)",
+            path("plans/aaaa")
+        )));
+}
+// RETIRED VOCABULARY END
 
 /// D17: `--check` computes the identical report and changes only the
 /// judgment — an unresolved sentinel or rendered drift exits 1, seeded
@@ -8698,19 +9812,35 @@ fn a_rendered_to_seeded_reclassification_is_silent_when_untouched() {
     assert_eq!(seeded["sha256"], Digest::of(&disk).to_string());
 }
 
-/// The record's failure taxonomy: unparsable at a known schema is a
-/// defect-class failure, an unknown schema refuses naming the record.
+/// The record's failure taxonomy: a record that does not parse is the
+/// target's file to repair, refused as `record-invalid` with the parts a
+/// `config-invalid` refusal carries, and an unknown schema refuses naming
+/// the record.
 #[test]
 fn a_broken_or_alien_record_fails_by_its_taxonomy() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
     std::fs::create_dir(target.path().join(".release-kit")).expect("the record dir creates");
     let record = target.path().join(".release-kit/manifest.json");
 
-    std::fs::write(&record, "not json").expect("the garbage writes");
-    rk().args(["status", "--target"])
-        .arg(target.path())
-        .assert()
-        .code(70);
+    for garbage in ["not json", r#"{"schema_version": 10, "files": "no list"}"#] {
+        std::fs::write(&record, garbage).expect("the garbage writes");
+        let out = rk()
+            .args(["status", "--json", "--target"])
+            .arg(target.path())
+            .assert()
+            .code(73)
+            .get_output()
+            .stderr
+            .clone();
+        let diagnostic: serde_json::Value =
+            serde_json::from_slice(&out).expect("the failure is one JSON diagnostic");
+        assert_eq!(diagnostic["reason"], "record-invalid", "{diagnostic}");
+        assert!(diagnostic["action"].is_string(), "{diagnostic}");
+        assert_eq!(
+            diagnostic["target_state"], "nothing was written",
+            "{diagnostic}"
+        );
+    }
 
     std::fs::write(&record, r#"{"schema_version": 999}"#).expect("the alien record writes");
     rk().args(["status", "--target"])
@@ -8818,16 +9948,20 @@ fn an_upgrade_rewrites_an_untouched_stale_rendered_file() {
     );
 }
 
-/// A recorded generated file is replaced from this binary's projection
-/// whatever its bytes are, because the operator and the agent authorized
-/// the migration and Git holds the recovery; an unattributed whole file
-/// beside it refuses the whole run first, and once the agent records or
-/// removes that file the rerun replaces the workflow and preserves the
-/// tuned seeded files.
+/// A recorded generated file whose bytes the record no longer vouches
+/// for is a conflict: the upgrade refuses it, beside an unattributed
+/// whole file, before any write. Only a named `--replace` passes a
+/// conflict, after its bytes are saved where the report names; a name
+/// that is no conflict is a usage error, and the tuned seeded file
+/// survives every run.
 ///
 /// SATISFIES landing:ownership-is-elementary
 #[test]
-fn an_upgrade_replaces_a_recorded_generated_file_whose_bytes_differ() {
+#[allow(
+    clippy::too_many_lines,
+    reason = "one fixture walks the refusal, the usage error, and the named replace in order"
+)]
+fn an_upgrade_refuses_an_edited_rendered_file_until_replace_names_it() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
     land_rust(target.path()).success();
     let workflow = target.path().join(".github/workflows/release-plz.yml");
@@ -8863,6 +9997,10 @@ fn an_upgrade_replaces_a_recorded_generated_file_whose_bytes_differ() {
         .code(73)
         .stderr(
             predicate::str::contains("SECURITY.md")
+                .and(predicate::str::contains(
+                    ".github/workflows/release-plz.yml",
+                ))
+                .and(predicate::str::contains("AGENTS.md"))
                 .and(predicate::str::contains("nothing was written"))
                 .and(predicate::str::contains("rk stage"))
                 .and(predicate::str::contains("rk-setup")),
@@ -8879,24 +10017,78 @@ fn an_upgrade_replaces_a_recorded_generated_file_whose_bytes_differ() {
         "a refused upgrade leaves the previous receipt"
     );
 
-    // The agent removes the unattributed file; the rerun lands.
+    // The agent removes the unattributed file; the edited ones still
+    // refuse until the operator names them.
     std::fs::remove_file(target.path().join("SECURITY.md")).expect("the file removes");
     rk().args(["upgrade", "--apply", "--target"])
         .arg(target.path())
         .assert()
+        .code(73)
+        .stderr(predicate::str::contains("release-plz.yml"));
+    rk().args([
+        "upgrade",
+        "--apply",
+        "--replace",
+        "release-plz.toml",
+        "--target",
+    ])
+    .arg(target.path())
+    .assert()
+    .code(64)
+    .stderr(predicate::str::contains("names no conflict"));
+
+    let state = tempfile::tempdir().expect("a scratch state root exists");
+    let out = rk()
+        .env("XDG_STATE_HOME", state.path())
+        .args(["upgrade", "--apply", "--json"])
+        .args(["--replace", ".github/workflows/release-plz.yml"])
+        .args(["--replace", "AGENTS.md", "--target"])
+        .arg(target.path())
+        .assert()
         .success()
-        .stdout(
-            predicate::str::contains("replaced .github/workflows/release-plz.yml")
-                .and(predicate::str::contains("replaced AGENTS.md"))
-                .and(predicate::str::contains("created SECURITY.md"))
-                .and(predicate::str::contains(
-                    "drift release-plz.toml (seeded, target-owned)",
-                )),
-        );
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    let replaced = report["replaced"].as_array().expect("the replaced list");
+    assert_eq!(replaced.len(), 2, "{report}");
+    let saved_workflow = replaced
+        .iter()
+        .find(|entry| entry["path"] == ".github/workflows/release-plz.yml")
+        .and_then(|entry| entry["saved_to"].as_str())
+        .expect("the workflow's saved copy is named");
+    assert!(
+        saved_workflow.starts_with(
+            &state
+                .path()
+                .join("release-kit/snapshots")
+                .display()
+                .to_string()
+        ) && saved_workflow.ends_with("replaced/.github/workflows/release-plz.yml"),
+        "{saved_workflow}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(saved_workflow).expect("the saved copy reads"),
+        edited,
+        "the saved copy holds the edit"
+    );
+    let files = report["files"].as_array().expect("files");
+    let action = |path: &str| {
+        files
+            .iter()
+            .find(|file| file["path"] == path)
+            .map(|file| file["action"].clone())
+    };
+    assert_eq!(
+        action(".github/workflows/release-plz.yml"),
+        Some("replaced".into())
+    );
+    assert_eq!(action("SECURITY.md"), Some("created".into()));
+    assert_eq!(action("release-plz.toml"), Some("drift".into()));
     assert_eq!(
         std::fs::read_to_string(&workflow).expect("the workflow reads"),
         landed,
-        "the recorded generated file is replaced from the projection"
+        "the named conflict is replaced from the projection"
     );
     let agents = std::fs::read_to_string(&agents).expect("AGENTS.md reads");
     assert!(agents.contains("Never author a tag"), "{agents}");
@@ -8906,7 +10098,7 @@ fn an_upgrade_replaces_a_recorded_generated_file_whose_bytes_differ() {
         "semver_check = true\n"
     );
     let receipt = read_manifest(target.path());
-    assert_eq!(receipt["schema_version"], 10);
+    assert_eq!(receipt["schema_version"], 11);
     assert_eq!(
         manifest_file(&receipt, ".github/workflows/release-plz.yml")["sha256"],
         Digest::of(landed.as_bytes()).to_string()
@@ -9197,10 +10389,17 @@ fn an_existing_record_refuses_adoption_naming_upgrade() {
 }
 
 /// Every file's digest under a directory, for asserting a tree unchanged.
+/// The walk skips `.git` at any depth: git rewrites files there by
+/// itself (auto-maintenance, lock files, an index refresh), so a listed
+/// file can vanish mid-walk or change with no rk write. A test that must
+/// prove rk left git alone compares `git_metadata` as well.
 fn tree_digests(root: &Path) -> Vec<(String, String)> {
     fn walk(dir: &Path, root: &Path, out: &mut Vec<(String, String)>) {
         for entry in std::fs::read_dir(dir).expect("the tree reads") {
             let path = entry.expect("an entry").path();
+            if path.file_name().is_some_and(|name| name == ".git") {
+                continue;
+            }
             if path.is_dir() {
                 walk(&path, root, out);
             } else {
@@ -9217,6 +10416,27 @@ fn tree_digests(root: &Path) -> Vec<(String, String)> {
     let mut out = Vec::new();
     walk(root, root, &mut out);
     out.sort();
+    out
+}
+
+/// What rk could write under a repository's git directory: HEAD, the
+/// refs, the local configuration, the index as status shows it, and the
+/// hooks. `tree_digests` skips `.git`, so this proves git untouched.
+fn git_metadata(root: &Path) -> Vec<String> {
+    let mut out = vec![
+        std::fs::read_to_string(root.join(".git/HEAD")).expect("HEAD reads"),
+        git_out(root, &["for-each-ref"]),
+        git_out(root, &["config", "--local", "--list"]),
+        git_out(root, &["status", "--porcelain=v2", "--untracked-files=all"]),
+    ];
+    let hooks = root.join(".git/hooks");
+    if hooks.is_dir() {
+        out.extend(
+            tree_digests(&hooks)
+                .into_iter()
+                .map(|(path, digest)| format!("hooks/{path} {digest}")),
+        );
+    }
     out
 }
 
@@ -9638,6 +10858,38 @@ fn branch_fixture() -> tempfile::TempDir {
     dir
 }
 
+/// The same repository with the workflow guards answered on in its
+/// committed configuration, so the two workflow setup steps apply.
+fn guarded_branch_fixture() -> tempfile::TempDir {
+    let dir = branch_fixture();
+    std::fs::create_dir_all(dir.path().join(".release-kit")).expect("the config dir creates");
+    std::fs::write(
+        dir.path().join(".release-kit/config.toml"),
+        "schema_version = 2\n\n[capabilities]\nworkflow_guards = true\n",
+    )
+    .expect("the config writes");
+    dir
+}
+
+/// Without the workflow guards the reminder is not this target's: the
+/// step refuses by the value that decided it and writes no hook.
+#[test]
+fn branch_reminder_does_not_apply_without_the_workflow_guards() {
+    let repo = branch_fixture();
+    let home = tempfile::tempdir().expect("a scratch home exists");
+    let (_mock, gh) = mock_gh("#!/bin/sh\nexit 0\n");
+    rk_scrubbed()
+        .env("HOME", home.path())
+        .env("XDG_STATE_HOME", home.path())
+        .env("RK_GH_BIN", &gh)
+        .args(["setup", "step", "branch-reminder", "--apply", "--target"])
+        .arg(repo.path())
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("capabilities.workflow_guards"));
+    assert!(!repo.path().join(".git/hooks/post-merge").exists());
+}
+
 /// A branch whose configured upstream no longer exists: upstream config
 /// with no remote-tracking ref renders `[gone]`.
 fn gone_branch(dir: &Path, name: &str) {
@@ -9961,7 +11213,7 @@ fn branches_prune_quiet_conflicts_with_json() {
 
 #[test]
 fn branch_reminder_installs_the_hook_and_reapplies_idempotently() {
-    let repo = branch_fixture();
+    let repo = guarded_branch_fixture();
     let home = tempfile::tempdir().expect("a scratch home exists");
     let (_mock, gh) = mock_gh("#!/bin/sh\nexit 0\n");
     let apply = || {
@@ -10006,7 +11258,7 @@ fn branch_reminder_installs_the_hook_and_reapplies_idempotently() {
 
 #[test]
 fn branch_reminder_refuses_a_foreign_post_merge_hook() {
-    let repo = branch_fixture();
+    let repo = guarded_branch_fixture();
     let home = tempfile::tempdir().expect("a scratch home exists");
     let (_mock, gh) = mock_gh("#!/bin/sh\nexit 0\n");
     let hook = repo.path().join(".git/hooks/post-merge");
@@ -10034,7 +11286,7 @@ fn branch_reminder_refuses_a_foreign_post_merge_hook() {
 
 #[test]
 fn branch_reminder_honors_core_hooks_path() {
-    let repo = branch_fixture();
+    let repo = guarded_branch_fixture();
     let home = tempfile::tempdir().expect("a scratch home exists");
     let (_mock, gh) = mock_gh("#!/bin/sh\nexit 0\n");
     git_in(repo.path(), &["config", "core.hooksPath", ".husky"]);
@@ -10055,7 +11307,7 @@ fn branch_reminder_honors_core_hooks_path() {
 
 #[test]
 fn setup_preview_names_the_branch_reminder_write() {
-    let repo = branch_fixture();
+    let repo = guarded_branch_fixture();
     let home = tempfile::tempdir().expect("a scratch home exists");
     let (_mock, gh) = mock_gh("#!/bin/sh\nexit 0\n");
     rk_scrubbed()
@@ -12017,7 +13269,7 @@ fn this_repos_own_record_carries_every_rust_pin() {
 /// Land the rust files under one explicit workflow mode.
 fn land_rust_with_workflow(target: &Path, workflow: &str) -> assert_cmd::assert::Assert {
     rk().args(["init", "--tech", "rust", "--forge", "github"])
-        .args(["--integration", "forge"])
+        .args(["--integration", "forge", "--workflow-guards"])
         .args(["--repo", "acme/widget", "--workflow"])
         .arg(workflow)
         .args(["--target"])
@@ -12032,7 +13284,7 @@ fn land_rust_with_workflow(target: &Path, workflow: &str) -> assert_cmd::assert:
 fn init_defaults_to_the_worktree_workflow() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
     rk().args(["init", "--tech", "rust", "--forge", "github"])
-        .args(["--repo", "acme/widget", "--target"])
+        .args(["--repo", "acme/widget", "--workflow-guards", "--target"])
         .arg(target.path())
         .arg("--apply")
         .assert()
@@ -12059,8 +13311,8 @@ fn init_defaults_to_the_worktree_workflow() {
     );
     let agents = std::fs::read_to_string(target.path().join("AGENTS.md")).expect("AGENTS.md reads");
     assert!(
-        agents.contains("This project works in worktrees"),
-        "{agents}"
+        !agents.contains("This project works in worktrees"),
+        "the routing block tells no project how to lay out its working copies: {agents}"
     );
 }
 
@@ -12079,8 +13331,8 @@ fn init_lands_the_branches_workflow_without_the_guard() {
     );
     let agents = std::fs::read_to_string(target.path().join("AGENTS.md")).expect("AGENTS.md reads");
     assert!(
-        agents.contains("Branches are worked in the main checkout"),
-        "{agents}"
+        !agents.contains("Branches are worked in the main checkout"),
+        "the routing block tells no project how to lay out its working copies: {agents}"
     );
     rk().args([
         "init",
@@ -12107,7 +13359,14 @@ fn adopt_records_the_branches_workflow_by_default() {
     land_rust_with_workflow(target.path(), "branches").success();
     std::fs::remove_dir_all(target.path().join(".release-kit")).expect("the record removes");
     rk().args([
-        "adopt", "--tech", "rust", "--forge", "github", "--style", "trunk",
+        "adopt",
+        "--tech",
+        "rust",
+        "--forge",
+        "github",
+        "--style",
+        "trunk",
+        "--workflow-guards",
     ])
     .args(["--repo", "acme/widget", "--target"])
     .arg(target.path())
@@ -12132,7 +13391,14 @@ fn adopt_refuses_a_target_whose_blocks_do_not_match_the_selected_candidate() {
         let before = tree_digests(target.path());
         let output = rk()
             .args([
-                "adopt", "--tech", "rust", "--forge", "github", "--style", "trunk",
+                "adopt",
+                "--tech",
+                "rust",
+                "--forge",
+                "github",
+                "--style",
+                "trunk",
+                "--workflow-guards",
             ])
             .args(["--workflow", selected, "--repo", "acme/widget", "--target"])
             .arg(target.path())
@@ -12143,8 +13409,8 @@ fn adopt_refuses_a_target_whose_blocks_do_not_match_the_selected_candidate() {
             .clone();
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
-            stderr.contains("AGENTS.md") && stderr.contains(".pre-commit-config.yaml"),
-            "every mismatching block is listed: {stderr}"
+            stderr.contains(".pre-commit-config.yaml"),
+            "the mismatching hook block is listed: {stderr}"
         );
         assert!(
             stderr.contains("align first"),
@@ -12166,7 +13432,7 @@ fn adopt_refuses_a_target_whose_blocks_do_not_match_the_selected_candidate() {
 #[test]
 fn status_check_flags_a_manifest_whose_workflow_contradicts_its_landed_blocks() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
-    land_rust(target.path()).success();
+    land_rust_guarded(target.path()).success();
     let mut manifest = read_manifest(target.path());
     manifest["git"]["checkout_mode"] = serde_json::json!("main-worktree");
     write_manifest(target.path(), &manifest);
@@ -12234,7 +13500,7 @@ fn an_upgrade_migrates_a_schema_1_record_to_the_current_schema() {
         .assert()
         .success();
     let migrated = read_manifest(target.path());
-    assert_eq!(migrated["schema_version"], 10);
+    assert_eq!(migrated["schema_version"], 11);
     assert_eq!(migrated["git"]["checkout_mode"], "main-worktree");
     assert_eq!(migrated["profile"]["release"]["style"], "trunk");
     let hooks = std::fs::read_to_string(target.path().join(".pre-commit-config.yaml"))
@@ -12253,7 +13519,7 @@ fn an_upgrade_migrates_a_schema_1_record_to_the_current_schema() {
 #[test]
 fn an_upgrade_drops_the_recorded_scope_vocabulary() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
-    land_rust(target.path()).success();
+    land_rust_guarded(target.path()).success();
     // Stand in for the schema-4 renderer: the three scope-bearing files
     // carry the list-rendered bytes, and the record agrees with them, so
     // the upgrade sees a clean target rather than drift.
@@ -12316,7 +13582,7 @@ fn an_upgrade_drops_the_recorded_scope_vocabulary() {
         );
 
     let migrated = read_manifest(target.path());
-    assert_eq!(migrated["schema_version"], 10);
+    assert_eq!(migrated["schema_version"], 11);
     assert!(
         migrated["parameters"]["scopes"].is_null(),
         "the vocabulary leaves the record: {migrated}"
@@ -12387,7 +13653,13 @@ fn a_mode_change_replaces_the_edited_owned_file() {
     let landed = std::fs::read_to_string(&workflow).expect("the workflow reads");
     std::fs::write(&workflow, format!("{landed}# a local edit\n")).expect("the drift writes");
 
+    // The edit is a conflict: the mode change refuses it until named.
     rk().args(["upgrade", "--workflow", "branches", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .code(73);
+    rk().args(["upgrade", "--workflow", "branches", "--apply"])
+        .args(["--replace", ".github/workflows/release-plz.yml", "--target"])
         .arg(target.path())
         .assert()
         .success()
@@ -12447,7 +13719,7 @@ fn a_mode_change_upgrades_from_the_record() {
 #[test]
 fn upgrade_keeps_the_recorded_mode() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
-    land_rust(target.path()).success();
+    land_rust_guarded(target.path()).success();
     rk().args(["upgrade", "--apply", "--target"])
         .arg(target.path())
         .assert()
@@ -12467,7 +13739,7 @@ fn upgrade_keeps_the_recorded_mode() {
 #[test]
 fn status_reports_the_mode_and_check_flags_a_hand_edited_guard() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
-    land_rust(target.path()).success();
+    land_rust_guarded(target.path()).success();
     let out = rk()
         .args(["status", "--json", "--target"])
         .arg(target.path())
@@ -13500,6 +14772,7 @@ fn guard_script() -> String {
     let template = release_kit::projection::hooks_block(
         release_kit::landing::CheckoutMode::LinkedWorktree,
         release_kit::landing::Integration::Forge,
+        true,
     )
     .expect("the binary embeds the block");
     let block = String::from_utf8(release_kit::landing::render(
@@ -13651,7 +14924,7 @@ fn the_reminder_probes_each_verb_separately() {
 /// drift-and-reapply path rewrites it to the probe form.
 #[test]
 fn branch_reminder_drifted_body_rewrites_on_reapply() {
-    let repo = branch_fixture();
+    let repo = guarded_branch_fixture();
     let home = tempfile::tempdir().expect("a scratch home exists");
     let (_mock, gh) = mock_gh("#!/bin/sh\nexit 0\n");
     let hook = repo.path().join(".git/hooks/post-merge");
@@ -13900,7 +15173,7 @@ fn a_preview_follow_up_keeps_the_previewed_decision() {
     // configured value and apply a decision the preview did not show.
     assert!(
         String::from_utf8_lossy(&out).contains(
-            "rk upgrade --checkout-mode main-worktree --nix-packaging off --reporting-policy on --scorecard off --code-scanning off --target"
+            "rk upgrade --checkout-mode main-worktree --nix-packaging off --reporting-policy on --scorecard off --code-scanning off --workflow-guards off --target"
         ),
         "the upgrade follow-up carries the mode change and every capability: {}",
         String::from_utf8_lossy(&out)
@@ -15422,14 +16695,20 @@ fn an_edited_scorecard_workflow_is_rendered_drift_an_upgrade_replaces() {
         .stdout(predicate::str::contains(format!(
             "DRIFT {SCORECARD_WORKFLOW} (rendered, release-kit-owned)"
         )));
-    rk().args(["upgrade", "--apply", "--target"])
-        .arg(target.path())
-        .assert()
-        .success();
+    rk().args([
+        "upgrade",
+        "--apply",
+        "--replace",
+        SCORECARD_WORKFLOW,
+        "--target",
+    ])
+    .arg(target.path())
+    .assert()
+    .success();
     assert_eq!(
         std::fs::read(&landed).expect("the workflow reads"),
         projected,
-        "an upgrade replaces a rendered file from the projection"
+        "a named replace replaces a rendered file from the projection"
     );
 }
 
@@ -16016,7 +17295,6 @@ fn an_explicit_off_survives_into_the_init_follow_up_command() {
     for name in [
         ".pre-commit-config.yaml",
         "AGENTS.md",
-        "GLOSSARY.md",
         "SECURITY.md",
         "dist-workspace.toml",
         "release-plz.toml",
@@ -16882,7 +18160,7 @@ fn every_manager_in_the_enum_is_detected_once() {
 }
 
 /// A target with one manager file naming release-kit is wired through
-/// it, the way `rk depend` picks a lone manager without a flag.
+/// it, with no flag naming the manager.
 #[test]
 fn a_target_with_one_manager_chooses_it() {
     let fixture = SelfDependFixture::new();
@@ -19473,638 +20751,6 @@ fn assess_discovers_the_repository_under_a_foreign_git_dir_and_locale() {
         );
 }
 
-/// One depend fixture: a scratch source under git with a remote and a
-/// tag, shaped as a rust crate that ships release archives and a flake,
-/// and a scratch target the tests seed per manager.
-struct DependFixture {
-    source: tempfile::TempDir,
-    target: tempfile::TempDir,
-}
-
-impl DependFixture {
-    fn new() -> Self {
-        let fixture = Self {
-            source: tempfile::tempdir().expect("a scratch source exists"),
-            target: tempfile::tempdir().expect("a scratch target exists"),
-        };
-        let source = fixture.source.path();
-        std::fs::write(
-            source.join("Cargo.toml"),
-            "[package]\nname = \"sample-tool\"\nversion = \"1.4.0\"\nrepository = \"https://github.com/acme/sample-tool\"\n\n[[bin]]\nname = \"sam\"\n",
-        )
-        .expect("writes");
-        std::fs::write(
-            source.join("dist-workspace.toml"),
-            "[dist]\nci = \"github\"\n",
-        )
-        .expect("writes");
-        std::fs::write(
-            source.join("flake.nix"),
-            "{ outputs = { self, nixpkgs }: { packages.default = null; }; }\n",
-        )
-        .expect("writes");
-        git_in(source, &["init", "-q", "-b", "master"]);
-        git_in(source, &["config", "user.email", "rk@example.invalid"]);
-        git_in(source, &["config", "user.name", "rk test"]);
-        git_in(
-            source,
-            &[
-                "remote",
-                "add",
-                "origin",
-                "https://github.com/acme/sample-tool.git",
-            ],
-        );
-        git_in(source, &["add", "-A"]);
-        git_in(source, &["commit", "-qm", "chore: seed"]);
-        git_in(source, &["tag", "v1.4.0"]);
-        fixture
-    }
-
-    fn source(&self) -> &Path {
-        self.source.path()
-    }
-
-    fn target(&self) -> &Path {
-        self.target.path()
-    }
-
-    fn seed_target(&self, name: &str, text: &str) {
-        let path = self.target().join(name);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).expect("mkdir");
-        }
-        std::fs::write(path, text).expect("writes");
-    }
-
-    fn rk(&self, args: &[&str]) -> Command {
-        let mut command = rk_scrubbed();
-        command.args(args);
-        command.arg("--source").arg(self.source());
-        command.arg("--target").arg(self.target());
-        command
-    }
-
-    fn json(&self, args: &[&str]) -> serde_json::Value {
-        let output = self.rk(args).arg("--json").output().expect("runs");
-        serde_json::from_slice(&output.stdout).expect("one JSON object on stdout")
-    }
-
-    fn json_with_code(&self, args: &[&str]) -> (i32, serde_json::Value) {
-        let output = self.rk(args).arg("--json").output().expect("runs");
-        let code = output.status.code().expect("an exit code");
-        let report = serde_json::from_slice(&output.stdout).expect("one JSON object on stdout");
-        (code, report)
-    }
-}
-
-/// SATISFIES dependencies:the-assessment-is-offline-and-exits-zero
-#[test]
-fn depend_assess_reads_a_cargo_dist_flake_source_and_a_flake_target() {
-    let fixture = DependFixture::new();
-    fixture.seed_target(
-        "flake.nix",
-        "{ inputs = { nixpkgs.url = \"github:NixOS/nixpkgs\"; }; outputs = { self, nixpkgs }: { devShells.x86_64-linux.default = null; }; }\n",
-    );
-    fixture.seed_target(
-        "Cargo.toml",
-        "[package]\nname = \"widget\"\nversion = \"0.1.0\"\n",
-    );
-    fixture.rk(&["depend", "assess"]).assert().success().stdout(
-        predicate::str::contains("rust sample-tool 1.4.0")
-            .and(predicate::str::contains(
-                "channels: crates, flake, github-release",
-            ))
-            .and(predicate::str::contains("dev flake via flake: fragment"))
-            .and(predicate::str::contains(
-                "prod via crates: native cargo add sample-tool@1.4.0",
-            ))
-            .and(predicate::str::contains("verdict ready")),
-    );
-    let report = fixture.json(&["depend", "assess"]);
-    assert_eq!(report["schema"], "rk.depend-assess/1");
-    assert_eq!(report["verdict"], "ready");
-    assert_eq!(report["source"]["name"], "sample-tool");
-    assert_eq!(report["source"]["bins"], serde_json::json!(["sam"]));
-    assert_eq!(report["source"]["owner_repo"], "acme/sample-tool");
-    assert_eq!(report["source"]["tag_style"], "prefixed");
-    assert_eq!(report["resolved"]["tag"], "v1.4.0");
-    assert_eq!(report["target"]["managers"][0]["manager"], "flake");
-    let first = &report["dev"][0];
-    assert_eq!(first["manager"], "flake");
-    assert_eq!(first["channel"], "flake");
-    assert_eq!(first["mode"], "fragment");
-    assert_eq!(first["fragments"][0]["id"], "flake-input");
-    assert!(
-        first["fragments"][0]["text"]
-            .as_str()
-            .expect("text")
-            .contains("github:acme/sample-tool/v1.4.0")
-    );
-    assert_eq!(first["fragments"][0]["anchor"]["needle"], "inputs = {");
-    assert_eq!(report["prod"]["command"], "cargo add sample-tool@1.4.0");
-    let flake = std::fs::read_to_string(fixture.target().join("flake.nix")).expect("reads");
-    assert!(flake.starts_with("{ inputs"), "assess writes nothing");
-}
-
-/// The same target read by both verbs reports the same manager set,
-/// because one detection serves them.
-#[test]
-fn one_detection_serves_both_verbs() {
-    let fixture = DependFixture::new();
-    fixture.seed_target("mise.toml", "[tools]\nnode = \"24\"\n");
-    fixture.seed_target("devbox.json", "{\"packages\": []}\n");
-    std::fs::create_dir_all(fixture.target().join(".mise/conf.d")).expect("mkdir");
-    let assess = fixture.json(&["depend", "assess"]);
-    let from_depend: Vec<(String, String)> = assess["target"]["managers"]
-        .as_array()
-        .expect("managers")
-        .iter()
-        .map(|m| {
-            (
-                m["manager"].as_str().expect("manager").to_owned(),
-                m["file"].as_str().expect("file").to_owned(),
-            )
-        })
-        .collect();
-    let out = rk_scrubbed()
-        .args(["self-depend", "status", "--json", "--target"])
-        .arg(fixture.target())
-        .output()
-        .expect("rk runs");
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let status: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one JSON object");
-    let from_self: Vec<(String, String)> = status["managers"]
-        .as_array()
-        .expect("managers")
-        .iter()
-        .filter(|e| e["present"] == "present")
-        .map(|e| {
-            (
-                e["manager"].as_str().expect("manager").to_owned(),
-                e["file"].as_str().expect("file").to_owned(),
-            )
-        })
-        .collect();
-    assert_eq!(from_depend, from_self);
-    assert_eq!(
-        from_self,
-        [
-            ("mise".to_owned(), "mise.toml".to_owned()),
-            ("devbox".to_owned(), "devbox.json".to_owned())
-        ]
-    );
-}
-
-#[test]
-fn depend_assess_reports_manual_only_for_an_asdf_target() {
-    let fixture = DependFixture::new();
-    fixture.seed_target(".tool-versions", "nodejs 24.0.0\n");
-    let report = fixture.json(&["depend", "assess"]);
-    assert_eq!(report["verdict"], "manual-only");
-    let dev = report["dev"].as_array().expect("dev options");
-    assert_eq!(dev.len(), 3);
-    for option in dev {
-        assert_eq!(option["mode"], "manual");
-        assert_eq!(option["reason"], "asdf-plugin-unknown");
-        assert_eq!(option["fragments"][0]["text"], "sample-tool 1.4.0");
-    }
-    assert!(
-        report.get("prod").is_none(),
-        "no target technology, no prod option"
-    );
-}
-
-#[test]
-fn depend_assess_reports_source_unknown_for_an_empty_source() {
-    let fixture = DependFixture::new();
-    let empty = tempfile::tempdir().expect("an empty source");
-    let output = rk_scrubbed()
-        .args(["depend", "assess", "--json", "--source"])
-        .arg(empty.path())
-        .arg("--target")
-        .arg(fixture.target())
-        .output()
-        .expect("runs");
-    assert!(output.status.success(), "every verdict exits 0");
-    let report: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("one JSON object on stdout");
-    assert_eq!(report["verdict"], "source-unknown");
-    assert_eq!(report["dev"], serde_json::json!([]));
-    assert!(report.get("resolved").is_none());
-}
-
-#[test]
-fn depend_assess_reports_version_unknown_for_a_source_with_no_version() {
-    let fixture = DependFixture::new();
-    std::fs::write(
-        fixture.source().join("Cargo.toml"),
-        "[package]\nname = \"sample-tool\"\n",
-    )
-    .expect("writes");
-    fixture.seed_target("mise.toml", "[tools]\n");
-    let report = fixture.json(&["depend", "assess"]);
-    assert_eq!(report["verdict"], "version-unknown");
-    assert_eq!(report["dev"], serde_json::json!([]));
-    let next = report["next"].as_array().expect("next");
-    assert!(
-        next.iter()
-            .any(|l| l.as_str().is_some_and(|l| l.contains("--pin"))),
-        "{next:?}"
-    );
-    let pinned = fixture.json(&["depend", "add", "--kind", "dev", "--pin", "2.0.0"]);
-    assert_eq!(
-        pinned["fragments"][0]["text"],
-        "\"cargo:sample-tool\" = \"2.0.0\""
-    );
-}
-
-#[test]
-fn depend_add_never_seeds_over_a_mise_conf_d_directory() {
-    let fixture = DependFixture::new();
-    fixture.seed_target(".mise/conf.d/a-env.toml", "[env]\nFOO = 'bar'\n");
-    fixture.seed_target(
-        ".mise/conf.d/tools.toml",
-        "[tools]\nnode = '24'\n\"cargo:sample-tool\" = \"1.3.0\"\n",
-    );
-    let assessed = fixture.json(&["depend", "assess"]);
-    assert_eq!(
-        assessed["target"]["already"][0]["file"],
-        ".mise/conf.d/tools.toml"
-    );
-    let report = fixture.json(&["depend", "add", "--kind", "dev"]);
-    assert_eq!(report["manager"], "mise");
-    assert_eq!(report["file"], ".mise/conf.d/tools.toml");
-    assert_eq!(report["fragments"][0]["present"], true);
-    assert_eq!(report["file_present"], "present");
-    fixture
-        .rk(&["depend", "add", "--kind", "dev", "--apply"])
-        .assert()
-        .code(73);
-    assert!(
-        !fixture.target().join("mise.toml").exists(),
-        "no second configuration surface"
-    );
-}
-
-#[test]
-fn depend_add_flake_derives_a_nix_identifier_for_a_scoped_name() {
-    let fixture = DependFixture::new();
-    std::fs::remove_file(fixture.source().join("Cargo.toml")).expect("removes");
-    std::fs::remove_file(fixture.source().join("dist-workspace.toml")).expect("removes");
-    std::fs::write(
-        fixture.source().join("package.json"),
-        r#"{"name":"@acme/tool","version":"3.0.0","bin":{"tool":"cli.js"}}"#,
-    )
-    .expect("writes");
-    let report = fixture.json(&[
-        "depend",
-        "add",
-        "--kind",
-        "dev",
-        "--manager",
-        "flake",
-        "--apply",
-    ]);
-    assert_eq!(report["name"], "@acme/tool");
-    assert_eq!(report["freshness"], "nix flake update acme-tool");
-    let flake = std::fs::read_to_string(fixture.target().join("flake.nix")).expect("reads");
-    assert!(flake.contains("acme-tool = {"), "{flake}");
-    assert!(flake.contains("{ self, nixpkgs, acme-tool }"), "{flake}");
-    assert!(!flake.contains('@'));
-}
-
-#[test]
-fn depend_assess_names_where_the_dependency_is_already_pinned() {
-    let fixture = DependFixture::new();
-    fixture.seed_target(
-        "mise.toml",
-        "[tools]\nnode = '24'\n\"cargo:sample-tool\" = \"1.3.0\"\n",
-    );
-    let report = fixture.json(&["depend", "assess"]);
-    assert_eq!(report["target"]["already"][0]["file"], "mise.toml");
-    assert_eq!(report["target"]["already"][0]["line"], 3);
-    assert_eq!(report["dev"][0]["fragments"][0]["present"], true);
-}
-
-/// SATISFIES dependencies:the-source-is-a-local-checkout
-#[test]
-fn depend_refuses_a_url_source() {
-    let fixture = DependFixture::new();
-    for verb in [
-        vec!["depend", "assess"],
-        vec!["depend", "add", "--kind", "dev"],
-    ] {
-        rk_scrubbed()
-            .args(&verb)
-            .args(["--source", "https://github.com/acme/sample-tool"])
-            .arg("--target")
-            .arg(fixture.target())
-            .assert()
-            .code(64)
-            .stderr(predicate::str::contains("clone the URL first"));
-    }
-}
-
-#[test]
-fn depend_refuses_a_missing_source() {
-    let fixture = DependFixture::new();
-    rk_scrubbed()
-        .args([
-            "depend",
-            "assess",
-            "--json",
-            "--source",
-            "/nonexistent/sample",
-        ])
-        .arg("--target")
-        .arg(fixture.target())
-        .assert()
-        .code(66)
-        .stderr(predicate::str::contains("target-not-found"));
-}
-
-#[test]
-fn depend_add_previews_the_flake_fragments_and_writes_nothing() {
-    let fixture = DependFixture::new();
-    fixture.seed_target(
-        "flake.nix",
-        "{ inputs = {}; outputs = { self }: { devShells = {}; }; }\n",
-    );
-    fixture
-        .rk(&["depend", "add", "--kind", "dev"])
-        .assert()
-        .success()
-        .stdout(
-            predicate::str::contains("DRY RUN")
-                .and(predicate::str::contains(
-                    "sample-tool 1.4.0 (tag v1.4.0, from the source-tree)",
-                ))
-                .and(predicate::str::contains(
-                    "--- flake-input into flake.nix (insert-into-attrset at inputs): missing",
-                ))
-                .and(predicate::str::contains(
-                    "--- outputs-argument into flake.nix",
-                ))
-                .and(predicate::str::contains(
-                    "--- devshell-package into flake.nix",
-                ))
-                .and(predicate::str::contains(
-                    "sample-tool.packages.${system}.default",
-                ))
-                .and(predicate::str::contains(
-                    "flake.nix present: the target owns it",
-                )),
-        );
-    let report = fixture.json(&["depend", "add", "--kind", "dev"]);
-    assert_eq!(report["schema"], "rk.depend-add/1");
-    assert_eq!(report["mode"], "preview");
-    assert_eq!(report["manager"], "flake");
-    assert_eq!(report["manager_origin"], "detected");
-    assert_eq!(report["landing"], "fragment");
-    assert_eq!(report["file_present"], "present");
-    assert_eq!(report["written"], serde_json::json!([]));
-    assert_eq!(report["freshness"], "nix flake update sample-tool");
-    assert_eq!(
-        std::fs::read_to_string(fixture.target().join("flake.nix")).expect("reads"),
-        "{ inputs = {}; outputs = { self }: { devShells = {}; }; }\n"
-    );
-}
-
-#[test]
-fn depend_add_apply_seeds_a_flake_where_there_is_none() {
-    let fixture = DependFixture::new();
-    let report = fixture.json(&[
-        "depend",
-        "add",
-        "--kind",
-        "dev",
-        "--manager",
-        "flake",
-        "--apply",
-    ]);
-    assert_eq!(report["mode"], "apply");
-    assert_eq!(report["manager_origin"], "argument");
-    assert_eq!(report["written"], serde_json::json!(["flake.nix"]));
-    let flake = std::fs::read_to_string(fixture.target().join("flake.nix")).expect("reads");
-    assert!(flake.contains("sample-tool = {"));
-    assert!(flake.contains("url = \"github:acme/sample-tool/v1.4.0\";"));
-    assert!(flake.contains("packages = [ sample-tool.packages.${system}.default ];"));
-    assert!(flake.ends_with("}\n"));
-    let next = report["next"].as_array().expect("next");
-    assert!(
-        next.iter()
-            .any(|line| line.as_str().is_some_and(|l| l.contains("direnv"))),
-        "no .envrc loads the flake yet: {next:?}"
-    );
-}
-
-#[test]
-fn depend_add_apply_seeds_mise_toml_where_there_is_none() {
-    let fixture = DependFixture::new();
-    let report = fixture.json(&[
-        "depend",
-        "add",
-        "--kind",
-        "dev",
-        "--manager",
-        "mise",
-        "--apply",
-    ]);
-    assert_eq!(report["channel"], "crates");
-    assert_eq!(report["written"], serde_json::json!(["mise.toml"]));
-    assert_eq!(
-        std::fs::read_to_string(fixture.target().join("mise.toml")).expect("reads"),
-        "[tools]\n\"cargo:sample-tool\" = \"1.4.0\"\n"
-    );
-}
-
-/// SATISFIES dependencies:add-edits-no-file-the-target-owns
-#[test]
-fn depend_add_apply_refuses_a_manager_file_the_target_owns() {
-    let fixture = DependFixture::new();
-    let owned = "{ inputs = { nixpkgs.url = \"github:NixOS/nixpkgs\"; }; outputs = { self, nixpkgs }: { }; }\n";
-    fixture.seed_target("flake.nix", owned);
-    fixture
-        .rk(&["depend", "add", "--kind", "dev", "--apply"])
-        .assert()
-        .code(73)
-        .stdout(predicate::str::contains("--- flake-input into flake.nix"))
-        .stderr(predicate::str::contains(
-            "never edits a file the target owns",
-        ));
-    let (code, report) = fixture.json_with_code(&["depend", "add", "--kind", "dev", "--apply"]);
-    assert_eq!(code, 73);
-    assert_eq!(report["written"], serde_json::json!([]));
-    assert!(
-        report["refusal"]
-            .as_str()
-            .expect("a refusal")
-            .contains("flake.nix")
-    );
-    assert_eq!(
-        std::fs::read_to_string(fixture.target().join("flake.nix")).expect("reads"),
-        owned,
-        "the owned file is byte-identical"
-    );
-}
-
-#[test]
-fn depend_add_mise_serves_the_ubi_line_when_asked_for_the_archive() {
-    let fixture = DependFixture::new();
-    fixture.seed_target(".mise.toml", "[tools]\nnode = '24'\n");
-    let report = fixture.json(&[
-        "depend",
-        "add",
-        "--kind",
-        "dev",
-        "--channel",
-        "github-release",
-    ]);
-    assert_eq!(report["manager"], "mise");
-    assert_eq!(report["file"], ".mise.toml");
-    assert_eq!(
-        report["fragments"][0]["text"],
-        "\"ubi:acme/sample-tool\" = { version = \"1.4.0\", exe = \"sam\" }"
-    );
-    assert_eq!(report["fragments"][0]["placement"], "insert-into-table");
-    assert_eq!(report["fragments"][0]["anchor"]["needle"], "[tools]");
-    assert_eq!(
-        report["freshness"],
-        "mise upgrade --bump ubi:acme/sample-tool"
-    );
-    fixture
-        .rk(&["depend", "add", "--kind", "dev", "--channel", "pypi"])
-        .assert()
-        .code(64)
-        .stderr(predicate::str::contains(
-            "viable channels are crates, github-release",
-        ));
-}
-
-#[test]
-fn depend_add_devbox_serves_the_flake_ref() {
-    let fixture = DependFixture::new();
-    fixture.seed_target("devbox.json", "{\n  \"packages\": [\"go@latest\"]\n}\n");
-    let report = fixture.json(&["depend", "add", "--kind", "dev"]);
-    assert_eq!(report["manager"], "devbox");
-    assert_eq!(report["channel"], "flake");
-    assert_eq!(
-        report["fragments"][0]["text"],
-        "\"github:acme/sample-tool/v1.4.0#default\""
-    );
-    assert_eq!(report["fragments"][0]["placement"], "append-to-array");
-    assert_eq!(report["freshness"], "devbox update");
-}
-
-#[test]
-fn depend_add_needs_the_manager_when_the_target_carries_two() {
-    let fixture = DependFixture::new();
-    fixture.seed_target("flake.nix", "{ }\n");
-    fixture.seed_target("mise.toml", "[tools]\n");
-    fixture
-        .rk(&["depend", "add", "--kind", "dev"])
-        .assert()
-        .code(64)
-        .stderr(predicate::str::contains("flake and mise; pass --manager"));
-    let bare = DependFixture::new();
-    bare.rk(&["depend", "add", "--kind", "dev"])
-        .assert()
-        .code(64)
-        .stderr(predicate::str::contains("pass --manager to seed one"));
-}
-
-/// SATISFIES dependencies:a-prod-dependency-lands-through-the-native-command
-#[test]
-fn depend_add_prod_prints_the_native_command_and_refuses_apply() {
-    let fixture = DependFixture::new();
-    fixture.seed_target(
-        "Cargo.toml",
-        "[package]\nname = \"widget\"\nversion = \"0.1.0\"\n",
-    );
-    fixture
-        .rk(&["depend", "add", "--kind", "prod"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("run: cargo add sample-tool@1.4.0"));
-    let report = fixture.json(&["depend", "add", "--kind", "prod"]);
-    assert_eq!(report["kind"], "prod");
-    assert_eq!(report["landing"], "native");
-    assert_eq!(report["command"], "cargo add sample-tool@1.4.0");
-    assert!(report.get("manager").is_none());
-    assert!(report.get("file").is_none());
-    fixture
-        .rk(&["depend", "add", "--kind", "prod", "--apply"])
-        .assert()
-        .code(64)
-        .stdout(predicate::str::contains("run: cargo add sample-tool@1.4.0"))
-        .stderr(predicate::str::contains("rk never edits Cargo.toml"));
-    let (code, applied) = fixture.json_with_code(&["depend", "add", "--kind", "prod", "--apply"]);
-    assert_eq!(code, 64);
-    assert_eq!(
-        applied["command"], "cargo add sample-tool@1.4.0",
-        "the report precedes the refusal"
-    );
-    assert_eq!(
-        std::fs::read_to_string(fixture.target().join("Cargo.toml")).expect("reads"),
-        "[package]\nname = \"widget\"\nversion = \"0.1.0\"\n"
-    );
-    let python = DependFixture::new();
-    python.seed_target("pyproject.toml", "[project]\nname = \"widget\"\n");
-    let mismatch = python.json(&["depend", "add", "--kind", "prod"]);
-    assert_eq!(mismatch["landing"], "manual");
-    assert_eq!(mismatch["reason"], "technology-mismatch");
-}
-
-#[test]
-fn depend_add_honors_the_version_override_and_the_bare_tag_style() {
-    let fixture = DependFixture::new();
-    fixture.seed_target("mise.toml", "[tools]\n");
-    let report = fixture.json(&["depend", "add", "--kind", "dev", "--pin", "v2.0.0"]);
-    assert_eq!(report["version"], "2.0.0");
-    assert_eq!(report["tag"], "v2.0.0");
-    assert_eq!(report["version_origin"], "argument");
-    assert_eq!(
-        report["fragments"][0]["text"],
-        "\"cargo:sample-tool\" = \"2.0.0\""
-    );
-    fixture
-        .rk(&["depend", "add", "--kind", "dev", "--manager", "devbox"])
-        .assert()
-        .code(64)
-        .stderr(predicate::str::contains("its managers are mise"));
-    git_in(fixture.source(), &["tag", "-d", "v1.4.0"]);
-    git_in(fixture.source(), &["tag", "1.4.0"]);
-    std::fs::remove_file(fixture.target().join("mise.toml")).expect("removes");
-    let bare = fixture.json(&["depend", "add", "--kind", "dev", "--manager", "devbox"]);
-    assert_eq!(bare["tag"], "1.4.0");
-    assert_eq!(
-        bare["fragments"][0]["text"],
-        "\"github:acme/sample-tool/1.4.0#default\""
-    );
-    fixture
-        .rk(&["depend", "add", "--kind", "dev", "--pin", "latest"])
-        .assert()
-        .code(64);
-}
-
-#[test]
-fn every_depend_action_emits_one_json_object() {
-    let fixture = DependFixture::new();
-    for args in [
-        vec!["depend", "assess"],
-        vec!["depend", "add", "--kind", "dev", "--manager", "flake"],
-    ] {
-        let report = fixture.json(&args);
-        let schema = report["schema"].as_str().expect("a schema");
-        assert!(schema.starts_with("rk.depend-"), "{schema}");
-    }
-}
-
 /// The satisfied trunk shape: an owned ruleset requiring `test` and the
 /// title check, and both squash sources owned.
 fn seed_owned_trunk(fixture: &ForgeFixture) {
@@ -21159,38 +21805,30 @@ fn guide_serves_the_issue_runbook_with_the_forge_resolved() {
         .stdout(predicate::str::contains("issue"));
 }
 
+/// Starting work from an issue is the project's own workflow: the landed
+/// block names no helper for it in any capability state, and the agent
+/// policy the workflow guards land still bounds minting a branch as an
+/// action a request must name.
 #[test]
-fn the_landed_agents_block_routes_an_issue_to_the_verb() {
-    let target = tempfile::tempdir().expect("a target exists");
-    land_rust(target.path()).success();
-    let block = std::fs::read_to_string(target.path().join("AGENTS.md"))
-        .expect("the landing writes an AGENTS.md");
-    assert!(
-        block.contains("rk issue start <issue>"),
-        "the landed block names the verb: {block}"
-    );
-    assert!(
-        block.contains("Never invent a name for work an issue already names"),
-        "the landed block carries the rule: {block}"
-    );
-    assert!(
-        block.contains("Mint a branch at the forge from an issue"),
-        "minting is a bounded action a request must name: {block}"
-    );
-}
-
-#[test]
-fn both_skills_route_an_issue_shaped_request_to_the_verb() {
-    for skill in ["rk-setup", "rk-release"] {
-        let text = std::fs::read_to_string(repo_path(&format!("skills/{skill}/SKILL.md")))
-            .expect("the skill reads");
+fn the_landed_agents_block_names_no_issue_workflow() {
+    for guarded in [false, true] {
+        let target = tempfile::tempdir().expect("a target exists");
+        if guarded {
+            land_rust_guarded(target.path()).success();
+        } else {
+            land_rust(target.path()).success();
+        }
+        let block = std::fs::read_to_string(target.path().join("AGENTS.md"))
+            .expect("the landing writes an AGENTS.md");
+        assert!(!block.contains("rk issue start"), "{block}");
         assert!(
-            text.contains("rk issue start <issue>"),
-            "{skill} routes to the verb"
+            !block.contains("Never invent a name for work an issue already names"),
+            "{block}"
         );
-        assert!(
-            text.contains("Never write a predicted branch name into the plan"),
-            "{skill} forbids a guessed name"
+        assert_eq!(
+            block.contains("Mint a branch at the forge from an issue"),
+            guarded,
+            "minting is a bounded action under the agent policy: {block}"
         );
     }
 }
@@ -22508,7 +23146,7 @@ fn private_reporting_check_is_read_only_and_reports_step_state() {
 fn reporting_script(fixture: &ForgeFixture, forge: &str, repo: &str) -> std::process::Output {
     // Only the mocks and the utilities they need are on this PATH; this
     // also works on hosts whose tools live outside the traditional dirs.
-    for name in ["sh", "bash", "cat", "env", "touch", "sed", "tr"] {
+    for name in ["sh", "bash", "cat", "env", "touch", "sed", "tr", "mv"] {
         let destination = fixture.mock.path().join(name);
         if !destination.exists() {
             let source = std::env::split_paths(&std::env::var_os("PATH").unwrap())
@@ -22790,13 +23428,22 @@ fn private_reporting_policy_owned_drift_is_replaced_by_the_upgrade() {
         .arg(target.path())
         .assert()
         .failure();
-    // The policy is a recorded generated file: the upgrade replaces it
-    // from the projection, and Git holds the edit.
+    // The policy is a recorded generated file someone edited: a conflict
+    // the upgrade refuses, until the operator names it and its bytes are
+    // saved first.
     rk().args(["upgrade", "--apply", "--target"])
         .arg(target.path())
         .assert()
+        .code(73)
+        .stderr(predicate::str::contains("SECURITY.md"));
+    rk().args(["upgrade", "--apply", "--replace", "SECURITY.md", "--target"])
+        .arg(target.path())
+        .assert()
         .success()
-        .stdout(predicate::str::contains("replaced SECURITY.md"));
+        .stdout(
+            predicate::str::contains("replaced SECURITY.md")
+                .and(predicate::str::contains("saved SECURITY.md to")),
+        );
     assert_eq!(std::fs::read_to_string(&path).unwrap(), landed);
     rk().args(["status", "--check", "--target"])
         .arg(target.path())
@@ -22838,7 +23485,7 @@ fn private_reporting_policy_adoption_and_parameter_replay() {
         if mode == "matching" {
             out.success();
             let manifest = read_manifest(target.path());
-            assert_eq!(manifest["schema_version"], 10);
+            assert_eq!(manifest["schema_version"], 11);
             assert_eq!(manifest_file(&manifest, "SECURITY.md")["kind"], "rendered");
             assert_eq!(
                 std::fs::read(target.path().join("SECURITY.md")).unwrap(),
@@ -22870,7 +23517,7 @@ fn private_reporting_policy_adoption_and_parameter_replay() {
             )
         )
     );
-    assert_eq!(manifest["schema_version"], 10);
+    assert_eq!(manifest["schema_version"], 11);
     assert_eq!(manifest["profile"]["release"]["style"], "trunk");
 }
 
@@ -23323,7 +23970,7 @@ fn a_pre_policy_record_upgrades_without_touching_the_policy() {
         .success();
     assert_eq!(landed_policy(target.path()), policy);
     let manifest = read_manifest(target.path());
-    assert_eq!(manifest["schema_version"], 10);
+    assert_eq!(manifest["schema_version"], 11);
     assert_eq!(manifest["parameters"]["security_contact"], "");
     assert_eq!(manifest["parameters"]["security_response"], "best-effort");
 }
@@ -23706,7 +24353,7 @@ fn answer_the_seeded_sentinel(target: &Path) {
 #[test]
 fn the_trunk_branch_comes_from_the_config() {
     let target = tempfile::tempdir().expect("a tempdir");
-    land_rust(target.path()).success();
+    land_rust_guarded(target.path()).success();
 
     let config = target.path().join(".release-kit/config.toml");
     let text = std::fs::read_to_string(&config).expect("the landed config reads");
@@ -24276,7 +24923,11 @@ const EVERY_UNRUN_STEP: [(&str, &str); 13] = [
 fn seed_exclusions(target: &Path, steps: &[(&str, &str)]) {
     let dir = target.join(".release-kit");
     std::fs::create_dir_all(&dir).expect("the config directory exists");
-    let mut text = String::from("schema_version = 1\n\n[setup.excluded_steps]\n");
+    // The workflow guards are answered on, so the two workflow steps
+    // apply and an exclusion of either reads as an exclusion.
+    let mut text = String::from(
+        "schema_version = 2\n\n[capabilities]\nworkflow_guards = true\n\n[setup.excluded_steps]\n",
+    );
     for (step, reason) in steps {
         use std::fmt::Write as _;
         let _ = writeln!(text, "\"{step}\" = \"{reason}\"");
@@ -24534,10 +25185,10 @@ fn the_landing_runbook_renders_the_spine() {
     }
     for (n, word) in [
         (1, "Stage"),
-        (2, "Investigate"),
-        (3, "Land"),
-        (4, "Verify"),
-        (5, "Clean"),
+        (2, "Compare"),
+        (3, "Prepare"),
+        (4, "Land"),
+        (5, "Prove"),
     ] {
         assert_eq!(headings[n - 1], format!("## {n}. {word}"));
     }
@@ -24564,8 +25215,8 @@ fn the_landing_pair_renders() {
         "detection fills <tech>: {text}"
     );
     assert!(
-        text.contains("rk init --target ."),
-        "the landing reads the target's own configuration: {text}"
+        text.contains("rk init --stage <stage> --target ."),
+        "the landing reads the stage's answers: {text}"
     );
     for command in [
         "rk stage --target .",
@@ -24665,22 +25316,22 @@ fn the_setup_and_migration_runbooks_route_their_landing_steps_to_landing() {
     // the landing runbook's steps by number.
     let landing_4a = runbook_substep(&setup, "4a.");
     assert!(
-        landing_4a.contains("[the landing runbook](./landing.md) steps 1 and 2")
-            && landing_4a.contains("that runbook's step 3")
-            && landing_4a.contains("steps 4 and 5"),
+        landing_4a.contains("[the landing runbook](./landing.md) steps 1 to 3")
+            && landing_4a.contains("that runbook's step 4")
+            && landing_4a.contains("its step 5 and the close after it"),
         "setup 4a routes its landing to the landing runbook by step number"
     );
-    // Every migration substep that lands: the whole procedure, and no
-    // front run from a command block of its own.
-    for label in ["2a.", "2b.", "2c."] {
+    // The migration's one landing: the whole procedure, and no front run
+    // from a command block of its own.
+    for label in ["3a."] {
         let substep = runbook_substep(&migration, label);
         assert!(
             substep.contains("[the landing runbook](./landing.md) steps 1 to 5"),
             "migration {label} routes through the whole landing procedure"
         );
         assert!(
-            substep.contains("as the front in its step 3"),
-            "migration {label} names its front as the landing runbook's step 3"
+            substep.contains("as the front in its step 4"),
+            "migration {label} names its front as the landing runbook's step 4"
         );
         let mut fenced = false;
         for line in substep.lines() {
@@ -24698,16 +25349,6 @@ fn the_setup_and_migration_runbooks_route_their_landing_steps_to_landing() {
             }
         }
     }
-    assert!(
-        runbook_substep(&migration, "2b.").contains(
-            "its step 2d carries the collision, the tuned seeded file, the edited generated file, and the retired destination"
-        ),
-        "the migration runbook routes the preparation to landing step 2d"
-    );
-    assert!(
-        runbook_substep(&migration, "2b.").contains("prints `replaced`"),
-        "an edited generated file is replaced, not a conflict"
-    );
 }
 
 /// The field names the landing runbook's step 2a tells the reader to find
@@ -24720,7 +25361,7 @@ fn the_landing_runbook_names_the_real_stage_fields() {
     let scratch = tempfile::tempdir().expect("a scratch dir exists");
     let target = stage_target();
     let report = stage_json(target.path(), &scratch.path().join("stage"));
-    assert_eq!(report["schema"], "rk.stage/5");
+    assert_eq!(report["schema"], "rk.stage/6");
     for top in [
         "schema",
         "rk_version",
@@ -24784,7 +25425,7 @@ fn the_landing_runbook_names_the_real_stage_fields() {
 fn the_landing_runbook_cites_the_words_the_fronts_print() {
     let runbook = std::fs::read_to_string(repo_path("runbooks/landing.md")).expect("reads");
     let step = {
-        let start = runbook.find("\n## 3. Land").expect("step 3");
+        let start = runbook.find("\n## 4. Land").expect("step 4");
         let rest = &runbook[start..];
         &rest[..rest[1..].find("\n## ").map_or(rest.len(), |end| end + 1)]
     };
@@ -25350,11 +25991,7 @@ fn a_fresh_rust_landing_advertises_only_x86_64_linux() {
         }
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    for seed in [
-        "blocks/depend-seed-flake.nix.in",
-        "blocks/self-depend-seed-flake.nix.in",
-        "flake.nix",
-    ] {
+    for seed in ["blocks/self-depend-seed-flake.nix.in", "flake.nix"] {
         let text = std::fs::read_to_string(root.join(seed)).expect("the seed reads");
         assert_eq!(systems_of(&text, seed), ["x86_64-linux"], "{seed}");
     }
@@ -25483,6 +26120,7 @@ fn opt_in_signature_lines() -> Vec<String> {
                 reporting_policy: true,
                 scorecard,
                 code_scanning,
+                workflow_guards: Some(true),
             },
         );
         let params_again = params.clone();
@@ -25516,6 +26154,75 @@ fn opt_in_signature_lines() -> Vec<String> {
         // capabilities change every opted-in target's record silently.
         out.push(record_signature_line(
             &format!("{driver} {forge} linked-worktree trunk {column}-record"),
+            &params_again,
+            &projection.capabilities,
+        ));
+    }
+    out
+}
+
+/// The signature lines of a fresh landing without the workflow guards.
+fn unguarded_signature_lines() -> Vec<String> {
+    use release_kit::landing::{CheckoutMode, Style};
+    use release_kit::profile::CapabilityRequests;
+    use release_kit::projection::{Projection, ProjectionInput};
+
+    let mut out = Vec::new();
+    // A fresh landing takes no workflow guards: its routing and hook
+    // blocks carry the release lines alone, and no glossary lands. Each
+    // integration mode signs its own hook block, because the integrate
+    // note is the one part of it that mode still decides.
+    for (forge, integration) in [
+        ("github", release_kit::landing::Integration::Local),
+        ("github", release_kit::landing::Integration::Forge),
+        ("gitlab", release_kit::landing::Integration::Forge),
+    ] {
+        let params = params_requesting(
+            "rust",
+            forge,
+            CheckoutMode::LinkedWorktree,
+            integration,
+            Some(Style::Trunk),
+            "acme/widget",
+            CapabilityRequests {
+                nix_packaging: false,
+                reporting_policy: true,
+                scorecard: false,
+                code_scanning: None,
+                workflow_guards: Some(false),
+            },
+        );
+        let label = format!(
+            "rust {forge} linked-worktree {} trunk unguarded",
+            integration.as_str()
+        );
+        let params_again = params.clone();
+        let projection = Projection::compute(&ProjectionInput {
+            params,
+            evidence: NixShape::Supported.evidence(),
+        })
+        .expect("the unguarded pair projects");
+        assert!(
+            !projection
+                .candidates
+                .iter()
+                .any(|candidate| candidate.destination == "GLOSSARY.md"),
+            "{label}: an unguarded landing takes no glossary"
+        );
+        for candidate in projection.candidates.iter().filter(|candidate| {
+            ["AGENTS.md", ".pre-commit-config.yaml"].contains(&candidate.destination.as_str())
+        }) {
+            out.push(candidate_signature_line(candidate, &label));
+        }
+        let plan = release_kit::config::Plan::compose(None, &params_again, None, None)
+            .expect("the configuration composes from the parameters alone");
+        out.push(format!(
+            "{label} {} {}",
+            release_kit::config::CONFIG_PATH,
+            release_kit::digest::Digest::of(plan.content.as_bytes())
+        ));
+        out.push(record_signature_line(
+            &format!("{label}-record"),
             &params_again,
             &projection.capabilities,
         ));
@@ -26365,6 +27072,7 @@ fn every_current_landing_fixture_keeps_its_destinations_kinds_placement_and_dige
         ));
     }
     lines.extend(opt_in_signature_lines());
+    lines.extend(unguarded_signature_lines());
     lines.extend(occupied_target_signature_lines());
     let text = format!("{}\n", lines.join("\n"));
     let fixture =
@@ -26430,7 +27138,7 @@ fn every_selected_embedded_source_belongs_to_the_one_distribution_root_inventory
 
 /// The flags every staging in this section runs under, so a target with
 /// no remote resolves the same parameters a landing does.
-const STAGE_FLAGS: [&str; 8] = [
+const STAGE_FLAGS: [&str; 9] = [
     "--tech",
     "rust",
     "--forge",
@@ -26439,6 +27147,7 @@ const STAGE_FLAGS: [&str; 8] = [
     "forge",
     "--repo",
     "acme/widget",
+    "--workflow-guards",
 ];
 
 /// The operator's own document at the routing block's destination, whose
@@ -26501,12 +27210,17 @@ fn stage_receipt(stage: &Path) -> serde_json::Value {
 }
 
 /// A tree snapshot that survives an unreadable entry: every path with its
-/// mode and, where the bytes read, their digest.
+/// mode and, where the bytes read, their digest. Like `tree_digests`, the
+/// walk skips `.git` at any depth, because git rewrites files there by
+/// itself; a test that must prove git untouched compares `git_metadata`.
 fn tree_snapshot(root: &Path) -> Vec<(String, u32, Option<String>)> {
     use std::os::unix::fs::PermissionsExt as _;
     fn walk(dir: &Path, root: &Path, out: &mut Vec<(String, u32, Option<String>)>) {
         for entry in std::fs::read_dir(dir).expect("the tree reads") {
             let path = entry.expect("an entry").path();
+            if path.file_name().is_some_and(|name| name == ".git") {
+                continue;
+            }
             let rel = path
                 .strip_prefix(root)
                 .expect("under the root")
@@ -26771,7 +27485,7 @@ fn stage_writes_only_below_the_resolved_stage_root() {
         "an explicit --output leaves the state root without a stage"
     );
     assert!(resolved.join("stage.json").is_file());
-    assert_eq!(report["receipt_schema_version"], 10);
+    assert_eq!(report["receipt_schema_version"], 11);
 }
 
 /// SATISFIES staging:the-output-path-has-one-precedence
@@ -27202,13 +27916,19 @@ fn a_stage_holds_every_projected_artifact_byte_for_byte_and_every_reference_root
         std::fs::read_to_string(output.join("reference/CHANGELOG.md")).expect("reads"),
         release_kit::embedded::CHANGELOG
     );
-    assert!(output.join("reference/skills/rk-setup/SKILL.md").is_file());
-    assert!(output.join("reference/skill-shared/plan-gate.md").is_file());
-    assert!(
-        output
-            .join("reference/skill-shared/pre-flight-gate.md")
-            .is_file()
-    );
+    for name in SKILLS {
+        for path in package_paths(name) {
+            assert!(
+                output
+                    .join("reference/skills")
+                    .join(name)
+                    .join(&path)
+                    .is_file(),
+                "{name}/{path}: the package is not staged as installed"
+            );
+        }
+    }
+    assert!(!output.join("reference/skill-shared").exists());
 }
 
 /// SATISFIES staging:the-artifacts-tree-holds-the-proposed-bytes
@@ -27315,11 +28035,20 @@ fn the_reference_tree_carries_no_docs_tests_or_source() {
             "{root}: missing from the reference tree"
         );
     }
-    assert!(
-        !output.join("reference/skills/rk-release").exists()
-            && !output.join("reference/skills/rk-depend").exists(),
-        "only the setup skill is reference knowledge"
-    );
+    // Every package is staged as installed, byte for byte, its gate copies
+    // included, so the stage shows what an agent on this host reads.
+    for package in release_kit::skills::packages().expect("the packages compose") {
+        for file in &package.files {
+            let staged = std::fs::read(
+                output
+                    .join("reference/skills")
+                    .join(&package.name)
+                    .join(&file.path),
+            )
+            .unwrap_or_else(|_| panic!("{}/{}: not staged", package.name, file.path));
+            assert_eq!(staged, file.bytes, "{}/{}", package.name, file.path);
+        }
+    }
 }
 
 /// SATISFIES staging:the-stage-receipt-is-explanatory-metadata
@@ -27347,11 +28076,11 @@ fn the_stage_receipt_and_human_output_snapshot_hold() {
         format!("stage: {}", stage.display()),
         "output: from --output".to_owned(),
         format!("target: {}", canonical_target.display()),
-        "parameters: technologies rust; forge github; repo acme/widget; release automatic (driver rust, style trunk, line prefix release/); trunk master; checkout mode linked-worktree; integration forge; requests reporting_policy".to_owned(),
+        "parameters: technologies rust; forge github; repo acme/widget; release automatic (driver rust, style trunk, line prefix release/); trunk master; checkout mode linked-worktree; integration forge; requests reporting_policy, workflow_guards".to_owned(),
         "landing record: none".to_owned(),
         "  artifacts/AGENTS.md (rendered, region)".to_owned(),
         "  artifacts/release-plz.toml (seeded, whole)".to_owned(),
-        "reference: reference/CHANGELOG.md, reference/guidance, reference/method, reference/bindings, reference/runbooks, reference/forges, reference/skills/rk-setup, reference/skill-shared".to_owned(),
+        "reference: reference/CHANGELOG.md, reference/guidance, reference/method, reference/bindings, reference/runbooks, reference/forges, reference/skills".to_owned(),
         "Next:".to_owned(),
         format!("  rk stage clean {} removes the stage", stage.display()),
     ] {
@@ -27378,7 +28107,7 @@ fn the_stage_receipt_and_human_output_snapshot_hold() {
     ];
     assert_eq!(top_level_keys(&receipt_text), receipt_keys);
     let receipt = stage_receipt(&stage);
-    assert_eq!(receipt["schema"], "rk.stage/5");
+    assert_eq!(receipt["schema"], "rk.stage/6");
     assert_eq!(receipt["rk_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(receipt["target"], canonical_target.display().to_string());
     assert_eq!(receipt["stage_root"], stage.display().to_string());
@@ -27444,7 +28173,7 @@ fn the_stage_receipt_and_human_output_snapshot_hold() {
         .clone();
     let human = String::from_utf8_lossy(&human);
     assert!(
-        human.contains("landing record: schema_version 10"),
+        human.contains("landing record: schema_version 11"),
         "{human}"
     );
     assert!(
@@ -27456,7 +28185,7 @@ fn the_stage_receipt_and_human_output_snapshot_hold() {
         "{human}"
     );
     let receipt = stage_receipt(&landed_out);
-    assert_eq!(receipt["receipt_schema_version"], 10);
+    assert_eq!(receipt["receipt_schema_version"], 11);
     assert_eq!(receipt["retired"], serde_json::json!(["old-workflow.yml"]));
     assert!(
         receipt["seeded_present"]
@@ -27477,7 +28206,7 @@ fn a_stage_receipt_is_accepted_by_no_landing_command() {
     let before = tree_digests(&output);
     let target_before = tree_digests(target.path());
     for verb in ["init", "upgrade", "adopt"] {
-        for flag in ["--stage", "--from-stage", "--receipt", "--from"] {
+        for flag in ["--from-stage", "--receipt", "--from"] {
             rk().args([verb, "--target"])
                 .arg(target.path())
                 .arg(flag)
@@ -27486,6 +28215,22 @@ fn a_stage_receipt_is_accepted_by_no_landing_command() {
                 .code(64)
                 .stderr(predicate::str::contains("unexpected argument"));
         }
+        // `--stage` names a stage root and reads its parameters alone: a
+        // receipt file in its place is no stage root, and an upgrade with
+        // no record refuses before it reads the stage at all.
+        let refused = rk()
+            .args([verb, "--target"])
+            .arg(target.path())
+            .arg("--stage")
+            .arg(&receipt)
+            .assert()
+            .failure();
+        let stderr = String::from_utf8_lossy(&refused.get_output().stderr).into_owned();
+        assert!(
+            stderr.contains("no stage receipt")
+                || (verb == "upgrade" && stderr.contains("manifest.json")),
+            "{verb}: {stderr}"
+        );
     }
     // Offered as the target, the stage directory is just a directory: a
     // preview renders afresh and writes nothing, an upgrade finds no
@@ -27558,7 +28303,7 @@ fn stage_clean_refuses_every_protected_or_ambiguous_path_and_deletes_one_valid_s
     std::fs::write(
         ancestor.join("stage.json"),
         format!(
-            r#"{{"schema":"rk.stage/5","stage_root":"{}","target":"{}"}}"#,
+            r#"{{"schema":"rk.stage/6","stage_root":"{}","target":"{}"}}"#,
             ancestor.display(),
             ancestor.join("inner").display()
         ),
@@ -28393,7 +29138,7 @@ fn staged_candidates(target: &Path, flags: &[&str]) -> std::collections::BTreeMa
 
 /// SATISFIES landing:a-landing-leaves-a-record
 #[test]
-fn fresh_init_preview_is_read_only_and_apply_writes_the_schema_10_receipt() {
+fn fresh_init_preview_is_read_only_and_apply_writes_the_current_receipt() {
     let target = plan_target();
     let before = tree_digests(target.path());
     let preview = rk()
@@ -28443,7 +29188,7 @@ fn fresh_init_preview_is_read_only_and_apply_writes_the_schema_10_receipt() {
         ]
     );
     let receipt = read_manifest(target.path());
-    assert_eq!(receipt["schema_version"], 10);
+    assert_eq!(receipt["schema_version"], 11);
     assert_eq!(receipt["rk_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(receipt["origin"], "init");
     for file in receipt["files"].as_array().expect("files") {
@@ -28526,7 +29271,7 @@ fn every_unattributed_collision_and_malformed_marker_is_collected_before_the_fir
 
 /// SATISFIES landing:a-record-states-its-schema
 #[test]
-fn receipt_schemas_1_through_7_load_without_a_release_source_and_rewrite_as_schema_10() {
+fn receipt_schemas_1_through_7_load_without_a_release_source_and_rewrite_as_the_current_schema() {
     let curl = OfflineCurl::new();
     for schema in 1..=7u64 {
         let target = plan_target();
@@ -28575,7 +29320,7 @@ fn receipt_schemas_1_through_7_load_without_a_release_source_and_rewrite_as_sche
         );
         assert!(!text.contains("scopes"), "schema {schema}: {text}");
         let rewritten = read_manifest(target.path());
-        assert_eq!(rewritten["schema_version"], 10, "schema {schema}");
+        assert_eq!(rewritten["schema_version"], 11, "schema {schema}");
         assert_eq!(rewritten["profile"]["release"]["style"], "trunk");
         assert_eq!(
             rewritten["capabilities"]["scorecard"], false,
@@ -28802,11 +29547,11 @@ fn production_outputs_carry_no_plan_bundle_or_release_selection_field() {
         .map(|(_, document)| document["schema"].as_str().expect("a schema"))
         .collect();
     for expected in [
-        "rk.init/10",
+        "rk.init/11",
         "rk.assess/4",
-        "rk.status/12",
-        "rk.upgrade/10",
-        "rk.adopt/10",
+        "rk.status/13",
+        "rk.upgrade/11",
+        "rk.adopt/11",
     ] {
         assert!(
             schemas.contains(&expected),
@@ -28881,8 +29626,9 @@ fn seeded_and_state_files_survive_and_their_current_digests_enter_the_receipt() 
 #[test]
 fn a_marked_region_upgrades_and_the_surrounding_bytes_survive() {
     let target = plan_target();
-    land_rust(target.path()).success();
+    land_rust_guarded(target.path()).success();
     let mut surroundings = Vec::new();
+    let mut stale_regions = Vec::new();
     for (destination, begin, end, above, below) in [
         (
             "AGENTS.md",
@@ -28920,10 +29666,21 @@ fn a_marked_region_upgrades_and_the_surrounding_bytes_survive() {
             .replace("<!-- END release-kit-stale", "<!-- END release-kit");
         let document = format!("{above}{}{stale}{}{below}", &text[..start], &text[stop..]);
         std::fs::write(&path, &document).expect("writes");
+        stale_regions.push((destination, Digest::of(stale.as_bytes()).to_string()));
         surroundings.push((destination, begin, end, document));
     }
+    // An older landing recorded the region it wrote, so the record still
+    // vouches for the stale bytes and the upgrade replaces them.
     let mut manifest = read_manifest(target.path());
     manifest["rk_version"] = serde_json::json!("0.1.0");
+    for file in manifest["files"].as_array_mut().expect("files") {
+        if let Some((_, digest)) = stale_regions
+            .iter()
+            .find(|(destination, _)| file["destination"] == *destination)
+        {
+            file["sha256"] = serde_json::json!(digest);
+        }
+    }
     write_manifest(target.path(), &manifest);
 
     rk().args(["upgrade", "--apply", "--target"])
@@ -28990,10 +29747,35 @@ fn target_with_every_boundary_pending() -> tempfile::TempDir {
         "semver_check = true\n",
     )
     .expect("writes");
+    // An older landing recorded the stale bytes it wrote, so the record
+    // vouches for them and every one is a boundary the upgrade replaces.
     let mut manifest = read_manifest(target.path());
     manifest["rk_version"] = serde_json::json!("0.1.0");
+    vouch_for(
+        &mut manifest,
+        &[
+            ".github/workflows/pr-title.yml",
+            ".github/workflows/release-plz.yml",
+            "SECURITY.md",
+        ],
+        b"# stale\n",
+    );
     write_manifest(target.path(), &manifest);
     target
+}
+
+/// Make `manifest` record `bytes` as what each of `destinations` holds,
+/// the way an older landing records what it wrote.
+fn vouch_for(manifest: &mut serde_json::Value, destinations: &[&str], bytes: &[u8]) {
+    let digest = Digest::of(bytes).to_string();
+    for file in manifest["files"].as_array_mut().expect("files") {
+        if destinations
+            .iter()
+            .any(|destination| file["destination"] == *destination)
+        {
+            file["sha256"] = serde_json::json!(digest);
+        }
+    }
 }
 
 /// Every file below `root` with its bytes.
@@ -29102,7 +29884,7 @@ fn a_failpoint_at_every_write_boundary_leaves_whole_files_and_the_previous_recei
             .arg(target.path())
             .assert()
             .success();
-        assert_eq!(read_manifest(target.path())["schema_version"], 10);
+        assert_eq!(read_manifest(target.path())["schema_version"], 11);
         assert_eq!(
             std::fs::read_to_string(target.path().join("release-plz.toml")).expect("reads"),
             tuned
@@ -29129,6 +29911,7 @@ fn a_reported_rename_failure_is_observed_again_before_it_is_named() {
     std::fs::write(target.path().join("SECURITY.md"), "# stale\n").expect("writes");
     let mut manifest = read_manifest(target.path());
     manifest["rk_version"] = serde_json::json!("0.1.0");
+    vouch_for(&mut manifest, &["SECURITY.md"], b"# stale\n");
     write_manifest(target.path(), &manifest);
     let failed = rk()
         .env("RK_APPLY_INTERRUPT_AT", "SECURITY.md")
@@ -29850,8 +30633,10 @@ fn a_decoy_remote_at_the_exchanged_pathname_does_not_change_the_held_projection(
     std::fs::rename(&target, &real).expect("the real target moves aside");
     repo_with_remote(&target, "https://github.com/acme/decoy.git");
     let decoy_before = tree_digests(&target);
+    let decoy_git_before = git_metadata(&target);
     let (code, report, diagnostic) = paused.proceed_reporting();
     assert_eq!(tree_digests(&target), decoy_before, "{diagnostic}");
+    assert_eq!(git_metadata(&target), decoy_git_before, "{diagnostic}");
     let text = format!("{report}{diagnostic}");
     assert!(
         !text.contains("acme/decoy"),
@@ -30088,14 +30873,19 @@ const RETIRED_SURFACE_ALLOWLIST: &[(&str, &str, &str)] = &[
         "the 0.4.x state an agent inventories and removes",
     ),
     (
-        "skills/rk-setup/SKILL.md",
-        "release cache",
-        "the 0.4.x state an agent inventories and removes",
+        "src/commands/status.rs",
+        "stored plan",
+        "the 0.4.x state rk status inventories, path by path",
     ),
     (
-        "tests/fixtures/rk-setup-evals/active-legacy-operation-before-update.md",
-        "reconcile",
-        "an eval of the legacy-state route, naming the old binary's verb",
+        "src/commands/status.rs",
+        "release cache",
+        "the 0.4.x state rk status inventories, path by path",
+    ),
+    (
+        "src/commands/status.rs",
+        "readiness",
+        "the field of a 0.4.x plan that says whether it can still be applied",
     ),
     (
         "tests/fixtures/rk-setup-evals/active-legacy-operation-before-update.md",
@@ -30103,33 +30893,8 @@ const RETIRED_SURFACE_ALLOWLIST: &[(&str, &str, &str)] = &[
         "an eval of the legacy-state route",
     ),
     (
-        "tests/fixtures/rk-setup-evals/active-legacy-operation-before-update.md",
-        "plan-id",
-        "an eval of the legacy-state route",
-    ),
-    (
-        "tests/fixtures/rk-setup-evals/active-legacy-operation-before-update.md",
-        "release cache",
-        "an eval of the legacy-state route",
-    ),
-    (
-        "tests/fixtures/rk-setup-evals/inactive-legacy-host-state-after-success.md",
-        "reconcile",
-        "an eval of the legacy-state route, naming the old binary's verb",
-    ),
-    (
         "tests/fixtures/rk-setup-evals/inactive-legacy-host-state-after-success.md",
         "stored plan",
-        "an eval of the legacy-state route",
-    ),
-    (
-        "tests/fixtures/rk-setup-evals/inactive-legacy-host-state-after-success.md",
-        "plan-id",
-        "an eval of the legacy-state route",
-    ),
-    (
-        "tests/fixtures/rk-setup-evals/inactive-legacy-host-state-after-success.md",
-        "release cache",
         "an eval of the legacy-state route",
     ),
     // historical: the two fields of a receipt at schema 6 and below, which
@@ -30260,11 +31025,6 @@ const RETIRED_SURFACE_ALLOWLIST: &[(&str, &str, &str)] = &[
         "_docs/reference/REFERENCE-forge-setup-sources.md",
         "Reconcile",
         "reconciliation in the cited policy-as-code sense",
-    ),
-    (
-        "_docs/specs/SPEC-spec-to-code.md",
-        "the seam",
-        "the spec-to-code seam, an adopted spec's own term",
     ),
 ];
 // RETIRED VOCABULARY END
@@ -31096,7 +31856,7 @@ fn a_public_v0_4_0_target_upgrades_from_its_receipt_alone() {
         .stdout
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["schema"], "rk.upgrade/10", "{report}");
+    assert_eq!(report["schema"], "rk.upgrade/11", "{report}");
     assert_eq!(report["from_version"], "0.4.0", "{report}");
     let action_of = |destination: &str| -> String {
         report["files"]
@@ -31141,7 +31901,7 @@ fn a_public_v0_4_0_target_upgrades_from_its_receipt_alone() {
     }
 
     let manifest = read_manifest(target);
-    assert_eq!(manifest["schema_version"], 10);
+    assert_eq!(manifest["schema_version"], 11);
     assert_eq!(manifest["rk_version"], env!("CARGO_PKG_VERSION"));
     let text = std::fs::read_to_string(target.join(".release-kit/manifest.json"))
         .expect("the receipt reads");
@@ -31268,12 +32028,16 @@ fn a_target_with_no_technology_and_no_forge_lands_the_guards() {
         .stdout(predicate::str::contains(
             "capability git.title-check: not-applicable",
         ));
-    for destination in ["AGENTS.md", "GLOSSARY.md", ".pre-commit-config.yaml"] {
+    for destination in ["AGENTS.md", ".pre-commit-config.yaml"] {
         assert!(
             target.path().join(destination).is_file(),
             "{destination}: the guards land without a forge"
         );
     }
+    assert!(
+        !target.path().join("GLOSSARY.md").exists(),
+        "the glossary is the workflow guards', and this landing took none"
+    );
     for destination in ["SECURITY.md", ".github/workflows/pr-title.yml"] {
         assert!(
             !target.path().join(destination).exists(),
@@ -31293,8 +32057,8 @@ fn a_target_with_no_technology_and_no_forge_lands_the_guards() {
             .keys()
             .map(String::as_str)
             .collect::<Vec<&str>>(),
-        ["conventional-pre-commit", "pre-commit-hooks"],
-        "a guards-only target records the guards' own pins"
+        Vec::<&str>::new(),
+        "the release guards pin no tool, and the workflow guards' hook pins land with them alone"
     );
     rk().args(["status", "--check", "--target"])
         .arg(target.path())
@@ -31709,7 +32473,7 @@ fn profile_reports_values_sources_and_the_selection_and_writes_nothing() {
         "rk profile writes nothing"
     );
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["schema"], "rk.profile/2");
+    assert_eq!(report["schema"], "rk.profile/3");
     assert_eq!(report["profile"]["release"]["driver"], "rust");
     assert_eq!(report["git"]["checkout_mode"], "linked-worktree");
     assert_eq!(report["sources"]["profile.technologies"], "config");
@@ -31722,6 +32486,7 @@ fn profile_reports_values_sources_and_the_selection_and_writes_nothing() {
         ids,
         [
             "git.guards",
+            "git.workflow-guards",
             "git.title-check",
             "security.reporting-policy",
             "release.automation",
@@ -31763,7 +32528,7 @@ fn the_checkout_mode_rename_reaches_no_landed_byte() {
                 // The integration axis is held: this test is about the
                 // checkout-mode spelling alone, and the other axis
                 // decides whether the trunk guards render at all.
-                .args(["--integration", "forge"])
+                .args(["--integration", "forge", "--workflow-guards"])
                 .args(["--apply", "--target"])
                 .arg(target.path())
                 .assert()
@@ -32067,7 +32832,13 @@ fn a_local_step_runs_without_the_forge_cli() {
     let target = tempfile::tempdir().expect("a scratch repo exists");
     git_in(target.path(), &["init", "-q", "-b", "master"]);
     rk().args(["init", "--forge", "github", "--repo", "acme/widget"])
-        .args(["--release-mode", "none", "--apply", "--target"])
+        .args([
+            "--release-mode",
+            "none",
+            "--workflow-guards",
+            "--apply",
+            "--target",
+        ])
         .arg(target.path())
         .assert()
         .success();
@@ -32727,7 +33498,7 @@ fn git_out(dir: &Path, args: &[&str]) -> String {
 #[test]
 fn the_integration_mode_round_trips_through_the_landing() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
-    land_rust(target.path()).success();
+    land_rust_guarded(target.path()).success();
     let forge_bytes =
         std::fs::read(target.path().join(".pre-commit-config.yaml")).expect("the hooks read");
     assert_eq!(read_manifest(target.path())["git"]["integration"], "forge");
@@ -32747,7 +33518,10 @@ fn the_integration_mode_round_trips_through_the_landing() {
     assert!(hooks.contains("- id: rk-worktree-location"), "{hooks}");
     assert_eq!(read_manifest(target.path())["git"]["integration"], "local");
     let agents = std::fs::read_to_string(target.path().join("AGENTS.md")).expect("reads");
-    assert!(agents.contains("`rk integrate <branch>`"), "{agents}");
+    assert!(
+        !agents.contains("`rk integrate <branch>`"),
+        "the routing block tells no project how to integrate: {agents}"
+    );
 
     // Back again: the block is what it was, byte for byte.
     rk().args(["upgrade", "--integration", "forge", "--apply", "--target"])
@@ -33241,4 +34015,2982 @@ fn a_narrowed_protection_policy_settles_rather_than_pending_forever() {
         report["config"]["state"], "aligned",
         "a floored policy the operator narrowed is not untaken configuration: {report}"
     );
+}
+
+/// A mock forge and registry for `rk release status`: `gh` answers each
+/// API path from a file named by the path, `curl` answers each URL with a
+/// status code from a file, and anything unanswered is a 404.
+struct ReleaseForge {
+    mock: tempfile::TempDir,
+}
+
+impl ReleaseForge {
+    fn new() -> Self {
+        let mock = tempfile::tempdir().expect("a mock dir exists");
+        std::fs::create_dir(mock.path().join("answers")).expect("the answers dir creates");
+        let gh = r#"#!/bin/sh
+key=$(printf '%s' "$2" | tr '/?&=.:' '______')
+dir="$(dirname "$0")/answers"
+printf '%s\n' "$2" >> "$dir/calls.log"
+if [ -f "$dir/$key.after" ]; then
+  read -r other at < "$dir/$key.after"
+  if [ "$(cat "$dir/$other.count" 2>/dev/null || echo 0)" -ge "$at" ]; then cat "$dir/$key.late.json"; exit 0; fi
+fi
+if [ -f "$dir/$key.1.json" ]; then
+  n=$(cat "$dir/$key.count" 2>/dev/null || echo 0)
+  n=$((n + 1))
+  printf '%s' "$n" > "$dir/$key.count"
+  while [ "$n" -gt 1 ] && [ ! -f "$dir/$key.$n.json" ]; do n=$((n - 1)); done
+  cat "$dir/$key.$n.json"
+  exit 0
+fi
+if [ -f "$dir/$key.json" ]; then cat "$dir/$key.json"; exit 0; fi
+if [ -f "$dir/$key.fail" ]; then echo "gh: authentication required" >&2; exit 4; fi
+echo "gh: Not Found (HTTP 404)" >&2
+exit 1
+"#;
+        let curl = r#"#!/bin/sh
+for url; do :; done
+key=$(printf '%s' "$url" | tr '/?&=.:' '______')
+dir="$(dirname "$0")/answers"
+printf '%s\n' "$url" >> "$dir/calls.log"
+if [ -f "$dir/curl-$key" ]; then cat "$dir/curl-$key"; else printf 404; fi
+"#;
+        for (name, body) in [("gh", gh), ("curl", curl)] {
+            let path = mock.path().join(name);
+            std::fs::write(&path, body).expect("the mock writes");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                    .expect("the mock is executable");
+            }
+        }
+        Self { mock }
+    }
+
+    fn key(path: &str) -> String {
+        path.chars()
+            .map(|c| if "/?&=.:".contains(c) { '_' } else { c })
+            .collect()
+    }
+
+    fn answer(&self, path: &str, body: &serde_json::Value) -> &Self {
+        std::fs::write(
+            self.mock
+                .path()
+                .join("answers")
+                .join(format!("{}.json", Self::key(path))),
+            body.to_string(),
+        )
+        .expect("the answer writes");
+        self
+    }
+
+    fn answer_in_turn(&self, path: &str, bodies: &[serde_json::Value]) -> &Self {
+        for (idx, body) in bodies.iter().enumerate() {
+            std::fs::write(
+                self.mock.path().join("answers").join(format!(
+                    "{}.{}.json",
+                    Self::key(path),
+                    idx + 1
+                )),
+                body.to_string(),
+            )
+            .expect("the answer writes");
+        }
+        self
+    }
+
+    /// Answer `path` with `late` once `after`, answered in turn, was read
+    /// `count` times: the way a tag a run makes appears only once it ran.
+    fn answer_after(&self, path: &str, late: &serde_json::Value, after: &str, count: u32) -> &Self {
+        let answers = self.mock.path().join("answers");
+        std::fs::write(
+            answers.join(format!("{}.late.json", Self::key(path))),
+            late.to_string(),
+        )
+        .expect("the late answer writes");
+        std::fs::write(
+            answers.join(format!("{}.after", Self::key(path))),
+            format!("{} {count}\n", Self::key(after)),
+        )
+        .expect("the condition writes");
+        self
+    }
+
+    fn fail(&self, path: &str) -> &Self {
+        std::fs::write(
+            self.mock
+                .path()
+                .join("answers")
+                .join(format!("{}.fail", Self::key(path))),
+            "",
+        )
+        .expect("the failure writes");
+        self
+    }
+
+    fn registry(&self, url: &str, code: &str) -> &Self {
+        std::fs::write(
+            self.mock
+                .path()
+                .join("answers")
+                .join(format!("curl-{}", Self::key(url))),
+            code,
+        )
+        .expect("the registry answer writes");
+        self
+    }
+
+    /// Every forge path and registry URL read so far, one per line.
+    fn calls(&self) -> String {
+        std::fs::read_to_string(self.mock.path().join("answers/calls.log")).unwrap_or_default()
+    }
+
+    fn rk(&self, target: &Path, extra: &[&str]) -> Command {
+        let mut command = rk();
+        command
+            .env("RK_GH_BIN", self.mock.path().join("gh"))
+            .env("RK_CURL_BIN", self.mock.path().join("curl"))
+            .env("RK_RELEASE_WAIT_INTERVAL_MS", "10")
+            .args(["release", "status", "--json", "--target"])
+            .arg(target)
+            .args(extra);
+        command
+    }
+
+    fn report(&self, target: &Path, extra: &[&str]) -> serde_json::Value {
+        let out = self
+            .rk(target, extra)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        serde_json::from_slice(&out).expect("one JSON object")
+    }
+}
+
+/// A landed rust target on GitHub, in a repository with one commit, with
+/// the crate name the registry reads back.
+fn release_target() -> tempfile::TempDir {
+    let target = status_repo();
+    std::fs::write(
+        target.path().join("Cargo.toml"),
+        "[package]\nname = \"widget\"\nversion = \"1.2.2\"\n",
+    )
+    .expect("the version file writes");
+    land_rust(target.path()).success();
+    target
+}
+
+const PULLS_OPEN: &str = "repos/acme/widget/pulls?state=open&base=master&per_page=100";
+const PULLS_CLOSED: &str =
+    "repos/acme/widget/pulls?state=closed&base=master&sort=updated&direction=desc&per_page=30";
+const TAGS: &str = "repos/acme/widget/tags?per_page=100";
+
+/// The forge of a project whose last release, v1.2.2, published with one
+/// attested artifact, and whose last merged release request shipped it.
+fn shipped_forge() -> ReleaseForge {
+    let forge = ReleaseForge::new();
+    forge
+        .answer(PULLS_OPEN, &serde_json::json!([]))
+        .answer(
+            PULLS_CLOSED,
+            &serde_json::json!([{
+                "number": 11, "title": "chore: release v1.2.2",
+                "head": {"ref": "release-plz-2026-10-01", "sha": "c0ffee"},
+                "merged_at": "2026-10-01T10:00:00Z"
+            }]),
+        )
+        .answer(
+            TAGS,
+            &serde_json::json!([{"name": "v1.2.2", "commit": {"sha": "aaa"}}]),
+        )
+        .answer(
+            "repos/acme/widget/releases/tags/v1.2.2",
+            &serde_json::json!({"assets": [{"name": "widget.tar.gz", "digest": "sha256:d1"}]}),
+        )
+        .answer(
+            "repos/acme/widget/attestations/sha256:d1",
+            &serde_json::json!({"attestations": [{"bundle": {}}]}),
+        )
+        .registry("https://crates.io/api/v1/crates/widget/1.2.2", "200");
+    forge
+}
+
+/// SATISFIES release-state:a-forge-field-reads-unknown-without-credentials
+///
+/// The record fields read offline; every forge field reads unknown where
+/// the forge CLI is missing or refuses, and the verb still exits 0.
+#[test]
+fn release_status_reads_unknown_without_credentials() {
+    let target = release_target();
+    let out = rk()
+        .env("RK_GH_BIN", "/no/such/gh")
+        .args(["release", "status", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["schema"], "rk.release-status/1");
+    assert_eq!(report["style"], "trunk");
+    assert_eq!(report["integration"], "forge");
+    assert_eq!(report["checkout_mode"], "linked-worktree");
+    assert_eq!(report["forge"]["read"], "unknown", "{report}");
+    for field in ["armed", "behind_trunk"] {
+        assert_eq!(report["request"][field], "unknown", "{report}");
+    }
+    assert_eq!(report["request"]["state"], "unknown");
+    assert_eq!(report["request"]["checks"], "unknown");
+    assert_eq!(report["last_release"]["published"], "unknown");
+    assert_eq!(report["last_release"]["artifacts_verified"], "unknown");
+
+    let refusing = ReleaseForge::new();
+    refusing.fail(PULLS_OPEN).fail(PULLS_CLOSED).fail(TAGS);
+    let report = refusing.report(target.path(), &[]);
+    assert_eq!(report["forge"]["read"], "unknown", "{report}");
+    assert!(
+        report["forge"]["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("authentication")),
+        "{report}"
+    );
+    assert_eq!(report["request"]["state"], "unknown");
+    // A refused tag read observed no absence, so no release reads absent.
+    assert!(report["last_release"]["tag"].is_null(), "{report}");
+    assert_eq!(report["last_release"]["published"], "unknown", "{report}");
+    assert_eq!(
+        report["last_release"]["artifacts_verified"], "unknown",
+        "{report}"
+    );
+
+    // Nor does a tag the clone carries: the forge vouched for no release,
+    // so its fields stay unknown even where the registry would answer.
+    git_in(target.path(), &["tag", "v1.2.2"]);
+    let refusing = ReleaseForge::new();
+    refusing
+        .fail(PULLS_OPEN)
+        .fail(PULLS_CLOSED)
+        .fail(TAGS)
+        .registry("https://crates.io/api/v1/crates/widget/1.2.2", "200");
+    let report = refusing.report(target.path(), &[]);
+    assert_eq!(report["last_release"]["tag"], "v1.2.2", "{report}");
+    assert_eq!(report["last_release"]["published"], "unknown", "{report}");
+    assert_eq!(
+        report["last_release"]["artifacts_verified"], "unknown",
+        "{report}"
+    );
+    let calls = refusing.calls();
+    assert!(
+        !calls.contains("releases/tags/v1.2.2") && !calls.contains("widget/1.2.2"),
+        "no page or registry read runs for the clone's tag: {calls}"
+    );
+}
+
+/// SATISFIES release-state:the-report-joins-the-record-and-the-forge
+///
+/// Each request state, and the last release with its read-back.
+#[test]
+fn release_status_reports_each_request_state() {
+    let target = release_target();
+    let forge = shipped_forge();
+    let report = forge.report(target.path(), &[]);
+    assert_eq!(report["forge"]["read"], "yes", "{report}");
+    assert_eq!(report["request"]["state"], "none", "{report}");
+    assert_eq!(report["last_release"]["tag"], "v1.2.2");
+    assert_eq!(report["last_release"]["published"], "yes");
+    assert_eq!(report["last_release"]["artifacts_verified"], "yes");
+    assert_eq!(report["symptoms"], serde_json::json!([]), "{report}");
+    assert_eq!(report["lines"], serde_json::json!([]));
+
+    let open = |auto_merge: serde_json::Value, checks: serde_json::Value, behind: u64| {
+        forge
+            .answer(
+                PULLS_OPEN,
+                &serde_json::json!([
+                    {"number": 7, "title": "feat: unrelated", "head": {"ref": "feat/x", "sha": "f00"},
+                     "auto_merge": null},
+                    {"number": 12, "title": "chore: release v1.2.3",
+                     "head": {"ref": "release-plz-2026-10-09", "sha": "abc"},
+                     "auto_merge": auto_merge}
+                ]),
+            )
+            .answer(
+                "repos/acme/widget/commits/abc/check-runs?per_page=100",
+                &serde_json::json!({ "check_runs": checks }),
+            )
+            .answer(
+                "repos/acme/widget/compare/master...abc",
+                &serde_json::json!({ "behind_by": behind }),
+            );
+        forge.report(target.path(), &[])
+    };
+    let armed = open(
+        serde_json::json!({"merge_method": "squash"}),
+        serde_json::json!([{"status": "completed", "conclusion": "success"}]),
+        0,
+    );
+    let request = &armed["request"];
+    assert_eq!(request["state"], "open", "{armed}");
+    assert_eq!(request["number"], 12);
+    assert_eq!(request["proposed_version"], "1.2.3");
+    assert_eq!(request["armed"], "yes");
+    assert_eq!(request["checks"], "passing");
+    assert_eq!(request["behind_trunk"], "no");
+
+    let unarmed = open(
+        serde_json::Value::Null,
+        serde_json::json!([{"status": "in_progress", "conclusion": null}]),
+        0,
+    );
+    assert_eq!(unarmed["request"]["armed"], "no", "{unarmed}");
+    assert_eq!(unarmed["request"]["checks"], "pending");
+
+    let behind = open(
+        serde_json::Value::Null,
+        serde_json::json!([{"status": "completed", "conclusion": "failure"}]),
+        3,
+    );
+    assert_eq!(behind["request"]["behind_trunk"], "yes", "{behind}");
+    assert_eq!(behind["request"]["checks"], "failing");
+
+    let human = rk()
+        .env("RK_GH_BIN", forge.mock.path().join("gh"))
+        .env("RK_CURL_BIN", forge.mock.path().join("curl"))
+        .args(["release", "status", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let human = String::from_utf8_lossy(&human);
+    assert!(
+        human.contains(
+            "request: #12 proposing 1.2.3, armed no, checks failing, behind the trunk yes"
+        ),
+        "{human}"
+    );
+    assert!(
+        human.contains("last release: v1.2.2, published yes, artifacts verified yes"),
+        "{human}"
+    );
+}
+
+/// SATISFIES release-state:a-symptom-names-its-recovery
+///
+/// Each detected symptom on a forge that shows it, with its evidence and
+/// the recovery section that owns the path.
+#[test]
+fn release_status_reports_each_detected_symptom() {
+    let target = release_target();
+
+    let unpublished = shipped_forge();
+    unpublished.answer(
+        PULLS_CLOSED,
+        &serde_json::json!([
+            {"number": 11, "title": "chore: release v1.2.2",
+             "head": {"ref": "release-plz-a", "sha": "c0"}, "merged_at": "2026-10-01T10:00:00Z"},
+            {"number": 13, "title": "chore: release v1.2.3",
+             "head": {"ref": "release-plz-b", "sha": "c1"}, "merged_at": "2026-10-09T10:00:00Z"}
+        ]),
+    );
+    let report = unpublished.report(target.path(), &[]);
+    let symptoms = report["symptoms"].as_array().expect("the symptoms");
+    assert_eq!(symptoms.len(), 1, "{report}");
+    assert_eq!(symptoms[0]["code"], "request-merged-nothing-published");
+    assert_eq!(
+        symptoms[0]["recovery"],
+        "The release request merged and nothing published"
+    );
+    assert!(
+        symptoms[0]["evidence"]
+            .as_str()
+            .is_some_and(|evidence| evidence.contains("#13") && evidence.contains("v1.2.3")),
+        "{report}"
+    );
+
+    let empty = shipped_forge();
+    empty.answer(
+        "repos/acme/widget/releases/tags/v1.2.2",
+        &serde_json::json!({"assets": []}),
+    );
+    let report = empty.report(target.path(), &[]);
+    assert_eq!(
+        report["symptoms"][0]["code"], "published-no-artifacts",
+        "{report}"
+    );
+    assert_eq!(
+        report["symptoms"][0]["recovery"],
+        "The artifact build failed"
+    );
+    assert_eq!(report["last_release"]["artifacts_verified"], "no");
+
+    let unattested = shipped_forge();
+    unattested.answer(
+        "repos/acme/widget/attestations/sha256:d1",
+        &serde_json::json!({"attestations": []}),
+    );
+    let report = unattested.report(target.path(), &[]);
+    assert_eq!(
+        report["symptoms"][0]["code"], "artifact-without-attestation",
+        "{report}"
+    );
+    assert!(
+        report["symptoms"][0]["evidence"]
+            .as_str()
+            .is_some_and(|evidence| evidence.contains("widget.tar.gz")),
+        "{report}"
+    );
+}
+
+/// SATISFIES release-state:a-wait-selects-runs-by-commit
+///
+/// `--wait <sha>` selects the publish and the artifact run on that
+/// commit, never the newest run, waits until both conclude, and reports
+/// the release they made.
+#[test]
+fn release_status_wait_selects_the_runs_on_the_commit() {
+    let target = release_target();
+    let forge = shipped_forge();
+    let runs = "repos/acme/widget/actions/runs?head_sha=aaa&per_page=100";
+    let request_run = serde_json::json!({
+        "id": 99, "head_sha": "bbb", "event": "pull_request", "status": "in_progress",
+        "conclusion": null, "path": ".github/workflows/release-plz.yml", "head_branch": "release-plz-x"
+    });
+    let publish = serde_json::json!({
+        "id": 20, "head_sha": "aaa", "event": "push", "status": "completed",
+        "conclusion": "success", "path": ".github/workflows/release-plz.yml", "head_branch": "master"
+    });
+    let building = serde_json::json!({
+        "id": 21, "head_sha": "aaa", "event": "push", "status": "in_progress",
+        "conclusion": null, "path": ".github/workflows/release.yml", "head_branch": "v1.2.2"
+    });
+    let built = serde_json::json!({
+        "id": 21, "head_sha": "aaa", "event": "push", "status": "completed",
+        "conclusion": "success", "path": ".github/workflows/release.yml", "head_branch": "v1.2.2"
+    });
+    forge.answer_in_turn(
+        runs,
+        &[
+            serde_json::json!({ "workflow_runs": [request_run, publish, building] }),
+            serde_json::json!({ "workflow_runs": [request_run, publish, built] }),
+        ],
+    );
+    let report = forge.report(target.path(), &["--wait", "aaa"]);
+    let wait = &report["wait"];
+    assert_eq!(wait["publish"]["id"], 20, "{report}");
+    assert_eq!(wait["artifact"]["id"], 21, "{report}");
+    assert_eq!(wait["artifact"]["conclusion"], "success");
+    assert_eq!(wait["tag"], "v1.2.2");
+    assert_eq!(wait["timed_out"], false);
+    assert_eq!(report["last_release"]["tag"], "v1.2.2");
+    assert_eq!(report["last_release"]["published"], "yes");
+    assert_eq!(report["last_release"]["artifacts_verified"], "yes");
+
+    // A run that concluded with a failure ends the wait with exit 1,
+    // after the report.
+    let failing = shipped_forge();
+    let broke = serde_json::json!({
+        "id": 21, "head_sha": "aaa", "event": "push", "status": "completed",
+        "conclusion": "failure", "path": ".github/workflows/release.yml", "head_branch": "v1.2.2"
+    });
+    failing.answer(
+        runs,
+        &serde_json::json!({ "workflow_runs": [publish, broke] }),
+    );
+    let out = failing
+        .rk(target.path(), &["--wait", "aaa"])
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["wait"]["artifact"]["conclusion"], "failure");
+}
+
+/// SATISFIES release-state:a-wait-selects-runs-by-commit
+///
+/// A run on the trunk tags its own commit while it runs, and no run
+/// carries that tag as its branch: the wait reads the tags once the runs
+/// concluded, so it reports the release they made, not the one before.
+#[test]
+fn release_status_wait_reads_the_tag_a_trunk_run_made() {
+    let target = release_target();
+    let forge = shipped_forge();
+    let runs = "repos/acme/widget/actions/runs?head_sha=aaa&per_page=100";
+    let run = |id: u32, path: &str, done: bool| {
+        serde_json::json!({
+            "id": id, "head_sha": "aaa", "event": "push",
+            "status": if done { "completed" } else { "in_progress" },
+            "conclusion": if done { serde_json::json!("success") } else { serde_json::Value::Null },
+            "path": path, "head_branch": "master"
+        })
+    };
+    forge.answer_in_turn(
+        runs,
+        &[
+            serde_json::json!({ "workflow_runs": [
+                run(20, ".github/workflows/release-plz.yml", false),
+                run(21, ".github/workflows/release.yml", false),
+            ] }),
+            serde_json::json!({ "workflow_runs": [
+                run(20, ".github/workflows/release-plz.yml", true),
+                run(21, ".github/workflows/release.yml", true),
+            ] }),
+        ],
+    );
+    forge
+        .answer(
+            TAGS,
+            &serde_json::json!([{"name": "v1.2.1", "commit": {"sha": "old"}}]),
+        )
+        .answer_after(
+            TAGS,
+            &serde_json::json!([
+                {"name": "v1.2.2", "commit": {"sha": "aaa"}},
+                {"name": "v1.2.1", "commit": {"sha": "old"}}
+            ]),
+            runs,
+            2,
+        );
+    let report = forge.report(target.path(), &["--wait", "aaa"]);
+    assert_eq!(report["wait"]["timed_out"], false, "{report}");
+    assert_eq!(report["wait"]["tag"], "v1.2.2", "{report}");
+    assert_eq!(report["last_release"]["tag"], "v1.2.2", "{report}");
+    assert_eq!(report["last_release"]["published"], "yes");
+
+    // A commit whose runs concluded without making a release reports
+    // none, never the older release beside it.
+    let untagged = shipped_forge();
+    untagged
+        .answer(
+            runs,
+            &serde_json::json!({ "workflow_runs": [
+                run(20, ".github/workflows/release-plz.yml", true),
+                run(21, ".github/workflows/release.yml", true),
+            ] }),
+        )
+        .answer(
+            TAGS,
+            &serde_json::json!([{"name": "v1.2.1", "commit": {"sha": "old"}}]),
+        );
+    let report = untagged.report(target.path(), &["--wait", "aaa"]);
+    assert!(report["wait"]["tag"].is_null(), "{report}");
+    assert!(report["last_release"]["tag"].is_null(), "{report}");
+    assert_ne!(report["last_release"]["published"], "yes", "{report}");
+}
+
+/// The milestone events of one `rk setup check --json`, by id.
+fn milestones_of(
+    forge: &ReleaseForge,
+    target: &Path,
+) -> std::collections::BTreeMap<String, (String, String)> {
+    let out = rk()
+        .env("RK_GH_BIN", forge.mock.path().join("gh"))
+        .env("RK_CURL_BIN", forge.mock.path().join("curl"))
+        .env_remove("RK_BOT_APP_ID")
+        .env_remove("RK_BOT_PRIVATE_KEY")
+        .env_remove("RK_BOT_PRIVATE_KEY_FILE")
+        .env_remove("RK_BOT_TOKEN")
+        .args(["setup", "check", "--json", "--target"])
+        .arg(target)
+        .output()
+        .expect("the check runs");
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("one event per line"))
+        .filter(|event| event["type"] == "milestone")
+        .map(|event| {
+            (
+                event["step"].as_str().expect("an id").to_owned(),
+                (
+                    event["status"].as_str().expect("a status").to_owned(),
+                    event["detail"].as_str().expect("a detail").to_owned(),
+                ),
+            )
+        })
+        .collect()
+}
+
+/// SATISFIES setup-proof:the-check-reads-the-publish-milestones
+///
+/// The check reads both milestones back where the forge and the registry
+/// answer, reports each one not observed where they deny it, and reports
+/// every registry form no API exposes as the operator's, with the
+/// binding's read-back check.
+#[test]
+fn setup_check_reports_the_publish_milestones() {
+    let target = release_target();
+    let runs = "repos/acme/widget/actions/workflows/release-plz.yml/runs?branch=master&head_sha=aaa&event=push&status=success&per_page=1";
+    let released = |forge: &ReleaseForge| {
+        forge
+            .registry("https://crates.io/api/v1/crates/widget", "200")
+            .answer(
+                "repos/acme/widget/releases?per_page=1",
+                &serde_json::json!([{"tag_name": "v1.2.2"}]),
+            )
+            .answer(
+                "repos/acme/widget/commits/v1.2.2",
+                &serde_json::json!({"sha": "aaa"}),
+            );
+    };
+    let proven = ReleaseForge::new();
+    released(&proven);
+    proven.answer(
+        runs,
+        &serde_json::json!({"total_count": 1, "workflow_runs": [{"id": 1}]}),
+    );
+    let found = milestones_of(&proven, target.path());
+    assert_eq!(found["first-version-published"].0, "observed", "{found:?}");
+    assert_eq!(found["automated-release-proven"].0, "observed", "{found:?}");
+    for form in [
+        "trusted-publisher",
+        "bootstrap-token-revoked",
+        "trusted-publishing-required",
+    ] {
+        assert_eq!(found[form].0, "operator", "{found:?}");
+        assert!(found[form].1.contains("rk binding rust"), "{found:?}");
+    }
+
+    let fresh = ReleaseForge::new();
+    let found = milestones_of(&fresh, target.path());
+    assert_eq!(
+        found["first-version-published"].0, "not-observed",
+        "{found:?}"
+    );
+    assert_eq!(
+        found["automated-release-proven"].0, "not-observed",
+        "{found:?}"
+    );
+
+    // A release page beside a successful run proves nothing unless the
+    // run is the one at the release's commit: a manual first release and
+    // a later run that published nothing read as not observed.
+    let unrelated = ReleaseForge::new();
+    released(&unrelated);
+    unrelated
+        .answer(runs, &serde_json::json!({"total_count": 0, "workflow_runs": []}))
+        .answer(
+            "repos/acme/widget/actions/workflows/release-plz.yml/runs?branch=master&event=push&status=success&per_page=1",
+            &serde_json::json!({"total_count": 1, "workflow_runs": [{"id": 1}]}),
+        );
+    let found = milestones_of(&unrelated, target.path());
+    assert_eq!(
+        found["automated-release-proven"].0, "not-observed",
+        "{found:?}"
+    );
+
+    let refusing = ReleaseForge::new();
+    released(&refusing);
+    refusing.fail(runs);
+    let found = milestones_of(&refusing, target.path());
+    assert_eq!(found["first-version-published"].0, "observed", "{found:?}");
+    assert_eq!(found["automated-release-proven"].0, "unknown", "{found:?}");
+    assert_eq!(
+        found["trusted-publishing-required"].0, "operator",
+        "{found:?}"
+    );
+}
+
+/// Commit every change in a scratch repository.
+fn commit_all(dir: &Path, message: &str) {
+    git_in(dir, &["add", "-A"]);
+    git_in(dir, &["commit", "-qm", message]);
+}
+
+/// The flags a compare fixture lands and stages under: the standard rust
+/// pair with the Nix opt-in, so the stage carries a state file too.
+const COMPARE_FLAGS: [&str; 9] = [
+    "--tech",
+    "rust",
+    "--forge",
+    "github",
+    "--integration",
+    "forge",
+    "--repo",
+    "acme/widget",
+    "--nix-packaging",
+];
+
+/// Stage `target` into a fresh directory under `scratch`, returning the
+/// stage root.
+fn stage_into(target: &Path, scratch: &Path, flags: &[&str]) -> PathBuf {
+    let output = scratch.join("stage");
+    rk().env_remove("RK_STAGE_ROOT")
+        .args(["stage", "--target"])
+        .arg(target)
+        .args(flags)
+        .arg("--output")
+        .arg(&output)
+        .assert()
+        .success();
+    output
+}
+
+/// `rk stage compare` as JSON.
+fn compare_json(stage: &Path, target: &Path) -> serde_json::Value {
+    let out = rk()
+        .args(["stage", "compare"])
+        .arg(stage)
+        .arg("--target")
+        .arg(target)
+        .arg("--json")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    serde_json::from_slice(&out).expect("one JSON object")
+}
+
+/// The row for `path` in a comparison.
+fn compare_row<'a>(report: &'a serde_json::Value, path: &str) -> &'a serde_json::Value {
+    report["rows"]
+        .as_array()
+        .expect("the rows")
+        .iter()
+        .find(|row| row["path"] == path)
+        .unwrap_or_else(|| panic!("no row for {path}: {report}"))
+}
+
+/// SATISFIES staging:the-comparison-is-the-landing-decision
+///
+/// Each state, kind, and provenance class on a fixture for each, and every
+/// word equal to the action the production verb prints on the same
+/// target. After the landing, every rendered destination reads equal.
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one fixture shows every state, kind, and provenance class beside the production words"
+)]
+fn stage_compare_reports_each_state_kind_and_provenance() {
+    let target = status_repo();
+    seed_crate(target.path());
+    rk().args(["init"])
+        .args(COMPARE_FLAGS)
+        .arg("--target")
+        .arg(target.path())
+        .arg("--apply")
+        .assert()
+        .success();
+    commit_all(target.path(), "chore: land the convention");
+
+    // Attributed: an older release wrote these bytes, the record vouches
+    // for them, and the history carries them.
+    let title = target.path().join(".github/workflows/pr-title.yml");
+    std::fs::write(&title, "# an older release's title check\n").expect("writes");
+    let mut manifest = read_manifest(target.path());
+    vouch_for(
+        &mut manifest,
+        &[".github/workflows/pr-title.yml"],
+        b"# an older release's title check\n",
+    );
+    // Retired: a destination the record names and this release no longer
+    // produces.
+    std::fs::write(target.path().join("legacy.yml"), "old\n").expect("writes");
+    manifest["files"]
+        .as_array_mut()
+        .expect("files")
+        .push(serde_json::json!({
+            "destination": "legacy.yml",
+            "kind": "rendered",
+            "sha256": Digest::of(b"old\n").to_string(),
+            "placement": "whole",
+        }));
+    write_manifest(target.path(), &manifest);
+    commit_all(target.path(), "chore: an older landing");
+    // Reduced: someone edited a recorded rendered file after the landing.
+    let workflow = target.path().join(".github/workflows/release-plz.yml");
+    let landed = std::fs::read_to_string(&workflow).expect("reads");
+    std::fs::write(&workflow, format!("{landed}# a local edit\n")).expect("writes");
+    // Absent: a recorded rendered file someone deleted.
+    std::fs::remove_file(target.path().join("SECURITY.md")).expect("removes");
+
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let stage = stage_into(target.path(), scratch.path(), &COMPARE_FLAGS);
+    let report = compare_json(&stage, target.path());
+    assert_eq!(report["schema"], "rk.stage-compare/1");
+    assert_eq!(report["history"]["available"], true, "{report}");
+
+    let row = compare_row(&report, ".github/workflows/pr-title.yml");
+    assert_eq!(
+        (
+            &row["state"],
+            &row["kind"],
+            &row["provenance"],
+            &row["word"]
+        ),
+        (
+            &serde_json::json!("differs"),
+            &serde_json::json!("rendered"),
+            &serde_json::json!("attributed"),
+            &serde_json::json!("replaced")
+        ),
+        "{row}"
+    );
+    let row = compare_row(&report, ".github/workflows/release-plz.yml");
+    assert_eq!(row["state"], "differs", "{row}");
+    assert_eq!(row["provenance"], "reduced", "{row}");
+    assert_eq!(row["vouched"], false, "{row}");
+    assert_eq!(row["word"], "collision", "{row}");
+    let row = compare_row(&report, "SECURITY.md");
+    assert_eq!(
+        (&row["state"], &row["word"]),
+        (&serde_json::json!("absent"), &serde_json::json!("created")),
+        "{row}"
+    );
+    assert!(row["provenance"].is_null(), "{row}");
+    let row = compare_row(&report, "legacy.yml");
+    assert_eq!(
+        (&row["state"], &row["word"]),
+        (
+            &serde_json::json!("retired"),
+            &serde_json::json!("released")
+        ),
+        "{row}"
+    );
+    assert_eq!(compare_row(&report, "AGENTS.md")["kind"], "region");
+    assert_eq!(compare_row(&report, "AGENTS.md")["state"], "equal");
+    assert_eq!(compare_row(&report, "release-plz.toml")["kind"], "seeded");
+    assert_eq!(compare_row(&report, "flake.lock")["kind"], "state");
+
+    // Every word is the action the production verb prints here.
+    let out = rk()
+        .args(["upgrade", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let preview: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    for row in report["rows"].as_array().expect("the rows") {
+        let action = preview["files"]
+            .as_array()
+            .expect("files")
+            .iter()
+            .find(|file| file["path"] == row["path"])
+            .map(|file| file["action"].clone());
+        assert_eq!(
+            action.as_ref(),
+            Some(&row["word"]),
+            "{row} against {preview}"
+        );
+    }
+
+    // Unknown: no history to read and no record that vouches.
+    let plain = plan_target();
+    seed_crate(plain.path());
+    rk().args(["init"])
+        .args(COMPARE_FLAGS)
+        .arg("--target")
+        .arg(plain.path())
+        .arg("--apply")
+        .assert()
+        .success();
+    let edited = plain.path().join(".github/workflows/release-plz.yml");
+    std::fs::write(&edited, "# mine\n").expect("writes");
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let stage = stage_into(plain.path(), scratch.path(), &COMPARE_FLAGS);
+    let report = compare_json(&stage, plain.path());
+    assert_eq!(report["history"]["available"], false, "{report}");
+    assert!(report["history"]["reason"].is_string(), "{report}");
+    assert_eq!(
+        compare_row(&report, ".github/workflows/release-plz.yml")["provenance"],
+        "unknown"
+    );
+
+    // The proof: land from the stage, naming the one conflict, and every
+    // rendered destination reads equal.
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let stage = stage_into(target.path(), scratch.path(), &COMPARE_FLAGS);
+    rk().args(["upgrade", "--apply", "--stage"])
+        .arg(&stage)
+        .args(["--replace", ".github/workflows/release-plz.yml", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let proven = compare_json(&stage, target.path());
+    let rows = proven["rows"].as_array().expect("the rows");
+    assert!(
+        rows.iter().any(|row| row["state"] == "retired"),
+        "the stage still names the released destination: {proven}"
+    );
+    for row in rows {
+        if matches!(row["kind"].as_str(), Some("rendered" | "region")) && row["state"] != "retired"
+        {
+            assert_eq!(row["state"], "equal", "{row}");
+        }
+    }
+    // The retired row is the target's now, so the verb reads the proof.
+    rk().args(["stage", "compare"])
+        .arg(&stage)
+        .arg("--target")
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("the landing is proven"));
+}
+
+/// SATISFIES staging:the-comparison-is-the-landing-decision
+///
+/// The comparison reports every destination: a retired path no read
+/// answers, a directory where the file stood, is a row with unknown
+/// provenance that nothing vouches for, and the other rows still come.
+#[test]
+fn an_unreadable_retired_path_is_a_row_not_a_failed_report() {
+    let target = plan_target();
+    land_rust_guarded(target.path()).success();
+    let mut manifest = read_manifest(target.path());
+    manifest["files"]
+        .as_array_mut()
+        .expect("files")
+        .push(serde_json::json!({
+            "destination": "legacy.yml",
+            "kind": "rendered",
+            "sha256": Digest::of(b"old\n").to_string(),
+            "placement": "whole",
+        }));
+    write_manifest(target.path(), &manifest);
+    std::fs::create_dir(target.path().join("legacy.yml")).expect("a directory stands there");
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let stage = stage_into(target.path(), scratch.path(), &[]);
+    let report = compare_json(&stage, target.path());
+    let row = compare_row(&report, "legacy.yml");
+    assert_eq!(row["state"], "retired", "{row}");
+    assert_eq!(row["provenance"], "unknown", "{row}");
+    assert!(row["vouched"].is_null(), "{row}");
+    assert_eq!(row["replaceable"], false, "{row}");
+    assert_eq!(
+        compare_row(&report, ".github/workflows/release-plz.yml")["state"],
+        "equal",
+        "the other destinations are still reported: {report}"
+    );
+}
+
+/// With no receipt, the history tells a file untouched since the commit
+/// that brought it apart from one edited after it, and an edited recorded
+/// file never reads attributed.
+#[test]
+fn stage_compare_reads_the_history_of_a_target_with_no_receipt() {
+    let target = status_repo();
+    seed_crate(target.path());
+    land_rust(target.path()).success();
+    std::fs::remove_dir_all(target.path().join(".release-kit")).expect("the record removes");
+    commit_all(target.path(), "chore: a landing before the record");
+    let workflow = target.path().join(".github/workflows/release-plz.yml");
+    let landed = std::fs::read_to_string(&workflow).expect("reads");
+    std::fs::write(&workflow, format!("{landed}# ours\n")).expect("writes");
+    commit_all(target.path(), "chore: tune the workflow");
+
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    // The target carries the landing without its record, so the stage
+    // takes the adoption's answers and names the landing's style.
+    let stage = stage_into(
+        target.path(),
+        scratch.path(),
+        &[&STAGE_FLAGS[..], &["--release-style", "trunk"]].concat(),
+    );
+    let report = compare_json(&stage, target.path());
+    let edited = compare_row(&report, ".github/workflows/release-plz.yml");
+    assert_eq!(edited["state"], "differs", "{edited}");
+    assert_eq!(edited["edited_after_added"], true, "{edited}");
+    assert_ne!(edited["provenance"], "attributed", "{edited}");
+    let untouched = compare_row(&report, ".github/workflows/pr-title.yml");
+    assert_eq!(untouched["edited_after_added"], false, "{untouched}");
+}
+
+/// SATISFIES staging:a-landing-reads-the-stage-parameters
+///
+/// The receipt carries every answer resolved, defaults included, and the
+/// landing takes them back as given: over a target whose answers did not
+/// change, that lands no byte at all, the configuration with its comments
+/// and the record included. rk resolves a default and an answer to the
+/// same bytes, so this guards a defect it never had.
+#[test]
+fn an_unchanged_upgrade_from_a_stage_keeps_every_byte() {
+    let target = plan_target();
+    land_rust_guarded(target.path()).success();
+    let before = tree_bytes(target.path());
+    assert!(
+        before.contains_key(".release-kit/config.toml"),
+        "the landing wrote a configuration to compare"
+    );
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let stage = stage_into(target.path(), scratch.path(), &[]);
+    rk().args(["upgrade", "--apply", "--stage"])
+        .arg(&stage)
+        .arg("--target")
+        .arg(target.path())
+        .assert()
+        .success();
+    let after = tree_bytes(target.path());
+    for (path, bytes) in &before {
+        assert_eq!(
+            after
+                .get(path)
+                .map(|after| String::from_utf8_lossy(after).into_owned()),
+            Some(String::from_utf8_lossy(bytes).into_owned()),
+            "{path} changed on an unchanged landing"
+        );
+    }
+    assert_eq!(
+        after.keys().collect::<Vec<_>>(),
+        before.keys().collect::<Vec<_>>(),
+        "an unchanged landing adds or removes no file"
+    );
+}
+
+/// SATISFIES staging:a-landing-reads-the-stage-parameters
+///
+/// `rk init --stage <root>` lands the receipt's answers, an answer beside
+/// it is a usage error, and every landing verb refuses a stage another
+/// binary wrote or one taken for another target.
+#[test]
+fn a_landing_reads_the_stage_parameters_and_refuses_a_foreign_stage() {
+    let target = plan_target();
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let stage = stage_into(
+        target.path(),
+        scratch.path(),
+        &[
+            "--tech",
+            "rust",
+            "--forge",
+            "github",
+            "--repo",
+            "acme/widget",
+            "--integration",
+            "local",
+            "--checkout-mode",
+            "main-worktree",
+        ],
+    );
+    rk().args(["init", "--stage"])
+        .arg(&stage)
+        .args(["--repo", "acme/other", "--target"])
+        .arg(target.path())
+        .assert()
+        .code(64)
+        .stderr(predicate::str::contains("--stage carries every answer"));
+    rk().args(["init", "--apply", "--stage"])
+        .arg(&stage)
+        .arg("--target")
+        .arg(target.path())
+        .assert()
+        .success();
+    let manifest = read_manifest(target.path());
+    assert_eq!(manifest["git"]["integration"], "local", "{manifest}");
+    assert_eq!(
+        manifest["git"]["checkout_mode"], "main-worktree",
+        "{manifest}"
+    );
+    assert_eq!(manifest["parameters"]["repo"], "acme/widget");
+
+    let other = plan_target();
+    for verb in ["init", "upgrade", "adopt"] {
+        rk().args([verb, "--stage"])
+            .arg(&stage)
+            .arg("--target")
+            .arg(other.path())
+            .assert()
+            .failure()
+            .stderr(
+                predicate::str::contains("was taken for")
+                    .or(predicate::str::contains("manifest.json")),
+            );
+    }
+    // A stage another binary wrote: the recorded target for an upgrade,
+    // and a target with no record for a first landing and an adoption.
+    let fresh = plan_target();
+    let fresh_scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let fresh_stage = stage_into(fresh.path(), fresh_scratch.path(), &STAGE_FLAGS);
+    for (verb, stage, target) in [
+        ("upgrade", &stage, target.path()),
+        ("init", &fresh_stage, fresh.path()),
+        ("adopt", &fresh_stage, fresh.path()),
+    ] {
+        let mut receipt = stage_receipt(stage);
+        receipt["rk_version"] = serde_json::json!("0.0.1");
+        std::fs::write(stage.join("stage.json"), receipt.to_string()).expect("the receipt writes");
+        rk().args([verb, "--stage"])
+            .arg(stage)
+            .arg("--target")
+            .arg(target)
+            .assert()
+            .code(73)
+            .stderr(predicate::str::contains("was written by rk 0.0.1"));
+    }
+}
+
+/// SATISFIES staging:the-comparison-is-the-landing-decision
+///
+/// For a target the adoption lands, each row carries the adoption's own
+/// decision: a tuned seeded file stays and reads `preserved`, which no
+/// `--replace` may name, and an edited rendered file reads `collision`,
+/// which a named `--replace` answers.
+#[test]
+fn an_adoption_stage_compares_with_the_adoptions_own_words() {
+    let target = plan_target();
+    land_rust_guarded(target.path()).success();
+    let manifest = read_manifest(target.path());
+    let seeded = manifest["files"]
+        .as_array()
+        .expect("the files")
+        .iter()
+        .find(|file| {
+            file["kind"] == "seeded"
+                && file["placement"].is_null()
+                && !file["destination"]
+                    .as_str()
+                    .is_some_and(|path| path.starts_with(".release-kit/"))
+        })
+        .and_then(|file| file["destination"].as_str())
+        .expect("the landing seeds a file")
+        .to_owned();
+    std::fs::remove_dir_all(target.path().join(".release-kit")).expect("the record removes");
+    let tune = |path: &str, line: &str| {
+        let file = target.path().join(path);
+        let text = std::fs::read_to_string(&file).expect("reads");
+        std::fs::write(&file, format!("{text}{line}\n")).expect("writes");
+    };
+    let rendered = ".github/workflows/release-plz.yml";
+    tune(&seeded, "# tuned by the project");
+    tune(rendered, "# edited by hand");
+
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let stage = stage_into(
+        target.path(),
+        scratch.path(),
+        &[
+            &STAGE_FLAGS[..],
+            &["--release-style", "trunk", "--workflow", "worktree"],
+        ]
+        .concat(),
+    );
+    let report = compare_json(&stage, target.path());
+    assert_eq!(
+        compare_row(&report, &seeded)["word"],
+        "preserved",
+        "{report}"
+    );
+    assert_eq!(
+        compare_row(&report, rendered)["word"],
+        "collision",
+        "{report}"
+    );
+    assert_eq!(compare_row(&report, &seeded)["replaceable"], false);
+    assert_eq!(compare_row(&report, rendered)["replaceable"], true);
+
+    let adopt = |replace: &str| {
+        let mut command = rk();
+        command
+            .args(["adopt", "--apply", "--stage"])
+            .arg(&stage)
+            .args(["--replace", replace, "--target"])
+            .arg(target.path());
+        command
+    };
+    adopt(&seeded).assert().code(64);
+    assert!(!target.path().join(".release-kit/manifest.json").exists());
+    adopt(rendered).assert().success();
+    assert!(target.path().join(".release-kit/manifest.json").exists());
+}
+
+/// SATISFIES staging:the-comparison-is-the-landing-decision
+///
+/// A collision `--replace` cannot pass reads `replaceable` false: a link
+/// standing where a rendered file belongs is no file to save and
+/// overwrite, and the landing refuses it however it is named.
+#[test]
+fn a_collision_no_replace_passes_reads_not_replaceable() {
+    let target = plan_target();
+    land_rust_guarded(target.path()).success();
+    let title = ".github/workflows/pr-title.yml";
+    let path = target.path().join(title);
+    let moved = target.path().join("pr-title.yml.orig");
+    std::fs::rename(&path, &moved).expect("the file moves");
+    std::os::unix::fs::symlink(&moved, &path).expect("a link stands in its place");
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let stage = stage_into(target.path(), scratch.path(), &[]);
+    let report = compare_json(&stage, target.path());
+    let row = compare_row(&report, title);
+    assert_eq!(row["word"], "collision", "{row}");
+    assert_eq!(row["replaceable"], false, "{row}");
+    rk().args(["upgrade", "--apply", "--stage"])
+        .arg(&stage)
+        .args(["--replace", title, "--target"])
+        .arg(target.path())
+        .assert()
+        .code(64);
+    let landed = compare_row(&report, ".github/workflows/release-plz.yml");
+    assert_eq!(
+        landed["replaceable"], false,
+        "a row the landing decides: {landed}"
+    );
+
+    // An edited rendered file is a collision `--replace` passes, until
+    // the record is a newer binary's: the upgrade refuses that before any
+    // replace check, so nothing reads replaceable.
+    let edited = ".github/workflows/release-plz.yml";
+    let file = target.path().join(edited);
+    let text = std::fs::read_to_string(&file).expect("reads");
+    std::fs::write(&file, format!("{text}# edited by hand\n")).expect("writes");
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let stage = stage_into(target.path(), scratch.path(), &[]);
+    assert_eq!(
+        compare_row(&compare_json(&stage, target.path()), edited)["replaceable"],
+        true
+    );
+    let mut manifest = read_manifest(target.path());
+    manifest["rk_version"] = serde_json::Value::from("999.0.0");
+    write_manifest(target.path(), &manifest);
+    let row = compare_row(&compare_json(&stage, target.path()), edited).clone();
+    assert_eq!(row["word"], "collision", "{row}");
+    assert_eq!(row["replaceable"], false, "{row}");
+}
+
+/// SATISFIES staging:the-comparison-is-the-landing-decision
+///
+/// An adoption judges a destination by the landing's own walk: a link
+/// whose target is gone is a link, not an absent file, so it reads
+/// `replaceable` false and the adoption refuses its name cleanly.
+#[test]
+fn a_dangling_link_is_no_replaceable_adoption_row() {
+    let target = plan_target();
+    land_rust_guarded(target.path()).success();
+    std::fs::remove_dir_all(target.path().join(".release-kit")).expect("the record removes");
+    let title = ".github/workflows/pr-title.yml";
+    let path = target.path().join(title);
+    std::fs::remove_file(&path).expect("the file removes");
+    std::os::unix::fs::symlink(target.path().join("gone.yml"), &path)
+        .expect("a dangling link stands in its place");
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let stage = stage_into(
+        target.path(),
+        scratch.path(),
+        &[
+            &STAGE_FLAGS[..],
+            &["--release-style", "trunk", "--workflow", "worktree"],
+        ]
+        .concat(),
+    );
+    let report = compare_json(&stage, target.path());
+    let row = compare_row(&report, title);
+    assert_eq!(row["word"], "collision", "{row}");
+    assert_eq!(row["replaceable"], false, "{row}");
+    rk().args(["adopt", "--apply", "--stage"])
+        .arg(&stage)
+        .args(["--replace", title, "--target"])
+        .arg(target.path())
+        .assert()
+        .code(64);
+    assert!(!target.path().join(".release-kit/manifest.json").exists());
+}
+
+/// SATISFIES landing:ownership-is-elementary
+///
+/// A replaced file's copy goes to a snapshot the run claims under the
+/// state root, an open migration's run included, never into the
+/// migration's workspace.
+#[test]
+fn a_replaced_copy_goes_to_the_state_root_during_a_migration() {
+    let target = plan_target();
+    land_rust_guarded(target.path()).success();
+    let workflow = ".github/workflows/release-plz.yml";
+    let file = target.path().join(workflow);
+    let text = std::fs::read_to_string(&file).expect("reads");
+    std::fs::write(&file, format!("{text}# edited by hand\n")).expect("writes");
+    let config = target.path().join(".release-kit/config.toml");
+    let text = std::fs::read_to_string(&config).expect("the configuration reads");
+    let (first, rest) = text.split_once('\n').expect("a first line");
+    std::fs::write(
+        &config,
+        format!("{first}\nmigration = \"20261010T120000Z\"\n{rest}"),
+    )
+    .expect("the migration opens");
+    let state = tempfile::tempdir().expect("a scratch state root exists");
+    let out = rk()
+        .env("XDG_STATE_HOME", state.path())
+        .args([
+            "upgrade",
+            "--apply",
+            "--json",
+            "--replace",
+            workflow,
+            "--target",
+        ])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    let saved = report["replaced"][0]["saved_to"]
+        .as_str()
+        .expect("the saved copy is named");
+    assert!(
+        saved.starts_with(
+            &state
+                .path()
+                .join("release-kit/snapshots")
+                .display()
+                .to_string()
+        ),
+        "{saved}"
+    );
+    assert!(
+        !state.path().join("release-kit/migrations").exists(),
+        "nothing writes into a migration workspace"
+    );
+}
+
+/// A stage previews the verb that lands it: a target carrying
+/// release-kit's own landing without its record stages under the
+/// adoption's answers, and refuses where the release style is unnamed,
+/// as `rk adopt` itself does, rather than defaulting a first landing's.
+#[test]
+fn a_stage_for_an_adoption_refuses_an_unnamed_release_style() {
+    let target = plan_target();
+    land_rust_guarded(target.path()).success();
+    std::fs::remove_dir_all(target.path().join(".release-kit")).expect("the record removes");
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    rk().env_remove("RK_STAGE_ROOT")
+        .args(["stage", "--target"])
+        .arg(target.path())
+        .args(STAGE_FLAGS)
+        .arg("--output")
+        .arg(scratch.path().join("stage"))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("style"));
+    assert!(
+        !scratch.path().join("stage").exists(),
+        "a refused stage writes nothing"
+    );
+}
+
+/// An open migration outranks the adoption detector, as `rk status`
+/// reads it: a target whose migration keeps a release-kit block stages
+/// as the first landing its close makes, not as an adoption.
+#[test]
+fn a_stage_during_an_open_migration_is_no_adoption() {
+    let target = plan_target();
+    land_rust_guarded(target.path()).success();
+    std::fs::remove_file(target.path().join(".release-kit/manifest.json"))
+        .expect("the record removes");
+    // The configuration holds the open migration alone, so no style is
+    // answered and the purpose decides whether one is required.
+    std::fs::write(
+        target.path().join(".release-kit/config.toml"),
+        "schema_version = 2\nmigration = \"20261010T120000Z\"\n",
+    )
+    .expect("the migration opens");
+    let out = rk()
+        .args(["status", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .get_output()
+        .stdout
+        .clone();
+    let status: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(status["classification"], "migration", "{status}");
+    // A first landing names no style and defaults it; an adoption would
+    // refuse the same flags.
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    stage_into(target.path(), scratch.path(), &STAGE_FLAGS);
+}
+
+/// `rk adopt --stage <root> --replace <path>` records the target after
+/// replacing only the named file, its bytes saved first; the saved copy
+/// outlives `rk stage clean`.
+#[test]
+fn an_adoption_replaces_only_the_named_file_and_the_copy_outlives_the_stage() {
+    let target = plan_target();
+    land_rust_guarded(target.path()).success();
+    std::fs::remove_dir_all(target.path().join(".release-kit")).expect("the record removes");
+    let workflow = target.path().join(".github/workflows/release-plz.yml");
+    let landed = std::fs::read_to_string(&workflow).expect("reads");
+    let older = format!("{landed}# an older release\n");
+    std::fs::write(&workflow, &older).expect("writes");
+    let title = target.path().join(".github/workflows/pr-title.yml");
+    let title_before = std::fs::read(&title).expect("reads");
+
+    // An adoption states the answers the landing it adopts was made
+    // with, because the adoption defaults differ from a first landing's.
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let stage = stage_into(
+        target.path(),
+        scratch.path(),
+        &[
+            &STAGE_FLAGS[..],
+            &["--release-style", "trunk", "--workflow", "worktree"],
+        ]
+        .concat(),
+    );
+    rk().args(["adopt", "--apply", "--stage"])
+        .arg(&stage)
+        .arg("--target")
+        .arg(target.path())
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("release-plz.yml"));
+    assert!(!target.path().join(".release-kit/manifest.json").exists());
+
+    let state_root = tempfile::tempdir().expect("a scratch state root exists");
+    let out = rk()
+        .env("XDG_STATE_HOME", state_root.path())
+        .args(["adopt", "--apply", "--json", "--stage"])
+        .arg(&stage)
+        .args(["--replace", ".github/workflows/release-plz.yml", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    let saved = report["replaced"][0]["saved_to"]
+        .as_str()
+        .expect("the saved copy is named")
+        .to_owned();
+    assert_eq!(std::fs::read_to_string(&saved).expect("reads"), older);
+    assert_eq!(std::fs::read_to_string(&workflow).expect("reads"), landed);
+    assert_eq!(std::fs::read(&title).expect("reads"), title_before);
+    let manifest = read_manifest(target.path());
+    assert_eq!(manifest["origin"], "adopt");
+    assert_eq!(
+        manifest_file(&manifest, ".github/workflows/release-plz.yml")["sha256"],
+        Digest::of(landed.as_bytes()).to_string()
+    );
+
+    rk().args(["stage", "clean"]).arg(&stage).assert().success();
+    assert!(!stage.exists());
+    assert!(
+        Path::new(&saved).is_file(),
+        "the saved copy outlives the stage"
+    );
+}
+
+/// SATISFIES forge-setup:a-step-is-idempotent
+///
+/// A step that replaces forge state writes what it found first, to the
+/// path its report names, before anything changes; where it cannot read
+/// that state, it refuses and changes nothing.
+#[test]
+fn a_destructive_step_saves_its_before_state_first() {
+    let fixture = ForgeFixture::new();
+    fixture.seed("default_branch", "main");
+    let out = fixture
+        .rk(&["setup", "step", "default-branch"])
+        .args([
+            "--repo",
+            "acme/widget",
+            "--forge",
+            "github",
+            "--apply",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let saved: Vec<String> = String::from_utf8_lossy(&out)
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("one event per line"))
+        .filter(|event| event["type"] == "snapshot" && event["step"] == "default-branch")
+        .filter_map(|event| event["detail"].as_str().map(str::to_owned))
+        .collect();
+    assert_eq!(saved.len(), 1, "one snapshot event names the path");
+    let path = &saved[0];
+    assert!(
+        path.starts_with(
+            &fixture
+                .home
+                .path()
+                .join("release-kit/snapshots")
+                .display()
+                .to_string()
+        ) && path.ends_with("forge/default-branch.json"),
+        "{path}"
+    );
+    let document: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(path).expect("the before-state reads"))
+            .expect("the before-state parses");
+    assert_eq!(
+        document["reads"]["repos/acme/widget"]["default_branch"], "main",
+        "the state before the change: {document}"
+    );
+    let log = fixture.log();
+    let read = log
+        .find("api repos/acme/widget")
+        .expect("the before-state read ran");
+    let change = log.find("repo edit").expect("the change ran");
+    assert!(read < change, "the read precedes the change: {log}");
+    assert_eq!(
+        std::fs::read_to_string(fixture.state("default_branch")).expect("reads"),
+        "master\n"
+    );
+
+    // The second read of the repository is the before-state's, after the
+    // step's own observation: fail exactly that call.
+    let api_calls: Vec<&str> = log
+        .lines()
+        .filter(|line| line.starts_with("api "))
+        .collect();
+    let before_state = api_calls
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| **line == "api repos/acme/widget")
+        .nth(1)
+        .map(|(index, _)| index + 1)
+        .expect("the before-state read is the second read of the repository");
+    let blind = ForgeFixture::new();
+    blind.seed("default_branch", "main");
+    blind.seed(&format!("fail_call_{before_state}"), "");
+    blind
+        .rk(&["setup", "step", "default-branch"])
+        .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("cannot read first"));
+    assert_eq!(
+        std::fs::read_to_string(blind.state("default_branch")).expect("reads"),
+        "main",
+        "a step that cannot save first changes nothing"
+    );
+    assert!(!blind.log().contains("repo edit"), "{}", blind.log());
+}
+
+/// SATISFIES forge-setup:a-step-is-idempotent
+///
+/// The ruleset listing names each ruleset without its rules, conditions,
+/// or bypass actors, so a step that replaces rulesets saves each one in
+/// full, and protect-trunk saves the squash settings it rewrites too.
+/// Where a listed ruleset cannot be read, the step refuses unchanged.
+#[test]
+fn a_ruleset_step_saves_each_replaced_ruleset_in_full() {
+    let seeded = |fixture: &ForgeFixture| {
+        fixture.seed_gate();
+        fixture.seed("default_branch", "master");
+        fixture.seed("rulesets.index", "master-safety\nmaster-protection\n");
+        fixture.seed(
+            "ruleset_master-safety",
+            r#"{"name": "master-safety", "rules": [{"type": "deletion"}], "bypass_actors": []}"#,
+        );
+        fixture.seed(
+            "ruleset_master-protection",
+            r#"{"name": "master-protection", "rules": [{"type": "pull_request"}], "bypass_actors": [{"actor_id": 5}]}"#,
+        );
+        fixture.seed("squash_merge_commit_title", "COMMIT_OR_PR_TITLE");
+    };
+    let fixture = ForgeFixture::new();
+    seeded(&fixture);
+    let out = fixture
+        .rk(&["setup", "step", "protect-trunk"])
+        .args([
+            "--repo",
+            "acme/widget",
+            "--forge",
+            "github",
+            "--apply",
+            "--json",
+        ])
+        .args(["--required-check", "build (matrix, 1)"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let path = String::from_utf8_lossy(&out)
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("one event per line"))
+        .find(|event| event["type"] == "snapshot" && event["step"] == "protect-trunk")
+        .and_then(|event| event["detail"].as_str().map(str::to_owned))
+        .expect("a snapshot event names the path");
+    let document: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).expect("the before-state reads"))
+            .expect("the before-state parses");
+    let reads = &document["reads"];
+    assert_eq!(
+        reads["repos/acme/widget/rulesets/1"]["rules"][0]["type"], "deletion",
+        "{document}"
+    );
+    assert_eq!(
+        reads["repos/acme/widget/rulesets/2"]["bypass_actors"][0]["actor_id"], 5,
+        "{document}"
+    );
+    assert_eq!(
+        reads["repos/acme/widget"]["squash_merge_commit_title"], "COMMIT_OR_PR_TITLE",
+        "{document}"
+    );
+    let log = fixture.log();
+    let api_calls: Vec<&str> = log
+        .lines()
+        .filter(|line| line.starts_with("api "))
+        .collect();
+    let first_put = api_calls
+        .iter()
+        .position(|line| line.starts_with("api -X PUT"))
+        .expect("the step replaced a ruleset");
+    let detail_read = api_calls[..first_put]
+        .iter()
+        .rposition(|line| *line == "api repos/acme/widget/rulesets/2")
+        .expect("the full ruleset is read before any change");
+
+    // Fail exactly that read: the step refuses before anything changes.
+    let blind = ForgeFixture::new();
+    seeded(&blind);
+    blind.seed(&format!("fail_call_{}", detail_read + 1), "");
+    blind
+        .rk(&["setup", "step", "protect-trunk"])
+        .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
+        .args(["--required-check", "build (matrix, 1)"])
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("cannot read first"));
+    let log = blind.log();
+    assert!(
+        !log.contains("-X PUT") && !log.contains("-X PATCH"),
+        "a step that cannot save first changes nothing: {log}"
+    );
+}
+
+/// A recorded host install reads as its own state, beside the gaps, and a
+/// configuration without the answer still reads as the gap it is.
+///
+/// VERIFIES packaging:a-host-install-reads-as-a-decision
+#[test]
+fn self_depend_status_reads_a_recorded_host_install_as_a_decision() {
+    let fixture = SelfDependFixture::new();
+    assert_eq!(
+        fixture.json(&["self-depend", "status"])["state"],
+        "no-manager"
+    );
+
+    // Preview writes nothing.
+    fixture
+        .rk(&["self-depend", "add", "--host"])
+        .assert()
+        .success();
+    assert!(!fixture.target().join(".release-kit/config.toml").exists());
+
+    let report = fixture.json(&["self-depend", "add", "--host", "--apply"]);
+    assert_eq!(report["schema"], "rk.self-depend-add-host/1");
+    assert_eq!(report["written"], true);
+    assert_eq!(report["acquisition"]["minimum"], env!("CARGO_PKG_VERSION"));
+
+    let report = fixture.json(&["self-depend", "status"]);
+    assert_eq!(report["state"], "host");
+    assert_eq!(report["acquisition"]["source"], "host");
+    assert_eq!(report["acquisition"]["minimum"], env!("CARGO_PKG_VERSION"));
+
+    // A second run finds the answer and writes nothing.
+    let again = fixture.json(&["self-depend", "add", "--host", "--apply"]);
+    assert_eq!(again["written"], false);
+}
+
+/// The answer written before a landing survives it, and an answer added to
+/// a landed configuration keeps every other byte.
+///
+/// VERIFIES target-config:a-host-install-is-a-recorded-answer
+#[test]
+fn a_host_answer_survives_the_landing_and_keeps_the_configuration() {
+    let early = tempfile::tempdir().expect("a scratch dir exists");
+    rk().args(["self-depend", "add", "--host", "--apply", "--target"])
+        .arg(early.path())
+        .assert()
+        .success();
+    land_rust(early.path()).success();
+    let config =
+        std::fs::read_to_string(early.path().join(".release-kit/config.toml")).expect("reads");
+    assert!(config.contains("[acquisition]"), "{config}");
+    assert!(config.contains("source = \"host\""), "{config}");
+
+    let landed = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(landed.path()).success();
+    let path = landed.path().join(".release-kit/config.toml");
+    let before = std::fs::read_to_string(&path).expect("reads");
+    rk().args(["self-depend", "add", "--host", "--apply", "--target"])
+        .arg(landed.path())
+        .assert()
+        .success();
+    let after = std::fs::read_to_string(&path).expect("reads");
+    assert!(
+        after.starts_with(before.trim_end()),
+        "a byte before the answer moved"
+    );
+    assert!(after.contains("minimum = "), "{after}");
+    rk().args(["status", "--target"])
+        .arg(landed.path())
+        .assert()
+        .success();
+}
+
+/// The configuration reads the answer and refuses a minimum that is no
+/// release version, as every malformed key refuses.
+#[test]
+fn a_malformed_acquisition_minimum_refuses_as_config_invalid() {
+    let fixture = SelfDependFixture::new();
+    std::fs::create_dir_all(fixture.target().join(".release-kit")).expect("the dir creates");
+    std::fs::write(
+        fixture.target().join(".release-kit/config.toml"),
+        "schema_version = 2\n\n[acquisition]\nsource = \"host\"\nminimum = \"soon\"\n",
+    )
+    .expect("writes");
+    let out = fixture
+        .rk(&["self-depend", "status", "--json"])
+        .assert()
+        .code(73)
+        .get_output()
+        .stderr
+        .clone();
+    let diagnostic: serde_json::Value =
+        serde_json::from_slice(&out).expect("the failure is one JSON diagnostic");
+    assert_eq!(diagnostic["reason"], "config-invalid", "{diagnostic}");
+    assert!(
+        diagnostic["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("acquisition.minimum")),
+        "{diagnostic}"
+    );
+}
+
+/// A host answer beside a pin would be two mechanisms.
+#[test]
+fn a_host_answer_refuses_where_a_manager_pins_release_kit() {
+    let fixture = SelfDependFixture::new();
+    fixture.write_flake("v0.2.16");
+    fixture
+        .rk(&["self-depend", "add", "--host", "--apply"])
+        .assert()
+        .code(73);
+    assert!(!fixture.target().join(".release-kit/config.toml").exists());
+}
+
+/// Two managers pinning release-kit leave the wiring ambiguous, and the
+/// host answer still refuses: any pin is a mechanism already there.
+#[test]
+fn a_host_answer_refuses_where_several_managers_pin_release_kit() {
+    let fixture = SelfDependFixture::new();
+    fixture.write_flake("v0.2.16");
+    std::fs::write(
+        fixture.target().join("mise.toml"),
+        "[tools]\n\"cargo:release-kit\" = \"0.3.0\"\n",
+    )
+    .expect("writes");
+    assert!(
+        fixture.json(&["self-depend", "status"])["wired"].is_null(),
+        "two pins leave the wiring ambiguous"
+    );
+    fixture
+        .rk(&["self-depend", "add", "--host", "--apply"])
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("flake").and(predicate::str::contains("mise")));
+    assert!(!fixture.target().join(".release-kit/config.toml").exists());
+}
+
+/// The dependency feature left whole: no help page, no `rk usage` line,
+/// no method chapter or runbook, and no tracked or untracked-and-not-ignored
+/// text file names it, outside the immutable decision records and the
+/// changelog. The needles are assembled at run time, so this file scans
+/// itself like any other.
+#[test]
+fn the_dependency_feature_leaves_no_live_surface() {
+    let verb = ["dep", "end"].concat();
+    let needles = [
+        format!("rk {verb}"),
+        format!("rk-{verb}"),
+        format!("{verb} assess"),
+        format!("{verb} add"),
+        format!("SPEC-{verb}encies"),
+        format!("{verb}encies.md"),
+    ];
+    // `rk self-depend add` is the consumer pin, which stays.
+    let hits_in = |label: &str, text: &str| -> Vec<String> {
+        let mut hits = Vec::new();
+        for (index, line) in text.lines().enumerate() {
+            for needle in &needles {
+                let leftover = line
+                    .match_indices(needle.as_str())
+                    .any(|(at, _)| !line[..at].ends_with("self-"));
+                if leftover {
+                    hits.push(format!("{label}:{}: {needle}", index + 1));
+                }
+            }
+        }
+        hits
+    };
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut surfaces: Vec<(String, String)> = help_pages();
+    for args in [
+        vec!["usage"],
+        vec!["method", "--list"],
+        vec!["guide", "--list"],
+    ] {
+        let out = rk()
+            .args(&args)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let text = String::from_utf8_lossy(&out).into_owned();
+        if args.ends_with(&["--list"]) {
+            let chapter = format!("{verb}encies");
+            assert!(
+                !text.lines().any(|line| line.trim() == chapter),
+                "rk {} still lists {chapter}: {text}",
+                args.join(" ")
+            );
+        }
+        surfaces.push((format!("rk {}", args.join(" ")), text));
+    }
+    let listed = std::process::Command::new("git")
+        .args([
+            "-C",
+            &root.to_string_lossy(),
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+        ])
+        .output()
+        .expect("git ls-files runs");
+    assert!(listed.status.success(), "git ls-files failed");
+    for relative in String::from_utf8_lossy(&listed.stdout).split('\0') {
+        if relative.is_empty()
+            || relative == "CHANGELOG.md"
+            || relative.starts_with("_docs/decisions/")
+        {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(root.join(relative)) else {
+            continue;
+        };
+        surfaces.push((relative.to_owned(), text));
+    }
+
+    let hits: Vec<String> = surfaces
+        .iter()
+        .flat_map(|(label, text)| hits_in(label, text))
+        .collect();
+    assert!(
+        hits.is_empty(),
+        "the dependency feature is still named on a live surface:\n{}",
+        hits.join("\n")
+    );
+    rk().args([verb.as_str(), "--help"]).assert().failure();
+}
+
+// ---------------------------------------------------------------------------
+// rk migrate: the archive-first migration
+
+/// A target another release tool drives: a committed Rust crate with the
+/// release-please files, a workflow, and two root files. It has no remote,
+/// so no forge resolves and no step reaches one.
+struct MigrateFixture {
+    target: tempfile::TempDir,
+    state: tempfile::TempDir,
+}
+
+/// The predecessor files the fixture carries, with their bytes.
+const PREDECESSOR_FILES: [(&str, &str); 3] = [
+    (
+        "release-please-config.json",
+        "{\"packages\": {\".\": {}}}\n",
+    ),
+    (".release-please-manifest.json", "{\".\": \"0.1.0\"}\n"),
+    (
+        ".github/workflows/release-please.yml",
+        "on: push\njobs:\n  release:\n    runs-on: ubuntu-latest\n",
+    ),
+];
+
+impl MigrateFixture {
+    fn new() -> Self {
+        let fixture = Self {
+            target: tempfile::tempdir().expect("a scratch target exists"),
+            state: tempfile::tempdir().expect("a scratch state root exists"),
+        };
+        let root = fixture.target.path();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"widget\"\nversion = \"0.1.0\"\nlicense = \"MIT\"\n",
+        )
+        .expect("writes");
+        std::fs::create_dir_all(root.join("src")).expect("mkdir");
+        std::fs::write(root.join("src/main.rs"), "fn main() {}\n").expect("writes");
+        std::fs::write(root.join("CHANGELOG.md"), "# Changelog\n").expect("writes");
+        std::fs::write(root.join("README.md"), "# widget\n").expect("writes");
+        for (path, text) in PREDECESSOR_FILES {
+            let full = root.join(path);
+            std::fs::create_dir_all(full.parent().expect("a parent")).expect("mkdir");
+            std::fs::write(full, text).expect("writes");
+        }
+        git_in(root, &["init", "-q", "-b", "master"]);
+        git_in(root, &["config", "user.email", "rk@example.invalid"]);
+        git_in(root, &["config", "user.name", "rk test"]);
+        git_in(root, &["add", "-A"]);
+        git_in(root, &["commit", "-qm", "chore: seed"]);
+        fixture
+    }
+
+    fn path(&self) -> &Path {
+        self.target.path()
+    }
+
+    fn rk(&self, args: &[&str]) -> Command {
+        let mut command = rk_scrubbed();
+        command
+            .env("HOME", self.state.path())
+            .env("XDG_STATE_HOME", self.state.path())
+            .env("RK_GH_BIN", "/nonexistent/gh")
+            .env("RK_GLAB_BIN", "/nonexistent/glab")
+            .args(args)
+            .arg("--target")
+            .arg(self.path());
+        command
+    }
+
+    fn json(&self, args: &[&str]) -> serde_json::Value {
+        let out = self
+            .rk(args)
+            .arg("--json")
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        serde_json::from_slice(&out).expect("one JSON object")
+    }
+
+    fn archive(&self) -> serde_json::Value {
+        self.json(&["migrate", "archive", "--apply"])
+    }
+
+    fn head(&self) -> String {
+        let out = std::process::Command::new("git")
+            .envs(std::iter::empty::<(&str, &str)>())
+            .args(["-C"])
+            .arg(self.path())
+            .args(["rev-parse", "HEAD"])
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
+            .env_remove("GIT_COMMON_DIR")
+            .output()
+            .expect("git runs");
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    }
+}
+
+/// A migration workspace's registry, parsed.
+fn migration_registry(workspace: &str) -> serde_json::Value {
+    let text = std::fs::read_to_string(Path::new(workspace).join("registry.yaml"))
+        .expect("the registry reads");
+    yaml_serde::from_str(&text).expect("the registry parses")
+}
+
+/// SATISFIES migration:an-archive-moves-only-committed-files
+#[test]
+fn an_archive_refuses_an_uncommitted_listed_file_and_writes_nothing() {
+    let fixture = MigrateFixture::new();
+    std::fs::write(fixture.path().join("release-please-config.json"), "{}\n").expect("edits");
+    let before = tree_digests(fixture.path());
+    let git_before = git_metadata(fixture.path());
+    for apply in [false, true] {
+        let mut command = fixture.rk(&["migrate", "archive"]);
+        if apply {
+            command.arg("--apply");
+        }
+        command.assert().code(73).stderr(
+            predicate::str::contains("differ from the trunk's copy on master")
+                .and(predicate::str::contains("release-please-config.json")),
+        );
+    }
+    assert_eq!(tree_digests(fixture.path()), before);
+    assert_eq!(git_metadata(fixture.path()), git_before);
+    assert!(!fixture.state.path().join("release-kit/migrations").exists());
+}
+
+/// SATISFIES migration:an-archive-moves-only-committed-files
+#[test]
+fn an_ignored_predecessor_file_refuses_the_archive() {
+    let fixture = MigrateFixture::new();
+    std::fs::write(fixture.path().join("bump.sh"), "echo bump\n").expect("writes");
+    std::fs::write(fixture.path().join(".git/info/exclude"), "bump.sh\n").expect("ignores");
+    let before = tree_digests(fixture.path());
+    fixture
+        .rk(&["migrate", "archive", "--apply"])
+        .assert()
+        .code(73)
+        .stderr(
+            predicate::str::contains("differ from the trunk's copy")
+                .and(predicate::str::contains("bump.sh")),
+        );
+    assert_eq!(tree_digests(fixture.path()), before);
+    assert!(!fixture.state.path().join("release-kit/migrations").exists());
+}
+
+/// An edit committed on the migration branch alone refuses: the trunk
+/// must hold the bytes a later rebuild reads back.
+///
+/// SATISFIES migration:an-archive-moves-only-committed-files
+#[test]
+fn a_predecessor_file_that_differs_from_the_trunk_refuses_the_archive() {
+    let fixture = MigrateFixture::new();
+    git_in(fixture.path(), &["checkout", "-qb", "chore/migrate"]);
+    std::fs::write(fixture.path().join("release-please-config.json"), "{}\n").expect("edits");
+    git_in(
+        fixture.path(),
+        &["commit", "-qam", "chore: edit the predecessor"],
+    );
+    fixture
+        .rk(&["migrate", "archive", "--apply"])
+        .assert()
+        .code(73)
+        .stderr(
+            predicate::str::contains("differ from the trunk's copy on master")
+                .and(predicate::str::contains("release-please-config.json"))
+                .and(predicate::str::contains(
+                    "integrate their edits onto the trunk",
+                )),
+        );
+    assert!(!fixture.state.path().join("release-kit/migrations").exists());
+}
+
+/// A deletion committed on the migration branch alone refuses: the
+/// trunk still holds the file, so a rebuild would recreate a source the
+/// archive never took.
+///
+/// SATISFIES migration:an-archive-moves-only-committed-files
+#[test]
+fn a_predecessor_file_deleted_off_the_trunk_refuses_the_archive() {
+    let fixture = MigrateFixture::new();
+    git_in(fixture.path(), &["checkout", "-qb", "chore/migrate"]);
+    git_in(
+        fixture.path(),
+        &["rm", "-q", ".release-please-manifest.json"],
+    );
+    git_in(
+        fixture.path(),
+        &["commit", "-qm", "chore: drop the manifest"],
+    );
+    fixture
+        .rk(&["migrate", "archive", "--apply"])
+        .assert()
+        .code(73)
+        .stderr(
+            predicate::str::contains("differ from the trunk's copy on master")
+                .and(predicate::str::contains(".release-please-manifest.json")),
+        );
+    assert!(fixture.path().join("release-please-config.json").is_file());
+    assert!(!fixture.state.path().join("release-kit/migrations").exists());
+}
+
+/// A symlinked configuration directory would carry the migration key out
+/// of the target, so the archive refuses before it claims anything.
+#[test]
+fn an_archive_refuses_a_symlinked_configuration_directory() {
+    let fixture = MigrateFixture::new();
+    let elsewhere = tempfile::tempdir().expect("an outside directory exists");
+    std::os::unix::fs::symlink(elsewhere.path(), fixture.path().join(".release-kit"))
+        .expect("links");
+    for apply in [false, true] {
+        let mut command = fixture.rk(&["migrate", "archive"]);
+        if apply {
+            command.arg("--apply");
+        }
+        command
+            .assert()
+            .code(73)
+            .stderr(predicate::str::contains("would not stay in the target"));
+    }
+    assert!(
+        std::fs::read_dir(elsewhere.path())
+            .expect("reads")
+            .next()
+            .is_none()
+    );
+    assert!(fixture.path().join("release-please-config.json").is_file());
+    assert!(!fixture.state.path().join("release-kit/migrations").exists());
+}
+
+/// The inventory names each predecessor file with its tool and kind, and
+/// the root files as staying in place.
+#[test]
+fn the_inventory_lists_the_predecessor_files_and_the_root_files() {
+    let fixture = MigrateFixture::new();
+    let report = fixture.json(&["migrate", "inventory"]);
+    assert_eq!(report["schema"], "rk.migrate/1");
+    let files = report["files"].as_array().expect("files");
+    let row = |path: &str| {
+        files
+            .iter()
+            .find(|file| file["path"] == path)
+            .unwrap_or_else(|| panic!("{path} is listed: {report}"))
+            .clone()
+    };
+    assert_eq!(row("release-please-config.json")["tool"], "release-please");
+    assert_eq!(row("release-please-config.json")["kind"], "release-config");
+    assert_eq!(row(".release-please-manifest.json")["kind"], "manifest");
+    assert_eq!(
+        row(".github/workflows/release-please.yml")["kind"],
+        "workflow"
+    );
+    for root in ["CHANGELOG.md", "README.md"] {
+        assert_eq!(row(root)["placement"], "in-place");
+    }
+    assert!(!files.iter().any(|file| file["path"] == "Cargo.toml"));
+}
+
+/// SATISFIES migration:the-configuration-names-the-open-migration
+#[test]
+fn an_archive_moves_every_predecessor_file_and_opens_the_migration() {
+    let fixture = MigrateFixture::new();
+    let base = fixture.head();
+    let report = fixture.archive();
+    assert_eq!(report["mode"], "apply");
+    assert_eq!(report["base_commit"], base.as_str());
+    let id = report["id"].as_str().expect("an id").to_owned();
+    assert_eq!(id.len(), "20261009T140205Z".len(), "{id}");
+    let workspace = report["workspace"]
+        .as_str()
+        .expect("a workspace")
+        .to_owned();
+    assert!(
+        workspace.contains("/release-kit/migrations/") && workspace.ends_with(&id),
+        "{workspace}"
+    );
+    for (path, text) in PREDECESSOR_FILES {
+        assert!(
+            !fixture.path().join(path).exists(),
+            "{path} left the target"
+        );
+        assert_eq!(
+            std::fs::read_to_string(Path::new(&workspace).join("sources").join(path))
+                .expect("the archived copy reads"),
+            text
+        );
+    }
+    assert!(
+        !fixture.path().join(".github").exists(),
+        "the emptied directory goes"
+    );
+    for root in ["CHANGELOG.md", "README.md", "Cargo.toml"] {
+        assert!(fixture.path().join(root).is_file(), "{root} stays");
+    }
+    let config = std::fs::read_to_string(fixture.path().join(".release-kit/config.toml"))
+        .expect("the configuration reads");
+    assert!(
+        config.contains(&format!("migration = \"{id}\"")),
+        "{config}"
+    );
+
+    let registry = migration_registry(&workspace);
+    assert_eq!(registry["id"], id.as_str());
+    assert_eq!(registry["base_commit"], base.as_str());
+    for source in registry["sources"].as_array().expect("sources") {
+        assert_eq!(source["status"], "pending");
+        let path = source["path"].as_str().expect("a path");
+        let bytes = if source["placement"] == "archived" {
+            std::fs::read(Path::new(&workspace).join("sources").join(path)).expect("reads")
+        } else {
+            std::fs::read(fixture.path().join(path)).expect("reads")
+        };
+        assert_eq!(source["sha256"], Digest::of(&bytes).to_string(), "{path}");
+    }
+    assert!(
+        registry["snapshots"]
+            .as_array()
+            .expect("snapshots")
+            .iter()
+            .all(|snapshot| snapshot["second_copy"] == false),
+        "{registry}"
+    );
+
+    let status = fixture.json(&["status"]);
+    assert_eq!(status["classification"], "migration");
+    assert_eq!(status["migration"]["id"], id.as_str());
+    assert_eq!(status["migration"]["unfinished"], 5);
+    // A second archive refuses while one is open.
+    fixture
+        .rk(&["migrate", "archive"])
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("already open"));
+}
+
+/// SATISFIES migration:a-rebuild-recreates-the-files-alone
+#[test]
+fn a_rebuild_recreates_the_archived_bytes_from_git_at_the_base_commit() {
+    let fixture = MigrateFixture::new();
+    let base = fixture.head();
+    let report = fixture.archive();
+    let workspace = report["workspace"]
+        .as_str()
+        .expect("a workspace")
+        .to_owned();
+    git_in(fixture.path(), &["add", "-A"]);
+    git_in(
+        fixture.path(),
+        &["commit", "-qm", "chore: archive the predecessor"],
+    );
+    // Another clone: the workspace is local state, and this host holds none.
+    std::fs::remove_dir_all(&workspace).expect("the workspace removes");
+    // Without --apply the rebuild names what it would recreate and writes
+    // nothing, as every verb previews.
+    let preview = fixture.json(&["migrate", "archive", "--rebuild"]);
+    assert_eq!(preview["mode"], "preview", "{preview}");
+    assert!(
+        preview["archived"]
+            .as_array()
+            .is_some_and(|list| !list.is_empty()),
+        "{preview}"
+    );
+    assert!(!Path::new(&workspace).exists(), "a preview writes nothing");
+    let rebuilt = fixture.json(&["migrate", "archive", "--rebuild", "--apply"]);
+    assert_eq!(rebuilt["mode"], "rebuild");
+    assert_eq!(rebuilt["base_commit"], base.as_str());
+    for (path, text) in PREDECESSOR_FILES {
+        assert_eq!(
+            std::fs::read_to_string(Path::new(&workspace).join("sources").join(path))
+                .expect("the rebuilt copy reads"),
+            text,
+            "{path}"
+        );
+    }
+    let registry = migration_registry(&workspace);
+    assert_eq!(registry["base_commit"], base.as_str());
+    assert_eq!(
+        registry["snapshots"].as_array().map(Vec::len),
+        Some(0),
+        "a snapshot has no second copy, so none is rebuilt"
+    );
+    fixture.json(&["migrate", "status"]);
+}
+
+/// Squash `chore/migrate` onto master, delete the branch, and drop every
+/// object only the branch reached, as a clone of the trunk would hold.
+fn squash_the_migration_branch(root: &Path) {
+    git_in(root, &["checkout", "-q", "master"]);
+    git_in(root, &["merge", "-q", "--squash", "chore/migrate"]);
+    git_in(root, &["commit", "-qm", "chore: migrate to the convention"]);
+    git_in(root, &["branch", "-qD", "chore/migrate"]);
+    git_in(root, &["reflog", "expire", "--expire=now", "--all"]);
+    git_in(root, &["gc", "-q", "--prune=now"]);
+}
+
+/// The trunk takes an edit to a predecessor file, the migration branch
+/// archives and is squash-merged, and its branch is deleted. A clone with
+/// no workspace rebuilds the edited bytes from the parent of the commit
+/// that recorded the key.
+///
+/// SATISFIES migration:a-rebuild-recreates-the-files-alone
+#[test]
+fn a_rebuild_after_a_squash_merged_branch_restores_the_archived_bytes() {
+    let fixture = MigrateFixture::new();
+    let edited = "{\"packages\": {\".\": {\"release-type\": \"rust\"}}}\n";
+    std::fs::write(fixture.path().join("release-please-config.json"), edited).expect("edits");
+    git_in(
+        fixture.path(),
+        &["commit", "-qam", "chore: tune the predecessor"],
+    );
+    let base = fixture.head();
+    git_in(fixture.path(), &["checkout", "-qb", "chore/migrate"]);
+    std::fs::write(fixture.path().join("src/main.rs"), "fn main() { }\n").expect("edits");
+    git_in(
+        fixture.path(),
+        &["commit", "-qam", "chore: a branch commit"],
+    );
+    let workspace = fixture.archive()["workspace"]
+        .as_str()
+        .expect("a workspace")
+        .to_owned();
+    git_in(fixture.path(), &["add", "-A"]);
+    git_in(
+        fixture.path(),
+        &["commit", "-qm", "chore: archive the predecessor"],
+    );
+    squash_the_migration_branch(fixture.path());
+    std::fs::remove_dir_all(&workspace).expect("the workspace removes");
+
+    let rebuilt = fixture.json(&["migrate", "archive", "--rebuild", "--apply"]);
+    assert_eq!(rebuilt["base_commit"], base.as_str());
+    assert_eq!(
+        std::fs::read_to_string(Path::new(&workspace).join("sources/release-please-config.json"))
+            .expect("the rebuilt copy reads"),
+        edited
+    );
+}
+
+/// The registry records the trunk commit the archive compared against,
+/// not the branch head, so a rebuild with the registry still reads its
+/// base once the branch is squash-merged and deleted.
+///
+/// SATISFIES migration:a-rebuild-recreates-the-files-alone
+#[test]
+fn a_rebuild_with_its_registry_survives_a_squash_merge_and_a_deleted_branch() {
+    let fixture = MigrateFixture::new();
+    let trunk = fixture.head();
+    git_in(fixture.path(), &["checkout", "-qb", "chore/migrate"]);
+    std::fs::write(fixture.path().join("src/main.rs"), "fn main() { }\n").expect("edits");
+    git_in(
+        fixture.path(),
+        &["commit", "-qam", "chore: a branch commit"],
+    );
+    let report = fixture.archive();
+    assert_eq!(report["base_commit"], trunk.as_str());
+    let workspace = report["workspace"]
+        .as_str()
+        .expect("a workspace")
+        .to_owned();
+    git_in(fixture.path(), &["add", "-A"]);
+    git_in(
+        fixture.path(),
+        &["commit", "-qm", "chore: archive the predecessor"],
+    );
+    squash_the_migration_branch(fixture.path());
+    std::fs::remove_dir_all(Path::new(&workspace).join("sources")).expect("the copies remove");
+
+    let rebuilt = fixture.json(&["migrate", "archive", "--rebuild", "--apply"]);
+    assert_eq!(rebuilt["base_commit"], trunk.as_str());
+    for (path, text) in PREDECESSOR_FILES {
+        assert_eq!(
+            std::fs::read_to_string(Path::new(&workspace).join("sources").join(path))
+                .expect("the rebuilt copy reads"),
+            text,
+            "{path}"
+        );
+    }
+}
+
+/// A merge commit that itself records the key is found by its diff
+/// against its first parent, and a rebuild with no registry reads the
+/// base from that parent.
+///
+/// SATISFIES migration:a-rebuild-recreates-the-files-alone
+#[test]
+fn a_key_first_recorded_in_a_merge_commit_is_found() {
+    let fixture = MigrateFixture::new();
+    let base = fixture.head();
+    git_in(fixture.path(), &["checkout", "-qb", "side"]);
+    std::fs::write(fixture.path().join("src/main.rs"), "fn main() { }\n").expect("edits");
+    git_in(fixture.path(), &["commit", "-qam", "chore: a side commit"]);
+    git_in(fixture.path(), &["checkout", "-q", "master"]);
+    git_in(
+        fixture.path(),
+        &["merge", "-q", "--no-ff", "--no-commit", "side"],
+    );
+    let workspace = fixture.archive()["workspace"]
+        .as_str()
+        .expect("a workspace")
+        .to_owned();
+    git_in(fixture.path(), &["add", "-A"]);
+    git_in(
+        fixture.path(),
+        &["commit", "-qm", "chore: merge and archive"],
+    );
+    std::fs::remove_dir_all(&workspace).expect("the workspace removes");
+
+    let rebuilt = fixture.json(&["migrate", "archive", "--rebuild", "--apply"]);
+    assert_eq!(rebuilt["base_commit"], base.as_str());
+    for (path, text) in PREDECESSOR_FILES {
+        assert_eq!(
+            std::fs::read_to_string(Path::new(&workspace).join("sources").join(path))
+                .expect("the rebuilt copy reads"),
+            text,
+            "{path}"
+        );
+    }
+}
+
+/// A branch that recorded the key merges into a trunk that changed a
+/// predecessor file meanwhile. The search walks the trunk's first parents
+/// alone, so it finds the merge, and a rebuild with no registry restores
+/// the trunk's bytes at the merge rather than the branch's older base.
+///
+/// SATISFIES migration:a-rebuild-recreates-the-files-alone
+#[test]
+fn a_key_a_merged_branch_recorded_is_found_at_the_merge() {
+    let fixture = MigrateFixture::new();
+    git_in(fixture.path(), &["checkout", "-qb", "chore/migrate"]);
+    let workspace = fixture.archive()["workspace"]
+        .as_str()
+        .expect("a workspace")
+        .to_owned();
+    git_in(fixture.path(), &["add", "-A"]);
+    git_in(
+        fixture.path(),
+        &["commit", "-qm", "chore: archive the predecessor"],
+    );
+    git_in(fixture.path(), &["checkout", "-q", "master"]);
+    let bumped = "{\".\": \"0.2.0\"}\n";
+    std::fs::write(fixture.path().join(".release-please-manifest.json"), bumped).expect("bumps");
+    git_in(fixture.path(), &["commit", "-qam", "chore: release 0.2.0"]);
+    let merge_base = fixture.head();
+    // The branch deleted the manifest the trunk just changed: the merge
+    // stops on that conflict, and the migration's deletion resolves it.
+    let mut merge = std::process::Command::new("git");
+    for var in GIT_HOOK_VARS {
+        merge.env_remove(var);
+    }
+    let _ = merge
+        .args(["merge", "-q", "--no-ff", "--no-commit", "chore/migrate"])
+        .current_dir(fixture.path())
+        .output()
+        .expect("git runs");
+    git_in(
+        fixture.path(),
+        &["rm", "-q", ".release-please-manifest.json"],
+    );
+    git_in(
+        fixture.path(),
+        &["commit", "-qm", "chore: merge the migration"],
+    );
+    std::fs::remove_dir_all(&workspace).expect("the workspace removes");
+
+    let rebuilt = fixture.json(&["migrate", "archive", "--rebuild", "--apply"]);
+    assert_eq!(rebuilt["base_commit"], merge_base.as_str());
+    assert_eq!(
+        std::fs::read_to_string(
+            Path::new(&workspace).join("sources/.release-please-manifest.json")
+        )
+        .expect("the rebuilt copy reads"),
+        bumped
+    );
+}
+
+/// With a registry, a rebuild recreates the registry's sources alone,
+/// never another listed file its base commit holds.
+///
+/// SATISFIES migration:a-rebuild-recreates-the-files-alone
+#[test]
+fn a_rebuild_with_its_registry_recreates_its_sources_alone() {
+    let fixture = MigrateFixture::new();
+    let workspace = fixture.archive()["workspace"]
+        .as_str()
+        .expect("a workspace")
+        .to_owned();
+    let registry_path = Path::new(&workspace).join("registry.yaml");
+    let mut registry = migration_registry(&workspace);
+    registry["sources"]
+        .as_array_mut()
+        .expect("sources")
+        .retain(|source| source["path"] != ".release-please-manifest.json");
+    std::fs::write(
+        &registry_path,
+        yaml_serde::to_string(&registry).expect("serializes"),
+    )
+    .expect("the registry writes");
+    std::fs::remove_dir_all(Path::new(&workspace).join("sources")).expect("the copies remove");
+
+    let rebuilt = fixture.json(&["migrate", "archive", "--rebuild", "--apply"]);
+    let archived: Vec<&str> = rebuilt["archived"]
+        .as_array()
+        .expect("archived")
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .collect();
+    assert!(
+        !archived.contains(&".release-please-manifest.json"),
+        "{rebuilt}"
+    );
+    assert!(
+        archived.contains(&"release-please-config.json"),
+        "{rebuilt}"
+    );
+    assert!(
+        !Path::new(&workspace)
+            .join("sources/.release-please-manifest.json")
+            .exists()
+    );
+}
+
+/// A rebuild lists what the inventory would: regular files alone, never
+/// a symlink the base commit holds at a listed path.
+///
+/// SATISFIES migration:a-rebuild-recreates-the-files-alone
+#[test]
+fn a_rebuild_lists_regular_files_alone() {
+    let fixture = MigrateFixture::new();
+    std::os::unix::fs::symlink("release-please-config.json", fixture.path().join("bump.sh"))
+        .expect("links");
+    git_in(fixture.path(), &["add", "-A"]);
+    git_in(fixture.path(), &["commit", "-qm", "chore: link a script"]);
+    let workspace = fixture.archive()["workspace"]
+        .as_str()
+        .expect("a workspace")
+        .to_owned();
+    git_in(fixture.path(), &["add", "-A"]);
+    git_in(
+        fixture.path(),
+        &["commit", "-qm", "chore: archive the predecessor"],
+    );
+    std::fs::remove_dir_all(&workspace).expect("the workspace removes");
+
+    let rebuilt = fixture.json(&["migrate", "archive", "--rebuild", "--apply"]);
+    let archived: Vec<&str> = rebuilt["archived"]
+        .as_array()
+        .expect("archived")
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .collect();
+    assert!(!archived.contains(&"bump.sh"), "{rebuilt}");
+    assert!(
+        archived.contains(&"release-please-config.json"),
+        "{rebuilt}"
+    );
+    let registry = migration_registry(&workspace);
+    assert!(
+        registry["sources"]
+            .as_array()
+            .expect("sources")
+            .iter()
+            .all(|source| source["path"] != "bump.sh"),
+        "{registry}"
+    );
+}
+
+/// SATISFIES migration:a-mark-appends-and-never-rewrites
+#[test]
+fn a_mark_files_a_source_and_moves_a_group_appending_history() {
+    let fixture = MigrateFixture::new();
+    let workspace = fixture.archive()["workspace"]
+        .as_str()
+        .expect("a workspace")
+        .to_owned();
+    fixture.json(&[
+        "migrate",
+        "mark",
+        "release-please-config.json",
+        "mapped",
+        "--group",
+        "release-please",
+        "--tag",
+        "versioning",
+    ]);
+    let marked = fixture.json(&[
+        "migrate",
+        "mark",
+        "release-please",
+        "written",
+        "--destination",
+        "release-plz.toml",
+    ]);
+    assert_eq!(marked["marked"]["subject"], "group");
+    let registry = migration_registry(&workspace);
+    let source = registry["sources"]
+        .as_array()
+        .expect("sources")
+        .iter()
+        .find(|source| source["path"] == "release-please-config.json")
+        .expect("the source")
+        .clone();
+    let history: Vec<&str> = source["history"]
+        .as_array()
+        .expect("history")
+        .iter()
+        .map(|entry| entry["status"].as_str().expect("a status"))
+        .collect();
+    assert_eq!(history, ["pending", "mapped", "written"]);
+    assert_eq!(source["group"], "release-please");
+    assert_eq!(source["tags"], serde_json::json!(["versioning"]));
+    assert_eq!(
+        registry["groups"][0]["destinations"],
+        serde_json::json!(["release-plz.toml"])
+    );
+    fixture
+        .rk(&["migrate", "mark", "README.md", "dropped"])
+        .assert()
+        .code(64)
+        .stderr(predicate::str::contains("--reason"));
+}
+
+/// SATISFIES migration:close-refuses-an-unfinished-migration
+#[test]
+fn a_close_refuses_while_a_source_is_unfinished_and_keeps_the_key() {
+    let fixture = MigrateFixture::new();
+    let id = fixture.archive()["id"].as_str().expect("an id").to_owned();
+    for apply in [false, true] {
+        let mut command = fixture.rk(&["migrate", "close"]);
+        if apply {
+            command.arg("--apply");
+        }
+        command
+            .assert()
+            .code(73)
+            .stderr(
+                predicate::str::contains("cannot close").and(predicate::str::contains(
+                    "release-please-config.json is pending",
+                )),
+            );
+    }
+    let config =
+        std::fs::read_to_string(fixture.path().join(".release-kit/config.toml")).expect("reads");
+    assert!(config.contains(&id), "{config}");
+}
+
+/// The landing a migration makes is a true greenfield: once the key
+/// leaves, the configuration equals the one a greenfield landing of the
+/// same answers writes.
+#[test]
+fn a_migrated_landing_writes_the_greenfield_configuration_beside_the_key() {
+    let fixture = MigrateFixture::new();
+    let id = fixture.archive()["id"].as_str().expect("an id").to_owned();
+    fixture
+        .rk(&["init", "--release-mode", "none", "--apply"])
+        .assert()
+        .success();
+    let migrated =
+        std::fs::read_to_string(fixture.path().join(".release-kit/config.toml")).expect("reads");
+    assert!(
+        migrated.contains(&format!("migration = \"{id}\"")),
+        "{migrated}"
+    );
+    let twin = MigrateFixture::new();
+    for (path, _) in PREDECESSOR_FILES {
+        std::fs::remove_file(twin.path().join(path)).expect("removes");
+    }
+    twin.rk(&["init", "--release-mode", "none", "--apply"])
+        .assert()
+        .success();
+    let greenfield =
+        std::fs::read_to_string(twin.path().join(".release-kit/config.toml")).expect("reads");
+    assert_eq!(
+        release_kit::config::with_migration(&migrated, None).expect("the key removes"),
+        greenfield
+    );
+}
+
+/// Leave a workspace as a host without the forge credentials leaves one
+/// step: no snapshot file and no registry entry.
+fn forget_forge_snapshot(workspace: &str, step: &str) {
+    let registry_path = Path::new(workspace).join("registry.yaml");
+    let text = std::fs::read_to_string(&registry_path).expect("reads");
+    let mut registry: serde_json::Value = yaml_serde::from_str(&text).expect("parses");
+    let id = format!("forge-{step}");
+    registry["snapshots"]
+        .as_array_mut()
+        .expect("snapshots")
+        .retain(|snapshot| snapshot["id"] != id.as_str());
+    std::fs::remove_file(Path::new(workspace).join(format!("forge/{step}.json")))
+        .expect("the snapshot removes");
+    std::fs::write(
+        &registry_path,
+        yaml_serde::to_string(&registry).expect("serializes"),
+    )
+    .expect("writes");
+}
+
+/// A forge fixture another release tool drives: the release-please files
+/// committed, a remote the setup detects, and the gate's check committed
+/// as the configuration's answer.
+fn forge_migration_fixture() -> ForgeFixture {
+    let fixture = ForgeFixture::new();
+    fixture.seed_gate();
+    {
+        let root = fixture.target.path();
+        git_in(root, &["config", "user.email", "rk@example.invalid"]);
+        git_in(root, &["config", "user.name", "rk test"]);
+        git_in(
+            root,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/acme/widget.git",
+            ],
+        );
+        for (path, text) in PREDECESSOR_FILES {
+            let full = root.join(path);
+            std::fs::create_dir_all(full.parent().expect("a parent")).expect("mkdir");
+            std::fs::write(full, text).expect("writes");
+        }
+        // The landing writes the version file itself, so the fixture's own
+        // copy would stand where the greenfield candidate lands.
+        std::fs::remove_file(root.join("VERSION")).expect("the version file removes");
+        // The gate's check is the committed answer, so the setup proof and the
+        // close read one contract.
+        std::fs::create_dir_all(root.join(".release-kit")).expect("mkdir");
+        std::fs::write(
+            root.join(".release-kit/config.toml"),
+            "schema_version = 2\n\n[setup]\nrequired_check = \"test-check\"\n",
+        )
+        .expect("writes");
+        git_in(root, &["add", "-A"]);
+        git_in(root, &["commit", "-qm", "chore: seed"]);
+    }
+    fixture
+}
+
+/// One `rk` call against a forge fixture, its JSON report parsed.
+fn forge_json(fixture: &ForgeFixture, args: &[&str]) -> serde_json::Value {
+    let out = fixture
+        .rk(args)
+        .arg("--json")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    serde_json::from_slice(&out).expect("one JSON object")
+}
+
+/// The map and the loop of the fixture: the release-please group carried
+/// into the gate workflow, and its workflow dropped.
+fn carry_one_group_and_drop_the_rest(json: &dyn Fn(&[&str]) -> serde_json::Value) {
+    json(&[
+        "migrate",
+        "mark",
+        "release-please-config.json",
+        "mapped",
+        "--group",
+        "release-please",
+    ]);
+    json(&[
+        "migrate",
+        "mark",
+        ".release-please-manifest.json",
+        "mapped",
+        "--group",
+        "release-please",
+    ]);
+    json(&[
+        "migrate",
+        "mark",
+        "release-please",
+        "verified",
+        "--destination",
+        ".github/workflows/ci.yml",
+    ]);
+    json(&[
+        "migrate",
+        "mark",
+        ".github/workflows/release-please.yml",
+        "dropped",
+        "--reason",
+        "the convention's release workflow replaces it",
+    ]);
+}
+
+/// A whole migration on a forge: the archive takes the forge snapshots, a
+/// destructive step refuses while the registry lacks its snapshot, the
+/// greenfield instance lands, one group is carried, and the close clears
+/// the key once the setup proof is current.
+///
+/// SATISFIES migration:a-destructive-step-waits-for-its-snapshot
+/// SATISFIES migration:close-refuses-an-unfinished-migration
+#[test]
+fn a_target_migrates_from_its_predecessor_and_closes() {
+    let fixture = forge_migration_fixture();
+    let root = fixture.target.path();
+    let json = |args: &[&str]| forge_json(&fixture, args);
+    let archive = json(&["migrate", "archive", "--apply"]);
+    let workspace = archive["workspace"]
+        .as_str()
+        .expect("a workspace")
+        .to_owned();
+    assert!(
+        archive["forge"]
+            .as_array()
+            .expect("forge rows")
+            .iter()
+            .any(|row| row["state"] == "taken" && row["step"] == "protect-trunk"),
+        "{archive}"
+    );
+
+    // Without its snapshot, the destructive step refuses and changes
+    // nothing.
+    forget_forge_snapshot(&workspace, "default-branch");
+    let key = fixture.key_file();
+    with_app(
+        &fixture,
+        &key,
+        &["setup", "step", "default-branch", "--apply"],
+    )
+    .arg("--required-check")
+    .arg("test-check")
+    .assert()
+    .code(73)
+    .stderr(predicate::str::contains("holds no intact snapshot of it"));
+    // The archive, run again, takes what is missing.
+    let resumed = json(&["migrate", "archive", "--apply"]);
+    assert_eq!(resumed["mode"], "resume");
+    assert!(
+        resumed["snapshots"]
+            .as_array()
+            .expect("snapshots")
+            .iter()
+            .any(|id| id == "forge-default-branch"),
+        "{resumed}"
+    );
+
+    // The greenfield landing: no collision is left, so nothing is replaced.
+    fixture
+        .rk(&[
+            "init",
+            "--tech",
+            "bash",
+            "--forge",
+            "github",
+            "--repo",
+            "acme/widget",
+            "--integration",
+            "forge",
+        ])
+        .arg("--apply")
+        .assert()
+        .success();
+    assert!(
+        std::fs::read_to_string(root.join(".release-kit/config.toml"))
+            .expect("reads")
+            .contains("migration = "),
+        "the landing keeps the open migration"
+    );
+    // The landed profile runs steps the unlanded one did not, so the
+    // status names their missing snapshots and the archive takes them.
+    let status = json(&["migrate", "status"]);
+    assert!(
+        status["forge_missing"]
+            .as_array()
+            .expect("forge_missing")
+            .iter()
+            .any(|step| step == "auto-merge"),
+        "{status}"
+    );
+    json(&["migrate", "archive", "--apply"]);
+    with_app(&fixture, &key, &["setup", "--apply"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "the migration holds the before-state",
+        ));
+    with_app(&fixture, &key, &["setup", "checkpoint"])
+        .assert()
+        .success();
+
+    carry_one_group_and_drop_the_rest(&json);
+    let closed = json(&["migrate", "close", "--apply"]);
+    assert_eq!(closed["closed"], true);
+    let config = std::fs::read_to_string(root.join(".release-kit/config.toml")).expect("reads");
+    assert!(!config.contains("migration"), "{config}");
+    assert!(Path::new(&workspace).is_dir(), "the workspace stays");
+    let status = json(&["status"]);
+    assert!(
+        ["current", "drift"].contains(&status["classification"].as_str().unwrap_or_default()),
+        "{status}"
+    );
+    assert!(status.get("migration").is_none(), "{status}");
+}
+
+/// A snapshot whose file was altered licenses nothing: the destructive
+/// step refuses, and the archive run again sets the altered file aside and
+/// takes the snapshot anew.
+///
+/// SATISFIES migration:a-destructive-step-waits-for-its-snapshot
+#[test]
+fn an_altered_forge_snapshot_refuses_its_step_and_is_taken_again() {
+    let fixture = forge_migration_fixture();
+    let json = |args: &[&str]| forge_json(&fixture, args);
+    let workspace = json(&["migrate", "archive", "--apply"])["workspace"]
+        .as_str()
+        .expect("a workspace")
+        .to_owned();
+    let key = fixture.key_file();
+    let snapshot_file = |registry: &serde_json::Value| {
+        registry["snapshots"]
+            .as_array()
+            .expect("snapshots")
+            .iter()
+            .find(|snapshot| snapshot["id"] == "forge-default-branch")
+            .and_then(|snapshot| snapshot["file"].as_str())
+            .map(|file| Path::new(&workspace).join(file))
+            .expect("the snapshot is recorded")
+    };
+    std::fs::write(
+        snapshot_file(&migration_registry(&workspace)),
+        "{\"altered\": true}\n",
+    )
+    .expect("alters");
+    with_app(
+        &fixture,
+        &key,
+        &["setup", "step", "default-branch", "--apply"],
+    )
+    .arg("--required-check")
+    .arg("test-check")
+    .assert()
+    .code(73)
+    .stderr(predicate::str::contains("holds no intact snapshot of it"));
+    json(&["migrate", "archive", "--apply"]);
+    assert!(
+        std::fs::read_dir(Path::new(&workspace).join("forge"))
+            .expect("the forge snapshots read")
+            .filter_map(Result::ok)
+            .any(|entry| entry.file_name().to_string_lossy().contains(".altered-")),
+        "the altered file is set aside, not destroyed"
+    );
+    let registry = migration_registry(&workspace);
+    assert_eq!(
+        registry["snapshots"]
+            .as_array()
+            .expect("snapshots")
+            .iter()
+            .filter(|snapshot| snapshot["id"] == "forge-default-branch")
+            .count(),
+        1,
+        "{registry}"
+    );
+    assert_ne!(
+        std::fs::read_to_string(snapshot_file(&registry)).expect("reads"),
+        "{\"altered\": true}\n"
+    );
+}
+
+/// A snapshot that cannot be read may still be whole, so the archive run
+/// again stops on the read error and keeps the entry and the file.
+///
+/// SATISFIES migration:a-destructive-step-waits-for-its-snapshot
+#[test]
+fn an_unreadable_forge_snapshot_stops_the_resume_and_keeps_its_entry() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let fixture = forge_migration_fixture();
+    let json = |args: &[&str]| forge_json(&fixture, args);
+    let workspace = json(&["migrate", "archive", "--apply"])["workspace"]
+        .as_str()
+        .expect("a workspace")
+        .to_owned();
+    let before = migration_registry(&workspace);
+    let file = before["snapshots"]
+        .as_array()
+        .expect("snapshots")
+        .iter()
+        .find(|snapshot| snapshot["id"] == "forge-default-branch")
+        .and_then(|snapshot| snapshot["file"].as_str())
+        .map(|file| Path::new(&workspace).join(file))
+        .expect("the snapshot is recorded");
+    let bytes = std::fs::read(&file).expect("reads");
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).expect("locks");
+    let resumed = fixture
+        .rk(&["migrate", "archive", "--apply"])
+        .output()
+        .expect("rk runs");
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).expect("unlocks");
+    assert!(!resumed.status.success(), "{resumed:?}");
+    assert_eq!(migration_registry(&workspace), before);
+    assert_eq!(std::fs::read(&file).expect("reads"), bytes);
 }

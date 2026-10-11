@@ -3,15 +3,17 @@
 //! A front over the direct writer: the receipt is required, the target's
 //! evidence is gathered once, this binary's projection is computed from
 //! its embedded sources, and every destination is decided by its recorded
-//! kind alone. A recorded generated file is replaced from the candidate
-//! whatever its bytes are, because the operator and the agent authorized
-//! the migration and Git holds the recovery; a recorded seeded or state
-//! file is preserved with its current digest entering the receipt; a
-//! recorded marked region is replaced alone; a recorded destination the
-//! projection no longer produces is released to the target. A whole-file
-//! destination present on disk and absent from the receipt refuses
-//! before any write, every collision collected in one pass. Preview by
-//! default; `--apply` lands under one target lock with the receipt last.
+//! kind alone. A recorded generated file whose bytes the record vouches
+//! for is replaced from the candidate; one someone edited is a conflict,
+//! replaced only where `--replace` names it, after its bytes are saved; a
+//! recorded seeded or state file is preserved with its current digest
+//! entering the receipt; a recorded marked region is replaced alone; a
+//! recorded destination the projection no longer produces is released to
+//! the target. A whole-file destination present on disk and absent from
+//! the receipt is a conflict too. Every conflict not named refuses before
+//! any write, collected in one pass. `--stage` takes every answer from a
+//! stage's receipt. Preview by default; `--apply` lands under one target
+//! lock with the receipt last.
 //!
 //! SATISFIES landing:ownership-is-elementary
 //! SATISFIES landing:a-dropped-file-stays
@@ -26,7 +28,7 @@ use crate::diagnostic::{Diagnostic, Reason};
 use crate::embedded;
 use crate::error::RkError;
 use crate::held;
-use crate::landing::apply::{self, Action, Collision, Prepared};
+use crate::landing::apply::{self, Action, Collision, Prepared, Replaced};
 use crate::landing::manifest::{self, Alignment, Manifest, Provider};
 use crate::landing::{self, lock};
 use crate::output::Output;
@@ -44,6 +46,44 @@ struct FileEntry {
     /// `created`, `replaced`, `matched`, `preserved`, `drift`, `released`,
     /// or `collision` in a preview.
     action: &'static str,
+}
+
+/// An answer the record leaves open, and the default this upgrade takes.
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct PendingAnswer {
+    /// The configuration key the answer belongs to.
+    key: &'static str,
+    /// The answer this upgrade takes where the operator gives none.
+    default: &'static str,
+    /// Why the answer is open.
+    reason: &'static str,
+    /// The flag that gives the other answer.
+    action: &'static str,
+}
+
+/// The answers this upgrade takes on the operator's behalf.
+///
+/// A record that predates the workflow guards carries no answer for them.
+/// That is the one capability whose old records do not read as opt-out:
+/// every such target carries the guards, so the upgrade keeps them, and it
+/// says so once, until a flag or the configuration answers.
+fn pending_answers(
+    args: &UpgradeArgs,
+    recorded: &Manifest,
+    existing: Option<&crate::config::Config>,
+) -> Vec<PendingAnswer> {
+    let answered = args.workflow_guards.is_some()
+        || existing.is_some_and(|config| config.capabilities.workflow_guards.is_some())
+        || recorded.capabilities.workflow_guards.is_some();
+    if answered {
+        return Vec::new();
+    }
+    vec![PendingAnswer {
+        key: "capabilities.workflow_guards",
+        default: "on",
+        reason: "the record predates the workflow guards, and this target carries them",
+        action: "--workflow-guards off drops them; --workflow-guards on keeps them and records the answer",
+    }]
 }
 
 /// The machine form of an upgrade report.
@@ -85,6 +125,13 @@ struct Report {
     /// there is none. A preview lists them and exits 0.
     #[serde(skip_serializing_if = "Option::is_none")]
     collisions: Option<Vec<Collision>>,
+    /// The conflicts `--replace` named, each with where its bytes were
+    /// saved; empty where none was named.
+    replaced: Vec<Replaced>,
+    /// The answers the record leaves open and this upgrade takes by
+    /// default; absent where the record answers everything.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pending: Vec<PendingAnswer>,
     config: crate::config::Plan,
     /// Every destination, with its action.
     files: Vec<FileEntry>,
@@ -99,6 +146,10 @@ struct Report {
 /// Returns a refusal for a missing receipt, an unknown receipt schema, a
 /// receipt from a newer binary, and, on apply, any collected collision;
 /// and [`RkError::Io`] on filesystem failure.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one pass holds the target, resolves the answers once from the flags or the stage, and lands"
+)]
 pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
     let out = Output::new(args.json);
     // An apply takes the target before it reads anything of it, the
@@ -120,10 +171,35 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
     held::pause(apply::PAUSE_VAR, "held", "proceed-held");
     let recorded = load_upgradable(&held)?;
     let existing = crate::config::load(held.base().as_std_path())?;
-    let params = resolve_params(args, &held, &recorded, existing.as_ref())?;
+    let staged = args
+        .stage
+        .as_deref()
+        .map(|root| {
+            if answered(args) {
+                return Err(crate::stage::read::answered_twice());
+            }
+            let canonical = std::fs::canonicalize(args.target.as_std_path())?;
+            crate::stage::read::load(root, &canonical).map(|receipt| (root, receipt))
+        })
+        .transpose()?;
+    let params = match &staged {
+        Some((root, receipt)) => {
+            let params = landing::Params::resolve(
+                held.base(),
+                &crate::stage::read::inputs(&receipt.parameters),
+                existing.as_ref(),
+                Some(&recorded),
+                landing::Purpose::Upgrade,
+            )?;
+            crate::stage::read::confirm(&params, receipt, root)?;
+            params
+        }
+        None => resolve_params(args, &held, &recorded, existing.as_ref())?,
+    };
 
-    let (prepared, landed) = if let Some(lock) = lock {
-        let prepared = apply::prepare(&held, Some(&recorded), &params, existing.as_ref())?;
+    let mut prepared = apply::prepare(&held, Some(&recorded), &params, existing.as_ref())?;
+    apply::name_replacements(&mut prepared, &args.replace)?;
+    let landed = if let Some(lock) = lock {
         let landed = apply::land(
             &held,
             Some(&recorded),
@@ -132,14 +208,27 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
             &lock,
         )?;
         drop(lock);
-        (prepared, Some(landed))
+        Some(landed)
     } else {
-        (
-            apply::prepare(&held, Some(&recorded), &params, existing.as_ref())?,
-            None,
-        )
+        None
     };
+    let replaced = landed.as_ref().map_or_else(
+        || apply::previewed_replacements(&prepared),
+        |landed| landed.replaced.clone(),
+    );
+    for entry in &replaced {
+        if let Some(saved) = &entry.saved_to {
+            out.result_line(format!("saved {} to {saved}", entry.path));
+        }
+    }
 
+    let pending = pending_answers(args, &recorded, existing.as_ref());
+    for answer in &pending {
+        out.result_line(format!(
+            "pending {}: {}; this upgrade answers {}; {}",
+            answer.key, answer.reason, answer.default, answer.action
+        ));
+    }
     let sentinels = report_decisions(out, &held, &prepared, landed.is_some())?;
     if landed.is_some() {
         out.result_line(format!("rewrote {}", manifest::MANIFEST_PATH));
@@ -151,7 +240,7 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
     let next = next_lines(args, &params, prepared.collisions.is_empty());
     out.next(&next);
     out.emit(&Report {
-        schema: "rk.upgrade/10",
+        schema: SCHEMA,
         config: prepared.config.clone(),
         mode: if args.apply { "apply" } else { "preview" },
         target: args.target.to_string(),
@@ -170,6 +259,8 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
         licence_refusal: prepared.projection.licence_refusal.clone(),
         withheld: withheld_of(&prepared),
         collisions: (!prepared.collisions.is_empty()).then(|| prepared.collisions.clone()),
+        replaced,
+        pending,
         files: prepared
             .decisions
             .iter()
@@ -186,6 +277,19 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
             .collect(),
         next,
     })
+}
+
+/// The report's shape version.
+const SCHEMA: &str = "rk.upgrade/11";
+
+/// Whether any answer flag was given, which `--stage` refuses beside it.
+const fn answered(args: &UpgradeArgs) -> bool {
+    !args.profile.is_empty()
+        || args.nix_packaging.is_some()
+        || args.reporting_policy.is_some()
+        || args.scorecard.is_some()
+        || args.workflow_guards.is_some()
+        || args.code_scanning.is_some()
 }
 
 /// The withheld list a report carries.
@@ -290,6 +394,7 @@ fn resolve_params(
     let nix = toggle("nix-packaging", args.nix_packaging.as_deref())?;
     let reporting_policy = toggle("reporting-policy", args.reporting_policy.as_deref())?;
     let scorecard = toggle("scorecard", args.scorecard.as_deref())?;
+    let workflow_guards = toggle("workflow-guards", args.workflow_guards.as_deref())?;
     let code_scanning = args
         .code_scanning
         .as_deref()
@@ -302,6 +407,7 @@ fn resolve_params(
             reporting_policy,
             scorecard,
             code_scanning,
+            workflow_guards,
             ..args.profile.inputs()?
         },
         existing,
@@ -457,11 +563,11 @@ mod tests {
         CapabilityRequests, GitWorkflow, ProfileSnapshot, ReleaseIntent, ReleaseMode,
     };
 
-    /// The complete `rk.upgrade/10` shape, held by snapshot.
+    /// The complete `rk.upgrade/11` shape, held by snapshot.
     #[test]
     fn the_upgrade_report_schema_snapshot_holds() {
         let report = Report {
-            schema: "rk.upgrade/10",
+            schema: super::SCHEMA,
             config: crate::config::Plan {
                 action: "added",
                 changes: vec![],
@@ -491,12 +597,22 @@ mod tests {
                 reporting_policy: true,
                 scorecard: false,
                 code_scanning: None,
+                workflow_guards: Some(false),
             },
             selection: vec![],
             release_unavailable: None,
             licence_refusal: None,
             withheld: None,
-            collisions: None,
+            collisions: Some(vec![crate::landing::apply::Collision {
+                path: "SECURITY.md".into(),
+                reason: "was edited after the landing".into(),
+                replaceable: true,
+            }]),
+            replaced: vec![crate::landing::apply::Replaced {
+                path: ".github/workflows/release-plz.yml".into(),
+                saved_to: Some("/state/snapshots/widget-0123456789ab/20261009T120000Z/replaced/.github/workflows/release-plz.yml".into()),
+            }],
+            pending: vec![],
             files: vec![
                 FileEntry {
                     path: "release-plz.toml".into(),
@@ -513,7 +629,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.upgrade/10","mode":"preview","target":"/tmp/t","from_version":"0.1.0","to_version":"0.2.0","profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"main-worktree","integration":"local"},"capabilities":{"nix_packaging":false,"reporting_policy":true,"scorecard":false},"selection":[],"config":{"action":"added","changes":[],"content":"schema_version = 2\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"drift"},{"path":"legacy.yml","kind":"rendered","action":"released"}],"next":["rk upgrade --target /tmp/t --apply writes"]}"#
+            r#"{"schema":"rk.upgrade/11","mode":"preview","target":"/tmp/t","from_version":"0.1.0","to_version":"0.2.0","profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"main-worktree","integration":"local"},"capabilities":{"nix_packaging":false,"reporting_policy":true,"scorecard":false,"workflow_guards":false},"selection":[],"collisions":[{"path":"SECURITY.md","reason":"was edited after the landing","replaceable":true}],"replaced":[{"path":".github/workflows/release-plz.yml","saved_to":"/state/snapshots/widget-0123456789ab/20261009T120000Z/replaced/.github/workflows/release-plz.yml"}],"config":{"action":"added","changes":[],"content":"schema_version = 2\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"drift"},{"path":"legacy.yml","kind":"rendered","action":"released"}],"next":["rk upgrade --target /tmp/t --apply writes"]}"#
         );
     }
 }

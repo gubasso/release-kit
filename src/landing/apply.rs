@@ -85,6 +85,84 @@ impl Action {
     }
 }
 
+/// What an adoption finds at one candidate's destination.
+///
+/// It is judged on the bytes alone. `rk adopt` decides from it, and
+/// `rk stage compare` takes the word of a target the adoption lands from
+/// it, so the comparison is the adoption's own decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Adoption {
+    /// The destination holds the candidate's bytes.
+    Matches,
+    /// A seeded file the target tuned: it stays, target-owned.
+    Tuned,
+    /// A state file: it stays as the target left it.
+    State,
+    /// A rendered destination whose bytes differ from the candidate.
+    Differs,
+    /// The destination is absent, or carries no release-kit block where
+    /// `exists`.
+    Missing {
+        /// Whether a file stands at the destination.
+        exists: bool,
+    },
+    /// Something other than a regular file stands at the destination.
+    Irregular,
+}
+
+impl Adoption {
+    /// The comparison word, in the landing's vocabulary and with the
+    /// meaning the method gives it: a kept seeded or state file is
+    /// `preserved`, and whatever the adoption refuses is a `collision`.
+    #[must_use]
+    pub const fn word(self) -> &'static str {
+        match self {
+            Self::Matches => "matched",
+            Self::Tuned | Self::State => "preserved",
+            Self::Differs | Self::Missing { .. } | Self::Irregular => "collision",
+        }
+    }
+
+    /// Whether the adoption accepts `--replace` for a destination of
+    /// `kind` judged so: a rendered destination that differs or is
+    /// missing. Every other collision refuses whatever is named.
+    #[must_use]
+    pub fn replaceable(self, kind: Kind) -> bool {
+        matches!(self, Self::Differs)
+            || (matches!(self, Self::Missing { .. }) && kind == Kind::Rendered)
+    }
+}
+
+/// Judge one candidate's destination as an adoption does.
+///
+/// # Errors
+///
+/// [`RkError::Io`] for a read that fails for a reason other than
+/// absence.
+pub fn judge_adoption(target: &Held, candidate: &Candidate) -> Result<Adoption, RkError> {
+    // The landing's own walk: a linked or non-directory parent, a link at
+    // the destination, dangling or not, and any non-regular entry are
+    // irregular, because the write would refuse to follow them.
+    match locate(&target.root, &candidate.destination)? {
+        Located::Collision(_) => return Ok(Adoption::Irregular),
+        Located::Absent => return Ok(Adoption::Missing { exists: false }),
+        Located::Present { .. } => {}
+    }
+    let Some(current) = super::read_recorded(target.base(), &candidate.destination)? else {
+        return Ok(Adoption::Missing { exists: true });
+    };
+    let expected: &[u8] = match candidate.placement {
+        Placement::Whole => &candidate.bytes,
+        Placement::Region { .. } => candidate.region.as_deref().unwrap_or(&candidate.bytes),
+    };
+    Ok(match candidate.kind {
+        Kind::Rendered | Kind::Seeded if current == expected => Adoption::Matches,
+        Kind::Rendered => Adoption::Differs,
+        Kind::Seeded => Adoption::Tuned,
+        Kind::State => Adoption::State,
+    })
+}
+
 /// One decided destination.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Decision {
@@ -97,16 +175,37 @@ pub struct Decision {
     pub action: Action,
 }
 
-/// One destination the landing refuses before any write: a whole-file
-/// destination present on disk with no receipt entry attributing it, or a
-/// document whose markers offer the block no place.
+/// One destination the landing refuses before any write.
+///
+/// It is a whole-file destination present on disk with no receipt entry
+/// attributing it, a recorded rendered file or region whose bytes the
+/// record no longer vouches for, or a document whose markers offer the
+/// block no place.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Collision {
     /// The destination.
     pub path: String,
     /// Why it refuses.
     pub reason: String,
+    /// Whether it is a conflict `--replace` may name: a regular file whose
+    /// bytes a landing could save and overwrite. A defective marker or a
+    /// linked parent is no conflict, and only a fix to the target clears
+    /// it.
+    pub replaceable: bool,
 }
+
+/// One conflict the operator named, replaced after its bytes were saved.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Replaced {
+    /// The destination.
+    pub path: String,
+    /// Where its bytes were saved; absent in a preview, which saves
+    /// nothing.
+    pub saved_to: Option<String>,
+}
+
+/// The reason a recorded rendered file reads as a conflict.
+const EDITED: &str = "was edited after the landing, and the record no longer vouches for its bytes";
 
 /// One target directory held open for a whole landing verb.
 ///
@@ -194,6 +293,9 @@ pub struct Prepared {
     pub collisions: Vec<Collision>,
     /// The configuration the landing writes before the files.
     pub config: config::Plan,
+    /// The conflicts the operator named, which the landing saves and then
+    /// replaces.
+    pub replacements: Vec<String>,
 }
 
 impl Prepared {
@@ -240,7 +342,63 @@ pub fn prepare(
         decisions,
         collisions,
         config,
+        replacements: Vec::new(),
     })
+}
+
+/// Turn every conflict `replace` names into a replacement, and refuse a
+/// name that is no conflict.
+///
+/// A conflict is an unattributed collision or a recorded rendered file
+/// whose bytes the record no longer vouches for. Every conflict the
+/// operator did not name stays a collision, and the landing still
+/// refuses it before the first write; a name that matches no conflict is
+/// a usage error, because a replace the operator believes happened and
+/// did not is worse than a refusal.
+///
+/// # Errors
+///
+/// [`RkError::Usage`] naming the first path that is no conflict.
+pub fn name_replacements(prepared: &mut Prepared, replace: &[String]) -> Result<(), RkError> {
+    for path in replace {
+        if prepared.replacements.contains(path) {
+            continue;
+        }
+        let Some(index) = prepared
+            .collisions
+            .iter()
+            .position(|collision| collision.path == *path && collision.replaceable)
+        else {
+            return Err(RkError::Usage(format!(
+                "--replace {path} names no conflict this landing has; a conflict is an unattributed file or a recorded rendered file someone edited"
+            )));
+        };
+        prepared.collisions.remove(index);
+        let kind = prepared
+            .projection
+            .candidates
+            .iter()
+            .find(|candidate| candidate.destination == *path)
+            .map_or(Kind::Rendered, |candidate| candidate.kind);
+        prepared.decisions.push(Decision {
+            destination: path.clone(),
+            kind,
+            action: Action::Replaced,
+        });
+        prepared.replacements.push(path.clone());
+    }
+    let order = |destination: &str| {
+        prepared
+            .projection
+            .candidates
+            .iter()
+            .position(|candidate| candidate.destination == destination)
+            .unwrap_or(usize::MAX)
+    };
+    let mut decisions = std::mem::take(&mut prepared.decisions);
+    decisions.sort_by_key(|decision| order(&decision.destination));
+    prepared.decisions = decisions;
+    Ok(())
 }
 
 /// Decide every destination from the receipt and the disk, collecting
@@ -254,6 +412,10 @@ pub fn prepare(
 /// # Errors
 ///
 /// A read failure other than absence.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one pass decides every destination by its placement, its record, and its bytes"
+)]
 pub fn decide(
     target: &Held,
     recorded: Option<&Manifest>,
@@ -267,6 +429,7 @@ pub fn decide(
         .map(|collision| Collision {
             path: collision.destination.clone(),
             reason: collision.reason.clone(),
+            replaceable: false,
         })
         .collect();
     for candidate in &projection.candidates {
@@ -276,6 +439,7 @@ pub fn decide(
                 collisions.push(Collision {
                     path: candidate.destination.clone(),
                     reason,
+                    replaceable: false,
                 });
                 continue;
             }
@@ -285,6 +449,25 @@ pub fn decide(
         let current = || located.read();
         let action = match (candidate.placement, present, record) {
             (_, false, _) => Action::Created,
+            // A recorded region someone edited is a conflict like an
+            // edited rendered file: the record no longer vouches for it,
+            // and it does not already hold the candidate's region, which
+            // is what a landing stopped part way leaves behind.
+            (Placement::Region { begin, end }, true, Some(record))
+                if record.kind == Kind::Rendered
+                    && super::extract_block(&String::from_utf8_lossy(&current()?), begin, end)
+                        .is_some_and(|block| {
+                            Digest::of(block.as_bytes()) != record.sha256
+                                && candidate.region.as_deref() != Some(block.as_bytes())
+                        }) =>
+            {
+                collisions.push(Collision {
+                    path: candidate.destination.clone(),
+                    reason: format!("its marked region {EDITED}"),
+                    replaceable: true,
+                });
+                continue;
+            }
             // A marked region lands into the target's document whether
             // the receipt names it or not: the bytes outside the markers
             // stay the target's, so nothing is taken from it.
@@ -302,12 +485,31 @@ pub fn decide(
                         reason:
                             "exists with bytes differing from the candidate, and no receipt attributes it to release-kit"
                                 .to_owned(),
+                        replaceable: true,
                     });
                     continue;
                 }
             }
             (Placement::Whole, true, Some(record)) => match (candidate.kind, record.kind) {
-                (Kind::Rendered, Kind::Rendered) => Action::Replaced,
+                // The record vouches for the bytes on disk, so they are
+                // release-kit's own; bytes it no longer vouches for are an
+                // edit, which only a named replace overwrites.
+                (Kind::Rendered, Kind::Rendered) => {
+                    let bytes = current()?;
+                    // Bytes equal to the candidate are what a landing
+                    // stopped part way wrote: attributed by content, as a
+                    // matched file is, so the rerun lands the rest.
+                    if Digest::of(&bytes) == record.sha256 || bytes == candidate.bytes {
+                        Action::Replaced
+                    } else {
+                        collisions.push(Collision {
+                            path: candidate.destination.clone(),
+                            reason: EDITED.to_owned(),
+                            replaceable: true,
+                        });
+                        continue;
+                    }
+                }
                 (Kind::Rendered, Kind::Seeded | Kind::State) => {
                     collisions.push(Collision {
                         path: candidate.destination.clone(),
@@ -315,6 +517,7 @@ pub fn decide(
                             "is recorded as {}, and this release renders it, so its bytes are the target's",
                             record.kind.as_str()
                         ),
+                        replaceable: true,
                     });
                     continue;
                 }
@@ -442,9 +645,9 @@ pub fn release_unavailable(reason: &str) -> RkError {
 
 /// The one refusal for every collision, before any write.
 ///
-/// The verbs offer no force flag: an unattributed file becomes landable
-/// through the agent's migration alone, which brings the target to the
-/// projection or records it through `rk adopt`.
+/// No flag forces past a collision. Only a named `--replace`, which saves
+/// a copy first, passes a conflict, and a defective marker or a linked
+/// parent only a fix to the target clears.
 #[must_use]
 pub fn refusal(target: &Utf8Path, collisions: &[Collision]) -> RkError {
     let listed: Vec<String> = collisions
@@ -463,7 +666,7 @@ pub fn refusal(target: &Utf8Path, collisions: &[Collision]) -> RkError {
             "every whole-file destination absent, named by the receipt, or already holding the candidate's bytes, every parent component a directory reached through no link, and every marked document offering its block one place",
         )
         .action(format!(
-            "rk stage --target {target} stages this binary's candidate for a byte comparison; the rk-setup skill carries the migration that brings each file to the candidate or records it, then re-run"
+            "rk stage --target {target}, then rk stage compare <stage> names each conflict, and the rk-setup skill asks the operator about each one; --replace <path> saves a copy of a named conflict and replaces it, then re-run"
         ))
         .target_state("unchanged"),
     )
@@ -491,6 +694,8 @@ pub struct Landed {
     pub config_written: bool,
     /// The receipt as written.
     pub receipt: Manifest,
+    /// Every conflict replaced, with where its bytes were saved.
+    pub replaced: Vec<Replaced>,
 }
 
 /// Land `prepared` into `target`.
@@ -534,6 +739,9 @@ pub fn land(
     // file must still stand, and an adopted value must still equal the
     // candidate, or the landing refuses with the old receipt intact.
     let unwritten = reverify(root, prepared, origin)?;
+    // Every named conflict is saved before the first write, so a failed
+    // save leaves the target exactly as it stood.
+    let replaced = save_replacements(target, root, prepared)?;
     let mut writer = Writer {
         root,
         completed: Vec::new(),
@@ -579,7 +787,50 @@ pub fn land(
         completed: writer.completed,
         config_written,
         receipt,
+        replaced,
     })
+}
+
+/// Save the bytes of every named conflict that stands on disk.
+fn save_replacements(
+    target: &Held,
+    root: &File,
+    prepared: &Prepared,
+) -> Result<Vec<Replaced>, RkError> {
+    if prepared.replacements.is_empty() {
+        return Ok(Vec::new());
+    }
+    // Every run claims its own state-root snapshot, an open migration's
+    // included: nothing reads a saved copy back, and a fresh claim never
+    // collides with an earlier run's copy of the same path.
+    let canonical = std::fs::canonicalize(target.display().as_std_path())?;
+    let snapshot = crate::snapshot::Snapshot::begin(&canonical)?;
+    let mut replaced = Vec::new();
+    for path in &prepared.replacements {
+        let saved_to = match read_relative(root, path)? {
+            Some(bytes) => Some(snapshot.save_replaced(path, &bytes)?.display().to_string()),
+            None => None,
+        };
+        replaced.push(Replaced {
+            path: path.clone(),
+            saved_to,
+        });
+    }
+    Ok(replaced)
+}
+
+/// What a preview reports for the named conflicts: each path, with no
+/// saved copy yet.
+#[must_use]
+pub fn previewed_replacements(prepared: &Prepared) -> Vec<Replaced> {
+    prepared
+        .replacements
+        .iter()
+        .map(|path| Replaced {
+            path: path.clone(),
+            saved_to: None,
+        })
+        .collect()
 }
 
 /// What the landing does with one destination under `origin`: an
@@ -588,6 +839,9 @@ pub fn land(
 /// already named.
 fn action_of(prepared: &Prepared, origin: Origin, destination: &str) -> Option<Action> {
     match origin {
+        Origin::Adopt if prepared.replacements.iter().any(|path| path == destination) => {
+            Some(Action::Replaced)
+        }
         Origin::Adopt => Some(Action::Preserved),
         Origin::Init | Origin::Upgrade => prepared.decision(destination).map(|d| d.action),
     }
@@ -627,6 +881,7 @@ fn reverify(
     for candidate in &prepared.projection.candidates {
         let action = action_of(prepared, origin, &candidate.destination);
         let must_match = match (origin, action) {
+            (_, Some(Action::Replaced | Action::Created)) => continue,
             (Origin::Adopt, _) => candidate.kind == Kind::Rendered,
             (_, Some(Action::Matched)) => true,
             (_, Some(Action::Preserved | Action::Drift)) => false,

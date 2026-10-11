@@ -61,6 +61,8 @@ fn run(cli: &Cli) -> Result<(), RkError> {
         Commands::Setup(args) => commands::setup::run(args),
         Commands::Branches(args) => commands::branches::run(args),
         Commands::Lines(args) => commands::lines::run(args),
+        Commands::Migrate(args) => commands::migrate::run(args),
+        Commands::Release(args) => commands::release::run(args),
         Commands::Integrate(args) => commands::integrate::run(args),
         Commands::Message(args) => commands::message::run(args),
         Commands::Worktree(args) => commands::worktree::run(args),
@@ -68,7 +70,6 @@ fn run(cli: &Cli) -> Result<(), RkError> {
         Commands::Runs(args) => commands::runs::run(args),
         Commands::Skill(args) => commands::skill::run(args),
         Commands::SelfDepend(args) => commands::self_depend::run(args),
-        Commands::Depend(args) => commands::depend::run(args),
         Commands::Doctor(args) => commands::doctor::run(args),
         Commands::Usage => commands::usage::run(),
         Commands::License => commands::license::run(),
@@ -126,6 +127,8 @@ const fn name(command: &Commands) -> &'static str {
         Commands::Setup(_) => "setup",
         Commands::Branches(_) => "branches",
         Commands::Lines(_) => "lines",
+        Commands::Migrate(_) => "migrate",
+        Commands::Release(_) => "release",
         Commands::Integrate(_) => "integrate",
         Commands::Message(_) => "message",
         Commands::Worktree(_) => "worktree",
@@ -133,7 +136,6 @@ const fn name(command: &Commands) -> &'static str {
         Commands::Runs(_) => "runs",
         Commands::Skill(_) => "skill",
         Commands::SelfDepend(_) => "self-depend",
-        Commands::Depend(_) => "depend",
         Commands::Doctor(_) => "doctor",
         Commands::Usage => "usage",
         Commands::License => "license",
@@ -145,9 +147,10 @@ const fn name(command: &Commands) -> &'static str {
 /// error renders on stderr.
 const fn wants_json(command: &Commands) -> bool {
     use release_kit::cli::branches::BranchesAction;
-    use release_kit::cli::depend::DependAction;
     use release_kit::cli::issue::IssueAction;
     use release_kit::cli::lines::LinesAction;
+    use release_kit::cli::migrate::MigrateAction;
+    use release_kit::cli::release::ReleaseAction;
     use release_kit::cli::runs::RunsAction;
     use release_kit::cli::self_depend::SelfDependAction;
     use release_kit::cli::setup::SetupAction;
@@ -161,7 +164,7 @@ const fn wants_json(command: &Commands) -> bool {
         Commands::Adopt(args) => args.json,
         Commands::Assess(args) => args.json,
         Commands::Stage(args) => match &args.action {
-            Some(StageAction::Clean { json, .. }) => *json,
+            Some(StageAction::Clean { json, .. } | StageAction::Compare { json, .. }) => *json,
             None => args.json,
         },
         Commands::Versions(args) => args.json,
@@ -181,11 +184,21 @@ const fn wants_json(command: &Commands) -> bool {
         },
         // The same explicit nesting as the worktree arm: every action
         // named, so a new one cannot be silently swallowed.
+        Commands::Migrate(args) => match &args.action {
+            MigrateAction::Inventory { json, .. }
+            | MigrateAction::Archive { json, .. }
+            | MigrateAction::Mark { json, .. }
+            | MigrateAction::Status { json, .. }
+            | MigrateAction::Close { json, .. } => *json,
+        },
         Commands::Lines(args) => match &args.action {
             LinesAction::List { json, .. }
             | LinesAction::Open { json, .. }
             | LinesAction::Rc { json, .. }
             | LinesAction::Retire { json, .. } => *json,
+        },
+        Commands::Release(args) => match &args.action {
+            ReleaseAction::Status { json, .. } => *json,
         },
         Commands::Integrate(args) => args.json,
         Commands::Message(args) => args.json,
@@ -214,10 +227,6 @@ const fn wants_json(command: &Commands) -> bool {
             SelfDependAction::Add(args) => args.json,
             SelfDependAction::Clean(args) => args.json,
             SelfDependAction::Sync(args) => args.json,
-        },
-        Commands::Depend(args) => match &args.action {
-            DependAction::Assess(args) => args.json,
-            DependAction::Add(args) => args.json,
         },
         _ => false,
     }

@@ -28,6 +28,7 @@ nix_packaging = RK_CONFIG_CAPABILITIES_NIX_PACKAGING # P: opt-in Nix capability
 reporting_policy = RK_CONFIG_CAPABILITIES_REPORTING_POLICY # P: the landed vulnerability reporting policy
 scorecard = RK_CONFIG_CAPABILITIES_SCORECARD # P: opt-in OpenSSF Scorecard workflow, github only
 code_scanning = RK_CONFIG_CAPABILITIES_CODE_SCANNING # P: opt-in code scanning provider: codeql, semgrep, or off
+workflow_guards = RK_CONFIG_CAPABILITIES_WORKFLOW_GUARDS # P: opt-in workflow guards: the agent and commit policy lines, the glossary, the workflow hooks, merge-cleanup, and branch-reminder
 
 [security]
 advisories = RK_CONFIG_SECURITY_ADVISORIES # N: project receiving vulnerability reports
@@ -70,3 +71,7 @@ squash_option = RK_CONFIG_PROTECTION_GITLAB_SQUASH_OPTION # F: invariant, always
 squash_commit_template = RK_CONFIG_PROTECTION_GITLAB_SQUASH_COMMIT_TEMPLATE # F: invariant, references title and description
 push_access_level = RK_CONFIG_PROTECTION_GITLAB_PUSH_ACCESS_LEVEL # F: invariant, the level git.integration names
 merge_access_level = RK_CONFIG_PROTECTION_GITLAB_MERGE_ACCESS_LEVEL # F: floor thirty
+
+[acquisition]
+source = RK_CONFIG_ACQUISITION_SOURCE # P: host where every host installs rk itself; absent where a manager file pins it
+minimum = RK_CONFIG_ACQUISITION_MINIMUM # P: the lowest rk release a host may run against this project

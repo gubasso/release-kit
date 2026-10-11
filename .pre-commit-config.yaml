@@ -168,22 +168,6 @@ repos:
     rev: v0.23.2
     hooks:
       - id: markdownlint-cli2
-      - id: markdownlint-cli2
-        alias: md-relative-links
-        name: markdownlint relative links
-        additional_dependencies: ['markdownlint-rule-relative-links']
-        args: ['--config', '.spec-driven-docs/markdownlint/relative-links.markdownlint-cli2.jsonc']
-        exclude: '^_docs/decisions/'
-      - id: markdownlint-cli2
-        alias: md-spec
-        name: markdownlint spec heading shape
-        files: '^_docs/specs/SPEC-[a-z0-9-]+\.md$'
-        args: ['--config', '.spec-driven-docs/markdownlint/spec.markdownlint-cli2.jsonc']
-      - id: markdownlint-cli2
-        alias: md-adr
-        name: markdownlint decision heading shape
-        files: '^_docs/decisions/ADR-[a-z-]+\.md$'
-        args: ['--config', '.spec-driven-docs/markdownlint/adr.markdownlint-cli2.jsonc']
   - repo: https://github.com/crate-ci/typos
     rev: v1.49.0
     hooks:
@@ -338,22 +322,16 @@ repos:
         name: 'documents state the present'
         entry: sdd gate no-self-narration
         language: system
-        files: '^_docs/(?:.*/)?[^/]*\.md$'
+        files: '^_docs/(?:specs|decisions|guides|reference|explanation)/(?:.*/)?[^/]*\.md$'
         types: [markdown]
         exclude: '^_docs/decisions/.*$'
       - id: prose-stays-unwrapped
         name: 'prose lines stay unwrapped'
         entry: sdd gate prose-stays-unwrapped
         language: system
-        files: '^_docs/(?:.*/)?[^/]*\.md$'
+        files: '^_docs/(?:specs|decisions|guides|reference|explanation)/(?:.*/)?[^/]*\.md$'
         types: [markdown]
         exclude: '^(?:.*/)?CHANGELOG\.md$'
-      - id: spec-change-is-typed
-        name: 'spec changes are typed'
-        entry: sdd gate spec-change-is-typed
-        language: system
-        always_run: true
-        pass_filenames: false
       - id: spec-requirement-parts
         name: 'spec requirement parts'
         entry: sdd gate spec-requirement-parts
@@ -389,4 +367,9 @@ repos:
         language: system
         always_run: true
         pass_filenames: false
+  - repo: https://github.com/DavidAnson/markdownlint-cli2
+    rev: v0.23.3
+    hooks:
+      - id: markdownlint-cli2
+        additional_dependencies: ['markdownlint-rule-relative-links@5.1.3']
 # END spec-driven-docs managed

@@ -2,13 +2,15 @@
 //!
 //! A front over the direct writer: this binary's projection is computed
 //! exactly as `rk init` would land it; every `rendered` destination must
-//! match it byte for byte, and one mismatch refuses the whole adoption
-//! listing every mismatch and every missing expected file in one run.
-//! On `--apply` the writer lands the configuration and then the receipt,
-//! last, inside `.release-kit/` and nothing else. Blessing whatever is on
-//! disk would launder arbitrary drift into release-kit ownership, so
-//! nothing here ever takes the disk as the candidate, and no target file
-//! is ever changed: not a byte, not a mode, not a sentinel.
+//! match it byte for byte, and one mismatch the operator did not name
+//! refuses the whole adoption, listing every mismatch and every missing
+//! expected file in one run. A mismatch or a missing file `--replace`
+//! names is a conflict the operator answered: on `--apply` its bytes are
+//! saved first, then the candidate is written. The writer then lands the
+//! configuration and the receipt, last. Blessing whatever is on disk
+//! would launder arbitrary drift into release-kit ownership, so nothing
+//! here ever takes the disk as the candidate, and no file outside
+//! `.release-kit/` changes unless the operator named it.
 //!
 //! SATISFIES landing:an-adoption-writes-the-record-and-nothing-else
 //! SATISFIES landing:a-missing-receipt-is-a-classification
@@ -19,12 +21,11 @@ use crate::cli::adopt::AdoptArgs;
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
 use crate::held;
-use crate::landing::apply::{self, Prepared};
+use crate::landing::apply::{self, Adoption, Prepared, Replaced};
 use crate::landing::manifest::{self, CheckoutMode, Provider};
-use crate::landing::{self, Kind, lock};
+use crate::landing::{self, lock};
 use crate::output::Output;
 use crate::profile::{CapabilityRequests, GitWorkflow, ProfileSnapshot};
-use crate::projection::Placement;
 use crate::stage::CapabilityNote;
 
 /// One verified destination.
@@ -73,6 +74,9 @@ struct Report {
     config: crate::config::Plan,
     /// Every destination, with its verification result.
     files: Vec<FileEntry>,
+    /// The conflicts `--replace` named, each with where its bytes were
+    /// saved; empty where none was named.
+    replaced: Vec<Replaced>,
     /// What plausibly follows.
     next: Vec<String>,
 }
@@ -86,6 +90,10 @@ struct Report {
 /// `rendered` mismatch or missing expected file, listing every one in
 /// one run, and [`RkError::Missing`] where detection resolves no
 /// technology, forge, or repository and no flag covers the gap.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one pass holds the target, resolves the answers once, verifies, and lands"
+)]
 pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
     let out = Output::new(args.json);
     if !args.target.is_dir() {
@@ -134,27 +142,46 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
         ));
     }
     let config = crate::config::load(held.base().as_std_path())?;
+    let staged = args
+        .stage
+        .as_deref()
+        .map(|root| {
+            if answered(args) {
+                return Err(crate::stage::read::answered_twice());
+            }
+            let canonical = std::fs::canonicalize(args.target.as_std_path())?;
+            crate::stage::read::load(root, &canonical).map(|receipt| (root, receipt))
+        })
+        .transpose()?;
+    let staged_inputs = staged
+        .as_ref()
+        .map(|(_, receipt)| crate::stage::read::inputs(&receipt.parameters));
+    let flag_inputs = landing::Inputs {
+        nix: args.nix_packaging.then_some(true),
+        reporting_policy: args.reporting_policy.then_some(true),
+        scorecard: args.scorecard.then_some(true),
+        workflow_guards: args.workflow_guards.then_some(true),
+        code_scanning: args
+            .code_scanning
+            .as_deref()
+            .map(Provider::parse)
+            .transpose()?,
+        ..args.profile.inputs()?
+    };
     let params = landing::Params::resolve(
         held.base(),
-        &landing::Inputs {
-            nix: args.nix_packaging.then_some(true),
-            reporting_policy: args.reporting_policy.then_some(true),
-            scorecard: args.scorecard.then_some(true),
-            code_scanning: args
-                .code_scanning
-                .as_deref()
-                .map(Provider::parse)
-                .transpose()?,
-            ..args.profile.inputs()?
-        },
+        staged_inputs.as_ref().unwrap_or(&flag_inputs),
         config.as_ref(),
         None,
         landing::Purpose::Adopt,
     )?;
+    if let Some((root, receipt)) = &staged {
+        crate::stage::read::confirm(&params, receipt, root)?;
+    }
     let checkout_mode = params.checkout_mode();
 
     let mut prepared = apply::prepare(&held, None, &params, config.as_ref())?;
-    let files = verify(&held, checkout_mode, &prepared)?;
+    let files = verify(&held, checkout_mode, &mut prepared, &args.replace)?;
     // Every destination verified, so what the decision pass read as an
     // unattributed whole file is a file the agent brought to the
     // projection: the adoption records it and writes nothing else.
@@ -180,12 +207,33 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
         out.result_line(format!("withheld {}: {}", entry.destination, entry.reason));
     }
 
-    if let Some(lock) = &lock {
-        apply::land(&held, None, &prepared, apply::Origin::Adopt, lock)?;
+    let replaced = if let Some(lock) = &lock {
+        let landed = apply::land(&held, None, &prepared, apply::Origin::Adopt, lock)?;
+        for entry in &landed.replaced {
+            if let Some(saved) = &entry.saved_to {
+                out.result_line(format!("saved {} to {saved}", entry.path));
+            }
+        }
         out.result_line(format!("wrote {}", manifest::MANIFEST_PATH));
-    }
+        landed.replaced
+    } else {
+        apply::previewed_replacements(&prepared)
+    };
     drop(lock);
-    report(out, args, &params, &prepared, files)
+    report(out, args, &params, &prepared, files, replaced)
+}
+
+/// The report's shape version.
+const SCHEMA: &str = "rk.adopt/11";
+
+/// Whether any answer flag was given, which `--stage` refuses beside it.
+const fn answered(args: &AdoptArgs) -> bool {
+    !args.profile.is_empty()
+        || args.nix_packaging
+        || args.reporting_policy
+        || args.scorecard
+        || args.workflow_guards
+        || args.code_scanning.is_some()
 }
 
 /// The report of a verified target, and of the receipt where one was
@@ -196,6 +244,7 @@ fn report(
     params: &landing::Params,
     prepared: &Prepared,
     files: Vec<FileEntry>,
+    replaced: Vec<Replaced>,
 ) -> Result<(), RkError> {
     let repo = params.repo().to_owned();
     let mut next = if args.apply {
@@ -231,7 +280,7 @@ fn report(
     ));
     out.next(&next);
     out.emit(&Report {
-        schema: "rk.adopt/10",
+        schema: SCHEMA,
         config: prepared.config.clone(),
         mode: if args.apply { "apply" } else { "preview" },
         target: args.target.to_string(),
@@ -260,18 +309,30 @@ fn report(
             (!withheld.is_empty()).then_some(withheld)
         },
         files,
+        replaced,
         next,
     })
 }
 
 /// The verification pass: every candidate checked against the disk,
 /// every failure collected before the one refusal, so an operator
-/// resolves everything and re-runs once.
+/// resolves everything and re-runs once. A rendered mismatch or a missing
+/// expected file `replace` names is the operator's answered conflict: it
+/// joins the replacements instead of the refusal.
+///
+/// SATISFIES landing:an-adoption-writes-the-record-and-nothing-else
+#[allow(
+    clippy::too_many_lines,
+    reason = "one pass judges every candidate, the named conflicts, and the one refusal"
+)]
 fn verify(
     held: &apply::Held,
     checkout_mode: CheckoutMode,
-    prepared: &Prepared,
+    prepared: &mut Prepared,
+    replace: &[String],
 ) -> Result<Vec<FileEntry>, RkError> {
+    let named = |destination: &str| replace.iter().any(|path| path == destination);
+    let mut answered: Vec<String> = Vec::new();
     let target = held.display();
     let mut mismatches: Vec<String> = Vec::new();
     let mut missing: Vec<String> = Vec::new();
@@ -285,41 +346,46 @@ fn verify(
         .map(|collision| collision.reason.clone())
         .collect();
     for candidate in &prepared.projection.candidates {
-        let path = held.base().join(&candidate.destination);
-        let regular = std::fs::symlink_metadata(path.as_std_path())
-            .is_ok_and(|metadata| metadata.is_file())
-            || !path.exists();
-        if !regular {
-            mismatches.push(format!("{} (is not a regular file)", candidate.destination));
-            continue;
-        }
-        let current = landing::read_recorded(held.base(), &candidate.destination)?;
-        let Some(current) = current else {
-            // A block-placed artifact reads as absent from a file that
-            // exists; the operator's remedy differs, so the label must.
-            let label = if path.exists() {
-                format!("{} (carries no release-kit block)", candidate.destination)
-            } else {
-                format!("{} (expected and missing)", candidate.destination)
-            };
-            missing.push(label);
-            continue;
-        };
-        let expected: &[u8] = match candidate.placement {
-            Placement::Whole => &candidate.bytes,
-            Placement::Region { .. } => candidate.region.as_deref().unwrap_or(&candidate.bytes),
-        };
-        let action = match candidate.kind {
-            Kind::Rendered | Kind::Seeded if current == expected => "matches",
-            Kind::Rendered => {
+        let judged = apply::judge_adoption(held, candidate)?;
+        let answers = judged.replaceable(candidate.kind) && named(&candidate.destination);
+        let action = match judged {
+            Adoption::Irregular => {
+                mismatches.push(format!("{} (is not a regular file)", candidate.destination));
+                continue;
+            }
+            Adoption::Missing { exists } => {
+                if answers {
+                    answered.push(candidate.destination.clone());
+                    files.push(FileEntry {
+                        path: candidate.destination.clone(),
+                        kind: candidate.kind.as_str(),
+                        action: "replaced",
+                    });
+                    continue;
+                }
+                // A block-placed artifact reads as absent from a file that
+                // exists; the operator's remedy differs, so the label must.
+                missing.push(if exists {
+                    format!("{} (carries no release-kit block)", candidate.destination)
+                } else {
+                    format!("{} (expected and missing)", candidate.destination)
+                });
+                continue;
+            }
+            Adoption::Matches => "matches",
+            Adoption::Differs if answers => {
+                answered.push(candidate.destination.clone());
+                "replaced"
+            }
+            Adoption::Differs => {
                 mismatches.push(format!(
                     "{} (differs from the rendered candidate)",
                     candidate.destination
                 ));
                 "differs"
             }
-            Kind::Seeded => "differs",
-            Kind::State => "state",
+            Adoption::Tuned => "differs",
+            Adoption::State => "state",
         };
         files.push(FileEntry {
             path: candidate.destination.clone(),
@@ -327,7 +393,13 @@ fn verify(
             action,
         });
     }
+    if let Some(stray) = replace.iter().find(|path| !answered.contains(path)) {
+        return Err(RkError::Usage(format!(
+            "--replace {stray} names no conflict this adoption has; a conflict is a rendered destination that differs from the candidate or is missing"
+        )));
+    }
     if mismatches.is_empty() && missing.is_empty() && defects.is_empty() {
+        prepared.replacements = answered;
         return Ok(files);
     }
     let listed: Vec<String> = mismatches
@@ -372,11 +444,11 @@ mod tests {
         CapabilityRequests, GitWorkflow, ProfileSnapshot, ReleaseIntent, ReleaseMode,
     };
 
-    /// The complete `rk.adopt/10` shape, held by snapshot.
+    /// The complete `rk.adopt/11` shape, held by snapshot.
     #[test]
     fn the_adopt_report_schema_snapshot_holds() {
         let report = Report {
-            schema: "rk.adopt/10",
+            schema: super::SCHEMA,
             config: crate::config::Plan {
                 action: "added",
                 changes: vec![],
@@ -404,6 +476,7 @@ mod tests {
                 reporting_policy: true,
                 scorecard: false,
                 code_scanning: Some(crate::landing::Provider::Semgrep),
+                workflow_guards: Some(false),
             },
             repo: "acme/widget".into(),
             selection: vec![],
@@ -415,11 +488,12 @@ mod tests {
                 kind: "seeded",
                 action: "differs",
             }],
+            replaced: vec![],
             next: vec!["commit the config and the receipt".into()],
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.adopt/10","mode":"apply","target":"/tmp/t","profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"main-worktree","integration":"local"},"capabilities":{"nix_packaging":false,"reporting_policy":true,"scorecard":false,"code_scanning":"semgrep"},"repo":"acme/widget","selection":[],"config":{"action":"added","changes":[],"content":"schema_version = 2\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"differs"}],"next":["commit the config and the receipt"]}"#
+            r#"{"schema":"rk.adopt/11","mode":"apply","target":"/tmp/t","profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"main-worktree","integration":"local"},"capabilities":{"nix_packaging":false,"reporting_policy":true,"scorecard":false,"code_scanning":"semgrep","workflow_guards":false},"repo":"acme/widget","selection":[],"config":{"action":"added","changes":[],"content":"schema_version = 2\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"differs"}],"replaced":[],"next":["commit the config and the receipt"]}"#
         );
     }
 }

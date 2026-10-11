@@ -24,6 +24,7 @@
   - [`packaging:the-cleanup-removes-only-what-it-can-judge` — The cleanup removes only what it can judge](#packagingthe-cleanup-removes-only-what-it-can-judge--the-cleanup-removes-only-what-it-can-judge)
   - [`packaging:the-setup-offers-the-freshness-wire` — The setup offers the freshness wire](#packagingthe-setup-offers-the-freshness-wire--the-setup-offers-the-freshness-wire)
   - [`packaging:the-setup-offers-the-acquisition-route` — The setup offers the acquisition route](#packagingthe-setup-offers-the-acquisition-route--the-setup-offers-the-acquisition-route)
+  - [`packaging:a-host-install-reads-as-a-decision` — A host install reads as a decision](#packaginga-host-install-reads-as-a-decision--a-host-install-reads-as-a-decision)
 
 <!--TOC-->
 
@@ -167,7 +168,7 @@ Verify: `cargo nextest run -E 'test(self_depend_sync_apply_rewrites_the_pin_upda
 
 ### `packaging:the-pin-is-read-through-a-manager-axis` — The pin is read through a manager axis
 
-The binary MUST read how a target obtains `rk` through one manager enum shared with `rk depend`, and `rk self-depend status` MUST report one entry per manager in the enum's order, absent ones included, each naming whether its file mentions release-kit and the version it records, because `rk` offers every other project through a four-manager matrix and a manager list restated in prose drifts at the first new manager. The binary MUST report `.envrc` outside the list, because direnv loads a shell and pins nothing: a host install under an `.envrc` is a reported state with no version to move, never a manager. The status MUST exit 0 for every state it reports, because the verb has no `--check` mode and a report is not a verdict, the same split `landing:status-judges-only-under-check` draws. A new manager is one variant plus its rows in each matrix, and no skill or chapter restates the list.
+The binary MUST read how a target obtains `rk` through one manager enum, and `rk self-depend status` MUST report one entry per manager in the enum's order, absent ones included, each naming whether its file mentions release-kit and the version it records, because a manager list restated in prose drifts at the first new manager. The binary MUST report `.envrc` outside the list, because direnv loads a shell and pins nothing: a host install under an `.envrc` is a reported state with no version to move, never a manager. The status MUST exit 0 for every state it reports, because the verb has no `--check` mode and a report is not a verdict, the same split `landing:status-judges-only-under-check` draws. A new manager is one variant plus its rows in the matrix, and no skill or chapter restates the list.
 
 #### Scenario: A mise target carries no flake
 
@@ -272,3 +273,17 @@ Where a landing records a target for the first time and `rk self-depend status` 
 - THEN the skill asks how the project obtains `rk`, states what each answer costs, and records the answer it receives
 
 Verify: `cargo nextest run -E 'test(the_setup_skill_offers_the_acquisition_route_to_an_unwired_target) or test(an_unwired_target_takes_the_chosen_manager_and_reports_it_back)'`
+
+### `packaging:a-host-install-reads-as-a-decision` — A host install reads as a decision
+
+Where no manager file names release-kit and `.release-kit/config.toml` records the acquisition answer `source = "host"`, `rk self-depend status` MUST report the state `host` with the recorded minimum, beside `no-manager` and `not-wired`, and `rk self-depend add --host` MUST be the verb that records the answer, refusing where a manager already pins release-kit.
+
+The answer goes into the configuration, every comment kept, at the installed binary's release as the minimum. A target with no configuration yet gets one holding the answer alone, because the configuration is input a landing completes rather than a file it replaces. Spec-driven-docs records the same decision in its own declaration only after a landing, because a declaration written earlier would become a file that landing keeps in place of its seed.
+
+#### Scenario: A project declines a pin before its first landing
+
+- GIVEN a target with no record and no manager file, whose operator chose a host install
+- WHEN `rk self-depend add --host --apply` runs, then `rk init --apply`
+- THEN `rk self-depend status` reports `host` before and after the landing, and no later run asks again
+
+Verify: `cargo nextest run -E 'test(self_depend_status_reads_a_recorded_host_install_as_a_decision) or test(a_host_answer_survives_the_landing_and_keeps_the_configuration) or test(a_host_answer_refuses_where_a_manager_pins_release_kit)'`

@@ -10,6 +10,7 @@
   - [`setup-proof:the-proof-carries-no-secret-or-machine-coordinate` — The proof carries no secret or machine coordinate](#setup-proofthe-proof-carries-no-secret-or-machine-coordinate--the-proof-carries-no-secret-or-machine-coordinate)
   - [`setup-proof:the-status-reads-the-proof-offline` — The status reads the proof offline](#setup-proofthe-status-reads-the-proof-offline--the-status-reads-the-proof-offline)
   - [`setup-proof:one-report-owns-every-classification` — One report owns every classification](#setup-proofone-report-owns-every-classification--one-report-owns-every-classification)
+  - [`setup-proof:the-check-reads-the-publish-milestones` — The check reads the publish milestones](#setup-proofthe-check-reads-the-publish-milestones--the-check-reads-the-publish-milestones)
 
 <!--TOC-->
 
@@ -90,3 +91,15 @@ One observation MUST produce one typed report, which keeps each step's applicabi
 - THEN the report stops being checkpointable, and each observer answer keeps its own word through the classification
 
 Verify: `cargo nextest run -E 'test(only_a_complete_observation_is_checkpointable) or test(an_observation_keeps_its_distinctions)'`
+
+### `setup-proof:the-check-reads-the-publish-milestones` — The check reads the publish milestones
+
+`rk setup check` MUST report the first version published from the registry's public read-back, an automated release proven from the newest release and a successful publish run on the trunk at the commit its tag names, and `operator` with the binding's read-back check for each registry form no API exposes, each as a `milestone` event, and none of them MUST weigh on the check's verdict.
+
+#### Scenario: The forge cannot be read for the automated path
+
+- GIVEN a landed rust target whose crate the registry serves, and a forge CLI that refuses the run listing
+- WHEN `rk setup check --json` runs
+- THEN the first version reads `observed`, the automated release reads `unknown`, and the three crates.io forms read `operator`, each naming its read-back check
+
+Verify: `cargo nextest run -E 'test(setup_check_reports_the_publish_milestones)'`

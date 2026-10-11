@@ -15,6 +15,8 @@
   - [`target-config:an-exclusion-narrows-scope-and-not-policy` — An exclusion narrows scope and not policy](#target-configan-exclusion-narrows-scope-and-not-policy--an-exclusion-narrows-scope-and-not-policy)
   - [`target-config:an-unanswered-key-is-absent-and-not-empty` — An unanswered key is absent and not empty](#target-configan-unanswered-key-is-absent-and-not-empty--an-unanswered-key-is-absent-and-not-empty)
   - [`target-config:an-untaken-config-is-reported-and-not-judged` — An untaken config is reported and not judged](#target-configan-untaken-config-is-reported-and-not-judged--an-untaken-config-is-reported-and-not-judged)
+  - [`target-config:a-host-install-is-a-recorded-answer` — A host install is a recorded answer](#target-configa-host-install-is-a-recorded-answer--a-host-install-is-a-recorded-answer)
+  - [`target-config:an-open-migration-is-one-top-level-key` — An open migration is one top-level key](#target-configan-open-migration-is-one-top-level-key--an-open-migration-is-one-top-level-key)
 
 <!--TOC-->
 
@@ -62,7 +64,13 @@ Verify: `cargo nextest run -E 'test(config) or test(params_from_a_record) or tes
 
 ### `target-config:a-flag-overrides-and-a-landing-writes-back` — A flag overrides and a landing writes back
 
-When a landing applies a class P invocation flag, the verb MUST write that key back through the comment-preserving editor, with class N names and class F policy left to their use-time readers. Exactly three class F keys are excepted, because `git.integration` decides them and a configuration carrying one authority's keys beside the other's mode is one its own floor table refuses: `protection.bypass_actors`, `protection.owned_trunk_rules`, and `protection.gitlab.push_access_level` travel with that parameter where they still match a compiled authority's tuple, keep whatever a target narrowed or widened them to otherwise, and are excluded from the comparison that reports untaken configuration, because the record holds no baseline for a floored policy.
+When a landing applies a class P invocation flag, the verb MUST write that key back through the comment-preserving editor, with class N names and class F policy left to their use-time readers. Exactly three class F keys are excepted, because `git.integration` decides them and a configuration carrying one authority's keys beside the other's mode is one its own floor table refuses: `protection.bypass_actors`, `protection.owned_trunk_rules`, and `protection.gitlab.push_access_level` travel with that parameter where they still match a compiled authority's tuple, keep whatever a target narrowed or widened them to otherwise, and are excluded from the comparison that reports untaken configuration, because the record holds no baseline for a floored policy. Every write of the configuration MUST refuse, writing nothing, where `.release-kit` or `.release-kit/config.toml` is a symlink or of another kind, because a write through one would land outside the target.
+
+#### Scenario: The configuration directory is a symlink
+
+- GIVEN a target whose `.release-kit` is a symlink to a directory elsewhere
+- WHEN any verb writes the configuration
+- THEN it exits 73 naming the path, and the directory the link names is unchanged
 
 #### Scenario: The integration authority changes
 
@@ -187,3 +195,35 @@ When a committed class P answer differs from the record's, status MUST report th
 - THEN both report `profile.release.style` as pending and exit 0
 
 Verify: `cargo nextest run -E 'test(config) or test(params_from_a_record) or test(a_schema_1_config_migrates_into_its_domains)'`
+
+### `target-config:a-host-install-is-a-recorded-answer` — A host install is a recorded answer
+
+Where a project obtains `rk` from each host's own install rather than a manager file, the configuration MUST record it in the `acquisition` table as `source = "host"` and `minimum`, the lowest release a host may run, and a `minimum` that is no release version MUST refuse as `config-invalid`.
+
+A manager file records its own pin, so the table exists only for the one method that leaves no file behind, and a configuration that omits it records no host decision. Every landing verb rewrites an existing configuration and keeps the table.
+
+#### Scenario: A host answer names no version
+
+- GIVEN a configuration whose `acquisition.minimum` reads `soon`
+- WHEN any verb that reads the configuration runs
+- THEN it refuses as `config-invalid` naming `acquisition.minimum`, and nothing is written
+
+Verify: `cargo nextest run -E 'test(a_malformed_acquisition_minimum_refuses_as_config_invalid) or test(a_host_answer_survives_the_landing_and_keeps_the_configuration)'`
+
+### `target-config:an-open-migration-is-one-top-level-key` — An open migration is one top-level key
+
+While a migration is open, the configuration MUST name it in one top-level `migration` key beside `schema_version`, which only `rk migrate archive` sets and only `rk migrate close` removes, whose value MUST be the UTC second the archive opened, `%Y%m%dT%H%M%SZ`, followed by `-<n>` from 2 up where an earlier archive of the target took that second, and every other byte MUST be what a greenfield landing of the same answers writes, because the key is how every clone sees the open migration and its removal must leave nothing of the migration behind.
+
+#### Scenario: A migrated target closes
+
+- GIVEN a target whose archive set the key and whose greenfield landing rendered the rest
+- WHEN `rk migrate close --apply` removes the key
+- THEN the file equals the one a greenfield landing of the same answers writes
+
+#### Scenario: Two archives open in one second
+
+- GIVEN a migration workspace that already holds the stamp of this second
+- WHEN a second archive claims its workspace in the same second
+- THEN it takes the stamp with `-2`, and the key names that identifier, while a value that is no identifier refuses as `config-invalid`
+
+Verify: `cargo nextest run -E 'test(a_migrated_landing_writes_the_greenfield_configuration_beside_the_key) or test(a_target_migrates_from_its_predecessor_and_closes) or test(a_second_archive_in_one_second_takes_the_next_free_identifier) or test(an_identifier_is_a_stamp_and_an_optional_counter) or test(a_migration_key_that_is_no_identifier_refuses)'`

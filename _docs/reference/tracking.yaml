@@ -16,4 +16,93 @@
 #     dependents:
 #       - guides/cost-estimation.md
 schema_version: 1
-tracked: []
+tracked:
+  - id: agent-skills-specification
+    path: _docs/reference/REFERENCE-skill-format-sources.md
+    last_checked: 2026-10-08
+    cadence_days: 90
+    why: the open format moves its fields, limits, and loading guidance without notice
+    revalidate:
+      - re-read https://agentskills.io/specification
+      - update the finding and its quote in _docs/reference/REFERENCE-skill-format-sources.md, and every rule that rests on it
+      - advance last_checked
+    dependents:
+      - _docs/specs/SPEC-skill-format.md
+      - _docs/specs/SPEC-distribution.md
+  - id: claude-code-skills
+    path: _docs/reference/REFERENCE-skill-format-sources.md
+    last_checked: 2026-10-08
+    cadence_days: 90
+    why: the host's compaction budget and loading behavior change between releases
+    revalidate:
+      - re-read https://code.claude.com/docs/en/skills
+      - update the finding and its quote in _docs/reference/REFERENCE-skill-format-sources.md, and every rule that rests on it
+      - advance last_checked
+    dependents:
+      - _docs/specs/SPEC-skill-format.md
+  - id: claude-models-overview
+    path: _docs/reference/REFERENCE-skill-format-sources.md
+    last_checked: 2026-10-08
+    cadence_days: 90
+    why: the stated characters per token moves with each tokenizer
+    revalidate:
+      - re-read https://platform.claude.com/docs/en/docs/about-claude/models/overview
+      - update the finding and its quote in _docs/reference/REFERENCE-skill-format-sources.md, and every rule that rests on it
+      - advance last_checked
+    dependents:
+      - _docs/specs/SPEC-skill-format.md
+  - id: codex-agents-md
+    path: _docs/reference/REFERENCE-skill-format-sources.md
+    last_checked: 2026-10-08
+    cadence_days: 90
+    why: the instruction-file byte limit is a configuration default that can change
+    revalidate:
+      - re-read https://learn.chatgpt.com/docs/agent-configuration/agents-md
+      - update the finding and its quote in _docs/reference/REFERENCE-skill-format-sources.md, and every rule that rests on it
+      - advance last_checked
+    dependents:
+      - _docs/specs/SPEC-skill-format.md
+  - id: skill-authoring-best-practices
+    path: _docs/reference/REFERENCE-skill-format-sources.md
+    last_checked: 2026-10-08
+    cadence_days: 90
+    why: the vendor's authoring guidance and its thresholds are revised without notice
+    revalidate:
+      - re-read https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices
+      - update the finding and its quote in _docs/reference/REFERENCE-skill-format-sources.md, and every rule that rests on it
+      - advance last_checked
+    dependents:
+      - _docs/specs/SPEC-skill-format.md
+  - id: atlassian-twg-skills
+    path: _docs/reference/REFERENCE-skill-format-sources.md
+    last_checked: 2026-10-09
+    cadence_days: 90
+    why: the installer's package layout is a product behavior that can change
+    revalidate:
+      - re-read https://developer.atlassian.com/cloud/twg-cli/agents/skills/
+      - update the finding and its quote in _docs/reference/REFERENCE-skill-format-sources.md, and every rule that rests on it
+      - advance last_checked
+    dependents:
+      - _docs/specs/SPEC-distribution.md
+  - id: gh-skill-install
+    path: _docs/reference/REFERENCE-skill-format-sources.md
+    last_checked: 2026-10-09
+    cadence_days: 90
+    why: the installer's copy-or-link behavior is a product behavior that can change
+    revalidate:
+      - re-read https://cli.github.com/manual/gh_skill_install
+      - update the finding and its quote in _docs/reference/REFERENCE-skill-format-sources.md, and every rule that rests on it
+      - advance last_checked
+    dependents:
+      - _docs/specs/SPEC-distribution.md
+  - id: vercel-skills-cli
+    path: _docs/reference/REFERENCE-skill-format-sources.md
+    last_checked: 2026-10-09
+    cadence_days: 90
+    why: the installer's link mode and its open issues move with each release
+    revalidate:
+      - re-read https://github.com/vercel-labs/skills
+      - update the finding and its quote in _docs/reference/REFERENCE-skill-format-sources.md, and every rule that rests on it
+      - advance last_checked
+    dependents:
+      - _docs/specs/SPEC-distribution.md

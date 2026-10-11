@@ -47,8 +47,12 @@ pub const MANIFEST_PATH: &str = ".release-kit/manifest.json";
 /// implementation onto the trunk. A record at schema 9 or below carries
 /// no such key and reads as `forge`, which is the authority it landed.
 ///
+/// Schema 11 adds `capabilities.workflow_guards`. A record at schema 10 or
+/// below carries no such key: that is the pending answer, which reads as
+/// kept, because every such landing carries the guards.
+///
 /// SATISFIES landing:a-record-states-its-schema
-pub const SCHEMA_VERSION: u64 = 10;
+pub const SCHEMA_VERSION: u64 = 11;
 
 /// The oldest schema this binary still reads.
 const OLDEST_READABLE_SCHEMA: u64 = 1;
@@ -553,7 +557,7 @@ pub fn load(target: &Utf8Path) -> Result<Option<Manifest>, RkError> {
         }
     };
     let value: serde_json::Value = serde_json::from_slice(&bytes)
-        .map_err(|e| anyhow::anyhow!("{path} is not a landing record: {e}"))?;
+        .map_err(|e| record_invalid(&path, &format!("{path} is not a landing record: {e}")))?;
     // A record at an earlier schema converts through the one legacy
     // conversion. Anything past this binary's schema refuses by the
     // record schema alone: the record decides whether a guard is landed,
@@ -581,8 +585,12 @@ pub fn load(target: &Utf8Path) -> Result<Option<Manifest>, RkError> {
     } else {
         value
     };
-    let mut manifest: Manifest = serde_json::from_value(value)
-        .map_err(|e| anyhow::anyhow!("{path} does not parse at schema_version {declared}: {e}"))?;
+    let mut manifest: Manifest = serde_json::from_value(value).map_err(|e| {
+        record_invalid(
+            &path,
+            &format!("{path} does not parse at schema_version {declared}: {e}"),
+        )
+    })?;
     // A record below the placement schema stated none: the block
     // destinations were regions by their names alone, and the loaded shape
     // says so.
@@ -593,6 +601,23 @@ pub fn load(target: &Utf8Path) -> Result<Option<Manifest>, RkError> {
         }
     }
     Ok(Some(manifest))
+}
+
+/// The refusal a record that exists and does not parse answers with.
+///
+/// It is the target's file that is wrong, not this binary, so it carries
+/// the same parts a `config-invalid` refusal does: what to change, and
+/// that nothing was written. Git usually holds the last good copy, which
+/// is why the action names the restore first.
+fn record_invalid(path: &Utf8Path, message: &str) -> RkError {
+    RkError::refusal(
+        Diagnostic::new(Reason::RecordInvalid, message)
+            .expected("a landing record this binary wrote, or one it can convert")
+            .action(format!(
+                "restore {path} from Git, or repair the file it names, and retry"
+            ))
+            .target_state("nothing was written"),
+    )
 }
 
 /// Write the record, last, through the temp-plus-rename writer.
@@ -768,6 +793,7 @@ mod tests {
                 reporting_policy: true,
                 scorecard: true,
                 code_scanning: Some(Provider::Semgrep),
+                workflow_guards: Some(false),
             },
             parameters: Parameters {
                 repo: "acme/widget".into(),
@@ -797,7 +823,7 @@ mod tests {
         assert_eq!(
             text,
             format!(
-                r#"{{"schema_version":10,"rk_version":"0.1.0","origin":"init","landed_at":"2026-08-29T00:00:00Z","profile":{{"technologies":["rust"],"forge":"github","release":{{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}}}},"git":{{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"}},"capabilities":{{"nix_packaging":true,"reporting_policy":true,"scorecard":true,"code_scanning":"semgrep"}},"parameters":{{"repo":"acme/widget","security_contact":"","security_response":"best-effort","required_check":"","required_workflow":""}},"files":[{{"destination":"release-plz.toml","kind":"seeded","sha256":"{empty}"}},{{"destination":"AGENTS.md","kind":"rendered","sha256":"{empty}","placement":"region"}}],"pins":{{"release-plz":"0.3.160"}}}}"#
+                r#"{{"schema_version":11,"rk_version":"0.1.0","origin":"init","landed_at":"2026-08-29T00:00:00Z","profile":{{"technologies":["rust"],"forge":"github","release":{{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}}}},"git":{{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"}},"capabilities":{{"nix_packaging":true,"reporting_policy":true,"scorecard":true,"code_scanning":"semgrep","workflow_guards":false}},"parameters":{{"repo":"acme/widget","security_contact":"","security_response":"best-effort","required_check":"","required_workflow":""}},"files":[{{"destination":"release-plz.toml","kind":"seeded","sha256":"{empty}"}},{{"destination":"AGENTS.md","kind":"rendered","sha256":"{empty}","placement":"region"}}],"pins":{{"release-plz":"0.3.160"}}}}"#
             ),
             "a whole file omits its placement, and no retired digest field survives"
         );
@@ -819,6 +845,7 @@ mod tests {
                 reporting_policy: false,
                 scorecard: false,
                 code_scanning: None,
+                workflow_guards: Some(false),
             },
             parameters: Parameters {
                 repo: String::new(),
@@ -833,7 +860,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&release_less).expect("serializes"),
-            r#"{"schema_version":10,"rk_version":"0.1.0","origin":"init","landed_at":"2026-08-29T00:00:00Z","profile":{"technologies":[],"release":{"mode":"none"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"},"capabilities":{"nix_packaging":false,"reporting_policy":false,"scorecard":false},"parameters":{"repo":"","security_contact":"","security_response":"best-effort","required_check":"","required_workflow":""},"files":[],"pins":{}}"#
+            r#"{"schema_version":11,"rk_version":"0.1.0","origin":"init","landed_at":"2026-08-29T00:00:00Z","profile":{"technologies":[],"release":{"mode":"none"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"},"capabilities":{"nix_packaging":false,"reporting_policy":false,"scorecard":false,"workflow_guards":false},"parameters":{"repo":"","security_contact":"","security_response":"best-effort","required_check":"","required_workflow":""},"files":[],"pins":{}}"#
         );
     }
 

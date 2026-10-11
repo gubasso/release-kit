@@ -20,9 +20,16 @@ use super::{Params, ReleaseMode};
 use crate::detect::Forge;
 use crate::projection::{CODE_SCANNING_DESTINATIONS, NIX_DESTINATIONS};
 
-/// The local Git workflow guards: the routing block, the glossary, and the
-/// hook block. Every valid target selects it.
+/// The release guards every valid target selects.
+///
+/// What the release process needs in the target's own files: the routing
+/// block and the hook block, with the release lines and the hooks that
+/// guard the tags and the files release-kit owns.
 pub const GUARDS: &str = "git.guards";
+/// The opt-in workflow guards: the agent and commit policy lines of the
+/// routing block, the glossary, the workflow hooks, and the two workflow
+/// setup steps. Off for a fresh landing.
+pub const WORKFLOW_GUARDS: &str = "git.workflow-guards";
 /// The complete, active title gate at the forge.
 pub const TITLE_CHECK: &str = "git.title-check";
 /// The landed vulnerability reporting policy.
@@ -38,8 +45,9 @@ pub const SCORECARD: &str = "supply-chain.scorecard";
 pub const CODE_SCANNING: &str = "supply-chain.code-scanning";
 
 /// Every capability, in the order a report lists them.
-pub const ALL: [&str; 7] = [
+pub const ALL: [&str; 8] = [
     GUARDS,
+    WORKFLOW_GUARDS,
     TITLE_CHECK,
     REPORTING_POLICY,
     RELEASE_AUTOMATION,
@@ -303,6 +311,15 @@ pub fn select(params: &Params, availability: &Availability) -> Vec<Selection> {
 
     let mut out = Vec::with_capacity(ALL.len());
     out.push(Selection::selected(GUARDS, Vec::new(), None));
+    out.push(if params.workflow_guards() {
+        Selection::selected(WORKFLOW_GUARDS, Vec::new(), None)
+    } else {
+        Selection::omitted(
+            WORKFLOW_GUARDS,
+            Status::NotRequested,
+            "capabilities.workflow_guards is false",
+        )
+    });
 
     // The release automation first, because the title gate's root
     // pipeline depends on whether it lands.
@@ -591,7 +608,7 @@ pub fn pin_keys(selection: &Selection) -> Vec<String> {
 mod tests {
     use super::{
         ALL, Availability, CODE_SCANNING, GUARDS, PACKAGING_NIX, RELEASE_AUTOMATION,
-        REPORTING_POLICY, SCORECARD, Status, TITLE_CHECK, owner_of, select,
+        REPORTING_POLICY, SCORECARD, Status, TITLE_CHECK, WORKFLOW_GUARDS, owner_of, select,
     };
     use crate::landing::Params;
     use crate::landing::manifest::{Provider, Style};
@@ -699,6 +716,22 @@ mod tests {
             Status::NotRequested
         );
         assert_eq!(status_of(&selections, PACKAGING_NIX), Status::NotRequested);
+    }
+
+    /// The workflow guards answer their request alone, and the release
+    /// guards land whatever it says.
+    #[test]
+    fn the_workflow_guards_are_selected_only_when_requested() {
+        let mut params = Params::for_test("acme/widget", Some(Style::Trunk));
+        let selections = select(&params, &Availability::embedded());
+        assert_eq!(status_of(&selections, WORKFLOW_GUARDS), Status::Selected);
+        params.set_workflow_guards_for_test(false);
+        let selections = select(&params, &Availability::embedded());
+        assert_eq!(
+            status_of(&selections, WORKFLOW_GUARDS),
+            Status::NotRequested
+        );
+        assert_eq!(status_of(&selections, GUARDS), Status::Selected);
     }
 
     /// An unknown forge keeps the guards and reports the rest unknown.

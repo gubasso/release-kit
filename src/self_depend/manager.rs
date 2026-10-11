@@ -1,12 +1,11 @@
 //! The manager axis: which tool manager a target obtains `rk` through.
 //!
 //! One enum owns the list, and one detection reads which manager files
-//! a target carries. `rk depend` reads the same files to land another
-//! project, so both verbs share this module and a fifth manager is one
-//! variant here plus its rows in each matrix. The per-manager pin reader
-//! is pure text in, values out: it names whether a file mentions
-//! release-kit, the version it pins where the manager records one, and
-//! nothing it cannot read offline.
+//! a target carries, so a fifth manager is one variant here plus its
+//! rows in the matrix. The per-manager pin reader is pure text in,
+//! values out: it names whether a file mentions release-kit, the version
+//! it pins where the manager records one, and nothing it cannot read
+//! offline.
 
 use camino::Utf8Path;
 use clap::ValueEnum;
