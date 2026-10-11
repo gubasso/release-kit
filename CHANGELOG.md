@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0](https://github.com/gubasso/release-kit/compare/v0.8.7...v0.9.0) - 2026-10-11
+
+### Added
+
+- *(skills)* [**breaking**] rebuild the skills around a task gate and migrations
+
 ## [0.8.7](https://github.com/gubasso/release-kit/compare/v0.8.6...v0.8.7) - 2026-09-27
 
 ### Added
