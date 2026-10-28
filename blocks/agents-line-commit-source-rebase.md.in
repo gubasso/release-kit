@@ -1,0 +1,1 @@
+- Every commit of a branch reaches the trunk with its own message, and its body carries the context and lands with it. The body names no internal planning artifact and carries no agent attribution. The landed rk-message hook holds that rule on every commit.

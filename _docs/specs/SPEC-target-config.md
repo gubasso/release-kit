@@ -10,6 +10,8 @@
   - [`target-config:a-flag-overrides-and-a-landing-writes-back` — A flag overrides and a landing writes back](#target-configa-flag-overrides-and-a-landing-writes-back--a-flag-overrides-and-a-landing-writes-back)
   - [`target-config:an-absent-config-changes-nothing` — An absent config changes nothing](#target-configan-absent-config-changes-nothing--an-absent-config-changes-nothing)
   - [`target-config:an-invariant-bearing-key-carries-a-floor` — An invariant-bearing key carries a floor](#target-configan-invariant-bearing-key-carries-a-floor--an-invariant-bearing-key-carries-a-floor)
+  - [`target-config:the-effective-protection-follows-the-profile` — The effective protection follows the profile](#target-configthe-effective-protection-follows-the-profile--the-effective-protection-follows-the-profile)
+  - [`target-config:a-release-less-template-carries-no-release-table` — A release-less template carries no release table](#target-configa-release-less-template-carries-no-release-table--a-release-less-template-carries-no-release-table)
   - [`target-config:the-trunk-branch-has-one-owner` — The trunk branch has one owner](#target-configthe-trunk-branch-has-one-owner--the-trunk-branch-has-one-owner)
   - [`target-config:a-setup-fact-is-committed-once` — A setup fact is committed once](#target-configa-setup-fact-is-committed-once--a-setup-fact-is-committed-once)
   - [`target-config:an-exclusion-narrows-scope-and-not-policy` — An exclusion narrows scope and not policy](#target-configan-exclusion-narrows-scope-and-not-policy--an-exclusion-narrows-scope-and-not-policy)
@@ -100,13 +102,19 @@ Verify: `cargo nextest run -E 'test(config) or test(params_from_a_record) or tes
 
 ### `target-config:an-invariant-bearing-key-carries-a-floor` — An invariant-bearing key carries a floor
 
-The config reader MUST judge class F values through a floor table selected by the resolved `git.integration` mode, naming each key, its minimum and its source heading in `rk method invariants`, accept stricter values, and refuse a weaker value naming all three. Both tables MUST carry the request rule, required-check rule, and strict status-check policy. Under GitHub local integration the table MUST require exactly the stable `repository-admin` bypass, so an administrator may make the deliberate direct push while integrations remain governed; under GitLab it MUST refuse a push access level broad enough to name every writer. `protection.bypass_actors` MUST reach only the ruleset carrying the request and required-check rules: the deletion and force-push rules are installed with an empty bypass no key states, so no answer in this file can widen who may rewrite the trunk. The reader MAY accept the former compiled local tuple only so a landing or setup can migrate it to the current policy rather than strand an installed target. Every heading either table cites MUST exist in the invariants chapter.
+The config reader MUST judge class F values through a floor table selected by the resolved `git.integration` mode, naming each key, its minimum and its source heading in `rk method invariants`, accept stricter values, and refuse a weaker value naming all three. Both tables MUST carry the request rule, required-check rule, and strict status-check policy. Under GitHub local integration the table MUST require exactly the stable `repository-admin` bypass, so an administrator may make the deliberate direct push while integrations remain governed; under GitLab it MUST refuse a push access level broad enough to name every writer. `protection.bypass_actors` MUST reach only the ruleset carrying the request and required-check rules: the deletion and force-push rules are installed with an empty bypass no key states, so no answer in this file can widen who may rewrite the trunk. The reader MAY accept the former compiled local tuple only so a landing or setup can migrate it to the current policy rather than strand an installed target. The merge floors `protection.allowed_merge_methods`, `protection.github.squash_title_source`, `protection.github.squash_body_source`, and `protection.gitlab.squash_option` MUST accept the values of the resolved `git.merge_form`: under `squash`, exactly squash, the request's title and body as the squash sources, and `squash_option = "always"`, and under `rebase`, exactly rebase and `squash_option = "never"`, where the two squash source floors do not apply. Every heading either table cites MUST exist in the invariants chapter.
 
 #### Scenario: A target permits an additional merge method
 
-- GIVEN a policy allowing squash and merge commits
+- GIVEN a policy allowing squash and merge commits under `git.merge_form = "squash"`
 - WHEN the config reader checks the policy
 - THEN it refuses naming `protection.allowed_merge_methods`, exactly squash, and `rk method invariants`
+
+#### Scenario: A rebase policy is judged under each merge form
+
+- GIVEN a policy allowing rebase alone, with `protection.gitlab.squash_option = "never"`
+- WHEN the config reader checks it under `rebase` and then under `squash`
+- THEN the rebase check passes, and the squash check refuses naming `protection.allowed_merge_methods` and exactly squash
 
 #### Scenario: One policy is judged under each mode
 
@@ -114,7 +122,43 @@ The config reader MUST judge class F values through a floor table selected by th
 - WHEN the config reader checks it under `forge` and then under `local`
 - THEN the forge check passes, the local check refuses naming `protection.bypass_actors`, and adding `repository-admin` makes the local check pass
 
-Verify: `cargo nextest run -E 'test(config) or test(params_from_a_record) or test(a_schema_1_config_migrates_into_its_domains)'`
+Verify: `cargo nextest run -E 'test(config) or test(params_from_a_record) or test(a_schema_1_config_migrates_into_its_domains) or test(merge_form)'`
+
+### `target-config:the-effective-protection-follows-the-profile` — The effective protection follows the profile
+
+The setup MUST derive one effective protection from the configuration and the resolved profile, and the forge setters, the observer, and both `protections-check` scripts MUST read that one result, so a canonical apply never faults its own output. The tag protection MUST follow the release mode alone: `release.mode = "none"` requires no tag protection under either integration mode. The GitHub required status check and the GitLab pipeline requirement MUST follow the forge gate alone: where `project-profile:the-forge-gate-follows-the-merge-form` selects no gate, the GitHub trunk ruleset requires no status check and the GitLab trunk drops `only_allow_merge_if_pipeline_succeeds`, because no workflow reports a check and no pipeline runs, while no-deletion and no-force-push hold in every case. The expected merge settings MUST follow the resolved `git.merge_form`.
+
+#### Scenario: A workflow-only target at each forge
+
+- GIVEN a target landed with `--workflow-only` and `git.merge_form = "rebase"`, configured at GitHub and at GitLab
+- WHEN `rk setup check` and each `protections-check` run
+- THEN both pass with no release tag protection, no required status check, and no required pipeline, and each forge allows only the rebase form
+
+#### Scenario: A release-bearing target loses a protection
+
+- GIVEN a target with an automatic release whose tag protection or pipeline requirement is missing
+- WHEN `rk setup check` runs
+- THEN it faults naming the missing protection, as before
+
+Verify: `cargo nextest run -E 'test(release_less) or test(merge_form)'`
+
+### `target-config:a-release-less-template-carries-no-release-table` — A release-less template carries no release table
+
+Under `profile.release.mode = "none"`, the configuration a landing writes MUST leave out the tag protection keys `protection.tag_ruleset`, `protection.tag_pattern`, and `protection.lines_ruleset`, and the `[setup.bot]` table, because no step of a release-less target reads them, and MUST leave out the `[security]` table unless the target requests the reporting policy, whose landed `SECURITY.md` reads that table's contact and response.
+
+#### Scenario: A workflow-only landing writes its configuration
+
+- GIVEN a target with a GitLab remote and no configuration
+- WHEN `rk init --workflow-only --apply` writes the configuration
+- THEN the file carries no tag protection key, no `[security]`, and no `[setup.bot]`, and it passes its own floor table
+
+#### Scenario: A release-less landing requests the reporting policy
+
+- GIVEN the same target
+- WHEN `rk init --workflow-only --reporting-policy --apply` writes the configuration
+- THEN the file keeps `[security]` for the landed `SECURITY.md`, carries no tag protection key and no `[setup.bot]`, and it passes its own floor table
+
+Verify: `cargo nextest run -E 'test(release_less)'`
 
 ### `target-config:the-trunk-branch-has-one-owner` — The trunk branch has one owner
 

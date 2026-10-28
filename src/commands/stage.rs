@@ -338,6 +338,7 @@ mod tests {
                     trunk: "main".into(),
                     checkout_mode: crate::landing::CheckoutMode::MainWorktree,
                     integration: Integration::Local,
+                    merge_form: crate::landing::MergeForm::Squash,
                 },
                 capabilities: crate::profile::CapabilityRequests {
                     nix_packaging: true,
@@ -371,7 +372,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.stage/6","rk_version":"0.0.0","target":"/tmp/t","stage_root":"/tmp/s","parameters":{"profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","line_prefix":"release/"}},"git":{"trunk":"main","checkout_mode":"main-worktree","integration":"local"},"capabilities":{"nix_packaging":true,"reporting_policy":true,"scorecard":false,"workflow_guards":false},"repo":"acme/widget","security_contact":"","security_response":"best-effort","required_check":"","required_workflow":""},"capabilities":[],"receipt_schema_version":null,"candidates":[],"omissions":[],"collisions":[],"retired":[],"seeded_present":[],"state_present":[],"reference":["CHANGELOG.md"],"output_source":"--output","next":["rk stage clean /tmp/s removes the stage once the landing is verified"]}"#
+            r#"{"schema":"rk.stage/6","rk_version":"0.0.0","target":"/tmp/t","stage_root":"/tmp/s","parameters":{"profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","line_prefix":"release/"}},"git":{"trunk":"main","checkout_mode":"main-worktree","integration":"local","merge_form":"squash"},"capabilities":{"nix_packaging":true,"reporting_policy":true,"scorecard":false,"workflow_guards":false},"repo":"acme/widget","security_contact":"","security_response":"best-effort","required_check":"","required_workflow":""},"capabilities":[],"receipt_schema_version":null,"candidates":[],"omissions":[],"collisions":[],"retired":[],"seeded_present":[],"state_present":[],"reference":["CHANGELOG.md"],"output_source":"--output","next":["rk stage clean /tmp/s removes the stage once the landing is verified"]}"#
         );
     }
 

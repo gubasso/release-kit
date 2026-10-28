@@ -2,21 +2,29 @@
 # Protect the trunk. It takes no direct push: a merge request with a passing
 # pipeline is the only way in. This forge's gate is the project setting
 # requiring the whole pipeline — it is project-wide and names no check, which
-# is why no check name reaches this script. Linear history is the ff merge
-# method plus squash on every merge request: the forge that can fast-forward,
-# does, so the trunk takes no merge commits; the method's invariants chapter
-# owns these facts. Rerunning re-asserts: the protection updates in place
-# where the forge allows and is re-created where it does not.
+# is why no check name reaches this script. Where no forge gate lands, no
+# pipeline runs, so the setting is turned off rather than left alone: a
+# requirement inherited from an earlier gate would hold every merge request
+# on a pipeline nothing starts. The protection keeps no-deletion and
+# no-force-push either way. Linear history is the ff merge
+# method: the forge that can fast-forward, does, so the trunk takes no merge
+# commits. The recorded merge form decides the squash setting: under squash
+# every merge request squashes, and under rebase none does, so every commit
+# keeps its own message and no squash template applies. The method's
+# invariants chapter owns these facts. Rerunning re-asserts: the protection
+# updates in place where the forge allows and is re-created where it does not.
 set -eu
 : "${RK_REPO:?rk sets this; run this script through rk setup}"
 : "${RK_TRUNK_BRANCH:?rk sets this; run this script through rk setup}"
 # The policy below. rk judged every value against the floor table before
 # this ran, so this script substitutes and never decides.
+: "${RK_MERGE_FORM:?rk sets this; run this script through rk setup}"
 : "${RK_GITLAB_MERGE_METHOD:?rk sets this; run this script through rk setup}"
 : "${RK_GITLAB_SQUASH_OPTION:?rk sets this; run this script through rk setup}"
 : "${RK_GITLAB_SQUASH_TEMPLATE:?rk sets this; run this script through rk setup}"
 : "${RK_GITLAB_PUSH_LEVEL:?rk sets this; run this script through rk setup}"
 : "${RK_GITLAB_MERGE_LEVEL:?rk sets this; run this script through rk setup}"
+: "${RK_FORGE_GATE:?rk sets this; run this script through rk setup}"
 
 project="$(printf '%s' "$RK_REPO" | sed 's|/|%2F|g')"
 
@@ -55,14 +63,25 @@ fi
 
 # The squash template is asserted, not assumed: %{title} is this forge's
 # documented default, and asserting it keeps the trunk's commit message the
-# merge request's title even where a project once set something else.
-glab api -X PUT "projects/$project" \
-  -F only_allow_merge_if_pipeline_succeeds=true -f "merge_method=$RK_GITLAB_MERGE_METHOD" -f "squash_option=$RK_GITLAB_SQUASH_OPTION" \
-  -f "squash_commit_template=$RK_GITLAB_SQUASH_TEMPLATE" >/dev/null
+# merge request's title even where a project once set something else. A
+# rebase target squashes nothing, so no template is its message source.
+# The pipeline requirement is the forge gate's own answer, true where a gate
+# lands and false where none does, and it is always sent.
+case "$RK_FORGE_GATE" in
+  true | false) ;;
+  *) echo "RK_FORGE_GATE is $RK_FORGE_GATE; rk sets it to true or false" >&2; exit 1 ;;
+esac
+set -- -F "only_allow_merge_if_pipeline_succeeds=$RK_FORGE_GATE" -f "merge_method=$RK_GITLAB_MERGE_METHOD" -f "squash_option=$RK_GITLAB_SQUASH_OPTION"
+if [ "$RK_MERGE_FORM" = squash ]; then
+  set -- "$@" -f "squash_commit_template=$RK_GITLAB_SQUASH_TEMPLATE"
+fi
+glab api -X PUT "projects/$project" "$@" >/dev/null
 
-echo "check: prints the protection, the pipeline requirement, the merge method, the squash setting, and the squash template"
+echo "check: prints the protection, the pipeline requirement, true exactly where a forge gate lands, the merge method, the squash setting, and the squash template under the squash form"
 glab api "projects/$project/protected_branches/$RK_TRUNK_BRANCH" | compact | grep -o "\"name\":\"$RK_TRUNK_BRANCH\""
 glab api "projects/$project" | compact | grep -o '"only_allow_merge_if_pipeline_succeeds":[a-z]*'
 glab api "projects/$project" | compact | grep -o '"merge_method":"[^"]*"'
 glab api "projects/$project" | compact | grep -o '"squash_option":"[^"]*"'
-glab api "projects/$project" | compact | grep -o '"squash_commit_template":"[^"]*"'
+if [ "$RK_MERGE_FORM" = squash ]; then
+  glab api "projects/$project" | compact | grep -o '"squash_commit_template":"[^"]*"'
+fi

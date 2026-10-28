@@ -3,17 +3,10 @@
 # pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push
 RK_SWEEP_NOTERK_MESSAGE_GUARDSRK_TRUNK_COMMIT_GUARD  - repo: local
     hooks:
-RK_BRANCH_NAME_GUARDRK_WORKTREE_GUARDRK_TRUNK_PUSH_GUARD      - id: rk-no-hand-authored-tag
-        name: rk no hand-authored tag
-        stages: [pre-push]
-        language: system
-        always_run: true
-        pass_filenames: false
-        entry: sh -c 'case "$PRE_COMMIT_REMOTE_BRANCH" in refs/tags/v*) echo "never author a tag; the release automation mints every v* tag" >&2; exit 1;; esac'
-      - id: rk-status-check
+RK_BRANCH_NAME_GUARDRK_WORKTREE_GUARDRK_TRUNK_PUSH_GUARDRK_TAG_GUARD      - id: rk-status-check
         name: rk status check
         language: system
         pass_filenames: false
         entry: rk status --check --target .
-        files: '^(\.github/workflows/|\.gitlab-ci\.yml$|\.gitlab/ci/|AGENTS\.md$|\.release-kit/|\.pre-commit-config\.yaml$|release-plz\.toml$|dist-workspace\.toml$|release-please-config\.json$|cliff\.toml$|\.release-please-manifest\.json$|VERSION$)'
+        files: '^(\.github/workflows/|\.gitlab-ci\.yml$|\.gitlab/ci/|AGENTS\.md$|\.release-kit/|\.pre-commit-config\.yaml$RK_STATUS_RELEASE_FILES)'
 # END release-kit

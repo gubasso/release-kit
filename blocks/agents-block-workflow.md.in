@@ -1,0 +1,10 @@
+<!-- BEGIN release-kit -->
+
+## Workflow
+
+- This repository runs the release-kit workflow. `rk method invariants` states what must stay true.
+RK_AGENT_POLICY- Every commit that reaches the trunk MUST be a Conventional Commit.
+RK_COMMIT_POLICY- Run `rk status` before changing any file `.release-kit/manifest.json` names. Before reading a gap in `rk setup check` as a setup defect, run `rk setup status`. A credential this runtime cannot reach leaves a step unknown, which is an observation boundary and not drift. Never ask the operator to mount, expose, recreate, or rotate a secret only so an agent check can pass.
+- The full method is `rk method --list`.
+
+<!-- END release-kit -->

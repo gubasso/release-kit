@@ -37,7 +37,7 @@ use serde::{Deserialize, Serialize};
 use crate::embedded;
 use crate::error::RkError;
 pub use crate::landing::manifest::Provider;
-use crate::landing::{CheckoutMode, Integration, Params};
+use crate::landing::{CheckoutMode, Integration, MergeForm, Params};
 use crate::profile::ReleaseMode;
 use crate::profile::catalog::{self, Availability, Selection, Status};
 
@@ -340,21 +340,27 @@ impl Projection {
         // root pipeline the receipt does not attribute, the fragment still
         // lands as the gate's prerequisite, and the activation is the
         // operator's one include line rather than a refusal of the whole
-        // landing.
-        let title_root = candidates.iter().position(|candidate| {
-            candidate.capability == catalog::TITLE_CHECK
+        // landing. The gate is the one the merge form names.
+        let gate_root = candidates.iter().position(|candidate| {
+            (candidate.capability == catalog::TITLE_CHECK
+                || candidate.capability == catalog::COMMIT_CHECK)
                 && candidate.destination == GITLAB_ROOT_PIPELINE
         });
-        if let Some(index) = title_root
+        if let Some(index) = gate_root
             && evidence.root_pipeline_present
             && !evidence.root_pipeline_recorded
         {
             let candidate = candidates.remove(index);
+            let (gate, fragment) = if candidate.capability == catalog::COMMIT_CHECK {
+                ("commit gate", GITLAB_COMMIT_FRAGMENT)
+            } else {
+                ("title gate", GITLAB_TITLE_FRAGMENT)
+            };
             let reason = format!(
-                "the target owns {GITLAB_ROOT_PIPELINE}, so the release-less root pipeline that would activate the title gate stays out; the fragment lands as the gate's prerequisite"
+                "the target owns {GITLAB_ROOT_PIPELINE}, so the release-less root pipeline that would activate the {gate} stays out; the fragment lands as the gate's prerequisite"
             );
             let action = format!(
-                "add the include to the target's own {GITLAB_ROOT_PIPELINE}: include:\n  - local: {GITLAB_TITLE_FRAGMENT}"
+                "add the include to the target's own {GITLAB_ROOT_PIPELINE}: include:\n  - local: {fragment}"
             );
             omissions.push(Omission {
                 destination: candidate.destination,
@@ -363,7 +369,7 @@ impl Projection {
             });
             withhold(
                 &mut capabilities,
-                catalog::TITLE_CHECK,
+                candidate.capability,
                 &reason,
                 Some(action),
             );
@@ -450,8 +456,11 @@ fn withhold(capabilities: &mut [Selection], id: &str, reason: &str, action: Opti
 /// withholds where the target owns it.
 pub const GITLAB_ROOT_PIPELINE: &str = ".gitlab-ci.yml";
 
-/// The GitLab title fragment the root pipeline includes.
+/// The GitLab title fragment the root pipeline includes under `squash`.
 pub const GITLAB_TITLE_FRAGMENT: &str = ".gitlab/ci/mr-title.yml";
+
+/// The GitLab commit fragment the root pipeline includes under `rebase`.
+pub const GITLAB_COMMIT_FRAGMENT: &str = ".gitlab/ci/mr-commits.yml";
 
 /// Every snippet this binary embeds, as `(path, bytes)` with the path
 /// carrying the `snippets/` root, sorted by path.
@@ -509,11 +518,12 @@ impl Kind {
 /// OIDC permission, so release-kit owns them; the tool configurations are
 /// per-project judgment; the two state files are rewritten by the release
 /// automation itself.
-const KINDS: [(&str, Kind); 20] = [
+const KINDS: [(&str, Kind); 22] = [
     (".github/workflows/release-plz.yml", Kind::Rendered),
     (".github/workflows/release-please.yml", Kind::Rendered),
     (".github/workflows/release.yml", Kind::Rendered),
     (".github/workflows/pr-title.yml", Kind::Rendered),
+    (".github/workflows/pr-commits.yml", Kind::Rendered),
     (".github/workflows/scorecard.yml", Kind::Rendered),
     (".github/workflows/code-scanning-codeql.yml", Kind::Rendered),
     (
@@ -524,6 +534,7 @@ const KINDS: [(&str, Kind); 20] = [
     (".gitlab-ci.yml", Kind::Rendered),
     ("SECURITY.md", Kind::Rendered),
     (".gitlab/ci/mr-title.yml", Kind::Rendered),
+    (".gitlab/ci/mr-commits.yml", Kind::Rendered),
     ("release-plz.toml", Kind::Seeded),
     ("dist-workspace.toml", Kind::Seeded),
     ("release-please-config.json", Kind::Seeded),
@@ -1143,6 +1154,71 @@ pub const REPO_TOKEN: &[u8] = b"RK_REPO";
 /// The one scope shape: the title checks' regular expression.
 pub const SCOPE_SHAPE_TOKEN: &[u8] = b"RK_SCOPE_SHAPE";
 
+/// Marks a line a forge gate carries wherever the record names a release.
+///
+/// The line lands with the token removed there, and is dropped where the
+/// release mode is `none`, so a release-bearing gate keeps its bytes.
+pub const IF_RELEASE_TOKEN: &[u8] = b"RK_IF_RELEASE_";
+
+/// Marks a line a forge gate carries only where the release mode is
+/// `none`: its release-less wording, dropped wherever a release stands.
+pub const IF_NO_RELEASE_TOKEN: &[u8] = b"RK_IF_NO_RELEASE_";
+
+/// The word a gate's step name gives the Conventional Commit it requires:
+/// `scoped` wherever the record names a release, and nothing where a
+/// scope is preferred and not required.
+pub const SCOPED_TOKEN: &[u8] = b"RK_SCOPED";
+
+/// The opening end of a gate pattern's scope group.
+///
+/// Wherever the record names a release both ends render empty and the
+/// scope is required; where it names none they make the group optional, so
+/// a header with no scope passes.
+pub const SCOPE_OPEN_TOKEN: &[u8] = b"RK_SCOPE_OPEN";
+
+/// The closing end of a gate pattern's scope group: see [`SCOPE_OPEN_TOKEN`].
+pub const SCOPE_CLOSE_TOKEN: &[u8] = b"RK_SCOPE_CLOSE";
+
+/// Every line the release mode does not select dropped, and the marker of
+/// every line it selects removed.
+///
+/// SATISFIES project-profile:a-release-less-landing-carries-no-release-text
+fn release_lines(baseline: &[u8], release: bool) -> Vec<u8> {
+    if find(baseline, IF_RELEASE_TOKEN).is_none() && find(baseline, IF_NO_RELEASE_TOKEN).is_none() {
+        return baseline.to_vec();
+    }
+    let mut out = Vec::with_capacity(baseline.len());
+    for line in baseline.split_inclusive(|byte| *byte == b'\n') {
+        // The release-less marker first: it is not a part of the other,
+        // and checking it first keeps that true by construction.
+        let (token, wanted) = if find(line, IF_NO_RELEASE_TOKEN).is_some() {
+            (IF_NO_RELEASE_TOKEN, !release)
+        } else if find(line, IF_RELEASE_TOKEN).is_some() {
+            (IF_RELEASE_TOKEN, release)
+        } else {
+            out.extend_from_slice(line);
+            continue;
+        };
+        if wanted {
+            out.extend(substitute(line, token, b""));
+        }
+    }
+    out
+}
+
+/// The forge gate fragment a binding's GitLab root pipeline includes: the
+/// title fragment under `squash` and the commit fragment under `rebase`.
+pub const GITLAB_GATE_FRAGMENT_TOKEN: &[u8] = b"RK_GITLAB_GATE_FRAGMENT";
+
+/// The merge flag a GitHub release arm passes to `gh pr merge`: the one
+/// method the trunk ruleset allows under the recorded merge form.
+pub const MERGE_FLAG_TOKEN: &[u8] = b"RK_MERGE_FLAG";
+
+/// The `squash` answer a GitLab release arm passes to the merge call:
+/// `true` under `squash`, `false` under `rebase`, whose project squashes
+/// nothing.
+pub const SQUASH_ON_MERGE_TOKEN: &[u8] = b"RK_SQUASH_ON_MERGE";
+
 /// The recorded release style: `trunk` arms the bot's request in the
 /// landed release workflow, `lines` leaves every request unarmed.
 pub const STYLE_TOKEN: &[u8] = b"RK_STYLE";
@@ -1410,11 +1486,34 @@ pub fn render(baseline: &[u8], params: &Params) -> Vec<u8> {
 fn substitute_tokens(baseline: &[u8], params: &Params) -> Vec<u8> {
     let repo = params.repo();
     let owner = repo.split('/').next().unwrap_or(repo);
-    let mut out = substitute(baseline, OWNER_TOKEN, owner.as_bytes());
+    // The release mode selects a forge gate's lines first, then its scope
+    // rule: a release reads the scope, so its gate requires one, and a
+    // release-less gate takes a header with none.
+    let release = params.release_mode() != ReleaseMode::None;
+    let mut out = release_lines(baseline, release);
+    let (scoped, open, close): (&[u8], &[u8], &[u8]) = if release {
+        (b"scoped ", b"", b"")
+    } else {
+        (b"", b"(", b")?")
+    };
+    out = substitute(&out, SCOPED_TOKEN, scoped);
+    out = substitute(&out, SCOPE_OPEN_TOKEN, open);
+    out = substitute(&out, SCOPE_CLOSE_TOKEN, close);
+    out = substitute(&out, OWNER_TOKEN, owner.as_bytes());
     if let Some(style) = params.style() {
         out = substitute(&out, STYLE_TOKEN, style.as_str().as_bytes());
     }
     out = substitute(&out, SCOPE_SHAPE_TOKEN, SCOPE_SHAPE.as_bytes());
+    // The merge form's three renderings: which gate fragment a GitLab
+    // root pipeline includes, and how each release arm asks its forge to
+    // merge, so the arm asks for the one method the protection allows.
+    let (fragment, flag, squash): (&str, &[u8], &[u8]) = match params.merge_form() {
+        crate::landing::MergeForm::Squash => (GITLAB_TITLE_FRAGMENT, b"--squash", b"true"),
+        crate::landing::MergeForm::Rebase => (GITLAB_COMMIT_FRAGMENT, b"--rebase", b"false"),
+    };
+    out = substitute(&out, GITLAB_GATE_FRAGMENT_TOKEN, fragment.as_bytes());
+    out = substitute(&out, MERGE_FLAG_TOKEN, flag);
+    out = substitute(&out, SQUASH_ON_MERGE_TOKEN, squash);
     // The branch shape substitutes before the trunk, because one driver's
     // shape names the trunk inside itself; the trunk token is its own
     // prefix, in the same way the escaped line prefix goes before the
@@ -1513,8 +1612,39 @@ pub const GLOSSARY_BLOCK: &str = "blocks/glossary.md.in";
 /// The routing block's agent policy lines, under the workflow guards.
 pub const AGENTS_LINE_AGENT_POLICY: &str = "blocks/agents-line-agent-policy.md.in";
 
-/// The routing block's commit policy lines, under the workflow guards.
+/// The routing block's commit policy lines, under the workflow guards: the
+/// message source and the scope rule, each the target's own variant, and
+/// the scope vocabulary line.
 pub const AGENTS_LINE_COMMIT_POLICY: &str = "blocks/agents-line-commit-policy.md.in";
+
+/// The routing block's workflow variant, for a target whose release mode
+/// is `none`: no `## Releases` heading and no release reason.
+pub const AGENTS_BLOCK_WORKFLOW: &str = "blocks/agents-block-workflow.md.in";
+
+/// The agent policy lines of the workflow variant, which name the two
+/// workflow terms and no tag.
+pub const AGENTS_LINE_AGENT_POLICY_WORKFLOW: &str =
+    "blocks/agents-line-agent-policy-workflow.md.in";
+
+/// The message source line under the `squash` merge form: the request's
+/// title becomes the trunk's one commit.
+pub const AGENTS_LINE_COMMIT_SOURCE_SQUASH: &str = "blocks/agents-line-commit-source-squash.md.in";
+
+/// The message source line under the `rebase` merge form: every commit
+/// reaches the trunk with its own message.
+pub const AGENTS_LINE_COMMIT_SOURCE_REBASE: &str = "blocks/agents-line-commit-source-rebase.md.in";
+
+/// The scope line wherever the record names a release: a scope is
+/// required.
+pub const AGENTS_LINE_COMMIT_SCOPE_REQUIRED: &str =
+    "blocks/agents-line-commit-scope-required.md.in";
+
+/// The scope line under `release.mode = "none"`: a scope is preferred.
+pub const AGENTS_LINE_COMMIT_SCOPE_PREFERRED: &str =
+    "blocks/agents-line-commit-scope-preferred.md.in";
+
+/// The glossary's workflow variant, which carries no release term.
+pub const GLOSSARY_BLOCK_WORKFLOW: &str = "blocks/glossary-workflow.md.in";
 
 /// The authored hook-block template.
 pub const PRE_COMMIT_BLOCK: &str = "blocks/pre-commit-block.yaml.in";
@@ -1542,6 +1672,33 @@ pub const PRE_COMMIT_SWEEP_NONE: &str = "blocks/pre-commit-sweep-none.yaml.in";
 
 /// The header note naming the pre-integrate contract.
 pub const PRE_COMMIT_INTEGRATE_NOTE: &str = "blocks/pre-commit-integrate-note.yaml.in";
+
+/// The tag guard, wherever the record names a release.
+pub const PRE_COMMIT_TAG_GUARD: &str = "blocks/pre-commit-tag-guard.yaml.in";
+
+/// The release files the status check watches, wherever the record names
+/// a release.
+///
+/// They are the bot configurations and the version files only a release
+/// lands: one pattern fragment, spliced into the status check's `files`.
+pub const PRE_COMMIT_STATUS_RELEASE_FILES: &str = "blocks/pre-commit-status-release-files.yaml.in";
+
+/// The local integration mode's guard against a trunk commit, at the
+/// pre-commit stage alone, so the operator's trunk push stays open.
+pub const PRE_COMMIT_LOCAL_TRUNK_COMMIT_GUARD: &str =
+    "blocks/pre-commit-local-trunk-commit-guard.yaml.in";
+
+/// The local integration mode's two pre-push guards: no force push to the
+/// trunk, and no merge commit on it.
+pub const PRE_COMMIT_LOCAL_TRUNK_PUSH_GUARDS: &str =
+    "blocks/pre-commit-local-trunk-push-guards.yaml.in";
+
+/// The argument that makes the landed `conventional-pre-commit` hook
+/// require a scope, as the authored message guards carry it.
+///
+/// A target whose release mode is `none` prefers a scope and does not
+/// require one, so its hook block renders without it.
+pub const FORCE_SCOPE_ARG: &str = ", --force-scope";
 
 /// One authored block this binary embeds, as text, by its embedded path.
 ///
@@ -1604,8 +1761,13 @@ pub fn scope_is_shaped(scope: &str) -> bool {
 pub struct RoutingGuards<'a> {
     /// The agent policy lines: the bounded actions and the glossary route.
     pub agent_policy: &'a str,
-    /// The commit policy lines: the body rule and the scope convention.
+    /// The commit policy lines: the body rule and the scope convention,
+    /// carrying the two tokens below.
     pub commit_policy: &'a str,
+    /// The message source line the merge form names.
+    pub commit_source: &'a str,
+    /// The scope line the release mode names.
+    pub commit_scope: &'a str,
 }
 
 /// The routing block from its authored template, with the workflow
@@ -1622,7 +1784,11 @@ pub fn compose_routing(template: &str, guards: Option<&RoutingGuards<'_>>) -> St
         |guards| {
             (
                 fragment(guards.agent_policy),
-                fragment(guards.commit_policy),
+                fragment(
+                    &authored(guards.commit_policy)
+                        .replacen("RK_COMMIT_SOURCE", &fragment(guards.commit_source), 1)
+                        .replacen("RK_COMMIT_SCOPE", &fragment(guards.commit_scope), 1),
+                ),
             )
         },
     );
@@ -1654,15 +1820,19 @@ pub struct WorkflowHooks<'a> {
 
 /// The hook block from its authored template.
 ///
-/// The block always carries the two hooks the release process needs: the
-/// tag guard and the status check. `workflow` adds the workflow guards'
-/// hooks where the target selects them.
+/// The block always carries the status check, and the tag guard wherever
+/// `parts` names a release. `workflow` adds the workflow guards' hooks
+/// where the target selects them, and drops the scope requirement from the
+/// commit hook where the record names no release.
 ///
-/// `parts` is the integration mode's answer. Under forge integration with
-/// the workflow guards, the two trunk guards render. Under local
-/// integration neither renders, because `rk integrate` writes the trunk
-/// commit and the operator pushes the trunk, and the header carries the
-/// pre-integrate note.
+/// `parts` is the integration mode's answer, and the workflow guards add
+/// the trunk guards of that mode. Under forge integration they are
+/// `no-commit-to-branch` and `rk-no-push-to-trunk`, because a request is
+/// the one way in. Under local integration they are `no-commit-to-branch`
+/// at the pre-commit stage alone and two pre-push guards against a force
+/// push and a merge commit on the trunk, because `rk integrate` moves the
+/// trunk with no commit hook and the operator pushes the trunk. Local
+/// integration's header also carries the pre-integrate note.
 ///
 /// The one branch grammar substitutes from [`BRANCH_GRAMMAR`]. Markers
 /// included, without a trailing newline and with its scope token
@@ -1677,7 +1847,7 @@ pub fn compose_hooks(
     let worktree = workflow
         .and_then(|hooks| hooks.worktree)
         .map_or_else(String::new, fragment);
-    let trunk_guards = workflow.is_some() && parts.integration == Integration::Forge;
+    let trunk_guards = workflow.is_some();
     let mut skips: Vec<&str> = Vec::new();
     if trunk_guards {
         skips.push("no-commit-to-branch");
@@ -1690,10 +1860,18 @@ pub fn compose_hooks(
     } else {
         fragment(&authored(parts.sweep_skip).replacen("RK_SWEEP_SKIP", &skips.join(","), 1))
     };
-    let (commit_guard, push_guard) = if trunk_guards {
-        (fragment(parts.trunk_commit), fragment(parts.trunk_push))
+    let (commit_guard, push_guard) = match (trunk_guards, parts.integration) {
+        (false, _) => (String::new(), String::new()),
+        (true, Integration::Forge) => (fragment(parts.trunk_commit), fragment(parts.trunk_push)),
+        (true, Integration::Local) => (
+            fragment(parts.local_trunk_commit),
+            fragment(parts.local_trunk_push),
+        ),
+    };
+    let (tag_guard, release_files) = if parts.release {
+        (fragment(parts.tag_guard), authored(parts.release_files))
     } else {
-        (String::new(), String::new())
+        (String::new(), "")
     };
     let note = match parts.integration {
         Integration::Forge => String::new(),
@@ -1701,7 +1879,17 @@ pub fn compose_hooks(
     };
     let (message, branch_name) = workflow.map_or_else(
         || (String::new(), String::new()),
-        |hooks| (fragment(hooks.message), fragment(hooks.branch_name)),
+        |hooks| {
+            let message = fragment(hooks.message);
+            (
+                if parts.release {
+                    message
+                } else {
+                    message.replacen(FORCE_SCOPE_ARG, "", 1)
+                },
+                fragment(hooks.branch_name),
+            )
+        },
     );
     authored(template)
         .replacen("RK_SWEEP_NOTE", &format!("{sweep}{note}"), 1)
@@ -1710,18 +1898,36 @@ pub fn compose_hooks(
         .replacen("RK_BRANCH_NAME_GUARD", &branch_name, 1)
         .replacen("RK_WORKTREE_GUARD", &worktree, 1)
         .replacen("RK_TRUNK_PUSH_GUARD", &push_guard, 1)
+        .replacen("RK_TAG_GUARD", &tag_guard, 1)
+        .replacen("RK_STATUS_RELEASE_FILES", release_files, 1)
         .replacen("RK_BRANCH_GRAMMAR", BRANCH_GRAMMAR, 1)
 }
 
-/// The two authored guard entries the integration mode selects between,
-/// beside the mode itself.
+/// The authored guard entries the integration mode selects between,
+/// beside the mode itself, and the release mode's tag guard.
 pub struct TrunkGuards<'a> {
     /// Which authority moves an implementation onto the trunk.
     pub integration: Integration,
-    /// The `no-commit-to-branch` entry that refuses a trunk commit.
+    /// Whether the record names a release: any mode but `none`. It decides
+    /// the tag guard and whether the commit hook requires a scope.
+    pub release: bool,
+    /// The `no-commit-to-branch` entry that refuses a trunk commit under
+    /// forge integration.
     pub trunk_commit: &'a str,
-    /// The `rk-no-push-to-trunk` entry that refuses a trunk push.
+    /// The `rk-no-push-to-trunk` entry that refuses a trunk push under
+    /// forge integration.
     pub trunk_push: &'a str,
+    /// The `no-commit-to-branch` entry that refuses a trunk commit under
+    /// local integration, at the pre-commit stage alone.
+    pub local_trunk_commit: &'a str,
+    /// The two pre-push entries that refuse a force push and a merge
+    /// commit on the trunk under local integration.
+    pub local_trunk_push: &'a str,
+    /// The `rk-no-hand-authored-tag` entry.
+    pub tag_guard: &'a str,
+    /// The release files the status check watches, as one pattern
+    /// fragment.
+    pub release_files: &'a str,
     /// The header note naming what a CI sweep skips.
     pub sweep_skip: &'a str,
     /// The header note for the pairing where a sweep skips nothing.
@@ -1730,28 +1936,123 @@ pub struct TrunkGuards<'a> {
     pub integrate_note: &'a str,
 }
 
+/// The axes every landed block reads, resolved from one target's
+/// parameters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlockShape {
+    /// Where a topic branch opens.
+    pub checkout_mode: CheckoutMode,
+    /// Which authority moves an implementation onto the trunk.
+    pub integration: Integration,
+    /// How the commits of a branch reach the trunk.
+    pub merge_form: MergeForm,
+    /// Whether the target selects the workflow guards.
+    pub workflow_guards: bool,
+    /// Whether the record names a release: any mode but `none`.
+    pub release: bool,
+}
+
+impl BlockShape {
+    /// The shape one target's parameters resolve to.
+    #[must_use]
+    pub fn of(params: &Params) -> Self {
+        Self {
+            checkout_mode: params.checkout_mode(),
+            integration: params.integration(),
+            merge_form: params.merge_form(),
+            workflow_guards: params.workflow_guards(),
+            release: params.release_mode() != ReleaseMode::None,
+        }
+    }
+
+    /// A release-bearing `squash` shape on the two given axes, the shape
+    /// every target took before the merge form and the release-less
+    /// variants existed.
+    #[must_use]
+    pub const fn releasing(
+        checkout_mode: CheckoutMode,
+        integration: Integration,
+        workflow_guards: bool,
+    ) -> Self {
+        Self {
+            checkout_mode,
+            integration,
+            merge_form: MergeForm::Squash,
+            workflow_guards,
+            release: true,
+        }
+    }
+
+    /// The embedded routing template, the agent policy, and the two
+    /// commit policy parts this shape selects.
+    const fn routing_sources(self) -> [&'static str; 4] {
+        let (template, agent) = if self.release {
+            (AGENTS_BLOCK, AGENTS_LINE_AGENT_POLICY)
+        } else {
+            (AGENTS_BLOCK_WORKFLOW, AGENTS_LINE_AGENT_POLICY_WORKFLOW)
+        };
+        let source = match self.merge_form {
+            MergeForm::Squash => AGENTS_LINE_COMMIT_SOURCE_SQUASH,
+            MergeForm::Rebase => AGENTS_LINE_COMMIT_SOURCE_REBASE,
+        };
+        let scope = if self.release {
+            AGENTS_LINE_COMMIT_SCOPE_REQUIRED
+        } else {
+            AGENTS_LINE_COMMIT_SCOPE_PREFERRED
+        };
+        [template, agent, source, scope]
+    }
+
+    /// The embedded glossary template this shape selects.
+    const fn glossary_source(self) -> &'static str {
+        if self.release {
+            GLOSSARY_BLOCK
+        } else {
+            GLOSSARY_BLOCK_WORKFLOW
+        }
+    }
+}
+
 /// The routing block, with or without the workflow guards, from this
-/// binary's embedded templates.
+/// binary's embedded templates, for a release-bearing `squash` target.
 ///
 /// # Errors
 ///
 /// A block this binary does not embed, a defect in the binary.
 pub fn routing_block(workflow_guards: bool) -> Result<String, RkError> {
-    let guards = if workflow_guards {
+    routing_block_of(&BlockShape::releasing(
+        CheckoutMode::LinkedWorktree,
+        Integration::Local,
+        workflow_guards,
+    ))
+}
+
+/// The routing block one shape selects.
+///
+/// It is the workflow variant where the record names no release, and it
+/// carries the message source of the merge form with the scope rule of
+/// the release mode under the workflow guards.
+///
+/// # Errors
+///
+/// A block this binary does not embed, a defect in the binary.
+pub fn routing_block_of(shape: &BlockShape) -> Result<String, RkError> {
+    let [template, agent, source, scope] = shape.routing_sources();
+    let guards = if shape.workflow_guards {
         Some(RoutingGuards {
-            agent_policy: embedded_block(AGENTS_LINE_AGENT_POLICY)?,
+            agent_policy: embedded_block(agent)?,
             commit_policy: embedded_block(AGENTS_LINE_COMMIT_POLICY)?,
+            commit_source: embedded_block(source)?,
+            commit_scope: embedded_block(scope)?,
         })
     } else {
         None
     };
-    Ok(compose_routing(
-        embedded_block(AGENTS_BLOCK)?,
-        guards.as_ref(),
-    ))
+    Ok(compose_routing(embedded_block(template)?, guards.as_ref()))
 }
 
-/// The glossary block from this binary's embedded template.
+/// The glossary block from this binary's embedded template, for a target
+/// that names a release.
 ///
 /// # Errors
 ///
@@ -1760,8 +2061,19 @@ pub fn glossary_block() -> Result<String, RkError> {
     Ok(compose_glossary(embedded_block(GLOSSARY_BLOCK)?))
 }
 
+/// The glossary block one shape selects: the workflow variant, which
+/// carries no release term, where the record names no release.
+///
+/// # Errors
+///
+/// A block this binary does not embed, a defect in the binary.
+pub fn glossary_block_of(shape: &BlockShape) -> Result<String, RkError> {
+    Ok(compose_glossary(embedded_block(shape.glossary_source())?))
+}
+
 /// The hook block for one checkout mode and one integration mode, with or
-/// without the workflow guards, from this binary's embedded templates.
+/// without the workflow guards, from this binary's embedded templates, for
+/// a target that names a release.
 ///
 /// # Errors
 ///
@@ -1771,11 +2083,20 @@ pub fn hooks_block(
     integration: Integration,
     workflow_guards: bool,
 ) -> Result<String, RkError> {
-    let workflow = if workflow_guards {
+    hooks_block_of(&BlockShape::releasing(mode, integration, workflow_guards))
+}
+
+/// The hook block one shape selects.
+///
+/// # Errors
+///
+/// A block this binary does not embed, a defect in the binary.
+pub fn hooks_block_of(shape: &BlockShape) -> Result<String, RkError> {
+    let workflow = if shape.workflow_guards {
         Some(WorkflowHooks {
             message: embedded_block(PRE_COMMIT_MESSAGE_GUARDS)?,
             branch_name: embedded_block(PRE_COMMIT_BRANCH_NAME_GUARD)?,
-            worktree: match mode {
+            worktree: match shape.checkout_mode {
                 CheckoutMode::LinkedWorktree => Some(embedded_block(PRE_COMMIT_WORKTREE_GUARD)?),
                 CheckoutMode::MainWorktree => None,
             },
@@ -1784,9 +2105,14 @@ pub fn hooks_block(
         None
     };
     let parts = TrunkGuards {
-        integration,
+        integration: shape.integration,
+        release: shape.release,
         trunk_commit: embedded_block(PRE_COMMIT_TRUNK_COMMIT_GUARD)?,
         trunk_push: embedded_block(PRE_COMMIT_TRUNK_PUSH_GUARD)?,
+        local_trunk_commit: embedded_block(PRE_COMMIT_LOCAL_TRUNK_COMMIT_GUARD)?,
+        local_trunk_push: embedded_block(PRE_COMMIT_LOCAL_TRUNK_PUSH_GUARDS)?,
+        tag_guard: embedded_block(PRE_COMMIT_TAG_GUARD)?,
+        release_files: embedded_block(PRE_COMMIT_STATUS_RELEASE_FILES)?,
         sweep_skip: embedded_block(PRE_COMMIT_SWEEP_SKIP)?,
         sweep_none: embedded_block(PRE_COMMIT_SWEEP_NONE)?,
         integrate_note: embedded_block(PRE_COMMIT_INTEGRATE_NOTE)?,
@@ -1805,56 +2131,61 @@ type BlockTemplate = (String, Vec<String>, &'static str);
 /// The unrendered block for one block destination, or `None` where this
 /// target lands no such block.
 fn block_template(destination: &str, params: &Params) -> Result<Option<BlockTemplate>, RkError> {
-    let guards = params.workflow_guards();
-    let mode = params.checkout_mode();
-    let integration = params.integration();
+    let shape = BlockShape::of(params);
+    let guards = shape.workflow_guards;
     match destination {
         AGENTS_DESTINATION => {
-            let mut sources = vec![AGENTS_BLOCK.to_owned()];
+            let [template, agent, source, scope] = shape.routing_sources();
+            let mut sources = vec![template.to_owned()];
             if guards {
-                sources.push(AGENTS_LINE_AGENT_POLICY.to_owned());
+                sources.push(agent.to_owned());
                 sources.push(AGENTS_LINE_COMMIT_POLICY.to_owned());
+                sources.push(source.to_owned());
+                sources.push(scope.to_owned());
             }
-            Ok(Some((routing_block(guards)?, sources, catalog::GUARDS)))
+            Ok(Some((routing_block_of(&shape)?, sources, catalog::GUARDS)))
         }
         GLOSSARY_DESTINATION => Ok(guards
             .then(|| -> Result<_, RkError> {
                 Ok((
-                    glossary_block()?,
-                    vec![GLOSSARY_BLOCK.to_owned()],
+                    glossary_block_of(&shape)?,
+                    vec![shape.glossary_source().to_owned()],
                     catalog::WORKFLOW_GUARDS,
                 ))
             })
             .transpose()?),
         HOOKS_DESTINATION => {
             let mut sources = vec![PRE_COMMIT_BLOCK.to_owned()];
-            let mut skips = false;
             if guards {
                 sources.push(PRE_COMMIT_MESSAGE_GUARDS.to_owned());
                 sources.push(PRE_COMMIT_BRANCH_NAME_GUARD.to_owned());
-                if mode == CheckoutMode::LinkedWorktree {
+                if shape.checkout_mode == CheckoutMode::LinkedWorktree {
                     sources.push(PRE_COMMIT_WORKTREE_GUARD.to_owned());
-                    skips = true;
                 }
-                if integration == Integration::Forge {
-                    sources.push(PRE_COMMIT_TRUNK_COMMIT_GUARD.to_owned());
-                    sources.push(PRE_COMMIT_TRUNK_PUSH_GUARD.to_owned());
-                    skips = true;
+                match shape.integration {
+                    Integration::Forge => {
+                        sources.push(PRE_COMMIT_TRUNK_COMMIT_GUARD.to_owned());
+                        sources.push(PRE_COMMIT_TRUNK_PUSH_GUARD.to_owned());
+                    }
+                    Integration::Local => {
+                        sources.push(PRE_COMMIT_LOCAL_TRUNK_COMMIT_GUARD.to_owned());
+                        sources.push(PRE_COMMIT_LOCAL_TRUNK_PUSH_GUARDS.to_owned());
+                    }
                 }
             }
-            sources.push(if skips {
+            if shape.release {
+                sources.push(PRE_COMMIT_TAG_GUARD.to_owned());
+                sources.push(PRE_COMMIT_STATUS_RELEASE_FILES.to_owned());
+            }
+            sources.push(if guards {
                 PRE_COMMIT_SWEEP_SKIP.to_owned()
             } else {
                 PRE_COMMIT_SWEEP_NONE.to_owned()
             });
-            if integration == Integration::Local {
+            if shape.integration == Integration::Local {
                 sources.push(PRE_COMMIT_INTEGRATE_NOTE.to_owned());
             }
-            Ok(Some((
-                hooks_block(mode, integration, guards)?,
-                sources,
-                catalog::GUARDS,
-            )))
+            Ok(Some((hooks_block_of(&shape)?, sources, catalog::GUARDS)))
         }
         other => Err(anyhow::anyhow!("{other} is not a block destination").into()),
     }

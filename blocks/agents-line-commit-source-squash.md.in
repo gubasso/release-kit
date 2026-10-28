@@ -1,0 +1,1 @@
+- The request's title becomes that commit's message, and its body carries the context and lands with it. The body names no internal planning artifact and carries no agent attribution. The landed rk-message hook, the forge's body check, and the observed body source hold that rule.

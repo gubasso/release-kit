@@ -16,6 +16,9 @@
   - [`project-profile:the-observation-proposes-a-release-mode` — The observation proposes a release mode](#project-profilethe-observation-proposes-a-release-mode--the-observation-proposes-a-release-mode)
   - [`project-profile:an-operation-refuses-only-what-it-requires` — An operation refuses only what it requires](#project-profilean-operation-refuses-only-what-it-requires--an-operation-refuses-only-what-it-requires)
   - [`project-profile:the-profile-command-writes-nothing` — The profile command writes nothing](#project-profilethe-profile-command-writes-nothing--the-profile-command-writes-nothing)
+  - [`project-profile:the-workflow-only-preset-expands-to-recorded-answers` — The workflow-only preset expands to recorded answers](#project-profilethe-workflow-only-preset-expands-to-recorded-answers--the-workflow-only-preset-expands-to-recorded-answers)
+  - [`project-profile:a-release-less-landing-carries-no-release-text` — A release-less landing carries no release text](#project-profilea-release-less-landing-carries-no-release-text--a-release-less-landing-carries-no-release-text)
+  - [`project-profile:the-forge-gate-follows-the-merge-form` — The forge gate follows the merge form](#project-profilethe-forge-gate-follows-the-merge-form--the-forge-gate-follows-the-merge-form)
   - [`project-profile:a-schema-one-configuration-migrates-in-place` — A schema one configuration migrates in place](#project-profilea-schema-one-configuration-migrates-in-place--a-schema-one-configuration-migrates-in-place)
   - [`project-profile:a-destination-has-one-capability-owner` — A destination has one capability owner](#project-profilea-destination-has-one-capability-owner--a-destination-has-one-capability-owner)
 
@@ -93,7 +96,7 @@ A capability MUST be selected only where its whole contribution lands active, an
 
 #### Scenario: A release-less GitLab project owns its pipeline
 
-- GIVEN a GitLab target with `mode = "none"` and a `.gitlab-ci.yml` of its own
+- GIVEN a forge-integrated GitLab target with `mode = "none"` and a `.gitlab-ci.yml` of its own
 - WHEN `rk init --apply` runs
 - THEN the title fragment lands, the root pipeline is withheld naming the `include` line the operator adds, the target's pipeline is untouched, and the landing succeeds
 
@@ -101,7 +104,7 @@ Verify: `cargo nextest run -E 'test(an_occupied_gitlab_root_pipeline_withholds_t
 
 ### `project-profile:the-workflow-rules-are-one-opt-in` — The workflow rules are one opt-in
 
-The catalog MUST hold every landed rule that only shapes how a project works in one capability, `git.workflow-guards`, requested by `capabilities.workflow_guards` and off for a fresh landing: the agent policy and commit policy lines of the routing block, the glossary, the hooks `conventional-pre-commit`, `rk-message`, `rk-branch-name`, `rk-worktree-location`, `rk-no-push-to-trunk`, and `no-commit-to-branch`, and the setup steps `merge-cleanup` and `branch-reminder`. The always-selected `git.guards` MUST keep only what the release process needs: the routing lines, the scoped title of the trunk commit, the tag, generated-workflow, status, and secret rules, and the hooks `rk-no-hand-authored-tag` and `rk-status-check`. A tool intervenes in a project's workflow as little as it can, so a rule that exists only to shape that workflow lands where the operator asks for it by name.
+The catalog MUST hold every landed rule that only shapes how a project works in one capability, `git.workflow-guards`, requested by `capabilities.workflow_guards` and off for a fresh landing: the agent policy and commit policy lines of the routing block, the glossary, the hooks `conventional-pre-commit`, `rk-message`, `rk-branch-name`, `rk-worktree-location`, `rk-no-push-to-trunk`, `no-commit-to-branch`, and the two pre-push trunk guards of local integration, and the setup steps `merge-cleanup` and `branch-reminder`. The always-selected `git.guards` MUST keep only what the release process needs: the routing lines, the scoped title of the trunk commit, the tag, generated-workflow, status, and secret rules, and the hooks `rk-no-hand-authored-tag` and `rk-status-check`, less what `project-profile:a-release-less-landing-carries-no-release-text` leaves out under `release.mode = "none"`. A tool intervenes in a project's workflow as little as it can, so a rule that exists only to shape that workflow lands where the operator asks for it by name.
 
 #### Scenario: A fresh landing asks for nothing
 
@@ -170,6 +173,66 @@ Verify: `cargo nextest run -E 'test(python_on_gitlab_reports_unavailable_and_app
 - THEN one `rk.profile/1` object reports the values, sources, capabilities, and destinations, and the tree is unchanged
 
 Verify: `cargo nextest run -E 'test(profile_reports_values_sources_and_the_selection_and_writes_nothing) or test(the_profile_follow_up_command_runs_on_a_landed_target)'`
+
+### `project-profile:the-workflow-only-preset-expands-to-recorded-answers` — The workflow-only preset expands to recorded answers
+
+`rk init` and `rk upgrade` MUST accept `--workflow-only` as a preset that expands to `profile.release.mode = "none"`, `git.integration = "local"`, `git.checkout_mode = "linked-worktree"`, and `capabilities.workflow_guards = true`, MUST record those four answers and no key or record field that names the preset, and MUST refuse before any write an explicit flag that contradicts one of the four, naming the flag and the preset. A flag the preset does not set, such as `--merge-form`, MUST combine with it.
+
+#### Scenario: A workflow-only landing on a GitLab remote
+
+- GIVEN a Git repository whose remote names a GitLab project that `rk` does not reach
+- WHEN `rk init --workflow-only --apply` runs
+- THEN the configuration carries the four answers and no preset key, no `.gitlab-ci.yml`, no `.gitlab/` folder, no version file, and no changelog lands, and `rk status --check` exits 0
+
+#### Scenario: A flag contradicts the preset
+
+- GIVEN the same repository
+- WHEN `rk init --workflow-only --integration forge` runs
+- THEN it refuses naming `--integration` and `--workflow-only`, and nothing is written
+
+Verify: `cargo nextest run -E 'test(workflow_only)'`
+
+### `project-profile:a-release-less-landing-carries-no-release-text` — A release-less landing carries no release text
+
+Under `profile.release.mode = "none"`, a landing MUST carry no file and no line whose reason is a version, a changelog, or a tag: the routing block MUST take its workflow variant, the glossary MUST carry no release term, and the hook `rk-no-hand-authored-tag` MUST NOT land. A commit scope MUST be preferred and not required there, so `rk integrate`, `rk message`, and the landed commit hooks MUST accept a header with no scope, because no changelog reads it, while every other release mode keeps the scope required.
+
+#### Scenario: A workflow-only landing is read for release text
+
+- GIVEN a target landed with `--workflow-only` on GitHub, on GitLab, and with no forge
+- WHEN its landed files are read
+- THEN no `## Releases` heading, no tag hook, and no line naming a version, a changelog, or a tag as a reason appears in any of them
+
+#### Scenario: A header with no scope
+
+- GIVEN the commit header `fix: drop the stale path` under `release.mode = "none"` and under an automatic release
+- WHEN the landed commit hooks and `rk message --check` judge it
+- THEN it passes under `none` and refuses under the automatic release, naming the missing scope
+
+Verify: `cargo nextest run -E 'test(workflow_only)'`
+
+### `project-profile:the-forge-gate-follows-the-merge-form` — The forge gate follows the merge form
+
+The catalog MUST select a forge gate only where the integration mode is `forge` or the release is automatic, and that gate MUST be the title gate `git.title-check` under `git.merge_form = "squash"` and the commit gate under `rebase`. The commit gate MUST judge every commit between the target branch and the head of the request with the landed `commit-msg` judgment, MUST run again on each push to the request, and MUST admit the bot's release request as the title gate does, because under `rebase` every commit of the request reaches the trunk with its own message. On GitLab, whose `ff` merge method adds the source branch's commits as they stand, the commit gate MUST also refuse any commit with more than one parent in that range, naming each one, and MUST do so before the bot's exemption, which then covers the message rules alone, so no request carries a merge commit onto the trunk.
+
+#### Scenario: A local release-less landing
+
+- GIVEN a target with `mode = "none"` and `git.integration = "local"` on GitHub and on GitLab
+- WHEN the catalog selects
+- THEN neither gate is selected, and no `pr-title.yml`, `.gitlab-ci.yml`, or `.gitlab/ci/mr-title.yml` lands
+
+#### Scenario: A rebase request carries one bad commit
+
+- GIVEN a forge-integrated target whose merge form is `rebase`, and a request with a valid title
+- WHEN one commit of the request fails the judgment, or a push adds such a commit after a first pass
+- THEN the commit gate fails and names that commit
+
+#### Scenario: A GitLab rebase request carries a merge commit
+
+- GIVEN a GitLab target whose merge form is `rebase`, and a request whose branch merged a side branch with valid subjects
+- WHEN the commit gate runs, under the request's own title or under the bot's release title
+- THEN it fails and names the merge commit by its short SHA and subject, while a linear request passes and a linear release request stays exempt from the message rules
+
+Verify: `cargo nextest run -E 'test(commit_gate) or test(workflow_only)'`
 
 ### `project-profile:a-schema-one-configuration-migrates-in-place` — A schema one configuration migrates in place
 

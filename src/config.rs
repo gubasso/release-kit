@@ -13,7 +13,7 @@ use std::path::Path;
 
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
-use crate::landing::{CheckoutMode, Integration, Style};
+use crate::landing::{CheckoutMode, Integration, MergeForm, Style};
 use crate::profile::ReleaseMode;
 use serde::{Deserialize, Serialize};
 
@@ -178,6 +178,8 @@ pub struct Git {
     /// P: local or forge, the authority that moves an implementation
     /// onto the trunk.
     pub integration: Option<Integration>,
+    /// P: squash or rebase, how the commits of a branch reach the trunk.
+    pub merge_form: Option<MergeForm>,
 }
 
 /// The `capabilities` table: the optional products the target requests.
@@ -371,7 +373,8 @@ pub struct Protection {
     /// F: invariant, the actors `git.integration` names. It excuses the
     /// trunk ruleset alone; the safety ruleset names nobody.
     pub bypass_actors: Vec<String>,
-    /// F: invariant, exactly squash.
+    /// F: invariant, exactly the method `git.merge_form` names: squash or
+    /// rebase. A landing writes this key with the form.
     pub allowed_merge_methods: Vec<String>,
     /// F: invariant, true.
     pub strict_required_status_checks: bool,
@@ -450,8 +453,21 @@ impl Protection {
 /// These hold against every actor, so they live apart from the rules a
 /// bypass may excuse. `protection.owned_trunk_rules` still names them, and
 /// the floor table still requires them, so one key remains the answer to
-/// what the setup owns on the trunk.
-pub const SAFETY_RULES: [&str; 2] = ["deletion", "non_fast_forward"];
+/// what the setup owns on the trunk. The linear-history rule is the third:
+/// the setup derives it from the `rebase` merge form rather than reading it
+/// from that key, and a trunk that keeps only rebase merges keeps it
+/// against every actor, the local integrator's push included.
+pub const SAFETY_RULES: [&str; 3] = ["deletion", "non_fast_forward", LINEAR_HISTORY_RULE];
+
+/// The context the landed commit gate reports under: the job name in
+/// `pr-commits.yml`, which the trunk ruleset requires under the `rebase`
+/// merge form in place of `protection.title_check`.
+pub const COMMIT_GATE_CHECK: &str = "pr-commits";
+
+/// The GitHub rule that refuses a merge commit on the trunk. The `rebase`
+/// merge form requires it, because a rebase merge alone does not stop a
+/// merge commit pushed past the request.
+pub const LINEAR_HISTORY_RULE: &str = "required_linear_history";
 
 /// The rules the trunk ruleset carries: the request and the check it must
 /// carry, which a recorded bypass actor may be excused from.
@@ -461,9 +477,10 @@ pub const REQUEST_RULES: [&str; 2] = ["pull_request", "required_status_checks"];
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Github {
-    /// F: invariant, `PR_TITLE`.
+    /// F: invariant under `git.merge_form = "squash"`, `PR_TITLE`. No
+    /// squash source applies under `rebase`.
     pub squash_title_source: String,
-    /// F: invariant, `PR_BODY`.
+    /// F: invariant under `git.merge_form = "squash"`, `PR_BODY`.
     pub squash_body_source: String,
 }
 
@@ -482,7 +499,9 @@ impl Default for Github {
 pub struct Gitlab {
     /// F: invariant, linear history.
     pub merge_method: String,
-    /// F: invariant, always squash.
+    /// F: invariant, the squash setting `git.merge_form` names: `always`
+    /// under squash and `never` under rebase. A landing writes this key
+    /// with the form.
     pub squash_option: String,
     /// F: invariant, references title and description.
     pub squash_commit_template: String,
@@ -826,6 +845,17 @@ fn fields(config: &Config) -> Result<Vec<(&'static str, Option<toml_edit::Value>
             ),
         ),
         (
+            "RK_CONFIG_GIT_MERGE_FORM",
+            Some(
+                config
+                    .git
+                    .merge_form
+                    .ok_or_else(|| invalid("git.merge_form is unresolved"))?
+                    .as_str()
+                    .into(),
+            ),
+        ),
+        (
             "RK_CONFIG_CAPABILITIES_NIX_PACKAGING",
             Some(
                 config
@@ -939,8 +969,43 @@ fn fields(config: &Config) -> Result<Vec<(&'static str, Option<toml_edit::Value>
             .into_iter()
             .map(|(token, value)| (token, Some(value))),
     );
+    // A release-less target reads none of the release tables, so its
+    // configuration leaves them out rather than carrying answers no step
+    // asks for: the tag protection keys and the bot. The security table
+    // goes too, unless the target requested the landed reporting policy,
+    // whose contact and response it states.
+    if mode == crate::profile::ReleaseMode::None {
+        let reporting = config.capabilities.reporting_policy.unwrap_or(false);
+        for (token, value) in &mut fields {
+            if RELEASE_ONLY_TOKENS.contains(token)
+                || (!reporting && SECURITY_TOKENS.contains(token))
+            {
+                *value = None;
+            }
+        }
+    }
     Ok(fields)
 }
+
+/// The template tokens only a release reads: the tag protection keys and
+/// the bot's App identifier. A configuration whose release mode is `none`
+/// leaves each one out.
+///
+/// SATISFIES target-config:a-release-less-template-carries-no-release-table
+const RELEASE_ONLY_TOKENS: [&str; 4] = [
+    "RK_CONFIG_PROTECTION_TAG_RULESET",
+    "RK_CONFIG_PROTECTION_TAG_PATTERN",
+    "RK_CONFIG_PROTECTION_LINES_RULESET",
+    "RK_CONFIG_SETUP_BOT_APP_ID",
+];
+
+/// The `[security]` table's tokens, which a release-less configuration
+/// leaves out unless it requested the landed reporting policy.
+const SECURITY_TOKENS: [&str; 3] = [
+    "RK_CONFIG_SECURITY_ADVISORIES",
+    "RK_CONFIG_SECURITY_CONTACT",
+    "RK_CONFIG_SECURITY_RESPONSE",
+];
 
 fn render(config: &Config) -> Result<Vec<u8>, RkError> {
     let fields = fields(config)?;
@@ -1098,7 +1163,8 @@ fn protection_fields(
     ]
 }
 
-/// The two floored keys a write-back carries beside `git.integration`.
+/// The floored keys a write-back carries beside `git.integration` and
+/// `git.merge_form`.
 ///
 /// They are derived companions of the authority rather than recorded
 /// parameters: the record holds no baseline for them, so a target that
@@ -1107,14 +1173,16 @@ fn protection_fields(
 /// `target-config:a-flag-overrides-and-a-landing-writes-back` leaves
 /// class F policy with its use-time readers, and excluding these from
 /// what status judges keeps that true.
-const DERIVED_POLICY_KEYS: [&str; 3] = [
+const DERIVED_POLICY_KEYS: [&str; 5] = [
     "protection.bypass_actors",
     "protection.owned_trunk_rules",
     "protection.gitlab.push_access_level",
+    "protection.allowed_merge_methods",
+    "protection.gitlab.squash_option",
 ];
 
 /// The keys a landing writes back: every class P answer.
-const PARAMETER_KEYS: [&str; 23] = [
+const PARAMETER_KEYS: [&str; 26] = [
     "project.repo",
     "profile.technologies",
     "profile.forge",
@@ -1125,6 +1193,11 @@ const PARAMETER_KEYS: [&str; 23] = [
     "git.trunk",
     "git.checkout_mode",
     "git.integration",
+    "git.merge_form",
+    // The two floored keys the merge form decides, written back with it
+    // for the same reason as the three below.
+    "protection.allowed_merge_methods",
+    "protection.gitlab.squash_option",
     // The three floored keys the integration authority decides. They are
     // written back with it, because changing the authority without them
     // leaves a configuration whose own floor table refuses it.
@@ -1772,11 +1845,15 @@ impl Plan {
             trunk: Some(params.trunk().to_owned()),
             checkout_mode: Some(params.checkout_mode()),
             integration: Some(params.integration()),
+            merge_form: Some(params.merge_form()),
         };
-        resolved.protection = protection_for(
-            &resolved.protection,
-            params.integration(),
-            existing.is_none(),
+        resolved.protection = with_merge_form(
+            &protection_for(
+                &resolved.protection,
+                params.integration(),
+                existing.is_none(),
+            ),
+            params.merge_form(),
         );
         resolved.capabilities = Capabilities {
             nix_packaging: Some(params.nix_packaging()),
@@ -1790,8 +1867,13 @@ impl Plan {
             ),
             workflow_guards: Some(params.workflow_guards()),
         };
-        resolved.security.contact = Some(params.security_contact().to_owned());
-        resolved.security.response = Some(params.security_response().to_owned());
+        // A release-less target with no reporting policy states no
+        // security answer: the fresh file leaves the table out, and an
+        // existing file keeps whatever it already says.
+        if params.release_mode() != crate::profile::ReleaseMode::None || params.reporting_policy() {
+            resolved.security.contact = Some(params.security_contact().to_owned());
+            resolved.security.response = Some(params.security_response().to_owned());
+        }
         params
             .required_check()
             .clone_into(&mut resolved.setup.required_check);
@@ -1833,6 +1915,10 @@ impl Plan {
 }
 
 /// Every class P key with its value, `None` for a key the answers omit.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one push per class P key, in the order the keys are written, and splitting it would hide that every key projects the same way"
+)]
 fn parameter_values(config: &Config) -> Vec<(&'static str, Option<toml_edit::Value>)> {
     let mut values: Vec<(&'static str, Option<toml_edit::Value>)> = vec![(
         "project.repo",
@@ -1903,6 +1989,25 @@ fn parameter_values(config: &Config) -> Vec<(&'static str, Option<toml_edit::Val
         values.push((
             "protection.gitlab.push_access_level",
             Some(config.protection.gitlab.push_access_level.into()),
+        ));
+    }
+    if let Some(form) = config.git.merge_form {
+        values.push(("git.merge_form", Some(form.as_str().into())));
+        // The merge values the form decides travel with it, for the reason
+        // the authority's tuple does: the floor table judges them by the
+        // form, so a write-back that moved the form alone would leave a
+        // configuration that refuses itself on the next read.
+        let mut methods = toml_edit::Array::new();
+        for method in &config.protection.allowed_merge_methods {
+            methods.push(method.as_str());
+        }
+        values.push((
+            "protection.allowed_merge_methods",
+            Some(toml_edit::Value::Array(methods)),
+        ));
+        values.push((
+            "protection.gitlab.squash_option",
+            Some(config.protection.gitlab.squash_option.clone().into()),
         ));
     }
     if let Some(value) = config.capabilities.nix_packaging {
@@ -2000,6 +2105,33 @@ pub(crate) fn local_protection() -> Protection {
     }
 }
 
+/// The merge method a forge allows on the trunk under one merge form, and
+/// the GitLab squash setting that goes with it.
+///
+/// The floors hold both keys to exactly these values, so the form decides
+/// them whole: there is no stricter answer to keep, and a landing that
+/// resolves a form writes its values whatever the file held.
+#[must_use]
+pub const fn merge_values(form: MergeForm) -> (&'static str, &'static str) {
+    match form {
+        MergeForm::Squash => ("squash", "always"),
+        MergeForm::Rebase => ("rebase", "never"),
+    }
+}
+
+/// The policy with the merge values `form` names.
+///
+/// The squash message sources stay as stated: they are the forge's
+/// squash settings, which no rebase merge reads, and `squash` floors them.
+#[must_use]
+pub fn with_merge_form(policy: &Protection, form: MergeForm) -> Protection {
+    let (method, squash_option) = merge_values(form);
+    let mut next = policy.clone();
+    next.allowed_merge_methods = vec![method.to_owned()];
+    squash_option.clone_into(&mut next.gitlab.squash_option);
+    next
+}
+
 /// Whether this is the compiled local policy from before release-request
 /// freshness moved back into the trunk ruleset.
 #[must_use]
@@ -2082,7 +2214,7 @@ pub fn line_prefix_of(target: &Path) -> Result<String, RkError> {
 #[cfg(test)]
 mod tests {
     use super::{CONFIG_PATH, Config, load, parse, rewrite_key, set_migration, trunk_of, write};
-    use crate::landing::{CheckoutMode, Integration, Style};
+    use crate::landing::{CheckoutMode, Integration, MergeForm, Style};
     use crate::profile::ReleaseMode;
 
     /// The resolved defaults a landing writes for an automatic rust
@@ -2106,6 +2238,7 @@ mod tests {
                 trunk: Some(super::TRUNK_DEFAULT.into()),
                 checkout_mode: Some(CheckoutMode::LinkedWorktree),
                 integration: Some(Integration::Local),
+                merge_form: Some(MergeForm::Squash),
             },
             capabilities: super::Capabilities {
                 nix_packaging: Some(false),
@@ -2310,6 +2443,8 @@ mod tests {
         config.git.trunk = Some("main".into());
         config.git.checkout_mode = Some(CheckoutMode::MainWorktree);
         config.git.integration = Some(Integration::Forge);
+        config.git.merge_form = Some(MergeForm::Rebase);
+        config.protection = super::with_merge_form(&config.protection, MergeForm::Rebase);
         config.capabilities.nix_packaging = Some(true);
         config.capabilities.reporting_policy = Some(false);
         config.capabilities.scorecard = Some(true);
@@ -2368,6 +2503,10 @@ mod tests {
             line_prefix: None,
         };
         release_less.capabilities.reporting_policy = Some(false);
+        // A release-less target with no reporting policy states no
+        // security answer, so the file carries no `[security]` to read back.
+        release_less.security.contact = None;
+        release_less.security.response = None;
         for expected in [resolved_defaults(), config, release_less] {
             write(dir.path(), &expected).expect("the template renders");
             assert_eq!(load(dir.path()).expect("the config reads"), Some(expected));

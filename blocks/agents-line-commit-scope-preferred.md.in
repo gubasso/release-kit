@@ -1,0 +1,1 @@
+- Every commit follows the same Conventional Commit convention. A scope is preferred and not required. The landed commit-msg hook holds a scope that is present to lowercase letters, digits, and `_ . / -`.

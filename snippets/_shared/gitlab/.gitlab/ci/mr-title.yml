@@ -1,7 +1,9 @@
 # The squash-title gate. protect-trunk sets squash_commit_template to
 # %{title}, so the merge request's title becomes the trunk's commit message,
-# and the bot derives the version and the changelog from that message; this
-# job holds the title to a scoped Conventional Commit. The template also
+#RK_IF_RELEASE_ and the bot derives the version and the changelog from that message; this
+#RK_IF_RELEASE_ job holds the title to a scoped Conventional Commit. The template also
+#RK_IF_NO_RELEASE_ and this job holds the title to a Conventional Commit, whose scope is
+#RK_IF_NO_RELEASE_ preferred and not required. The template also
 # means the request's description never reaches the trunk, so this forge
 # needs no body gate. The project setting
 # requiring the whole pipeline is what makes it blocking — this forge names
@@ -20,7 +22,8 @@ mr-title:
   script:
     - |
       printf '%s' "$CI_MERGE_REQUEST_TITLE" | grep -Eq \
-        '^((build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)\((RK_SCOPE_SHAPE)\)!?: .+|chore(\((release|master|main)\))?: (release|v).+)$' \
+        '^((build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)RK_SCOPE_OPEN\((RK_SCOPE_SHAPE)\)RK_SCOPE_CLOSE!?: .+|chore(\((release|master|main)\))?: (release|v).+)$' \
         && exit 0
-      echo "the title '$CI_MERGE_REQUEST_TITLE' must read type(scope) then a colon and a description, with the scope lowercase letters, digits, and _ . / -"
+      RK_IF_RELEASE_echo "the title '$CI_MERGE_REQUEST_TITLE' must read type(scope) then a colon and a description, with the scope lowercase letters, digits, and _ . / -"
+      RK_IF_NO_RELEASE_echo "the title '$CI_MERGE_REQUEST_TITLE' must read type or type(scope) then a colon and a description, with any scope lowercase letters, digits, and _ . / -"
       exit 1

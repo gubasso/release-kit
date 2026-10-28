@@ -53,9 +53,10 @@ pub enum WorktreeAction {
         json: bool,
     },
 
-    /// Report the worktrees a squash merge retired — stale records and
-    /// gone upstreams, never healthy seats — and remove only the
-    /// forge-confirmed ones, and only under --apply.
+    /// Report the worktrees a merge retired — stale records, gone
+    /// upstreams, and branches a local integration or the trunk already
+    /// carries, never healthy seats — and remove only the proven ones, and
+    /// only under --apply.
     Prune {
         /// The repository to read; any of its worktrees names it.
         #[arg(long, default_value = ".")]

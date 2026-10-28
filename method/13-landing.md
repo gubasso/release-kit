@@ -52,6 +52,20 @@ A documentation file the projection selects for this target is an ordinary candi
 
 The checks every run ends with, `rk status --check` and the project's own suite, and the stage cleanup after them, belong to the setup skill's general post-flight, not to this sequence. A failure there is repaired through another fresh production invocation, never by hand from the stage.
 
+## A landing with no release
+
+A project that wants the Git workflow and no release lands with one preset. `--workflow-only` on `rk init` and `rk upgrade` sets four answers: `release.mode = "none"`, `git.integration = "local"`, `git.checkout_mode = "linked-worktree"`, and `capabilities.workflow_guards = true`. The preset records nothing of its own, only those four answers, because a key with one legal value restates an invariant. A flag that contradicts one of the four refuses before any write. A flag the preset does not set, such as `--merge-form`, combines with it.
+
+Under `release.mode = "none"` the landing carries nothing whose reason is a release:
+
+- The routing block takes its workflow variant, with no `## Releases` heading and no version, changelog, or tag reason.
+- The glossary names no release term.
+- The tag hook `rk-no-hand-authored-tag` does not land.
+- The configuration leaves out the tag protection keys, `[security]`, and `[setup.bot]`.
+- A commit scope is preferred and not required, in `rk integrate`, `rk message`, and the landed commit hooks.
+
+The title gate lands only under forge integration or an automatic release, so a local, release-less project gets no CI file. Under local integration the workflow guards add the trunk guard at the pre-commit stage, and two pre-push guards against a force push and a merge commit on the trunk. [Setup](./02-setup.md) owns what the forge then requires.
+
 ## Legacy operation state
 
 Release 0.4.x stored plans, results, run journals, and release caches under the state root. Before an operator-owned update from such a release, the installed binary is the one that reads them. An active operation is finished with that binary before the tool is replaced, or the operator decides to abandon it, because the next binary carries no parser for it. Inactive state is recorded as local evidence: its exact paths, and why each is obsolete. The new binary offers no verb that removes it and no recursive target. Its removal is a one-time, agent-guided host cleanup, taken only under explicit cleanup authorization and only after no active old operation remains.

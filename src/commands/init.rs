@@ -181,24 +181,24 @@ pub fn run(args: &InitArgs) -> Result<(), RkError> {
         crate::stage::read::confirm(&params, &receipt, root)?;
         params
     } else {
-        landing::Params::resolve(
-            held.base(),
-            &landing::Inputs {
-                nix: args.nix_packaging.then_some(true),
-                reporting_policy: args.reporting_policy.then_some(true),
-                scorecard: args.scorecard.then_some(true),
-                workflow_guards: args.workflow_guards.then_some(true),
-                code_scanning: args
-                    .code_scanning
-                    .as_deref()
-                    .map(Provider::parse)
-                    .transpose()?,
-                ..args.profile.inputs()?
-            },
-            config.as_ref(),
-            None,
-            purpose,
-        )?
+        let inputs = landing::Inputs {
+            nix: args.nix_packaging.then_some(true),
+            reporting_policy: args.reporting_policy.then_some(true),
+            scorecard: args.scorecard.then_some(true),
+            workflow_guards: args.workflow_guards.then_some(true),
+            code_scanning: args
+                .code_scanning
+                .as_deref()
+                .map(Provider::parse)
+                .transpose()?,
+            ..args.profile.inputs()?
+        };
+        let inputs = if args.workflow_only {
+            crate::cli::profile_flags::workflow_only(inputs)?
+        } else {
+            inputs
+        };
+        landing::Params::resolve(held.base(), &inputs, config.as_ref(), None, purpose)?
     };
     if let Some(lock) = lock {
         refuse_a_recorded_target(&held)?;
@@ -231,6 +231,7 @@ const fn answered(args: &InitArgs) -> bool {
         || args.reporting_policy
         || args.scorecard
         || args.workflow_guards
+        || args.workflow_only
         || args.code_scanning.is_some()
 }
 
@@ -440,10 +441,21 @@ fn report_apply(
         prepared.config.action,
         crate::config::CONFIG_PATH
     ));
+    // The required check is asked for only where a forge gate lands: a
+    // target with no gate has no check for a trunk ruleset to require.
+    let gated = prepared.projection.capabilities.iter().any(|selection| {
+        matches!(
+            selection.id,
+            crate::profile::catalog::TITLE_CHECK | crate::profile::catalog::COMMIT_CHECK
+        ) && selection.lands()
+    });
     for (key, empty_line) in [
         ("setup.required_check", "required_check = \"\""),
         ("setup.bot.app_id", "app_id = \"\""),
     ] {
+        if key == "setup.required_check" && !gated {
+            continue;
+        }
         if let Some((index, _)) = prepared
             .config
             .content
@@ -622,6 +634,7 @@ mod tests {
                 trunk: "master".into(),
                 checkout_mode: CheckoutMode::LinkedWorktree,
                 integration: Integration::Local,
+                merge_form: crate::landing::MergeForm::Squash,
             },
             capabilities: CapabilityRequests {
                 nix_packaging: true,
@@ -660,7 +673,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&apply).expect("a report serializes"),
-            r##"{"schema":"rk.init/11","mode":"apply","target":"/tmp/t","profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"},"capabilities":{"nix_packaging":true,"reporting_policy":true,"scorecard":true,"code_scanning":"codeql","workflow_guards":false},"repo":"acme/widget","selection":[{"id":"git.guards","status":"selected","destinations":["AGENTS.md"]}],"withheld":[{"path":"flake.nix","reason":"the target already carries flake.nix"}],"replaced":[],"config":{"action":"added","changes":[],"content":"schema_version = 2\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"created"}],"sentinels":[{"path":"/tmp/t/release-plz.toml","line":3,"text":"# TODO(release-kit): keep false for a binary-only crate"}],"next":["commit the landed files, the receipt included"]}"##
+            r##"{"schema":"rk.init/11","mode":"apply","target":"/tmp/t","profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local","merge_form":"squash"},"capabilities":{"nix_packaging":true,"reporting_policy":true,"scorecard":true,"code_scanning":"codeql","workflow_guards":false},"repo":"acme/widget","selection":[{"id":"git.guards","status":"selected","destinations":["AGENTS.md"]}],"withheld":[{"path":"flake.nix","reason":"the target already carries flake.nix"}],"replaced":[],"config":{"action":"added","changes":[],"content":"schema_version = 2\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"created"}],"sentinels":[{"path":"/tmp/t/release-plz.toml","line":3,"text":"# TODO(release-kit): keep false for a binary-only crate"}],"next":["commit the landed files, the receipt included"]}"##
         );
         let preview = Report {
             sentinels: None,
@@ -692,7 +705,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&preview).expect("a report serializes"),
-            r#"{"schema":"rk.init/11","mode":"preview","target":"/tmp/t","profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"},"capabilities":{"nix_packaging":false,"reporting_policy":false,"scorecard":false,"workflow_guards":false},"selection":[],"release_unavailable":"the release automation at (python, gitlab) has no landable files","licence_refusal":"the target's Cargo.toml declares no license field","collisions":[{"path":"SECURITY.md","reason":"exists, and no receipt attributes it to release-kit","replaceable":true}],"replaced":[{"path":"SECURITY.md","saved_to":null}],"config":{"action":"added","changes":[],"content":"schema_version = 2\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"created"}],"next":["commit the landed files, the receipt included"]}"#,
+            r#"{"schema":"rk.init/11","mode":"preview","target":"/tmp/t","profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local","merge_form":"squash"},"capabilities":{"nix_packaging":false,"reporting_policy":false,"scorecard":false,"workflow_guards":false},"selection":[],"release_unavailable":"the release automation at (python, gitlab) has no landable files","licence_refusal":"the target's Cargo.toml declares no license field","collisions":[{"path":"SECURITY.md","reason":"exists, and no receipt attributes it to release-kit","replaceable":true}],"replaced":[{"path":"SECURITY.md","saved_to":null}],"config":{"action":"added","changes":[],"content":"schema_version = 2\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"created"}],"next":["commit the landed files, the receipt included"]}"#,
             "a preview omits the sentinels, the unresolved repo, and an empty withheld list rather than serializing null"
         );
     }

@@ -55,7 +55,7 @@ On rust:
 
 The registry account is signed in at crates.io with a verified email, and `cargo info <crate>` 404s unless the account already owns the crate; [the binding](../bindings/rust.md) says why the email gates the first publish.
 
-Which steps apply is the target configuration's answer before it is the operator's. A forge step applies where `profile.forge` names a forge this release drives; the release half applies where `profile.release.mode` is `automatic`; the packaging gate applies where that release names a driver; the reporting channel applies where `capabilities.reporting_policy` asks for the landed policy. `rk profile --target .` reports those values, and every run prints the step's stance before it acts.
+Which steps apply is the target configuration's answer before it is the operator's. A forge step applies where `profile.forge` names a forge this release drives; the release half applies where `profile.release.mode` is `automatic`; the packaging gate applies where that release names a driver; the tag protection applies where `profile.release.mode` is not `none`; the reporting channel applies where `capabilities.reporting_policy` asks for the landed policy. `rk profile --target .` reports those values, and every run prints the step's stance before it acts.
 
 A project that runs part of what still applies declares that before its first apply. `setup.excluded_steps` in `.release-kit/config.toml` names each step the project does not run against the reason it does not, and `rk setup --list` names the steps it may hold. A full run then states each exclusion and runs nothing for it, `rk setup check --target .` reports each one with its reason and judges the rest, and `rk setup step <name> --apply` refuses a step named there until the entry goes. An exclusion declared for a step that does not apply here reports as redundant. The file needs no landing to be read, so a project that lands no file still declares its model.
 
@@ -222,7 +222,9 @@ gh secret list --repo <repo>
 
 ### 3a. Prove the required checks exist
 
-The trunk protection names check contexts, and a context no workflow reports is unsatisfiable: nothing would ever merge.
+The trunk protection names check contexts, and a context no workflow reports is unsatisfiable: nothing would ever merge. The forge gate is the context the protection requires beside the project's own check: `pr-title` under `git.merge_form = "squash"`, and `pr-commits` under `rebase`, which judges every commit of a request.
+
+A forge gate lands only under forge integration or an automatic release. Under local integration with no automatic release, as `rk init --workflow-only` lands, no request reaches the trunk: the GitHub trunk ruleset requires no check, the GitLab trunk requires no pipeline, and this substep has nothing to prove, so 3c takes no `--required-check`.
 
 On github:
 
@@ -292,11 +294,11 @@ rk setup step forge-version --target . --apply
 
 ### 3c. Protect the trunk
 
-Automated: `rk setup step protect-trunk --apply --required-check <name>` — on GitHub only after 3a passes, per the chapter's ordering, and on GitLab only after 3b passes; a rerun updates the protection in place.
+Automated: `rk setup step protect-trunk --apply --required-check <name>` — on GitHub only after 3a passes, per the chapter's ordering, and on GitLab only after 3b passes; a rerun updates the protection in place. The recorded merge form names the one merge method the protection allows. Under `squash` GitHub takes the squash merge with the request's title and body as its message, and GitLab squashes every merge request. Under `rebase` GitHub takes the rebase merge alone, with the linear-history rule in the ruleset no actor bypasses, and GitLab sets the `ff` method with squash off. After `rk upgrade --merge-form <form> --apply`, rerun this substep, because the forge holds the old form's settings until it does.
 
 ### 3d. Protect the tags and the release lines
 
-Automated: `rk setup step protect-tags --apply`, and — only when an older line exists — `rk setup step protect-release-lines --apply`. A full apply skips that step until `setup.release_lines` is true in `.release-kit/config.toml`, which a project that keeps lines sets once.
+Automated: `rk setup step protect-tags --apply`, and — only when an older line exists — `rk setup step protect-release-lines --apply`. Under `release.mode = "none"` no tag is minted, so `protect-tags` reports not applicable, naming it by hand refuses, and 3f requires no tag protection. A full apply skips that step until `setup.release_lines` is true in `.release-kit/config.toml`, which a project that keeps lines sets once.
 
 ### 3e. Let a request merge itself
 
@@ -339,7 +341,7 @@ Where the forge enforces less than a step claims, the check names the weaker gua
 
 ### 4a. Land the files
 
-The apply names no scope vocabulary. The title check holds a scope to lowercase letters, digits, and `_ . / -`. `--workflow-guards` adds the opt-in workflow guards: the agent and commit policy lines of the landed `AGENTS.md` block, `GLOSSARY.md`, the commit-message, branch-name, worktree, and trunk hooks, and steps 1c and 1d. A fresh landing takes none of them, because they shape how the project works rather than what its release needs, and `rk upgrade --workflow-guards on` or `off` changes the answer later. The checkout mode is not asked: `git.checkout_mode` keeps its default, `linked-worktree`, which sets where the helper verbs open a topic branch and, under the workflow guards, whether the location hook lands. `--integration` chooses which authority moves an implementation onto the trunk and defaults to `local` — the checkout squashes and records it through `rk integrate`, with no forge round trip; `--integration forge` keeps a pull request or merge request as the integration, which is what a project with more than one writer and a review requirement wants. Ask for this answer rather than assuming it: a project that never answered has the answer it did not choose. The release request integrates at the forge either way. `--release-style` chooses the release style of an automatic release and defaults to `trunk` — the bot's request carries auto-merge from creation, so a green trunk ships itself; `--release-style lines` leaves every request unarmed, for a project that keeps older lines and validates a candidate by hand (check: `rk status` prints the checkout mode, the integration mode, and the style).
+The apply names no scope vocabulary. The title check holds a scope to lowercase letters, digits, and `_ . / -`. `--workflow-guards` adds the opt-in workflow guards: the agent and commit policy lines of the landed `AGENTS.md` block, `GLOSSARY.md`, the commit-message, branch-name, worktree, and trunk hooks, and steps 1c and 1d. A fresh landing takes none of them, because they shape how the project works rather than what its release needs, and `rk upgrade --workflow-guards on` or `off` changes the answer later. The checkout mode is not asked: `git.checkout_mode` keeps its default, `linked-worktree`, which sets where the helper verbs open a topic branch and, under the workflow guards, whether the location hook lands. `--integration` chooses which authority moves an implementation onto the trunk and defaults to `local` — the checkout squashes and records it through `rk integrate`, with no forge round trip; `--integration forge` keeps a pull request or merge request as the integration, which is what a project with more than one writer and a review requirement wants. Ask for this answer rather than assuming it: a project that never answered has the answer it did not choose. The release request integrates at the forge either way. `--merge-form` chooses how the commits of a branch reach the trunk and defaults to `squash`, one trunk commit per implementation; `--merge-form rebase` keeps every commit of the branch, each holding its own message, and lands the commit gate in place of the title check where a forge gate lands. [The integration runbook](./integration.md) carries the choice. `--workflow-only` lands the Git workflow with no release: it sets the release mode `none`, local integration, the `linked-worktree` checkout mode, and the workflow guards, and [the landing runbook](./landing.md) step 4a names what it lands and omits; a project that releases nothing then skips steps 0, 2, 5, 6, and 8, and of step 7 keeps 7a and 7e. `--release-style` chooses the release style of an automatic release and defaults to `trunk` — the bot's request carries auto-merge from creation, so a green trunk ships itself; `--release-style lines` leaves every request unarmed, for a project that keeps older lines and validates a candidate by hand (check: `rk status` prints the checkout mode, the integration mode, and the style).
 
 The landed block is release-kit's own hooks alone. The project owns everything in `.pre-commit-config.yaml` outside the markers, and this is where it decides what goes where: each check on the earliest native stage that can run it, the suite that must pass before an integration on the `manual` stage, and the project's own continuous integration invoking those same stages. Release-kit invokes `pre-commit run --hook-stage manual --all-files` and reads no hook identifier, so the assignment stays the project's. [Integration](../method/12-integration.md) owns the rule.
 
@@ -449,7 +451,7 @@ Manual — registry web UI, no API, once per package; the binding walks the form
 
 ### 7a. Prove the protected path
 
-From 3c on, the trunk takes a change only through its protected path, and the recorded integration mode names it: under `local`, `rk integrate` squashes the branch in the checkout and a repository administrator fast-forwards the trunk; under `forge`, a request whose required checks pass is squashed onto the trunk. Prove it once with one real change, through [the integration runbook](./integration.md)'s variant for the recorded mode. The squash title becomes the trunk commit's subject, so write it as a scoped Conventional Commit carrying the strongest intent of the branch: one `!` anywhere makes the title breaking. On github a request's description becomes the commit's body, so it carries no agent attribution and no reference to an internal planning artifact.
+From 3c on, the trunk takes a change only through its protected path, and the recorded integration mode names it: under `local`, `rk integrate` squashes the branch in the checkout, or under `rebase` moves the trunk to the branch tip, and a repository administrator fast-forwards the trunk; under `forge`, a request whose required checks pass is merged onto the trunk in the recorded merge form. Prove it once with one real change, through [the integration runbook](./integration.md)'s variant for the recorded mode. Under `squash` the squash title becomes the trunk commit's subject, so write it as a scoped Conventional Commit carrying the strongest intent of the branch: one `!` anywhere makes the title breaking. Under `rebase` every commit message reaches the trunk as written, so each one carries that convention, and `rk integrate` takes no `-m`. Under `squash` on github, the request's description becomes the commit's body, so it carries no agent attribution and no reference to an internal planning artifact. Under `rebase` each commit's own body reaches the trunk, so the same holds for each commit message.
 
 On local:
 
@@ -465,7 +467,7 @@ On forge:
 ```bash
 rk integrate <type>/<slug> --forge --apply
 # check: the report names the request command for this forge; open the request with it
-# check: the required check reports success, and the forge squashes the request onto the trunk once it is merged
+# check: the required check reports success, and the forge merges the request onto the trunk in the recorded merge form
 ```
 
 - the check never appears: the job id is not the one the ruleset names, and 3a's prerequisite has moved; nothing merges until the ruleset and the workflow agree on the name.

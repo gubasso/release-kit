@@ -14,8 +14,9 @@ pub struct BranchesArgs {
 /// The local-branch verbs.
 #[derive(Debug, Subcommand)]
 pub enum BranchesAction {
-    /// Report the local branches whose remote branch is gone; delete only
-    /// the forge-confirmed ones, and only under --apply.
+    /// Report the local branches whose remote branch is gone, or that a
+    /// local integration or the trunk already carries; delete only the
+    /// proven ones, and only under --apply.
     Prune {
         /// The repository to read.
         #[arg(long, default_value = ".")]

@@ -98,7 +98,7 @@ jobs:
             echo "a line's request is never armed; its candidate is what a human validated."
             exit 0
           fi
-          gh pr merge "$branch" --auto --squash --delete-branch
+          gh pr merge "$branch" --auto RK_MERGE_FLAG --delete-branch
           echo "armed the release request for v$next."
           # RK_GATE_ARM_END
 

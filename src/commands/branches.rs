@@ -1,10 +1,12 @@
-//! `rk branches prune`: report the branches a squash merge retired.
+//! `rk branches prune`: report the branches a merge retired.
 //!
 //! Preview by default and fully offline: the post-merge hook runs it on
 //! every pull, so the read path costs no network and no forge CLI. Only
 //! `--verify` and `--apply` resolve the forge, and only `--apply` deletes
-//! — each branch on the strength of a merged request whose recorded head
-//! equals the local tip, never on `[gone]` alone.
+//! — each branch on the strength of one of three proofs: a merged request
+//! whose recorded head equals the local tip, a local integration recorded
+//! at that tip, or a trunk that reaches a tip the branch moved to since
+//! its creation. Never on `[gone]` alone.
 
 use camino::Utf8Path;
 use serde::Serialize;
@@ -49,10 +51,12 @@ struct Row {
     /// unconfirmed, unknown, deleted, or delete-failed.
     status: &'static str,
     /// What proved the tip, where anything did: a merged request as the
-    /// forge names it, or the local integration that wrote the trunk.
+    /// forge names it, the local integration that wrote the trunk, or the
+    /// trunk reaching the tip.
     #[serde(skip_serializing_if = "Option::is_none")]
     proof: Option<String>,
-    /// Which of the two proofs it was: `request` or `local-integration`.
+    /// Which of the three proofs it was: `request`, `local-integration`,
+    /// or `reachable-tip`.
     #[serde(skip_serializing_if = "Option::is_none")]
     proof_kind: Option<&'static str>,
     /// Why the branch was kept or the answer is missing.
@@ -94,6 +98,9 @@ impl Row {
                 "worktree-bound: checked out at {}; its worktree owns the cleanup",
                 self.worktree.as_deref().unwrap_or("")
             ),
+            "confirmed" if self.proof_kind == Some("reachable-tip") => {
+                format!("confirmed: {}", self.proof.as_deref().unwrap_or(""))
+            }
             "confirmed" => format!(
                 "confirmed: {} matches this tip",
                 self.proof.as_deref().unwrap_or("")
@@ -189,21 +196,23 @@ fn prune(
         .filter(|answer| answer.status.success())
         .map(|answer| String::from_utf8_lossy(&answer.stdout).trim().to_owned())
         .filter(|name| !name.is_empty());
-    // The clone's own local integrations are the second admissible
-    // proof. A branch that never reached the forge has no gone upstream
-    // to put it in the report, so this read is what makes a locally
-    // integrated branch visible at all.
+    // The clone's own proofs: a tip the trunk reaches, and a local
+    // integration it recorded. A branch that never reached the forge has
+    // no gone upstream to put it in the report, so these reads are what
+    // make such a branch visible at all. Where both hold, the reachable
+    // tip is named: it is the fact a recorded integration under `rebase`
+    // stands for.
     let ledger = crate::maintenance::integration_ledger(target, &trunk);
     let mut judged: Vec<(&Branch, Class)> = branches
         .iter()
         .filter_map(|branch| {
-            classify(
-                branch,
-                current.as_deref(),
-                &trunk,
-                ledger.proof(&branch.name, &branch.tip),
-            )
-            .map(|class| (branch, class))
+            let local = maintenance::reachable_tip(target, &trunk, &branch.name, &branch.tip)
+                .or_else(|| {
+                    ledger.proof(&branch.name, &branch.tip).map(|entry| {
+                        crate::branches::Proof::LocalIntegration(entry.trunk_commit.clone())
+                    })
+                });
+            classify(branch, current.as_deref(), &trunk, local).map(|class| (branch, class))
         })
         .collect();
 
@@ -228,7 +237,7 @@ fn prune(
             if row.status != "confirmed" {
                 continue;
             }
-            if let Err(count) = delete_branch(target, row) {
+            if let Err(count) = delete_branch(target, &trunk, row) {
                 failed_deletes += count;
             }
         }
@@ -285,14 +294,16 @@ fn confirm_candidates(
 /// Delete one confirmed branch, updating its row; `Err(1)` counts a
 /// failed deletion toward the run's typed failure.
 ///
-/// Two guards close the window between verification and deletion. The
+/// Three guards close the window between verification and deletion. The
 /// checkout state is re-read at the last instant — a branch someone
 /// checked out mid-run becomes worktree-bound, because `update-ref`,
-/// unlike `branch -D`, never looks at worktree HEADs. Then the deletion
-/// itself rides the shared compare-and-swap helper: the verified tip
-/// travels with it, so a ref the forge CLI raced past the verification
-/// is refused, not lost.
-fn delete_branch(target: &Utf8Path, row: &mut Row) -> Result<(), usize> {
+/// unlike `branch -D`, never looks at worktree HEADs. A reachable-tip
+/// proof, which no record holds, is re-observed: a trunk reset under the
+/// run no longer carries the tip, and the branch is kept. Then the
+/// deletion itself rides the shared compare-and-swap helper: the verified
+/// tip travels with it, so a ref the forge CLI raced past the
+/// verification is refused, not lost.
+fn delete_branch(target: &Utf8Path, trunk: &str, row: &mut Row) -> Result<(), usize> {
     let ref_name = format!("refs/heads/{}", row.name);
     let rechecked = git(
         target,
@@ -318,6 +329,16 @@ fn delete_branch(target: &Utf8Path, row: &mut Row) -> Result<(), usize> {
             return Ok(());
         }
         Ok(None) => {}
+    }
+    if row.proof_kind == Some("reachable-tip")
+        && !maintenance::trunk_reaches(target, trunk, &row.tip)
+    {
+        row.status = "kept";
+        row.detail = Some(
+            "the trunk no longer reaches the tip after verification; rk branches prune --verify re-confirms"
+                .to_owned(),
+        );
+        return Ok(());
     }
     match maintenance::delete_branch(target, &row.name, &row.tip) {
         maintenance::Deletion::Deleted => {
@@ -393,6 +414,9 @@ fn render(out: Output, rows: &[Row], next: &[String], quiet: bool) {
             rows.iter()
                 .filter(|row| row.proof_kind == Some("local-integration"))
                 .count(),
+            rows.iter()
+                .filter(|row| row.proof_kind == Some("reachable-tip"))
+                .count(),
         ));
         let width = rows.iter().map(|row| row.name.len()).max().unwrap_or(0);
         for row in rows {
@@ -411,12 +435,13 @@ fn render(out: Output, rows: &[Row], next: &[String], quiet: bool) {
 
 /// The count-bearing first line.
 ///
-/// Two signals put a branch in this report and the line names whichever
-/// one applies: a gone upstream, which is a candidate rather than proof,
-/// and a local integration this clone recorded, which is proof. A
-/// local-integration target has no gone upstream to report at all, so a
-/// line naming only the forge signal would read as nothing to do.
-fn header(count: usize, local: usize) -> String {
+/// Three signals put a branch in this report and the line names whichever
+/// apply: a gone upstream, which is a candidate rather than proof, and
+/// two proofs the clone holds on its own — a local integration it
+/// recorded, and a tip the trunk reaches. A local-integration target has
+/// no gone upstream to report at all, so a line naming only the forge
+/// signal would read as nothing to do.
+fn header(count: usize, local: usize, reachable: usize) -> String {
     let (noun, verb, carry) = if count == 1 {
         ("1 local branch", "tracks", "carries")
     } else {
@@ -427,12 +452,21 @@ fn header(count: usize, local: usize) -> String {
     } else {
         format!("{count} {noun}")
     };
-    match (local, count - local) {
-        (0, _) => {
+    match (local, reachable, count - local - reachable) {
+        (0, 0, _) => {
             format!("{noun} {verb} a remote branch that is gone (a candidate, not proof):")
         }
-        (_, 0) => format!("{noun} {carry} a local integration this clone recorded:"),
-        (_, gone) => format!("{noun}: {gone} with a gone upstream, {local} locally integrated:"),
+        (_, 0, 0) => format!("{noun} {carry} a local integration this clone recorded:"),
+        (0, _, 0) => format!("{noun} {carry} a tip the trunk reaches:"),
+        (_, _, 0) => {
+            format!("{noun}: {local} locally integrated, {reachable} with a tip the trunk reaches:")
+        }
+        (_, 0, gone) => {
+            format!("{noun}: {gone} with a gone upstream, {local} locally integrated:")
+        }
+        (_, _, gone) => format!(
+            "{noun}: {gone} with a gone upstream, {local} locally integrated, {reachable} with a tip the trunk reaches:"
+        ),
     }
 }
 

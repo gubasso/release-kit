@@ -74,6 +74,20 @@ fn needs_release(ctx: &Ctx) -> Option<String> {
     })
 }
 
+/// The tag protection serves the tags a release mints, so it applies
+/// wherever the release mode is not `none`, at a forge this release
+/// drives.
+fn needs_tags(ctx: &Ctx) -> Option<String> {
+    needs_adapter(ctx).or_else(|| {
+        (!ctx.tag_protection()).then(|| {
+            format!(
+                "profile.release.mode is {}, so no release tag is minted to protect",
+                ctx.profile.release.mode.as_str()
+            )
+        })
+    })
+}
+
 /// The packaging gate reads the release driver's own command, so it
 /// applies where an automatic release names one.
 fn needs_driver(ctx: &Ctx) -> Option<String> {
@@ -268,7 +282,7 @@ pub const STEPS: [StepSpec; 15] = [
         optional: false,
         forge_cli: &[Forge::Github, Forge::Gitlab],
         prereqs: &[],
-        applies: needs_adapter,
+        applies: needs_tags,
     },
     StepSpec {
         name: "protect-release-lines",
@@ -316,6 +330,34 @@ pub const STEPS: [StepSpec; 15] = [
     },
 ];
 
+impl StepSpec {
+    /// What this step proves for one target.
+    ///
+    /// The table's text is the release-bearing `squash` claim, which every
+    /// target made before the merge form existed, so a proof written then
+    /// still reads as compatible. `protect-trunk` names the target's own
+    /// merge form, and names the required check only where a forge gate
+    /// lands to report one.
+    #[must_use]
+    pub fn proves_for(&self, ctx: &Ctx) -> &'static str {
+        if self.name != "protect-trunk" {
+            return self.proves;
+        }
+        match (ctx.merge_form(), ctx.forge_gate()) {
+            (crate::landing::MergeForm::Squash, true) => self.proves,
+            (crate::landing::MergeForm::Squash, false) => {
+                "the trunk takes no direct push and merges only by squash with the request's title and body as the message"
+            }
+            (crate::landing::MergeForm::Rebase, true) => {
+                "the trunk takes no direct push, merges only by rebase with every commit keeping its own message, and requires the named check"
+            }
+            (crate::landing::MergeForm::Rebase, false) => {
+                "the trunk takes no direct push and merges only by rebase with every commit keeping its own message"
+            }
+        }
+    }
+}
+
 /// Look one step up by name.
 #[must_use]
 pub fn spec(name: &str) -> Option<&'static StepSpec> {
@@ -342,6 +384,7 @@ mod tests {
         ctx.forge = forge.and_then(crate::detect::Forge::parse);
         ctx.profile.forge = ctx.declared_forge.clone();
         ctx.profile.release.mode = mode;
+        ctx.tag_protection = mode != ReleaseMode::None;
         if mode != ReleaseMode::Automatic {
             ctx.profile.release.driver = None;
             ctx.profile.release.style = None;
@@ -416,10 +459,17 @@ mod tests {
             for step in STEPS.iter().map(|step| step.name) {
                 assert!(automatic.contains(&step), "{forge} automatic: {step}");
             }
-            // A release-less target keeps the trunk half and the tag
-            // protection, and takes none of the release half.
+            // A target with no automatic release keeps the trunk half and
+            // takes none of the release half. The tag protection follows
+            // the release mode alone: an external release keeps it, and a
+            // release-less target mints no tag to protect.
             for mode in [ReleaseMode::External, ReleaseMode::None] {
                 let steps = applicable(Some(forge), mode);
+                assert_eq!(
+                    steps.contains(&"protect-tags"),
+                    mode == ReleaseMode::External,
+                    "{forge} {mode:?}: protect-tags"
+                );
                 for step in [
                     "default-branch",
                     "single-trunk",
@@ -427,7 +477,6 @@ mod tests {
                     "branch-reminder",
                     "forge-version",
                     "protect-trunk",
-                    "protect-tags",
                     "protections-check",
                     "private-vulnerability-reporting",
                 ] {
@@ -443,6 +492,28 @@ mod tests {
                 ] {
                     assert!(!steps.contains(&step), "{forge} {mode:?}: {step} applies");
                 }
+            }
+        }
+    }
+
+    /// A release-less target mints no tag, so `protect-tags` reports not
+    /// applicable with the release mode that decided it, at either forge.
+    ///
+    /// SATISFIES forge-setup:applicability-follows-the-target-configuration
+    #[test]
+    fn release_less_protect_tags_does_not_apply() {
+        for forge in ["github", "gitlab"] {
+            let none = ctx(Some(forge), ReleaseMode::None);
+            let reason = (spec("protect-tags").expect("the step exists").applies)(&none)
+                .expect("a release-less target protects no tag");
+            assert!(reason.contains("profile.release.mode is none"), "{reason}");
+            for mode in [ReleaseMode::Automatic, ReleaseMode::External] {
+                let releasing = ctx(Some(forge), mode);
+                assert_eq!(
+                    (spec("protect-tags").expect("the step exists").applies)(&releasing),
+                    None,
+                    "{forge} {mode:?}"
+                );
             }
         }
     }

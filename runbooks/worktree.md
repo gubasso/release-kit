@@ -67,7 +67,13 @@ rk worktree prune --verify               # check: confirmed, and the row names w
 rk worktree prune --apply                # check: pruned; the branch and its configuration went with it
 ```
 
-The proof the verify names is the merged request under forge integration and the recorded local integration under local integration. [Integration](./integration.md) owns which one a target leaves.
+The verify names one of three proofs, and each removal rests on one:
+
+- `request`: a merged request whose recorded head equals the branch's tip, the proof forge integration leaves.
+- `local-integration`: a recorded local integration whose branch tip equals it and whose commit the trunk reaches, the proof `rk integrate` leaves under either merge form.
+- `reachable-tip`: the trunk reaches the branch's current tip, and the branch moved from the commit its reflog's creation entry records. It needs no record and no forge answer, so it holds after a local rebase integration, a GitLab fast-forward merge, and a hand `git merge --ff-only`. A fresh branch still at its creation commit is never pruned by it, and a branch whose creation entry expired gets no such proof.
+
+A squash writes a new commit and a GitHub rebase merge writes new commits with new SHAs, so after either the trunk does not reach the tip, and the merged request or the recorded integration stays the proof. [Integration](./integration.md) owns which one a target leaves, and [worktrees](../method/08-worktrees.md) owns why each proof is admissible. `rk branches prune --verify` names the same three proofs for a branch with no seat.
 
 ### 4a. The divergent rerun
 

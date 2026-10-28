@@ -137,7 +137,7 @@ pub fn subject(ctx: &Ctx) -> Subject {
             let stance = stance(ctx, step);
             SubjectStep {
                 name: step.name.to_owned(),
-                proves: step.proves.to_owned(),
+                proves: step.proves_for(ctx).to_owned(),
                 prerequisites: step.prereqs.iter().map(|&name| name.to_owned()).collect(),
                 stance: stance.word().to_owned(),
                 reason: stance.detail(),

@@ -231,19 +231,19 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `landing:a-landed-hook-serves-the-release-convention-alone` — A landed hook serves the release convention alone
 
-The hook block MUST carry the two hooks the release process needs, the tag guard and the status check, and only under the workflow guards the commit contract and the local mirrors of the forge protections, never general hygiene, which stays the target's own, and every third-party hook it names MUST be pinned in `versions.toml`.
+The hook block MUST carry the hooks the release process needs, the status check and, wherever `profile.release.mode` is not `none`, the tag guard, and only under the workflow guards the commit contract, the local mirrors of the forge protections, and the trunk guards of local integration, never general hygiene, which stays the target's own, and every third-party hook it names MUST be pinned in `versions.toml`.
 
 #### Scenario: The block's hooks are enumerated
 
 - GIVEN a landed `.pre-commit-config.yaml` block
 - WHEN its hooks are read beside `rk versions`
-- THEN each hook maps to a rule the method states, the workflow hooks appear only where the record selects the workflow guards, and each third-party repository the block names carries a registry pin
+- THEN each hook maps to a rule the method states, the workflow hooks appear only where the record selects the workflow guards, the tag guard appears only where the record names a release, and each third-party repository the block names carries a registry pin
 
-Verify: `cargo nextest run -E 'binary(cli)'`
+Verify: `cargo nextest run -E 'binary(cli) or test(workflow_only)'`
 
 ### `landing:the-landed-guards-hold-the-message-content` — The landed guards hold the message content
 
-Where the target selects the workflow guards, the landed commit-msg hook MUST refuse a message referencing a git-ignored path, carrying agent attribution, or naming a scope outside the one shape the landed title check admits, exempting only the release bot's request, recognized by exactly the title shape the landed title check admits for the bot. The scope's shape is a gate and its vocabulary is not: no landing records a scope list, the landed hooks require that a scope is present, and the routing block carries the guidance an author reads to choose the word. Where the forge carries the request's description onto the trunk, the landed required check MUST refuse a body matching the same patterns — the bot's request exempt whole, since the check has no ignore rules to consult — and the two pattern copies MUST be held equal by test.
+Where the target selects the workflow guards, the landed commit-msg hook MUST refuse a message referencing a git-ignored path, carrying agent attribution, or naming a scope outside the one shape the landed title check admits, exempting only the release bot's request, recognized by exactly the title shape the landed title check admits for the bot. The scope's shape is a gate and its vocabulary is not: no landing records a scope list, the landed hooks require that a scope is present wherever the record names a release, as `project-profile:a-release-less-landing-carries-no-release-text` binds, and the routing block carries the guidance an author reads to choose the word. Where the forge carries the request's description onto the trunk, the landed required check MUST refuse a body matching the same patterns — the bot's request exempt whole, since the check has no ignore rules to consult — and the two pattern copies MUST be held equal by test.
 
 #### Scenario: A message references an internal planning artifact
 
@@ -267,7 +267,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `landing:the-changelog-quality-gate-is-the-squash-message` — The changelog quality gate is the squash message
 
-Where the recorded style arms the release request, the changelog's quality MUST be held at the point the entry is generated from — the squash title the landed title check holds to the scoped convention and the body the landed content guard judges — because an armed request offers no window in which a human edit on its branch survives to the merge.
+Where the recorded style arms the release request, the changelog's quality MUST be held at the point the entry is generated from — under `squash` the squash title the landed title check holds to the scoped convention and the body the landed content guard judges, and under `rebase` each commit message the landed commit gate judges — because an armed request offers no window in which a human edit on its branch survives to the merge.
 
 #### Scenario: An entry reads badly on an armed request
 
@@ -279,15 +279,15 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `landing:the-routing-block-bounds-the-agents-initiative` — The routing block bounds the agent's initiative and reads as plain prose
 
-The routing block MUST carry no line that tells the project how to start work, integrate a branch, or lay out its working copies, in any capability state, because that workflow is the project's own, and where the target selects the workflow guards, the block MUST state that an agent acting in the target guides and never drives: that a request to change code authorizes the file changes alone, and that a git or forge action — creating, switching or deleting a branch, creating or removing a worktree, committing, pushing, tagging, and opening, updating or merging a pull request among them — happens only where the operator's request named that action. It is the one landed line no mechanism enforces — a hook and a forge protection bound the end state and cannot tell an agent from a person — so the target carries it as a sentence rather than leaving an agent to discover it by refusal. Every line of the block MUST also read as plain prose — a simple tense, no contraction, no modal outside can, will and must, no semicolon, no dash splicing two statements, and no sentence over 25 words — because the target owns none of these lines, so a prose gate the target runs over its own `AGENTS.md` finds a defect it cannot repair and the renderer is the only place that can answer it. Under the workflow guards, the block MUST name the glossary destination and list the terms release-kit owns there, because a separate file loads into no session on its own and a term the agent cannot see is a term the operator cannot use.
+The routing block MUST carry no line that tells the project how to start work, integrate a branch, or lay out its working copies, in any capability state, because that workflow is the project's own, and where the target selects the workflow guards, the block MUST state that an agent acting in the target guides and never drives: that a request to change code authorizes the file changes alone, and that a git or forge action — creating, switching or deleting a branch, creating or removing a worktree, committing, pushing, tagging, and opening, updating or merging a pull request among them — happens only where the operator's request named that action. It is the one landed line no mechanism enforces — a hook and a forge protection bound the end state and cannot tell an agent from a person — so the target carries it as a sentence rather than leaving an agent to discover it by refusal. Every line of the block MUST also read as plain prose — a simple tense, no contraction, no modal outside can, will and must, no semicolon, no dash splicing two statements, and no sentence over 25 words — because the target owns none of these lines, so a prose gate the target runs over its own `AGENTS.md` finds a defect it cannot repair and the renderer is the only place that can answer it. Under the workflow guards, the block MUST name the glossary destination and list the terms release-kit owns there, because a separate file loads into no session on its own and a term the agent cannot see is a term the operator cannot use. Under `profile.release.mode = "none"` the block MUST take its workflow variant, with no `## Releases` heading and no line that gives a version, a changelog, or a tag as a reason, and the glossary MUST carry no release term.
 
 #### Scenario: The block is read for what it authorizes
 
 - GIVEN the routing block release-kit renders into a target's `AGENTS.md`
 - WHEN the test suite reads it
-- THEN the guarded block carries the line bounding the agent's initiative, no block carries a line ordering an agent to branch, commit, or merge on its own or naming a workflow helper, and no line a prose gate would report
+- THEN the guarded block carries the line bounding the agent's initiative, no block carries a line ordering an agent to branch, commit, or merge on its own or naming a workflow helper, no line a prose gate would report, and the workflow variant names no version, changelog, or tag
 
-Verify: `cargo nextest run -E 'binary(cli)'`
+Verify: `cargo nextest run -E 'binary(cli) or test(workflow_only)'`
 
 ### `landing:a-landing-writes-what-the-catalog-selects` — A landing writes what the catalog selects
 

@@ -54,7 +54,8 @@ Remove nothing here. Step 5b owns the removal, and only under explicit cleanup a
 ```bash
 rk stage --target .
 # check: prints stage: <stage>, the parameters, the landing record's schema, one candidate line per destination, and the omitted, collision, retired, seeded present, and state present lines
-# a first landing: pass --technology, --release-mode, and the checkout-mode, release-style, and capability flags the request answers, so the stage renders the candidate the landing will render
+# a first landing: pass --technology, --release-mode, and the checkout-mode, release-style, merge-form, and capability flags the request answers, so the stage renders the candidate the landing will render
+# the Git workflow with no release: pass --release-mode none --integration local --checkout-mode linked-worktree --workflow-guards, the four answers rk init --workflow-only sets (4a)
 # an exact directory wanted: pass --output <dir>. It must be absent or empty, and RK_STAGE_ROOT is the base otherwise
 # exit 73 naming an existing nonempty output: choose another directory, or clean the old stage through the close first
 ```
@@ -145,6 +146,20 @@ rk adopt --stage <stage> --target . --apply       # adding --replace <path> for 
 - exit 73 naming the release automation: the profile asks for a release this binary does not carry at its driver and forge. The refusal names the tuples it does carry; the answer is an available pair or another release mode, never a flag that forces past it.
 - exit 73 naming a newer `rk_version`: the target is ahead of this binary, and the operator installs the named version.
 - exit 74 naming completed paths: a rename stopped part way. Whole files stand beside the previous receipt. Read `git status`, then run the same command again.
+- exit 73 with the reason `preset-contradiction`: a flag beside `--workflow-only` states another answer than one of its four. Drop that flag, or drop the preset and state each answer by its own flag.
+
+### 4a. A landing with no release
+
+A project that wants the Git workflow alone takes it with one preset. `--workflow-only` sets `release.mode = "none"`, `git.integration = "local"`, `git.checkout_mode = "linked-worktree"`, and `capabilities.workflow_guards = true`, and `--merge-form <squash|rebase>` combines with it. `--stage` carries every answer a stage resolved, so it refuses the preset beside it: a staged landing passes the four answers to `rk stage` instead, as 1c names.
+
+```bash
+rk init --workflow-only --target .                # preview, with the four answers resolved
+rk init --workflow-only --target . --apply
+# check: AGENTS.md, GLOSSARY.md, .pre-commit-config.yaml, .release-kit/config.toml, and .release-kit/manifest.json, and no sentinel to fill
+rk upgrade --workflow-only --target . --apply     # a recorded target taking the same four answers
+```
+
+The landing writes no version file, no changelog, no release automation, and no forge gate, because no request reaches the trunk under local integration with no release. The routing block takes its workflow variant, with no `## Releases` heading, and the glossary names no release term. The hook block carries no tag guard, and its commit hook prefers a scope rather than requiring one. It adds the trunk guards of local integration: `no-commit-to-branch` at the pre-commit stage, and the pre-push hooks `rk-no-force-push-to-trunk` and `rk-no-merge-commit-to-trunk`. The configuration leaves out the tag protection keys, `[setup.bot]`, and `[security]` unless `--reporting-policy` asks for the policy. The record and the configuration state the four answers and nothing that names the preset. [Landing](../method/13-landing.md) owns the preset.
 
 ## 5. Prove
 

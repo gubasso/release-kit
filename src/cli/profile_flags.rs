@@ -72,6 +72,14 @@ pub struct ProfileFlags {
     #[arg(long, value_name = "MODE")]
     pub integration: Option<String>,
 
+    /// How the commits of a branch reach the trunk: squash (the branch
+    /// arrives as one commit) or rebase (the branch is rebased on the
+    /// trunk tip and the trunk fast-forwards to it, every commit keeping
+    /// its own message). Recorded as a Git workflow parameter. Defaults
+    /// to squash.
+    #[arg(long, value_name = "FORM")]
+    pub merge_form: Option<String>,
+
     /// The check the release gate believes: the context the trunk ruleset
     /// requires under forge integration, and the context the rendered
     /// release gate judges under local integration. GitHub only.
@@ -98,6 +106,7 @@ impl ProfileFlags {
             && self.trunk.is_none()
             && self.checkout_mode.is_none()
             && self.integration.is_none()
+            && self.merge_form.is_none()
             && self.required_check.is_none()
             && self.required_workflow.is_none()
     }
@@ -109,7 +118,7 @@ impl ProfileFlags {
     /// Returns [`crate::error::RkError::Usage`] for a value outside its
     /// vocabulary.
     pub fn inputs(&self) -> Result<crate::profile::Inputs<'_>, crate::error::RkError> {
-        use crate::landing::{CheckoutMode, Integration, Style};
+        use crate::landing::{CheckoutMode, Integration, MergeForm, Style};
         use crate::profile::ReleaseMode;
         Ok(crate::profile::Inputs {
             technologies: &self.technology,
@@ -137,9 +146,109 @@ impl ProfileFlags {
                 .as_deref()
                 .map(Integration::parse)
                 .transpose()?,
+            merge_form: self
+                .merge_form
+                .as_deref()
+                .map(MergeForm::parse)
+                .transpose()?,
             required_check: self.required_check.as_deref(),
             required_workflow: self.required_workflow.as_deref(),
             ..crate::profile::Inputs::default()
         })
     }
+}
+
+/// The preset flag's name, as an operator types it.
+pub const WORKFLOW_ONLY: &str = "--workflow-only";
+
+/// Expand `--workflow-only` over the answers an invocation states.
+///
+/// The preset sets four answers: no release, local integration, linked
+/// worktrees, and the workflow guards. It records nothing of its own, so
+/// the expansion is the four answers and nothing else. A flag that states
+/// one of them the same way agrees with it; a flag that states another
+/// answer, or an answer only a release takes, refuses before any write,
+/// naming the flag and the preset. A flag the preset does not set, such
+/// as `--merge-form`, passes through.
+///
+/// # Errors
+///
+/// A [`crate::diagnostic::Reason::PresetContradiction`] refusal naming
+/// every contradicting flag.
+///
+/// SATISFIES project-profile:the-workflow-only-preset-expands-to-recorded-answers
+pub fn workflow_only(
+    mut inputs: crate::profile::Inputs<'_>,
+) -> Result<crate::profile::Inputs<'_>, crate::error::RkError> {
+    use crate::landing::{CheckoutMode, Integration};
+    use crate::profile::ReleaseMode;
+    let mut contradicting: Vec<String> = Vec::new();
+    if let Some(mode) = inputs
+        .release_mode
+        .filter(|mode| *mode != ReleaseMode::None)
+    {
+        contradicting.push(format!(
+            "--release-mode {} (the preset sets profile.release.mode = \"none\")",
+            mode.as_str()
+        ));
+    }
+    if let Some(driver) = inputs.release_driver {
+        contradicting.push(format!(
+            "--release-driver {driver} (an automatic release alone takes a driver)"
+        ));
+    }
+    if let Some(style) = inputs.style {
+        contradicting.push(format!(
+            "--release-style {} (an automatic release alone takes a style)",
+            style.as_str()
+        ));
+    }
+    if let Some(integration) = inputs
+        .integration
+        .filter(|integration| *integration != Integration::Local)
+    {
+        contradicting.push(format!(
+            "--integration {} (the preset sets git.integration = \"local\")",
+            integration.as_str()
+        ));
+    }
+    if let Some(mode) = inputs
+        .checkout_mode
+        .filter(|mode| *mode != CheckoutMode::LinkedWorktree)
+    {
+        contradicting.push(format!(
+            "--checkout-mode {} (the preset sets git.checkout_mode = \"linked-worktree\")",
+            mode.as_str()
+        ));
+    }
+    if inputs.workflow_guards == Some(false) {
+        contradicting.push(
+            "--workflow-guards off (the preset sets capabilities.workflow_guards = true)"
+                .to_owned(),
+        );
+    }
+    if !contradicting.is_empty() {
+        return Err(crate::error::RkError::refusal(
+            crate::diagnostic::Diagnostic::new(
+                crate::diagnostic::Reason::PresetContradiction,
+                format!(
+                    "{} contradict{} {WORKFLOW_ONLY}; nothing was written",
+                    contradicting.join(", "),
+                    if contradicting.len() == 1 { "s" } else { "" }
+                ),
+            )
+            .expected(format!(
+                "{WORKFLOW_ONLY} alone, or beside a flag it does not set, such as --merge-form"
+            ))
+            .action(format!(
+                "drop {WORKFLOW_ONLY} and state each answer by its own flag, or drop the contradicting flag"
+            ))
+            .target_state("unchanged"),
+        ));
+    }
+    inputs.release_mode = Some(ReleaseMode::None);
+    inputs.integration = Some(Integration::Local);
+    inputs.checkout_mode = Some(CheckoutMode::LinkedWorktree);
+    inputs.workflow_guards = Some(true);
+    Ok(inputs)
 }

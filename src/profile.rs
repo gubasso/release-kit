@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
-use crate::landing::manifest::{self, CheckoutMode, Integration, Provider, Style};
+use crate::landing::manifest::{self, CheckoutMode, Integration, MergeForm, Provider, Style};
 
 /// The release intent's mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -114,6 +114,10 @@ pub struct GitWorkflow {
     /// predating the parameter carries no key and reads as `forge`.
     #[serde(default = "crate::landing::manifest::integration_forge")]
     pub integration: Integration,
+    /// How the commits of a branch reach the trunk. A record predating
+    /// the parameter carries no key and reads as `squash`.
+    #[serde(default = "crate::landing::manifest::merge_form_squash")]
+    pub merge_form: MergeForm,
 }
 
 /// The optional products the target requested.
@@ -253,6 +257,8 @@ pub struct Inputs<'a> {
     pub checkout_mode: Option<CheckoutMode>,
     /// Integration mode override.
     pub integration: Option<Integration>,
+    /// Merge form override.
+    pub merge_form: Option<MergeForm>,
     /// The check the release gate believes, overriding the configuration.
     pub required_check: Option<&'a str>,
     /// The workflow whose completion wakes the release gate, overriding
@@ -505,6 +511,12 @@ impl Params {
         self.git.integration
     }
 
+    /// How the commits of a branch reach the trunk.
+    #[must_use]
+    pub const fn merge_form(&self) -> MergeForm {
+        self.git.merge_form
+    }
+
     /// The one permanent branch this landing writes into its artifacts.
     #[must_use]
     pub fn trunk(&self) -> &str {
@@ -586,6 +598,8 @@ impl Params {
         out.push_str(self.git.checkout_mode.as_str());
         out.push_str(" --integration ");
         out.push_str(self.git.integration.as_str());
+        out.push_str(" --merge-form ");
+        out.push_str(self.git.merge_form.as_str());
         // An unanswered gate has no flag form: the empty answer is the
         // compiled default, and a replayed command that stated it would
         // pass a name the resolution never produced.
@@ -679,6 +693,7 @@ impl Params {
                 trunk: crate::config::TRUNK_DEFAULT.to_owned(),
                 checkout_mode: CheckoutMode::LinkedWorktree,
                 integration: Integration::Local,
+                merge_form: MergeForm::Squash,
             },
             capabilities: CapabilityRequests {
                 nix_packaging: false,
@@ -742,6 +757,11 @@ impl Params {
     /// The same set with the integration mode answered.
     pub(crate) const fn set_integration_for_test(&mut self, mode: Integration) {
         self.git.integration = mode;
+    }
+
+    /// The same set with the merge form answered.
+    pub(crate) const fn set_merge_form_for_test(&mut self, form: MergeForm) {
+        self.git.merge_form = form;
     }
 
     /// The same set with the Nix opt-in answered.
@@ -1209,6 +1229,18 @@ pub fn resolve(
     ])
     .unwrap_or((Integration::Local, Source::Default));
     sources.insert("git.integration", source);
+    // The merge form defaults to `squash` for every purpose: it is the
+    // form every target took before the parameter existed, so a fresh
+    // landing, an adoption, and an older record all answer the same.
+    let (merge_form, source) = answered([
+        (flags.merge_form, Source::Flag),
+        (config.and_then(|c| c.git.merge_form), Source::Config),
+        (record.map(|r| r.git.merge_form), Source::Record),
+        (None, Source::Observation),
+        (Some(manifest::merge_form_squash()), Source::Default),
+    ])
+    .unwrap_or((MergeForm::Squash, Source::Default));
+    sources.insert("git.merge_form", source);
 
     // The capability requests.
     let (nix_packaging, source) = answered([
@@ -1346,6 +1378,7 @@ pub fn resolve(
             trunk: trunk.clone(),
             checkout_mode,
             integration,
+            merge_form,
         },
     );
     let (required_check, source) = answered([
@@ -1431,6 +1464,7 @@ pub fn resolve(
                 trunk,
                 checkout_mode,
                 integration,
+                merge_form,
             },
             capabilities: CapabilityRequests {
                 nix_packaging,

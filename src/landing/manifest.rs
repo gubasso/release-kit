@@ -51,8 +51,13 @@ pub const MANIFEST_PATH: &str = ".release-kit/manifest.json";
 /// below carries no such key: that is the pending answer, which reads as
 /// kept, because every such landing carries the guards.
 ///
+/// Schema 12 adds `git.merge_form`, how the commits of a branch reach the
+/// trunk. A record at schema 11 or below carries no such key and reads as
+/// `squash`, which is the form every such landing took.
+///
 /// SATISFIES landing:a-record-states-its-schema
-pub const SCHEMA_VERSION: u64 = 11;
+/// SATISFIES git:the-merge-form-is-a-landing-parameter
+pub const SCHEMA_VERSION: u64 = 12;
 
 /// The oldest schema this binary still reads.
 const OLDEST_READABLE_SCHEMA: u64 = 1;
@@ -184,6 +189,69 @@ impl<'de> serde::Deserialize<'de> for Integration {
 /// takes direct pushes.
 pub(crate) const fn integration_forge() -> Integration {
     Integration::Forge
+}
+
+/// The merge form a landing records: how the commits of a branch reach
+/// the trunk.
+///
+/// A Git workflow parameter, changed only through the landing verbs. It
+/// selects a form and nothing else: no authority, no checkout mode, and no
+/// release path. Both forms keep the trunk linear and write no merge
+/// commit.
+///
+/// SATISFIES git:the-merge-form-is-a-landing-parameter
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MergeForm {
+    /// The branch arrives as one commit, so one implementation is one
+    /// trunk commit.
+    Squash,
+    /// The branch is rebased on the trunk tip and the trunk fast-forwards
+    /// to it, so every commit arrives with its own message.
+    Rebase,
+}
+
+impl MergeForm {
+    /// The flag, wire, and report form.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Squash => "squash",
+            Self::Rebase => "rebase",
+        }
+    }
+
+    /// Parse a `--merge-form` flag value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RkError::Usage`] naming the two values.
+    pub fn parse(raw: &str) -> Result<Self, RkError> {
+        match raw {
+            "squash" => Ok(Self::Squash),
+            "rebase" => Ok(Self::Rebase),
+            other => Err(RkError::Usage(format!(
+                "unknown merge form '{other}'; the forms are: squash, rebase"
+            ))),
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for MergeForm {
+    fn deserialize<D: serde::Deserializer<'de>>(reader: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(reader)?;
+        Self::parse(&raw).map_err(|error| serde::de::Error::custom(error.to_string()))
+    }
+}
+
+/// The compiled default, and the answer for a record written before the
+/// merge form existed.
+///
+/// Every such landing took the squash form, so reading it as anything
+/// else would change how its branches reach the trunk without a question.
+#[must_use]
+pub const fn merge_form_squash() -> MergeForm {
+    MergeForm::Squash
 }
 
 /// The release style a landing records.
@@ -787,6 +855,7 @@ mod tests {
                 trunk: crate::config::TRUNK_DEFAULT.to_owned(),
                 checkout_mode: CheckoutMode::LinkedWorktree,
                 integration: Integration::Local,
+                merge_form: crate::landing::MergeForm::Squash,
             },
             capabilities: CapabilityRequests {
                 nix_packaging: true,
@@ -823,7 +892,7 @@ mod tests {
         assert_eq!(
             text,
             format!(
-                r#"{{"schema_version":11,"rk_version":"0.1.0","origin":"init","landed_at":"2026-08-29T00:00:00Z","profile":{{"technologies":["rust"],"forge":"github","release":{{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}}}},"git":{{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"}},"capabilities":{{"nix_packaging":true,"reporting_policy":true,"scorecard":true,"code_scanning":"semgrep","workflow_guards":false}},"parameters":{{"repo":"acme/widget","security_contact":"","security_response":"best-effort","required_check":"","required_workflow":""}},"files":[{{"destination":"release-plz.toml","kind":"seeded","sha256":"{empty}"}},{{"destination":"AGENTS.md","kind":"rendered","sha256":"{empty}","placement":"region"}}],"pins":{{"release-plz":"0.3.160"}}}}"#
+                r#"{{"schema_version":12,"rk_version":"0.1.0","origin":"init","landed_at":"2026-08-29T00:00:00Z","profile":{{"technologies":["rust"],"forge":"github","release":{{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}}}},"git":{{"trunk":"master","checkout_mode":"linked-worktree","integration":"local","merge_form":"squash"}},"capabilities":{{"nix_packaging":true,"reporting_policy":true,"scorecard":true,"code_scanning":"semgrep","workflow_guards":false}},"parameters":{{"repo":"acme/widget","security_contact":"","security_response":"best-effort","required_check":"","required_workflow":""}},"files":[{{"destination":"release-plz.toml","kind":"seeded","sha256":"{empty}"}},{{"destination":"AGENTS.md","kind":"rendered","sha256":"{empty}","placement":"region"}}],"pins":{{"release-plz":"0.3.160"}}}}"#
             ),
             "a whole file omits its placement, and no retired digest field survives"
         );
@@ -860,7 +929,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&release_less).expect("serializes"),
-            r#"{"schema_version":11,"rk_version":"0.1.0","origin":"init","landed_at":"2026-08-29T00:00:00Z","profile":{"technologies":[],"release":{"mode":"none"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"},"capabilities":{"nix_packaging":false,"reporting_policy":false,"scorecard":false,"workflow_guards":false},"parameters":{"repo":"","security_contact":"","security_response":"best-effort","required_check":"","required_workflow":""},"files":[],"pins":{}}"#
+            r#"{"schema_version":12,"rk_version":"0.1.0","origin":"init","landed_at":"2026-08-29T00:00:00Z","profile":{"technologies":[],"release":{"mode":"none"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local","merge_form":"squash"},"capabilities":{"nix_packaging":false,"reporting_policy":false,"scorecard":false,"workflow_guards":false},"parameters":{"repo":"","security_contact":"","security_response":"best-effort","required_check":"","required_workflow":""},"files":[],"pins":{}}"#
         );
     }
 
@@ -972,6 +1041,52 @@ mod tests {
             !message.to_lowercase().contains("bundle"),
             "the record schema stands alone: {message}"
         );
+    }
+
+    /// A record at schema 11 predates the merge form and carries no key,
+    /// so it reads as `squash`, the form every such landing took, and the
+    /// next write states the form at the current schema. A record that
+    /// names `rebase` keeps it, and a form outside the two refuses as an
+    /// invalid record rather than reading as either.
+    ///
+    /// SATISFIES git:the-merge-form-is-a-landing-parameter
+    #[test]
+    fn merge_form_of_a_schema_11_record_reads_as_squash() {
+        let dir = tempfile::tempdir().expect("a scratch target exists");
+        let target = camino::Utf8Path::from_path(dir.path()).expect("utf-8 path");
+        std::fs::create_dir_all(target.join(".release-kit")).expect("the record dir writes");
+        let record = |schema: u64, git: &str| {
+            format!(
+                r#"{{"schema_version":{schema},"rk_version":"0.1.0","origin":"init","landed_at":"2026-08-29T00:00:00Z","profile":{{"technologies":[],"release":{{"mode":"none"}}}},"git":{{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"{git}}},"capabilities":{{"nix_packaging":false,"reporting_policy":false,"scorecard":false,"workflow_guards":true}},"parameters":{{"repo":""}},"files":[],"pins":{{}}}}"#
+            )
+        };
+        std::fs::write(target.join(super::MANIFEST_PATH), record(11, "")).expect("writes");
+        let manifest = super::load(target)
+            .expect("a schema-11 record loads")
+            .expect("the record exists");
+        assert_eq!(manifest.schema_version, 11);
+        assert_eq!(manifest.git.merge_form, super::MergeForm::Squash);
+        let text = String::from_utf8(super::render(&manifest).expect("renders")).expect("text");
+        assert!(text.contains("\"merge_form\": \"squash\""), "{text}");
+
+        std::fs::write(
+            target.join(super::MANIFEST_PATH),
+            record(super::SCHEMA_VERSION, r#","merge_form":"rebase""#),
+        )
+        .expect("writes");
+        let manifest = super::load(target)
+            .expect("a current record loads")
+            .expect("the record exists");
+        assert_eq!(manifest.git.merge_form, super::MergeForm::Rebase);
+
+        std::fs::write(
+            target.join(super::MANIFEST_PATH),
+            record(super::SCHEMA_VERSION, r#","merge_form":"merge""#),
+        )
+        .expect("writes");
+        let refused = super::load(target).expect_err("an unknown form refuses");
+        assert_eq!(refused.reason(), crate::diagnostic::Reason::RecordInvalid);
+        assert!(refused.to_string().contains("merge form"), "{refused}");
     }
 
     /// The record is the one input a re-render reads, so a hand-edited

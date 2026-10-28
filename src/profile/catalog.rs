@@ -18,6 +18,7 @@ use serde::Serialize;
 
 use super::{Params, ReleaseMode};
 use crate::detect::Forge;
+use crate::landing::{Integration, MergeForm};
 use crate::projection::{CODE_SCANNING_DESTINATIONS, NIX_DESTINATIONS};
 
 /// The release guards every valid target selects.
@@ -30,8 +31,14 @@ pub const GUARDS: &str = "git.guards";
 /// routing block, the glossary, the workflow hooks, and the two workflow
 /// setup steps. Off for a fresh landing.
 pub const WORKFLOW_GUARDS: &str = "git.workflow-guards";
-/// The complete, active title gate at the forge.
+/// The complete, active title gate at the forge: the forge gate of the
+/// `squash` merge form, which judges the request's title because it
+/// becomes the trunk's commit message.
 pub const TITLE_CHECK: &str = "git.title-check";
+/// The complete, active commit gate at the forge: the forge gate of the
+/// `rebase` merge form, which judges every commit of the request because
+/// each one reaches the trunk with its own message.
+pub const COMMIT_CHECK: &str = "git.commit-check";
 /// The landed vulnerability reporting policy.
 pub const REPORTING_POLICY: &str = "security.reporting-policy";
 /// The release automation at one driver and one forge: the version
@@ -45,10 +52,11 @@ pub const SCORECARD: &str = "supply-chain.scorecard";
 pub const CODE_SCANNING: &str = "supply-chain.code-scanning";
 
 /// Every capability, in the order a report lists them.
-pub const ALL: [&str; 8] = [
+pub const ALL: [&str; 9] = [
     GUARDS,
     WORKFLOW_GUARDS,
     TITLE_CHECK,
+    COMMIT_CHECK,
     REPORTING_POLICY,
     RELEASE_AUTOMATION,
     PACKAGING_NIX,
@@ -60,6 +68,11 @@ pub const ALL: [&str; 8] = [
 /// pipeline: the minimal `.gitlab-ci.yml` that activates the title
 /// fragment where no release automation ships a root pipeline.
 pub const TITLE_GATE_ZONE: &str = "_title-gate";
+
+/// The zone below `snippets/` that carries the release-less GitLab root
+/// pipeline of the `rebase` merge form, which activates the commit
+/// fragment instead.
+pub const COMMIT_GATE_ZONE: &str = "_commit-gate";
 
 /// The one owner of every embedded snippet: which capability lands the
 /// file at `path`, the path relative to `snippets/`.
@@ -75,12 +88,16 @@ pub fn owner_of(path: &str) -> Option<&'static str> {
         return match destination {
             "SECURITY.md" => Some(REPORTING_POLICY),
             ".github/workflows/pr-title.yml" | ".gitlab/ci/mr-title.yml" => Some(TITLE_CHECK),
+            ".github/workflows/pr-commits.yml" | ".gitlab/ci/mr-commits.yml" => Some(COMMIT_CHECK),
             ".github/workflows/scorecard.yml" => Some(SCORECARD),
             _ => None,
         };
     }
     if zone == TITLE_GATE_ZONE {
         return (destination == ".gitlab-ci.yml").then_some(TITLE_CHECK);
+    }
+    if zone == COMMIT_GATE_ZONE {
+        return (destination == ".gitlab-ci.yml").then_some(COMMIT_CHECK);
     }
     if zone.starts_with('_') {
         return None;
@@ -282,6 +299,24 @@ impl Availability {
     }
 }
 
+/// Whether a target lands a forge gate at all.
+///
+/// It does under forge integration, where a request is the way onto the
+/// trunk, and under an automatic release, whose bot opens a request
+/// whatever the integration mode. A local integration with no automatic
+/// release opens no request, so no gate has anything to judge and no CI
+/// file lands for it.
+///
+/// The one owner of the answer: the catalog selects by it, and the setup's
+/// effective protection requires a check and a pipeline by it, so a forge
+/// never requires a check no landed workflow reports.
+///
+/// SATISFIES project-profile:the-forge-gate-follows-the-merge-form
+#[must_use]
+pub const fn forge_gate_lands(integration: Integration, mode: ReleaseMode) -> bool {
+    matches!(integration, Integration::Forge) || matches!(mode, ReleaseMode::Automatic)
+}
+
 /// The release drivers this binary's sources know.
 #[must_use]
 pub fn known_drivers() -> Vec<String> {
@@ -297,6 +332,8 @@ fn known_forge(name: &str) -> bool {
 ///
 /// The order is [`ALL`]. The local guards are always selected; every
 /// other capability answers by its dimensions and its request.
+///
+/// SATISFIES project-profile:the-forge-gate-follows-the-merge-form
 #[must_use]
 #[allow(
     clippy::too_many_lines,
@@ -381,36 +418,80 @@ pub fn select(params: &Params, availability: &Availability) -> Vec<Selection> {
     };
     let automation_lands = automation.status == Status::Selected;
 
-    // The title gate: complete where the forge is known.
-    out.push(match forge {
-        None => Selection::omitted(
+    // The forge gate: complete where the forge is known, and the one the
+    // merge form names. Under `squash` the request's title becomes the
+    // trunk's commit, so the title gate judges it; under `rebase` every
+    // commit keeps its own message, so the commit gate judges each.
+    let (gate, zone, other, why_not) = match params.merge_form() {
+        MergeForm::Squash => (
             TITLE_CHECK,
-            Status::NotApplicable,
-            "the profile names no forge",
+            TITLE_GATE_ZONE,
+            COMMIT_CHECK,
+            "git.merge_form is squash, so the title gate judges the request",
         ),
-        Some(forge) if !forge_known => Selection::omitted(
+        MergeForm::Rebase => (
+            COMMIT_CHECK,
+            COMMIT_GATE_ZONE,
             TITLE_CHECK,
+            "git.merge_form is rebase, so the commit gate judges every commit of the request",
+        ),
+    };
+    // Where no request reaches the trunk, neither gate has anything to
+    // judge, and both say so rather than naming the merge form.
+    let no_gate = (!forge_gate_lands(params.integration(), params.release_mode())).then(|| {
+        format!(
+            "no forge gate lands: git.integration is local and the release is not automatic (profile.release.mode is {}), so no request reaches the trunk for a gate to judge",
+            params.release_mode().as_str()
+        )
+    });
+    let selected_gate = match forge {
+        None => Selection::omitted(gate, Status::NotApplicable, "the profile names no forge"),
+        Some(forge) if !forge_known => Selection::omitted(
+            gate,
             Status::Unknown,
             format!(
                 "the forge {forge} is not one this release drives; the forges are: github, gitlab"
             ),
         ),
+        Some(_) if no_gate.is_some() => Selection::omitted(
+            gate,
+            Status::NotApplicable,
+            no_gate.clone().unwrap_or_default(),
+        ),
         Some(forge) => {
-            let mut sources = availability.owned("_shared", forge, TITLE_CHECK);
+            let mut sources = availability.owned("_shared", forge, gate);
             if !automation_lands {
-                sources.extend(availability.owned(TITLE_GATE_ZONE, forge, TITLE_CHECK));
+                sources.extend(availability.owned(zone, forge, gate));
             }
             if sources.is_empty() {
                 Selection::omitted(
-                    TITLE_CHECK,
+                    gate,
                     Status::Unavailable,
-                    format!("this release ships no title gate for {forge}"),
+                    format!(
+                        "this release ships no {} gate for {forge}",
+                        if gate == TITLE_CHECK {
+                            "title"
+                        } else {
+                            "commit"
+                        }
+                    ),
                 )
             } else {
-                Selection::selected(TITLE_CHECK, sources, None)
+                Selection::selected(gate, sources, None)
             }
         }
-    });
+    };
+    let other_gate = no_gate.map_or_else(
+        || Selection::omitted(other, Status::NotRequested, why_not),
+        |reason| Selection::omitted(other, Status::NotApplicable, reason),
+    );
+    if gate == TITLE_CHECK {
+        out.push(selected_gate);
+        out.push(other_gate);
+    } else {
+        out.push(other_gate);
+        out.push(selected_gate);
+    }
 
     // The reporting policy.
     out.push(match forge {
@@ -607,7 +688,7 @@ pub fn pin_keys(selection: &Selection) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ALL, Availability, CODE_SCANNING, GUARDS, PACKAGING_NIX, RELEASE_AUTOMATION,
+        ALL, Availability, CODE_SCANNING, COMMIT_CHECK, GUARDS, PACKAGING_NIX, RELEASE_AUTOMATION,
         REPORTING_POLICY, SCORECARD, Status, TITLE_CHECK, WORKFLOW_GUARDS, owner_of, select,
     };
     use crate::landing::Params;
@@ -734,6 +815,80 @@ mod tests {
         assert_eq!(status_of(&selections, GUARDS), Status::Selected);
     }
 
+    /// A forge gate lands only where a request reaches the trunk: under
+    /// forge integration, or under an automatic release whose bot opens
+    /// one. A local, release-less landing selects neither gate on either
+    /// forge, and so lands no CI file; an external release integrated
+    /// locally takes none either, as the canon states it.
+    ///
+    /// SATISFIES project-profile:the-forge-gate-follows-the-merge-form
+    #[test]
+    fn workflow_only_local_landing_selects_no_forge_gate() {
+        use crate::landing::{Integration, MergeForm};
+        let availability = Availability::embedded();
+        for forge in ["github", "gitlab"] {
+            for form in [MergeForm::Squash, MergeForm::Rebase] {
+                for (mode, integration, lands) in [
+                    (ReleaseMode::None, Integration::Local, false),
+                    (ReleaseMode::External, Integration::Local, false),
+                    (ReleaseMode::None, Integration::Forge, true),
+                    (ReleaseMode::External, Integration::Forge, true),
+                ] {
+                    let mut params = Params::for_test_release_less(&[], Some(forge), mode);
+                    params.set_integration_for_test(integration);
+                    params.set_merge_form_for_test(form);
+                    let selections = select(&params, &availability);
+                    let (gate, other) = match form {
+                        MergeForm::Squash => (TITLE_CHECK, COMMIT_CHECK),
+                        MergeForm::Rebase => (COMMIT_CHECK, TITLE_CHECK),
+                    };
+                    let at = format!("{forge} {form:?} {mode:?} {integration:?}");
+                    let selection = selections
+                        .iter()
+                        .find(|s| s.id == gate)
+                        .expect("every capability answers");
+                    assert_eq!(selection.lands(), lands, "{at}");
+                    if !lands {
+                        assert_eq!(selection.status, Status::NotApplicable, "{at}");
+                        assert!(selection.sources.is_empty(), "{at}");
+                        let reason = selection.reason.as_deref().unwrap_or_default();
+                        assert!(reason.contains("no forge gate lands"), "{at}: {reason}");
+                        assert!(
+                            reason.contains("git.integration is local"),
+                            "{at}: {reason}"
+                        );
+                    }
+                    // The gate the form does not name gives the same real
+                    // reason where no gate lands, and the form's otherwise.
+                    let unnamed = selections
+                        .iter()
+                        .find(|s| s.id == other)
+                        .expect("every capability answers");
+                    let reason = unnamed.reason.as_deref().unwrap_or_default();
+                    if lands {
+                        assert_eq!(unnamed.status, Status::NotRequested, "{at}");
+                        assert!(reason.contains("git.merge_form is"), "{at}: {reason}");
+                    } else {
+                        assert_eq!(unnamed.status, Status::NotApplicable, "{at}");
+                        assert!(reason.contains("no forge gate lands"), "{at}: {reason}");
+                        assert!(!reason.contains("merge_form"), "{at}: {reason}");
+                    }
+                }
+            }
+            // An automatic release keeps its gate under local integration,
+            // because the bot's request still reaches the trunk.
+            let mut params = Params::for_test("acme/widget", Some(Style::Trunk));
+            params.set_pair_for_test("rust", forge);
+            params.set_integration_for_test(Integration::Local);
+            let selections = select(&params, &availability);
+            assert_eq!(
+                status_of(&selections, TITLE_CHECK),
+                Status::Selected,
+                "{forge}"
+            );
+        }
+    }
+
     /// An unknown forge keeps the guards and reports the rest unknown.
     #[test]
     fn an_unknown_forge_reads_as_unknown_and_lands_the_guards() {
@@ -766,5 +921,70 @@ mod tests {
         params.set_pair_for_test("bash", "github");
         let selections = select(&params, &availability);
         assert_eq!(status_of(&selections, CODE_SCANNING), Status::Unavailable);
+    }
+
+    /// The merge form picks the forge gate: the title gate under squash,
+    /// the commit gate under rebase, never both, and on GitLab with no
+    /// release automation the root pipeline that activates the chosen
+    /// fragment.
+    ///
+    /// SATISFIES project-profile:the-forge-gate-follows-the-merge-form
+    #[test]
+    fn commit_gate_replaces_the_title_gate_under_rebase() {
+        use crate::landing::{Integration, MergeForm};
+        let availability = Availability::embedded();
+        for integration in [Integration::Forge, Integration::Local] {
+            for (driver, forge) in [("rust", "github"), ("rust", "gitlab"), ("python", "gitlab")] {
+                let mut params = Params::for_test("acme/widget", Some(Style::Trunk));
+                params.set_pair_for_test(driver, forge);
+                params.set_integration_for_test(integration);
+                let squash = select(&params, &availability);
+                assert_eq!(status_of(&squash, TITLE_CHECK), Status::Selected);
+                assert_eq!(status_of(&squash, COMMIT_CHECK), Status::NotRequested);
+
+                params.set_merge_form_for_test(MergeForm::Rebase);
+                let rebase = select(&params, &availability);
+                assert_eq!(status_of(&rebase, TITLE_CHECK), Status::NotRequested);
+                let gate = rebase
+                    .iter()
+                    .find(|s| s.id == COMMIT_CHECK)
+                    .expect("the commit gate answers");
+                assert_eq!(gate.status, Status::Selected, "{driver} {forge}");
+                assert!(
+                    gate.sources.iter().all(|source| !source.contains("title")),
+                    "{:?}",
+                    gate.sources
+                );
+                let fragment = if forge == "github" {
+                    "_shared/github/.github/workflows/pr-commits.yml"
+                } else {
+                    "_shared/gitlab/.gitlab/ci/mr-commits.yml"
+                };
+                assert!(
+                    gate.sources.iter().any(|s| s == fragment),
+                    "{:?}",
+                    gate.sources
+                );
+                // Python automates no release on GitLab, so the commit
+                // gate's own root pipeline activates the fragment.
+                assert_eq!(
+                    gate.sources
+                        .iter()
+                        .any(|s| s == "_commit-gate/gitlab/.gitlab-ci.yml"),
+                    driver == "python",
+                    "{:?}",
+                    gate.sources
+                );
+            }
+        }
+        assert_eq!(
+            owner_of("_shared/github/.github/workflows/pr-commits.yml"),
+            Some(COMMIT_CHECK)
+        );
+        assert_eq!(
+            owner_of("_commit-gate/gitlab/.gitlab-ci.yml"),
+            Some(COMMIT_CHECK)
+        );
+        assert_eq!(ALL.len(), 9);
     }
 }

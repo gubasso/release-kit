@@ -10,10 +10,12 @@
   - [`git:the-trunk-name-is-a-parameter` — The trunk name is a parameter](#gitthe-trunk-name-is-a-parameter--the-trunk-name-is-a-parameter)
   - [`git:checkout-mode-selects-where-a-topic-branch-opens` — Checkout mode selects where a topic branch opens](#gitcheckout-mode-selects-where-a-topic-branch-opens--checkout-mode-selects-where-a-topic-branch-opens)
   - [`git:integration-mode-selects-the-authority-that-squashes` — Integration mode selects the authority that squashes](#gitintegration-mode-selects-the-authority-that-squashes--integration-mode-selects-the-authority-that-squashes)
+  - [`git:the-merge-form-is-a-landing-parameter` — The merge form is a landing parameter](#gitthe-merge-form-is-a-landing-parameter--the-merge-form-is-a-landing-parameter)
   - [`git:the-release-request-integrates-at-the-forge` — The release request integrates at the forge](#gitthe-release-request-integrates-at-the-forge--the-release-request-integrates-at-the-forge)
   - [`git:the-manual-stage-is-the-pre-integrate-contract` — The manual stage is the pre-integrate contract](#gitthe-manual-stage-is-the-pre-integrate-contract--the-manual-stage-is-the-pre-integrate-contract)
   - [`git:a-check-declares-where-it-runs` — A check declares where it runs](#gita-check-declares-where-it-runs--a-check-declares-where-it-runs)
   - [`git:a-local-integration-is-a-transaction` — A local integration is a transaction](#gita-local-integration-is-a-transaction--a-local-integration-is-a-transaction)
+  - [`git:a-rebase-integration-publishes-the-branch-tip` — A rebase integration publishes the branch tip](#gita-rebase-integration-publishes-the-branch-tip--a-rebase-integration-publishes-the-branch-tip)
   - [`git:a-local-integration-warns-of-an-uncounted-release` — A local integration warns of an uncounted release](#gita-local-integration-warns-of-an-uncounted-release--a-local-integration-warns-of-an-uncounted-release)
   - [`git:git-and-forge-terms-stay-explicit` — Git and forge terms stay explicit](#gitgit-and-forge-terms-stay-explicit--git-and-forge-terms-stay-explicit)
   - [`git:concurrent-pull-and-merge-requests-carry-the-tested-trunk` — Concurrent pull and merge requests carry the tested trunk](#gitconcurrent-pull-and-merge-requests-carry-the-tested-trunk--concurrent-pull-and-merge-requests-carry-the-tested-trunk)
@@ -22,7 +24,7 @@
 
 ## Purpose
 
-Rules governing the Git shape every target must have and the Git workflow parameters a target records: the non-bare repository, trunk-based development as the one development method, the trunk's name, the checkout mode a topic branch opens under, the integration mode that says which authority carries it onto the trunk, and the words shared prose uses for the two forges' review units. The protection domain in [the target configuration specification](./SPEC-target-config.md) and [the forge setup specification](./SPEC-forge-setup.md) owns how each forge enforces these rules. The project profile in [the project profile specification](./SPEC-project-profile.md) owns what the project is. This spec owns how changes reach its trunk.
+Rules governing the Git shape every target must have and the Git workflow parameters a target records: the non-bare repository, trunk-based development as the one development method, the trunk's name, the checkout mode a topic branch opens under, the integration mode that says which authority carries it onto the trunk, the merge form that says how its commits reach the trunk, and the words shared prose uses for the two forges' review units. The protection domain in [the target configuration specification](./SPEC-target-config.md) and [the forge setup specification](./SPEC-forge-setup.md) owns how each forge enforces these rules. The project profile in [the project profile specification](./SPEC-project-profile.md) owns what the project is. This spec owns how changes reach its trunk.
 
 ## Requirements
 
@@ -52,7 +54,7 @@ Verify: `rg -n 'development_method' src blocks && exit 1 || exit 0`
 
 ### `git:one-trunk-receives-pull-and-merge-requests` — One trunk receives pull and merge requests
 
-One configured trunk MUST receive every change through a short-lived topic branch, as one squash commit that passed every gate the project declared, so one implementation is one commit and the history stays linear. Where the recorded integration mode is `forge`, that squash MUST be a guarded pull request or merge request and the trunk MUST take no direct push.
+One configured trunk MUST receive every change through a short-lived topic branch that passed every gate the project declared, by the merge form the project records in `git.merge_form`: one squash commit, or the commits of the branch rebased on the trunk tip and fast-forwarded. Either form keeps the history linear, and the trunk MUST take no merge commit. Where the recorded integration mode is `forge`, that merge MUST be a guarded pull request or merge request and the trunk MUST take no direct push.
 
 #### Scenario: A change arrives outside a request
 
@@ -60,7 +62,7 @@ One configured trunk MUST receive every change through a short-lived topic branc
 - WHEN a direct push to the trunk is attempted
 - THEN the forge refuses it, and the landed hooks refuse the commit at the desk first
 
-Verify: `cargo nextest run -E 'test(the_applied_trunk_ruleset_requires_a_fresh_branch) or test(a_gitlab_protect_trunk_apply_asserts_the_squash_template)'`
+Verify: `cargo nextest run -E 'test(the_applied_trunk_ruleset_requires_a_fresh_branch) or test(a_gitlab_protect_trunk_apply_asserts_the_squash_template) or test(merge_form)'`
 
 ### `git:the-trunk-name-is-a-parameter` — The trunk name is a parameter
 
@@ -88,7 +90,7 @@ Verify: `cargo nextest run -E 'test(the_checkout_mode_rename_reaches_no_landed_b
 
 ### `git:integration-mode-selects-the-authority-that-squashes` — Integration mode selects the authority that squashes
 
-The integration mode, `git.integration`, MUST be one of `local` and `forge`, MUST be a recorded landing parameter resolved from a flag, the committed configuration, a compatible record, and a compiled default of `local` in that order, and MUST change only through a landing verb. It MUST decide only which authority performs the squash onto the trunk and MUST change no branch semantics and no checkout mode. A per-execution override MUST select the other authority for one integration without writing the record. A record predating this parameter MUST resolve to `forge`, because that is the authority such a target landed.
+The integration mode, `git.integration`, MUST be one of `local` and `forge`, MUST be a recorded landing parameter resolved from a flag, the committed configuration, a compatible record, and a compiled default of `local` in that order, and MUST change only through a landing verb. It MUST decide only which authority performs the integration onto the trunk, in the recorded merge form, and MUST change no branch semantics, no checkout mode, and no merge form. A per-execution override MUST select the other authority for one integration without writing the record. A record predating this parameter MUST resolve to `forge`, because that is the authority such a target landed.
 
 #### Scenario: A target landed before the axis existed
 
@@ -97,6 +99,24 @@ The integration mode, `git.integration`, MUST be one of `local` and `forge`, MUS
 - THEN it resolves `forge`, and a fresh landing with the same silence resolves `local`
 
 Verify: `cargo nextest run -E 'test(integration) or test(params_from_a_record)'`
+
+### `git:the-merge-form-is-a-landing-parameter` — The merge form is a landing parameter
+
+The merge form, `git.merge_form`, MUST be one of `squash` and `rebase`, MUST be a recorded landing parameter resolved from a flag, the committed configuration, a compatible record, and a compiled default of `squash` in that order, MUST change only through a landing verb, and MUST decide only how the commits of a branch reach the trunk under either integration mode: `squash` writes one commit for the branch, and `rebase` keeps every commit of the branch with its own message. A record predating this parameter MUST resolve to `squash`, because that is the form such a target landed. Under `rebase` the forge path of `rk integrate` MUST name a request command that asks for no squash, and its guidance MUST say that every commit of the branch reaches the trunk with its own message and passes the commit-msg judgment. The key has two legal values, so `git:the-method-is-trunk-based` admits it.
+
+#### Scenario: A target landed before the merge form existed
+
+- GIVEN a record at a schema below the one that carries `git.merge_form`
+- WHEN a landing verb resolves the parameter with no flag and no configured value
+- THEN it resolves `squash`, and the landed blocks and the forge settings stay as they were
+
+#### Scenario: A rebase target sends a branch through the forge
+
+- GIVEN a GitLab target whose recorded merge form is `rebase`
+- WHEN `rk integrate --forge <branch>` names the request command
+- THEN the command carries no `--squash-before-merge`, and the guidance says that each commit reaches the trunk with its own message
+
+Verify: `cargo nextest run -E 'test(merge_form)'`
 
 ### `git:the-release-request-integrates-at-the-forge` — The release request integrates at the forge
 
@@ -142,13 +162,31 @@ Verify: `cargo nextest run -E 'test(a_landed_sweep_note_invites_the_projects_own
 
 ### `git:a-local-integration-is-a-transaction` — A local integration is a transaction
 
-A local integration MUST leave the trunk where it stood unless every check passed, and MUST reach that by publishing late rather than by undoing: it MUST gate before it builds, MUST build the squash commit as an object no ref names, and MUST publish it with one compare-and-swap carrying the trunk tip observed before the gate ran, so a trunk that moved under the gate refuses with nothing written and no tip to restore. It MUST observe the branch before the gate, use that one object for both the tree it integrates and the tip its evidence certifies, and re-observe it after the gate, refusing on any movement, so the tree the gate judged is the tree that reaches the trunk. It MUST read and judge its evidence ledger before it builds anything, and MUST stage that evidence before the publication, so every fallible part of writing it happens with the trunk unmoved. It MUST apply the whole landed `commit-msg` judgment to the trunk message, because the command that writes the commit fires no hook. It MUST take a lock so a second integration in the same clone refuses rather than waits, and it MUST never push and never force-push.
+A local integration MUST leave the trunk where it stood unless every check passed, and MUST reach that by publishing late rather than by undoing: it MUST gate before it builds, MUST move no trunk ref before the publication, and MUST publish one commit object against the trunk tip observed before the gate ran, so a trunk that moved under the gate refuses with nothing written and no tip to restore. Where no worktree holds the trunk, it MUST publish with one compare-and-swap of the trunk ref carrying that observed tip. Where a worktree holds the trunk, it MUST re-observe the trunk and its holder immediately before the publication, refuse on any difference in either, fast-forward that worktree to the object, and then confirm that the move started at the observed tip and ended at the object, from the trunk's reflog or from the fast-forward's own report of the move in full object names, accepting only an exact match of both. Git offers no compare-and-swap for a checked-out branch that also updates its worktree, so a writer outside rk can still move the trunk between the re-observation and the fast-forward. Once the fast-forward succeeded the trunk is published, and nothing after it MUST be reported as a refusal of an unchanged trunk: where a source shows the move started elsewhere, or where no source confirms the move because a reflog is missing, too short, or unreadable, the report is missing or abbreviated, or two sources disagree, the integration MUST NOT roll the trunk back or reset it, MUST report the integration as published, and MUST exit nonzero with the reason `state-drift`, naming the published object, the observed tip, and the commit the move started at or the reason the start is unconfirmed. The same holds for the fast-forward that brings a held trunk level with its remote before the gate: one that completed and is not confirmed refuses the integration, saying the trunk was refreshed to its remote tip and that no integration was published. Under `squash` it MUST build that object as a squash commit no ref names, and under `rebase` it MUST build no new commit and publish the rebased branch tip, as `git:a-rebase-integration-publishes-the-branch-tip` binds. It MUST observe the branch before the gate, use that one object for both the tree it integrates and the tip its evidence certifies, and re-observe it after the gate, refusing on any movement, so the tree the gate judged is the tree that reaches the trunk. It MUST read and judge its evidence ledger before it builds anything, and MUST stage that evidence before the publication, so every fallible part of writing it happens with the trunk unmoved. It MUST apply the whole landed `commit-msg` judgment to every message it publishes onto the trunk, because the command that moves the trunk fires no hook. It MUST take a lock so a second integration in the same clone refuses rather than waits, and it MUST never push and never force-push.
 
 #### Scenario: The trunk moves while the gate runs
 
-- GIVEN a local integration whose trunk advanced between the tip it observed and its publication
+- GIVEN a local integration whose trunk no worktree holds, and whose trunk advanced between the tip it observed and its publication
 - WHEN the compare-and-swap runs
 - THEN it refuses naming both tips, no ref moved, and the staged evidence is inert because the trunk does not reach the commit it names
+
+#### Scenario: A held trunk moves while the gate runs
+
+- GIVEN a local integration whose trunk is checked out in a worktree, and a gate that fast-forwards that trunk to a commit of the branch
+- WHEN the publication re-observes the trunk and its holder
+- THEN it refuses naming both tips, the trunk stays where the gate left it, and nothing is written
+
+#### Scenario: A held trunk's move cannot be confirmed
+
+- GIVEN a local integration whose held trunk's reflog holds one entry after the fast-forward, as a reftable reflog does after an expiry with ordinary logging off
+- WHEN the publication reads the move back
+- THEN the fast-forward's own full-name report confirms it and the integration succeeds, and where neither the reflog nor that report confirms it, the integration reports the publication, exits nonzero with `state-drift`, and says the start of the move is unconfirmed, never that the trunk stands where it stood
+
+#### Scenario: The trunk is checked out while the gate runs
+
+- GIVEN a local integration whose trunk no worktree held at the observation, and a gate that checks the trunk out in a new worktree
+- WHEN the publication re-observes the trunk and its holder
+- THEN it refuses naming the new holder, and the trunk and that worktree stay where they were
 
 #### Scenario: The branch advances while the gate runs
 
@@ -163,6 +201,30 @@ A local integration MUST leave the trunk where it stood unless every check passe
 - THEN it ignores the entry and the branch keeps everything, because the proof is the trunk carrying the work and never the ledger saying so
 
 Verify: `cargo nextest run -E 'test(integrate)'`
+
+### `git:a-rebase-integration-publishes-the-branch-tip` — A rebase integration publishes the branch tip
+
+Where the recorded merge form is `rebase`, a local integration MUST rebase the branch on the trunk tip, run the `manual` stage, refuse when the branch moved during the gate, judge the message of every commit between the trunk and the branch tip with the whole landed `commit-msg` judgment, and move the trunk to the branch tip by the publication of `git:a-local-integration-is-a-transaction`, writing no new commit. Its rebase MUST flatten every merge and move no other ref, whatever the Git configuration asks, and the published range MUST hold no merge commit, whatever the Git configuration: the range is read back before the publication, and a merge commit in it refuses with the trunk unmoved. Its ledger entry MUST name the branch tip as the integrated commit, and it MUST refuse a trunk message given with `-m`, because every commit keeps its own message.
+
+#### Scenario: A branch of three commits integrates by rebase
+
+- GIVEN a local target whose recorded merge form is `rebase`, and a branch of three commits behind the trunk tip
+- WHEN `rk integrate <branch> --apply` runs
+- THEN the trunk carries the same three commits in order with their own messages, no merge commit, and a tip equal to the branch tip, and the ledger entry names that tip
+
+#### Scenario: The clone asks every rebase to keep merges
+
+- GIVEN the same target, whose Git configuration sets `rebase.rebaseMerges` and `rebase.updateRefs`, a branch that merged a side branch with valid messages, and a second branch at a commit of the range
+- WHEN `rk integrate <branch> --apply` runs
+- THEN the trunk carries a range with no merge commit, the second branch does not move, and a range that still held a merge would refuse with the trunk unmoved
+
+#### Scenario: One commit of the branch fails the judgment
+
+- GIVEN the same target, and a branch whose second commit carries agent attribution
+- WHEN `rk integrate <branch> --apply` runs, or runs with `-m`
+- THEN it refuses naming that commit, or naming `-m`, and the trunk does not move
+
+Verify: `cargo nextest run -E 'test(rebase_integrate)'`
 
 ### `git:a-local-integration-warns-of-an-uncounted-release` — A local integration warns of an uncounted release
 
@@ -196,7 +258,7 @@ Verify: `rg -ln 'ForgeRequest' method bindings runbooks forges skills skill-shar
 
 ### `git:concurrent-pull-and-merge-requests-carry-the-tested-trunk` — Concurrent pull and merge requests carry the tested trunk
 
-A merge MUST carry the trunk it was tested against. On GitHub the protection domain enforces it through `protection.strict_required_status_checks` in both integration modes. A local integrator's repository-administrator role MAY bypass the ruleset carrying that rule for the deliberate trunk push, but the release App MUST NOT be a bypass actor, so its stale release request remains refused. That bypass MUST NOT reach the deletion and force-push rules, which a bypass actor would otherwise excuse along with the rest of its ruleset, so they hold in a ruleset of their own. On GitLab the protection domain enforces freshness through `protection.gitlab.merge_method = "ff"`, so a rebase is part of the GitLab path. The protection domain owns both mappings, and this convention refuses a merge queue on GitHub because the landed CI workflows carry no `merge_group` trigger and a queued merge would wait on a check that never reports.
+A merge MUST carry the trunk it was tested against. On GitHub the protection domain enforces it through `protection.strict_required_status_checks` in both integration modes wherever a forge gate lands, and a target where none lands merges no request at the forge. A local integrator's repository-administrator role MAY bypass the ruleset carrying that rule for the deliberate trunk push, but the release App MUST NOT be a bypass actor, so its stale release request remains refused. That bypass MUST NOT reach the deletion and force-push rules, which a bypass actor would otherwise excuse along with the rest of its ruleset, so they hold in a ruleset of their own. On GitLab the protection domain enforces freshness through `protection.gitlab.merge_method = "ff"`, so a rebase is part of the GitLab path. The protection domain owns both mappings, and this convention refuses a merge queue on GitHub because the landed CI workflows carry no `merge_group` trigger and a queued merge would wait on a check that never reports.
 
 #### Scenario: The two forges enforce one rule
 

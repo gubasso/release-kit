@@ -202,6 +202,24 @@ mod tests {
                 RkError::refusal(Diagnostic::new(Reason::TargetBusy, "another run holds it")),
                 73,
             ),
+            // An argument the recorded merge form does not take refuses
+            // with the target untouched, like every refusal.
+            (
+                RkError::refusal(Diagnostic::new(
+                    Reason::MergeFormMismatch,
+                    "-m under rebase",
+                )),
+                73,
+            ),
+            // A flag that contradicts a preset refuses before any write,
+            // naming the flag and the preset.
+            (
+                RkError::refusal(Diagnostic::new(
+                    Reason::PresetContradiction,
+                    "--integration forge contradicts --workflow-only",
+                )),
+                73,
+            ),
             (RkError::Other(anyhow::anyhow!("unclassified")), 70),
         ];
         for (err, code) in cases {

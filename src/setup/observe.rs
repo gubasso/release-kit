@@ -27,12 +27,14 @@ pub type Runner<'a> = dyn FnMut(&Exec) -> Result<Outcome, RkError> + 'a;
 // default branch and the retired second branch, so a target that names
 // none behaves exactly as it did.
 
-// The landed title check's context is the job in `pr-title.yml` that
-// holds the squash title to the commit convention. The target names it in
-// `protection.title_check`, read through `Ctx::title_check`; the landed
-// job keeps its own name as a source constant, so a target that renames
-// the key without renaming the job breaks its own trunk protection and
-// this observer reports it.
+// The landed forge gate's context is the job in `pr-title.yml` that holds
+// the squash title to the commit convention under `squash`, or the job in
+// `pr-commits.yml` that holds every commit of the request to it under
+// `rebase`. The target names the title check in `protection.title_check`,
+// read through `Ctx::title_check`, which answers the commit gate's job
+// under `rebase`; the landed job keeps its own name as a source constant,
+// so a target that renames the key without renaming the job breaks its
+// own trunk protection and this observer reports it.
 
 const GITLAB_PRIVATE_REPORTING_LIMITATION: &str = "GitLab has no project-level private reporting switch; the reporter must enable confidentiality; this proves project feature access, not successful submission by every external reporter";
 
@@ -765,7 +767,7 @@ fn github(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
             let mut unknowns = Vec::new();
             // Every satisfied step's limitation survives the aggregate.
             let mut limitations: Vec<String> = Vec::new();
-            for owned in ["protect-trunk", "protect-tags", "protect-release-lines"] {
+            for owned in owned_protections(ctx) {
                 match github(ctx, owned, run)? {
                     StepState::Satisfied {
                         limitation: found, ..
@@ -815,6 +817,18 @@ fn github(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
         }
         _ => Ok(StepState::unknown(format!("no observation for {step}"))),
     }
+}
+
+/// The protection steps `protections-check` aggregates for one target: the
+/// trunk, the release tags wherever the release mode is not `none`, and
+/// the optional release lines.
+fn owned_protections(ctx: &Ctx) -> Vec<&'static str> {
+    let mut owned = vec!["protect-trunk"];
+    if ctx.tag_protection() {
+        owned.push("protect-tags");
+    }
+    owned.push("protect-release-lines");
+    owned
 }
 
 /// The installation, observed as the App itself.
@@ -998,12 +1012,7 @@ fn github_trunk_ruleset(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkErro
         faults.push("the bypass actors do not match the recorded authority".to_owned());
     }
     faults.extend(trunk_rule_faults(ctx, &rules, &name));
-    if let Some(request) = rules.iter().find(|rule| rule["type"] == "pull_request")
-        && request["parameters"]["allowed_merge_methods"]
-            != serde_json::json!(ctx.protection().allowed_merge_methods)
-    {
-        faults.push("the merge method is not exactly a squash merge".to_owned());
-    }
+    faults.extend(merge_method_fault(ctx, &rules));
     if let Some(checks) = rules
         .iter()
         .find(|rule| rule["type"] == "required_status_checks")
@@ -1044,7 +1053,7 @@ fn github_trunk_ruleset(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkErro
             faults.push(format!("the {} check is not required", ctx.title_check()));
         }
     }
-    match squash_merge_sources(ctx, run)? {
+    match repository_merge_settings(ctx, run)? {
         MergeSources::Owned => {}
         MergeSources::Faults(proven) => faults.extend(proven),
         // Proven drift wins over an outage: an unreadable settings read
@@ -1075,6 +1084,20 @@ fn github_trunk_ruleset(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkErro
         "{name} holds the release-merge shape beside {}",
         ctx.safety_ruleset()
     )))
+}
+
+/// The fault of a request rule allowing any merge method but the one the
+/// recorded merge form names.
+fn merge_method_fault(ctx: &Ctx, rules: &[Value]) -> Option<String> {
+    let request = rules.iter().find(|rule| rule["type"] == "pull_request")?;
+    (request["parameters"]["allowed_merge_methods"]
+        != serde_json::json!(ctx.protection().allowed_merge_methods))
+    .then(|| {
+        format!(
+            "the merge method is not exactly a {} merge",
+            ctx.merge_form().as_str()
+        )
+    })
 }
 
 /// Which rules the trunk ruleset must carry, and which it must not.
@@ -1188,6 +1211,9 @@ fn github_safety_ruleset(ctx: &Ctx, run: &mut Runner) -> Result<SafetyRuleset, R
 /// merge is intent, no file states it, and `forges/github.md` carries that
 /// as a convention instead.
 fn gate_faults(ctx: &Ctx) -> Option<String> {
+    if !ctx.forge_gate() {
+        return None;
+    }
     let check = ctx.required_check.as_deref()?;
     let shape = workflow_jobs::faults(
         &workflow_jobs::read_gate(&ctx.target, check, ctx.trunk()),
@@ -1211,9 +1237,9 @@ fn gate_faults(ctx: &Ctx) -> Option<String> {
     }
 }
 
-/// What the repository's squash message settings hold.
+/// What the repository's merge settings hold.
 enum MergeSources {
-    /// The request's title and body, as the setup owns.
+    /// The settings the recorded merge form needs, as the setup owns.
     Owned,
     /// Proven other values, one fault line each.
     Faults(Vec<String>),
@@ -1221,29 +1247,42 @@ enum MergeSources {
     Unreadable(String),
 }
 
-/// The squash message sources, repository settings beside the ruleset:
-/// with the title source unset, a one-commit request offers that commit's
-/// own subject as the trunk's message, which the bot then reads for the
-/// version; with the message source on another value, the trunk's body is
-/// not the request's description the content gates judged. One GET
-/// answers for both, each faulted by name.
-fn squash_merge_sources(ctx: &Ctx, run: &mut Runner) -> Result<MergeSources, RkError> {
+/// The repository's own merge settings, beside the ruleset, as the
+/// recorded merge form needs them. One GET answers for each form.
+///
+/// Under `squash` they are the squash message sources: with the title
+/// source unset, a one-commit request offers that commit's own subject as
+/// the trunk's message, which the bot then reads for the version; with the
+/// message source on another value, the trunk's body is not the request's
+/// description the content gates judged. Each is faulted by name.
+///
+/// Under `rebase` it is the repository switch `allow_rebase_merge`. The
+/// ruleset allows the rebase merge alone, and a repository that disallows
+/// it offers no merge method at all, so a request can never merge. A
+/// switch that is missing or not a boolean is a fault rather than a pass,
+/// and no squash source is read, because no rebase merge reads one.
+fn repository_merge_settings(ctx: &Ctx, run: &mut Runner) -> Result<MergeSources, RkError> {
+    let squash = ctx.merge_form() == crate::landing::MergeForm::Squash;
     Ok(match api_get(ctx, run, &format!("repos/{}", ctx.repo))? {
         Api::Ok(body) => {
             let mut faults = Vec::new();
-            let owned_title = ctx.protection().github.squash_title_source.as_str();
-            let owned_body = ctx.protection().github.squash_body_source.as_str();
-            if body["squash_merge_commit_title"] != owned_title {
-                faults.push(format!(
-                    "the squash title source is {} where the setup owns {owned_title}",
-                    body["squash_merge_commit_title"]
-                ));
-            }
-            if body["squash_merge_commit_message"] != owned_body {
-                faults.push(format!(
-                    "the squash message source is {} where the setup owns {owned_body}",
-                    body["squash_merge_commit_message"]
-                ));
+            if squash {
+                let owned_title = ctx.protection().github.squash_title_source.as_str();
+                let owned_body = ctx.protection().github.squash_body_source.as_str();
+                if body["squash_merge_commit_title"] != owned_title {
+                    faults.push(format!(
+                        "the squash title source is {} where the setup owns {owned_title}",
+                        body["squash_merge_commit_title"]
+                    ));
+                }
+                if body["squash_merge_commit_message"] != owned_body {
+                    faults.push(format!(
+                        "the squash message source is {} where the setup owns {owned_body}",
+                        body["squash_merge_commit_message"]
+                    ));
+                }
+            } else if let Some(fault) = rebase_switch_fault(body["allow_rebase_merge"].as_bool()) {
+                faults.push(fault);
             }
             if faults.is_empty() {
                 MergeSources::Owned
@@ -1254,6 +1293,19 @@ fn squash_merge_sources(ctx: &Ctx, run: &mut Runner) -> Result<MergeSources, RkE
         Api::Missing => MergeSources::Faults(vec![format!("the forge does not know {}", ctx.repo)]),
         Api::Failed(err) => MergeSources::Unreadable(err),
     })
+}
+
+/// The fault of the repository's `allow_rebase_merge` switch under the
+/// `rebase` merge form, or `None` where it is on.
+fn rebase_switch_fault(allowed: Option<bool>) -> Option<String> {
+    match allowed {
+        Some(true) => None,
+        Some(false) => Some(
+            "the repository disallows rebase merges (allow_rebase_merge is false), so the ruleset's one merge method is refused and no request can merge"
+                .to_owned(),
+        ),
+        None => Some("the repository's allow_rebase_merge switch is missing or unreadable".to_owned()),
+    }
 }
 
 /// One ruleset lookup by name: found, provably absent, or unreadable —
@@ -1324,6 +1376,28 @@ const STALE_MERGE_FAULT: &str = "the trunk permits a merge from a branch that do
 /// The GitLab limitation `protect-trunk` and `protections-check` report:
 /// the title gate rides the request's own pipeline on this forge.
 const GITLAB_TITLE_LIMITATION: &str = "the title gate stops accident, not authority: a merge request runs its own CI configuration, and a title edit starts no new pipeline";
+
+/// The fault of an observed pipeline requirement against the forge gate's
+/// answer, or `None` where the two agree.
+///
+/// SATISFIES target-config:the-effective-protection-follows-the-profile
+fn pipeline_fault(forge_gate: bool, observed: Option<bool>) -> Option<String> {
+    match (forge_gate, observed) {
+        (true, Some(true)) | (false, Some(false)) => None,
+        (true, Some(false)) => Some("the pipeline requirement is off".to_owned()),
+        (false, Some(true)) => Some(
+            "the pipeline requirement is on, and no forge gate lands to run a pipeline, so no merge request can merge"
+                .to_owned(),
+        ),
+        (_, None) => Some("the pipeline requirement is missing or unreadable".to_owned()),
+    }
+}
+
+/// The same limitation under the `rebase` form: the commit gate rides the
+/// request's own pipeline too, and every push starts one, so only the
+/// first half holds.
+const GITLAB_COMMIT_LIMITATION: &str =
+    "the commit gate stops accident, not authority: a merge request runs its own CI configuration";
 
 #[allow(
     clippy::too_many_lines,
@@ -1560,23 +1634,50 @@ fn gitlab(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
             if protection["allow_force_push"] != false {
                 faults.push(format!("{trunk} allows force pushes"));
             }
-            if settings["only_allow_merge_if_pipeline_succeeds"] != true {
-                faults.push("the pipeline requirement is off".to_owned());
+            // The pipeline is required exactly where a forge gate lands to
+            // run in it. With none, no pipeline runs, so a requirement left
+            // on would hold every merge request; it is judged in both
+            // directions, and a value that cannot be read is no answer.
+            if let Some(fault) = pipeline_fault(
+                ctx.forge_gate(),
+                settings["only_allow_merge_if_pipeline_succeeds"].as_bool(),
+            ) {
+                faults.push(fault);
             }
             if settings["merge_method"] != policy.gitlab.merge_method.as_str() {
                 faults.push("the merge method is not fast-forward".to_owned());
             }
+            let squash = ctx.merge_form() == crate::landing::MergeForm::Squash;
             if settings["squash_option"] != policy.gitlab.squash_option.as_str() {
-                faults.push("merge requests do not always squash".to_owned());
+                faults.push(if squash {
+                    "merge requests do not always squash".to_owned()
+                } else {
+                    "merge requests may squash, so a request's commits would not keep their own messages".to_owned()
+                });
             }
-            if settings["squash_commit_template"] != policy.gitlab.squash_commit_template.as_str() {
+            // The template is the squash commit's message source, so it is
+            // asserted only where a merge squashes.
+            if squash
+                && settings["squash_commit_template"]
+                    != policy.gitlab.squash_commit_template.as_str()
+            {
                 faults.push("the squash template is not the merge request's title".to_owned());
             }
             Ok(if faults.is_empty() {
-                StepState::ok_with_limitation(
-                    format!("{trunk} holds the release-merge shape"),
-                    GITLAB_TITLE_LIMITATION,
-                )
+                let detail = format!("{trunk} holds the release-merge shape");
+                if ctx.forge_gate() {
+                    StepState::ok_with_limitation(
+                        detail,
+                        if squash {
+                            GITLAB_TITLE_LIMITATION
+                        } else {
+                            GITLAB_COMMIT_LIMITATION
+                        },
+                    )
+                } else {
+                    // No gate lands, so no gate's limitation applies.
+                    StepState::ok(detail)
+                }
             } else {
                 StepState::not(faults.join("; "))
             })
@@ -1631,7 +1732,7 @@ fn gitlab(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
             // Every satisfied step's limitation survives the aggregate: a
             // first limitation must not shadow a second.
             let mut limitations: Vec<String> = Vec::new();
-            for owned in ["protect-trunk", "protect-tags", "protect-release-lines"] {
+            for owned in owned_protections(ctx) {
                 match gitlab(ctx, owned, run)? {
                     StepState::Satisfied {
                         limitation: found, ..
@@ -1661,5 +1762,43 @@ fn gitlab(ctx: &Ctx, step: &str, run: &mut Runner) -> Result<StepState, RkError>
             })
         }
         _ => Ok(StepState::unknown(format!("no observation for {step}"))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// The repository's rebase switch passes only where it reads on.
+    #[test]
+    fn merge_form_rebase_switch_is_judged() {
+        assert_eq!(super::rebase_switch_fault(Some(true)), None);
+        assert!(
+            super::rebase_switch_fault(Some(false))
+                .is_some_and(|fault| fault.contains("allow_rebase_merge is false"))
+        );
+        assert!(
+            super::rebase_switch_fault(None)
+                .is_some_and(|fault| fault.contains("missing or unreadable"))
+        );
+    }
+
+    /// The pipeline requirement is judged in both directions, and a value
+    /// that cannot be read is never ready.
+    ///
+    /// SATISFIES target-config:the-effective-protection-follows-the-profile
+    #[test]
+    fn release_less_pipeline_requirement_is_judged_both_ways() {
+        assert_eq!(super::pipeline_fault(true, Some(true)), None);
+        assert_eq!(super::pipeline_fault(false, Some(false)), None);
+        for (gate, observed) in [
+            (true, Some(false)),
+            (false, Some(true)),
+            (true, None),
+            (false, None),
+        ] {
+            assert!(
+                super::pipeline_fault(gate, observed).is_some(),
+                "gate {gate}, observed {observed:?}"
+            );
+        }
     }
 }

@@ -1,0 +1,93 @@
+# The commit gate. Under the rebase merge form every commit of the request
+#RK_IF_RELEASE_ reaches the trunk with its own message, and the bot derives the version
+#RK_IF_RELEASE_ and the changelog from those messages, so this check holds every commit
+#RK_IF_RELEASE_ between the target branch and the request's head to a scoped
+#RK_IF_RELEASE_ Conventional Commit, and every message to the content guards, before the
+#RK_IF_NO_RELEASE_ reaches the trunk with its own message, so this check holds every commit
+#RK_IF_NO_RELEASE_ between the target branch and the request's head to a Conventional
+#RK_IF_NO_RELEASE_ Commit, whose scope is preferred and not required, and every message to
+#RK_IF_NO_RELEASE_ the content guards, before the
+# merge is offered. It runs again on each push to the request, so a commit
+# pushed after a first pass is judged too. The trunk ruleset requires it by
+# the job name pr-commits, beside the project's own check.
+#
+# pull_request_target runs the trunk's own copy of this file, so a request
+# cannot edit the check it must pass; nothing here checks out or executes
+# the request's code. The commits come from the forge's API, and the title
+# and every message reach the shell as data, never through template
+# interpolation.
+
+name: pr-commits
+
+on:
+  # zizmor: ignore[dangerous-triggers] the trigger is what makes this gate
+  # unforgeable, and the header above states why it is safe here.
+  pull_request_target:
+    types: [opened, edited, reopened, synchronize]
+
+permissions: {}
+
+jobs:
+  pr-commits:
+    name: pr-commits
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: every commit is a RK_SCOPEDConventional Commit with clean content
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          COUNT: ${{ github.event.pull_request.commits }}
+          TITLE: ${{ github.event.pull_request.title }}
+        # The bot's own release request is exempt whole, exactly as the
+        # title check exempts it: its title is the bot alternative, and the
+        # release automation authors its commits and body, generated-with
+        # line and bot co-author included. No checkout happens here, so the
+        # gate cannot consult check-ignore; it greps the fixed guard list,
+        # duplicated from blocks/message-guards and held equal by a test in
+        # the rk repository, and the landed commit-msg hooks stay the
+        # stronger, ignore-aware check.
+        run: |
+          printf '%s' "$TITLE" | grep -Eq \
+            '^chore(\((release|master|main)\))?: (release|v).+$' \
+            && exit 0
+          listing="$(gh api --paginate "repos/$REPO/pulls/$NUMBER/commits" \
+            --jq '.[] | .sha + " " + (.commit.message | @base64)')"
+          fail=0
+          listed=0
+          while read -r sha encoded; do
+            [ -n "$sha" ] || continue
+            listed=$((listed + 1))
+            message="$(printf '%s' "$encoded" | base64 -d)"
+            subject="$(printf '%s\n' "$message" | head -n 1)"
+            commit="$(printf '%s' "$sha" | cut -c 1-12)"
+            if ! printf '%s' "$subject" | grep -Eq \
+              '^((build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)RK_SCOPE_OPEN\((RK_SCOPE_SHAPE)\)RK_SCOPE_CLOSE!?: .+|chore(\((release|master|main)\))?: (release|v).+)$'; then
+              RK_IF_RELEASE_echo "commit $commit: the subject '$subject' must read type(scope) then a colon and a description, with the scope lowercase letters, digits, and _ . / -"
+              RK_IF_NO_RELEASE_echo "commit $commit: the subject '$subject' must read type or type(scope) then a colon and a description, with any scope lowercase letters, digits, and _ . / -"
+              fail=1
+            fi
+            while IFS='|' read -r class pattern; do
+              if printf '%s' "$message" | grep -Eq "$pattern"; then
+                echo "commit $commit: the message carries a $class finding: a line matches $pattern"
+                fail=1
+              fi
+            done <<'GUARDS'
+          attribution|[Gg]enerated with \[?Claude
+          attribution|🤖 Generated with
+          attribution|[Cc]o-[Aa]uthored-[Bb]y:.*([Cc]laude|[Cc]opilot|Codex|ChatGPT)
+          attribution|noreply@anthropic\.com
+          internal-path|(^|[^A-Za-z0-9])\.draft/
+          GUARDS
+          done <<<"$listing"
+          # The forge lists at most 250 commits of a request. A gate that
+          # judged fewer than the request carries would pass commits it
+          # never read, so a short listing fails rather than passing.
+          if [ "$listed" -ne "$COUNT" ]; then
+            echo "the forge listed $listed of the request's $COUNT commits, and this gate judges every commit or none; split the request"
+            fail=1
+          fi
+          exit "$fail"

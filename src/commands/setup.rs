@@ -575,7 +575,7 @@ fn preview(out: Output, ctx: &Ctx, steps: &[&StepSpec]) -> Result<(), RkError> {
             idx + 1,
             steps.len(),
             step.name,
-            step.proves
+            step.proves_for(ctx)
         ));
         let stance = stance(&engine.ctx, step);
         if !stance.acts() {
@@ -761,7 +761,7 @@ fn execute(
             idx + 1,
             steps.len(),
             step.name,
-            step.proves
+            step.proves_for(&engine.ctx)
         ));
         let mut started = engine.event(EventKind::StepStarted, Some(step.name));
         started.status = Some("running".into());
@@ -904,7 +904,7 @@ fn apply_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
                             Reason::SubprocessFailed,
                             format!("package-check failed: {detail}"),
                         )
-                        .expected(step.proves.to_owned())
+                        .expected(step.proves_for(&engine.ctx).to_owned())
                         .step(step.name),
                     ))
                 }
@@ -927,7 +927,7 @@ fn apply_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
             StepState::Unsatisfied { detail } | StepState::Inapplicable { detail } => {
                 Err(RkError::refusal(
                     Diagnostic::new(Reason::PrerequisiteUnmet, detail)
-                        .expected(step.proves.to_owned())
+                        .expected(step.proves_for(&engine.ctx).to_owned())
                         .action("upgrade the instance, or host the project on gitlab.com")
                         .target_state("unchanged")
                         .step(step.name),
@@ -1101,7 +1101,7 @@ fn apply_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
                             Reason::StateDrift,
                             format!("protections-check passed its script and the observation disagrees: {detail}"),
                         )
-                        .expected(step.proves.to_owned())
+                        .expected(step.proves_for(&engine.ctx).to_owned())
                         .step(step.name),
                     ))
                 }
@@ -1114,7 +1114,7 @@ fn apply_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
                             "protections-check passed its script and the readback could not confirm it: {detail}"
                         ),
                     )
-                    .expected(step.proves.to_owned())
+                    .expected(step.proves_for(&engine.ctx).to_owned())
                     .action("check authentication and connectivity, then rerun")
                     .step(step.name),
                 )),
@@ -1299,7 +1299,7 @@ fn run_forge_step_with(
                         step.name
                     ),
                 )
-                .expected(step.proves.to_owned())
+                .expected(step.proves_for(&engine.ctx).to_owned())
                 .step(step.name),
             ))
         }
@@ -1314,7 +1314,7 @@ fn run_forge_step_with(
                     step.name
                 ),
             )
-            .expected(step.proves.to_owned())
+            .expected(step.proves_for(&engine.ctx).to_owned())
             .action(format!(
                 "rk setup step {} --target {} --apply re-asserts and re-proves it",
                 step.name, engine.ctx.target
@@ -1687,7 +1687,7 @@ fn classify_failure(engine: &Engine, step: &StepSpec, outcome: &Outcome) -> RkEr
         Reason::SubprocessFailed
     };
     let diagnostic = Diagnostic::new(reason, format!("the forge refused '{}': {last}", step.name))
-        .expected(step.proves.to_owned())
+        .expected(step.proves_for(&engine.ctx).to_owned())
         .action(format!(
             "rk setup step {} --target {} --apply",
             step.name, engine.ctx.target

@@ -11,6 +11,7 @@
   - [`maintenance:a-report-closes-only-on-what-is-still-owed` — A report closes only on what is still owed](#maintenancea-report-closes-only-on-what-is-still-owed--a-report-closes-only-on-what-is-still-owed)
   - [`maintenance:the-workflow-mode-is-a-landing-parameter` — The workflow mode is a landing parameter](#maintenancethe-workflow-mode-is-a-landing-parameter--the-workflow-mode-is-a-landing-parameter)
   - [`maintenance:worktree-mode-guards-the-main-checkout` — Worktree mode guards the main checkout](#maintenanceworktree-mode-guards-the-main-checkout--worktree-mode-guards-the-main-checkout)
+  - [`maintenance:local-integration-guards-the-trunk` — Local integration guards the trunk](#maintenancelocal-integration-guards-the-trunk--local-integration-guards-the-trunk)
   - [`maintenance:branches-mode-refuses-nothing` — Branches mode refuses nothing](#maintenancebranches-mode-refuses-nothing--branches-mode-refuses-nothing)
   - [`maintenance:a-worktree-path-derives-from-project-and-branch` — A worktree path derives from project and branch](#maintenancea-worktree-path-derives-from-project-and-branch--a-worktree-path-derives-from-project-and-branch)
   - [`maintenance:a-worktree-is-removed-before-its-branch` — A worktree is removed before its branch](#maintenancea-worktree-is-removed-before-its-branch--a-worktree-is-removed-before-its-branch)
@@ -29,13 +30,13 @@
 
 ## Purpose
 
-Rules governing the local-repository housekeeping the release convention leaves behind: the two local resources a squash merge retires in every clone — branches and the worktrees that seat them — the `rk branches prune` and `rk worktree` verbs that report and retire them, the workflow mode that decides which desk-level guards the landing renders, and the post-merge reminder hook `rk setup step branch-reminder` installs. Its subject is the operator's own clone — local refs, local worktrees, local hooks — which is neither calling a remote API on the operator's behalf, `SPEC-forge-setup.md`, nor deciding what a landing writes into a target, `SPEC-landing.md`; the one forge call here reads proof and configures nothing, and the mode's record and rendering mechanics belong to the landing while the rules the rendered guards enforce belong here. No adopting project adopts this spec: a project cannot violate a rule about how `rk` behaves and cannot run the verification. The upstream documentation behind these rules is in `../reference/REFERENCE-maintenance-sources.md`.
+Rules governing the local-repository housekeeping the release convention leaves behind: the two local resources a merge retires in every clone — branches and the worktrees that seat them — the `rk branches prune` and `rk worktree` verbs that report and retire them, the workflow mode that decides which desk-level guards the landing renders, and the post-merge reminder hook `rk setup step branch-reminder` installs. Its subject is the operator's own clone — local refs, local worktrees, local hooks — which is neither calling a remote API on the operator's behalf, `SPEC-forge-setup.md`, nor deciding what a landing writes into a target, `SPEC-landing.md`; the one forge call here reads proof and configures nothing, and the mode's record and rendering mechanics belong to the landing while the rules the rendered guards enforce belong here. No adopting project adopts this spec: a project cannot violate a rule about how `rk` behaves and cannot run the verification. The upstream documentation behind these rules is in `../reference/REFERENCE-maintenance-sources.md`.
 
 ## Requirements
 
 ### `maintenance:gone-is-a-candidate-not-proof` — Gone is a candidate, not proof
 
-When `rk branches prune --apply` deletes a branch, the deletion MUST rest on one of exactly two proofs, never on the gone upstream alone: a merged request whose recorded head equals the branch's tip, or a locally recorded integration whose recorded branch tip equals it and whose recorded commit the trunk reaches. A branch carrying neither proof MUST be kept, and a report MUST name which proof retired each branch. Under `local` integration no branch reaches the forge, so the gone-upstream signal is absent and the report MUST say that rather than present an empty candidate set.
+When `rk branches prune --apply` deletes a branch, the deletion MUST rest on one of exactly three proofs, never on the gone upstream alone: a merged request whose recorded head equals the branch's tip, a locally recorded integration whose recorded branch tip equals it and whose recorded commit the trunk reaches, or a trunk that reaches the branch's current tip after the branch moved from the commit its reflog's creation entry records. A branch carrying none of them MUST be kept, and a report MUST name which proof retired each branch. Under `local` integration no branch reaches the forge, so the gone-upstream signal is absent and the report MUST say that rather than present an empty candidate set.
 
 #### Scenario: A branch advanced after its local integration
 
@@ -49,7 +50,7 @@ When `rk branches prune --apply` deletes a branch, the deletion MUST rest on one
 - WHEN `rk branches prune --apply` runs
 - THEN the merged request records A, the tip is B, no proof covers B, and the branch stays
 
-Verify: `cargo nextest run -E 'binary(cli)'`
+Verify: `cargo nextest run -E 'binary(cli) or test(reachable_tip)'`
 
 ### `maintenance:a-checked-out-branch-is-never-pruned` — A checked-out branch is never pruned
 
@@ -65,7 +66,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `maintenance:forge-unavailability-never-authorizes-deletion` — Forge unavailability never authorizes deletion
 
-If the forge cannot answer for a candidate, then the prune verb MUST report that candidate as unknown and keep it, in every mode.
+If the forge cannot answer for a candidate that no local proof covers, then the prune verb MUST report that candidate as unknown and keep it, in every mode.
 
 #### Scenario: The forge is down during an apply
 
@@ -113,7 +114,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `maintenance:worktree-mode-guards-the-main-checkout` — Worktree mode guards the main checkout
 
-Where the target selects the workflow guards, in the worktree mode the landed hook block MUST refuse every commit in the main checkout, detached HEAD included — `master` through the trunk guard, everything else through the location guard — and MUST pass every linked worktree by topology; the mirror is desk-level, honest about `--no-verify`, and its one named escape is the sweep-skip pair the block's comment states.
+Where the target selects the workflow guards, in the worktree mode the landed hook block MUST refuse every commit in the main checkout, detached HEAD included — the trunk through the trunk guard under either integration mode, everything else through the location guard — and MUST pass every linked worktree by topology; the mirror is desk-level, honest about `--no-verify`, and its one named escape is the sweep-skip pair the block's comment states.
 
 #### Scenario: The main checkout tries a detached commit
 
@@ -122,6 +123,24 @@ Where the target selects the workflow guards, in the worktree mode the landed ho
 - THEN it refuses, naming `rk worktree add` as the way to a seat
 
 Verify: `cargo nextest run -E 'binary(cli)'`
+
+### `maintenance:local-integration-guards-the-trunk` — Local integration guards the trunk
+
+Where the target selects the workflow guards under local integration, the landed hook block MUST carry `no-commit-to-branch` for the trunk at the pre-commit stage and two pre-push guards, one that refuses a force push to the trunk and one that refuses a push carrying a merge commit onto the trunk, in either checkout mode, because `rk integrate` is the one writer of the trunk and it moves the trunk with no commit hook.
+
+#### Scenario: A hand commit on a workflow-only trunk
+
+- GIVEN a target landed with `--workflow-only`, its hooks installed, and the main checkout on the trunk
+- WHEN the operator commits there, and then integrates a branch with `rk integrate <branch> --apply`
+- THEN the commit refuses at the pre-commit stage naming the trunk, and the integration still moves the trunk
+
+#### Scenario: A rewrite reaches the trunk push
+
+- GIVEN the same target, whose trunk carries a merge commit or rewinds an earlier trunk tip
+- WHEN the operator pushes the trunk
+- THEN the pre-push guards refuse, naming the merge commit or the force push
+
+Verify: `cargo nextest run -E 'test(workflow_only)'`
 
 ### `maintenance:branches-mode-refuses-nothing` — Branches mode refuses nothing
 
@@ -167,7 +186,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `maintenance:one-merge-proof-authorizes-both-removals` — One merge proof authorizes both removals
 
-The worktree prune MUST rest on the same predicate as the branch prune — a merged request whose recorded head equals the branch's tip, or a locally recorded integration whose recorded branch tip equals it and whose recorded commit the trunk reaches — and MUST re-observe at the moment of action: a tip, a lock, or dirt that arrived after verification keeps the worktree, and a forge that cannot answer keeps everything. A proof of one kind MUST NOT stand in for the other, and evidence recorded for one branch MUST NOT confirm another.
+The worktree prune MUST rest on the same predicate as the branch prune — a merged request whose recorded head equals the branch's tip, a locally recorded integration whose recorded branch tip equals it and whose recorded commit the trunk reaches, or a trunk that reaches the branch's current tip after the branch moved from the commit its reflog's creation entry records — and MUST re-observe at the moment of action: a tip, a lock, or dirt that arrived after verification keeps the worktree, and a forge that cannot answer keeps everything no local proof covers. The third proof holds after a local rebase integration, a GitLab fast-forward merge, and a hand `git merge --ff-only`, and needs no forge answer. Its creation entry is the reflog entry whose old object ID is all zeros; where none survives, because the reflog is missing or partly expired, the third proof is unavailable, so a fresh branch at the trunk tip keeps its worktree. A GitHub rebase merge writes new commits, so the trunk does not reach the tip there, and the merged request stays the proof. A proof of one kind MUST NOT stand in for another, and evidence recorded for one branch MUST NOT confirm another.
 
 #### Scenario: The tip moves between verification and the apply
 
@@ -175,7 +194,19 @@ The worktree prune MUST rest on the same predicate as the branch prune — a mer
 - WHEN `rk worktree prune --apply` acts
 - THEN the re-observation keeps the worktree and nothing is removed
 
-Verify: `cargo nextest run -E 'binary(cli)'`
+#### Scenario: A branch fast-forwarded by hand
+
+- GIVEN a linked worktree whose branch the operator fast-forwarded onto the trunk with `git merge --ff-only`, with no ledger entry and no request
+- WHEN `rk worktree prune --apply` and then `rk branches prune --apply` run
+- THEN the worktree and then the branch are removed, each report names the reachable tip as the proof, and a branch whose tip the trunk does not reach stays
+
+#### Scenario: A GitHub request merged by rebase
+
+- GIVEN a branch whose GitHub request merged by rebase, so the trunk carries its commits under new SHAs
+- WHEN `rk branches prune --apply` runs
+- THEN the trunk does not reach the branch tip, and the merged request whose recorded head equals that tip retires the branch
+
+Verify: `cargo nextest run -E 'binary(cli) or test(reachable_tip)'`
 
 ### `maintenance:a-prune-report-covers-cleanup-not-inventory` — A prune report covers cleanup, not inventory
 

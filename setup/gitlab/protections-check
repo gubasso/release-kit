@@ -6,6 +6,24 @@
 set -eu
 : "${RK_REPO:?rk sets this; run this script through rk setup}"
 : "${RK_TRUNK_BRANCH:?rk sets this; run this script through rk setup}"
+# The merge settings of the recorded merge form, which rk derived from the
+# configuration and the record before this ran.
+: "${RK_MERGE_FORM:?rk sets this; run this script through rk setup}"
+: "${RK_GITLAB_MERGE_METHOD:?rk sets this; run this script through rk setup}"
+: "${RK_GITLAB_SQUASH_OPTION:?rk sets this; run this script through rk setup}"
+# The access levels the recorded integration authority names: no push under
+# forge integration, the narrowest level that admits one under local.
+: "${RK_GITLAB_PUSH_LEVEL:?rk sets this; run this script through rk setup}"
+: "${RK_GITLAB_MERGE_LEVEL:?rk sets this; run this script through rk setup}"
+# The two requirements the profile decides: the release tags are protected
+# wherever a release mints them, and the whole pipeline is required wherever
+# a forge gate lands to run in it.
+: "${RK_TAG_PROTECTION:?rk sets this; run this script through rk setup}"
+: "${RK_FORGE_GATE:?rk sets this; run this script through rk setup}"
+case "$RK_FORGE_GATE" in
+  true | false) ;;
+  *) echo "RK_FORGE_GATE is $RK_FORGE_GATE; rk sets it to true or false" >&2; exit 1 ;;
+esac
 
 project="$(printf '%s' "$RK_REPO" | sed 's|/|%2F|g')"
 
@@ -36,35 +54,53 @@ assert "$RK_TRUNK_BRANCH refuses force pushes" '"allow_force_push":false' "$trun
   'rk setup step protect-trunk --apply'
 trunk_levels="$(printf '%s' "$trunk" | grep -o '"push_access_levels":\[[^]]*\]' || true)"
 trunk_grants="$(printf '%s' "$trunk_levels" | grep -o '{' | grep -c . || true)"
-if [ "$trunk_grants" = "1" ] && printf '%s' "$trunk_levels" | grep -q '"access_level":0'; then
-  echo "ok $RK_TRUNK_BRANCH takes no direct push"
+if [ "$trunk_grants" = "1" ] && printf '%s' "$trunk_levels" | grep -q "\"access_level\":$RK_GITLAB_PUSH_LEVEL[,}]"; then
+  echo "ok $RK_TRUNK_BRANCH takes a push at access level $RK_GITLAB_PUSH_LEVEL alone"
 else
-  echo "FAIL $RK_TRUNK_BRANCH takes no direct push: the forge honors the most permissive of $trunk_grants push grants" >&2
+  echo "FAIL $RK_TRUNK_BRANCH push grants: the setup owns exactly one at access level $RK_GITLAB_PUSH_LEVEL, and the forge honors the most permissive of $trunk_grants" >&2
   echo 'remediation: rk setup step protect-trunk --apply' >&2
   status=1
 fi
 trunk_merge_levels="$(printf '%s' "$trunk" | grep -o '"merge_access_levels":\[[^]]*\]' || true)"
 trunk_merge_grants="$(printf '%s' "$trunk_merge_levels" | grep -o '{' | grep -c . || true)"
-if [ "$trunk_merge_grants" = "1" ] && printf '%s' "$trunk_merge_levels" | grep -q '"access_level":40'; then
-  echo "ok $RK_TRUNK_BRANCH merges only through maintainers"
+if [ "$trunk_merge_grants" = "1" ] && printf '%s' "$trunk_merge_levels" | grep -q "\"access_level\":$RK_GITLAB_MERGE_LEVEL[,}]"; then
+  echo "ok $RK_TRUNK_BRANCH merges only at access level $RK_GITLAB_MERGE_LEVEL"
 else
-  echo "FAIL $RK_TRUNK_BRANCH merge grants: the setup owns exactly one at maintainer level, found $trunk_merge_grants" >&2
+  echo "FAIL $RK_TRUNK_BRANCH merge grants: the setup owns exactly one at access level $RK_GITLAB_MERGE_LEVEL, found $trunk_merge_grants" >&2
   echo 'remediation: rk setup step protect-trunk --apply' >&2
   status=1
 fi
 
 settings="$(glab api "projects/$project" | compact)"
-assert 'the gate requires the whole pipeline' '"only_allow_merge_if_pipeline_succeeds":true' "$settings" \
+# The pipeline requirement is judged in both directions: required exactly
+# where a forge gate lands, and off where none does, because a requirement
+# no pipeline can satisfy holds every merge request. A value that is
+# missing or unreadable matches neither, and fails.
+if [ "$RK_FORGE_GATE" = true ]; then
+  pipeline_label='the gate requires the whole pipeline'
+else
+  pipeline_label='no pipeline is required: no forge gate lands, so none runs'
+fi
+assert "$pipeline_label" "\"only_allow_merge_if_pipeline_succeeds\":$RK_FORGE_GATE[,}]" "$settings" \
   'rk setup step protect-trunk --apply'
-assert 'merges fast-forward' '"merge_method":"ff"' "$settings" \
+assert 'merges fast-forward' "\"merge_method\":\"$RK_GITLAB_MERGE_METHOD\"" "$settings" \
   'rk setup step protect-trunk --apply'
-assert 'every merge request squashes' '"squash_option":"always"' "$settings" \
+if [ "$RK_MERGE_FORM" = squash ]; then
+  squash_label='every merge request squashes'
+else
+  squash_label='no merge request squashes, so every commit keeps its own message'
+fi
+assert "$squash_label" "\"squash_option\":\"$RK_GITLAB_SQUASH_OPTION\"" "$settings" \
   'rk setup step protect-trunk --apply'
 
-tags="$(glab api "projects/$project/protected_tags/v%2A" 2>/dev/null | compact || true)"
-assert 'v* is protected' '"name":"v\*"' "$tags" \
-  'rk setup step protect-tags --apply'
-echo 'note: tag protection here stops git clients and non-privileged users; an Owner or Maintainer can still delete a protected tag through the UI or API'
+if [ "$RK_TAG_PROTECTION" = true ]; then
+  tags="$(glab api "projects/$project/protected_tags/v%2A" 2>/dev/null | compact || true)"
+  assert 'v* is protected' '"name":"v\*"' "$tags" \
+    'rk setup step protect-tags --apply'
+  echo 'note: tag protection here stops git clients and non-privileged users; an Owner or Maintainer can still delete a protected tag through the UI or API'
+else
+  echo 'ok no tag protection is required: the release mode is none, so no release tag is minted'
+fi
 
 # The optional release-line protection: absent is fine, present is owned.
 lines="$(glab api "projects/$project/protected_branches/release%2F%2A" 2>/dev/null | compact || true)"

@@ -470,6 +470,7 @@ mod tests {
                 trunk: "master".into(),
                 checkout_mode: CheckoutMode::MainWorktree,
                 integration: Integration::Local,
+                merge_form: crate::landing::MergeForm::Squash,
             },
             capabilities: CapabilityRequests {
                 nix_packaging: false,
@@ -493,7 +494,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.adopt/11","mode":"apply","target":"/tmp/t","profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"main-worktree","integration":"local"},"capabilities":{"nix_packaging":false,"reporting_policy":true,"scorecard":false,"code_scanning":"semgrep","workflow_guards":false},"repo":"acme/widget","selection":[],"config":{"action":"added","changes":[],"content":"schema_version = 2\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"differs"}],"replaced":[],"next":["commit the config and the receipt"]}"#
+            r#"{"schema":"rk.adopt/11","mode":"apply","target":"/tmp/t","profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"main-worktree","integration":"local","merge_form":"squash"},"capabilities":{"nix_packaging":false,"reporting_policy":true,"scorecard":false,"code_scanning":"semgrep","workflow_guards":false},"repo":"acme/widget","selection":[],"config":{"action":"added","changes":[],"content":"schema_version = 2\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"differs"}],"replaced":[],"next":["commit the config and the receipt"]}"#
         );
     }
 }

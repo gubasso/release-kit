@@ -1,0 +1,7 @@
+      - id: rk-no-hand-authored-tag
+        name: rk no hand-authored tag
+        stages: [pre-push]
+        language: system
+        always_run: true
+        pass_filenames: false
+        entry: sh -c 'case "$PRE_COMMIT_REMOTE_BRANCH" in refs/tags/v*) echo "never author a tag; the release automation mints every v* tag" >&2; exit 1;; esac'

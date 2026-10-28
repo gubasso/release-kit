@@ -71,6 +71,16 @@ pub struct UpgradeArgs {
     #[arg(long, value_name = "on|off")]
     pub workflow_guards: Option<String>,
 
+    /// Land the Git workflow and nothing of a release: a preset that sets
+    /// `profile.release.mode = "none"`, `git.integration = "local"`,
+    /// `git.checkout_mode = "linked-worktree"`, and
+    /// `capabilities.workflow_guards = true`, and records those four
+    /// answers alone. A flag that contradicts one of them refuses before
+    /// any write; a flag the preset does not set, such as `--merge-form`,
+    /// combines with it.
+    #[arg(long)]
+    pub workflow_only: bool,
+
     /// Write the upgrade; without it every file's action is listed and
     /// nothing is touched. `rk stage` is the full-byte comparison surface.
     #[arg(long)]

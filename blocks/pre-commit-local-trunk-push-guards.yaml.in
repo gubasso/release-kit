@@ -1,0 +1,14 @@
+      - id: rk-no-force-push-to-trunk
+        name: rk no force push to trunk
+        stages: [pre-push]
+        language: system
+        always_run: true
+        pass_filenames: false
+        entry: sh -c '[ "$PRE_COMMIT_REMOTE_BRANCH" = refs/heads/RK_TRUNK_BRANCH ] || exit 0; tracked=$(git rev-parse --verify --quiet "refs/remotes/$PRE_COMMIT_REMOTE_NAME/RK_TRUNK_BRANCH"); for base in "$PRE_COMMIT_FROM_REF" "$tracked"; do case "$base" in "") continue;; *[!0]*) ;; *) continue;; esac; git merge-base --is-ancestor "$base" "$PRE_COMMIT_TO_REF" 2>/dev/null && continue; echo "refusing a force push to RK_TRUNK_BRANCH, because $base is not an ancestor of the pushed tip; rebase onto the remote trunk instead of rewriting it" >&2; exit 1; done'
+      - id: rk-no-merge-commit-to-trunk
+        name: rk no merge commit to trunk
+        stages: [pre-push]
+        language: system
+        always_run: true
+        pass_filenames: false
+        entry: sh -c '[ "$PRE_COMMIT_REMOTE_BRANCH" = refs/heads/RK_TRUNK_BRANCH ] || exit 0; tip=${PRE_COMMIT_TO_REF:-$PRE_COMMIT_LOCAL_BRANCH}; [ -n "$tip" ] || exit 0; case "$PRE_COMMIT_FROM_REF" in ""|*[!0]*) range=${PRE_COMMIT_FROM_REF:+$PRE_COMMIT_FROM_REF..}$tip;; *) range=$tip;; esac; merges=$(git rev-list --merges "$range") || { echo "the commits pushed to RK_TRUNK_BRANCH cannot be listed, so the push is refused" >&2; exit 1; }; [ -z "$merges" ] && exit 0; echo "refusing a push that adds a merge commit to RK_TRUNK_BRANCH, whose history stays linear; rebase instead" >&2; git log --oneline --no-walk $merges >&2; exit 1'

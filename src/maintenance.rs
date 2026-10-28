@@ -2,7 +2,8 @@
 //!
 //! `rk branches prune` and `rk worktree prune` retire the same resource
 //! pair — a branch, and the worktree that seats one — so the deletion
-//! discipline has one implementation here, and exactly two callers invoke
+//! discipline, and the observation of the proof no record holds, have one
+//! implementation here, and exactly two callers invoke
 //! it: `crate::commands::branches` and `crate::commands::worktree`. The
 //! module spawns git, which is why it sits beside the pure `branches` and
 //! `worktree` modules rather than inside either: both declare themselves
@@ -152,11 +153,63 @@ pub fn integration_ledger(target: &Utf8Path, trunk: &str) -> crate::integrate::L
     ledger
 }
 
+/// The third proof for one branch, observed: the trunk reaches its tip and
+/// its reflog's creation entry names another commit.
+///
+/// The trunk and the release lines never carry it: they are guarded out
+/// of every prune, and a trunk always reaches its own tip, so asking would
+/// only put a protected branch in every report. Every read that cannot
+/// answer — no reflog, a reflog git keeps outside the files backend, a
+/// git that does not run — reads as no proof, which keeps the branch.
+///
+/// SATISFIES maintenance:one-merge-proof-authorizes-both-removals
+#[must_use]
+pub fn reachable_tip(
+    target: &Utf8Path,
+    trunk: &str,
+    branch: &str,
+    tip: &str,
+) -> Option<crate::branches::Proof> {
+    if branch == trunk || branch.starts_with(crate::branches::PROTECTED_PREFIX) {
+        return None;
+    }
+    if !trunk_reaches(target, trunk, tip) {
+        return None;
+    }
+    let created = creation_of(target, branch);
+    crate::branches::reachable_tip(created.as_deref(), tip, true)
+}
+
+/// The commit a branch's reflog creation entry names, where one survives.
+///
+/// git names the reflog's path itself, which resolves to the common
+/// directory from any worktree; the files backend keeps it there as the
+/// raw `<old> <new>` lines this reads. A ref store with no such file
+/// answers nothing, and the proof is then unavailable.
+fn creation_of(target: &Utf8Path, branch: &str) -> Option<String> {
+    let answer = git(
+        target,
+        &[
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-path",
+            &format!("logs/refs/heads/{branch}"),
+        ],
+    )
+    .ok()
+    .filter(|answer| answer.status.success())?;
+    let path = String::from_utf8_lossy(&answer.stdout).trim().to_owned();
+    let text = std::fs::read_to_string(path).ok()?;
+    crate::branches::creation_entry(&text)
+}
+
 /// Whether the trunk reaches one commit.
 ///
 /// A git that cannot answer reads as unreachable, which keeps the branch
-/// rather than deleting it.
-fn trunk_reaches(target: &Utf8Path, trunk: &str, commit: &str) -> bool {
+/// rather than deleting it. The prune verbs re-ask it at the moment of
+/// action for the third proof, which no record holds.
+#[must_use]
+pub fn trunk_reaches(target: &Utf8Path, trunk: &str, commit: &str) -> bool {
     git(target, &["merge-base", "--is-ancestor", commit, trunk])
         .is_ok_and(|answer| answer.status.success())
 }

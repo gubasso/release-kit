@@ -17,7 +17,7 @@
 # invariants exist to remove.
 
 include:
-  - local: .gitlab/ci/mr-title.yml
+  - local: RK_GITLAB_GATE_FRAGMENT
   # The opt-in code scanning job, included only where the landing wrote
   # it: a local include naming an absent file fails the whole pipeline,
   # and a target that did not opt in has no such file.
@@ -112,7 +112,7 @@ release-request:
         echo "no release request to arm."
         exit 0
       fi
-      if api -X PUT "$project/merge_requests/$iid/merge?auto_merge=true&merge_when_pipeline_succeeds=true&squash=true&should_remove_source_branch=true" >/dev/null 2>&1; then
+      if api -X PUT "$project/merge_requests/$iid/merge?auto_merge=true&merge_when_pipeline_succeeds=true&squash=RK_SQUASH_ON_MERGE&should_remove_source_branch=true" >/dev/null 2>&1; then
         echo "armed merge request !$iid."
       else
         echo "could not arm !$iid yet — its pipeline has not started; the next trunk push re-arms."

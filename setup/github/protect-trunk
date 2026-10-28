@@ -6,7 +6,10 @@
 # RK_SAFETY_RULESET carries deletion and force-push protection and names no
 # bypass actor, so those hold against every actor including the operator.
 # RK_TRUNK_RULESET carries the request rule and the check the request must
-# carry, and names the actors the recorded integration mode excuses. Under
+# carry, where a forge gate lands to report one: a local integration with no
+# automatic release lands no gate, so its ruleset requires no check, because
+# a required check nothing reports would hold every request open. It names
+# the actors the recorded integration mode excuses. Under
 # forge integration that list is empty and the trunk takes no direct push.
 # Under local integration it names the repository administrator, so the
 # deliberate trunk push goes through while the release App, which is an
@@ -14,12 +17,17 @@
 #
 # The request must carry the trunk's tip: the release request has computed
 # contents, and nothing else re-reads the trunk between that computation
-# and the merge. Squash is the only merge method, so the trunk history
-# stays linear on a forge that offers no fast-forward merge. The squash
-# title is the pull request's title — never a lone branch commit's subject —
-# because the bot derives the version from the trunk's commit messages.
-# The method's invariants chapter owns these facts; this comment points
-# there. Rerunning updates in place.
+# and the merge. The recorded merge form names the only merge method, so
+# the trunk history stays linear on a forge that offers no fast-forward
+# merge. Under squash the squash title is the pull request's title — never
+# a lone branch commit's subject — because the bot derives the version
+# from the trunk's commit messages. Under rebase every commit keeps its own
+# message, no squash source applies, and the safety ruleset carries the
+# linear-history rule. The repository's own allow_rebase_merge switch is
+# separate from the ruleset, and a repository that disallows the one method
+# the ruleset allows can merge nothing, so the rebase form turns it on and
+# changes no other merge switch. The method's invariants chapter owns these facts;
+# this comment points there. Rerunning updates in place.
 set -eu
 : "${RK_REPO:?rk sets this; run this script through rk setup}"
 : "${RK_TRUNK_BRANCH:?rk sets this; run this script through rk setup}"
@@ -31,6 +39,7 @@ set -eu
 : "${RK_TRUNK_RULES:?rk sets this; run this script through rk setup}"
 : "${RK_SAFETY_RULES:?rk sets this; run this script through rk setup}"
 : "${RK_BYPASS_ACTORS:?rk sets this; run this script through rk setup}"
+: "${RK_MERGE_FORM:?rk sets this; run this script through rk setup}"
 : "${RK_SQUASH_TITLE_SOURCE:?rk sets this; run this script through rk setup}"
 : "${RK_SQUASH_BODY_SOURCE:?rk sets this; run this script through rk setup}"
 
@@ -65,12 +74,21 @@ upsert "$RK_TRUNK_RULESET" "$RK_BYPASS_ACTORS" "$RK_TRUNK_RULES"
 
 # The squash title source is a repository setting, not a ruleset rule: on a
 # one-commit request the forge otherwise offers that commit's own subject,
-# so a branch commit named wip could become the trunk's message.
-gh api -X PATCH "repos/$RK_REPO" \
-  -f "squash_merge_commit_title=$RK_SQUASH_TITLE_SOURCE" -f "squash_merge_commit_message=$RK_SQUASH_BODY_SOURCE" >/dev/null
+# so a branch commit named wip could become the trunk's message. A rebase
+# merge reads no squash source, so the rebase form leaves both alone.
+if [ "$RK_MERGE_FORM" = squash ]; then
+  gh api -X PATCH "repos/$RK_REPO" \
+    -f "squash_merge_commit_title=$RK_SQUASH_TITLE_SOURCE" -f "squash_merge_commit_message=$RK_SQUASH_BODY_SOURCE" >/dev/null
+else
+  gh api -X PATCH "repos/$RK_REPO" -F allow_rebase_merge=true >/dev/null
+fi
 
-echo "check: prints both ruleset names and the squash message sources"
+echo "check: prints both ruleset names, then the squash message sources under the squash form, or the rebase switch under the rebase form"
 gh api "repos/$RK_REPO/rulesets" \
   -q ".[] | select(.name == \"$RK_SAFETY_RULESET\" or .name == \"$RK_TRUNK_RULESET\") | .name"
-gh api "repos/$RK_REPO" -q .squash_merge_commit_title
-gh api "repos/$RK_REPO" -q .squash_merge_commit_message
+if [ "$RK_MERGE_FORM" = squash ]; then
+  gh api "repos/$RK_REPO" -q .squash_merge_commit_title
+  gh api "repos/$RK_REPO" -q .squash_merge_commit_message
+else
+  gh api "repos/$RK_REPO" -q .allow_rebase_merge
+fi

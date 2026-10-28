@@ -88,6 +88,7 @@ pub fn inputs(parameters: &Parameters) -> Inputs<'_> {
         trunk: Some(parameters.git.trunk.as_str()),
         checkout_mode: Some(parameters.git.checkout_mode),
         integration: Some(parameters.git.integration),
+        merge_form: Some(parameters.git.merge_form),
         required_check: (!parameters.required_check.is_empty())
             .then_some(parameters.required_check.as_str()),
         required_workflow: (!parameters.required_workflow.is_empty())

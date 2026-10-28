@@ -32,7 +32,7 @@ pub use crate::projection::{
     authored, block_markers, destinations, extract_block, hooks_marker_defect, kind_of,
     marker_defect, render, scope_is_shaped, splice_hooks_block, splice_marked_block, substitute,
 };
-pub use manifest::{CheckoutMode, Integration, Provider, Style};
+pub use manifest::{CheckoutMode, Integration, MergeForm, Provider, Style};
 use serde::Serialize;
 
 use crate::diagnostic::{Diagnostic, Reason};
@@ -496,6 +496,7 @@ mod tests {
                                     trunk: crate::config::TRUNK_DEFAULT.to_owned(),
                                     checkout_mode,
                                     integration,
+                                    merge_form: crate::landing::MergeForm::Squash,
                                 },
                                 capabilities: CapabilityRequests {
                                     nix_packaging: nix,
@@ -592,6 +593,7 @@ mod tests {
                 trunk: None,
                 checkout_mode: Some(checkout_mode),
                 integration: None,
+                merge_form: None,
                 nix: Some(nix),
                 reporting_policy: None,
                 scorecard: Some(scorecard),
@@ -1150,6 +1152,189 @@ mod tests {
         }
     }
 
+    /// Every word that names a release reason, matched whole: the routing
+    /// block, the glossary, and the hook block of a release-less target
+    /// carry none of them.
+    fn release_words(text: &str) -> Vec<String> {
+        text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
+            .filter(|word| {
+                matches!(
+                    *word,
+                    "version" | "versions" | "changelog" | "changelogs" | "tag" | "tags"
+                )
+            })
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// One block shape on the axes the routing block and the glossary read.
+    fn shape(
+        workflow_guards: bool,
+        release: bool,
+        merge_form: crate::landing::MergeForm,
+    ) -> projection::BlockShape {
+        projection::BlockShape {
+            checkout_mode: CheckoutMode::LinkedWorktree,
+            integration: Integration::Local,
+            merge_form,
+            workflow_guards,
+            release,
+        }
+    }
+
+    /// The routing block of a release-less target is the workflow variant:
+    /// no `## Releases` heading, no version, changelog, or tag reason, a
+    /// scope preferred rather than required, and the two workflow terms. A
+    /// release-bearing target keeps every line it carried, and the message
+    /// source line names the target's own merge form.
+    ///
+    /// SATISFIES landing:the-routing-block-bounds-the-agents-initiative
+    /// SATISFIES project-profile:a-release-less-landing-carries-no-release-text
+    #[test]
+    fn workflow_only_routing_block_carries_no_release_text() {
+        use crate::landing::MergeForm;
+        for form in [MergeForm::Squash, MergeForm::Rebase] {
+            for guards in [true, false] {
+                let workflow = projection::routing_block_of(&shape(guards, false, form))
+                    .expect("the binary embeds the block");
+                let at = format!("{form:?} guards {guards}");
+                assert!(!workflow.contains("## Releases"), "{at}: {workflow}");
+                assert!(workflow.contains("## Workflow"), "{at}: {workflow}");
+                assert_eq!(release_words(&workflow), Vec::<String>::new(), "{at}");
+                assert!(!workflow.contains("rk method recovery"), "{at}");
+                for token in [
+                    "RK_AGENT_POLICY",
+                    "RK_COMMIT_POLICY",
+                    "RK_COMMIT_SOURCE",
+                    "RK_COMMIT_SCOPE",
+                ] {
+                    assert!(!workflow.contains(token), "{at}: {token} survived");
+                }
+                assert!(
+                    workflow.contains("MUST be a Conventional Commit"),
+                    "{at}: {workflow}"
+                );
+                if guards {
+                    for kept in [
+                        "guides and never drives",
+                        "`implement-and-request` and `implement-and-merge`",
+                        "A scope is preferred and not required.",
+                        "names no internal planning artifact and carries no agent attribution",
+                    ] {
+                        assert!(workflow.contains(kept), "{at}: {kept}: {workflow}");
+                    }
+                    assert!(!workflow.contains("full-implement"), "{at}: {workflow}");
+                    assert!(!workflow.contains("requires a scope"), "{at}: {workflow}");
+                }
+                let releasing = projection::routing_block_of(&shape(guards, true, form))
+                    .expect("the binary embeds the block");
+                assert!(releasing.contains("## Releases"), "{at}");
+                assert!(releasing.contains("Never author a tag"), "{at}");
+                if guards {
+                    assert!(releasing.contains("requires a scope on every one"), "{at}");
+                    assert_eq!(
+                        releasing.contains("The request's title becomes that commit's message"),
+                        form == MergeForm::Squash,
+                        "{at}: the title is the message under squash alone"
+                    );
+                    assert_eq!(
+                        releasing.contains(
+                            "Every commit of a branch reaches the trunk with its own message"
+                        ),
+                        form == MergeForm::Rebase,
+                        "{at}"
+                    );
+                }
+            }
+        }
+        // The release-bearing squash block is the block every target
+        // already carries, byte for byte.
+        assert_eq!(
+            projection::routing_block_of(&shape(true, true, MergeForm::Squash))
+                .expect("the binary embeds the block"),
+            routing_block(true)
+        );
+    }
+
+    /// The glossary of a release-less target names no release term: the
+    /// two workflow terms stand, and the term that ends in a release does
+    /// not.
+    ///
+    /// SATISFIES project-profile:a-release-less-landing-carries-no-release-text
+    #[test]
+    fn workflow_only_glossary_carries_no_release_term() {
+        let workflow =
+            projection::glossary_block_of(&shape(true, false, crate::landing::MergeForm::Squash))
+                .expect("the binary embeds the block");
+        assert!(workflow.contains("`implement-and-request`"), "{workflow}");
+        assert!(workflow.contains("`implement-and-merge`"), "{workflow}");
+        assert!(!workflow.contains("full-implement"), "{workflow}");
+        assert!(!workflow.contains("release,"), "{workflow}");
+        assert!(!workflow.contains("before the release"), "{workflow}");
+        assert_eq!(release_words(&workflow), Vec::<String>::new());
+        assert!(workflow.starts_with(BLOCK_BEGIN), "{workflow}");
+        assert!(workflow.ends_with(BLOCK_END), "{workflow}");
+        assert_eq!(
+            projection::glossary_block_of(&shape(true, true, crate::landing::MergeForm::Squash))
+                .expect("the binary embeds the block"),
+            glossary_block()
+        );
+    }
+
+    /// The hook block of a release-less target carries no tag guard, and
+    /// its commit hook accepts a header with no scope; a release-bearing
+    /// block keeps both, byte for byte as before.
+    ///
+    /// SATISFIES landing:a-landed-hook-serves-the-release-convention-alone
+    #[test]
+    fn workflow_only_hook_block_drops_the_tag_guard_and_the_forced_scope() {
+        let authored = projection::embedded_block(projection::PRE_COMMIT_MESSAGE_GUARDS)
+            .expect("the binary embeds the block");
+        assert_eq!(
+            authored.matches(projection::FORCE_SCOPE_ARG).count(),
+            1,
+            "the authored commit hook carries the argument the renderer drops: {authored}"
+        );
+        for (mode, integration) in MODE_PAIRS {
+            for guards in [true, false] {
+                let at = format!("{mode:?} {integration:?} guards {guards}");
+                let release_less = projection::hooks_block_of(&projection::BlockShape {
+                    checkout_mode: mode,
+                    integration,
+                    merge_form: crate::landing::MergeForm::Squash,
+                    workflow_guards: guards,
+                    release: false,
+                })
+                .expect("the binary embeds the block");
+                assert!(!release_less.contains("rk-no-hand-authored-tag"), "{at}");
+                assert!(!release_less.contains("--force-scope"), "{at}");
+                assert!(release_less.contains("- id: rk-status-check"), "{at}");
+                assert!(!release_less.contains("RK_TAG_GUARD"), "{at}");
+                assert!(!release_less.contains("RK_STATUS_RELEASE_FILES"), "{at}");
+                assert!(!release_less.contains("release-plz"), "{at}");
+                assert!(
+                    release_less.contains("\\.pre-commit-config\\.yaml$)'"),
+                    "{at}: {release_less}"
+                );
+                assert_eq!(release_words(&release_less), Vec::<String>::new(), "{at}");
+                if guards {
+                    assert!(release_less.contains("args: [--strict]\n"), "{at}");
+                }
+                let releasing = if guards {
+                    hooks_block_for(mode, integration)
+                } else {
+                    unguarded_hooks_block(mode, integration)
+                };
+                assert!(releasing.contains("- id: rk-no-hand-authored-tag"), "{at}");
+                assert!(
+                    releasing.contains(r"\.pre-commit-config\.yaml$|release-plz\.toml$|dist-workspace\.toml$|release-please-config\.json$|cliff\.toml$|\.release-please-manifest\.json$|VERSION$)'"),
+                    "{at}: the release-bearing pattern is unchanged: {releasing}"
+                );
+                assert_eq!(releasing.contains("--force-scope"), guards, "{at}");
+            }
+        }
+    }
+
     /// Without the workflow guards, the hook block carries the two hooks
     /// the release process needs and nothing that shapes how the project
     /// works, under either integration mode and either checkout mode.
@@ -1194,12 +1379,16 @@ mod tests {
     /// The integration axis decides exactly which trunk guards render,
     /// and it decides nothing about the checkout axis.
     ///
-    /// The forge column is what every landed target already carries, so
-    /// the two guards are present there and absent under local
-    /// integration, where `rk integrate` writes the trunk commit and the
-    /// operator pushes the trunk. The location guard is integration-blind
-    /// in both directions, which is the claim the two axes being
-    /// orthogonal rests on.
+    /// Both columns refuse a hand commit on the trunk. The forge column
+    /// also refuses every trunk push, because a request is the one way in.
+    /// The local column refuses the commit at the pre-commit stage alone,
+    /// and guards the push the operator makes after `rk integrate` against
+    /// a rewrite and a merge commit, because `rk integrate` moves the trunk
+    /// with no commit hook. The location guard is integration-blind in
+    /// both directions, which is the claim the two axes being orthogonal
+    /// rests on.
+    ///
+    /// SATISFIES maintenance:local-integration-guards-the-trunk
     #[test]
     fn the_integration_mode_decides_which_trunk_guards_render() {
         for mode in [CheckoutMode::LinkedWorktree, CheckoutMode::MainWorktree] {
@@ -1207,7 +1396,18 @@ mod tests {
             let local = hooks_block_for(mode, Integration::Local);
             assert!(forge.contains("- id: no-commit-to-branch"), "{forge}");
             assert!(forge.contains("- id: rk-no-push-to-trunk"), "{forge}");
-            assert!(!local.contains("no-commit-to-branch"), "{local}");
+            assert!(!forge.contains("rk-no-force-push-to-trunk"), "{forge}");
+            assert!(!forge.contains("rk-no-merge-commit-to-trunk"), "{forge}");
+            assert!(local.contains("- id: no-commit-to-branch"), "{local}");
+            assert!(
+                local.contains("args: [--branch, RK_TRUNK_BRANCH]\n        stages: [pre-commit]"),
+                "the local trunk guard runs at the pre-commit stage alone: {local}"
+            );
+            assert!(local.contains("- id: rk-no-force-push-to-trunk"), "{local}");
+            assert!(
+                local.contains("- id: rk-no-merge-commit-to-trunk"),
+                "{local}"
+            );
             assert!(!local.contains("rk-no-push-to-trunk"), "{local}");
             // Everything the integration axis does not own is unchanged.
             for kept in [
@@ -1240,13 +1440,19 @@ mod tests {
                 assert!(!forge.contains(token), "{token} survived: {forge}");
             }
         }
-        // The sweep note names exactly the hooks a trunk checkout meets.
+        // The sweep note names exactly the hooks a trunk checkout meets:
+        // the trunk guard under either integration mode, and the location
+        // guard in the worktree mode.
         assert!(
             hooks_block_for(CheckoutMode::LinkedWorktree, Integration::Local)
-                .contains("SKIP=rk-worktree-location in")
+                .contains("SKIP=no-commit-to-branch,rk-worktree-location in")
         );
         assert!(
             hooks_block_for(CheckoutMode::MainWorktree, Integration::Local)
+                .contains("SKIP=no-commit-to-branch in")
+        );
+        assert!(
+            unguarded_hooks_block(CheckoutMode::MainWorktree, Integration::Local)
                 .contains("A CI sweep needs no SKIP here")
         );
     }
@@ -1260,13 +1466,13 @@ mod tests {
     fn a_landed_sweep_note_invites_the_projects_own_skips() {
         let with_skip = hooks_block_for(CheckoutMode::LinkedWorktree, Integration::Local);
         assert!(
-            with_skip.contains("SKIP=rk-worktree-location in"),
+            with_skip.contains("SKIP=no-commit-to-branch,rk-worktree-location in"),
             "{with_skip}"
         );
         assert!(with_skip.contains("local-only"), "{with_skip}");
         assert!(with_skip.contains("the value is a list the"), "{with_skip}");
 
-        let without = hooks_block_for(CheckoutMode::MainWorktree, Integration::Local);
+        let without = unguarded_hooks_block(CheckoutMode::MainWorktree, Integration::Local);
         assert!(
             without.contains("A CI sweep needs no SKIP here"),
             "{without}"

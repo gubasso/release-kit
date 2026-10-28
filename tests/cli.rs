@@ -203,9 +203,56 @@ fn params_requesting(
     repo: &str,
     capabilities: release_kit::profile::CapabilityRequests,
 ) -> release_kit::landing::Params {
+    release_kit::landing::Params::from_record(&manifest_requesting(
+        driver,
+        forge,
+        checkout_mode,
+        integration,
+        style,
+        repo,
+        capabilities,
+    ))
+}
+
+/// The ordinary parameter set of one pair under the `rebase` merge form,
+/// built from a record as production builds one.
+fn rebase_params(
+    driver: &str,
+    forge: &str,
+    integration: release_kit::landing::Integration,
+) -> release_kit::landing::Params {
+    let mut record = manifest_requesting(
+        driver,
+        forge,
+        release_kit::landing::CheckoutMode::LinkedWorktree,
+        integration,
+        Some(release_kit::landing::Style::Trunk),
+        "acme/widget",
+        release_kit::profile::CapabilityRequests {
+            nix_packaging: false,
+            reporting_policy: true,
+            scorecard: false,
+            code_scanning: None,
+            workflow_guards: Some(true),
+        },
+    );
+    record.git.merge_form = release_kit::landing::MergeForm::Rebase;
+    release_kit::landing::Params::from_record(&record)
+}
+
+/// The record [`params_requesting`] reads its parameters from.
+fn manifest_requesting(
+    driver: &str,
+    forge: &str,
+    checkout_mode: release_kit::landing::CheckoutMode,
+    integration: release_kit::landing::Integration,
+    style: Option<release_kit::landing::Style>,
+    repo: &str,
+    capabilities: release_kit::profile::CapabilityRequests,
+) -> release_kit::landing::manifest::Manifest {
     use release_kit::landing::manifest::{Manifest, Parameters, SCHEMA_VERSION};
     use release_kit::profile::{GitWorkflow, ProfileSnapshot, ReleaseIntent, ReleaseMode};
-    release_kit::landing::Params::from_record(&Manifest {
+    Manifest {
         schema_version: SCHEMA_VERSION,
         rk_version: "0.0.0".to_owned(),
         origin: "init".to_owned(),
@@ -224,6 +271,7 @@ fn params_requesting(
             trunk: release_kit::config::TRUNK_DEFAULT.to_owned(),
             checkout_mode,
             integration,
+            merge_form: release_kit::landing::MergeForm::Squash,
         },
         capabilities,
         parameters: Parameters {
@@ -235,7 +283,7 @@ fn params_requesting(
         },
         files: Vec::new(),
         pins: std::collections::BTreeMap::new(),
-    })
+    }
 }
 
 /// The Nix evidence a fixture combination runs under, on both sides of
@@ -886,10 +934,11 @@ fn init_preview_human_lines_are_snapshot_held() {
     let path = target.path().to_string_lossy().into_owned();
     let expected = format!(
         "DRY RUN: rk init writes these files into {path}; re-run with --apply\n\
-         profile: technologies rust; forge github; repo unresolved; release automatic (driver rust, style trunk, line prefix release/); trunk master; checkout mode linked-worktree; integration local; requests reporting_policy\n\
+         profile: technologies rust; forge github; repo unresolved; release automatic (driver rust, style trunk, line prefix release/); trunk master; checkout mode linked-worktree; integration local; merge form squash; requests reporting_policy\n\
          capability git.guards: selected\n\
          capability git.workflow-guards: not-requested (capabilities.workflow_guards is false)\n\
          capability git.title-check: selected\n\
+         capability git.commit-check: not-requested (git.merge_form is squash, so the title gate judges the request)\n\
          capability security.reporting-policy: selected\n\
          capability release.automation: selected\n\
          capability packaging.nix: not-requested (capabilities.nix_packaging is false)\n\
@@ -902,7 +951,7 @@ fn init_preview_human_lines_are_snapshot_held() {
          created SECURITY.md\n\
          created dist-workspace.toml\n\
          created release-plz.toml\n\
-         Next:\n  rk init --technology rust --forge github --release-mode automatic --release-driver rust --release-style trunk --trunk master --checkout-mode linked-worktree --integration local --required-check gate --required-workflow ci --repo <owner/name> --reporting-policy --code-scanning off --target {path} --apply\n\
+         Next:\n  rk init --technology rust --forge github --release-mode automatic --release-driver rust --release-style trunk --trunk master --checkout-mode linked-worktree --integration local --merge-form squash --required-check gate --required-workflow ci --repo <owner/name> --reporting-policy --code-scanning off --target {path} --apply\n\
          \x20 rk stage --target {path} stages the complete candidate for a byte comparison\n"
     );
     let output = rk()
@@ -4322,19 +4371,35 @@ fn the_prose_checks_catch_every_class_they_name() {
 /// gate runs over its `AGENTS.md` are held here, at the renderer.
 #[test]
 fn the_routing_block_reads_as_plain_prose() {
+    // Every variant: the guards on and off, each merge form, and the
+    // workflow variant of a target that names no release.
     for workflow_guards in [true, false] {
-        let rendered = release_kit::landing::render(
-            release_kit::projection::routing_block(workflow_guards)
-                .expect("the binary embeds the block")
-                .as_bytes(),
-            &render_params("acme/widget", None),
-        );
-        let text = String::from_utf8(rendered).expect("the block is text");
-        let findings = prose_findings(&text);
-        assert!(
-            findings.is_empty(),
-            "the rendered block carries prose findings: {findings:?}"
-        );
+        for merge_form in [
+            release_kit::landing::MergeForm::Squash,
+            release_kit::landing::MergeForm::Rebase,
+        ] {
+            for release in [true, false] {
+                let shape = release_kit::projection::BlockShape {
+                    checkout_mode: release_kit::landing::CheckoutMode::LinkedWorktree,
+                    integration: release_kit::landing::Integration::Local,
+                    merge_form,
+                    workflow_guards,
+                    release,
+                };
+                let rendered = release_kit::landing::render(
+                    release_kit::projection::routing_block_of(&shape)
+                        .expect("the binary embeds the block")
+                        .as_bytes(),
+                    &render_params("acme/widget", None),
+                );
+                let text = String::from_utf8(rendered).expect("the block is text");
+                let findings = prose_findings(&text);
+                assert!(
+                    findings.is_empty(),
+                    "the rendered block {shape:?} carries prose findings: {findings:?}"
+                );
+            }
+        }
     }
 }
 
@@ -4467,6 +4532,10 @@ fn every_setup_script_passes_the_static_battery() {
         "RK_GITLAB_SQUASH_TEMPLATE",
         "RK_GITLAB_PUSH_LEVEL",
         "RK_GITLAB_MERGE_LEVEL",
+        "RK_MERGE_FORM",
+        "RK_SAFETY_RULE_TYPES",
+        "RK_TAG_PROTECTION",
+        "RK_FORGE_GATE",
     ];
     for forge in ["github", "gitlab"] {
         for (name, text) in script_files(forge) {
@@ -5168,13 +5237,19 @@ api)
     [[ -f "$STATE/squash_merge_commit_title" ]] && squash_title="\"$(cat "$STATE/squash_merge_commit_title")\""
     squash_message="null"
     [[ -f "$STATE/squash_merge_commit_message" ]] && squash_message="\"$(cat "$STATE/squash_merge_commit_message")\""
+    # The repository's own rebase switch, on by default as on the forge;
+    # "absent" leaves it out of the answer, as an unreadable field would.
+    rebasing="$(cat "$STATE/allow_rebase_merge" 2>/dev/null || echo true)"
+    rebase_field=",\"allow_rebase_merge\":$rebasing"
+    [[ "$rebasing" == absent ]] && rebase_field=""
     if [[ "$query" == ".id" ]]; then echo 1
+    elif [[ "$query" == ".allow_rebase_merge" ]]; then [[ "$rebasing" == absent ]] && echo "" || echo "$rebasing"
     elif [[ "$query" == ".private" ]]; then echo "$private"
     elif [[ "$query" == ".delete_branch_on_merge" ]]; then echo "$deleting"
     elif [[ "$query" == ".allow_auto_merge" ]]; then echo "$self_merging"
     elif [[ "$query" == ".squash_merge_commit_title" ]]; then echo "${squash_title//\"/}"
     elif [[ "$query" == ".squash_merge_commit_message" ]]; then echo "${squash_message//\"/}"
-    else echo "{\"private\":$private,\"id\":1,\"default_branch\":\"$(cat "$STATE/default_branch")\",\"delete_branch_on_merge\":$deleting,\"allow_auto_merge\":$self_merging,\"squash_merge_commit_title\":$squash_title,\"squash_merge_commit_message\":$squash_message}"; fi;;
+    else echo "{\"private\":$private,\"id\":1,\"default_branch\":\"$(cat "$STATE/default_branch")\",\"delete_branch_on_merge\":$deleting,\"allow_auto_merge\":$self_merging,\"squash_merge_commit_title\":$squash_title,\"squash_merge_commit_message\":$squash_message$rebase_field}"; fi;;
   "PATCH repos/acme/widget")
     for f in "${fields[@]}"; do
       case "$f" in
@@ -5182,6 +5257,7 @@ api)
         allow_auto_merge=*) put_state allow_auto_merge "${f#allow_auto_merge=}";;
         squash_merge_commit_title=*) put_state squash_merge_commit_title "${f#squash_merge_commit_title=}";;
         squash_merge_commit_message=*) put_state squash_merge_commit_message "${f#squash_merge_commit_message=}";;
+        allow_rebase_merge=*) put_state allow_rebase_merge "${f#allow_rebase_merge=}";;
       esac
     done
     echo '{}';;
@@ -5308,13 +5384,23 @@ api)
     touch "$STATE/tag_protected"; echo '{}';;
   "GET "*"/protected_branches/master")
     if [[ -f "$STATE/protected_master" ]]; then
-      echo '{"name":"master","push_access_levels":[{"access_level":0}],"merge_access_levels":[{"access_level":40}],"allow_force_push":false}'
+      push="$(cat "$STATE/push_level" 2>/dev/null || echo 0)"
+      merge="$(cat "$STATE/merge_level" 2>/dev/null || echo 40)"
+      echo "{\"name\":\"master\",\"push_access_levels\":[{\"access_level\":$push}],\"merge_access_levels\":[{\"access_level\":$merge}],\"allow_force_push\":false}"
     else
       echo "glab: 404 Not Found (HTTP 404)" >&2; exit 1
     fi;;
   "GET "*"/protected_branches/"*)
     echo "glab: 404 Not Found (HTTP 404)" >&2; exit 1;;
   "POST "*"/protected_branches")
+    # The levels the creation asked for are the levels a read returns,
+    # so a trunk protected for local integration reads back as such.
+    for f in "${fields[@]}"; do
+      case "$f" in
+        push_access_level=*) echo "${f#push_access_level=}" > "$STATE/push_level";;
+        merge_access_level=*) echo "${f#merge_access_level=}" > "$STATE/merge_level";;
+      esac
+    done
     touch "$STATE/protected_master"; echo '{}';;
   "PATCH "*"/protected_branches/master")
     echo '{}';;
@@ -8635,7 +8721,7 @@ fn a_landing_writes_the_record_with_its_identity() {
         .success()
         .stdout(predicate::str::contains("wrote .release-kit/manifest.json"));
     let manifest = read_manifest(target.path());
-    assert_eq!(manifest["schema_version"], 11);
+    assert_eq!(manifest["schema_version"], 12);
     assert_eq!(manifest["rk_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(manifest["origin"], "init");
     assert_eq!(manifest["profile"]["release"]["driver"], "rust");
@@ -10098,7 +10184,7 @@ fn an_upgrade_refuses_an_edited_rendered_file_until_replace_names_it() {
         "semver_check = true\n"
     );
     let receipt = read_manifest(target.path());
-    assert_eq!(receipt["schema_version"], 11);
+    assert_eq!(receipt["schema_version"], 12);
     assert_eq!(
         manifest_file(&receipt, ".github/workflows/release-plz.yml")["sha256"],
         Digest::of(landed.as_bytes()).to_string()
@@ -13302,12 +13388,12 @@ fn init_defaults_to_the_worktree_workflow() {
         "the worktree mode lands the location guard: {hooks}"
     );
     assert!(
-        hooks.contains("SKIP=rk-worktree-location"),
-        "the sweep comment names the one hook a trunk checkout meets: {hooks}"
+        hooks.contains("SKIP=no-commit-to-branch,rk-worktree-location"),
+        "the sweep comment names the two hooks a trunk checkout meets: {hooks}"
     );
     assert!(
-        !hooks.contains("no-commit-to-branch"),
-        "local integration writes the trunk commit, so nothing refuses it: {hooks}"
+        hooks.contains("- id: no-commit-to-branch"),
+        "rk integrate moves the trunk with no commit hook, so a hand commit there refuses: {hooks}"
     );
     let agents = std::fs::read_to_string(target.path().join("AGENTS.md")).expect("AGENTS.md reads");
     assert!(
@@ -13500,7 +13586,7 @@ fn an_upgrade_migrates_a_schema_1_record_to_the_current_schema() {
         .assert()
         .success();
     let migrated = read_manifest(target.path());
-    assert_eq!(migrated["schema_version"], 11);
+    assert_eq!(migrated["schema_version"], 12);
     assert_eq!(migrated["git"]["checkout_mode"], "main-worktree");
     assert_eq!(migrated["profile"]["release"]["style"], "trunk");
     let hooks = std::fs::read_to_string(target.path().join(".pre-commit-config.yaml"))
@@ -13582,7 +13668,7 @@ fn an_upgrade_drops_the_recorded_scope_vocabulary() {
         );
 
     let migrated = read_manifest(target.path());
-    assert_eq!(migrated["schema_version"], 11);
+    assert_eq!(migrated["schema_version"], 12);
     assert!(
         migrated["parameters"]["scopes"].is_null(),
         "the vocabulary leaves the record: {migrated}"
@@ -15348,7 +15434,7 @@ fn the_message_json_is_one_object_with_the_schema() {
         .clone();
     let report: serde_json::Value =
         serde_json::from_slice(&out).expect("one JSON object on stdout");
-    assert_eq!(report["schema"], "rk.message/2");
+    assert_eq!(report["schema"], "rk.message/3");
     assert_eq!(report["kind"], "commit");
     assert_eq!(report["exempt"], false);
     assert_eq!(report["findings"][0]["class"], "internal-path");
@@ -15679,8 +15765,8 @@ fn every_arming_step_authenticates_as_the_bot() {
             "{path}: the rendered style is the arm's gate"
         );
         assert!(
-            text.contains("gh pr merge") && text.contains("--auto --squash --delete-branch"),
-            "{path}: the arm sets auto-merge with the protected merge method"
+            text.contains("gh pr merge") && text.contains("--auto RK_MERGE_FLAG --delete-branch"),
+            "{path}: the arm sets auto-merge with the protected merge method, which the merge form renders"
         );
         let arm_at = text
             .find("arm the release request")
@@ -23485,7 +23571,7 @@ fn private_reporting_policy_adoption_and_parameter_replay() {
         if mode == "matching" {
             out.success();
             let manifest = read_manifest(target.path());
-            assert_eq!(manifest["schema_version"], 11);
+            assert_eq!(manifest["schema_version"], 12);
             assert_eq!(manifest_file(&manifest, "SECURITY.md")["kind"], "rendered");
             assert_eq!(
                 std::fs::read(target.path().join("SECURITY.md")).unwrap(),
@@ -23517,7 +23603,7 @@ fn private_reporting_policy_adoption_and_parameter_replay() {
             )
         )
     );
-    assert_eq!(manifest["schema_version"], 11);
+    assert_eq!(manifest["schema_version"], 12);
     assert_eq!(manifest["profile"]["release"]["style"], "trunk");
 }
 
@@ -23970,7 +24056,7 @@ fn a_pre_policy_record_upgrades_without_touching_the_policy() {
         .success();
     assert_eq!(landed_policy(target.path()), policy);
     let manifest = read_manifest(target.path());
-    assert_eq!(manifest["schema_version"], 11);
+    assert_eq!(manifest["schema_version"], 12);
     assert_eq!(manifest["parameters"]["security_contact"], "");
     assert_eq!(manifest["parameters"]["security_response"], "best-effort");
 }
@@ -26161,6 +26247,176 @@ fn opt_in_signature_lines() -> Vec<String> {
     out
 }
 
+/// The signature lines of a landing under the `rebase` merge form: every
+/// candidate, the configuration, and the record, so the commit gate's
+/// files, the rebase arms, and the rebase merge values each sign the bytes
+/// a rebase target receives.
+fn rebase_signature_lines() -> Vec<String> {
+    use release_kit::landing::Integration;
+    use release_kit::projection::{Projection, ProjectionInput};
+
+    let mut out = Vec::new();
+    for (driver, forge, integration) in [
+        ("rust", "github", Integration::Forge),
+        ("rust", "github", Integration::Local),
+        ("python", "github", Integration::Forge),
+        ("bash", "github", Integration::Forge),
+        ("rust", "gitlab", Integration::Forge),
+        ("bash", "gitlab", Integration::Forge),
+        ("python", "gitlab", Integration::Forge),
+    ] {
+        let params = rebase_params(driver, forge, integration);
+        let projection = Projection::compute(&ProjectionInput {
+            params: params.clone(),
+            evidence: NixShape::Supported.evidence(),
+        })
+        .expect("the rebase pair projects");
+        assert!(
+            projection.collisions.is_empty(),
+            "{driver} {forge}: {:?}",
+            projection.collisions
+        );
+        let label = format!(
+            "{driver} {forge} linked-worktree {} trunk rebase",
+            integration.as_str()
+        );
+        for candidate in &projection.candidates {
+            out.push(candidate_signature_line(candidate, &label));
+        }
+        let plan = release_kit::config::Plan::compose(None, &params, None, None)
+            .expect("the rebase configuration composes from the parameters alone");
+        out.push(format!(
+            "{label} {} {}",
+            release_kit::config::CONFIG_PATH,
+            release_kit::digest::Digest::of(plan.content.as_bytes())
+        ));
+        out.push(record_signature_line(
+            &label,
+            &params,
+            &projection.capabilities,
+        ));
+    }
+    out
+}
+
+/// A release-less parameter set, built from a record as production builds
+/// one: the technologies and the forge as given, `release.mode = "none"`,
+/// the workflow guards, the linked-worktree checkout mode, and no reporting
+/// policy, which a release-less landing does not request by default.
+fn release_none_params(
+    technologies: &[&str],
+    forge: Option<&str>,
+    integration: release_kit::landing::Integration,
+    form: release_kit::landing::MergeForm,
+) -> release_kit::landing::Params {
+    let mut record = manifest_requesting(
+        "rust",
+        forge.unwrap_or("github"),
+        release_kit::landing::CheckoutMode::LinkedWorktree,
+        integration,
+        None,
+        if forge.is_some() { "acme/widget" } else { "" },
+        release_kit::profile::CapabilityRequests {
+            nix_packaging: false,
+            reporting_policy: false,
+            scorecard: false,
+            code_scanning: None,
+            workflow_guards: Some(true),
+        },
+    );
+    record.profile.technologies = technologies.iter().map(|t| (*t).to_owned()).collect();
+    record.profile.forge = forge.map(str::to_owned);
+    record.profile.release = release_kit::profile::ReleaseIntent {
+        mode: release_kit::profile::ReleaseMode::None,
+        driver: None,
+        style: None,
+        line_prefix: None,
+    };
+    record.git.merge_form = form;
+    release_kit::landing::Params::from_record(&record)
+}
+
+/// The signature lines of the release-less landings: every candidate, the
+/// configuration, and the record, so the workflow variants of the routing
+/// block and the glossary, the hook block without the tag guard, the
+/// release-less gates, and the configuration without its release tables
+/// each sign the bytes a release-less target receives.
+///
+/// Three shapes. `release-none` is each supported pair's technology with
+/// no release, under each integration mode. `workflow-only` is what
+/// `rk init --workflow-only` resolves for a project with no technology, on
+/// each forge and with none. `release-none-rebase` is the release-less
+/// shape under the `rebase` merge form, where forge integration lands the
+/// commit gate.
+fn release_less_signature_lines() -> Vec<String> {
+    use release_kit::landing::{Integration, MergeForm};
+    use release_kit::projection::{Projection, ProjectionInput};
+
+    let mut shapes: Vec<(String, release_kit::landing::Params)> = Vec::new();
+    for tech in ["rust", "python", "bash"] {
+        for forge in ["github", "gitlab"] {
+            for integration in [Integration::Local, Integration::Forge] {
+                shapes.push((
+                    format!(
+                        "{tech} {forge} linked-worktree {} trunk release-none",
+                        integration.as_str()
+                    ),
+                    release_none_params(&[tech], Some(forge), integration, MergeForm::Squash),
+                ));
+            }
+        }
+    }
+    for forge in [Some("github"), Some("gitlab"), None] {
+        shapes.push((
+            format!(
+                "none {} linked-worktree local trunk workflow-only",
+                forge.unwrap_or("none")
+            ),
+            release_none_params(&[], forge, Integration::Local, MergeForm::Squash),
+        ));
+    }
+    for forge in ["github", "gitlab"] {
+        for integration in [Integration::Local, Integration::Forge] {
+            shapes.push((
+                format!(
+                    "rust {forge} linked-worktree {} trunk release-none-rebase",
+                    integration.as_str()
+                ),
+                release_none_params(&["rust"], Some(forge), integration, MergeForm::Rebase),
+            ));
+        }
+    }
+    let mut out = Vec::new();
+    for (label, params) in shapes {
+        let projection = Projection::compute(&ProjectionInput {
+            params: params.clone(),
+            evidence: NixShape::Supported.evidence(),
+        })
+        .expect("the release-less pair projects");
+        assert!(
+            projection.collisions.is_empty(),
+            "{label}: {:?}",
+            projection.collisions
+        );
+        for candidate in &projection.candidates {
+            out.push(candidate_signature_line(candidate, &label));
+        }
+        let plan = release_kit::config::Plan::compose(None, &params, None, None)
+            .expect("the release-less configuration composes from the parameters alone");
+        out.push(format!(
+            "{label} {} {}",
+            release_kit::config::CONFIG_PATH,
+            release_kit::digest::Digest::of(plan.content.as_bytes())
+        ));
+        out.push(record_signature_line(
+            &label,
+            &params,
+            &projection.capabilities,
+        ));
+    }
+    out
+}
+
 /// The signature lines of a fresh landing without the workflow guards.
 fn unguarded_signature_lines() -> Vec<String> {
     use release_kit::landing::{CheckoutMode, Style};
@@ -27074,6 +27330,8 @@ fn every_current_landing_fixture_keeps_its_destinations_kinds_placement_and_dige
     lines.extend(opt_in_signature_lines());
     lines.extend(unguarded_signature_lines());
     lines.extend(occupied_target_signature_lines());
+    lines.extend(rebase_signature_lines());
+    lines.extend(release_less_signature_lines());
     let text = format!("{}\n", lines.join("\n"));
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/projection-digests.txt");
@@ -27485,7 +27743,7 @@ fn stage_writes_only_below_the_resolved_stage_root() {
         "an explicit --output leaves the state root without a stage"
     );
     assert!(resolved.join("stage.json").is_file());
-    assert_eq!(report["receipt_schema_version"], 11);
+    assert_eq!(report["receipt_schema_version"], 12);
 }
 
 /// SATISFIES staging:the-output-path-has-one-precedence
@@ -28076,7 +28334,7 @@ fn the_stage_receipt_and_human_output_snapshot_hold() {
         format!("stage: {}", stage.display()),
         "output: from --output".to_owned(),
         format!("target: {}", canonical_target.display()),
-        "parameters: technologies rust; forge github; repo acme/widget; release automatic (driver rust, style trunk, line prefix release/); trunk master; checkout mode linked-worktree; integration forge; requests reporting_policy, workflow_guards".to_owned(),
+        "parameters: technologies rust; forge github; repo acme/widget; release automatic (driver rust, style trunk, line prefix release/); trunk master; checkout mode linked-worktree; integration forge; merge form squash; requests reporting_policy, workflow_guards".to_owned(),
         "landing record: none".to_owned(),
         "  artifacts/AGENTS.md (rendered, region)".to_owned(),
         "  artifacts/release-plz.toml (seeded, whole)".to_owned(),
@@ -28173,7 +28431,7 @@ fn the_stage_receipt_and_human_output_snapshot_hold() {
         .clone();
     let human = String::from_utf8_lossy(&human);
     assert!(
-        human.contains("landing record: schema_version 11"),
+        human.contains("landing record: schema_version 12"),
         "{human}"
     );
     assert!(
@@ -28185,7 +28443,7 @@ fn the_stage_receipt_and_human_output_snapshot_hold() {
         "{human}"
     );
     let receipt = stage_receipt(&landed_out);
-    assert_eq!(receipt["receipt_schema_version"], 11);
+    assert_eq!(receipt["receipt_schema_version"], 12);
     assert_eq!(receipt["retired"], serde_json::json!(["old-workflow.yml"]));
     assert!(
         receipt["seeded_present"]
@@ -29188,7 +29446,7 @@ fn fresh_init_preview_is_read_only_and_apply_writes_the_current_receipt() {
         ]
     );
     let receipt = read_manifest(target.path());
-    assert_eq!(receipt["schema_version"], 11);
+    assert_eq!(receipt["schema_version"], 12);
     assert_eq!(receipt["rk_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(receipt["origin"], "init");
     for file in receipt["files"].as_array().expect("files") {
@@ -29320,7 +29578,7 @@ fn receipt_schemas_1_through_7_load_without_a_release_source_and_rewrite_as_the_
         );
         assert!(!text.contains("scopes"), "schema {schema}: {text}");
         let rewritten = read_manifest(target.path());
-        assert_eq!(rewritten["schema_version"], 11, "schema {schema}");
+        assert_eq!(rewritten["schema_version"], 12, "schema {schema}");
         assert_eq!(rewritten["profile"]["release"]["style"], "trunk");
         assert_eq!(
             rewritten["capabilities"]["scorecard"], false,
@@ -29884,7 +30142,7 @@ fn a_failpoint_at_every_write_boundary_leaves_whole_files_and_the_previous_recei
             .arg(target.path())
             .assert()
             .success();
-        assert_eq!(read_manifest(target.path())["schema_version"], 11);
+        assert_eq!(read_manifest(target.path())["schema_version"], 12);
         assert_eq!(
             std::fs::read_to_string(target.path().join("release-plz.toml")).expect("reads"),
             tuned
@@ -31901,7 +32159,7 @@ fn a_public_v0_4_0_target_upgrades_from_its_receipt_alone() {
     }
 
     let manifest = read_manifest(target);
-    assert_eq!(manifest["schema_version"], 11);
+    assert_eq!(manifest["schema_version"], 12);
     assert_eq!(manifest["rk_version"], env!("CARGO_PKG_VERSION"));
     let text = std::fs::read_to_string(target.join(".release-kit/manifest.json"))
         .expect("the receipt reads");
@@ -32117,8 +32375,10 @@ fn an_unknown_forge_survives_init_status_and_upgrade() {
 }
 
 /// SATISFIES project-profile:a-capability-is-available-only-when-complete
-/// A release-less GitLab target receives a complete, active title gate:
-/// the fragment and the minimal root pipeline that includes it.
+/// A release-less GitLab target integrated at the forge receives a
+/// complete, active title gate: the fragment and the minimal root pipeline
+/// that includes it. A request reaches its trunk, so a gate has one to
+/// judge.
 #[test]
 fn a_release_less_gitlab_target_lands_a_complete_title_gate() {
     let target = bare_target();
@@ -32130,6 +32390,8 @@ fn a_release_less_gitlab_target_lands_a_complete_title_gate() {
         "acme/widget",
         "--release-mode",
         "none",
+        "--integration",
+        "forge",
         "--apply",
         "--target",
     ])
@@ -32166,6 +32428,8 @@ fn a_release_less_gitlab_target_lands_a_complete_title_gate() {
         "acme/widget",
         "--release-mode",
         "none",
+        "--integration",
+        "forge",
         "--apply",
         "--target",
     ])
@@ -32211,6 +32475,8 @@ fn an_occupied_gitlab_root_pipeline_withholds_the_title_gate() {
         "acme/widget",
         "--release-mode",
         "none",
+        "--integration",
+        "forge",
         "--apply",
         "--target",
     ])
@@ -32488,6 +32754,7 @@ fn profile_reports_values_sources_and_the_selection_and_writes_nothing() {
             "git.guards",
             "git.workflow-guards",
             "git.title-check",
+            "git.commit-check",
             "security.reporting-policy",
             "release.automation",
             "packaging.nix",
@@ -32914,6 +33181,18 @@ fn integrate_fixture_with(
     release: &serde_json::Value,
     crate_root: bool,
 ) -> (tempfile::TempDir, PathBuf) {
+    integrate_fixture_shaped(release, crate_root, None, &["feat(greeting): add it"])
+}
+
+/// The integrate fixture with the record's merge form as given — `None`
+/// writes a schema-10 record that predates the parameter — and one branch
+/// commit per message, each adding its own file.
+fn integrate_fixture_shaped(
+    release: &serde_json::Value,
+    crate_root: bool,
+    merge_form: Option<&str>,
+    messages: &[&str],
+) -> (tempfile::TempDir, PathBuf) {
     let (parent, repo) = seatable_fixture();
     if crate_root {
         std::fs::write(
@@ -32934,19 +33213,23 @@ fn integrate_fixture_with(
     // The record, not the configuration, is what `rk integrate` reads:
     // the record is what landed, and an edited configuration is pending
     // input to the next landing rather than a runtime override.
+    let mut git = serde_json::json!({
+        "trunk": "master",
+        "checkout_mode": "linked-worktree",
+        "integration": "local",
+    });
+    if let Some(form) = merge_form {
+        git["merge_form"] = serde_json::json!(form);
+    }
     std::fs::write(
         repo.join(".release-kit/manifest.json"),
         serde_json::to_string_pretty(&serde_json::json!({
-            "schema_version": 10,
+            "schema_version": if merge_form.is_some() { 12 } else { 10 },
             "rk_version": "0.0.0",
             "origin": "init",
             "landed_at": "2026-09-15T00:00:00Z",
             "profile": { "technologies": technologies, "release": release },
-            "git": {
-                "trunk": "master",
-                "checkout_mode": "linked-worktree",
-                "integration": "local",
-            },
+            "git": git,
             "capabilities": {
                 "nix_packaging": false,
                 "reporting_policy": false,
@@ -32968,9 +33251,30 @@ fn integrate_fixture_with(
     git_in(&repo, &["push", "-q", "origin", "master"]);
     git_in(&repo, &["branch", "feat/greeting"]);
     let seat = seat(&repo, "feat/greeting");
-    std::fs::write(seat.join("greeting.txt"), "hi\n").expect("the file writes");
-    git_in(&seat, &["add", "-A"]);
-    git_in(&seat, &["commit", "-qm", "feat(greeting): add it"]);
+    for (index, message) in messages.iter().enumerate() {
+        let name = if index == 0 {
+            "greeting.txt".to_owned()
+        } else {
+            format!("greeting-{index}.txt")
+        };
+        std::fs::write(seat.join(name), "hi\n").expect("the file writes");
+        git_in(&seat, &["add", "-A"]);
+        // No hook the host configures judges the fixture's messages: some
+        // of them exist to be refused by `rk integrate` itself, so the
+        // commit reads no global or system configuration.
+        let mut command = std::process::Command::new("git");
+        for var in GIT_HOOK_VARS {
+            command.env_remove(var);
+        }
+        let status = command
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .args(["-c", "core.hooksPath=/dev/null", "commit", "-qm", message])
+            .current_dir(&seat)
+            .status()
+            .expect("git runs");
+        assert!(status.success(), "the fixture commit {message:?} failed");
+    }
     (parent, repo)
 }
 
@@ -33281,7 +33585,10 @@ fn integrate_refuses_by_name_and_leaves_the_trunk_alone() {
 /// because `git commit-tree` fires no hook.
 #[test]
 fn integrate_holds_the_trunk_message_to_the_landed_convention() {
-    let (_parent, repo) = integrate_fixture();
+    // A record that names a release requires the scope; a release-less
+    // one prefers it, which `workflow_only_integrate_accepts_a_header_with_no_scope`
+    // holds.
+    let (_parent, repo) = integrate_fixture_with(&rust_release(), false);
     let before = rev_parse(&repo, "master");
     for message in ["add the greeting", "feat: add the greeting"] {
         rk_scrubbed()
@@ -33371,9 +33678,13 @@ fn a_local_integration_is_the_second_admissible_prune_proof() {
     git_in(&other, &["add", "-A"]);
     git_in(&other, &["commit", "-qm", "feat(other): add it"]);
 
+    // The trunk messages differ from the branch commits' own, so each
+    // squash is a new object: a squash of one commit under the same
+    // message, parent, tree, and second would be that commit itself, and
+    // the trunk would then reach the tip, which is the third proof.
     for (branch, message) in [
-        ("feat/greeting", "feat(greeting): add it"),
-        ("feat/other", "feat(other): add it"),
+        ("feat/greeting", "feat(greeting): add the greeting file"),
+        ("feat/other", "feat(other): add the other file"),
     ] {
         rk_scrubbed()
             .args(["integrate", branch, "--apply", "-m", message, "--target"])
@@ -33509,7 +33820,15 @@ fn the_integration_mode_round_trips_through_the_landing() {
         .success();
     let hooks =
         std::fs::read_to_string(target.path().join(".pre-commit-config.yaml")).expect("reads");
-    assert!(!hooks.contains("no-commit-to-branch"), "{hooks}");
+    // The trunk guards of local integration: the hand commit refuses, and
+    // the operator's trunk push is held against a rewrite and a merge
+    // commit rather than refused.
+    assert!(hooks.contains("- id: no-commit-to-branch"), "{hooks}");
+    assert!(hooks.contains("- id: rk-no-force-push-to-trunk"), "{hooks}");
+    assert!(
+        hooks.contains("- id: rk-no-merge-commit-to-trunk"),
+        "{hooks}"
+    );
     assert!(!hooks.contains("rk-no-push-to-trunk"), "{hooks}");
     assert!(
         hooks.contains("pre-commit run --hook-stage manual --all-files"),
@@ -36993,4 +37312,3877 @@ fn an_unreadable_forge_snapshot_stops_the_resume_and_keeps_its_entry() {
     assert!(!resumed.status.success(), "{resumed:?}");
     assert_eq!(migration_registry(&workspace), before);
     assert_eq!(std::fs::read(&file).expect("reads"), bytes);
+}
+
+// ---------------------------------------------------------------------
+// git.merge_form and the rebase form of rk integrate
+// ---------------------------------------------------------------------
+
+/// The integrate fixture under the `rebase` merge form, with one branch
+/// commit per message.
+fn rebase_fixture(messages: &[&str]) -> (tempfile::TempDir, PathBuf) {
+    integrate_fixture_shaped(
+        &serde_json::json!({ "mode": "none" }),
+        false,
+        Some("rebase"),
+        messages,
+    )
+}
+
+/// The integrate seat of the fixture branch.
+fn greeting_seat(repo: &Path) -> PathBuf {
+    repo.parent()
+        .expect("a parent")
+        .join("widget@feat-greeting")
+}
+
+/// The commits between two revisions, oldest first.
+fn commits_between(repo: &Path, from: &str, to: &str) -> Vec<String> {
+    git_out(repo, &["rev-list", "--reverse", &format!("{from}..{to}")])
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
+/// One applied rebase integration, its JSON report returned.
+fn rebase_integrate_apply(repo: &Path) -> serde_json::Value {
+    let out = rk_scrubbed()
+        .args([
+            "integrate",
+            "feat/greeting",
+            "--apply",
+            "--json",
+            "--target",
+        ])
+        .arg(repo)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    serde_json::from_slice(&out).expect("one JSON object")
+}
+
+/// A branch of one commit reaches the trunk as that very commit: the same
+/// object, no new commit, no merge commit, and evidence naming the tip.
+///
+/// SATISFIES git:a-rebase-integration-publishes-the-branch-tip
+#[test]
+fn rebase_integrate_puts_one_commit_on_the_trunk_as_it_is() {
+    if !pre_commit_present() {
+        return;
+    }
+    let (_parent, repo) = rebase_fixture(&["feat(greeting): add it"]);
+    let before = rev_parse(&repo, "master");
+    let tip = rev_parse(&repo, "feat/greeting");
+    let report = rebase_integrate_apply(&repo);
+    assert_eq!(report["merge_form"], "rebase", "{report}");
+    assert_eq!(report["trunk_before"], before, "{report}");
+    assert_eq!(report["trunk_commit"], tip, "{report}");
+    assert_eq!(
+        rev_parse(&repo, "master"),
+        tip,
+        "the trunk is the branch tip"
+    );
+    assert_eq!(commits_between(&repo, &before, "master"), vec![tip.clone()]);
+    assert_eq!(
+        git_out(
+            &repo,
+            &["rev-list", "--merges", &format!("{before}..master")]
+        ),
+        "",
+        "no merge commit"
+    );
+    assert_eq!(
+        git_out(&repo, &["log", "-1", "--format=%s", "master"]),
+        "feat(greeting): add it"
+    );
+    // The trunk's own worktree moved with its HEAD.
+    assert!(repo.join("greeting.txt").is_file());
+    assert_eq!(git_out(&repo, &["status", "--porcelain"]), "");
+    let ledger: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(repo.join(".git/rk/integrations.json")).expect("the ledger reads"),
+    )
+    .expect("the ledger parses");
+    let entry = &ledger["entries"][0];
+    assert_eq!(entry["branch"], "feat/greeting");
+    assert_eq!(entry["branch_tip"], tip);
+    assert_eq!(entry["trunk_commit"], tip);
+    assert_ne!(
+        git_out(&repo, &["rev-parse", "refs/remotes/origin/master"]),
+        tip,
+        "the command never pushes"
+    );
+}
+
+/// A branch of three commits reaches the trunk as the same three commits,
+/// in order, with their own messages.
+///
+/// SATISFIES git:a-rebase-integration-publishes-the-branch-tip
+#[test]
+fn rebase_integrate_puts_three_commits_on_the_trunk_in_order() {
+    if !pre_commit_present() {
+        return;
+    }
+    let messages = [
+        "feat(greeting): add it",
+        "fix(greeting): mend it",
+        "docs(greeting): explain it",
+    ];
+    let (_parent, repo) = rebase_fixture(&messages);
+    let before = rev_parse(&repo, "master");
+    let branch = commits_between(&repo, &before, "feat/greeting");
+    assert_eq!(branch.len(), 3);
+    let objects_before = git_out(&repo, &["count-objects", "-v"]);
+    let report = rebase_integrate_apply(&repo);
+    assert_eq!(report["trunk_commit"], branch[2], "{report}");
+    assert_eq!(
+        commits_between(&repo, &before, "master"),
+        branch,
+        "the same commits, the same order"
+    );
+    let subjects: Vec<String> = branch
+        .iter()
+        .map(|id| git_out(&repo, &["log", "-1", "--format=%s", id]))
+        .collect();
+    assert_eq!(subjects, messages);
+    assert_eq!(
+        git_out(
+            &repo,
+            &["rev-list", "--merges", &format!("{before}..master")]
+        ),
+        ""
+    );
+    assert_eq!(
+        rev_parse(&repo, "master"),
+        rev_parse(&repo, "feat/greeting")
+    );
+    // No commit object was written: the loose count moved by the ledger
+    // alone, which is a file and not an object.
+    assert_eq!(git_out(&repo, &["count-objects", "-v"]), objects_before);
+}
+
+/// One branch commit whose message the landed commit-msg stage refuses
+/// refuses the whole integration, naming that commit, and the trunk does
+/// not move.
+///
+/// SATISFIES git:a-rebase-integration-publishes-the-branch-tip
+#[test]
+fn rebase_integrate_refuses_a_commit_message_the_judgment_refuses() {
+    let (_parent, repo) = rebase_fixture(&[
+        "feat(greeting): add it",
+        "feat(greeting): add more\n\nCo-Authored-By: Claude <noreply@anthropic.com>",
+        "docs(greeting): explain it",
+    ]);
+    let before = rev_parse(&repo, "master");
+    let offending = commits_between(&repo, &before, "feat/greeting")[1].clone();
+    for apply in [false, true] {
+        let mut command = rk_scrubbed();
+        command
+            .args(["integrate", "feat/greeting", "--target"])
+            .arg(&repo);
+        if apply {
+            command.arg("--apply");
+        }
+        command
+            .assert()
+            .code(73)
+            .stderr(predicate::str::contains(format!(
+                "commit {}",
+                &offending[..7]
+            )))
+            .stderr(predicate::str::contains("attribution"));
+        assert_eq!(rev_parse(&repo, "master"), before, "apply {apply}");
+    }
+    assert!(!repo.join(".git/rk/integrations.json").exists());
+
+    // A subject outside the convention refuses the same way.
+    let (_parent, repo) = rebase_fixture(&["feat(greeting): add it", "add more"]);
+    let before = rev_parse(&repo, "master");
+    rk_scrubbed()
+        .args(["integrate", "feat/greeting", "--apply", "--target"])
+        .arg(&repo)
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("Conventional Commit"));
+    assert_eq!(rev_parse(&repo, "master"), before);
+}
+
+/// A commit landing in the seat while the gate runs refuses: the gate
+/// judged a tree that is no longer the branch's, and nothing reaches the
+/// trunk.
+///
+/// SATISFIES git:a-rebase-integration-publishes-the-branch-tip
+#[test]
+fn rebase_integrate_refuses_a_branch_that_moved_while_the_gate_ran() {
+    if !pre_commit_present() {
+        return;
+    }
+    let (_parent, repo) = rebase_fixture(&["feat(greeting): add it"]);
+    let seat = greeting_seat(&repo);
+    std::fs::write(
+        seat.join("sneak.sh"),
+        "#!/bin/sh\nset -eu\necho late > late.txt\ngit add late.txt\ngit -c core.hooksPath=/dev/null commit -qm 'feat(greeting): late'\n",
+    )
+    .expect("the hook script writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(
+            seat.join("sneak.sh"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .expect("the script is executable");
+    }
+    std::fs::write(
+        seat.join(".pre-commit-config.yaml"),
+        "repos:\n  - repo: local\n    hooks:\n      - id: sneak\n        name: sneak\n        stages: [manual]\n        language: script\n        always_run: true\n        pass_filenames: false\n        entry: sneak.sh\n",
+    )
+    .expect("the hook file writes");
+    git_in(&seat, &["add", "-A"]);
+    git_in(
+        &seat,
+        &["commit", "-qm", "ci(hooks): commit under the gate"],
+    );
+    let before = rev_parse(&repo, "master");
+    rk_scrubbed()
+        .args(["integrate", "feat/greeting", "--apply", "--target"])
+        .arg(&repo)
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("while the gate ran"));
+    assert_eq!(rev_parse(&repo, "master"), before);
+    assert!(!repo.join(".git/rk/integrations.json").exists());
+}
+
+/// A trunk message under `rebase` reaches nothing, so it refuses with its
+/// own reason and exit code, in the preview and in the apply, before
+/// anything is read or written.
+///
+/// SATISFIES git:a-rebase-integration-publishes-the-branch-tip
+#[test]
+fn rebase_integrate_refuses_a_trunk_message_with_its_typed_code() {
+    let (_parent, repo) = rebase_fixture(&["feat(greeting): add it"]);
+    let before = rev_parse(&repo, "master");
+    let tip = rev_parse(&repo, "feat/greeting");
+    for apply in [false, true] {
+        let mut command = rk_scrubbed();
+        command
+            .args(["integrate", "feat/greeting", "--json", "--target"])
+            .arg(&repo)
+            .args(["-m", "feat(greeting): add the greeting file"]);
+        if apply {
+            command.arg("--apply");
+        }
+        let output = command.assert().code(73).get_output().clone();
+        assert!(output.stdout.is_empty(), "no report on a refusal");
+        let diagnostic: serde_json::Value =
+            serde_json::from_slice(&output.stderr).expect("stderr is one JSON diagnostic");
+        assert_eq!(diagnostic["reason"], "merge-form-mismatch", "{diagnostic}");
+        assert!(
+            diagnostic["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("-m") && message.contains("rebase")),
+            "{diagnostic}"
+        );
+        assert_eq!(rev_parse(&repo, "master"), before);
+        assert_eq!(rev_parse(&repo, "feat/greeting"), tip);
+    }
+    assert!(!repo.join(".git/rk/integrations.json").exists());
+}
+
+/// The preview under `rebase` writes nothing at all: no ref, no ledger,
+/// no fetch, and it says that no commit will be written.
+#[test]
+fn rebase_integrate_preview_writes_nothing() {
+    let (_parent, repo) = rebase_fixture(&["feat(greeting): add it", "fix(greeting): mend it"]);
+    let before = rev_parse(&repo, "master");
+    let tip = rev_parse(&repo, "feat/greeting");
+    let tracking = rev_parse(&repo, "refs/remotes/origin/master");
+    let fetch_head = repo.join(".git/FETCH_HEAD").exists();
+    let out = rk_scrubbed()
+        .args(["integrate", "feat/greeting", "--json", "--target"])
+        .arg(&repo)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["mode"], "preview", "{report}");
+    assert_eq!(report["merge_form"], "rebase", "{report}");
+    assert!(report.get("trunk_commit").is_none(), "{report}");
+    assert!(
+        report["steps"]
+            .as_array()
+            .expect("steps")
+            .iter()
+            .any(|step| step
+                .as_str()
+                .is_some_and(|step| step.contains("2 commits") && step.contains("no new commit"))),
+        "{report}"
+    );
+    assert_eq!(rev_parse(&repo, "master"), before);
+    assert_eq!(rev_parse(&repo, "feat/greeting"), tip);
+    assert_eq!(rev_parse(&repo, "refs/remotes/origin/master"), tracking);
+    assert_eq!(repo.join(".git/FETCH_HEAD").exists(), fetch_head);
+    assert!(!repo.join(".git/rk/integrations.json").exists());
+}
+
+/// A record that states `squash` takes the squash path exactly as a
+/// record predating the parameter does: `-m` is required, and one new
+/// commit carrying the branch's tree reaches the trunk.
+#[test]
+fn rebase_integrate_leaves_a_squash_record_on_the_squash_path() {
+    let (_parent, repo) = integrate_fixture_shaped(
+        &serde_json::json!({ "mode": "none" }),
+        false,
+        Some("squash"),
+        &["feat(greeting): add it", "fix(greeting): mend it"],
+    );
+    let before = rev_parse(&repo, "master");
+    let tip = rev_parse(&repo, "feat/greeting");
+    rk_scrubbed()
+        .args(["integrate", "feat/greeting", "--apply", "--target"])
+        .arg(&repo)
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("--message is required"));
+    rk_scrubbed()
+        .args(["integrate", "feat/greeting", "--target"])
+        .arg(&repo)
+        .args(["-m", "feat(greeting): add the greeting"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("would write one squash commit"));
+    if !pre_commit_present() {
+        return;
+    }
+    let out = rk_scrubbed()
+        .args([
+            "integrate",
+            "feat/greeting",
+            "--apply",
+            "--json",
+            "--target",
+        ])
+        .arg(&repo)
+        .args(["-m", "feat(greeting): add the greeting"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["merge_form"], "squash", "{report}");
+    let after = rev_parse(&repo, "master");
+    assert_ne!(after, tip, "a squash is a new commit");
+    assert_eq!(commits_between(&repo, &before, &after).len(), 1);
+    assert_eq!(git_out(&repo, &["rev-parse", "master^"]), before);
+    assert_eq!(
+        git_out(&repo, &["rev-parse", "master^{tree}"]),
+        git_out(&repo, &["rev-parse", "feat/greeting^{tree}"])
+    );
+    assert_eq!(
+        git_out(&repo, &["log", "-1", "--format=%s", "master"]),
+        "feat(greeting): add the greeting"
+    );
+}
+
+/// A scratch target the landing verbs and `rk profile` resolve: a git
+/// directory and a GitHub coordinate on the command line.
+fn merge_form_target() -> tempfile::TempDir {
+    let target = tempfile::tempdir().expect("a scratch dir exists");
+    std::fs::create_dir_all(target.path().join(".git")).expect("the git dir creates");
+    target
+}
+
+/// `rk profile --json` against a target, with extra flags.
+fn merge_form_profile(target: &Path, flags: &[&str]) -> serde_json::Value {
+    let out = rk()
+        .args(["profile", "--json", "--target"])
+        .arg(target)
+        .args([
+            "--technology",
+            "rust",
+            "--forge",
+            "github",
+            "--repo",
+            "acme/widget",
+        ])
+        .args(flags)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    serde_json::from_slice(&out).expect("one JSON object")
+}
+
+/// Rewrite the committed configuration's `[git]` merge form line. A
+/// stated form takes its merge values with it, because the floors judge
+/// them by the form the file states; a removed one leaves them, because a
+/// silent file takes either form's whole values.
+fn set_configured_merge_form(target: &Path, form: Option<&str>) {
+    let path = target.join(".release-kit/config.toml");
+    let text = std::fs::read_to_string(&path).expect("the config reads");
+    let (method, squash_option) = match form {
+        Some("rebase") => (Some("rebase"), Some("never")),
+        Some(_) => (Some("squash"), Some("always")),
+        None => (None, None),
+    };
+    let kept: Vec<String> = text
+        .lines()
+        .filter(|line| !line.starts_with("merge_form ="))
+        .map(|line| match (method, squash_option) {
+            (Some(method), _) if line.starts_with("allowed_merge_methods =") => {
+                format!("allowed_merge_methods = [\"{method}\"]")
+            }
+            (_, Some(option)) if line.starts_with("squash_option =") => {
+                format!("squash_option = \"{option}\"")
+            }
+            _ => line.to_owned(),
+        })
+        .collect();
+    let mut text = format!("{}\n", kept.join("\n"));
+    if let Some(form) = form {
+        text = text.replacen("[git]\n", &format!("[git]\nmerge_form = \"{form}\"\n"), 1);
+    }
+    std::fs::write(&path, text).expect("the config writes");
+}
+
+/// The merge form resolves by the precedence every Git workflow parameter
+/// takes: a flag, then the committed configuration, then the record, then
+/// the compiled default of `squash`.
+///
+/// SATISFIES git:the-merge-form-is-a-landing-parameter
+#[test]
+fn merge_form_resolves_flag_over_config_over_record_over_default() {
+    let target = merge_form_target();
+    let resolved = merge_form_profile(target.path(), &[]);
+    assert_eq!(resolved["git"]["merge_form"], "squash", "{resolved}");
+    assert_eq!(
+        resolved["sources"]["git.merge_form"], "default",
+        "{resolved}"
+    );
+
+    rk().args(["init", "--technology", "rust", "--forge", "github"])
+        .args([
+            "--repo",
+            "acme/widget",
+            "--merge-form",
+            "rebase",
+            "--target",
+        ])
+        .arg(target.path())
+        .arg("--apply")
+        .assert()
+        .success();
+    // The configuration and the record both say rebase; the configuration
+    // answers.
+    let resolved = merge_form_profile(target.path(), &[]);
+    assert_eq!(resolved["git"]["merge_form"], "rebase", "{resolved}");
+    assert_eq!(
+        resolved["sources"]["git.merge_form"], "config",
+        "{resolved}"
+    );
+
+    // With the key gone, the record answers.
+    set_configured_merge_form(target.path(), None);
+    let resolved = merge_form_profile(target.path(), &[]);
+    assert_eq!(resolved["git"]["merge_form"], "rebase", "{resolved}");
+    assert_eq!(
+        resolved["sources"]["git.merge_form"], "record",
+        "{resolved}"
+    );
+
+    // The configuration outranks the record.
+    set_configured_merge_form(target.path(), Some("squash"));
+    let resolved = merge_form_profile(target.path(), &[]);
+    assert_eq!(resolved["git"]["merge_form"], "squash", "{resolved}");
+    assert_eq!(
+        resolved["sources"]["git.merge_form"], "config",
+        "{resolved}"
+    );
+
+    // The flag outranks the configuration.
+    let resolved = merge_form_profile(target.path(), &["--merge-form", "rebase"]);
+    assert_eq!(resolved["git"]["merge_form"], "rebase", "{resolved}");
+    assert_eq!(resolved["sources"]["git.merge_form"], "flag", "{resolved}");
+}
+
+/// `--merge-form` lands through `rk init` and changes through
+/// `rk upgrade`, writing the record and the configuration key with its
+/// template comment, and a plain upgrade keeps the recorded form.
+///
+/// SATISFIES git:the-merge-form-is-a-landing-parameter
+#[test]
+fn merge_form_flag_lands_through_init_and_upgrade() {
+    let target = merge_form_target();
+    rk().args(["init", "--technology", "rust", "--forge", "github"])
+        .args([
+            "--repo",
+            "acme/widget",
+            "--merge-form",
+            "rebase",
+            "--target",
+        ])
+        .arg(target.path())
+        .arg("--apply")
+        .assert()
+        .success();
+    let record = read_manifest(target.path());
+    assert_eq!(record["schema_version"], 12);
+    assert_eq!(record["git"]["merge_form"], "rebase");
+    let config = std::fs::read_to_string(target.path().join(".release-kit/config.toml"))
+        .expect("the config reads");
+    assert!(
+        config.contains("merge_form = \"rebase\" # P: squash or rebase"),
+        "the key lands with its template comment: {config}"
+    );
+
+    rk().args(["upgrade", "--merge-form", "squash", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    assert_eq!(read_manifest(target.path())["git"]["merge_form"], "squash");
+    let config = std::fs::read_to_string(target.path().join(".release-kit/config.toml"))
+        .expect("the config reads");
+    assert!(config.contains("merge_form = \"squash\""), "{config}");
+
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    assert_eq!(read_manifest(target.path())["git"]["merge_form"], "squash");
+}
+
+/// `rk profile` and `rk status` report the merge form beside the other Git
+/// workflow parameters, in the human and the machine form.
+#[test]
+fn merge_form_is_reported_by_profile_and_status() {
+    let target = merge_form_target();
+    rk().args(["profile", "--target"])
+        .arg(target.path())
+        .args([
+            "--technology",
+            "rust",
+            "--forge",
+            "github",
+            "--repo",
+            "acme/widget",
+        ])
+        .args(["--merge-form", "rebase"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "integration local; merge form rebase",
+        ));
+    rk().args(["init", "--technology", "rust", "--forge", "github"])
+        .args([
+            "--repo",
+            "acme/widget",
+            "--merge-form",
+            "rebase",
+            "--target",
+        ])
+        .arg(target.path())
+        .arg("--apply")
+        .assert()
+        .success();
+    rk().args(["status", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("merge form rebase"));
+    let out = rk()
+        .args(["status", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let status: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(status["git"]["merge_form"], "rebase", "{status}");
+}
+
+/// A form outside the two refuses, from a flag and from the committed
+/// configuration, naming the value and the forms.
+#[test]
+fn merge_form_refuses_an_unknown_value() {
+    let target = merge_form_target();
+    for verb in ["init", "profile"] {
+        rk().arg(verb)
+            .args([
+                "--technology",
+                "rust",
+                "--forge",
+                "github",
+                "--repo",
+                "acme/widget",
+            ])
+            .args(["--merge-form", "merge", "--target"])
+            .arg(target.path())
+            .assert()
+            .code(64)
+            .stderr(predicate::str::contains("unknown merge form 'merge'"))
+            .stderr(predicate::str::contains("squash, rebase"));
+    }
+    assert!(!target.path().join(".release-kit").exists());
+    std::fs::create_dir_all(target.path().join(".release-kit")).expect("the dir creates");
+    std::fs::write(
+        target.path().join(".release-kit/config.toml"),
+        "schema_version = 2\n\n[git]\nmerge_form = \"merge\"\n",
+    )
+    .expect("the config writes");
+    rk().args(["profile", "--target"])
+        .arg(target.path())
+        .args([
+            "--technology",
+            "rust",
+            "--forge",
+            "github",
+            "--repo",
+            "acme/widget",
+        ])
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("merge form"));
+}
+
+/// A target landed at schema 11, before the merge form existed, reads as
+/// `squash`, and its next upgrade writes the form at schema 12 with the
+/// landed blocks unchanged.
+///
+/// SATISFIES git:the-merge-form-is-a-landing-parameter
+#[test]
+fn merge_form_of_a_schema_11_target_migrates_as_squash() {
+    let target = merge_form_target();
+    rk().args(["init", "--technology", "rust", "--forge", "github"])
+        .args([
+            "--repo",
+            "acme/widget",
+            "--integration",
+            "local",
+            "--target",
+        ])
+        .arg(target.path())
+        .arg("--apply")
+        .assert()
+        .success();
+    // Take the landing back to what a schema-11 binary wrote: no key in
+    // the record, none in the configuration.
+    let mut record = read_manifest(target.path());
+    record["schema_version"] = serde_json::json!(11);
+    record["git"]
+        .as_object_mut()
+        .expect("the git domain")
+        .remove("merge_form");
+    write_manifest(target.path(), &record);
+    set_configured_merge_form(target.path(), None);
+    let hooks =
+        std::fs::read(target.path().join(".pre-commit-config.yaml")).expect("the hooks read");
+
+    let resolved = merge_form_profile(target.path(), &[]);
+    assert_eq!(resolved["git"]["merge_form"], "squash", "{resolved}");
+    assert_eq!(
+        resolved["sources"]["git.merge_form"], "record",
+        "{resolved}"
+    );
+
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let record = read_manifest(target.path());
+    assert_eq!(record["schema_version"], 12);
+    assert_eq!(record["git"]["merge_form"], "squash");
+    let config = std::fs::read_to_string(target.path().join(".release-kit/config.toml"))
+        .expect("the config reads");
+    assert!(config.contains("merge_form = \"squash\""), "{config}");
+    assert_eq!(
+        std::fs::read(target.path().join(".pre-commit-config.yaml")).expect("the hooks read"),
+        hooks,
+        "the landed blocks stay as they were"
+    );
+}
+
+// ---------------------------------------------------------------------
+// the third prune proof: a tip the trunk reaches
+// ---------------------------------------------------------------------
+
+/// One commit on a branch, in the given checkout.
+fn commit_one(dir: &Path, file: &str, message: &str) {
+    std::fs::write(dir.join(file), format!("{file}\n")).expect("the file writes");
+    git_in(dir, &["add", "-A"]);
+    git_in(dir, &["commit", "-qm", message]);
+}
+
+/// A branch with `commits` commits of its own, built in a seat that is
+/// then removed, so the branch stands with no worktree.
+fn unseated_branch(repo: &Path, name: &str, commits: usize) {
+    git_in(repo, &["branch", name]);
+    let seated = seat(repo, name);
+    for index in 0..commits {
+        commit_one(
+            &seated,
+            &format!("{}-{index}.txt", name.replace('/', "-")),
+            &format!("feat(hand): commit {index}"),
+        );
+    }
+    git_in(
+        repo,
+        &["worktree", "remove", seated.to_str().expect("utf-8")],
+    );
+}
+
+/// One prune verb's JSON report.
+fn prune_json(repo: &Path, verb: &str, mode: &str) -> serde_json::Value {
+    let out = rk_scrubbed()
+        .args([verb, "prune", mode, "--json", "--target"])
+        .arg(repo)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    serde_json::from_slice(&out).expect("one JSON object")
+}
+
+/// After a local rebase integration the trunk reaches the branch tip, so
+/// `rk worktree prune --apply` removes the seat and then the branch,
+/// naming the reachable tip as the proof.
+///
+/// SATISFIES maintenance:one-merge-proof-authorizes-both-removals
+#[test]
+fn reachable_tip_retires_the_worktree_of_a_rebase_integration() {
+    if !pre_commit_present() {
+        return;
+    }
+    let (_parent, repo) = rebase_fixture(&["feat(greeting): add it", "fix(greeting): mend it"]);
+    rebase_integrate_apply(&repo);
+    let report = prune_json(&repo, "worktree", "--verify");
+    let rows = report["worktrees"].as_array().expect("rows");
+    assert_eq!(rows.len(), 1, "{report}");
+    assert_eq!(rows[0]["branch"], "feat/greeting", "{report}");
+    assert_eq!(rows[0]["status"], "confirmed", "{report}");
+    assert_eq!(rows[0]["proof_kind"], "reachable-tip", "{report}");
+    rk_scrubbed()
+        .args(["worktree", "prune", "--apply", "--target"])
+        .arg(&repo)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("reachable tip"));
+    assert!(!greeting_seat(&repo).exists(), "the seat is removed");
+    assert!(!branch_names(&repo).contains("feat/greeting"));
+}
+
+/// After a local rebase integration whose seat the operator already
+/// removed, `rk branches prune --apply` deletes the branch on the same
+/// proof.
+///
+/// SATISFIES maintenance:gone-is-a-candidate-not-proof
+#[test]
+fn reachable_tip_retires_the_branch_of_a_rebase_integration() {
+    if !pre_commit_present() {
+        return;
+    }
+    let (_parent, repo) = rebase_fixture(&["feat(greeting): add it"]);
+    rebase_integrate_apply(&repo);
+    git_in(
+        &repo,
+        &[
+            "worktree",
+            "remove",
+            greeting_seat(&repo).to_str().expect("utf-8"),
+        ],
+    );
+    let report = prune_json(&repo, "branches", "--apply");
+    let rows = report["branches"].as_array().expect("rows");
+    assert_eq!(rows.len(), 1, "{report}");
+    assert_eq!(rows[0]["name"], "feat/greeting", "{report}");
+    assert_eq!(rows[0]["status"], "deleted", "{report}");
+    assert_eq!(rows[0]["proof_kind"], "reachable-tip", "{report}");
+    assert!(!branch_names(&repo).contains("feat/greeting"));
+}
+
+/// A branch fast-forwarded onto the trunk by hand, with no ledger entry
+/// and no request, is pruned by both verbs on the reachable tip, and a
+/// branch the trunk does not reach stays.
+///
+/// SATISFIES maintenance:one-merge-proof-authorizes-both-removals
+#[test]
+fn reachable_tip_prunes_a_branch_fast_forwarded_by_hand() {
+    let (_parent, repo) = seatable_fixture();
+    // A seated branch, fast-forwarded by hand.
+    git_in(&repo, &["branch", "feat/seated"]);
+    let seated = seat(&repo, "feat/seated");
+    commit_one(&seated, "seated.txt", "feat(hand): seated");
+    git_in(&repo, &["merge", "--ff-only", "-q", "feat/seated"]);
+    // A branch with no seat, fast-forwarded by hand on top of it.
+    unseated_branch(&repo, "feat/bare", 1);
+    git_in(&repo, &["merge", "--ff-only", "-q", "feat/bare"]);
+    // A branch the trunk does not reach.
+    unseated_branch(&repo, "feat/open", 1);
+
+    rk_scrubbed()
+        .args(["worktree", "prune", "--apply", "--target"])
+        .arg(&repo)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("reachable tip"));
+    assert!(!seated.exists(), "the seat is removed");
+    let names = branch_names(&repo);
+    assert!(!names.contains("feat/seated"), "{names}");
+    assert!(
+        names.contains("feat/bare"),
+        "the worktree verb left it alone"
+    );
+
+    let out = rk_scrubbed()
+        .args(["branches", "prune", "--apply", "--target"])
+        .arg(&repo)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8_lossy(&out);
+    assert!(text.contains("reachable tip"), "{text}");
+    assert!(text.contains("a tip the trunk reaches"), "{text}");
+    let names = branch_names(&repo);
+    assert!(!names.contains("feat/bare"), "{names}");
+    assert!(names.contains("feat/open"), "{names}");
+}
+
+/// A fresh branch at the trunk tip, with no commit of its own, is new
+/// rather than merged: neither verb reports it, seated or not.
+#[test]
+fn reachable_tip_never_prunes_a_fresh_branch_at_the_trunk_tip() {
+    let (_parent, repo) = seatable_fixture();
+    git_in(&repo, &["branch", "feat/fresh"]);
+    git_in(&repo, &["branch", "feat/fresh-seat"]);
+    let seated = seat(&repo, "feat/fresh-seat");
+    for verb in ["worktree", "branches"] {
+        let report = prune_json(&repo, verb, "--apply");
+        let rows = report[if verb == "worktree" {
+            "worktrees"
+        } else {
+            "branches"
+        }]
+        .as_array()
+        .expect("rows");
+        assert!(rows.is_empty(), "{verb}: {report}");
+    }
+    assert!(seated.exists());
+    let names = branch_names(&repo);
+    assert!(names.contains("feat/fresh\n"), "{names}");
+    assert!(names.contains("feat/fresh-seat"), "{names}");
+}
+
+/// A branch whose reflog is gone carries no creation entry, so the third
+/// proof is unavailable and the fast-forwarded branch stays.
+#[test]
+fn reachable_tip_is_unavailable_without_a_reflog() {
+    let (_parent, repo) = seatable_fixture();
+    unseated_branch(&repo, "feat/hand", 1);
+    git_in(&repo, &["merge", "--ff-only", "-q", "feat/hand"]);
+    std::fs::remove_file(repo.join(".git/logs/refs/heads/feat/hand"))
+        .expect("the reflog is removed");
+    let report = prune_json(&repo, "branches", "--apply");
+    assert!(
+        report["branches"].as_array().expect("rows").is_empty(),
+        "{report}"
+    );
+    assert!(branch_names(&repo).contains("feat/hand"));
+}
+
+/// A branch whose creation entry expired while newer entries remain has
+/// lost the commit it was created at, so the third proof is unavailable.
+#[test]
+fn reachable_tip_is_unavailable_once_the_creation_entry_expired() {
+    let (_parent, repo) = seatable_fixture();
+    unseated_branch(&repo, "feat/hand", 2);
+    git_in(&repo, &["merge", "--ff-only", "-q", "feat/hand"]);
+    // Three entries: the creation, then one per commit. The oldest is the
+    // creation, and deleting it leaves the two commits.
+    assert_eq!(
+        git_out(
+            &repo,
+            &["reflog", "show", "--format=%H", "refs/heads/feat/hand"]
+        )
+        .lines()
+        .count(),
+        3
+    );
+    git_in(&repo, &["reflog", "delete", "refs/heads/feat/hand@{2}"]);
+    assert_eq!(
+        git_out(
+            &repo,
+            &["reflog", "show", "--format=%H", "refs/heads/feat/hand"]
+        )
+        .lines()
+        .count(),
+        2,
+        "the newer entries remain"
+    );
+    let report = prune_json(&repo, "branches", "--apply");
+    assert!(
+        report["branches"].as_array().expect("rows").is_empty(),
+        "{report}"
+    );
+    assert!(branch_names(&repo).contains("feat/hand"));
+}
+
+/// A branch that moved since its creation and that the trunk does not
+/// reach carries no proof, seated or not.
+#[test]
+fn reachable_tip_keeps_a_branch_the_trunk_does_not_reach() {
+    let (_parent, repo) = seatable_fixture();
+    unseated_branch(&repo, "feat/open", 2);
+    git_in(&repo, &["branch", "feat/open-seat"]);
+    let seated = seat(&repo, "feat/open-seat");
+    commit_one(&seated, "open.txt", "feat(hand): open");
+    // The trunk moves on without either.
+    commit_one(&repo, "trunk.txt", "chore(trunk): move on");
+    for verb in ["worktree", "branches"] {
+        let report = prune_json(&repo, verb, "--apply");
+        let rows = report[if verb == "worktree" {
+            "worktrees"
+        } else {
+            "branches"
+        }]
+        .as_array()
+        .expect("rows");
+        assert!(rows.is_empty(), "{verb}: {report}");
+    }
+    assert!(seated.exists());
+    let names = branch_names(&repo);
+    assert!(names.contains("feat/open\n"), "{names}");
+    assert!(names.contains("feat/open-seat"), "{names}");
+}
+
+// ---------------------------------------------------------------------------
+// The merge form at the forge: the protection policy and the forge gate
+
+/// The project's own gated workflow, named as the configuration a landing
+/// writes names it: the workflow `ci`, whose job `gate` needs every other.
+const MERGE_FORM_CI: &str = "\
+name: ci
+on:
+  push:
+  pull_request:
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+  gate:
+    if: always()
+    needs: [lint]
+    runs-on: ubuntu-latest
+";
+
+/// Land a Rust project at `forge` with the given authority and merge form
+/// through `rk init`, so the setup reads the configuration and the record
+/// a real landing writes.
+fn land_merge_form(fixture: &ForgeFixture, forge: &str, integration: &str, form: &str) {
+    let mut init = fixture.rk(&["init"]);
+    init.args(["--technology", "rust", "--forge", forge])
+        .args(["--repo", "acme/widget", "--integration", integration])
+        .args(["--merge-form", form, "--apply"]);
+    // GitHub names the check the trunk requires beside the gate; GitLab
+    // requires the whole pipeline and refuses a named one.
+    if forge == "github" {
+        init.args(["--required-check", "gate"]);
+    }
+    init.assert().success();
+    fixture.seed("default_branch", "master");
+}
+
+/// One setup line of `rk setup check`, by step.
+fn merge_form_check_line(fixture: &ForgeFixture, forge: &str, step: &str) -> String {
+    let out = fixture
+        .rk(&["setup", "check"])
+        .args(["--repo", "acme/widget", "--forge", forge])
+        .assert()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8_lossy(&out);
+    text.lines()
+        .find(|line| line.split_whitespace().nth(1) == Some(step))
+        .unwrap_or_else(|| panic!("no {step} line: {text}"))
+        .to_owned()
+}
+
+/// A GitHub project configured for either merge form, under either
+/// authority, observes as correct after a canonical apply: the trunk
+/// ruleset allows the form's one method and requires the form's gate, the
+/// safety ruleset carries the linear-history rule under rebase alone, and
+/// the squash sources are asserted under squash alone.
+///
+/// SATISFIES forge-setup:the-setup-asserts-the-squash-title-source
+/// SATISFIES target-config:the-effective-protection-follows-the-profile
+#[test]
+fn merge_form_github_apply_observes_as_correct_under_each_form_and_authority() {
+    for integration in ["forge", "local"] {
+        for form in ["squash", "rebase"] {
+            let fixture = ForgeFixture::new();
+            land_merge_form(&fixture, "github", integration, form);
+            write_workflow(&fixture, "ci.yml", MERGE_FORM_CI);
+            for step in ["protect-trunk", "protect-tags", "protections-check"] {
+                fixture
+                    .rk(&["setup", "step", step])
+                    .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
+                    .assert()
+                    .success();
+            }
+            let at = format!("{integration} {form}");
+            let line = merge_form_check_line(&fixture, "github", "protect-trunk");
+            assert!(line.starts_with("ok protect-trunk"), "{at}: {line}");
+
+            let body = |name: &str| -> serde_json::Value {
+                serde_json::from_str(
+                    &std::fs::read_to_string(fixture.state(&format!("ruleset_{name}")))
+                        .expect("the sent body reads"),
+                )
+                .expect("the sent body parses")
+            };
+            let trunk = body("master-protection");
+            let rules = trunk["rules"].as_array().expect("rules");
+            let request = rules
+                .iter()
+                .find(|rule| rule["type"] == "pull_request")
+                .expect("the request rule");
+            assert_eq!(
+                request["parameters"]["allowed_merge_methods"],
+                serde_json::json!([form]),
+                "{at}"
+            );
+            let checks = rules
+                .iter()
+                .find(|rule| rule["type"] == "required_status_checks")
+                .expect("the check rule");
+            let gate = if form == "squash" {
+                "pr-title"
+            } else {
+                "pr-commits"
+            };
+            assert_eq!(
+                checks["parameters"]["required_status_checks"],
+                serde_json::json!([{ "context": "gate" }, { "context": gate }]),
+                "{at}"
+            );
+            let safety: Vec<String> = body("master-safety")["rules"]
+                .as_array()
+                .expect("rules")
+                .iter()
+                .filter_map(|rule| rule["type"].as_str().map(str::to_owned))
+                .collect();
+            let mut expected = vec!["deletion".to_owned(), "non_fast_forward".to_owned()];
+            if form == "rebase" {
+                expected.push("required_linear_history".to_owned());
+            }
+            assert_eq!(safety, expected, "{at}");
+            assert!(
+                !rules
+                    .iter()
+                    .any(|rule| rule["type"] == "required_linear_history"),
+                "{at}: the linear-history rule never sits where a bypass excuses it"
+            );
+            assert_eq!(
+                fixture.state("squash_merge_commit_title").exists(),
+                form == "squash",
+                "{at}: the squash sources are asserted under squash alone"
+            );
+            let landed_gate = fixture
+                .target
+                .path()
+                .join(format!(".github/workflows/{gate}.yml"));
+            assert!(landed_gate.is_file(), "{at}: the form's gate landed");
+        }
+    }
+}
+
+/// A GitLab project configured for either merge form, under either
+/// authority, observes as correct after a canonical apply: merge method
+/// `ff` with the form's squash setting, and the squash template asserted
+/// under squash alone.
+///
+/// SATISFIES forge-setup:the-setup-asserts-the-squash-title-source
+/// SATISFIES target-config:the-effective-protection-follows-the-profile
+#[test]
+fn merge_form_gitlab_apply_observes_as_correct_under_each_form_and_authority() {
+    for integration in ["forge", "local"] {
+        for form in ["squash", "rebase"] {
+            let fixture = ForgeFixture::new();
+            land_merge_form(&fixture, "gitlab", integration, form);
+            fixture.seed("tag_protected", "");
+            for step in ["protect-trunk", "protections-check"] {
+                fixture
+                    .rk(&["setup", "step", step])
+                    .args(["--repo", "acme/widget", "--forge", "gitlab", "--apply"])
+                    .assert()
+                    .success();
+            }
+            let at = format!("{integration} {form}");
+            let line = merge_form_check_line(&fixture, "gitlab", "protect-trunk");
+            assert!(line.starts_with("ok protect-trunk"), "{at}: {line}");
+            let state = |name: &str| {
+                std::fs::read_to_string(fixture.state(name))
+                    .unwrap_or_default()
+                    .trim()
+                    .to_owned()
+            };
+            assert_eq!(state("merge_method"), "ff", "{at}");
+            assert_eq!(
+                state("squash_option"),
+                if form == "squash" { "always" } else { "never" },
+                "{at}"
+            );
+            assert_eq!(
+                fixture.state("squash_commit_template").exists(),
+                form == "squash",
+                "{at}: the squash template is asserted under squash alone"
+            );
+            let fragment = if form == "squash" {
+                "mr-title"
+            } else {
+                "mr-commits"
+            };
+            let root = std::fs::read_to_string(fixture.target.path().join(".gitlab-ci.yml"))
+                .expect("the root pipeline landed");
+            assert!(
+                root.contains(&format!("- local: .gitlab/ci/{fragment}.yml")),
+                "{at}: {root}"
+            );
+        }
+    }
+}
+
+/// A rebase project whose forge still holds the squash settings faults by
+/// name on each forge, so a switch of the form is not read as done until
+/// the setup rewrites them.
+#[test]
+fn merge_form_rebase_faults_a_forge_still_holding_squash() {
+    let fixture = ForgeFixture::new();
+    land_merge_form(&fixture, "gitlab", "forge", "rebase");
+    fixture.seed("protected_master", "");
+    fixture.seed("pipeline_required", "true");
+    fixture.seed("merge_method", "ff");
+    fixture.seed("squash_option", "always");
+    let line = merge_form_check_line(&fixture, "gitlab", "protect-trunk");
+    assert!(line.starts_with("unsatisfied protect-trunk"), "{line}");
+    assert!(line.contains("merge requests may squash"), "{line}");
+    assert!(!line.contains("squash template"), "{line}");
+
+    let fixture = ForgeFixture::new();
+    land_merge_form(&fixture, "github", "forge", "squash");
+    write_workflow(&fixture, "ci.yml", MERGE_FORM_CI);
+    fixture
+        .rk(&["setup", "step", "protect-trunk"])
+        .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
+        .assert()
+        .success();
+    // The record moves to rebase while the forge keeps the squash rulesets.
+    let record = fixture.target.path().join(".release-kit/manifest.json");
+    let text = std::fs::read_to_string(&record).expect("the record reads");
+    std::fs::write(
+        &record,
+        text.replace("\"merge_form\": \"squash\"", "\"merge_form\": \"rebase\""),
+    )
+    .expect("the record writes");
+    let line = merge_form_check_line(&fixture, "github", "protect-trunk");
+    assert!(line.starts_with("unsatisfied protect-trunk"), "{line}");
+    assert!(
+        line.contains("the merge method is not exactly a rebase merge"),
+        "{line}"
+    );
+    assert!(line.contains("pr-commits"), "{line}");
+    assert!(line.contains("required_linear_history"), "{line}");
+}
+
+/// One forge gate snippet, rendered for a Rust target under the given
+/// merge form, as a target receives it.
+fn rendered_gate(path: &str, form: release_kit::landing::MergeForm) -> String {
+    let forge = if path.contains("/github/") {
+        "github"
+    } else {
+        "gitlab"
+    };
+    let params = if form == release_kit::landing::MergeForm::Squash {
+        projection_params(
+            "rust",
+            forge,
+            release_kit::landing::CheckoutMode::LinkedWorktree,
+            release_kit::landing::Integration::Forge,
+            release_kit::landing::Style::Trunk,
+            false,
+        )
+    } else {
+        rebase_params("rust", forge, release_kit::landing::Integration::Forge)
+    };
+    let source = release_kit::embedded::SNIPPETS
+        .get_file(path)
+        .expect("the gate is embedded");
+    String::from_utf8(release_kit::projection::render(source.contents(), &params))
+        .expect("the gate is text")
+}
+
+/// The first literal block after `marker` in a rendered gate, dedented to
+/// the runnable script the forge executes.
+fn gate_script(text: &str, marker: &str, indent: usize) -> String {
+    let body = text
+        .split(marker)
+        .nth(1)
+        .expect("the gate carries its script block");
+    let prefix = " ".repeat(indent);
+    body.lines()
+        .skip(1)
+        .take_while(|line| line.is_empty() || line.starts_with(&prefix))
+        .map(|line| line.strip_prefix(&prefix).unwrap_or(line))
+        .fold(String::new(), |mut script, line| {
+            script.push_str(line);
+            script.push('\n');
+            script
+        })
+}
+
+/// A request's commits as the GitHub gate reads them: a `gh` stand-in on
+/// `PATH` that lists every message file in `commits`, in name order, as
+/// the forge API's `sha base64(message)` lines.
+fn github_commit_listing(dir: &Path) -> PathBuf {
+    let bin = dir.join("bin");
+    std::fs::create_dir_all(&bin).expect("the bin dir");
+    let gh = bin.join("gh");
+    std::fs::write(
+        &gh,
+        "#!/bin/sh\nfor f in \"$COMMITS\"/*; do\n  printf '%s %s\\n' \"$(basename \"$f\" | cut -d - -f 2)\" \"$(base64 -w0 < \"$f\")\"\ndone\n",
+    )
+    .expect("the stand-in writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755))
+            .expect("the stand-in is executable");
+    }
+    std::fs::create_dir_all(dir.join("commits")).expect("the commits dir");
+    bin
+}
+
+/// Push one commit onto the stand-in request, by its order and its sha.
+fn push_github_commit(dir: &Path, order: usize, sha: &str, message: &str) {
+    std::fs::write(
+        dir.join("commits").join(format!("{order:02}-{sha}")),
+        message,
+    )
+    .expect("the commit writes");
+}
+
+/// Run the rendered GitHub commit gate the way the forge does: bash, the
+/// request's data through the environment, the commits from the API.
+fn run_github_commit_gate(dir: &Path, title: &str) -> (bool, String) {
+    let text = rendered_gate(
+        "_shared/github/.github/workflows/pr-commits.yml",
+        release_kit::landing::MergeForm::Rebase,
+    );
+    run_github_commit_gate_text(dir, title, &text)
+}
+
+/// Run one rendered GitHub commit gate, as [`run_github_commit_gate`] runs
+/// the release-bearing one.
+fn run_github_commit_gate_text(dir: &Path, title: &str, text: &str) -> (bool, String) {
+    let script = gate_script(text, "run: |", 10);
+    let bin = github_commit_listing(dir);
+    let count = std::fs::read_dir(dir.join("commits"))
+        .expect("the commits read")
+        .count();
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let out = std::process::Command::new("bash")
+        .args(["-c", &script])
+        .env("PATH", path)
+        .env("COMMITS", dir.join("commits"))
+        .env("REPO", "acme/widget")
+        .env("NUMBER", "7")
+        .env("COUNT", count.to_string())
+        .env("TITLE", title)
+        .current_dir(dir)
+        .output()
+        .expect("bash runs the gate");
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+    )
+}
+
+/// The GitHub commit gate judges every commit of the request: a valid
+/// title does not carry an invalid commit, the failure names the commit,
+/// and a later push of an invalid commit fails again after a first pass.
+///
+/// SATISFIES project-profile:the-forge-gate-follows-the-merge-form
+#[test]
+fn commit_gate_github_judges_every_commit_on_each_push() {
+    let dir = tempfile::tempdir().expect("a scratch dir exists");
+    let _ = github_commit_listing(dir.path());
+    push_github_commit(
+        dir.path(),
+        1,
+        "aaaaaaaaaaaa1111",
+        "feat(api): add the route\n",
+    );
+    push_github_commit(
+        dir.path(),
+        2,
+        "bbbbbbbbbbbb2222",
+        "fix(api): close the handle\n\nThe body explains why.\n",
+    );
+    let (ok, out) = run_github_commit_gate(dir.path(), "feat(api): add the route");
+    assert!(ok, "every commit is conventional: {out}");
+
+    // A later push adds a commit the convention refuses: the gate runs
+    // again on the push and fails, naming that commit alone.
+    push_github_commit(dir.path(), 3, "cccccccccccc3333", "wip\n");
+    let (ok, out) = run_github_commit_gate(dir.path(), "feat(api): add the route");
+    assert!(!ok, "the pushed commit is judged: {out}");
+    assert!(out.contains("commit cccccccccccc"), "{out}");
+    assert!(!out.contains("commit aaaaaaaaaaaa"), "{out}");
+
+    // One invalid commit under a valid title fails from the first run.
+    let dir = tempfile::tempdir().expect("a scratch dir exists");
+    let _ = github_commit_listing(dir.path());
+    push_github_commit(dir.path(), 1, "dddddddddddd4444", "feat: no scope\n");
+    push_github_commit(dir.path(), 2, "eeeeeeeeeeee5555", "feat(cli): scoped\n");
+    let (ok, out) = run_github_commit_gate(dir.path(), "feat(cli): a valid title");
+    assert!(!ok, "{out}");
+    assert!(out.contains("commit dddddddddddd"), "{out}");
+}
+
+/// Every message is held to the content guards, and the bot's release
+/// request passes whole with the content an operator could not merge.
+#[test]
+fn commit_gate_github_holds_the_content_and_admits_the_bot() {
+    let dir = tempfile::tempdir().expect("a scratch dir exists");
+    let _ = github_commit_listing(dir.path());
+    let attributed = "feat(api): add\n\nCo-authored-by: Claude <noreply@anthropic.com>\n";
+    push_github_commit(dir.path(), 1, "aaaaaaaaaaaa1111", attributed);
+    let (ok, out) = run_github_commit_gate(dir.path(), "feat(api): add");
+    assert!(!ok, "{out}");
+    assert!(out.contains("attribution"), "{out}");
+
+    let dir = tempfile::tempdir().expect("a scratch dir exists");
+    let _ = github_commit_listing(dir.path());
+    push_github_commit(
+        dir.path(),
+        1,
+        "bbbbbbbbbbbb2222",
+        "chore: release v0.3.0\n\n\u{1f916} Generated with release-plz\n",
+    );
+    let (ok, out) = run_github_commit_gate(dir.path(), "chore: release v0.3.0");
+    assert!(ok, "the bot's request passes whole: {out}");
+}
+
+/// A listing shorter than the request's commit count fails rather than
+/// passing commits the gate never read, and a message's shell
+/// metacharacters are content, never commands.
+#[test]
+fn commit_gate_github_refuses_a_short_listing_and_expands_nothing() {
+    let dir = tempfile::tempdir().expect("a scratch dir exists");
+    let _ = github_commit_listing(dir.path());
+    push_github_commit(
+        dir.path(),
+        1,
+        "aaaaaaaaaaaa1111",
+        "feat(api): $(touch pwned) `touch tick`\n",
+    );
+    let (ok, out) = run_github_commit_gate(dir.path(), "feat(api): $(touch title-pwned)");
+    assert!(ok, "{out}");
+    for probe in ["pwned", "tick", "title-pwned"] {
+        assert!(!dir.path().join(probe).exists(), "{probe} was executed");
+    }
+
+    let text = rendered_gate(
+        "_shared/github/.github/workflows/pr-commits.yml",
+        release_kit::landing::MergeForm::Rebase,
+    );
+    let script = gate_script(&text, "run: |", 10);
+    let bin = github_commit_listing(dir.path());
+    let out = std::process::Command::new("bash")
+        .args(["-c", &script])
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                bin.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
+        .env("COMMITS", dir.path().join("commits"))
+        .env("COUNT", "300")
+        .env("TITLE", "feat(api): add")
+        .output()
+        .expect("bash runs the gate");
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("judges every commit or none"),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}
+
+/// A scratch request at GitLab: a trunk commit, then the request's own
+/// commits, each with its message, and the SHAs the pipeline variables
+/// name.
+fn gitlab_request(messages: &[&str]) -> (tempfile::TempDir, String, String) {
+    let dir = tempfile::tempdir().expect("a scratch repo exists");
+    let root = dir.path();
+    git_in(root, &["init", "-q", "-b", "master"]);
+    git_in(root, &["config", "user.email", "rk@example.invalid"]);
+    git_in(root, &["config", "user.name", "rk test"]);
+    git_in(root, &["config", "commit.gpgsign", "false"]);
+    git_in(
+        root,
+        &["commit", "-q", "--allow-empty", "-m", "chore(repo): start"],
+    );
+    let base = git_out(root, &["rev-parse", "HEAD"]);
+    for message in messages {
+        git_in(
+            root,
+            &[
+                "commit",
+                "-q",
+                "--allow-empty",
+                "--no-verify",
+                "-m",
+                message,
+            ],
+        );
+    }
+    let head = git_out(root, &["rev-parse", "HEAD"]);
+    (dir, base, head)
+}
+
+/// Run the rendered GitLab commit gate the way a merge request pipeline
+/// does: `sh`, in the checkout, with the pipeline's variables.
+fn run_gitlab_commit_gate(dir: &Path, base: &str, head: &str, title: &str) -> (bool, String) {
+    let text = rendered_gate(
+        "_shared/gitlab/.gitlab/ci/mr-commits.yml",
+        release_kit::landing::MergeForm::Rebase,
+    );
+    run_gitlab_commit_gate_text(dir, base, head, title, &text)
+}
+
+/// Run one rendered GitLab commit gate, as [`run_gitlab_commit_gate`] runs
+/// the release-bearing one.
+fn run_gitlab_commit_gate_text(
+    dir: &Path,
+    base: &str,
+    head: &str,
+    title: &str,
+    text: &str,
+) -> (bool, String) {
+    let script = gate_script(text, "  script:\n    - |", 6);
+    let mut command = std::process::Command::new("sh");
+    for var in GIT_HOOK_VARS {
+        command.env_remove(var);
+    }
+    let out = command
+        .args(["-c", &script])
+        .env("CI_MERGE_REQUEST_TITLE", title)
+        .env("CI_MERGE_REQUEST_DIFF_BASE_SHA", base)
+        .env("CI_MERGE_REQUEST_SOURCE_BRANCH_SHA", "")
+        .env("CI_COMMIT_SHA", head)
+        .current_dir(dir)
+        .output()
+        .expect("sh runs the gate");
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+    )
+}
+
+/// The GitLab commit gate judges every commit between the target branch
+/// and the request's head, and each pipeline a push starts judges the
+/// pushed commit too.
+///
+/// SATISFIES project-profile:the-forge-gate-follows-the-merge-form
+#[test]
+fn commit_gate_gitlab_judges_every_commit_on_each_push() {
+    let (dir, base, head) = gitlab_request(&["feat(api): add the route", "fix(api): close"]);
+    let (ok, out) = run_gitlab_commit_gate(dir.path(), &base, &head, "feat(api): add the route");
+    assert!(ok, "every commit is conventional: {out}");
+
+    // The next push carries a commit the convention refuses.
+    git_in(
+        dir.path(),
+        &["commit", "-q", "--allow-empty", "--no-verify", "-m", "wip"],
+    );
+    let pushed = git_out(dir.path(), &["rev-parse", "HEAD"]);
+    let (ok, out) = run_gitlab_commit_gate(dir.path(), &base, &pushed, "feat(api): add the route");
+    assert!(!ok, "{out}");
+    assert!(out.contains(&format!("commit {}", &pushed[..12])), "{out}");
+    assert!(out.contains("'wip'"), "{out}");
+
+    // A guarded body fails under a valid subject, and the bot's request
+    // passes whole.
+    let (dir, base, head) =
+        gitlab_request(&["feat(api): add\n\nsee .draft/plan.md for the reasoning"]);
+    let (ok, out) = run_gitlab_commit_gate(dir.path(), &base, &head, "feat(api): add");
+    assert!(!ok, "{out}");
+    assert!(out.contains("internal-path"), "{out}");
+    let (ok, out) = run_gitlab_commit_gate(dir.path(), &base, &head, "chore(release): v0.3.0");
+    assert!(ok, "the bot's request passes whole: {out}");
+}
+
+/// Both commit gates carry the guard file's set verbatim, in both
+/// directions, as the title gate's body step does.
+#[test]
+fn commit_gate_carries_the_guard_file_set() {
+    let declared = release_kit::commands::message::guard_patterns();
+    for path in [
+        "_shared/github/.github/workflows/pr-commits.yml",
+        "_shared/gitlab/.gitlab/ci/mr-commits.yml",
+    ] {
+        let text = release_kit::embedded::SNIPPETS
+            .get_file(path)
+            .expect("the gate is embedded")
+            .contents_utf8()
+            .expect("the gate is text");
+        let heredoc: Vec<(&str, &str)> = text
+            .lines()
+            .skip_while(|line| !line.ends_with("<<'GUARDS'"))
+            .skip(1)
+            .map(str::trim_start)
+            .take_while(|line| *line != "GUARDS")
+            .map(|line| line.split_once('|').expect("a class|pattern line"))
+            .collect();
+        assert_eq!(
+            heredoc, declared,
+            "{path}: the two copies must hold the same set"
+        );
+    }
+}
+
+/// The GitHub commit gate runs on each push to the request, from the
+/// trunk's own copy, with read access alone, under the job name the trunk
+/// ruleset requires.
+#[test]
+fn commit_gate_runs_on_each_push_under_the_required_name() {
+    let text = rendered_gate(
+        "_shared/github/.github/workflows/pr-commits.yml",
+        release_kit::landing::MergeForm::Rebase,
+    );
+    assert!(text.contains("pull_request_target:"), "{text}");
+    assert!(
+        text.contains("types: [opened, edited, reopened, synchronize]"),
+        "{text}"
+    );
+    assert!(text.contains("permissions: {}"), "{text}");
+    assert!(text.contains("    name: pr-commits\n"), "{text}");
+    assert!(!text.contains("actions/checkout"), "{text}");
+    assert!(!text.contains("RK_SCOPE_SHAPE"), "{text}");
+    assert!(
+        !text.contains("${{ github.event.pull_request.title }}\n        run"),
+        "the title reaches the shell through the environment"
+    );
+    let gitlab = rendered_gate(
+        "_shared/gitlab/.gitlab/ci/mr-commits.yml",
+        release_kit::landing::MergeForm::Rebase,
+    );
+    assert!(gitlab.contains("merge_request_event"), "{gitlab}");
+    assert!(gitlab.contains("GIT_DEPTH: \"0\""), "{gitlab}");
+}
+
+/// The landing selects the commit gate under rebase and the title gate
+/// under squash, on each forge and under each authority, and reports the
+/// one it did not select with the form that decided it.
+///
+/// SATISFIES project-profile:the-forge-gate-follows-the-merge-form
+#[test]
+fn commit_gate_is_selected_by_the_merge_form() {
+    for forge in ["github", "gitlab"] {
+        for integration in ["forge", "local"] {
+            for (form, selected, omitted) in [
+                ("squash", "git.title-check", "git.commit-check"),
+                ("rebase", "git.commit-check", "git.title-check"),
+            ] {
+                let target = merge_form_target();
+                let out = rk()
+                    .args(["profile", "--json", "--target"])
+                    .arg(target.path())
+                    .args(["--technology", "rust", "--forge", forge])
+                    .args(["--repo", "acme/widget", "--integration", integration])
+                    .args(["--merge-form", form])
+                    .assert()
+                    .success()
+                    .get_output()
+                    .stdout
+                    .clone();
+                let report: serde_json::Value =
+                    serde_json::from_slice(&out).expect("one JSON object");
+                let status = |id: &str| {
+                    report["selection"]
+                        .as_array()
+                        .expect("a selection")
+                        .iter()
+                        .find(|entry| entry["id"] == id)
+                        .map(|entry| entry["status"].clone())
+                        .expect("every capability answers")
+                };
+                let at = format!("{forge} {integration} {form}");
+                assert_eq!(status(selected), "selected", "{at}");
+                assert_eq!(status(omitted), "not-requested", "{at}");
+            }
+        }
+    }
+}
+
+/// A GitHub rebase merge writes the branch's commits again with new SHAs,
+/// so the trunk never reaches the branch tip and the reachability proof
+/// does not apply: the merged request is the proof that retires the
+/// branch, as it is for a squash merge.
+///
+/// SATISFIES git:the-merge-form-is-a-landing-parameter
+#[test]
+fn merge_form_a_github_rebase_merged_request_prunes_through_the_request_proof() {
+    let repo = branch_fixture();
+    let root = repo.path();
+    gone_branch(root, "feat/rebased");
+    git_in(root, &["checkout", "-q", "feat/rebased"]);
+    for (file, message) in [("one.txt", "feat(api): one"), ("two.txt", "feat(api): two")] {
+        std::fs::write(root.join(file), "y\n").expect("the file writes");
+        git_in(root, &["add", "-A"]);
+        git_in(root, &["commit", "-qm", message]);
+    }
+    let tip = tip_of(root, "feat/rebased");
+    // The forge's rebase merge: the same changes and messages on the trunk,
+    // as new commits whose SHAs the branch never carried.
+    git_in(root, &["checkout", "-q", "master"]);
+    git_in(
+        root,
+        &[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "chore(repo): trunk moved",
+        ],
+    );
+    git_in(root, &["cherry-pick", "master..feat/rebased"]);
+    let mut reaches = std::process::Command::new("git");
+    for var in GIT_HOOK_VARS {
+        reaches.env_remove(var);
+    }
+    let reaches = reaches
+        .args(["merge-base", "--is-ancestor", &tip, "master"])
+        .current_dir(root)
+        .status()
+        .expect("git runs");
+    assert!(
+        !reaches.success(),
+        "the trunk does not reach the branch tip"
+    );
+
+    let body = format!(
+        "#!/bin/sh\ncase \"$2\" in\n*/commits/{tip}/pulls) printf '[{{\"number\":9,\"merged_at\":\"2026-10-27T00:00:00Z\",\"head\":{{\"sha\":\"{tip}\"}}}}]' ;;\n*) printf '[]' ;;\nesac\n"
+    );
+    let (_mock, gh) = mock_gh(&body);
+    let out = rk_scrubbed()
+        .args(["branches", "prune", "--apply", "--target"])
+        .arg(root)
+        .env("RK_GH_BIN", &gh)
+        .assert()
+        .success();
+    let text = String::from_utf8_lossy(&out.get_output().stdout).into_owned();
+    assert!(text.contains("deleted (#9)"), "{text}");
+    assert!(
+        !branch_names(root).contains("feat/rebased"),
+        "the request proof retires the rebased branch"
+    );
+}
+
+/// The forge path names a GitLab request command that asks for no squash
+/// under rebase, with guidance that every commit keeps its own message,
+/// and the squash command and title guidance under squash, as before.
+///
+/// SATISFIES git:the-merge-form-is-a-landing-parameter
+#[test]
+fn merge_form_names_the_gitlab_request_command_of_the_recorded_form() {
+    for form in ["squash", "rebase"] {
+        let (_parent, repo) = integrate_fixture_shaped(
+            &serde_json::json!({ "mode": "none" }),
+            false,
+            Some(form),
+            &["feat(greeting): add it"],
+        );
+        git_in(
+            &repo,
+            &[
+                "remote",
+                "set-url",
+                "origin",
+                "https://gitlab.com/acme/widget.git",
+            ],
+        );
+        let out = rk_scrubbed()
+            .args([
+                "integrate",
+                "feat/greeting",
+                "--forge",
+                "--json",
+                "--target",
+            ])
+            .arg(&repo)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+        assert_eq!(report["merge_form"], form);
+        let next: Vec<&str> = report["next"]
+            .as_array()
+            .expect("the next steps")
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect();
+        let create = next[0];
+        assert!(create.starts_with("glab mr create"), "{next:?}");
+        if form == "squash" {
+            assert!(create.ends_with(" --squash-before-merge"), "{next:?}");
+            assert!(
+                next.iter()
+                    .any(|line| line.contains("the title is the trunk's commit message")),
+                "{next:?}"
+            );
+        } else {
+            assert!(!create.contains("squash"), "{next:?}");
+            assert!(
+                next.iter().any(|line| line
+                    .contains("every commit of the branch reaches the trunk with its own message")),
+                "{next:?}"
+            );
+            assert!(!next.iter().any(|line| line.contains("title")), "{next:?}");
+        }
+    }
+}
+
+/// A landing writes the merge values with the form, so moving the form
+/// never leaves a configuration its own floors refuse: the method, the
+/// GitLab squash setting, and the commit gate follow `rk upgrade
+/// --merge-form` both ways, while the squash sources stay as stated.
+///
+/// SATISFIES target-config:an-invariant-bearing-key-carries-a-floor
+#[test]
+fn merge_form_upgrade_writes_the_merge_values_with_the_form() {
+    let target = merge_form_target();
+    rk().args(["init", "--technology", "rust", "--forge", "github"])
+        .args(["--repo", "acme/widget", "--target"])
+        .arg(target.path())
+        .arg("--apply")
+        .assert()
+        .success();
+    let config = || {
+        std::fs::read_to_string(target.path().join(".release-kit/config.toml"))
+            .expect("the config reads")
+    };
+    assert!(config().contains("allowed_merge_methods = [\"squash\"]"));
+    assert!(
+        target
+            .path()
+            .join(".github/workflows/pr-title.yml")
+            .is_file()
+    );
+
+    rk().args(["upgrade", "--merge-form", "rebase", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let text = config();
+    assert!(
+        text.contains(
+            "allowed_merge_methods = [\"rebase\"] # F: invariant, exactly the method git.merge_form names"
+        ),
+        "{text}"
+    );
+    assert!(text.contains("squash_option = \"never\""), "{text}");
+    assert!(
+        text.contains("squash_title_source = \"PR_TITLE\""),
+        "the squash sources stay as stated: {text}"
+    );
+    assert!(
+        target
+            .path()
+            .join(".github/workflows/pr-commits.yml")
+            .is_file()
+    );
+    let record = read_manifest(target.path());
+    let landed: Vec<&str> = record["files"]
+        .as_array()
+        .expect("the files")
+        .iter()
+        .filter_map(|file| file["destination"].as_str())
+        .collect();
+    assert!(
+        landed.contains(&".github/workflows/pr-commits.yml"),
+        "{landed:?}"
+    );
+    assert!(
+        !landed.contains(&".github/workflows/pr-title.yml"),
+        "the title gate is released: {landed:?}"
+    );
+
+    rk().args(["upgrade", "--merge-form", "squash", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let text = config();
+    assert!(
+        text.contains("allowed_merge_methods = [\"squash\"]"),
+        "{text}"
+    );
+    assert!(text.contains("squash_option = \"always\""), "{text}");
+    // The configuration agrees with the record it was written beside.
+    rk().args(["status", "--target"])
+        .arg(target.path())
+        .assert()
+        .stdout(predicate::str::contains("config: aligned"));
+}
+
+// ---------------------------------------------------------------------------
+// The workflow-only preset and the release-less landing
+
+/// A scratch repository on `master` with one commit, whose origin names
+/// `url` where one is given and which has no remote otherwise.
+fn workflow_only_repo(url: Option<&str>) -> (tempfile::TempDir, PathBuf) {
+    let parent = tempfile::tempdir().expect("a scratch parent exists");
+    let repo = parent.path().join("widget");
+    std::fs::create_dir(&repo).expect("the repo dir creates");
+    git_in(&repo, &["init", "-q", "-b", "master"]);
+    git_in(&repo, &["config", "user.email", "rk@example.invalid"]);
+    git_in(&repo, &["config", "user.name", "rk test"]);
+    if let Some(url) = url {
+        git_in(&repo, &["remote", "add", "origin", url]);
+    }
+    std::fs::write(repo.join("seed"), "x\n").expect("the seed writes");
+    git_in(&repo, &["add", "seed"]);
+    git_in(&repo, &["commit", "-qm", "chore: seed"]);
+    (parent, repo)
+}
+
+/// `rk init --workflow-only --apply` over the repository, with any extra
+/// flag.
+fn land_workflow_only(repo: &Path, extra: &[&str]) -> assert_cmd::assert::Assert {
+    rk().args(["init", "--workflow-only"])
+        .args(extra)
+        .args(["--apply", "--target"])
+        .arg(repo)
+        .assert()
+}
+
+/// Every file under `root` but the repository's own and the seed, as
+/// sorted paths relative to it.
+fn landed_files(root: &Path) -> Vec<String> {
+    fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).expect("the dir reads") {
+            let path = entry.expect("an entry reads").path();
+            let relative = path
+                .strip_prefix(root)
+                .expect("under the root")
+                .to_string_lossy()
+                .into_owned();
+            if relative == ".git" || relative == "seed" {
+                continue;
+            }
+            if path.is_dir() {
+                walk(root, &path, out);
+            } else {
+                out.push(relative);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, root, &mut out);
+    out.sort();
+    out
+}
+
+/// Every whole word in `text` that names a release reason: a version, a
+/// changelog, or a tag.
+fn release_reason_words(text: &str) -> Vec<String> {
+    text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
+        .filter(|word| {
+            matches!(
+                *word,
+                "version" | "versions" | "changelog" | "changelogs" | "tag" | "tags"
+            )
+        })
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The files a workflow-only landing writes at any forge, and nothing of
+/// a release: no CI file, no version file, no changelog, no release text,
+/// the four answers recorded and no key naming the preset, and a status
+/// check that passes.
+fn assert_workflow_only_landing(repo: &Path) {
+    assert_eq!(
+        landed_files(repo),
+        [
+            ".pre-commit-config.yaml",
+            ".release-kit/config.toml",
+            ".release-kit/manifest.json",
+            "AGENTS.md",
+            "GLOSSARY.md",
+        ],
+        "a workflow-only landing writes the workflow alone"
+    );
+    for path in landed_files(repo) {
+        let text = std::fs::read_to_string(repo.join(&path)).expect("the landed file reads");
+        // The technologies key says detection reads the version files: the
+        // evidence a technology is present, and no reason a release gives.
+        let text = text.replace("detects from the version files", "detects from the files");
+        assert!(!text.contains("## Releases"), "{path}: {text}");
+        assert!(!text.contains("rk-no-hand-authored-tag"), "{path}: {text}");
+        assert!(!text.contains("full-implement"), "{path}: {text}");
+        assert!(
+            !text.contains("workflow_only"),
+            "{path}: the preset is recorded"
+        );
+        assert_eq!(
+            release_reason_words(&text),
+            Vec::<String>::new(),
+            "{path} names a release reason: {text}"
+        );
+    }
+    let config =
+        std::fs::read_to_string(repo.join(".release-kit/config.toml")).expect("the config reads");
+    for answer in [
+        "mode = \"none\"",
+        "integration = \"local\"",
+        "checkout_mode = \"linked-worktree\"",
+        "workflow_guards = true",
+    ] {
+        assert!(config.contains(answer), "{answer}: {config}");
+    }
+    for gone in [
+        "tag_ruleset",
+        "tag_pattern",
+        "lines_ruleset",
+        "[security]",
+        "[setup.bot]",
+    ] {
+        assert!(!config.contains(gone), "{gone}: {config}");
+    }
+    let manifest = read_manifest(repo);
+    assert_eq!(manifest["profile"]["release"]["mode"], "none");
+    assert_eq!(manifest["git"]["integration"], "local");
+    assert_eq!(manifest["git"]["checkout_mode"], "linked-worktree");
+    assert_eq!(manifest["capabilities"]["workflow_guards"], true);
+    let hooks =
+        std::fs::read_to_string(repo.join(".pre-commit-config.yaml")).expect("the hooks read");
+    assert!(hooks.contains("args: [--strict]\n"), "{hooks}");
+    assert!(!hooks.contains("--force-scope"), "{hooks}");
+    // The status check watches no file only a release lands.
+    assert!(!hooks.contains("release-plz"), "{hooks}");
+    assert!(!hooks.contains("VERSION"), "{hooks}");
+    for guard in [
+        "- id: no-commit-to-branch",
+        "- id: rk-no-force-push-to-trunk",
+        "- id: rk-no-merge-commit-to-trunk",
+    ] {
+        assert!(hooks.contains(guard), "{guard}: {hooks}");
+    }
+    rk().args(["status", "--check", "--target"])
+        .arg(repo)
+        .assert()
+        .success();
+}
+
+/// SATISFIES project-profile:the-workflow-only-preset-expands-to-recorded-answers
+/// SATISFIES project-profile:a-release-less-landing-carries-no-release-text
+/// A GitLab remote rk does not reach: no `.gitlab-ci.yml`, no `.gitlab/`
+/// folder, and no sentinel asks for a check or a bot no step reads.
+#[test]
+fn workflow_only_lands_the_workflow_alone_on_gitlab() {
+    let (_parent, repo) = workflow_only_repo(Some("git@gitlab.com:acme/widget.git"));
+    land_workflow_only(&repo, &[])
+        .success()
+        .stdout(predicate::str::contains(
+            "capability git.title-check: not-applicable",
+        ))
+        .stdout(predicate::str::contains("no sentinels to fill"));
+    assert!(!repo.join(".gitlab-ci.yml").exists());
+    assert!(!repo.join(".gitlab").exists());
+    assert_workflow_only_landing(&repo);
+}
+
+/// SATISFIES project-profile:the-workflow-only-preset-expands-to-recorded-answers
+/// SATISFIES project-profile:a-release-less-landing-carries-no-release-text
+#[test]
+fn workflow_only_lands_the_workflow_alone_on_github() {
+    let (_parent, repo) = workflow_only_repo(Some("git@github.com:acme/widget.git"));
+    land_workflow_only(&repo, &[]).success();
+    assert!(!repo.join(".github").exists());
+    assert_workflow_only_landing(&repo);
+}
+
+/// SATISFIES project-profile:the-workflow-only-preset-expands-to-recorded-answers
+/// SATISFIES project-profile:a-release-less-landing-carries-no-release-text
+#[test]
+fn workflow_only_lands_the_workflow_alone_with_no_forge() {
+    let (_parent, repo) = workflow_only_repo(None);
+    land_workflow_only(&repo, &[]).success();
+    assert_workflow_only_landing(&repo);
+    let config =
+        std::fs::read_to_string(repo.join(".release-kit/config.toml")).expect("the config reads");
+    assert!(config.contains("forge = \"\""), "{config}");
+}
+
+/// SATISFIES project-profile:the-workflow-only-preset-expands-to-recorded-answers
+/// A flag that contradicts one of the four answers refuses before any
+/// write, naming the flag and the preset, with the reason
+/// `preset-contradiction` and exit 73; a flag that agrees passes.
+#[test]
+fn workflow_only_refuses_a_contradicting_flag_before_any_write() {
+    let (_parent, repo) = workflow_only_repo(Some("git@gitlab.com:acme/widget.git"));
+    for flags in [
+        &["--integration", "forge"][..],
+        &["--release-mode", "automatic"][..],
+        &["--release-mode", "external"][..],
+        &["--checkout-mode", "main-worktree"][..],
+        &["--release-driver", "bash"][..],
+        &["--release-style", "trunk"][..],
+    ] {
+        let out = land_workflow_only(&repo, flags)
+            .code(73)
+            .stderr(predicate::str::contains(flags[0]))
+            .stderr(predicate::str::contains("--workflow-only"))
+            .get_output()
+            .clone();
+        assert!(
+            !repo.join(".release-kit").exists(),
+            "{flags:?}: nothing was written: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let out = rk()
+        .args([
+            "init",
+            "--workflow-only",
+            "--integration",
+            "forge",
+            "--json",
+        ])
+        .args(["--apply", "--target"])
+        .arg(&repo)
+        .assert()
+        .code(73)
+        .get_output()
+        .stderr
+        .clone();
+    let diagnostic: serde_json::Value =
+        serde_json::from_slice(&out).expect("stderr is one JSON diagnostic");
+    assert_eq!(diagnostic["reason"], "preset-contradiction", "{diagnostic}");
+    assert!(!repo.join(".release-kit").exists());
+
+    // A flag that states the preset's own answer agrees with it.
+    land_workflow_only(&repo, &["--integration", "local", "--workflow-guards"]).success();
+    // An upgrade refuses the same way, and leaves the landing as it was.
+    let before = std::fs::read(repo.join(".release-kit/manifest.json")).expect("the record reads");
+    rk().args(["upgrade", "--workflow-only", "--workflow-guards", "off"])
+        .args(["--apply", "--target"])
+        .arg(&repo)
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("--workflow-guards off"))
+        .stderr(predicate::str::contains("--workflow-only"));
+    assert_eq!(
+        std::fs::read(repo.join(".release-kit/manifest.json")).expect("the record reads"),
+        before
+    );
+}
+
+/// SATISFIES project-profile:the-workflow-only-preset-expands-to-recorded-answers
+/// `--merge-form` combines with the preset, and an upgrade with the preset
+/// takes a release-bearing landing to the four answers, its tag guard and
+/// release text gone.
+#[test]
+fn workflow_only_combines_with_the_merge_form_and_upgrades_a_landed_target() {
+    let (_parent, repo) = workflow_only_repo(Some("git@github.com:acme/widget.git"));
+    land_workflow_only(&repo, &["--merge-form", "rebase"]).success();
+    let manifest = read_manifest(&repo);
+    assert_eq!(manifest["git"]["merge_form"], "rebase");
+    let agents = std::fs::read_to_string(repo.join("AGENTS.md")).expect("AGENTS.md reads");
+    assert!(
+        agents.contains("Every commit of a branch reaches the trunk with its own message"),
+        "{agents}"
+    );
+    assert!(!agents.contains("The request's title becomes"), "{agents}");
+    assert_workflow_only_landing(&repo);
+
+    // A target landed with a release and forge integration takes the
+    // preset on its next upgrade.
+    let (_parent, landed) = workflow_only_repo(Some("git@github.com:acme/widget.git"));
+    rk().args([
+        "init",
+        "--release-mode",
+        "external",
+        "--integration",
+        "forge",
+    ])
+    .args(["--checkout-mode", "main-worktree", "--apply", "--target"])
+    .arg(&landed)
+    .assert()
+    .success();
+    let hooks =
+        std::fs::read_to_string(landed.join(".pre-commit-config.yaml")).expect("the hooks read");
+    assert!(hooks.contains("rk-no-hand-authored-tag"), "{hooks}");
+    rk().args(["upgrade", "--workflow-only", "--apply", "--target"])
+        .arg(&landed)
+        .assert()
+        .success();
+    let manifest = read_manifest(&landed);
+    assert_eq!(manifest["profile"]["release"]["mode"], "none");
+    assert_eq!(manifest["git"]["integration"], "local");
+    assert_eq!(manifest["git"]["checkout_mode"], "linked-worktree");
+    assert_eq!(manifest["capabilities"]["workflow_guards"], true);
+    let hooks =
+        std::fs::read_to_string(landed.join(".pre-commit-config.yaml")).expect("the hooks read");
+    assert!(!hooks.contains("rk-no-hand-authored-tag"), "{hooks}");
+    assert!(hooks.contains("- id: rk-no-force-push-to-trunk"), "{hooks}");
+    let agents = std::fs::read_to_string(landed.join("AGENTS.md")).expect("AGENTS.md reads");
+    assert!(!agents.contains("## Releases"), "{agents}");
+    rk().args(["status", "--check", "--target"])
+        .arg(&landed)
+        .assert()
+        .success();
+}
+
+/// SATISFIES project-profile:a-release-less-landing-carries-no-release-text
+/// `rk message --check` reads the target's record: a header with no scope
+/// passes a workflow-only target and refuses a release-bearing one, naming
+/// the missing scope.
+#[test]
+fn workflow_only_message_check_accepts_a_header_with_no_scope() {
+    let (_parent, repo) = workflow_only_repo(Some("git@gitlab.com:acme/widget.git"));
+    land_workflow_only(&repo, &[]).success();
+    let header = "fix: drop the stale path\n";
+    rk().args(["message", "--check", "--target"])
+        .arg(&repo)
+        .write_stdin(header)
+        .assert()
+        .success();
+
+    let releasing = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(releasing.path()).success();
+    let out = rk()
+        .args(["message", "--check", "--json", "--target"])
+        .arg(releasing.path())
+        .write_stdin(header)
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["schema"], "rk.message/3");
+    assert_eq!(report["findings"][0]["class"], "scope-missing", "{report}");
+    assert!(
+        report["findings"][0]["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("names no scope")),
+        "{report}"
+    );
+    // The landed commit hook of a release keeps the forced scope.
+    let hooks = std::fs::read_to_string(releasing.path().join(".pre-commit-config.yaml"))
+        .expect("the hooks read");
+    assert!(!hooks.contains("args: [--strict]\n"), "{hooks}");
+}
+
+/// SATISFIES project-profile:a-release-less-landing-carries-no-release-text
+/// Under `release.mode = "none"`, `rk integrate` writes a trunk message
+/// with no scope.
+#[test]
+fn workflow_only_integrate_accepts_a_header_with_no_scope() {
+    if !pre_commit_present() {
+        return;
+    }
+    let (_parent, repo) = integrate_fixture();
+    let before = rev_parse(&repo, "master");
+    rk_scrubbed()
+        .args(["integrate", "feat/greeting", "--apply"])
+        .args(["-m", "feat: add the greeting", "--target"])
+        .arg(&repo)
+        .assert()
+        .success();
+    assert_ne!(rev_parse(&repo, "master"), before);
+    assert_eq!(
+        git_out(&repo, &["log", "-1", "--format=%s", "master"]),
+        "feat: add the greeting"
+    );
+}
+
+/// SATISFIES maintenance:local-integration-guards-the-trunk
+/// The landed trunk guard refuses a hand commit on the trunk at the
+/// pre-commit stage, and `rk integrate` still moves the trunk, because it
+/// moves it with no commit hook.
+///
+/// `no-commit-to-branch` is the pinned `pre-commit-hooks` entry, which no
+/// offline run can fetch, so the block is read for the entry and its
+/// stage, and a stand-in that refuses a commit on the trunk exactly as
+/// that hook does takes its place in the hooks directory: what this proves
+/// is that the integration never meets a commit hook at all.
+#[test]
+fn workflow_only_trunk_commit_refuses_and_integrate_still_moves_the_trunk() {
+    let template = release_kit::projection::hooks_block_of(&release_kit::projection::BlockShape {
+        checkout_mode: release_kit::landing::CheckoutMode::LinkedWorktree,
+        integration: release_kit::landing::Integration::Local,
+        merge_form: release_kit::landing::MergeForm::Squash,
+        workflow_guards: true,
+        release: false,
+    })
+    .expect("the binary embeds the block");
+    let block = String::from_utf8(release_kit::landing::render(
+        template.as_bytes(),
+        &render_params("acme/widget", None),
+    ))
+    .expect("the block is text");
+    let pin =
+        release_kit::registry::version_of("pre-commit-hooks").expect("pre-commit-hooks is pinned");
+    assert!(
+        block.contains(&format!(
+            "  - repo: https://github.com/pre-commit/pre-commit-hooks\n    rev: v{pin}\n    hooks:\n      - id: no-commit-to-branch\n        args: [--branch, master]\n        stages: [pre-commit]\n"
+        )),
+        "the trunk guard is the pinned hook, for the trunk, at the pre-commit stage alone: {block}"
+    );
+
+    if !pre_commit_present() {
+        return;
+    }
+    let (_parent, repo) = integrate_fixture();
+    let hooks = repo.join(".git/hooks");
+    std::fs::create_dir_all(&hooks).expect("the hooks dir");
+    let guard = hooks.join("pre-commit");
+    std::fs::write(
+        &guard,
+        "#!/bin/sh\nbranch=$(git symbolic-ref --quiet --short HEAD) || exit 0\n[ \"$branch\" = master ] || exit 0\necho \"no-commit-to-branch refuses a commit on master\" >&2\nexit 1\n",
+    )
+    .expect("the stand-in writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&guard, std::fs::Permissions::from_mode(0o755))
+            .expect("the stand-in is executable");
+    }
+    git_in(
+        &repo,
+        &["config", "core.hooksPath", hooks.to_str().expect("utf-8")],
+    );
+    let before = rev_parse(&repo, "master");
+    let mut commit = std::process::Command::new("git");
+    for var in GIT_HOOK_VARS {
+        commit.env_remove(var);
+    }
+    let refused = commit
+        .args([
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "fix(trunk): a hand commit",
+        ])
+        .current_dir(&repo)
+        .output()
+        .expect("git runs");
+    assert!(
+        !refused.status.success(),
+        "a hand commit on the trunk refuses"
+    );
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("no-commit-to-branch"),
+        "{refused:?}"
+    );
+    assert_eq!(rev_parse(&repo, "master"), before);
+
+    rk_scrubbed()
+        .args(["integrate", "feat/greeting", "--apply"])
+        .args(["-m", "feat(greeting): add it", "--target"])
+        .arg(&repo)
+        .assert()
+        .success();
+    assert_ne!(
+        rev_parse(&repo, "master"),
+        before,
+        "the integration moved the trunk"
+    );
+    assert_eq!(git_out(&repo, &["rev-parse", "master^"]), before);
+}
+
+/// One landed `sh -c` entry of the local-integration hook block, by its
+/// hook id, rendered for the trunk `master`.
+fn local_guard_script(id: &str) -> String {
+    let template = release_kit::projection::hooks_block_of(&release_kit::projection::BlockShape {
+        checkout_mode: release_kit::landing::CheckoutMode::LinkedWorktree,
+        integration: release_kit::landing::Integration::Local,
+        merge_form: release_kit::landing::MergeForm::Rebase,
+        workflow_guards: true,
+        release: false,
+    })
+    .expect("the binary embeds the block");
+    let block = String::from_utf8(release_kit::landing::render(
+        template.as_bytes(),
+        &render_params("acme/widget", None),
+    ))
+    .expect("the block is text");
+    block
+        .lines()
+        .skip_while(|line| !line.contains(&format!("id: {id}")))
+        .find(|line| line.trim_start().starts_with("entry: sh -c '"))
+        .and_then(|line| {
+            line.trim_start()
+                .strip_prefix("entry: sh -c '")
+                .and_then(|rest| rest.strip_suffix('\''))
+        })
+        .expect("the entry is one single-quoted script")
+        .to_owned()
+}
+
+/// Run one pre-push guard the way pre-commit does, with the push's
+/// variables, and return whether it passed and what it said.
+fn push_verdict(repo: &Path, id: &str, vars: &[(&str, &str)]) -> (bool, String) {
+    let mut command = std::process::Command::new("sh");
+    for var in GIT_HOOK_VARS {
+        command.env_remove(var);
+    }
+    for name in [
+        "PRE_COMMIT_REMOTE_BRANCH",
+        "PRE_COMMIT_FROM_REF",
+        "PRE_COMMIT_TO_REF",
+        "PRE_COMMIT_REMOTE_NAME",
+        "PRE_COMMIT_LOCAL_BRANCH",
+    ] {
+        command.env_remove(name);
+    }
+    for (name, value) in vars {
+        command.env(name, value);
+    }
+    let out = command
+        .args(["-c", &local_guard_script(id)])
+        .current_dir(repo)
+        .output()
+        .expect("sh runs");
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+/// SATISFIES maintenance:local-integration-guards-the-trunk
+/// The two pre-push guards hold the operator's trunk push: a fast-forward
+/// passes, a rewind of the remote tip refuses as a force push, a range
+/// carrying a merge commit refuses as one, and a push to any other branch
+/// is none of their business.
+#[test]
+fn workflow_only_pre_push_guards_refuse_a_rewrite_and_a_merge_commit() {
+    const FORCE: &str = "rk-no-force-push-to-trunk";
+    const MERGE: &str = "rk-no-merge-commit-to-trunk";
+    let (_parent, repo) = seatable_fixture();
+    let remote = rev_parse(&repo, "master");
+    std::fs::write(repo.join("one"), "1\n").expect("writes");
+    git_in(&repo, &["add", "one"]);
+    git_in(&repo, &["commit", "-qm", "feat(one): add it"]);
+    let ahead = rev_parse(&repo, "master");
+    let trunk = [
+        ("PRE_COMMIT_REMOTE_BRANCH", "refs/heads/master"),
+        ("PRE_COMMIT_REMOTE_NAME", "origin"),
+    ];
+    let push = |id: &str, from: &str, to: &str| {
+        let mut vars = trunk.to_vec();
+        vars.push(("PRE_COMMIT_FROM_REF", from));
+        vars.push(("PRE_COMMIT_TO_REF", to));
+        push_verdict(&repo, id, &vars)
+    };
+    // A fast-forward is the local integration's own push.
+    assert!(push(FORCE, &remote, &ahead).0, "a fast-forward passes");
+    assert!(push(MERGE, &remote, &ahead).0, "a linear range passes");
+
+    // A tip that does not descend from the remote one rewrites it.
+    git_in(&repo, &["checkout", "-qb", "rewrite", &remote]);
+    git_in(
+        &repo,
+        &["commit", "--allow-empty", "-qm", "feat(two): rewrite it"],
+    );
+    let rewrite = rev_parse(&repo, "rewrite");
+    let (ok, said) = push(FORCE, &ahead, &rewrite);
+    assert!(!ok, "a rewind refuses");
+    assert!(said.contains("force push to master"), "{said}");
+    // The remote-tracking tip catches a rewrite the push's own range
+    // cannot see.
+    git_in(&repo, &["checkout", "-q", "master"]);
+    git_in(&repo, &["push", "-q", "origin", "master"]);
+    let mut vars = trunk.to_vec();
+    vars.push(("PRE_COMMIT_FROM_REF", &remote));
+    vars.push(("PRE_COMMIT_TO_REF", &rewrite));
+    let (ok, said) = push_verdict(&repo, FORCE, &vars);
+    assert!(!ok, "a rewind past the tracked tip refuses: {said}");
+
+    // A merge commit on the pushed range refuses, naming it.
+    git_in(&repo, &["checkout", "-qb", "side", &ahead]);
+    git_in(
+        &repo,
+        &["commit", "--allow-empty", "-qm", "feat(side): add it"],
+    );
+    git_in(&repo, &["checkout", "-q", "master"]);
+    git_in(
+        &repo,
+        &["commit", "--allow-empty", "-qm", "feat(main): add it"],
+    );
+    git_in(
+        &repo,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "-m",
+            "chore(side): join the side",
+            "side",
+        ],
+    );
+    let merged = rev_parse(&repo, "master");
+    let (ok, said) = push(MERGE, &ahead, &merged);
+    assert!(!ok, "a merge commit refuses");
+    assert!(said.contains("merge commit to master"), "{said}");
+    assert!(
+        said.contains("join the side"),
+        "the refusal names the commit: {said}"
+    );
+    assert!(push(FORCE, &ahead, &merged).0, "the merge is no rewrite");
+
+    // Another branch is free to move however it likes.
+    let other = [
+        ("PRE_COMMIT_REMOTE_BRANCH", "refs/heads/feat/x"),
+        ("PRE_COMMIT_FROM_REF", ahead.as_str()),
+        ("PRE_COMMIT_TO_REF", rewrite.as_str()),
+    ];
+    assert!(push_verdict(&repo, FORCE, &other).0);
+    assert!(push_verdict(&repo, MERGE, &other).0);
+}
+
+/// SATISFIES target-config:a-release-less-template-carries-no-release-table
+/// The configuration a release-less landing writes leaves out the tag
+/// protection keys, `[security]`, and `[setup.bot]`, and passes its own
+/// floor table. A release-less target that requests the reporting policy
+/// keeps `[security]`, whose contact the policy states.
+#[test]
+fn release_less_template_omits_the_release_tables() {
+    let (_parent, repo) = workflow_only_repo(Some("git@gitlab.com:acme/widget.git"));
+    land_workflow_only(&repo, &[]).success();
+    let config =
+        std::fs::read_to_string(repo.join(".release-kit/config.toml")).expect("the config reads");
+    for gone in [
+        "tag_ruleset",
+        "tag_pattern",
+        "lines_ruleset",
+        "[security]",
+        "[setup.bot]",
+        "app_id",
+    ] {
+        assert!(!config.contains(gone), "{gone}: {config}");
+    }
+    // The floors read the file again on every landing verb.
+    rk().args(["upgrade", "--target"])
+        .arg(&repo)
+        .assert()
+        .success();
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(&repo)
+        .assert()
+        .success();
+    let after =
+        std::fs::read_to_string(repo.join(".release-kit/config.toml")).expect("the config reads");
+    assert_eq!(after, config, "an upgrade writes no release table back");
+
+    let (_parent, reporting) = workflow_only_repo(Some("git@gitlab.com:acme/widget.git"));
+    land_workflow_only(&reporting, &["--reporting-policy"]).success();
+    let config = std::fs::read_to_string(reporting.join(".release-kit/config.toml"))
+        .expect("the config reads");
+    assert!(config.contains("[security]"), "{config}");
+    assert!(!config.contains("tag_ruleset"), "{config}");
+    assert!(!config.contains("[setup.bot]"), "{config}");
+    // The kept table passes the floor table every reader applies.
+    rk().args(["status", "--check", "--target"])
+        .arg(&reporting)
+        .assert()
+        .success();
+
+    // A release-bearing landing keeps every table.
+    let releasing = tempfile::tempdir().expect("a scratch dir exists");
+    land_rust(releasing.path()).success();
+    let config = std::fs::read_to_string(releasing.path().join(".release-kit/config.toml"))
+        .expect("the config reads");
+    for kept in [
+        "tag_ruleset",
+        "tag_pattern",
+        "lines_ruleset",
+        "[security]",
+        "[setup.bot]",
+    ] {
+        assert!(config.contains(kept), "{kept}: {config}");
+    }
+}
+
+/// Land a workflow-only target at `forge` with the given merge form, so
+/// the setup reads the configuration and the record a real landing writes.
+fn land_workflow_only_at(fixture: &ForgeFixture, forge: &str, form: &str) {
+    fixture
+        .rk(&["init", "--workflow-only"])
+        .args(["--forge", forge, "--repo", "acme/widget"])
+        .args(["--merge-form", form, "--apply"])
+        .assert()
+        .success();
+    fixture.seed("default_branch", "master");
+}
+
+/// SATISFIES target-config:the-effective-protection-follows-the-profile
+/// SATISFIES forge-setup:applicability-follows-the-target-configuration
+/// A workflow-only GitHub target under `rebase` observes as correct after
+/// a canonical apply with no release tag ruleset and no required status
+/// check: the trunk ruleset carries the request rule alone, and allows
+/// only the rebase merge. `protect-tags` reports not applicable, and
+/// naming it by hand refuses.
+#[test]
+fn release_less_github_workflow_only_apply_observes_as_correct() {
+    let fixture = ForgeFixture::new();
+    land_workflow_only_at(&fixture, "github", "rebase");
+    for step in ["protect-trunk", "protections-check"] {
+        fixture
+            .rk(&["setup", "step", step])
+            .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
+            .assert()
+            .success();
+    }
+    fixture
+        .rk(&["setup", "step", "protect-tags"])
+        .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("profile.release.mode is none"));
+    let body: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture.state("ruleset_master-protection"))
+            .expect("the sent body reads"),
+    )
+    .expect("the sent body parses");
+    let rules: Vec<&str> = body["rules"]
+        .as_array()
+        .expect("rules")
+        .iter()
+        .filter_map(|rule| rule["type"].as_str())
+        .collect();
+    assert_eq!(
+        rules,
+        ["pull_request"],
+        "no status check is required: {body}"
+    );
+    assert_eq!(
+        body["rules"][0]["parameters"]["allowed_merge_methods"],
+        serde_json::json!(["rebase"])
+    );
+    assert!(
+        !fixture.state("ruleset_release-tags").exists(),
+        "no tag ruleset is installed"
+    );
+    for (step, word) in [
+        ("protect-trunk", "ok"),
+        ("protections-check", "ok"),
+        ("protect-tags", "not-applicable"),
+    ] {
+        let line = merge_form_check_line(&fixture, "github", step);
+        assert!(line.starts_with(word), "{step}: {line}");
+    }
+    let line = merge_form_check_line(&fixture, "github", "protect-tags");
+    assert!(line.contains("profile.release.mode is none"), "{line}");
+}
+
+/// SATISFIES target-config:the-effective-protection-follows-the-profile
+/// A workflow-only GitLab target under `rebase` observes as correct after
+/// a canonical apply with no protected tag and no required pipeline: the
+/// trunk keeps no-deletion and no-force-push, the merge method is `ff`
+/// with squash off, and the pipeline requirement is sent off and judged
+/// off on a fresh project.
+#[test]
+fn release_less_gitlab_workflow_only_apply_observes_as_correct() {
+    let fixture = ForgeFixture::new();
+    land_workflow_only_at(&fixture, "gitlab", "rebase");
+    for step in ["protect-trunk", "protections-check"] {
+        fixture
+            .rk(&["setup", "step", step])
+            .args(["--repo", "acme/widget", "--forge", "gitlab", "--apply"])
+            .assert()
+            .success();
+    }
+    let state = |name: &str| {
+        std::fs::read_to_string(fixture.state(name))
+            .unwrap_or_default()
+            .trim()
+            .to_owned()
+    };
+    assert_eq!(state("merge_method"), "ff");
+    assert_eq!(state("squash_option"), "never");
+    assert_eq!(
+        state("pipeline_required"),
+        "false",
+        "the pipeline requirement is sent off"
+    );
+    assert!(
+        !fixture.state("tag_protected").exists(),
+        "no tag is protected"
+    );
+    for (step, word) in [
+        ("protect-trunk", "ok"),
+        ("protections-check", "ok"),
+        ("protect-tags", "not-applicable"),
+    ] {
+        let line = merge_form_check_line(&fixture, "gitlab", step);
+        assert!(line.starts_with(word), "{step}: {line}");
+    }
+    let log = std::fs::read_to_string(fixture.state("log")).expect("the call log reads");
+    assert!(
+        log.contains("only_allow_merge_if_pipeline_succeeds=false"),
+        "{log}"
+    );
+    assert!(
+        !log.contains("only_allow_merge_if_pipeline_succeeds=true"),
+        "{log}"
+    );
+}
+
+/// SATISFIES target-config:the-effective-protection-follows-the-profile
+/// A release-bearing target still faults a missing tag protection and a
+/// missing pipeline requirement, as before.
+#[test]
+fn release_less_a_release_bearing_target_still_faults_a_missing_protection() {
+    let fixture = ForgeFixture::new();
+    land_merge_form(&fixture, "gitlab", "local", "rebase");
+    fixture.seed("protected_master", "");
+    fixture.seed("pipeline_required", "false");
+    fixture.seed("merge_method", "ff");
+    fixture.seed("squash_option", "never");
+    let line = merge_form_check_line(&fixture, "gitlab", "protect-trunk");
+    assert!(line.starts_with("unsatisfied protect-trunk"), "{line}");
+    assert!(line.contains("the pipeline requirement is off"), "{line}");
+    let line = merge_form_check_line(&fixture, "gitlab", "protect-tags");
+    assert!(line.starts_with("unsatisfied protect-tags"), "{line}");
+
+    let fixture = ForgeFixture::new();
+    land_merge_form(&fixture, "github", "local", "rebase");
+    write_workflow(&fixture, "ci.yml", MERGE_FORM_CI);
+    fixture
+        .rk(&["setup", "step", "protect-trunk"])
+        .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
+        .assert()
+        .success();
+    let body: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture.state("ruleset_master-protection"))
+            .expect("the sent body reads"),
+    )
+    .expect("the sent body parses");
+    assert!(
+        body["rules"]
+            .as_array()
+            .expect("rules")
+            .iter()
+            .any(|rule| rule["type"] == "required_status_checks"),
+        "an automatic release keeps its gate's check: {body}"
+    );
+    let line = merge_form_check_line(&fixture, "github", "protect-tags");
+    assert!(line.starts_with("unsatisfied protect-tags"), "{line}");
+    let line = merge_form_check_line(&fixture, "github", "protections-check");
+    assert!(line.starts_with("unsatisfied protections-check"), "{line}");
+}
+
+/// The parameters of a release-less target integrated at the forge, under
+/// one merge form: the shape whose gate lands with no release text.
+fn release_less_gate_params(
+    forge: &str,
+    form: release_kit::landing::MergeForm,
+) -> release_kit::landing::Params {
+    let mut record = manifest_requesting(
+        "rust",
+        forge,
+        release_kit::landing::CheckoutMode::LinkedWorktree,
+        release_kit::landing::Integration::Forge,
+        None,
+        "acme/widget",
+        release_kit::profile::CapabilityRequests {
+            nix_packaging: false,
+            reporting_policy: false,
+            scorecard: false,
+            code_scanning: None,
+            workflow_guards: Some(true),
+        },
+    );
+    record.profile.technologies = Vec::new();
+    record.profile.release = release_kit::profile::ReleaseIntent {
+        mode: release_kit::profile::ReleaseMode::None,
+        driver: None,
+        style: None,
+        line_prefix: None,
+    };
+    record.git.merge_form = form;
+    release_kit::landing::Params::from_record(&record)
+}
+
+/// One embedded gate snippet rendered for `params`.
+fn render_gate(path: &str, params: &release_kit::landing::Params) -> String {
+    let source = release_kit::embedded::SNIPPETS
+        .get_file(path)
+        .expect("the gate is embedded");
+    String::from_utf8(release_kit::projection::render(source.contents(), params))
+        .expect("the gate is text")
+}
+
+/// SATISFIES project-profile:a-release-less-landing-carries-no-release-text
+/// SATISFIES project-profile:the-forge-gate-follows-the-merge-form
+/// A release-less target integrated at the forge lands the gate its merge
+/// form names, on GitHub and on GitLab, with no version, changelog, or tag
+/// reason, no forced scope, and no unrendered token; the release-bearing
+/// gate keeps its release wording and its scope requirement, byte for byte
+/// as the projection digests pin it.
+#[test]
+fn workflow_only_forge_integration_gate_carries_no_release_text() {
+    use release_kit::landing::MergeForm;
+    for forge in ["github", "gitlab"] {
+        for (form, flag) in [(MergeForm::Squash, "squash"), (MergeForm::Rebase, "rebase")] {
+            let at = format!("{forge} {flag}");
+            let (_parent, repo) = workflow_only_repo(None);
+            rk().args(["init", "--release-mode", "none", "--integration", "forge"])
+                .args(["--forge", forge, "--repo", "acme/widget"])
+                .args([
+                    "--merge-form",
+                    flag,
+                    "--workflow-guards",
+                    "--apply",
+                    "--target",
+                ])
+                .arg(&repo)
+                .assert()
+                .success();
+            let gate = match (forge, form) {
+                ("github", MergeForm::Squash) => ".github/workflows/pr-title.yml",
+                ("github", MergeForm::Rebase) => ".github/workflows/pr-commits.yml",
+                (_, MergeForm::Squash) => ".gitlab/ci/mr-title.yml",
+                (_, MergeForm::Rebase) => ".gitlab/ci/mr-commits.yml",
+            };
+            let mut landed = vec![gate];
+            if forge == "gitlab" {
+                landed.push(".gitlab-ci.yml");
+            }
+            for path in landed {
+                let text = std::fs::read_to_string(repo.join(path))
+                    .unwrap_or_else(|_| panic!("{at}: {path} landed"));
+                assert_eq!(
+                    release_reason_words(&text),
+                    Vec::<String>::new(),
+                    "{at}: {path} names a release reason: {text}"
+                );
+                assert!(!text.contains("RK_"), "{at}: {path} keeps a token: {text}");
+                assert!(!text.contains("bot derives"), "{at}: {path}: {text}");
+                assert!(!text.contains("scoped"), "{at}: {path}: {text}");
+            }
+            let text = std::fs::read_to_string(repo.join(gate)).expect("the gate reads");
+            assert!(
+                text.contains(r"(\(([a-z0-9._/-]+)\))?!?: .+"),
+                "{at}: the scope group is optional: {text}"
+            );
+            // The comment wraps, so the words are read across its lines.
+            let words: Vec<&str> = text
+                .lines()
+                .map(|line| line.trim_start_matches('#'))
+                .flat_map(str::split_whitespace)
+                .collect();
+            assert!(
+                words
+                    .join(" ")
+                    .contains("whose scope is preferred and not required"),
+                "{at}: {text}"
+            );
+            rk().args(["status", "--check", "--target"])
+                .arg(&repo)
+                .assert()
+                .success();
+
+            // The release-bearing gate keeps every release line and the
+            // required scope group.
+            let source = if forge == "github" {
+                format!("_shared/github/{gate}")
+            } else {
+                format!("_shared/gitlab/{gate}")
+            };
+            let releasing = rendered_gate(&source, form);
+            assert!(
+                releasing.contains("the bot derives the version"),
+                "{at}: {releasing}"
+            );
+            assert!(
+                releasing.contains(r"\(([a-z0-9._/-]+)\)!?: .+"),
+                "{at}: {releasing}"
+            );
+            assert!(!releasing.contains(r"\))?!?"), "{at}: {releasing}");
+            assert!(!releasing.contains("RK_"), "{at}: {releasing}");
+            assert!(!releasing.contains("preferred and not required"), "{at}");
+        }
+    }
+}
+
+/// SATISFIES project-profile:a-release-less-landing-carries-no-release-text
+/// The release-less title gate on each forge and the release-less commit
+/// gate on each forge pass a header with no scope, while the grammar, a
+/// present scope's shape, and the content guards still hold; the
+/// release-bearing gates refuse the same header.
+#[test]
+fn release_less_forge_gate_accepts_a_header_with_no_scope() {
+    use release_kit::landing::MergeForm;
+    let title_gate = |path: &str, forge: &str, release: bool, title: &str| -> bool {
+        let text = if release {
+            rendered_gate(path, MergeForm::Squash)
+        } else {
+            render_gate(path, &release_less_gate_params(forge, MergeForm::Squash))
+        };
+        let (marker, indent, var) = if forge == "github" {
+            ("run: |", 10, "TITLE")
+        } else {
+            ("  script:\n    - |", 6, "CI_MERGE_REQUEST_TITLE")
+        };
+        let script = gate_script(&text, marker, indent);
+        std::process::Command::new("bash")
+            .args(["-c", &script])
+            .env(var, title)
+            .output()
+            .expect("bash runs the gate")
+            .status
+            .success()
+    };
+    for (forge, path) in [
+        ("github", "_shared/github/.github/workflows/pr-title.yml"),
+        ("gitlab", "_shared/gitlab/.gitlab/ci/mr-title.yml"),
+    ] {
+        assert!(
+            title_gate(path, forge, false, "fix: drop the stale path"),
+            "{forge}"
+        );
+        assert!(
+            title_gate(path, forge, false, "fix(paths): drop the stale path"),
+            "{forge}"
+        );
+        assert!(title_gate(path, forge, false, "feat!: break it"), "{forge}");
+        assert!(
+            !title_gate(path, forge, false, "drop the stale path"),
+            "{forge}"
+        );
+        assert!(
+            !title_gate(path, forge, false, "fix(Bad Scope): drop it"),
+            "{forge}"
+        );
+        assert!(!title_gate(path, forge, false, "wat: drop it"), "{forge}");
+        assert!(
+            !title_gate(path, forge, true, "fix: drop the stale path"),
+            "{forge}"
+        );
+        assert!(
+            title_gate(path, forge, true, "fix(paths): drop the stale path"),
+            "{forge}"
+        );
+    }
+
+    // The commit gates: every commit judged, a header with no scope passes
+    // where the release mode is none, the content guards hold, and the
+    // release-bearing gate refuses the same commit.
+    let release_less = render_gate(
+        "_shared/github/.github/workflows/pr-commits.yml",
+        &release_less_gate_params("github", MergeForm::Rebase),
+    );
+    let dir = tempfile::tempdir().expect("a scratch dir exists");
+    let _ = github_commit_listing(dir.path());
+    push_github_commit(dir.path(), 1, "aaaa1111", "fix: drop the stale path\n");
+    push_github_commit(dir.path(), 2, "bbbb2222", "feat(api): add the route\n");
+    let (ok, said) = run_github_commit_gate_text(dir.path(), "fix: two commits", &release_less);
+    assert!(ok, "{said}");
+    let (ok, said) = run_github_commit_gate(dir.path(), "fix(api): two commits");
+    assert!(!ok, "the release-bearing gate requires the scope: {said}");
+    assert!(said.contains("aaaa1111"), "{said}");
+    push_github_commit(
+        dir.path(),
+        3,
+        "cccc3333",
+        "fix: mend it\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n",
+    );
+    let (ok, said) = run_github_commit_gate_text(dir.path(), "fix: three commits", &release_less);
+    assert!(!ok, "the content guards still hold: {said}");
+    assert!(
+        said.contains("cccc3333") && said.contains("attribution"),
+        "{said}"
+    );
+
+    let release_less = render_gate(
+        "_shared/gitlab/.gitlab/ci/mr-commits.yml",
+        &release_less_gate_params("gitlab", MergeForm::Rebase),
+    );
+    let (repo, base, head) =
+        gitlab_request(&["fix: drop the stale path", "feat(api): add the route"]);
+    let (ok, said) =
+        run_gitlab_commit_gate_text(repo.path(), &base, &head, "fix: two commits", &release_less);
+    assert!(ok, "{said}");
+    let (ok, said) = run_gitlab_commit_gate(repo.path(), &base, &head, "fix(api): two commits");
+    assert!(!ok, "the release-bearing gate requires the scope: {said}");
+    let (repo, base, head) = gitlab_request(&["drop the stale path"]);
+    let (ok, said) =
+        run_gitlab_commit_gate_text(repo.path(), &base, &head, "fix: one commit", &release_less);
+    assert!(!ok, "the grammar still holds: {said}");
+    assert!(said.contains("type or type(scope)"), "{said}");
+}
+
+// ---------------------------------------------------------------------------
+// The publication of a local integration: a linear range, and a live trunk
+
+/// One git command in a fixture, with no host configuration and no hook,
+/// so the fixture's own repository configuration is the one that decides.
+fn git_bare_config(dir: &Path, args: &[&str]) {
+    let mut command = std::process::Command::new("git");
+    for var in GIT_HOOK_VARS {
+        command.env_remove(var);
+    }
+    let status = command
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .args(["-c", "core.hooksPath=/dev/null"])
+        .args(args)
+        .current_dir(dir)
+        .status()
+        .expect("git runs");
+    assert!(status.success(), "git {args:?} failed");
+}
+
+/// A manual-stage hook in the seat, committed on the branch, whose script
+/// is `body`: the project's own gate, which the integration runs and which
+/// the lock bounds no more than a hand at the desk.
+fn seat_manual_hook(seat: &Path, body: &str) {
+    std::fs::write(
+        seat.join("gate.sh"),
+        format!("#!/bin/sh\nset -eu\n{body}\n"),
+    )
+    .expect("the hook script writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(seat.join("gate.sh"), std::fs::Permissions::from_mode(0o755))
+            .expect("the script is executable");
+    }
+    std::fs::write(
+        seat.join(".pre-commit-config.yaml"),
+        "repos:\n  - repo: local\n    hooks:\n      - id: gate\n        name: gate\n        stages: [manual]\n        language: script\n        always_run: true\n        pass_filenames: false\n        entry: gate.sh\n",
+    )
+    .expect("the hook file writes");
+    git_bare_config(seat, &["add", "-A"]);
+    git_bare_config(
+        seat,
+        &["commit", "-qm", "ci(hooks): run the project's gate"],
+    );
+}
+
+/// A stand-in for git, on no `PATH`, that rk reaches through `RK_GIT_BIN`
+/// and that passes every call to the real git after `prelude` ran.
+fn git_wrapper(dir: &Path, prelude: &str) -> PathBuf {
+    let path = dir.join("git-wrap");
+    std::fs::write(
+        &path,
+        format!(
+            "#!/bin/sh\ndir=; prev=; merge=; ff=; rebase=; abort=; last=\nfor a; do\n  [ \"$prev\" = -C ] && dir=$a\n  [ \"$a\" = merge ] && merge=1\n  [ \"$a\" = --ff-only ] && ff=1\n  [ \"$a\" = rebase ] && rebase=1\n  [ \"$a\" = --abort ] && abort=1\n  prev=$a; last=$a\ndone\n{prelude}\nexec git \"$@\"\n"
+        ),
+    )
+    .expect("the wrapper writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .expect("the wrapper is executable");
+    }
+    path
+}
+
+/// A branch that merged a side branch with valid messages, in a clone
+/// whose own configuration asks every rebase to keep merges, publishes a
+/// linear range: the integration's rebase states its own semantics.
+///
+/// SATISFIES git:a-rebase-integration-publishes-the-branch-tip
+#[test]
+fn rebase_integrate_publishes_a_linear_range_under_rebase_merges() {
+    if !pre_commit_present() {
+        return;
+    }
+    let (_parent, repo) = rebase_fixture(&["feat(greeting): first"]);
+    let seat = greeting_seat(&repo);
+    git_bare_config(&repo, &["config", "rebase.rebaseMerges", "true"]);
+    git_bare_config(&seat, &["checkout", "-qb", "side", "HEAD~1"]);
+    std::fs::write(seat.join("side.txt"), "side\n").expect("writes");
+    git_bare_config(&seat, &["add", "side.txt"]);
+    git_bare_config(&seat, &["commit", "-qm", "feat(side): add it"]);
+    git_bare_config(&seat, &["checkout", "-q", "feat/greeting"]);
+    git_bare_config(
+        &seat,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "-m",
+            "feat(greeting): combine side",
+            "side",
+        ],
+    );
+    let base = rev_parse(&repo, "master");
+    assert_ne!(
+        git_out(
+            &repo,
+            &["rev-list", "--merges", &format!("{base}..feat/greeting")]
+        ),
+        "",
+        "the branch carries a merge before the integration"
+    );
+    let report = rebase_integrate_apply(&repo);
+    assert_eq!(report["merge_form"], "rebase", "{report}");
+    assert_eq!(
+        git_out(&repo, &["rev-list", "--merges", &format!("{base}..master")]),
+        "",
+        "the published range holds no merge commit"
+    );
+    assert!(repo.join("side.txt").is_file(), "the side's work arrived");
+    assert!(
+        repo.join("greeting.txt").is_file(),
+        "the branch's work arrived"
+    );
+}
+
+/// The guard stands on its own: where the rebase still leaves a merge in
+/// the range, as a git that ignored the explicit options would, the
+/// integration refuses before the publication and the trunk stays.
+///
+/// SATISFIES git:a-rebase-integration-publishes-the-branch-tip
+#[test]
+fn rebase_integrate_refuses_a_range_holding_a_merge() {
+    if !pre_commit_present() {
+        return;
+    }
+    let (parent, repo) = rebase_fixture(&["feat(greeting): first"]);
+    let seat = greeting_seat(&repo);
+    git_bare_config(&seat, &["checkout", "-qb", "side", "HEAD~1"]);
+    std::fs::write(seat.join("side.txt"), "side\n").expect("writes");
+    git_bare_config(&seat, &["add", "side.txt"]);
+    git_bare_config(&seat, &["commit", "-qm", "feat(side): add it"]);
+    git_bare_config(&seat, &["checkout", "-q", "feat/greeting"]);
+    git_bare_config(
+        &seat,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "-m",
+            "feat(greeting): combine side",
+            "side",
+        ],
+    );
+    // Every rebase this git runs keeps merges, whatever it is asked.
+    let wrapper = git_wrapper(
+        parent.path(),
+        "if [ -n \"$rebase\" ] && [ -z \"$abort\" ]; then exec git -C \"$dir\" rebase --rebase-merges \"$last\"; fi",
+    );
+    let before = rev_parse(&repo, "master");
+    rk_scrubbed()
+        .env("RK_GIT_BIN", &wrapper)
+        .args(["integrate", "feat/greeting", "--apply", "--target"])
+        .arg(&repo)
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("still holds the merge commit"));
+    assert_eq!(
+        rev_parse(&repo, "master"),
+        before,
+        "the trunk stands where it stood"
+    );
+}
+
+/// A clone whose configuration asks every rebase to update the refs of a
+/// stacked branch moves no ref but the trunk: a second branch at a commit
+/// of the range stays where it was.
+///
+/// SATISFIES git:a-rebase-integration-publishes-the-branch-tip
+#[test]
+fn rebase_integrate_moves_no_other_branch_under_update_refs() {
+    if !pre_commit_present() {
+        return;
+    }
+    let (_parent, repo) = rebase_fixture(&["feat(greeting): first", "feat(greeting): second"]);
+    git_bare_config(&repo, &["config", "rebase.updateRefs", "true"]);
+    git_bare_config(&repo, &["branch", "feat/stack", "feat/greeting~1"]);
+    let stacked = rev_parse(&repo, "feat/stack");
+    // The trunk advances, so the integration's rebase rewrites the range.
+    git_bare_config(
+        &repo,
+        &[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "chore(trunk): advance",
+        ],
+    );
+    rebase_integrate_apply(&repo);
+    assert_eq!(
+        rev_parse(&repo, "feat/stack"),
+        stacked,
+        "the stacked branch does not move"
+    );
+}
+
+/// A gate that fast-forwards the checked-out trunk to a commit of the
+/// branch moves the trunk the integration observed, so the publication
+/// refuses naming both commits and the trunk stays where the gate left it.
+///
+/// SATISFIES git:a-local-integration-is-a-transaction
+#[test]
+fn integrate_refuses_a_held_trunk_moved_under_the_gate() {
+    if !pre_commit_present() {
+        return;
+    }
+    for form in [Some("rebase"), None] {
+        let (_parent, repo) = integrate_fixture_shaped(
+            &serde_json::json!({ "mode": "none" }),
+            false,
+            form,
+            &["feat(greeting): add it"],
+        );
+        let seat = greeting_seat(&repo);
+        seat_manual_hook(
+            &seat,
+            &format!(
+                "git -C '{}' merge -q --ff-only feat/greeting~1",
+                repo.display()
+            ),
+        );
+        let observed = rev_parse(&repo, "master");
+        let mut command = rk_scrubbed();
+        command.args(["integrate", "feat/greeting", "--apply"]);
+        if form.is_none() {
+            command.args(["-m", "feat(greeting): add it"]);
+        }
+        let out = command
+            .args(["--target"])
+            .arg(&repo)
+            .assert()
+            .code(73)
+            .get_output()
+            .clone();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let moved_to = rev_parse(&repo, "master");
+        assert_ne!(moved_to, observed, "{form:?}: the gate moved the trunk");
+        assert_eq!(
+            moved_to,
+            rev_parse(&repo, "feat/greeting~1"),
+            "{form:?}: the trunk stays where the gate left it"
+        );
+        assert!(stderr.contains("the trunk moved"), "{form:?}: {stderr}");
+        assert!(stderr.contains(&observed[..7]), "{form:?}: {stderr}");
+        assert!(stderr.contains(&moved_to[..7]), "{form:?}: {stderr}");
+    }
+}
+
+/// The same movement against a trunk no worktree holds refuses through
+/// the compare-and-swap of the trunk ref.
+///
+/// SATISFIES git:a-local-integration-is-a-transaction
+#[test]
+fn integrate_refuses_an_unheld_trunk_moved_under_the_gate() {
+    if !pre_commit_present() {
+        return;
+    }
+    for form in [Some("rebase"), None] {
+        let (_parent, repo) = integrate_fixture_shaped(
+            &serde_json::json!({ "mode": "none" }),
+            false,
+            form,
+            &["feat(greeting): add it"],
+        );
+        git_bare_config(&repo, &["checkout", "-q", "--detach"]);
+        let seat = greeting_seat(&repo);
+        seat_manual_hook(
+            &seat,
+            &format!(
+                "git -C '{}' update-ref refs/heads/master feat/greeting~1",
+                repo.display()
+            ),
+        );
+        let observed = rev_parse(&repo, "master");
+        let mut command = rk_scrubbed();
+        command.args(["integrate", "feat/greeting", "--apply"]);
+        if form.is_none() {
+            command.args(["-m", "feat(greeting): add it"]);
+        }
+        let out = command
+            .args(["--target"])
+            .arg(&repo)
+            .assert()
+            .code(73)
+            .get_output()
+            .clone();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let moved_to = rev_parse(&repo, "master");
+        assert_eq!(moved_to, rev_parse(&repo, "feat/greeting~1"), "{form:?}");
+        assert!(stderr.contains("the trunk moved"), "{form:?}: {stderr}");
+        assert!(stderr.contains(&observed[..7]), "{form:?}: {stderr}");
+    }
+}
+
+/// A gate that checks the trunk out in a new worktree changes who holds
+/// it, so the publication refuses and the trunk and that worktree stand
+/// where they were.
+///
+/// SATISFIES git:a-local-integration-is-a-transaction
+#[test]
+fn integrate_refuses_a_trunk_seated_while_the_gate_ran() {
+    if !pre_commit_present() {
+        return;
+    }
+    for form in [Some("rebase"), None] {
+        let (parent, repo) = integrate_fixture_shaped(
+            &serde_json::json!({ "mode": "none" }),
+            false,
+            form,
+            &["feat(greeting): add it"],
+        );
+        git_bare_config(&repo, &["checkout", "-q", "--detach"]);
+        let seat = greeting_seat(&repo);
+        let seated = parent.path().join("trunk-seat");
+        seat_manual_hook(
+            &seat,
+            &format!(
+                "git -C '{}' worktree add -q '{}' master",
+                repo.display(),
+                seated.display()
+            ),
+        );
+        let before = rev_parse(&repo, "master");
+        let mut command = rk_scrubbed();
+        command.args(["integrate", "feat/greeting", "--apply"]);
+        if form.is_none() {
+            command.args(["-m", "feat(greeting): add it"]);
+        }
+        command
+            .args(["--target"])
+            .arg(&repo)
+            .assert()
+            .code(73)
+            .stderr(predicate::str::contains("checked out"));
+        assert_eq!(rev_parse(&repo, "master"), before, "{form:?}");
+        assert_eq!(rev_parse(&seated, "HEAD"), before, "{form:?}");
+    }
+}
+
+/// A writer that moves the held trunk between the re-observation and the
+/// fast-forward cannot be refused, because the trunk is already published
+/// when its move is read back. The integration says so: it exits nonzero
+/// with the reason `state-drift`, its report names the published commit,
+/// and its diagnostic names the observed and the actual starting commits.
+/// The race is forced through a git stand-in that moves the trunk once,
+/// right before the fast-forward runs.
+///
+/// SATISFIES git:a-local-integration-is-a-transaction
+#[test]
+fn integrate_reports_a_trunk_moved_during_its_publication() {
+    if !pre_commit_present() {
+        return;
+    }
+    let (parent, repo) = rebase_fixture(&["feat(greeting): first", "feat(greeting): second"]);
+    let mark = parent.path().join("raced");
+    let wrapper = git_wrapper(
+        parent.path(),
+        &format!(
+            "if [ -n \"$merge\" ] && [ -n \"$ff\" ] && [ ! -e '{}' ]; then : > '{}'; git -C \"$dir\" merge -q --ff-only \"$last~1\" >/dev/null 2>&1; fi",
+            mark.display(),
+            mark.display()
+        ),
+    );
+    let observed = rev_parse(&repo, "master");
+    let out = rk_scrubbed()
+        .env("RK_GIT_BIN", &wrapper)
+        .args([
+            "integrate",
+            "feat/greeting",
+            "--apply",
+            "--json",
+            "--target",
+        ])
+        .arg(&repo)
+        .assert()
+        .code(1)
+        .get_output()
+        .clone();
+    let tip = rev_parse(&repo, "feat/greeting");
+    let found = rev_parse(&repo, "feat/greeting~1");
+    assert!(mark.exists(), "the race ran");
+    assert_eq!(
+        rev_parse(&repo, "master"),
+        tip,
+        "the trunk is published, never rolled back"
+    );
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one JSON report");
+    assert_eq!(report["mode"], "apply", "{report}");
+    assert_eq!(
+        report["trunk_commit"], tip,
+        "the report names the publication: {report}"
+    );
+    let diagnostic: serde_json::Value =
+        serde_json::from_slice(&out.stderr).expect("one JSON diagnostic");
+    assert_eq!(diagnostic["reason"], "state-drift", "{diagnostic}");
+    let message = diagnostic["message"].as_str().unwrap_or_default();
+    assert!(message.contains(&tip[..7]), "{message}");
+    assert!(message.contains(&found[..7]), "{message}");
+    assert!(message.contains(&observed[..7]), "{message}");
+    assert!(!message.contains("nothing"), "{message}");
+    let state = diagnostic["target_state"].as_str().unwrap_or_default();
+    assert!(state.contains("published"), "{state}");
+    assert!(
+        !state.contains("unchanged") && !state.contains("where it stood"),
+        "{state}"
+    );
+}
+
+/// The pipeline requirement the GitLab fake holds, as the setter left it.
+fn gitlab_pipeline_state(fixture: &ForgeFixture) -> String {
+    std::fs::read_to_string(fixture.state("pipeline_required"))
+        .unwrap_or_default()
+        .trim()
+        .to_owned()
+}
+
+/// Run one GitLab setup step with `--apply`.
+fn gitlab_step(fixture: &ForgeFixture, step: &str) -> assert_cmd::assert::Assert {
+    fixture
+        .rk(&["setup", "step", step])
+        .args(["--repo", "acme/widget", "--forge", "gitlab", "--apply"])
+        .assert()
+}
+
+/// Seed the GitLab fake with an owned trunk under the rebase settings, so
+/// the pipeline requirement is the one value a check can disagree on.
+fn seed_gitlab_rebase_trunk(fixture: &ForgeFixture, pipeline: &str) {
+    gitlab_step(fixture, "protect-trunk").success();
+    fixture.seed("pipeline_required", pipeline);
+}
+
+/// SATISFIES target-config:the-effective-protection-follows-the-profile
+/// A GitLab project that required the pipeline under an earlier gate and
+/// takes the workflow-only profile has the requirement cleared by its next
+/// protect-trunk, and both checks then read it as ready: an inherited
+/// requirement would hold every merge request on a pipeline nothing runs.
+#[test]
+fn release_less_gitlab_apply_clears_an_inherited_pipeline_requirement() {
+    let fixture = ForgeFixture::new();
+    land_workflow_only_at(&fixture, "gitlab", "rebase");
+    fixture.seed("pipeline_required", "true");
+    gitlab_step(&fixture, "protect-trunk").success();
+    assert_eq!(
+        gitlab_pipeline_state(&fixture),
+        "false",
+        "the inherited requirement is cleared"
+    );
+    gitlab_step(&fixture, "protections-check").success();
+    let line = merge_form_check_line(&fixture, "gitlab", "protect-trunk");
+    assert!(line.starts_with("ok protect-trunk"), "{line}");
+}
+
+/// SATISFIES target-config:the-effective-protection-follows-the-profile
+/// A gated GitLab project whose pipeline requirement was turned off has it
+/// turned on by protect-trunk, and both checks read it as ready.
+#[test]
+fn release_less_gitlab_gated_apply_requires_the_pipeline() {
+    let fixture = ForgeFixture::new();
+    land_merge_form(&fixture, "gitlab", "forge", "rebase");
+    fixture.seed("pipeline_required", "false");
+    fixture.seed("tag_protected", "");
+    gitlab_step(&fixture, "protect-trunk").success();
+    assert_eq!(gitlab_pipeline_state(&fixture), "true");
+    gitlab_step(&fixture, "protections-check").success();
+    let line = merge_form_check_line(&fixture, "gitlab", "protect-trunk");
+    assert!(line.starts_with("ok protect-trunk"), "{line}");
+}
+
+/// SATISFIES target-config:the-effective-protection-follows-the-profile
+/// Both checks judge the pipeline requirement in both directions: on where
+/// no forge gate lands is a fault, off where one lands is a fault, and a
+/// value that is missing or unreadable is never ready. The shell check
+/// fails its script, and the Rust observation names the fault.
+#[test]
+fn release_less_gitlab_checks_fault_a_pipeline_mismatch() {
+    for (gated, observed, fault) in [
+        (false, "true", "the pipeline requirement is on"),
+        (true, "false", "the pipeline requirement is off"),
+        (
+            false,
+            "null",
+            "the pipeline requirement is missing or unreadable",
+        ),
+        (
+            true,
+            "null",
+            "the pipeline requirement is missing or unreadable",
+        ),
+    ] {
+        let at = format!("gated {gated}, observed {observed}");
+        let fixture = ForgeFixture::new();
+        if gated {
+            land_merge_form(&fixture, "gitlab", "forge", "rebase");
+            fixture.seed("tag_protected", "");
+        } else {
+            land_workflow_only_at(&fixture, "gitlab", "rebase");
+        }
+        seed_gitlab_rebase_trunk(&fixture, observed);
+        let line = merge_form_check_line(&fixture, "gitlab", "protect-trunk");
+        assert!(
+            line.starts_with("unsatisfied protect-trunk"),
+            "{at}: {line}"
+        );
+        assert!(line.contains(fault), "{at}: {line}");
+        let out = gitlab_step(&fixture, "protections-check")
+            .failure()
+            .get_output()
+            .clone();
+        let said = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let label = if gated {
+            "FAIL the gate requires the whole pipeline"
+        } else {
+            "FAIL no pipeline is required"
+        };
+        assert!(said.contains(label), "{at}: the shell check fails: {said}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The rebase form at the forge: the GitHub repository switch, and the
+// GitLab gate's merge-commit refusal
+
+/// The GitHub fake's repository rebase switch, as the setter left it.
+fn github_rebase_switch(fixture: &ForgeFixture) -> String {
+    std::fs::read_to_string(fixture.state("allow_rebase_merge"))
+        .unwrap_or_default()
+        .trim()
+        .to_owned()
+}
+
+/// Run one GitHub setup step with `--apply`.
+fn github_step(fixture: &ForgeFixture, step: &str) -> assert_cmd::assert::Assert {
+    fixture
+        .rk(&["setup", "step", step])
+        .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
+        .assert()
+}
+
+/// SATISFIES target-config:the-effective-protection-follows-the-profile
+/// A repository that disallows rebase merges takes the rebase form's
+/// canonical apply: protect-trunk turns the repository switch on, and
+/// both checks read it as ready. The squash form leaves the switch alone.
+#[test]
+fn merge_form_github_rebase_apply_enables_a_disabled_rebase_switch() {
+    let fixture = ForgeFixture::new();
+    land_merge_form(&fixture, "github", "forge", "rebase");
+    write_workflow(&fixture, "ci.yml", MERGE_FORM_CI);
+    fixture.seed("allow_rebase_merge", "false");
+    github_step(&fixture, "protect-trunk").success();
+    assert_eq!(github_rebase_switch(&fixture), "true");
+    github_step(&fixture, "protect-tags").success();
+    github_step(&fixture, "protections-check").success();
+    let line = merge_form_check_line(&fixture, "github", "protect-trunk");
+    assert!(line.starts_with("ok protect-trunk"), "{line}");
+    let log = std::fs::read_to_string(fixture.state("log")).expect("the call log reads");
+    assert!(log.contains("allow_rebase_merge=true"), "{log}");
+    for other in ["allow_squash_merge", "allow_merge_commit"] {
+        assert!(
+            !log.contains(other),
+            "no other merge switch is touched: {log}"
+        );
+    }
+
+    // The squash form sends no rebase switch at all.
+    let fixture = ForgeFixture::new();
+    land_merge_form(&fixture, "github", "forge", "squash");
+    write_workflow(&fixture, "ci.yml", MERGE_FORM_CI);
+    fixture.seed("allow_rebase_merge", "false");
+    github_step(&fixture, "protect-trunk").success();
+    assert_eq!(github_rebase_switch(&fixture), "false");
+    let log = std::fs::read_to_string(fixture.state("log")).expect("the call log reads");
+    assert!(!log.contains("allow_rebase_merge"), "{log}");
+}
+
+/// SATISFIES target-config:the-effective-protection-follows-the-profile
+/// After a canonical rebase apply, a repository switch turned off, left
+/// out, or unreadable is never ready: the Rust observation faults or
+/// cannot confirm it, and the shell check fails.
+#[test]
+fn merge_form_github_rebase_checks_fault_a_disabled_rebase_switch() {
+    for (seed, fault) in [
+        ("allow_rebase_merge", Some("allow_rebase_merge is false")),
+        (
+            "absent",
+            Some("allow_rebase_merge switch is missing or unreadable"),
+        ),
+        ("fail_repo", None),
+    ] {
+        let fixture = ForgeFixture::new();
+        land_merge_form(&fixture, "github", "forge", "rebase");
+        write_workflow(&fixture, "ci.yml", MERGE_FORM_CI);
+        github_step(&fixture, "protect-trunk").success();
+        github_step(&fixture, "protect-tags").success();
+        match seed {
+            "allow_rebase_merge" => fixture.seed("allow_rebase_merge", "false"),
+            "absent" => fixture.seed("allow_rebase_merge", "absent"),
+            _ => fixture.seed("fail_repo", ""),
+        }
+        let line = merge_form_check_line(&fixture, "github", "protect-trunk");
+        assert!(!line.starts_with("ok"), "{seed}: {line}");
+        if let Some(fault) = fault {
+            assert!(
+                line.starts_with("unsatisfied protect-trunk"),
+                "{seed}: {line}"
+            );
+            assert!(line.contains(fault), "{seed}: {line}");
+        }
+        let out = github_step(&fixture, "protections-check")
+            .failure()
+            .get_output()
+            .clone();
+        let said = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            said.contains("FAIL the repository allows rebase merges"),
+            "{seed}: the shell check fails: {said}"
+        );
+    }
+}
+
+/// A scratch GitLab request whose branch merged a side branch: a trunk
+/// commit, then one branch commit, a side commit off the trunk, and a
+/// merge with a valid conventional subject. Returns the repository, the
+/// base, the head, and the merge commit.
+fn gitlab_merge_request() -> (tempfile::TempDir, String, String, String) {
+    let dir = tempfile::tempdir().expect("a scratch repo exists");
+    let root = dir.path();
+    git_bare_config(root, &["init", "-q", "-b", "master"]);
+    git_bare_config(root, &["config", "user.email", "rk@example.invalid"]);
+    git_bare_config(root, &["config", "user.name", "rk test"]);
+    git_bare_config(
+        root,
+        &["commit", "-q", "--allow-empty", "-m", "chore(repo): start"],
+    );
+    let base = git_out(root, &["rev-parse", "HEAD"]);
+    git_bare_config(root, &["checkout", "-qb", "side"]);
+    git_bare_config(
+        root,
+        &["commit", "-q", "--allow-empty", "-m", "feat(side): add it"],
+    );
+    git_bare_config(root, &["checkout", "-q", "master"]);
+    git_bare_config(
+        root,
+        &[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "feat(api): add the route",
+        ],
+    );
+    git_bare_config(
+        root,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "-m",
+            "feat(api): join the side",
+            "side",
+        ],
+    );
+    let head = git_out(root, &["rev-parse", "HEAD"]);
+    (dir, base, head.clone(), head)
+}
+
+/// Run the rendered GitLab commit gate under `sh -e`, as a job's script
+/// runs, with the pipeline's variables.
+fn run_gitlab_commit_gate_strict(
+    dir: &Path,
+    base: &str,
+    head: &str,
+    title: &str,
+) -> (bool, String) {
+    let text = rendered_gate(
+        "_shared/gitlab/.gitlab/ci/mr-commits.yml",
+        release_kit::landing::MergeForm::Rebase,
+    );
+    let script = gate_script(&text, "  script:\n    - |", 6);
+    let mut command = std::process::Command::new("sh");
+    for var in GIT_HOOK_VARS {
+        command.env_remove(var);
+    }
+    let out = command
+        .args(["-e", "-c", &script])
+        .env("CI_MERGE_REQUEST_TITLE", title)
+        .env("CI_MERGE_REQUEST_DIFF_BASE_SHA", base)
+        .env("CI_MERGE_REQUEST_SOURCE_BRANCH_SHA", "")
+        .env("CI_COMMIT_SHA", head)
+        .current_dir(dir)
+        .output()
+        .expect("sh runs the gate");
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+    )
+}
+
+/// SATISFIES project-profile:the-forge-gate-follows-the-merge-form
+/// The GitLab commit gate refuses a request whose range carries a merge
+/// commit, even one whose every subject is valid, and names the merge by
+/// its short SHA and its subject: the ff merge method would add it to the
+/// trunk as it stands.
+#[test]
+fn commit_gate_gitlab_refuses_a_merge_commit_in_the_request() {
+    let (repo, base, head, merge) = gitlab_merge_request();
+    let (ok, said) =
+        run_gitlab_commit_gate_strict(repo.path(), &base, &head, "feat(api): add the route");
+    assert!(!ok, "a merge commit refuses: {said}");
+    assert!(said.contains(&merge[..12]), "{said}");
+    assert!(
+        said.contains("'feat(api): join the side' is a merge commit"),
+        "{said}"
+    );
+}
+
+/// SATISFIES project-profile:the-forge-gate-follows-the-merge-form
+/// A linear request with valid subjects passes the same gate.
+#[test]
+fn commit_gate_gitlab_passes_a_linear_request() {
+    let (repo, base, head) = gitlab_request(&["feat(api): add the route", "fix(api): close it"]);
+    let (ok, said) =
+        run_gitlab_commit_gate_strict(repo.path(), &base, &head, "feat(api): add the route");
+    assert!(ok, "{said}");
+}
+
+/// SATISFIES project-profile:the-forge-gate-follows-the-merge-form
+/// The merge refusal runs before the bot's exemption, so a request titled
+/// as the bot's release request cannot carry a merge commit either.
+#[test]
+fn commit_gate_gitlab_refuses_a_merge_under_a_bot_title() {
+    let (repo, base, head, merge) = gitlab_merge_request();
+    let (ok, said) =
+        run_gitlab_commit_gate_strict(repo.path(), &base, &head, "chore(release): v1.2.0");
+    assert!(!ok, "a merge commit refuses under the bot's title: {said}");
+    assert!(said.contains(&merge[..12]), "{said}");
+}
+
+/// SATISFIES project-profile:the-forge-gate-follows-the-merge-form
+/// A linear release request stays exempt from the message rules whole,
+/// as the title check exempts it.
+#[test]
+fn commit_gate_gitlab_keeps_a_linear_release_request_exempt() {
+    let (repo, base, head) = gitlab_request(&[
+        "release notes for v1.2.0",
+        "chore: release v1.2.0\n\nCo-Authored-By: Claude <noreply@anthropic.com>",
+    ]);
+    let (ok, said) =
+        run_gitlab_commit_gate_strict(repo.path(), &base, &head, "chore(release): v1.2.0");
+    assert!(ok, "the linear release request is exempt: {said}");
+    let (ok, said) =
+        run_gitlab_commit_gate_strict(repo.path(), &base, &head, "feat(api): add the route");
+    assert!(
+        !ok,
+        "without the bot's title the same messages refuse: {said}"
+    );
+}
+
+/// A local rebase target in a reftable repository whose reflog holds
+/// nothing and whose clone logs no ordinary ref update: the trunk, held by
+/// the main checkout, and a branch of two commits in its seat.
+fn reftable_rebase_fixture() -> (tempfile::TempDir, PathBuf) {
+    let parent = tempfile::tempdir().expect("a scratch parent exists");
+    let repo = parent.path().join("widget");
+    std::fs::create_dir(&repo).expect("the repo dir creates");
+    git_bare_config(
+        &repo,
+        &["init", "-q", "--ref-format=reftable", "-b", "master"],
+    );
+    git_bare_config(&repo, &["config", "user.email", "rk@example.invalid"]);
+    git_bare_config(&repo, &["config", "user.name", "rk test"]);
+    std::fs::write(repo.join(".pre-commit-config.yaml"), "repos: []\n").expect("writes");
+    std::fs::create_dir_all(repo.join(".release-kit")).expect("the record dir creates");
+    std::fs::write(
+        repo.join(".release-kit/manifest.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "schema_version": 12,
+            "rk_version": "0.0.0",
+            "origin": "init",
+            "landed_at": "2026-09-15T00:00:00Z",
+            "profile": { "technologies": [], "release": { "mode": "none" } },
+            "git": {
+                "trunk": "master",
+                "checkout_mode": "linked-worktree",
+                "integration": "local",
+                "merge_form": "rebase",
+            },
+            "capabilities": {
+                "nix_packaging": false,
+                "reporting_policy": false,
+                "scorecard": false,
+            },
+            "parameters": { "repo": "", "security_contact": "", "security_response": "best-effort" },
+            "files": [],
+            "pins": {},
+        }))
+        .expect("the record serializes"),
+    )
+    .expect("the record writes");
+    git_bare_config(&repo, &["add", "-A"]);
+    git_bare_config(&repo, &["commit", "-qm", "chore(rk): seed the local mode"]);
+    let seat = parent.path().join("widget@feat-greeting");
+    git_bare_config(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-qb",
+            "feat/greeting",
+            seat.to_str().expect("utf-8"),
+        ],
+    );
+    for (name, message) in [
+        ("first.txt", "feat(greeting): first"),
+        ("second.txt", "feat(greeting): second"),
+    ] {
+        std::fs::write(seat.join(name), "hi\n").expect("writes");
+        git_bare_config(&seat, &["add", "-A"]);
+        git_bare_config(&seat, &["commit", "-qm", message]);
+    }
+    git_bare_config(&repo, &["reflog", "expire", "--expire=now", "--all"]);
+    git_bare_config(&repo, &["config", "core.logAllRefUpdates", "false"]);
+    (parent, repo)
+}
+
+/// A reftable reflog that holds one entry after the publication, as after
+/// an expiry with ordinary logging off, still confirms the held trunk's
+/// move through the fast-forward's own report: the integration succeeds
+/// and reports its publication.
+///
+/// SATISFIES git:a-local-integration-is-a-transaction
+#[test]
+fn integrate_confirms_a_held_trunk_move_with_a_one_entry_reftable_reflog() {
+    if !pre_commit_present() {
+        return;
+    }
+    let (_parent, repo) = reftable_rebase_fixture();
+    let before = rev_parse(&repo, "master");
+    let tip = rev_parse(&repo, "feat/greeting");
+    let out = rk_scrubbed()
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .args([
+            "integrate",
+            "feat/greeting",
+            "--apply",
+            "--json",
+            "--target",
+        ])
+        .arg(&repo)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON report");
+    assert_eq!(report["mode"], "apply", "{report}");
+    assert_eq!(report["trunk_before"], before, "{report}");
+    assert_eq!(report["trunk_commit"], tip, "{report}");
+    assert_eq!(rev_parse(&repo, "master"), tip);
+}
+
+/// A publication no source confirms reads as a publication: with the
+/// reflog unreadable and the fast-forward's own report hidden, the trunk
+/// is published, the apply report names it, and the integration fails
+/// with `state-drift` and none of the unchanged-target text.
+///
+/// SATISFIES git:a-local-integration-is-a-transaction
+#[test]
+fn integrate_reports_an_unconfirmed_publication_as_published() {
+    if !pre_commit_present() {
+        return;
+    }
+    let (parent, repo) = rebase_fixture(&["feat(greeting): first", "feat(greeting): second"]);
+    let log = repo.join(".git/logs/refs/heads/master");
+    let wrapper = git_wrapper(
+        parent.path(),
+        &format!(
+            "for a; do [ \"$a\" = reflog ] && exit 1; done\nif [ -n \"$merge\" ] && [ -n \"$ff\" ]; then git \"$@\" | grep -v '^Updating '; rm -f '{}'; exit 0; fi",
+            log.display()
+        ),
+    );
+    let observed = rev_parse(&repo, "master");
+    let out = rk_scrubbed()
+        .env("RK_GIT_BIN", &wrapper)
+        .args([
+            "integrate",
+            "feat/greeting",
+            "--apply",
+            "--json",
+            "--target",
+        ])
+        .arg(&repo)
+        .assert()
+        .code(1)
+        .get_output()
+        .clone();
+    let tip = rev_parse(&repo, "feat/greeting");
+    assert_eq!(rev_parse(&repo, "master"), tip, "the trunk is published");
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one JSON report");
+    assert_eq!(report["mode"], "apply", "{report}");
+    assert_eq!(report["trunk_commit"], tip, "{report}");
+    let diagnostic: serde_json::Value =
+        serde_json::from_slice(&out.stderr).expect("one JSON diagnostic");
+    assert_eq!(diagnostic["reason"], "state-drift", "{diagnostic}");
+    let message = diagnostic["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains(&format!(
+            "master now stands at the published {}, but rk could not confirm that the move started at the observed {}",
+            &tip[..7],
+            &observed[..7]
+        )),
+        "{message}"
+    );
+    let text = diagnostic.to_string();
+    for unchanged in [
+        "unchanged",
+        "where it stood",
+        "nothing was published",
+        "nothing reached",
+    ] {
+        assert!(!text.contains(unchanged), "{unchanged}: {text}");
+    }
+    assert!(
+        diagnostic["target_state"]
+            .as_str()
+            .is_some_and(|state| state.contains("published at") && state.contains("no rollback")),
+        "{diagnostic}"
+    );
 }

@@ -366,7 +366,7 @@ pub fn classify(
     seats: &[&Utf8Path],
     trunk: &str,
     dirty: bool,
-    local: Option<&crate::integrate::Entry>,
+    local: Option<crate::branches::Proof>,
 ) -> WtClass {
     if worktree.path == layout.main {
         return WtClass::Kept {
@@ -414,13 +414,12 @@ pub fn classify(
             reason: "uncommitted changes".to_owned(),
         };
     }
-    // Local evidence is a proof rather than a candidate signal, so it
-    // resolves here and asks no forge. It sits after every state guard:
-    // a dirty, locked, or in-use seat keeps whatever proved its branch.
-    if let Some(entry) = local {
-        return WtClass::Judged(Class::Confirmed {
-            proof: crate::branches::Proof::LocalIntegration(entry.trunk_commit.clone()),
-        });
+    // A local proof — a recorded integration, or a tip the trunk reaches
+    // — is a proof rather than a candidate signal, so it resolves here and
+    // asks no forge. It sits after every state guard: a dirty, locked, or
+    // in-use seat keeps whatever proved its branch.
+    if let Some(proof) = local {
+        return WtClass::Judged(Class::Confirmed { proof });
     }
     if !branch.gone {
         return WtClass::Kept {
@@ -789,6 +788,44 @@ mod tests {
                 false
             ),
             WtClass::Candidate
+        );
+    }
+
+    /// A tip the trunk reaches confirms a seat whose upstream is live or
+    /// unset, as recorded local evidence does, and only after every state
+    /// guard: a dirty seat keeps whatever proved its branch.
+    #[test]
+    fn reachable_tip_confirms_a_seat_after_every_guard() {
+        let layout = Layout {
+            main: Utf8PathBuf::from("/srv/widget"),
+            parent: Utf8PathBuf::from("/srv"),
+            project: "widget".into(),
+        };
+        let proof = crate::branches::Proof::ReachableTip("bbbb".into());
+        let live = observation("feat/x", false);
+        let seat = fixture("/srv/widget@feat-x", Some("feat/x"));
+        let judge = |dirty: bool| {
+            classify(
+                &seat,
+                Some(&live),
+                &layout,
+                &[],
+                "master",
+                dirty,
+                Some(proof.clone()),
+            )
+        };
+        assert_eq!(
+            judge(false),
+            WtClass::Judged(crate::branches::Class::Confirmed {
+                proof: proof.clone()
+            })
+        );
+        assert_eq!(
+            judge(true),
+            WtClass::Kept {
+                reason: "uncommitted changes".into()
+            }
         );
     }
 }

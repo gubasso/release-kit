@@ -17,6 +17,11 @@
 //! [`landing::SCOPE_SHAPE`]. The landed `conventional-pre-commit` hook
 //! requires a scope but takes no pattern for it, so without this class a
 //! scope the forge's title check rejects passes at the desk.
+//!
+//! A fourth class is the scope's absence, judged only where the target's
+//! record names a release, because the changelog reads the scope. Under
+//! `release.mode = "none"` a scope is preferred and not required, so a
+//! Conventional Commit header with none passes.
 
 use std::io::Read as _;
 use std::io::Write as _;
@@ -36,7 +41,7 @@ static GUARDS: &str = include_str!("../../blocks/message-guards");
 /// One finding.
 #[derive(Debug, Serialize)]
 pub(crate) struct Finding {
-    /// `attribution`, `internal-path`, or `scope-shape`.
+    /// `attribution`, `internal-path`, `scope-shape`, or `scope-missing`.
     pub(crate) class: &'static str,
     /// The 1-based line the finding sits on.
     pub(crate) line: usize,
@@ -73,8 +78,12 @@ pub fn run(args: &MessageArgs) -> Result<(), RkError> {
         MessageKind::Body => args.title.as_deref().unwrap_or(""),
     };
     let exempt = bot_title(title);
+    let judgment = Judgment {
+        exempt,
+        scope_required: scope_required(&args.target),
+    };
 
-    let (findings, no_repo) = judge(&text, args.kind, &args.target, title, exempt);
+    let (findings, no_repo) = judge(&text, args.kind, &args.target, title, judgment);
     if no_repo && !args.json {
         out.warn(format!(
             "{} is not a git repository; only the fixed .draft/ pattern was tested",
@@ -96,7 +105,7 @@ pub fn run(args: &MessageArgs) -> Result<(), RkError> {
     }
     let count = findings.len();
     out.emit(&Report {
-        schema: "rk.message/2",
+        schema: "rk.message/3",
         kind: args.kind.as_str(),
         exempt,
         findings,
@@ -119,6 +128,36 @@ pub fn run(args: &MessageArgs) -> Result<(), RkError> {
     Ok(())
 }
 
+/// What decides the judgment beside the text itself.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Judgment {
+    /// Whether the release bot's exemption applies, by the title.
+    pub(crate) exempt: bool,
+    /// Whether the subject must name a scope: wherever the target's record
+    /// names a release.
+    pub(crate) scope_required: bool,
+}
+
+/// Whether the target at `target` requires a scope on every subject: its
+/// record, or its configuration where no record stands, names a release.
+/// A target that states neither is judged as before, by the landed
+/// `conventional-pre-commit` hook alone.
+///
+/// SATISFIES project-profile:a-release-less-landing-carries-no-release-text
+fn scope_required(target: &Utf8Path) -> bool {
+    let mode = crate::landing::manifest::load(target)
+        .ok()
+        .flatten()
+        .map(|record| record.profile.release.mode)
+        .or_else(|| {
+            crate::config::load(target.as_std_path())
+                .ok()
+                .flatten()
+                .and_then(|config| config.profile.release.mode)
+        });
+    mode.is_some_and(|mode| mode != crate::profile::ReleaseMode::None)
+}
+
 /// Every finding one text carries, in line order, beside whether the
 /// ignore judgment had no repository to ask.
 ///
@@ -131,8 +170,9 @@ pub(crate) fn judge(
     kind: MessageKind,
     target: &Utf8Path,
     title: &str,
-    exempt: bool,
+    judgment: Judgment,
 ) -> (Vec<Finding>, bool) {
+    let exempt = judgment.exempt;
     let mut findings = Vec::new();
     let mut no_repo = false;
     for (index, line) in text.lines().enumerate() {
@@ -157,6 +197,19 @@ pub(crate) fn judge(
             detail: format!(
                 "the scope '{scope}' is outside {}: lowercase letters, digits, and _ . / -",
                 landing::SCOPE_SHAPE
+            ),
+        });
+    }
+    if matches!(kind, MessageKind::Commit | MessageKind::Title)
+        && !exempt
+        && judgment.scope_required
+        && let Some(kind) = unscoped_type(title)
+    {
+        findings.push(Finding {
+            class: "scope-missing",
+            line: 1,
+            detail: format!(
+                "the subject names no scope after '{kind}', and this target names a release, so every subject reads <type>(<scope>): <description>"
             ),
         });
     }
@@ -259,6 +312,16 @@ fn misshapen_scope(title: &str) -> Option<String> {
         return None;
     }
     (!landing::scope_is_shaped(scope)).then(|| scope.to_owned())
+}
+
+/// The type of a Conventional Commit subject that names no scope, or
+/// `None`: `fix: drop it` and `feat!: break it` answer, while a scoped
+/// subject and a subject that is no Conventional Commit at all do not,
+/// because the landed `conventional-pre-commit` hook owns that shape.
+fn unscoped_type(title: &str) -> Option<&str> {
+    let (head, _) = title.split_once(':')?;
+    let kind = head.strip_suffix('!').unwrap_or(head);
+    (!kind.is_empty() && kind.chars().all(|c| c.is_ascii_alphabetic())).then_some(kind)
 }
 
 /// Every attribution match on one line, as the matched fragment.
@@ -458,16 +521,18 @@ pub fn guard_patterns() -> Vec<(&'static str, &'static str)> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Finding, Report, attribution_hits, bot_title, fixed_draft_hits, guard_patterns, path_token,
+        Finding, Judgment, Report, attribution_hits, bot_title, fixed_draft_hits, guard_patterns,
+        judge, path_token, unscoped_type,
     };
 
-    /// The complete `rk.message/2` shape, held by snapshot: the class
+    /// The complete `rk.message/3` shape, held by snapshot: the class
     /// vocabulary is part of the contract, so the third class moved the
-    /// version rather than arriving unannounced.
+    /// version rather than arriving unannounced, and the fourth,
+    /// `scope-missing`, moved it again.
     #[test]
     fn the_message_schema_snapshot_holds() {
         let report = Report {
-            schema: "rk.message/2",
+            schema: "rk.message/3",
             kind: "commit",
             exempt: false,
             findings: vec![
@@ -485,7 +550,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.message/2","kind":"commit","exempt":false,"findings":[{"class":"scope-shape","line":1,"detail":"the scope 'Specs Ugly' is outside [a-z0-9._/-]+: lowercase letters, digits, and _ . / -"},{"class":"internal-path","line":3,"detail":".draft/plan.md is git-ignored in ."}]}"#
+            r#"{"schema":"rk.message/3","kind":"commit","exempt":false,"findings":[{"class":"scope-shape","line":1,"detail":"the scope 'Specs Ugly' is outside [a-z0-9._/-]+: lowercase letters, digits, and _ . / -"},{"class":"internal-path","line":3,"detail":".draft/plan.md is git-ignored in ."}]}"#
         );
     }
 
@@ -624,5 +689,47 @@ mod tests {
         assert_eq!(path_token("and/or"), Some("and/or".into()));
         assert_eq!(path_token("word"), None);
         assert_eq!(path_token("trailing/"), None);
+    }
+
+    /// A header with no scope passes where the record names no release and
+    /// refuses where it names one, naming the missing scope. The bot's
+    /// request, which names none, stays exempt, and a subject that is no
+    /// Conventional Commit is the landed hook's to judge.
+    ///
+    /// SATISFIES project-profile:a-release-less-landing-carries-no-release-text
+    #[test]
+    fn workflow_only_a_header_with_no_scope_passes_only_without_a_release() {
+        let dir = tempfile::tempdir().expect("a scratch dir exists");
+        let target = camino::Utf8Path::from_path(dir.path()).expect("utf-8");
+        let judged = |text: &str, scope_required: bool| {
+            let title = text.lines().next().unwrap_or("");
+            judge(
+                text,
+                crate::cli::message::MessageKind::Commit,
+                target,
+                title,
+                Judgment {
+                    exempt: bot_title(title),
+                    scope_required,
+                },
+            )
+            .0
+        };
+        assert!(judged("fix: drop the stale path\n", false).is_empty());
+        let refused = judged("fix: drop the stale path\n", true);
+        assert_eq!(refused.len(), 1, "{refused:?}");
+        assert_eq!(refused[0].class, "scope-missing");
+        assert!(refused[0].detail.contains("names no scope"), "{refused:?}");
+        assert!(judged("fix(paths): drop the stale path\n", true).is_empty());
+        assert!(judged("chore: release v1.2.0\n", true).is_empty());
+        assert_eq!(unscoped_type("feat!: break it"), Some("feat"));
+        assert_eq!(unscoped_type("feat(x): add it"), None);
+        assert_eq!(unscoped_type("Merge branch 'x' into master"), None);
+        assert_eq!(unscoped_type("fixup! feat(x): add it"), None);
+        // A misshapen scope is still judged where none is required.
+        assert_eq!(
+            judged("fix(Bad Scope): mend\n", false)[0].class,
+            "scope-shape"
+        );
     }
 }

@@ -140,30 +140,131 @@ fn compose_rules(
 /// may merge only the tested request. The GitLab push level moves off zero
 /// to the narrowest level that still admits a push.
 ///
+/// The merge values follow the recorded merge form whatever the target
+/// stated, because the floors hold them to exactly that form's values:
+/// GitHub allows the one method the form names, and GitLab squashes every
+/// merge request under `squash` and none under `rebase`. Under `rebase`
+/// the safety ruleset also carries the linear-history rule, so a merge
+/// commit reaches the trunk from no actor.
+///
+/// The profile decides two requirements beside the policy. The tag
+/// protection follows the release mode alone: a target that releases
+/// nothing mints no tag to protect. The required status check and the
+/// GitLab pipeline requirement follow the forge gate alone, as
+/// [`crate::profile::catalog::forge_gate_lands`] answers it: where no gate
+/// lands, no workflow reports a check and no pipeline runs, so the trunk
+/// ruleset drops its required-check rule and the GitLab trunk drops the
+/// pipeline requirement, while deletion and force-push hold in every case.
+/// The floors still require the check rule in the stated key; the
+/// relaxation lives here, in the one result every reader takes.
+///
 /// One resolution serves the body a step sends, the observer that reads
 /// the answer back, and the prerequisites, so a canonical apply cannot
 /// install one shape and then fault its own result for not being another.
+///
+/// SATISFIES target-config:the-effective-protection-follows-the-profile
 fn effective_protection(
     stated: Option<&crate::config::Protection>,
     integration: crate::landing::Integration,
-) -> crate::config::Protection {
-    if let Some(stated) = stated {
-        if integration == crate::landing::Integration::Local
-            && crate::config::legacy_local_protection(stated)
-        {
-            let mut migrated = stated.clone();
-            let current = crate::config::local_protection();
-            migrated.bypass_actors = current.bypass_actors;
-            migrated.owned_trunk_rules = current.owned_trunk_rules;
-            migrated.gitlab.push_access_level = current.gitlab.push_access_level;
-            return migrated;
-        }
-        return stated.clone();
+    form: crate::landing::MergeForm,
+    mode: ReleaseMode,
+) -> Effective {
+    let authority = stated.map_or_else(
+        || {
+            if integration == crate::landing::Integration::Local {
+                crate::config::local_protection()
+            } else {
+                crate::config::Protection::default()
+            }
+        },
+        |stated| {
+            if integration == crate::landing::Integration::Local
+                && crate::config::legacy_local_protection(stated)
+            {
+                let mut migrated = stated.clone();
+                let current = crate::config::local_protection();
+                migrated.bypass_actors = current.bypass_actors;
+                migrated.owned_trunk_rules = current.owned_trunk_rules;
+                migrated.gitlab.push_access_level = current.gitlab.push_access_level;
+                migrated
+            } else {
+                stated.clone()
+            }
+        },
+    );
+    let mut policy = crate::config::with_merge_form(&authority, form);
+    if form == crate::landing::MergeForm::Rebase
+        && !policy
+            .owned_trunk_rules
+            .iter()
+            .any(|rule| rule == crate::config::LINEAR_HISTORY_RULE)
+    {
+        policy
+            .owned_trunk_rules
+            .push(crate::config::LINEAR_HISTORY_RULE.to_owned());
     }
-    if integration == crate::landing::Integration::Local {
-        return crate::config::local_protection();
+    let forge_gate = crate::profile::catalog::forge_gate_lands(integration, mode);
+    if !forge_gate {
+        policy
+            .owned_trunk_rules
+            .retain(|rule| rule != REQUIRED_CHECK_RULE);
     }
-    crate::config::Protection::default()
+    Effective {
+        policy,
+        tag_protection: mode != ReleaseMode::None,
+        forge_gate,
+    }
+}
+
+/// The ruleset rule that requires a status check, which the trunk carries
+/// only where a forge gate reports one.
+const REQUIRED_CHECK_RULE: &str = "required_status_checks";
+
+/// The effective protection: the policy, and the two requirements the
+/// profile decides beside it.
+struct Effective {
+    /// The policy every setter, observer, and check reads.
+    policy: crate::config::Protection,
+    /// Whether the release tags are protected: wherever the release mode
+    /// is not `none`.
+    tag_protection: bool,
+    /// Whether a forge gate lands, so the trunk requires its check on
+    /// GitHub and the whole pipeline on GitLab.
+    forge_gate: bool,
+}
+
+/// The authority and the merge form a setup configures the forge for.
+///
+/// The record, not the resolution's compiled default: a setup configures a
+/// forge to match what landed, and a target with no record has landed
+/// nothing here. Forge integration and `squash` are what such a target
+/// carries, the same compatibility answers `rk integrate` reads, and a
+/// record predating the merge form reads as `squash` too.
+fn recorded_workflow(
+    record: Option<&crate::landing::manifest::Manifest>,
+) -> (crate::landing::Integration, crate::landing::MergeForm) {
+    record.map_or_else(
+        || {
+            (
+                crate::landing::manifest::integration_forge(),
+                crate::landing::manifest::merge_form_squash(),
+            )
+        },
+        |held| (held.git.integration, held.git.merge_form),
+    )
+}
+
+/// The context the landed forge gate reports under: the title check the
+/// target names under `squash`, and the commit gate's job under `rebase`.
+///
+/// The commit gate's job name is a constant of its rendered file, as the
+/// title job's is, and no key renames it: a renamed context would require
+/// a check nothing reports.
+fn gate_check(protection: &crate::config::Protection, form: crate::landing::MergeForm) -> String {
+    match form {
+        crate::landing::MergeForm::Squash => protection.title_check.clone(),
+        crate::landing::MergeForm::Rebase => crate::config::COMMIT_GATE_CHECK.to_owned(),
+    }
 }
 
 /// The variables that pass through from the operator's environment to a
@@ -249,7 +350,8 @@ pub struct Ctx {
     tag_ruleset: String,
     /// The ruleset that protects the release lines.
     lines_ruleset: String,
-    /// The context the landed title job reports under.
+    /// The context the landed forge gate reports under: the title job under
+    /// `squash`, the commit gate's job under `rebase`.
     title_check: String,
     /// The effective policy this target runs under: what the target
     /// stated, resolved against the recorded integration mode. Every
@@ -267,6 +369,16 @@ pub struct Ctx {
     /// integrations end in, so the protection a run installs is not the
     /// forge-integration one.
     integration: crate::landing::Integration,
+    /// How the commits of a branch reach this target's trunk, as the record
+    /// says: it decides the merge settings and the forge gate a run
+    /// installs and expects.
+    merge_form: crate::landing::MergeForm,
+    /// Whether the release tags are protected, as the effective protection
+    /// decides it from the release mode.
+    pub(super) tag_protection: bool,
+    /// Whether a forge gate lands, as the effective protection decides it:
+    /// the trunk then requires the gate's check, and GitLab the pipeline.
+    pub(super) forge_gate: bool,
 }
 
 impl Ctx {
@@ -345,15 +457,7 @@ impl Ctx {
             .filter(|name| !name.is_empty() && forge == Some(Forge::Github));
         let bot_app_id = Some(answers.bot.app_id.clone()).filter(|id| !id.is_empty());
         let trunk = resolved.trunk().to_owned();
-        // The record, not the resolution's compiled default: a setup
-        // configures a forge to match what landed, and a target with no
-        // record has landed nothing here. Forge is what such a target
-        // carries, the same compatibility answer `rk integrate` reads.
-        let integration = record
-            .as_ref()
-            .map_or_else(crate::landing::manifest::integration_forge, |held| {
-                held.git.integration
-            });
+        let (integration, merge_form) = recorded_workflow(record.as_ref());
         let landed = record.as_ref().map(|held| {
             held.files
                 .iter()
@@ -361,7 +465,9 @@ impl Ctx {
                 .collect()
         });
         let stated = config.as_ref().map(|held| &held.protection);
-        let protection = effective_protection(stated, integration);
+        let effective =
+            effective_protection(stated, integration, merge_form, resolved.release_mode());
+        let protection = effective.policy;
         Ok(Self {
             target: target.clone(),
             repo,
@@ -379,9 +485,12 @@ impl Ctx {
             safety_ruleset: protection.safety_ruleset(&trunk),
             tag_ruleset: protection.tag_ruleset.clone(),
             lines_ruleset: protection.lines_ruleset.clone(),
-            title_check: protection.title_check.clone(),
+            title_check: gate_check(&protection, merge_form),
             protection,
+            tag_protection: effective.tag_protection,
+            forge_gate: effective.forge_gate,
             integration,
+            merge_form,
             landed,
             trunk,
             line_prefix: resolved.line_prefix().to_owned(),
@@ -440,6 +549,9 @@ impl Ctx {
             // The forge-integration shape, which is what every observer
             // and request-body test here asserts; a local-mode case states it.
             integration: crate::landing::Integration::Forge,
+            merge_form: crate::landing::MergeForm::Squash,
+            tag_protection: true,
+            forge_gate: true,
             landed: None,
             target,
             repo,
@@ -614,7 +726,8 @@ impl Ctx {
         &self.lines_ruleset
     }
 
-    /// The context the landed title job reports under.
+    /// The context the landed forge gate reports under: the title job under
+    /// `squash`, the commit gate's job under `rebase`.
     #[must_use]
     pub fn title_check(&self) -> &str {
         &self.title_check
@@ -624,6 +737,41 @@ impl Ctx {
     #[must_use]
     pub const fn integration(&self) -> crate::landing::Integration {
         self.integration
+    }
+
+    /// How the commits of a branch reach this trunk, as the record says.
+    #[must_use]
+    pub const fn merge_form(&self) -> crate::landing::MergeForm {
+        self.merge_form
+    }
+
+    /// Whether the release tags are protected: wherever the release mode
+    /// is not `none`.
+    #[must_use]
+    pub const fn tag_protection(&self) -> bool {
+        self.tag_protection
+    }
+
+    /// Whether a forge gate lands, so the trunk requires its check and
+    /// GitLab requires the pipeline.
+    #[must_use]
+    pub const fn forge_gate(&self) -> bool {
+        self.forge_gate
+    }
+
+    /// The safety ruleset's rule types, sorted, as the compact JSON array
+    /// the protection check compares against the forge's answer.
+    fn safety_rule_types(&self) -> String {
+        let mut types: Vec<&str> = self
+            .protection
+            .owned_trunk_rules
+            .iter()
+            .map(String::as_str)
+            .filter(|rule| crate::config::SAFETY_RULES.contains(rule))
+            .collect();
+        types.sort_unstable();
+        types.dedup();
+        serde_json::to_string(&types).unwrap_or_else(|_| "[]".to_owned())
     }
 
     /// The trunk ruleset's rules: the request and the check it carries,
@@ -728,7 +876,22 @@ impl Ctx {
             ),
             ("RK_TAG_RULESET".into(), self.tag_ruleset.clone().into()),
             ("RK_LINES_RULESET".into(), self.lines_ruleset.clone().into()),
+            // The context the landed forge gate reports under, which the
+            // trunk ruleset requires: the title job under `squash` and the
+            // commit gate's job under `rebase`.
             ("RK_TITLE_CHECK".into(), self.title_check.clone().into()),
+            // The recorded merge form, so a step asserts the squash
+            // settings only where a squash merge reads them.
+            ("RK_MERGE_FORM".into(), self.merge_form.as_str().into()),
+            // The two requirements the profile decides: the release tags
+            // are protected wherever a release mints them, and the trunk
+            // requires the gate's check, or GitLab's pipeline, wherever a
+            // forge gate lands to report it.
+            (
+                "RK_TAG_PROTECTION".into(),
+                bool_word(self.tag_protection).into(),
+            ),
+            ("RK_FORGE_GATE".into(), bool_word(self.forge_gate).into()),
             // The floored policy, already judged against the floor table
             // at load. A step receives values, never a judgment: one
             // owner decides what passes, and it is not a shell script.
@@ -803,6 +966,10 @@ impl Ctx {
             ("RK_TRUNK_RULES".into(), self.trunk_rules().into()),
             ("RK_SAFETY_RULES".into(), self.safety_rules().into()),
             (
+                "RK_SAFETY_RULE_TYPES".into(),
+                self.safety_rule_types().into(),
+            ),
+            (
                 "RK_GITLAB_MERGE_LEVEL".into(),
                 self.protection.gitlab.merge_access_level.to_string().into(),
             ),
@@ -811,6 +978,7 @@ impl Ctx {
         ];
         if let Some(check) = &self.required_check
             && self.forge == Some(Forge::Github)
+            && self.forge_gate
             && matches!(step, "protect-trunk" | "protections-check")
         {
             env.push(("RK_REQUIRED_CHECK".into(), check.clone().into()));
@@ -1015,8 +1183,14 @@ mod tests {
     /// compiled local tuple is migrated before setup can reinstall it.
     #[test]
     fn the_effective_policy_follows_the_recorded_authority() {
-        use crate::landing::Integration;
-        let silent = super::effective_protection(None, Integration::Forge);
+        use crate::landing::{Integration, MergeForm};
+        let silent = super::effective_protection(
+            None,
+            Integration::Forge,
+            MergeForm::Squash,
+            crate::profile::ReleaseMode::Automatic,
+        )
+        .policy;
         assert!(
             silent
                 .owned_trunk_rules
@@ -1024,7 +1198,13 @@ mod tests {
         );
         assert_eq!(silent.gitlab.push_access_level, 0);
 
-        let silent = super::effective_protection(None, Integration::Local);
+        let silent = super::effective_protection(
+            None,
+            Integration::Local,
+            MergeForm::Squash,
+            crate::profile::ReleaseMode::Automatic,
+        )
+        .policy;
         assert_eq!(
             silent.owned_trunk_rules,
             crate::config::Protection::default().owned_trunk_rules,
@@ -1042,7 +1222,13 @@ mod tests {
         let mut stated = crate::config::Protection::default();
         stated.gitlab.push_access_level = 0;
         stated.owned_trunk_rules = vec!["deletion".into()];
-        let held = super::effective_protection(Some(&stated), Integration::Local);
+        let held = super::effective_protection(
+            Some(&stated),
+            Integration::Local,
+            MergeForm::Squash,
+            crate::profile::ReleaseMode::Automatic,
+        )
+        .policy;
         assert_eq!(held.gitlab.push_access_level, 0, "a stated value wins");
         assert_eq!(held.owned_trunk_rules, ["deletion".to_owned()]);
 
@@ -1054,11 +1240,143 @@ mod tests {
             },
             ..crate::config::Protection::default()
         };
-        let migrated = super::effective_protection(Some(&legacy), Integration::Local);
+        let migrated = super::effective_protection(
+            Some(&legacy),
+            Integration::Local,
+            MergeForm::Squash,
+            crate::profile::ReleaseMode::Automatic,
+        )
+        .policy;
         assert_eq!(
             migrated,
             crate::config::local_protection(),
             "setup cannot reinstall the legacy policy while upgrade remains able to read it"
         );
+    }
+
+    /// The merge values follow the recorded form under both authorities,
+    /// whether the target stated a policy or not, and only the rebase form
+    /// adds the linear-history rule, to the safety half.
+    ///
+    /// SATISFIES target-config:the-effective-protection-follows-the-profile
+    #[test]
+    fn merge_form_decides_the_effective_merge_values() {
+        use crate::landing::{Integration, MergeForm};
+        let kinds = |text: &str| -> Vec<String> {
+            let parsed: Vec<serde_json::Value> =
+                serde_json::from_str(text).expect("the rules parse");
+            parsed
+                .iter()
+                .filter_map(|rule| rule["type"].as_str())
+                .map(str::to_owned)
+                .collect()
+        };
+        let stated = crate::config::Protection::default();
+        for integration in [Integration::Forge, Integration::Local] {
+            for held in [None, Some(&stated)] {
+                let squash = super::effective_protection(
+                    held,
+                    integration,
+                    MergeForm::Squash,
+                    crate::profile::ReleaseMode::Automatic,
+                )
+                .policy;
+                assert_eq!(squash.allowed_merge_methods, ["squash".to_owned()]);
+                assert_eq!(squash.gitlab.squash_option, "always");
+                assert!(
+                    !squash
+                        .owned_trunk_rules
+                        .contains(&crate::config::LINEAR_HISTORY_RULE.to_owned())
+                );
+                assert_eq!(
+                    kinds(&super::compose_rules(
+                        &squash,
+                        &crate::config::SAFETY_RULES,
+                        "gate",
+                        "pr-title"
+                    )),
+                    ["deletion", "non_fast_forward"]
+                );
+
+                let rebase = super::effective_protection(
+                    held,
+                    integration,
+                    MergeForm::Rebase,
+                    crate::profile::ReleaseMode::Automatic,
+                )
+                .policy;
+                assert_eq!(rebase.allowed_merge_methods, ["rebase".to_owned()]);
+                assert_eq!(rebase.gitlab.squash_option, "never");
+                assert_eq!(rebase.gitlab.merge_method, "ff");
+                assert_eq!(
+                    kinds(&super::compose_rules(
+                        &rebase,
+                        &crate::config::SAFETY_RULES,
+                        "gate",
+                        "pr-commits"
+                    )),
+                    ["deletion", "non_fast_forward", "required_linear_history"]
+                );
+                assert_eq!(
+                    kinds(&super::compose_rules(
+                        &rebase,
+                        &crate::config::REQUEST_RULES,
+                        "gate",
+                        "pr-commits"
+                    )),
+                    ["pull_request", "required_status_checks"],
+                    "the linear-history rule never sits where a bypass excuses it"
+                );
+            }
+        }
+    }
+
+    /// The required context is the gate the form lands.
+    #[test]
+    fn merge_form_names_the_required_gate() {
+        use crate::landing::MergeForm;
+        let policy = crate::config::Protection::default();
+        assert_eq!(super::gate_check(&policy, MergeForm::Squash), "pr-title");
+        assert_eq!(super::gate_check(&policy, MergeForm::Rebase), "pr-commits");
+    }
+    /// The effective protection decides the two requirements from the
+    /// profile: the tag protection follows the release mode alone, and the
+    /// required check, carried by the trunk ruleset's check rule, follows
+    /// the forge gate alone. Deletion and force-push hold in every cell.
+    ///
+    /// SATISFIES target-config:the-effective-protection-follows-the-profile
+    #[test]
+    fn release_less_effective_protection_follows_the_profile() {
+        use crate::landing::{Integration, MergeForm};
+        use crate::profile::ReleaseMode;
+        for integration in [Integration::Forge, Integration::Local] {
+            for form in [MergeForm::Squash, MergeForm::Rebase] {
+                for mode in [
+                    ReleaseMode::Automatic,
+                    ReleaseMode::External,
+                    ReleaseMode::None,
+                ] {
+                    let effective = super::effective_protection(None, integration, form, mode);
+                    let at = format!("{integration:?} {form:?} {mode:?}");
+                    let gate = integration == Integration::Forge || mode == ReleaseMode::Automatic;
+                    assert_eq!(effective.tag_protection, mode != ReleaseMode::None, "{at}");
+                    assert_eq!(effective.forge_gate, gate, "{at}");
+                    let rules = &effective.policy.owned_trunk_rules;
+                    assert_eq!(
+                        rules.iter().any(|rule| rule == "required_status_checks"),
+                        gate,
+                        "{at}: {rules:?}"
+                    );
+                    for kept in ["deletion", "non_fast_forward", "pull_request"] {
+                        assert!(rules.iter().any(|rule| rule == kept), "{at}: {kept}");
+                    }
+                    assert_eq!(
+                        effective.policy.allowed_merge_methods,
+                        [form.as_str().to_owned()],
+                        "{at}"
+                    );
+                }
+            }
+        }
     }
 }

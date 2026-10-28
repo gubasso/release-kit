@@ -15,7 +15,7 @@
 # job token starts no pipeline, which would silently skip the release half.
 
 include:
-  - local: .gitlab/ci/mr-title.yml
+  - local: RK_GITLAB_GATE_FRAGMENT
 
 stages:
   - release
@@ -127,7 +127,7 @@ release-request:
         echo "no release request to arm."
         exit 0
       fi
-      if api -X PUT "$project/merge_requests/$iid/merge?auto_merge=true&merge_when_pipeline_succeeds=true&squash=true&should_remove_source_branch=true" >/dev/null 2>&1; then
+      if api -X PUT "$project/merge_requests/$iid/merge?auto_merge=true&merge_when_pipeline_succeeds=true&squash=RK_SQUASH_ON_MERGE&should_remove_source_branch=true" >/dev/null 2>&1; then
         echo "armed merge request !$iid."
       else
         echo "could not arm !$iid yet — its pipeline has not started; the next trunk push re-arms."

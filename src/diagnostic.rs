@@ -79,11 +79,17 @@ pub enum Reason {
     ObservationIncomplete,
     /// The landing record exists and does not parse as one.
     RecordInvalid,
+    /// An argument the recorded merge form does not take, such as a trunk
+    /// message under `rebase`, where every commit keeps its own.
+    MergeFormMismatch,
+    /// An explicit flag contradicts an answer a preset flag sets, such as
+    /// `--integration forge` beside `--workflow-only`.
+    PresetContradiction,
 }
 
 /// Every reason, in declaration order; a test asserts against this so an
 /// addition is deliberate and a rename impossible.
-pub const REASONS: [Reason; 26] = [
+pub const REASONS: [Reason; 28] = [
     Reason::Usage,
     Reason::TargetNotFound,
     Reason::ForgeUndetected,
@@ -110,6 +116,8 @@ pub const REASONS: [Reason; 26] = [
     Reason::TargetBusy,
     Reason::ObservationIncomplete,
     Reason::RecordInvalid,
+    Reason::MergeFormMismatch,
+    Reason::PresetContradiction,
 ];
 
 impl Reason {
@@ -143,6 +151,8 @@ impl Reason {
             Self::TargetBusy => "target-busy",
             Self::ObservationIncomplete => "observation-incomplete",
             Self::RecordInvalid => "record-invalid",
+            Self::MergeFormMismatch => "merge-form-mismatch",
+            Self::PresetContradiction => "preset-contradiction",
         }
     }
 }
@@ -301,6 +311,8 @@ mod tests {
                 "target-busy",
                 "observation-incomplete",
                 "record-invalid",
+                "merge-form-mismatch",
+                "preset-contradiction",
             ]
         );
     }

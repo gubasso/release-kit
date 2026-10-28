@@ -76,7 +76,7 @@ jobs:
             echo "no release request to arm."
             exit 0
           fi
-          gh pr merge "$number" --auto --squash --delete-branch
+          gh pr merge "$number" --auto RK_MERGE_FLAG --delete-branch
           echo "armed pull request #$number."
 # RK_GATE_ARM_END
 

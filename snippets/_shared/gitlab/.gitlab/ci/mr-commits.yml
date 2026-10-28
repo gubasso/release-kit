@@ -1,0 +1,77 @@
+# The commit gate. Under the rebase merge form the project squashes no merge
+# request, so every commit between the target branch and the request's head
+#RK_IF_RELEASE_ reaches the trunk with its own message, and the bot derives the version
+#RK_IF_RELEASE_ and the changelog from those messages; this job holds every commit to a
+#RK_IF_RELEASE_ scoped Conventional Commit and every message to the content guards. Each
+#RK_IF_NO_RELEASE_ reaches the trunk with its own message, and this job holds every commit
+#RK_IF_NO_RELEASE_ to a Conventional Commit, whose scope is preferred and not required, and
+#RK_IF_NO_RELEASE_ every message to the content guards. Each
+# push to the request starts a new pipeline, so a commit pushed after a
+# first pass is judged too. The project setting requiring the whole
+# pipeline is what makes it blocking — this forge names no check — and
+# running it also gives every merge request the pipeline that requirement
+# waits on. It stops accident, not authority: the job runs from the
+# request's own CI configuration; the forge document's Limitations state
+# it.
+#
+# The ff merge method without squash adds every commit of the source branch
+# as it stands, a merge commit included, so this job also refuses any commit
+# with more than one parent in the same range, before any exemption: the
+# trunk takes no merge commit, from the bot's request either.
+
+mr-commits:
+  stage: test
+  image: alpine:3
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  variables:
+    GIT_DEPTH: "0"
+  before_script:
+    - apk add --no-cache git
+  # A merged results pipeline names the request's head apart from the
+  # commit it tests; an ordinary one tests the head itself. A merge commit
+  # in the range refuses first, whatever the title. After that, the bot's
+  # own release request is exempt from the message rules whole, exactly as
+  # the title check exempts it: its title is the bot alternative, and the
+  # release automation authors its commits. The guard list is duplicated
+  # from blocks/message-guards and held equal by a test in the rk
+  # repository.
+  script:
+    - |
+      head="${CI_MERGE_REQUEST_SOURCE_BRANCH_SHA:-$CI_COMMIT_SHA}"
+      merges="$(git rev-list --merges "$CI_MERGE_REQUEST_DIFF_BASE_SHA..$head")" || exit 1
+      if [ -n "$merges" ]; then
+        for sha in $merges; do
+          echo "commit $(printf '%s' "$sha" | cut -c 1-12): '$(git log -1 --format=%s "$sha")' is a merge commit, and the trunk takes none; rebase the branch so the request carries a linear range"
+        done
+        exit 1
+      fi
+      printf '%s' "$CI_MERGE_REQUEST_TITLE" | grep -Eq \
+        '^chore(\((release|master|main)\))?: (release|v).+$' \
+        && exit 0
+      commits="$(git rev-list --reverse "$CI_MERGE_REQUEST_DIFF_BASE_SHA..$head")" || exit 1
+      fail=0
+      for sha in $commits; do
+        message="$(git log -1 --format=%B "$sha")"
+        subject="$(printf '%s\n' "$message" | head -n 1)"
+        commit="$(printf '%s' "$sha" | cut -c 1-12)"
+        if ! printf '%s' "$subject" | grep -Eq \
+          '^((build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)RK_SCOPE_OPEN\((RK_SCOPE_SHAPE)\)RK_SCOPE_CLOSE!?: .+|chore(\((release|master|main)\))?: (release|v).+)$'; then
+          RK_IF_RELEASE_echo "commit $commit: the subject '$subject' must read type(scope) then a colon and a description, with the scope lowercase letters, digits, and _ . / -"
+          RK_IF_NO_RELEASE_echo "commit $commit: the subject '$subject' must read type or type(scope) then a colon and a description, with any scope lowercase letters, digits, and _ . / -"
+          fail=1
+        fi
+        while IFS='|' read -r class pattern; do
+          if printf '%s' "$message" | grep -Eq "$pattern"; then
+            echo "commit $commit: the message carries a $class finding: a line matches $pattern"
+            fail=1
+          fi
+        done <<'GUARDS'
+      attribution|[Gg]enerated with \[?Claude
+      attribution|🤖 Generated with
+      attribution|[Cc]o-[Aa]uthored-[Bb]y:.*([Cc]laude|[Cc]opilot|Codex|ChatGPT)
+      attribution|noreply@anthropic\.com
+      internal-path|(^|[^A-Za-z0-9])\.draft/
+      GUARDS
+      done
+      exit "$fail"

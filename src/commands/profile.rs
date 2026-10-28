@@ -127,7 +127,7 @@ pub fn describe(
     }
     let scanning = capabilities.code_scanning.map(Provider::as_str);
     format!(
-        "technologies {technologies}; forge {}; repo {}; release {release}; trunk {}; checkout mode {}; integration {}; requests {}{}",
+        "technologies {technologies}; forge {}; repo {}; release {release}; trunk {}; checkout mode {}; integration {}; merge form {}; requests {}{}",
         profile.forge.as_deref().unwrap_or("none"),
         match repo {
             "" => "none",
@@ -137,6 +137,7 @@ pub fn describe(
         git.trunk,
         git.checkout_mode.as_str(),
         git.integration.as_str(),
+        git.merge_form.as_str(),
         if requested.is_empty() {
             "none".to_owned()
         } else {
@@ -357,6 +358,7 @@ mod tests {
                 trunk: "master".into(),
                 checkout_mode: CheckoutMode::LinkedWorktree,
                 integration: Integration::Local,
+                merge_form: crate::landing::MergeForm::Squash,
             },
             capabilities: CapabilityRequests {
                 nix_packaging: false,
@@ -396,7 +398,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.profile/3","target":"/tmp/t","profile":{"technologies":["python","rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"},"capabilities":{"nix_packaging":false,"reporting_policy":true,"scorecard":false,"workflow_guards":false},"repo":"acme/widget","security":{"contact":"","response":"best-effort"},"setup":{"required_check":"","required_workflow":""},"sources":{"profile.technologies":"observation"},"unknown":[],"proposal":{"state":"ambiguous","drivers":["python","rust"]},"selection":[{"id":"git.guards","status":"selected","destinations":["AGENTS.md"]}],"omissions":[{"destination":".gitlab-ci.yml","reason":"the target owns it","action":"add the include"}],"collisions":[],"next":["rk init --target /tmp/t previews the landing"]}"#
+            r#"{"schema":"rk.profile/3","target":"/tmp/t","profile":{"technologies":["python","rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local","merge_form":"squash"},"capabilities":{"nix_packaging":false,"reporting_policy":true,"scorecard":false,"workflow_guards":false},"repo":"acme/widget","security":{"contact":"","response":"best-effort"},"setup":{"required_check":"","required_workflow":""},"sources":{"profile.technologies":"observation"},"unknown":[],"proposal":{"state":"ambiguous","drivers":["python","rust"]},"selection":[{"id":"git.guards","status":"selected","destinations":["AGENTS.md"]}],"omissions":[{"destination":".gitlab-ci.yml","reason":"the target owns it","action":"add the include"}],"collisions":[],"next":["rk init --target /tmp/t previews the landing"]}"#
         );
     }
 }

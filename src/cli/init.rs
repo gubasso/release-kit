@@ -47,6 +47,16 @@ pub struct InitArgs {
     #[arg(long)]
     pub workflow_guards: bool,
 
+    /// Land the Git workflow and nothing of a release: a preset that sets
+    /// `profile.release.mode = "none"`, `git.integration = "local"`,
+    /// `git.checkout_mode = "linked-worktree"`, and
+    /// `capabilities.workflow_guards = true`, and records those four
+    /// answers alone. A flag that contradicts one of them refuses before
+    /// any write; a flag the preset does not set, such as `--merge-form`,
+    /// combines with it.
+    #[arg(long)]
+    pub workflow_only: bool,
+
     /// Opt the landing into code scanning, naming the provider: codeql,
     /// GitHub's own analyzer, whose terms cover an open-source codebase so
     /// the landing reads the driver's declared licence and refuses the pair

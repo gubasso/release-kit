@@ -94,7 +94,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `forge-setup:applicability-follows-the-target-configuration` — Applicability follows the target configuration
 
-Which steps a run acts on MUST follow the resolved target configuration through one pure predicate per step: a step that calls a forge applies only where the profile names a forge this release drives, the release half applies only to an automatic release, the packaging gate applies only where that release names a driver, the reporting channel applies only where the target requested the landed policy, and the two workflow steps, `merge-cleanup` and `branch-reminder`, apply only where the target selected the workflow guards. A step that does not apply MUST report as not applicable with the profile value that decided it and MUST carry no operator reason, a declared exclusion MUST report with the reason the target stated, an exclusion declared for a step that does not apply MUST report as redundant, and only the applicable steps MUST count toward a check's verdict. Naming an inapplicable step by hand MUST refuse rather than apply it, because changing the configuration is the auditable act. A run MUST require the forge CLI only where a step it will act on reaches the forge through it at this target's forge, because a step that is local work alone, one the configuration does not select, one the target excluded, and one the forge answers without a call are all callers of nothing, and refusing over any of them would withdraw an advertised step from a target whose operator has no reason to need the CLI.
+Which steps a run acts on MUST follow the resolved target configuration through one pure predicate per step: a step that calls a forge applies only where the profile names a forge this release drives, the release half applies only to an automatic release, the tag protection applies only where the release mode is not `none`, so `protect-tags` reports not applicable and `protections-check` requires no tag protection there, the packaging gate applies only where that release names a driver, the reporting channel applies only where the target requested the landed policy, and the two workflow steps, `merge-cleanup` and `branch-reminder`, apply only where the target selected the workflow guards. A step that does not apply MUST report as not applicable with the profile value that decided it and MUST carry no operator reason, a declared exclusion MUST report with the reason the target stated, an exclusion declared for a step that does not apply MUST report as redundant, and only the applicable steps MUST count toward a check's verdict. Naming an inapplicable step by hand MUST refuse rather than apply it, because changing the configuration is the auditable act. A run MUST require the forge CLI only where a step it will act on reaches the forge through it at this target's forge, because a step that is local work alone, one the configuration does not select, one the target excluded, and one the forge answers without a call are all callers of nothing, and refusing over any of them would withdraw an advertised step from a target whose operator has no reason to need the CLI.
 
 #### Scenario: A repository with no forge and no release is set up
 
@@ -102,7 +102,7 @@ Which steps a run acts on MUST follow the resolved target configuration through 
 - WHEN `rk setup` previews and `rk setup step protect-trunk --apply` runs
 - THEN the preview reports the local steps and every forge step as not applicable, the run does not fail, and the named step refuses saying the profile names no forge
 
-Verify: `cargo nextest run -E 'test(the_applicability_matrix_follows_the_profile) or test(detection_selects_the_tree_and_refuses_an_unknown_host) or test(a_local_step_runs_without_the_forge_cli) or test(the_workflow_steps_follow_the_workflow_guards)'`
+Verify: `cargo nextest run -E 'test(the_applicability_matrix_follows_the_profile) or test(detection_selects_the_tree_and_refuses_an_unknown_host) or test(a_local_step_runs_without_the_forge_cli) or test(the_workflow_steps_follow_the_workflow_guards) or test(release_less)'`
 
 ### `forge-setup:every-supported-forge-runs-every-step` — Every supported forge runs every step
 
@@ -220,7 +220,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 ### `forge-setup:the-setup-asserts-the-squash-title-source` — The setup asserts the squash title source
 
-`protect-trunk` MUST assert, where the forge exposes it, that the squash commit's message derives from the request's title — `squash_merge_commit_title=PR_TITLE` on GitHub, `squash_commit_template=%{title}` on GitLab — and the observation MUST fault any other value, because the bot derives the version and the changelog from the trunk's commit messages and the forge's one-commit fallback is the lone branch commit's own subject.
+`protect-trunk` MUST assert the merge settings of the resolved `git.merge_form`, and the observation MUST fault any other value. Under `squash`, GitHub allows the squash merge alone and GitLab uses merge method `ff` with `squash_option = "always"`, and where the forge exposes it the squash commit's message derives from the request's title — `squash_merge_commit_title=PR_TITLE` on GitHub, `squash_commit_template=%{title}` on GitLab — because the bot derives the version and the changelog from the trunk's commit messages and the forge's one-commit fallback is the lone branch commit's own subject. Under `rebase`, GitHub allows the rebase merge alone and requires a linear history, GitLab uses merge method `ff` with `squash_option = "never"`, and no squash source applies, because every commit keeps its own message.
 
 #### Scenario: A one-commit request titled by its branch commit
 
@@ -228,11 +228,11 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 - WHEN `rk setup step protect-trunk --apply` runs and `rk setup check` reads the repository back
 - THEN the apply sets the title source to the request's title, and a check against a repository holding any other value reports `protect-trunk` unsatisfied naming the setting
 
-Verify: `cargo nextest run -E 'binary(cli)'`
+Verify: `cargo nextest run -E 'binary(cli) or test(merge_form)'`
 
 ### `forge-setup:the-setup-asserts-the-squash-body-source` — The setup asserts the squash body source
 
-`protect-trunk` MUST assert `squash_merge_commit_message=PR_BODY` on GitHub and the observation MUST fault any other value, because the request's description becomes the trunk commit's body there and the content gates judge that description, not whatever another source would substitute.
+Under `git.merge_form = "squash"`, `protect-trunk` MUST assert `squash_merge_commit_message=PR_BODY` on GitHub and the observation MUST fault any other value, because the request's description becomes the trunk commit's body there and the content gates judge that description, not whatever another source would substitute.
 
 #### Scenario: The message source drifts to another value
 
@@ -252,7 +252,7 @@ Verify: `cargo nextest run -E 'binary(cli)'`
 
 On every supported forge, the trunk protection MUST refuse a merge from a branch that does not carry the trunk's tip, and `rk setup check` MUST fault where the protection does not enforce that requirement, accepting a forge's existing enforcing setting rather than requiring a second switch.
 
-The release request is the one branch whose contents are computed: a merge that does not re-read the trunk publishes a version its contents did not earn. GitHub requires the strict status-check policy with required checks in both integration modes, and MUST install the trunk's rules as two rulesets, because a bypass actor is recorded on a ruleset and excuses every rule in it: the deletion and force-push rules in a ruleset naming no bypass actor, written first, and the request and required-check rules in the ruleset the integration mode's actors name. Local integration names exactly the repository-administrator bypass there for the deliberate direct push and MUST leave the release App governed. Setup and observation MUST fault any other bypass shape, a bypass actor on the safety ruleset, and a safety rule installed in the bypassed one. GitLab's `ff` merge method carries the requirement. [The freshness decision](../decisions/ADR-require-a-fresh-branch-before-a-merge.md) and [the two-ruleset decision](../decisions/ADR-hold-the-trunk-in-two-rulesets.md) record the trade.
+The release request is the one branch whose contents are computed: a merge that does not re-read the trunk publishes a version its contents did not earn. Wherever a forge gate lands, GitHub requires the strict status-check policy with required checks in both integration modes, and the required check is the title gate under `squash` and the commit gate under `rebase`, which judges every commit of the request on each push. Where no forge gate lands, as under local integration with no automatic release, the GitHub trunk ruleset requires no status check and GitLab's `protect-trunk` drops `only_allow_merge_if_pipeline_succeeds` while keeping no-deletion and no-force-push, as `target-config:the-effective-protection-follows-the-profile` binds. GitHub MUST install the trunk's rules as two rulesets, because a bypass actor is recorded on a ruleset and excuses every rule in it: the deletion and force-push rules in a ruleset naming no bypass actor, written first, and the request and required-check rules in the ruleset the integration mode's actors name. Local integration names exactly the repository-administrator bypass there for the deliberate direct push and MUST leave the release App governed. Setup and observation MUST fault any other bypass shape, a bypass actor on the safety ruleset, and a safety rule installed in the bypassed one. GitLab's `ff` merge method carries the requirement. [The freshness decision](../decisions/ADR-require-a-fresh-branch-before-a-merge.md) and [the two-ruleset decision](../decisions/ADR-hold-the-trunk-in-two-rulesets.md) record the trade.
 
 #### Scenario: The GitHub policy is loose
 
@@ -272,7 +272,7 @@ The release request is the one branch whose contents are computed: a merge that 
 - WHEN `rk setup check` runs
 - THEN `protect-trunk` reports satisfied without a second setting, because the merge method carries the requirement
 
-Verify: `cargo nextest run -E 'binary(cli)'`
+Verify: `cargo nextest run -E 'binary(cli) or test(release_less) or test(commit_gate)'`
 
 ### `forge-setup:the-setup-proves-a-private-reporting-channel` — The setup proves a private reporting channel
 

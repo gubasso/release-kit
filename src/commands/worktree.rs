@@ -822,10 +822,12 @@ struct PruneRow {
     /// unknown, pruned, remove-failed, or branch-delete-failed.
     status: &'static str,
     /// What proved the tip, where anything did: a merged request as the
-    /// forge names it, or the local integration that wrote the trunk.
+    /// forge names it, the local integration that wrote the trunk, or the
+    /// trunk reaching the tip.
     #[serde(skip_serializing_if = "Option::is_none")]
     proof: Option<String>,
-    /// Which of the two proofs it was: `request` or `local-integration`.
+    /// Which of the three proofs it was: `request`, `local-integration`,
+    /// or `reachable-tip`.
     #[serde(skip_serializing_if = "Option::is_none")]
     proof_kind: Option<&'static str>,
     /// Why the worktree stays, or what is still owed.
@@ -840,6 +842,9 @@ impl PruneRow {
             "kept" => format!("kept: {}", self.detail.as_deref().unwrap_or("")),
             "stale" => {
                 "stale: the registered directory is missing; apply clears the record".to_owned()
+            }
+            "confirmed" if self.proof_kind == Some("reachable-tip") => {
+                format!("confirmed: {}", self.proof.as_deref().unwrap_or(""))
             }
             "confirmed" => format!(
                 "confirmed: {} matches this tip",
@@ -937,8 +942,16 @@ fn prune(
             .as_deref()
             .and_then(|name| branches.iter().find(|branch| branch.name == name));
         // A locally integrated branch has no upstream to go gone, so
-        // its own evidence is what makes its seat reportable at all.
-        let local = observation.and_then(|branch| ledger.proof(&branch.name, &branch.tip));
+        // its own evidence is what makes its seat reportable at all, and
+        // so does a tip the trunk reaches. Where both hold, the reachable
+        // tip is named, as on the branch side.
+        let local = observation.and_then(|branch| {
+            maintenance::reachable_tip(target, &trunk, &branch.name, &branch.tip).or_else(|| {
+                ledger.proof(&branch.name, &branch.tip).map(|entry| {
+                    crate::branches::Proof::LocalIntegration(entry.trunk_commit.clone())
+                })
+            })
+        });
         let reportable = worktree.prunable.is_some()
             || local.is_some()
             || worktree
@@ -1028,7 +1041,7 @@ fn prune(
             if row.status != "confirmed" {
                 continue;
             }
-            if let Err(count) = retire(target, row) {
+            if let Err(count) = retire(target, &trunk, row) {
                 failures += count;
             }
         }
@@ -1064,10 +1077,11 @@ fn prune(
 
 /// Retire one confirmed worktree, ordered, each outcome independent:
 /// re-observe at the last moment — verification authorizes only the
-/// state it saw — then remove the worktree, then delete its branch
+/// state it saw, and a reachable-tip proof, which no record holds, is
+/// asked again — then remove the worktree, then delete its branch
 /// through the shared compare-and-swap helper. A failed remove leaves
 /// the branch and its configuration untouched.
-fn retire(target: &Utf8Path, row: &mut PruneRow) -> Result<(), usize> {
+fn retire(target: &Utf8Path, trunk: &str, row: &mut PruneRow) -> Result<(), usize> {
     let Some(branch) = row.branch.clone() else {
         return Ok(());
     };
@@ -1093,6 +1107,10 @@ fn retire(target: &Utf8Path, row: &mut PruneRow) -> Result<(), usize> {
     let fresh_tip = String::from_utf8_lossy(&reread.stdout).trim().to_owned();
     if !reread.status.success() || fresh_tip != tip {
         keep(row, "the tip moved");
+        return Ok(());
+    }
+    if row.proof_kind == Some("reachable-tip") && !maintenance::trunk_reaches(target, trunk, &tip) {
+        keep(row, "the trunk no longer reaches the tip");
         return Ok(());
     }
     // The fresh inventory fails closed: an unobservable state clears no
@@ -1231,6 +1249,9 @@ fn render(out: Output, rows: &[PruneRow], next: &[String], quiet: bool) {
             rows.iter()
                 .filter(|row| row.proof_kind == Some("local-integration"))
                 .count(),
+            rows.iter()
+                .filter(|row| row.proof_kind == Some("reachable-tip"))
+                .count(),
         ));
         let width = rows.iter().map(|row| row.path.len()).max().unwrap_or(0);
         for row in rows {
@@ -1254,19 +1275,26 @@ fn render(out: Output, rows: &[PruneRow], next: &[String], quiet: bool) {
 ///
 /// As on the branch side, the line names which signal reported each
 /// seat: a gone upstream is a candidate, and a recorded local
-/// integration is proof.
-fn header(count: usize, local: usize) -> String {
+/// integration and a tip the trunk reaches are proof.
+fn header(count: usize, local: usize, reachable: usize) -> String {
     let (noun, reports, carry) = if count == 1 {
         ("1 worktree".to_owned(), "reports", "carries")
     } else {
         (format!("{count} worktrees"), "report", "carry")
     };
-    match (local, count - local) {
-        (0, _) => format!("{noun} {reports} cleanup (a candidate, not proof):"),
-        (_, 0) => format!("{noun} {carry} a local integration this clone recorded:"),
-        (_, other) => {
+    match (local, reachable, count - local - reachable) {
+        (0, 0, _) => format!("{noun} {reports} cleanup (a candidate, not proof):"),
+        (_, 0, 0) => format!("{noun} {carry} a local integration this clone recorded:"),
+        (0, _, 0) => format!("{noun} {carry} a branch tip the trunk reaches:"),
+        (_, _, 0) => format!(
+            "{noun}: {local} locally integrated, {reachable} with a branch tip the trunk reaches:"
+        ),
+        (_, 0, other) => {
             format!("{noun}: {other} reporting cleanup, {local} locally integrated:")
         }
+        (_, _, other) => format!(
+            "{noun}: {other} reporting cleanup, {local} locally integrated, {reachable} with a branch tip the trunk reaches:"
+        ),
     }
 }
 

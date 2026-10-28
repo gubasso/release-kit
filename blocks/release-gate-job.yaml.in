@@ -97,7 +97,7 @@
           # merging bytes nothing judged. The trunk's own strict rule makes
           # the base-freshness proof part of the same write, and this job
           # holds no bypass of it.
-          if gh pr merge "$number" --match-head-commit "$head" --squash --delete-branch; then
+          if gh pr merge "$number" --match-head-commit "$head" RK_MERGE_FLAG --delete-branch; then
             echo "merged pull request #$number at $head."
             exit 0
           fi

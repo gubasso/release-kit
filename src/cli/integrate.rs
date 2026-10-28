@@ -18,8 +18,11 @@ pub struct IntegrateArgs {
     pub target: Utf8PathBuf,
 
     /// The trunk commit's message. A local integration writes it as the
-    /// squash commit, so it must be a scoped Conventional Commit the
-    /// landed guards admit. Required for a local integration.
+    /// squash commit, so it must be a Conventional Commit the landed
+    /// guards admit, scoped wherever the record names a release. Required
+    /// for a local integration under the squash merge form, and refused
+    /// under rebase, where every commit of the branch keeps its own
+    /// message.
     #[arg(long, short = 'm', value_name = "TEXT")]
     pub message: Option<String>,
 

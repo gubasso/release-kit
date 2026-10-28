@@ -1,14 +1,19 @@
-//! Local-branch hygiene after squash merges.
+//! Local-branch hygiene after merges.
 //!
 //! A squash merge rewrites the branch's work into one trunk commit, so the
 //! branch tip never becomes an ancestor of the trunk and git's own
 //! `--merged` test cannot see the merge. Once the forge deletes the remote
 //! branch and a pruning fetch drops the tracking ref, `[gone]` is the one
 //! local signal left — and it proves only that the upstream vanished,
-//! never that it merged. This module holds the pure half of `rk branches
-//! prune`: parsing what `git for-each-ref` reports, the guard order that
-//! keeps a branch out of the candidate set, and the confirmation predicate
-//! that turns a forge answer into proof. Spawning stays in the handler.
+//! never that it merged. A merge that keeps the commits — a local rebase
+//! integration, a fast-forward merge, a hand `git merge --ff-only` —
+//! leaves the tip on the trunk, and the branch's own reflog says whether
+//! the tip is work or only where the branch was created. This module
+//! holds the pure half of `rk branches prune`: parsing what
+//! `git for-each-ref` and the reflog report, the guard order that keeps a
+//! branch out of the candidate set, and the confirmation predicates that
+//! turn a forge answer or a reachable tip into proof. Spawning stays in
+//! the handler and in `crate::maintenance`.
 
 use std::path::Path;
 
@@ -84,7 +89,7 @@ pub enum Class {
         /// The worktree's path, as `for-each-ref` reports it.
         path: String,
     },
-    /// One of the two proofs covers this tip.
+    /// One of the three proofs covers this tip.
     Confirmed {
         /// Which proof, and what it names.
         proof: Proof,
@@ -103,15 +108,25 @@ pub enum Class {
 
 /// What authorized a branch's retirement.
 ///
-/// Exactly two proofs are admissible, one per integration authority, and
-/// neither stands in for the other. Both rest on the same predicate: the
-/// tip the proof recorded equals the tip observed now.
+/// Exactly three proofs are admissible, and none stands in for another.
+/// The first two are records, one per integration authority, and both
+/// rest on the same predicate: the tip the proof recorded equals the tip
+/// observed now. The third is no record at all: the trunk reaches the tip
+/// observed now, and the branch moved since its reflog's creation entry,
+/// so the tip is work the trunk carries rather than the commit a fresh
+/// branch started at.
+///
+/// SATISFIES maintenance:gone-is-a-candidate-not-proof
+/// SATISFIES maintenance:one-merge-proof-authorizes-both-removals
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Proof {
     /// A merged request whose recorded head equals this tip.
     Request(String),
     /// A local integration whose recorded branch tip equals this tip.
     LocalIntegration(String),
+    /// A trunk that reaches this tip, carrying the commit the branch's
+    /// creation entry names, which differs from the tip.
+    ReachableTip(String),
 }
 
 impl Proof {
@@ -123,6 +138,10 @@ impl Proof {
             Self::LocalIntegration(commit) => {
                 format!("locally integrated as {}", crate::integrate::short(commit))
             }
+            Self::ReachableTip(created) => format!(
+                "reachable tip: the trunk carries it, and the branch moved from {} since its creation",
+                crate::integrate::short(created)
+            ),
         }
     }
 
@@ -132,12 +151,62 @@ impl Proof {
         match self {
             Self::Request(_) => "request",
             Self::LocalIntegration(_) => "local-integration",
+            Self::ReachableTip(_) => "reachable-tip",
         }
+    }
+
+    /// Whether this proof rests on the clone alone, with no forge answer:
+    /// the prune reports name these as proof rather than candidates.
+    #[must_use]
+    pub const fn is_local(&self) -> bool {
+        matches!(self, Self::LocalIntegration(_) | Self::ReachableTip(_))
     }
 }
 
-/// Classify one branch: `None` when its upstream is live or unset — the
-/// branch never reaches the report — and the guard's verdict otherwise.
+/// The commit a branch's latest creation entry names, from the raw reflog
+/// text git keeps for the ref: one `<old> <new> <identity>\t<message>`
+/// line per update, oldest first.
+///
+/// The creation entry is the one whose old object ID is all zeros. A
+/// reflog with none — expired in part, or rewritten — answers `None`, and
+/// so does one that does not parse: an absent creation proves nothing,
+/// which keeps the branch.
+#[must_use]
+pub fn creation_entry(reflog: &str) -> Option<String> {
+    reflog
+        .lines()
+        .rev()
+        .find_map(|line| {
+            let mut fields = line.split(' ');
+            let old = fields.next()?;
+            let new = fields.next()?;
+            let is_id = |id: &str| {
+                matches!(id.len(), 40 | 64) && id.bytes().all(|byte| byte.is_ascii_hexdigit())
+            };
+            (is_id(old) && is_id(new) && old.bytes().all(|byte| byte == b'0'))
+                .then(|| new.to_owned())
+        })
+        .filter(|new| !new.bytes().all(|byte| byte == b'0'))
+}
+
+/// The third proof, judged: the trunk reaches `tip`, and the branch's
+/// creation entry names a commit other than `tip`.
+///
+/// A fresh branch still at the commit it was created at is new, not
+/// merged, so equality is no proof; and with no creation entry there is
+/// nothing to compare against, so the proof is unavailable.
+#[must_use]
+pub fn reachable_tip(created: Option<&str>, tip: &str, trunk_reaches: bool) -> Option<Proof> {
+    let created = created?;
+    (trunk_reaches && created != tip).then(|| Proof::ReachableTip(created.to_owned()))
+}
+
+/// Classify one branch: `None` when its upstream is live or unset and no
+/// local proof covers it — the branch never reaches the report — and the
+/// guard's verdict otherwise.
+///
+/// `local` is the proof the clone holds on its own: a recorded local
+/// integration, or a tip the trunk reaches.
 ///
 /// The guards run in order and the first one holds: the current branch
 /// stays kept — it is the operator's own seat — a branch checked out in
@@ -149,13 +218,14 @@ pub fn classify(
     branch: &Branch,
     current: Option<&str>,
     trunk: &str,
-    local: Option<&crate::integrate::Entry>,
+    local: Option<Proof>,
 ) -> Option<Class> {
     // A locally integrated branch never reached the forge, so it has no
     // upstream to go gone. Its own evidence is what puts it in the
     // report, and a branch that advanced after its integration matches
     // no evidence and stays invisible, exactly as an advanced
-    // forge-merged branch does.
+    // forge-merged branch does. A branch the trunk reaches is reported
+    // on the same footing.
     if !branch.gone && local.is_none() {
         return None;
     }
@@ -174,10 +244,8 @@ pub fn classify(
             reason: "a protected branch".to_owned(),
         });
     }
-    if let Some(entry) = local {
-        return Some(Class::Confirmed {
-            proof: Proof::LocalIntegration(entry.trunk_commit.clone()),
-        });
+    if let Some(proof) = local {
+        return Some(Class::Confirmed { proof });
     }
     Some(Class::Candidate)
 }
@@ -284,7 +352,9 @@ fn last_line(bytes: &[u8]) -> String {
 mod tests {
     use serde_json::json;
 
-    use super::{Branch, Class, Proof, classify, confirmation, parse_branches};
+    use super::{
+        Branch, Class, Proof, classify, confirmation, creation_entry, parse_branches, reachable_tip,
+    };
     use crate::detect::Forge;
 
     /// The five tab-separated fields parse, empty ones to `None`, and only
@@ -400,5 +470,65 @@ mod tests {
             confirmation(Forge::Github, &json!({"message": "rate limited"}), "aaaa"),
             Class::Unknown { .. }
         ));
+    }
+
+    /// The creation entry is the one whose old object ID is all zeros, and
+    /// the latest such entry answers. A reflog whose creation entry is gone
+    /// — expired in part, or never written — answers nothing, and so does
+    /// text that is no reflog.
+    #[test]
+    fn reachable_tip_reads_the_creation_entry_of_a_raw_reflog() {
+        let zero = "0".repeat(40);
+        let a = "a".repeat(40);
+        let b = "b".repeat(40);
+        let c = "c".repeat(40);
+        let whole = format!(
+            "{zero} {a} Dev <dev@example.com> 1700000000 +0000\tbranch: Created from master\n\
+             {a} {b} Dev <dev@example.com> 1700000100 +0000\tcommit: one\n\
+             {b} {c} Dev <dev@example.com> 1700000200 +0000\tcommit: two\n"
+        );
+        assert_eq!(creation_entry(&whole), Some(a));
+        let expired = whole.lines().skip(1).collect::<Vec<_>>().join("\n");
+        assert_eq!(creation_entry(&expired), None, "the creation entry expired");
+        assert_eq!(creation_entry(""), None, "no reflog at all");
+        assert_eq!(creation_entry("not a reflog\n"), None);
+        let sha256 = format!(
+            "{} {} Dev <dev@example.com> 1700000000 +0000\tbranch: Created\n",
+            "0".repeat(64),
+            "d".repeat(64)
+        );
+        assert_eq!(creation_entry(&sha256), Some("d".repeat(64)));
+    }
+
+    /// The third proof needs all three facts: a creation entry, a tip that
+    /// moved from it, and a trunk that reaches the tip. A fresh branch at
+    /// its creation commit is new rather than merged.
+    #[test]
+    fn reachable_tip_needs_a_moved_branch_the_trunk_reaches() {
+        assert_eq!(
+            reachable_tip(Some("aaaa"), "bbbb", true),
+            Some(Proof::ReachableTip("aaaa".into()))
+        );
+        assert_eq!(reachable_tip(Some("bbbb"), "bbbb", true), None, "fresh");
+        assert_eq!(reachable_tip(Some("aaaa"), "bbbb", false), None, "unmerged");
+        assert_eq!(reachable_tip(None, "bbbb", true), None, "no creation entry");
+        let proof = Proof::ReachableTip("aaaa".into());
+        assert_eq!(proof.kind(), "reachable-tip");
+        assert!(proof.detail().starts_with("reachable tip"));
+        assert!(proof.is_local() && Proof::LocalIntegration("x".into()).is_local());
+        assert!(!Proof::Request("#8".into()).is_local());
+        // The proof confirms the branch the way local evidence does, after
+        // every guard.
+        let branch = Branch {
+            name: "feat/x".into(),
+            tip: "bbbb".into(),
+            upstream: None,
+            gone: false,
+            worktree: None,
+        };
+        assert_eq!(
+            classify(&branch, Some("master"), "master", Some(proof.clone())),
+            Some(Class::Confirmed { proof })
+        );
     }
 }
