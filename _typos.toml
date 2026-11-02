@@ -1,7 +1,7 @@
 [files]
-# The generated files, which follow their generator (the generated-file rule
-# of nix-secrets, ADR-0081), and the fixtures, which keep the bytes a landing
-# wrote. The hook passes --force-exclude, so this list also holds there.
+# The generated files, which follow their generator (the dev environment rule
+# of nix-secrets, home/apps/claude-session/rules/dev-environment.md), and the
+# fixtures, which keep the bytes a landing wrote. The hook passes --force-exclude, so this list also holds there.
 extend-exclude = [
   "tests/fixtures/**",
   "/CHANGELOG.md",

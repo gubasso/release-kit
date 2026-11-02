@@ -60,6 +60,11 @@ fn rk() -> Command {
     // own store and journal are never written or pruned by the suite. A
     // test that needs one root across two invocations sets its own.
     command.env("XDG_STATE_HOME", scratch_state_root());
+    // `rk integrate` runs its gate through pre-commit, which records every
+    // run in its store database. The operator's store is shared with every
+    // pre-commit on the host, and one that holds its lock past sqlite's
+    // timeout fails the gate, so each invocation gets a scratch store too.
+    command.env("PRE_COMMIT_HOME", scratch_state_root());
     command
 }
 
@@ -33519,6 +33524,39 @@ fn integrate_writes_one_squash_commit_and_records_it() {
     assert_ne!(
         git_out(&repo, &["rev-parse", "refs/remotes/origin/master"]),
         after
+    );
+}
+
+/// The integration gate runs pre-commit against a store of the call's own,
+/// never the operator's: another pre-commit on the host that holds the
+/// shared store's lock past sqlite's timeout would fail the gate, and with
+/// it a test that has nothing to do with the store.
+#[test]
+fn integrate_runs_its_gate_against_a_store_of_its_own() {
+    if !pre_commit_present() {
+        return;
+    }
+    let (_parent, repo) = integrate_fixture();
+    let mut command = rk_scrubbed();
+    let store = command
+        .get_envs()
+        .find(|(key, _)| *key == "PRE_COMMIT_HOME")
+        .and_then(|(_, value)| value)
+        .map(PathBuf::from)
+        .expect("every rk call names a pre-commit store of its own");
+    assert!(
+        !store.join("db.db").exists(),
+        "the call's store starts empty"
+    );
+    command
+        .args(["integrate", "feat/greeting", "--apply"])
+        .args(["-m", "feat(greeting): add it", "--target"])
+        .arg(&repo)
+        .assert()
+        .success();
+    assert!(
+        store.join("db.db").is_file(),
+        "the gate recorded its run in the call's own store"
     );
 }
 

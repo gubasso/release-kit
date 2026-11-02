@@ -10,9 +10,10 @@
     "**/*.json",
     "**/*.jsonc"
   ],
-  // The generated files follow their generator (the generated-file rule of
-  // nix-secrets, ADR-0081): release-plz writes CHANGELOG.md, rk writes
-  // SECURITY.md and the .release-kit files, and sdd writes the rest.
+  // The generated files follow their generator (the dev environment rule of
+  // nix-secrets, home/apps/claude-session/rules/dev-environment.md):
+  // release-plz writes CHANGELOG.md, rk writes SECURITY.md and the
+  // .release-kit files, and sdd writes the rest.
   "excludes": [
     ".git",
     "node_modules",

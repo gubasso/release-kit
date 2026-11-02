@@ -55,7 +55,8 @@ repos:
         files: '^(\.github/workflows/|\.gitlab-ci\.yml$|\.gitlab/ci/|AGENTS\.md$|\.release-kit/|\.pre-commit-config\.yaml$|release-plz\.toml$|dist-workspace\.toml$|release-please-config\.json$|cliff\.toml$|\.release-please-manifest\.json$|VERSION$)'
 # END release-kit
 # A generated file follows its generator, and no check of this project
-# rewrites or judges it (the generated-file rule of nix-secrets, ADR-0081).
+# rewrites or judges it (the dev environment rule of nix-secrets,
+# home/apps/claude-session/rules/dev-environment.md).
 # The generated files and their generators:
 #   CHANGELOG.md                         release-plz
 #   SECURITY.md, and the workflows code-scanning-codeql.yml, pr-title.yml,

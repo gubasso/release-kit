@@ -1,6 +1,6 @@
 # actionlint reads every workflow, the generated ones included. A finding that
-# this project accepts goes here, never into the file (the generated-file rule
-# of nix-secrets, ADR-0081).
+# this project accepts goes here, never into the file (the dev environment
+# rule of nix-secrets, home/apps/claude-session/rules/dev-environment.md).
 paths:
   # cargo-dist writes release.yml, and the dist-plan job proves it byte-equal
   # to the generator, so its five shellcheck relays are not this project's to
