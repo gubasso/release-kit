@@ -54,14 +54,33 @@ repos:
         entry: rk status --check --target .
         files: '^(\.github/workflows/|\.gitlab-ci\.yml$|\.gitlab/ci/|AGENTS\.md$|\.release-kit/|\.pre-commit-config\.yaml$|release-plz\.toml$|dist-workspace\.toml$|release-please-config\.json$|cliff\.toml$|\.release-please-manifest\.json$|VERSION$)'
 # END release-kit
+# A generated file follows its generator, and no check of this project
+# rewrites or judges it (the generated-file rule of nix-secrets, ADR-0081).
+# The generated files and their generators:
+#   CHANGELOG.md                         release-plz
+#   SECURITY.md, and the workflows code-scanning-codeql.yml, pr-title.yml,
+#   release-plz.yml, and scorecard.yml   rk, rendered whole
+#   .github/workflows/release.yml        cargo-dist
+#   .release-kit/manifest.json and .release-kit/setup-proof.json   rk
+#   .spec-driven-docs/manifest.json and _docs/.markdownlint-cli2.jsonc   sdd
+#   Cargo.lock                           cargo
+#   flake.lock, here and in snippets/    nix
+# Each tool excludes them in its own configuration: dprint.json,
+# .markdownlint-cli2.jsonc, _typos.toml, and .editorconfig-checker.json. The
+# fixers below have no configuration, so each takes its own exclude. The
+# reading hooks keep them: the YAML, TOML, and JSON parsers, the secret and
+# merge-conflict scans, the link check, actionlint, and zizmor.
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
       - id: trailing-whitespace
         args: [--markdown-linebreak-ext=md]
+        exclude: '^(CHANGELOG\.md|SECURITY\.md|\.github/workflows/(code-scanning-codeql|pr-title|release-plz|release|scorecard)\.yml|\.release-kit/(manifest|setup-proof)\.json|\.spec-driven-docs/manifest\.json|_docs/\.markdownlint-cli2\.jsonc)$|(^|/)(Cargo|flake)\.lock$'
       - id: end-of-file-fixer
+        exclude: '^(CHANGELOG\.md|SECURITY\.md|\.github/workflows/(code-scanning-codeql|pr-title|release-plz|release|scorecard)\.yml|\.release-kit/(manifest|setup-proof)\.json|\.spec-driven-docs/manifest\.json|_docs/\.markdownlint-cli2\.jsonc)$|(^|/)(Cargo|flake)\.lock$'
       - id: mixed-line-ending
         args: [--fix=lf]
+        exclude: '^(CHANGELOG\.md|SECURITY\.md|\.github/workflows/(code-scanning-codeql|pr-title|release-plz|release|scorecard)\.yml|\.release-kit/(manifest|setup-proof)\.json|\.spec-driven-docs/manifest\.json|_docs/\.markdownlint-cli2\.jsonc)$|(^|/)(Cargo|flake)\.lock$'
       - id: check-added-large-files
         args: ['--maxkb=16384']
       - id: check-case-conflict
@@ -148,16 +167,15 @@ repos:
         entry: zizmor --no-progress --offline --config zizmor.yml --min-confidence medium
         language: system
         files: '^\.github/workflows/.*\.ya?ml$'
-      # release.yml is excluded because it is cargo-dist's output and the
-      # dist-plan job proves it byte-equal to the generator, so its five
-      # shellcheck relays are not this project's to fix. See
+      # actionlint reads release.yml too: .github/actionlint.yaml accepts the
+      # five shellcheck relays of cargo-dist's output, which are not this
+      # project's to fix. See
       # _docs/reference/known-issues/KI-dist-generates-an-unhardened-workflow.md
       - id: actionlint
         name: actionlint
         entry: actionlint
         language: system
         files: '^(\.github|snippets/.*/\.github)/workflows/.*\.ya?ml$'
-        exclude: '^\.github/workflows/release\.yml$'
   - repo: https://github.com/frnmst/md-toc
     rev: 9.0.0
     hooks:
@@ -184,7 +202,6 @@ repos:
       - id: lychee
         stages: [pre-push]
         types: [markdown]
-        exclude: 'CHANGELOG\.md$'
         # The version is passed rather than discovered. The hook's shim reads it
         # by running git describe inside its own checkout, and git exports an
         # absolute GIT_DIR to a pre-push hook run from a linked worktree, which

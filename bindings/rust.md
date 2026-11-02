@@ -23,6 +23,10 @@ The tag push retriggers `release.yml` only because the publish jobs authenticate
 
 On GitLab, `.gitlab-ci.yml` is the one landed pipeline, and a project declares its own jobs in `.gitlab/ci/project.yml`, which the rendered parent triggers as a child pipeline; [the forge document](../forges/gitlab.md) carries the rules that file follows.
 
+## The changelog
+
+release-plz writes `CHANGELOG.md` in its own form, and the seeded `release-plz.toml` carries no `[changelog]` section. Do not add one to satisfy a formatter or a prose gate: exclude the changelog from those checks, as [generated files](./README.md#generated-files) says, together with the other files that the landing and cargo-dist write.
+
 ## Setup specifics
 
 - Step 0 is `cargo publish --dry-run` plus reading `cargo package --list`. crates.io hard-rejects a publish with no `description` and rejects a `categories` value that is not a canonical slug; both surface here without credentials. `rk setup step package-check` runs that listing itself where `cargo metadata --no-deps` selects one default package whose manifest is the target's root `Cargo.toml`, and reports whether the `.crate` carries `SECURITY.md`, where the target requests the reporting policy, and whether it ships any file release-kit lands or owns, naming the `[package].exclude` entry for each. A virtual workspace, several default members, or a sole nested member gets the packaging result alone with the inclusion named unproved: `cargo package --list` prints no stable delimiter across several packages, and a nested package cannot include a file above its own root. Read the listing by hand for those shapes, per package, before the first release.

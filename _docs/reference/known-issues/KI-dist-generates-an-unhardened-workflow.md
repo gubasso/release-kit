@@ -4,8 +4,8 @@ affects: .github/workflows/release.yml
 state: masked
 filing: deferred
 checked: 2026-09-11
-workaround: zizmor.yml ignores the two audits for release.yml, and the actionlint hook excludes the file
-retire_when: each mask retires with its own upstream fix, once the cargo-dist pin here reaches the release carrying it. The template-injection ignore retires with cargo-dist#2320. The excessive-permissions ignore retires when the workflow-level contents write drops to the jobs that need it. The actionlint exclusion retires with cargo-dist#62, the shell-quoting fix, which is separate from #2320.
+workaround: zizmor.yml ignores the two audits for release.yml, and .github/actionlint.yaml ignores the five shellcheck relays of the file
+retire_when: each mask retires with its own upstream fix, once the cargo-dist pin here reaches the release carrying it. The template-injection ignore retires with cargo-dist#2320. The excessive-permissions ignore retires when the workflow-level contents write drops to the jobs that need it. The actionlint ignore retires with cargo-dist#62, the shell-quoting fix, which is separate from #2320.
 ---
 
 # cargo-dist generates a workflow this project cannot harden
@@ -30,11 +30,11 @@ zizmor --no-progress --offline --config zizmor.yml --min-confidence medium .gith
 actionlint .github/workflows/release.yml
 ```
 
-Removing the `release.yml` entries from `zizmor.yml` returns five findings. Removing the `exclude:` from the `actionlint` hook returns five shellcheck relays.
+Removing the `release.yml` entries from `zizmor.yml` returns five findings. Removing the `release.yml` entry from `.github/actionlint.yaml` returns five shellcheck relays.
 
 ## Workaround
 
-`zizmor.yml` carries `release.yml` under the `excessive-permissions` and `template-injection` ignore lists, and the `actionlint` hook excludes the file. Both carry a comment pointing here.
+`zizmor.yml` carries `release.yml` under the `excessive-permissions` and `template-injection` ignore lists, and `.github/actionlint.yaml` ignores the two shellcheck codes, SC2086 and SC2129, for that path alone. Both linters still read the file, and both ignores carry a comment pointing here.
 
 The two ignores are keyed by base filename, which is the only key zizmor accepts, so they would also reach `snippets/bash/github/.github/workflows/release.yml`. The `zizmor-snippets` hook runs `--no-config` for that reason, and the snippets are audited with no ignore list at all.
 

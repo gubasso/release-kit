@@ -10,12 +10,20 @@
     "**/*.json",
     "**/*.jsonc"
   ],
+  // The generated files follow their generator (the generated-file rule of
+  // nix-secrets, ADR-0081): release-plz writes CHANGELOG.md, rk writes
+  // SECURITY.md and the .release-kit files, and sdd writes the rest.
   "excludes": [
     ".git",
     "node_modules",
     "target",
+    "AGENTS.md",
     "CHANGELOG.md",
-    "AGENTS.md"
+    "SECURITY.md",
+    ".release-kit/manifest.json",
+    ".release-kit/setup-proof.json",
+    ".spec-driven-docs/manifest.json",
+    "_docs/.markdownlint-cli2.jsonc"
   ],
   "plugins": [
     "https://plugins.dprint.dev/markdown-0.22.0.wasm",

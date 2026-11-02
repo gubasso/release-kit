@@ -15,6 +15,10 @@ There is no registry, so stages 4 and 5 of [the spine](../method/00-model.md) co
 
 A one-line `VERSION` file is the committed source of truth, and `git-cliff --bump` computes the next version from Conventional Commits and writes the changelog deterministically, which is what qualifies it under [the invariants](../method/01-invariants.md). git-cliff maintains no pull request on its own; the landed workflow drives it to open and refresh the release request.
 
+## The changelog
+
+git-cliff writes `CHANGELOG.md` from the template in the seeded `cliff.toml`. git-cliff expects a template that the project writes, so the project owns that template and keeps it. The changelog that it renders is generated all the same: exclude it from every formatter and prose gate, as [generated files](./README.md#generated-files) says, together with the other files that the landing writes.
+
 ## Setup specifics
 
 - No registry means no step 0 metadata gate, no bootstrap token, no trusted publisher, and no enforcement switch; setup is the branch shape, the protections, and the landed files.

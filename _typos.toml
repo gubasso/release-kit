@@ -1,5 +1,23 @@
 [files]
-extend-exclude = ["flake.lock", "tests/fixtures/**"]
+# The generated files, which follow their generator (the generated-file rule
+# of nix-secrets, ADR-0081), and the fixtures, which keep the bytes a landing
+# wrote. The hook passes --force-exclude, so this list also holds there.
+extend-exclude = [
+  "tests/fixtures/**",
+  "/CHANGELOG.md",
+  "/SECURITY.md",
+  "/.github/workflows/code-scanning-codeql.yml",
+  "/.github/workflows/pr-title.yml",
+  "/.github/workflows/release-plz.yml",
+  "/.github/workflows/release.yml",
+  "/.github/workflows/scorecard.yml",
+  "/.release-kit/manifest.json",
+  "/.release-kit/setup-proof.json",
+  "/.spec-driven-docs/manifest.json",
+  "/_docs/.markdownlint-cli2.jsonc",
+  "Cargo.lock",
+  "flake.lock",
+]
 
 [default.extend-words]
 # The RFC 4648 base64 test vector for the two-byte input "fo".

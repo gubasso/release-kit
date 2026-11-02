@@ -23,4 +23,8 @@ exclude = [
   '^https://fastercapital\.com/',
   '^https://jira\.atlassian\.com/',
   '^https://thoughtworks\.medium\.com/',
+  # release-plz wrote this compare link into CHANGELOG.md for the first
+  # release, and no v0.1.0 tag exists. The changelog is generated, so the link
+  # stays as written.
+  '^https://github\.com/gubasso/release-kit/compare/v0\.1\.0\.\.\.v0\.2\.0$',
 ]

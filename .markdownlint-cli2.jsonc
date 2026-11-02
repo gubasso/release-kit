@@ -79,7 +79,11 @@
     "node_modules/",
     "target/",
     ".draft/",
+    // Generated files follow their generator (the generated-file rule of
+    // nix-secrets, ADR-0081): release-plz writes CHANGELOG.md, and rk renders
+    // SECURITY.md whole.
     "CHANGELOG.md",
+    "SECURITY.md",
     ".obsidian/",
     ".trash/",
     "draft*"
