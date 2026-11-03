@@ -170,11 +170,11 @@ checked = 2026-09-02
 
 [[tool]]
 name = "conventional-pre-commit"
-version = "4.4.0"
+version = "4.5.0"
 used_by = ["git.workflow-guards"]
 purpose = "holds every commit header to the scoped convention through the landed commit-msg hook; rk message guards the content"
 check = "https://api.github.com/repos/compilerla/conventional-pre-commit/releases/latest"
-checked = 2026-09-02
+checked = 2026-11-03
 
 [[tool]]
 name = "pre-commit-hooks"

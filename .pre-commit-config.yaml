@@ -5,7 +5,7 @@ repos:
 # The release convention's hooks. Install every stage they run at:
 # pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push
 # A CI sweep commits nothing, so a job running pre-commit against a trunk
-# checkout sets SKIP=rk-worktree-location in its environment. Append the id of
+# checkout sets SKIP=no-commit-to-branch,rk-worktree-location in its environment. Append the id of
 # every check this project classifies local-only: the value is a list the
 # project owns the tail of.
 # rk integrate runs this project's pre-integrate suite as
@@ -14,7 +14,7 @@ repos:
 # continuous integration invoke the same stages: a check that runs on one
 # side of the boundary alone guards one side alone.
   - repo: https://github.com/compilerla/conventional-pre-commit
-    rev: v4.4.0
+    rev: v4.5.0
     hooks:
       - id: conventional-pre-commit
         stages: [commit-msg]
@@ -26,6 +26,12 @@ repos:
         stages: [commit-msg]
         language: system
         entry: rk message --check
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: no-commit-to-branch
+        args: [--branch, master]
+        stages: [pre-commit]
   - repo: local
     hooks:
       - id: rk-branch-name
@@ -40,6 +46,20 @@ repos:
         always_run: true
         pass_filenames: false
         entry: sh -c '[ "$(git rev-parse --git-dir)" = "$(git rev-parse --git-common-dir)" ] || exit 0; branch=$(git symbolic-ref --quiet --short HEAD) || { echo "this project works in worktrees — the main checkout takes no commit, detached included; rk worktree add <branch> seats work in its own worktree" >&2; exit 1; }; [ "$branch" = master ] && exit 0; echo "this project works in worktrees — the main checkout holds the trunk and takes no branch commit; rk worktree add $branch gives this branch its own worktree" >&2; exit 1'
+      - id: rk-no-force-push-to-trunk
+        name: rk no force push to trunk
+        stages: [pre-push]
+        language: system
+        always_run: true
+        pass_filenames: false
+        entry: sh -c '[ "$PRE_COMMIT_REMOTE_BRANCH" = refs/heads/master ] || exit 0; tracked=$(git rev-parse --verify --quiet "refs/remotes/$PRE_COMMIT_REMOTE_NAME/master"); for base in "$PRE_COMMIT_FROM_REF" "$tracked"; do case "$base" in "") continue;; *[!0]*) ;; *) continue;; esac; git merge-base --is-ancestor "$base" "$PRE_COMMIT_TO_REF" 2>/dev/null && continue; echo "refusing a force push to master, because $base is not an ancestor of the pushed tip; rebase onto the remote trunk instead of rewriting it" >&2; exit 1; done'
+      - id: rk-no-merge-commit-to-trunk
+        name: rk no merge commit to trunk
+        stages: [pre-push]
+        language: system
+        always_run: true
+        pass_filenames: false
+        entry: sh -c '[ "$PRE_COMMIT_REMOTE_BRANCH" = refs/heads/master ] || exit 0; tip=${PRE_COMMIT_TO_REF:-$PRE_COMMIT_LOCAL_BRANCH}; [ -n "$tip" ] || exit 0; case "$PRE_COMMIT_FROM_REF" in ""|*[!0]*) range=${PRE_COMMIT_FROM_REF:+$PRE_COMMIT_FROM_REF..}$tip;; *) range=$tip;; esac; merges=$(git rev-list --merges "$range") || { echo "the commits pushed to master cannot be listed, so the push is refused" >&2; exit 1; }; [ -z "$merges" ] && exit 0; echo "refusing a push that adds a merge commit to master, whose history stays linear; rebase instead" >&2; git log --oneline --no-walk $merges >&2; exit 1'
       - id: rk-no-hand-authored-tag
         name: rk no hand-authored tag
         stages: [pre-push]

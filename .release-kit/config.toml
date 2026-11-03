@@ -22,6 +22,7 @@ line_prefix = "release/" # P: release-line branch prefix, rendered into the rele
 trunk = "master" # P: the one permanent branch, rendered into every artifact naming it
 checkout_mode = "linked-worktree" # P: linked-worktree or main-worktree, where a topic branch opens
 integration = "local" # P: local or forge, which authority moves an implementation onto the trunk
+merge_form = "squash" # P: squash or rebase, how the commits of a branch reach the trunk
 
 [capabilities]
 nix_packaging = false # P: opt-in Nix capability
@@ -51,7 +52,7 @@ lines_ruleset = "release-lines" # N: release-line ruleset name
 title_check = "pr-title" # N: title job context
 tag_pattern = "refs/tags/v*" # F: invariant, covers every published version
 bypass_actors = ["repository-admin"] # F: invariant, the actors git.integration names
-allowed_merge_methods = ["squash"] # F: invariant, exactly squash
+allowed_merge_methods = ["squash"] # F: invariant, exactly the method git.merge_form names: squash or rebase
 strict_required_status_checks = true # F: invariant, true
 owned_trunk_rules = ["deletion", "non_fast_forward", "pull_request", "required_status_checks"] # F: invariant, the rules git.integration names
 required_approving_review_count = 0 # F: floor zero; higher is stricter
@@ -60,12 +61,12 @@ require_code_owner_review = false # F: floor false; true is stricter
 require_last_push_approval = false # F: floor false; true is stricter
 
 [protection.github]
-squash_title_source = "PR_TITLE" # F: invariant, PR_TITLE
-squash_body_source = "PR_BODY" # F: invariant, PR_BODY
+squash_title_source = "PR_TITLE" # F: invariant under the squash merge form, PR_TITLE
+squash_body_source = "PR_BODY" # F: invariant under the squash merge form, PR_BODY
 
 [protection.gitlab]
 merge_method = "ff" # F: invariant, linear history
-squash_option = "always" # F: invariant, always squash
+squash_option = "always" # F: invariant, the squash git.merge_form names: always under squash, never under rebase
 squash_commit_template = "%{title}" # F: invariant, references title and description
 push_access_level = 40 # F: invariant, the level git.integration names
 merge_access_level = 40 # F: floor thirty
