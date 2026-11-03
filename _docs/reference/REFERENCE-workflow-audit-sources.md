@@ -35,7 +35,7 @@ A snippet comment states its reason and names no case, which is the permanent-ex
 
 Every project read here uses the same shape: per-audit `ignore` lists keyed by base filename, each entry carrying a comment that gives the reason. None suppresses a generated file inline. The location splits: two keep the file at the repository root and three keep it under `.github/`, so both discovery positions are in real use and neither is the convention.
 
-- <https://github.com/n0-computer/iroh/blob/main/zizmor.yml> — root. Ignores `github-app` for one workflow, with three lines explaining that the token itself is least-privilege and that the install scope is what remains flagged.
+- <https://github.com/n0-computer/iroh/blob/89ed3bfdaf81e689322f1a00f23dd1975f9396bc/zizmor.yml> — root. Ignores `github-app` for one workflow, with three lines explaining that the token itself is least-privilege and that the install scope is what remains flagged.
 - <https://github.com/prefix-dev/rattler-build/blob/main/zizmor.yml> — root. Ignores `artipacked` for the workflows that need git credentials to push.
 - <https://github.com/prefix-dev/pixi/blob/main/.github/zizmor.yml> — under `.github/`. Ignores `template-injection` for `release.yml`, reasoning that the release matrix values are defined in-workflow rather than from untrusted input, and ignores `artipacked` for the workflows whose checkouts push.
 - <https://github.com/astral-sh/ruff/blob/main/.github/zizmor.yml> — under `.github/`. Ignores `secrets-outside-env` for six workflows, with a TODO naming the exit.

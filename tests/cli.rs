@@ -24597,12 +24597,39 @@ fn the_setup_preview_prints_the_configured_trunk() {
     )
     .expect("the config rewrites");
 
-    rk().args(["setup", "--repo", "acme/widget", "--forge", "github"])
+    rk_with_stub_gh()
+        .args(["setup", "--repo", "acme/widget", "--forge", "github"])
         .args(["--required-check", "gate", "--target"])
         .arg(target.path())
         .assert()
         .success()
         .stdout(predicates::str::contains("RK_TRUNK_BRANCH=main"));
+}
+
+/// `rk()` with a stand-in `gh`. A setup preview against `--forge github`
+/// resolves the forge CLI before it plans, and never calls it. The host's
+/// `gh` carries the operator's forge credentials and is not the suite's to
+/// need, so the stand-in fails every call: a preview that starts calling it
+/// fails here instead of reaching the network.
+fn rk_with_stub_gh() -> Command {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    static GH: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    let gh = GH.get_or_init(|| {
+        let dir = tempfile::tempdir().expect("a scratch bin exists").keep();
+        let gh = dir.join("gh");
+        std::fs::write(
+            &gh,
+            "#!/bin/sh\nprintf 'unexpected gh call: %s\\n' \"$*\" >&2\nexit 1\n",
+        )
+        .expect("the stand-in gh writes");
+        std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755))
+            .expect("the stand-in gh is executable");
+        gh
+    });
+    let mut command = rk();
+    command.env("RK_GH_BIN", gh);
+    command
 }
 
 /// Set one key in a landed target's committed configuration.
@@ -24626,18 +24653,19 @@ fn required_check_comes_from_the_config_on_github() {
         "required_check = \"gate\"",
     );
 
-    rk().args([
-        "setup",
-        "--repo",
-        "acme/widget",
-        "--forge",
-        "github",
-        "--target",
-    ])
-    .arg(target.path())
-    .assert()
-    .success()
-    .stdout(predicates::str::contains("RK_REQUIRED_CHECK=gate"));
+    rk_with_stub_gh()
+        .args([
+            "setup",
+            "--repo",
+            "acme/widget",
+            "--forge",
+            "github",
+            "--target",
+        ])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("RK_REQUIRED_CHECK=gate"));
 }
 
 /// SATISFIES forge-setup:every-supported-forge-runs-every-step
@@ -24731,7 +24759,8 @@ fn retired_branches_come_from_the_config() {
 
     // The configuration reaches the step through the context, so the
     // preview that names what would run is the reader's proof.
-    rk().args(["setup", "step", "single-trunk", "--repo", "acme/widget"])
+    rk_with_stub_gh()
+        .args(["setup", "step", "single-trunk", "--repo", "acme/widget"])
         .args(["--forge", "github", "--target"])
         .arg(target.path())
         .assert()
@@ -24752,7 +24781,7 @@ fn the_release_lines_step_runs_when_the_config_asks() {
         "required_check = \"gate\"",
     );
 
-    let skipped = rk()
+    let skipped = rk_with_stub_gh()
         .args([
             "setup",
             "--repo",
@@ -24775,7 +24804,7 @@ fn the_release_lines_step_runs_when_the_config_asks() {
         "release_lines = false",
         "release_lines = true",
     );
-    let runs = rk()
+    let runs = rk_with_stub_gh()
         .args([
             "setup",
             "--repo",

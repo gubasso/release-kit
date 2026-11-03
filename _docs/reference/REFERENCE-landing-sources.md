@@ -170,7 +170,7 @@ Verified 2026-09-09. Across this family a record carries up to three separable f
 - <https://developer.hashicorp.com/terraform/language/state/backends>
 - <https://developer.hashicorp.com/terraform/cli/commands/state/push>
 - <https://github.com/hashicorp/terraform/pull/7109>
-- <https://doc.rust-lang.org/stable/nightly-rustc/cargo/core/resolver/enum.ResolveVersion.html>
+- <https://doc.rust-lang.org/stable/nightly-rustc/cargo/resolver/enum.ResolveVersion.html>
 - <https://github.com/rust-lang/cargo/issues/10046>
 - <https://copier.readthedocs.io/en/stable/configuring/>
 - <https://cruft.github.io/cruft/>
