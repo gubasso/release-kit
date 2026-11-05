@@ -285,6 +285,7 @@ fn manifest_requesting(
             security_response: release_kit::config::RESPONSE_DEFAULT.to_owned(),
             required_check: String::new(),
             required_workflow: String::new(),
+            dev_environment: None,
         },
         files: Vec::new(),
         pins: std::collections::BTreeMap::new(),
@@ -23712,6 +23713,202 @@ fn a_committed_contact_lands_in_both_forge_policies() {
     }
 }
 
+/// A development environment answer for the rust pair on `forge`, in
+/// the shape the binding's Nix example gives.
+fn dev_environment_answer(forge: &str) -> String {
+    let setup = match forge {
+        "github" => {
+            "\n[[dev_environment.github.setup]]\nuses = \"DeterminateSystems/nix-installer-action@90bb610b90bf290cad97484ba341453bd1cbefea\"\ntag = \"v19\"\n\n[[dev_environment.github.cache]]\nuses = \"DeterminateSystems/magic-nix-cache-action@565684385bcd71bad329742eefe8d12f2e765b39\"\ntag = \"v13\"\nwith = { use-flakehub = false, use-gha-cache = true }\n"
+        }
+        _ => {
+            "\n[dev_environment.gitlab]\nimage = \"nixos/nix:2.35.2\"\nbefore_script = [\"echo ready\"]\n"
+        }
+    };
+    format!("\n[dev_environment]\nrun = \"nix develop --command\"\n{setup}")
+}
+
+fn append_target_config(target: &Path, text: &str) {
+    let path = target.join(".release-kit/config.toml");
+    let mut config = std::fs::read_to_string(&path).expect("config exists");
+    config.push_str(text);
+    std::fs::write(&path, config).expect("config writes");
+}
+
+/// A recorded development environment renders both GitHub release halves
+/// through its prefix: no toolchain action, no release-plz action, the
+/// recorded setup in both halves, the cache in the request half alone,
+/// and the request output the arm reads. The record carries the answer,
+/// and the configuration keeps the table.
+///
+/// SATISFIES target-config:a-dev-environment-is-a-recorded-answer
+#[test]
+fn a_dev_environment_answer_renders_the_github_release_jobs_through_its_prefix() {
+    let target = land_pair("rust", "github");
+    append_target_config(target.path(), &dev_environment_answer("github"));
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let workflow = std::fs::read_to_string(target.path().join(".github/workflows/release-plz.yml"))
+        .expect("the workflow landed");
+    assert!(!workflow.contains("dtolnay/rust-toolchain"), "{workflow}");
+    assert!(!workflow.contains("release-plz/action"), "{workflow}");
+    assert!(!workflow.contains("RK_DEV"), "{workflow}");
+    assert!(
+        workflow.contains("nix develop --command release-plz release --git-token"),
+        "{workflow}"
+    );
+    assert!(
+        workflow.contains("nix develop --command release-plz release-pr --git-token"),
+        "{workflow}"
+    );
+    assert_eq!(
+        workflow
+            .matches("nix-installer-action@90bb610b90bf290cad97484ba341453bd1cbefea # v19")
+            .count(),
+        2,
+        "{workflow}"
+    );
+    let (release, request) = workflow
+        .split_once("  release-plz-pr:")
+        .expect("both halves render");
+    assert!(!release.contains("magic-nix-cache-action"), "{release}");
+    assert!(request.contains("magic-nix-cache-action"), "{request}");
+    assert!(
+        request.contains("          use-flakehub: false"),
+        "{request}"
+    );
+    assert!(request.contains("id: release-pr"), "{request}");
+    assert!(request.contains(">> \"$GITHUB_OUTPUT\""), "{request}");
+    assert!(request.contains("printf 'pr=%s\\n'"), "{request}");
+    let recorded = read_manifest(target.path());
+    assert_eq!(
+        recorded["parameters"]["dev_environment"]["run"],
+        "nix develop --command"
+    );
+    let config = std::fs::read_to_string(target.path().join(".release-kit/config.toml"))
+        .expect("config exists");
+    assert!(config.contains("[dev_environment]"), "{config}");
+    // Under forge integration the standing arm stays, and it reads the
+    // request number from the output the request half writes.
+    rk().args(["upgrade", "--apply", "--integration", "forge", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let workflow = std::fs::read_to_string(target.path().join(".github/workflows/release-plz.yml"))
+        .expect("the workflow landed");
+    assert!(
+        workflow.contains("RELEASE_PR: ${{ steps.release-pr.outputs.pr }}"),
+        "{workflow}"
+    );
+    assert!(
+        workflow.contains("nix develop --command release-plz release-pr"),
+        "{workflow}"
+    );
+}
+
+/// The GitLab release template takes the recorded image and setup lines,
+/// downloads no release-plz, and runs both commands through the prefix.
+///
+/// SATISFIES target-config:a-dev-environment-is-a-recorded-answer
+#[test]
+fn a_dev_environment_answer_renders_the_gitlab_release_jobs_through_its_prefix() {
+    let target = land_pair("rust", "gitlab");
+    append_target_config(target.path(), &dev_environment_answer("gitlab"));
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let pipeline =
+        std::fs::read_to_string(target.path().join(".gitlab-ci.yml")).expect("the pipeline landed");
+    assert!(
+        pipeline.contains("  image: nixos/nix:2.35.2\n"),
+        "{pipeline}"
+    );
+    assert!(pipeline.contains("    - \"echo ready\"\n"), "{pipeline}");
+    assert!(!pipeline.contains("rust:1"), "{pipeline}");
+    assert!(
+        !pipeline.contains("releases/download/release-plz"),
+        "{pipeline}"
+    );
+    assert!(!pipeline.contains("RK_DEV"), "{pipeline}");
+    assert!(
+        pipeline.contains("- nix develop --command release-plz release-pr --forge gitlab"),
+        "{pipeline}"
+    );
+    assert!(
+        pipeline.contains("nix develop --command release-plz release --forge gitlab"),
+        "{pipeline}"
+    );
+}
+
+/// A setup reference that is not pinned to a full commit refuses naming
+/// its key, and so does a prefix with no setup for the landed forge.
+///
+/// SATISFIES target-config:a-dev-environment-is-a-recorded-answer
+#[test]
+fn an_unpinned_or_missing_dev_environment_setup_refuses_by_name() {
+    let target = land_pair("rust", "github");
+    let config = target.path().join(".release-kit/config.toml");
+    let landed = std::fs::read_to_string(&config).expect("config exists");
+    for (answer, key) in [
+        (
+            dev_environment_answer("github").replace(
+                "nix-installer-action@90bb610b90bf290cad97484ba341453bd1cbefea",
+                "nix-installer-action@v19",
+            ),
+            "dev_environment.github.setup[0].uses",
+        ),
+        (
+            "\n[dev_environment]\nrun = \"nix develop --command\"\n".to_owned(),
+            "dev_environment.github.setup",
+        ),
+    ] {
+        std::fs::write(&config, format!("{landed}{answer}")).expect("config writes");
+        rk().args(["upgrade", "--apply", "--target"])
+            .arg(target.path())
+            .assert()
+            .failure()
+            .stderr(predicates::str::contains(key));
+    }
+}
+
+/// An empty prefix states that the project gives no answer: it clears a
+/// recorded one, and the release jobs render as they do with none.
+///
+/// SATISFIES target-config:a-dev-environment-is-a-recorded-answer
+#[test]
+fn an_empty_dev_environment_run_clears_the_recorded_answer() {
+    let target = land_pair("rust", "github");
+    let workflow_path = target.path().join(".github/workflows/release-plz.yml");
+    let authored = std::fs::read_to_string(&workflow_path).expect("the workflow landed");
+    let config = target.path().join(".release-kit/config.toml");
+    let landed = std::fs::read_to_string(&config).expect("config exists");
+    append_target_config(target.path(), &dev_environment_answer("github"));
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    std::fs::write(
+        &config,
+        format!("{landed}\n[dev_environment]\nrun = \"\"\n"),
+    )
+    .expect("config writes");
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    assert!(
+        read_manifest(target.path())["parameters"]
+            .get("dev_environment")
+            .is_none()
+    );
+    assert_eq!(
+        std::fs::read_to_string(&workflow_path).expect("the workflow reads"),
+        authored
+    );
+}
+
 /// The release gate's two answers resolve by the class P precedence: a
 /// flag over the committed configuration over a compatible record, with
 /// the convention's own pair last.
@@ -26620,6 +26817,7 @@ fn record_signature_line(
             security_response: params.security_response().to_owned(),
             required_check: params.required_check().to_owned(),
             required_workflow: params.required_workflow().to_owned(),
+            dev_environment: None,
         },
         files: vec![
             FileRecord {

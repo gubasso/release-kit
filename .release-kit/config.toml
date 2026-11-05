@@ -70,3 +70,17 @@ squash_option = "always" # F: invariant, the squash git.merge_form names: always
 squash_commit_template = "%{title}" # F: invariant, references title and description
 push_access_level = 40 # F: invariant, the level git.integration names
 merge_access_level = 40 # F: floor thirty
+
+# How a command runs in this project's development environment. The rust
+# release jobs run release-plz and the toolchain through it.
+[dev_environment]
+run = "nix develop --command"
+
+[[dev_environment.github.setup]]
+uses = "DeterminateSystems/nix-installer-action@90bb610b90bf290cad97484ba341453bd1cbefea"
+tag = "v19"
+
+[[dev_environment.github.cache]]
+uses = "DeterminateSystems/magic-nix-cache-action@565684385bcd71bad329742eefe8d12f2e765b39"
+tag = "v13"
+with = { use-flakehub = false, use-gha-cache = true }

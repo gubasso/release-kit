@@ -511,6 +511,7 @@ mod tests {
                                     security_response: crate::config::RESPONSE_DEFAULT.to_owned(),
                                     required_check: "gate".to_owned(),
                                     required_workflow: "ci".to_owned(),
+                                    dev_environment: None,
                                 },
                                 files: Vec::new(),
                                 pins: std::collections::BTreeMap::new(),

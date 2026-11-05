@@ -100,6 +100,10 @@
               pkgs.shellcheck
               pkgs.shfmt
               pkgs.jq
+              # The release jobs run release-plz from this shell, as
+              # .release-kit/config.toml records, so CI installs no release
+              # tool of its own.
+              pkgs.release-plz
             ];
           };
         }

@@ -1,0 +1,14 @@
+      # The release app commits and tags, so git takes its identity, read
+      # from the app token the way release-plz's own action reads it. gh is
+      # the runner's, never the project's: it carries the forge credential.
+      - name: configure git as the release app
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -eu
+          viewer="$(gh api graphql -f query='query { viewer { login databaseId name } }' --jq '.data.viewer | .login, .databaseId, (.name // "")')"
+          login="$(printf '%s\n' "$viewer" | sed -n 1p)"
+          id="$(printf '%s\n' "$viewer" | sed -n 2p)"
+          name="$(printf '%s\n' "$viewer" | sed -n 3p)"
+          git config --global user.name "${name:-$login}"
+          git config --global user.email "$id+$login@users.noreply.github.com"

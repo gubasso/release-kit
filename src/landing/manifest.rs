@@ -401,6 +401,35 @@ pub struct Parameters {
     /// predating the field reads as empty, for the same reason.
     #[serde(default)]
     pub required_workflow: String,
+    /// How a command runs in the project's own development environment,
+    /// absent where the project gives no answer. A record predating the
+    /// field reads as absent, which is what such a landing rendered, and a
+    /// record with no answer omits the key, so its bytes do not change.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "read_dev_environment"
+    )]
+    pub dev_environment: Option<crate::config::dev_environment::DevEnvironment>,
+}
+
+/// A recorded development environment, held to the configuration's own
+/// rules, because the record is the one input a re-render reads.
+fn read_dev_environment<'de, D: serde::Deserializer<'de>>(
+    reader: D,
+) -> Result<Option<crate::config::dev_environment::DevEnvironment>, D::Error> {
+    let answer = crate::config::dev_environment::DevEnvironment::deserialize(reader)?;
+    answer.check().map_err(|reason| {
+        serde::de::Error::custom(format!("parameters.dev_environment: {reason}"))
+    })?;
+    answer.answered().map_or_else(
+        || {
+            Err(serde::de::Error::custom(
+                "parameters.dev_environment: a recorded answer names a run prefix",
+            ))
+        },
+        |answer| Ok(Some(answer)),
+    )
 }
 
 /// The stance a record predating the field carries.
@@ -870,6 +899,7 @@ mod tests {
                 security_response: crate::config::RESPONSE_DEFAULT.to_owned(),
                 required_check: String::new(),
                 required_workflow: String::new(),
+                dev_environment: None,
             },
             files: vec![
                 FileRecord {
@@ -921,6 +951,7 @@ mod tests {
                 security_contact: String::new(),
                 security_response: crate::config::RESPONSE_DEFAULT.to_owned(),
                 required_check: String::new(),
+                dev_environment: None,
                 required_workflow: String::new(),
             },
             files: vec![],

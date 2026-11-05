@@ -1,6 +1,6 @@
 # Task: configure
 
-Change what a record selects, on a record at this binary's version: the Git workflow answers, the integration mode, the release style, and each opt-in capability. A changed answer is a landing at the same version with that answer as a flag. `rk upgrade` writes the answer back into `.release-kit/config.toml` with its comments kept, so never edit the configuration by hand.
+Change what a record selects, on a record at this binary's version: the Git workflow answers, the integration mode, the release style, and each opt-in capability. A changed answer is a landing at the same version with that answer as a flag. `rk upgrade` writes the answer back into `.release-kit/config.toml` with its comments kept, so never edit the configuration by hand. The `[dev_environment]` table is the one exception: no flag carries it, so the operator writes it.
 
 ## Pre-flight
 
@@ -13,6 +13,7 @@ Change what a record selects, on a record at this binary's version: the Git work
    - a capability turned on lands its files, and turned off leaves them as released files whose removal is asked. The Scorecard workflow posts to a public API, and `codeql` reads the declared licence;
    - the workflow guards: on lands the agent and commit policy lines, the glossary, the workflow hooks, and two setup steps, and off retires them the same way;
    - the required check, the required workflow, and the trunk name.
+4. Where the request is to run the release jobs in the project's own development environment, ask the operator for the answer: the command prefix, and the pinned steps or image that put the environment on the runner. Quote the matching example of `rk binding rust`, section "The development environment", as an example and never as a default. Read no manager file to propose a value. Before the landing, ask the operator to run `<run> release-plz --version` and to paste the output.
 
 ## Execution
 

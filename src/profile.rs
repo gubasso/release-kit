@@ -24,6 +24,7 @@ use std::collections::BTreeMap;
 use camino::Utf8Path;
 use serde::{Deserialize, Serialize};
 
+use crate::config::dev_environment::DevEnvironment;
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
 use crate::landing::manifest::{self, CheckoutMode, Integration, MergeForm, Provider, Style};
@@ -233,6 +234,7 @@ pub struct Params {
     security_response: String,
     required_check: String,
     required_workflow: String,
+    dev_environment: Option<DevEnvironment>,
 }
 
 /// Explicit invocation answers; absence falls through to configuration.
@@ -394,6 +396,7 @@ impl Params {
                 |(_, workflow)| workflow,
                 |parameters| &parameters.required_workflow,
             ),
+            dev_environment: record.parameters.dev_environment.clone(),
         }
     }
 
@@ -554,6 +557,13 @@ impl Params {
         &self.required_check
     }
 
+    /// How a command runs in the project's own development environment,
+    /// `None` where the project gives no answer.
+    #[must_use]
+    pub const fn dev_environment(&self) -> Option<&DevEnvironment> {
+        self.dev_environment.as_ref()
+    }
+
     /// The workflow whose completion wakes the release gate, empty where
     /// this target renders no gate that waits on one.
     #[must_use]
@@ -707,6 +717,7 @@ impl Params {
             security_response: crate::config::RESPONSE_DEFAULT.to_owned(),
             required_check: "gate".to_owned(),
             required_workflow: "ci".to_owned(),
+            dev_environment: None,
         }
     }
 
@@ -1425,6 +1436,25 @@ pub fn resolve(
     ])
     .unwrap_or((String::new(), Source::Default));
     sources.insert("setup.required_workflow", source);
+    // The development environment has no flag and no observation: only the
+    // operator answers it, and nothing reads a manager file to propose one.
+    // A table whose run is empty states no answer and clears the record's.
+    let recorded = || {
+        record
+            .and_then(|r| r.parameters.dev_environment.clone())
+            .map_or((None, Source::Default), |answer| {
+                (Some(answer), Source::Record)
+            })
+    };
+    let (dev_environment, source) = config
+        .and_then(|c| c.dev_environment.clone())
+        .map_or_else(recorded, |answer| (answer.answered(), Source::Config));
+    if let Some(answer) = &dev_environment {
+        answer
+            .check_forge(forge.as_deref())
+            .map_err(crate::config::invalid)?;
+    }
+    sources.insert("dev_environment", source);
     // GitLab requires the whole pipeline through one project setting and
     // names no individual check, so neither answer has a reader there.
     // Refusing the flag says that; discarding it silently would let an
@@ -1478,6 +1508,7 @@ pub fn resolve(
             security_response,
             required_check,
             required_workflow,
+            dev_environment,
         },
         sources,
         unknown,

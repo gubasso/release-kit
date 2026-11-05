@@ -65,11 +65,15 @@ project-jobs:
 
 .release-plz:
   stage: release
+# RK_DEV_ENV_IMAGE_BEGIN
   image: rust:1
+# RK_DEV_ENV_IMAGE_END
   variables:
     GIT_DEPTH: "0"
+# RK_DEV_ENV_SCRIPT_BEGIN
   before_script:
     - curl -fsSL "https://github.com/release-plz/release-plz/releases/download/release-plz-v0.3.160/release-plz-x86_64-unknown-linux-gnu.tar.gz" | tar -xz -C /usr/local/bin
+# RK_DEV_ENV_SCRIPT_END
 
 # The release request: the version bump and the changelog, as one merge
 # request against the pushed branch. Force-push refresh is unavailable on
@@ -84,7 +88,7 @@ release-request:
   variables:
     RELEASE_STYLE: RK_STYLE
   script:
-    - release-plz release-pr --forge gitlab --git-token "$RELEASE_BOT_TOKEN"
+    - RK_DEV_RUN release-plz release-pr --forge gitlab --git-token "$RELEASE_BOT_TOKEN"
     - |
       set -eu
       # The trunk style's standing arm. It dies with the request it was made
@@ -137,6 +141,6 @@ release:
         -d "{\"jwt\":\"$CRATES_IO_ID_TOKEN\"}")"
       CARGO_REGISTRY_TOKEN="$(printf '%s' "$response" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')"
       export CARGO_REGISTRY_TOKEN
-      release-plz release --forge gitlab --git-token "$RELEASE_BOT_TOKEN"
+      RK_DEV_RUN release-plz release --forge gitlab --git-token "$RELEASE_BOT_TOKEN"
       curl -fsS -X DELETE "https://crates.io/api/v1/trusted_publishing/tokens" \
         -H "Authorization: Bearer $CARGO_REGISTRY_TOKEN" || true

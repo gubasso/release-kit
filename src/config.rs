@@ -4,6 +4,7 @@
 //!
 //! SATISFIES project-profile:the-target-configuration-is-typed-by-domain
 
+pub mod dev_environment;
 pub mod floors;
 pub mod migrate;
 
@@ -49,6 +50,8 @@ pub struct Config {
     pub protection: Protection,
     /// How every host obtains `rk`, where no manager file pins it.
     pub acquisition: Option<Acquisition>,
+    /// How a command runs in the project's own development environment.
+    pub dev_environment: Option<dev_environment::DevEnvironment>,
 }
 
 impl Default for Config {
@@ -64,6 +67,7 @@ impl Default for Config {
             setup: Setup::default(),
             protection: Protection::default(),
             acquisition: None,
+            dev_environment: None,
         }
     }
 }
@@ -649,6 +653,9 @@ fn parse(text: &str) -> Result<Config, RkError> {
             acquisition.minimum,
             env!("CARGO_PKG_VERSION")
         )));
+    }
+    if let Some(answer) = &config.dev_environment {
+        answer.check().map_err(invalid)?;
     }
     migration_key(&config)?;
     floors::check(&config)?;
@@ -2071,7 +2078,7 @@ pub fn pending(config: &Config, record: &crate::landing::manifest::Manifest) -> 
         .filter(|(key, _)| !DERIVED_POLICY_KEYS.contains(key))
         .map(|(key, value)| (*key, render(value)))
         .collect();
-    parameter_values(config)
+    let mut keys: Vec<String> = parameter_values(config)
         .into_iter()
         .filter(|(key, _)| !DERIVED_POLICY_KEYS.contains(key))
         .map(|(key, value)| (key, render(&value)))
@@ -2081,7 +2088,16 @@ pub fn pending(config: &Config, record: &crate::landing::manifest::Manifest) -> 
                 .any(|(other, old)| key == other && value != old)
         })
         .map(|(key, _)| key.to_owned())
-        .collect()
+        .collect();
+    // The development environment is a table the operator writes by hand
+    // and the landing never rewrites, so it is pending wherever the file
+    // states an answer the record does not carry.
+    if let Some(answer) = &config.dev_environment
+        && answer.clone().answered() != record.parameters.dev_environment
+    {
+        keys.push("dev_environment".to_owned());
+    }
+    keys
 }
 
 /// The compiled protection floors a locally integrated trunk carries.

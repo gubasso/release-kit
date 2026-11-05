@@ -1,0 +1,12 @@
+RK_DEV_SETUP_STEPSRK_DEV_GIT_USER
+      # release-plz and the toolchain come from the project's development
+      # environment, through the prefix the project records. The binary
+      # issues the crates.io token itself over OIDC, from the job's own
+      # environment, which the prefix keeps.
+      - name: release
+        id: release
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -eu
+          RK_DEV_RUN release-plz release --git-token "$GITHUB_TOKEN" -o json

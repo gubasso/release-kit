@@ -18,6 +18,7 @@
   - [`target-config:an-unanswered-key-is-absent-and-not-empty` — An unanswered key is absent and not empty](#target-configan-unanswered-key-is-absent-and-not-empty--an-unanswered-key-is-absent-and-not-empty)
   - [`target-config:an-untaken-config-is-reported-and-not-judged` — An untaken config is reported and not judged](#target-configan-untaken-config-is-reported-and-not-judged--an-untaken-config-is-reported-and-not-judged)
   - [`target-config:a-host-install-is-a-recorded-answer` — A host install is a recorded answer](#target-configa-host-install-is-a-recorded-answer--a-host-install-is-a-recorded-answer)
+  - [`target-config:a-dev-environment-is-a-recorded-answer` — A dev environment is a recorded answer](#target-configa-dev-environment-is-a-recorded-answer--a-dev-environment-is-a-recorded-answer)
   - [`target-config:an-open-migration-is-one-top-level-key` — An open migration is one top-level key](#target-configan-open-migration-is-one-top-level-key--an-open-migration-is-one-top-level-key)
 
 <!--TOC-->
@@ -253,6 +254,26 @@ A manager file records its own pin, so the table exists only for the one method 
 - THEN it refuses as `config-invalid` naming `acquisition.minimum`, and nothing is written
 
 Verify: `cargo nextest run -E 'test(a_malformed_acquisition_minimum_refuses_as_config_invalid) or test(a_host_answer_survives_the_landing_and_keeps_the_configuration)'`
+
+### `target-config:a-dev-environment-is-a-recorded-answer` — A dev environment is a recorded answer
+
+Where a project runs its tools in its own development environment, the configuration MAY record how in the `dev_environment` table: `run`, the command prefix, `github.setup` and `github.cache`, the action steps that put the environment on a runner, and `gitlab.image` and `gitlab.before_script`. Only the operator writes the table, and a landing verb MUST NOT infer it from a file the target carries, because release-kit assumes no environment manager. The resolution MUST take the table over the record, record the answer, and keep the table on every rewrite. A `run` that is empty MUST state that the project gives no answer and clear a recorded one.
+
+Every action step MUST pin `uses` to a full commit SHA. An unpinned step, a `run` that cannot stand in one shell line and one plain YAML scalar, and a `run` with no setup for the landed forge MUST refuse as `config-invalid` and name the key. With an answer, the rendered rust release jobs MUST run release-plz through `run`, take the setup steps, and install no toolchain and no release-plz themselves, and only the job that holds no publishing credential MUST take the cache steps. With no answer, every rendered byte MUST equal the rendering before the table existed.
+
+#### Scenario: A project records its development environment
+
+- GIVEN a GitHub rust target whose configuration records `run`, one pinned setup step, and one pinned cache step
+- WHEN `rk upgrade --apply` runs
+- THEN both release jobs run release-plz through the prefix after the setup step, only the request job takes the cache step, and the record carries the answer
+
+#### Scenario: A setup step is not pinned
+
+- GIVEN a configuration whose `dev_environment.github.setup` step names `owner/action@v19`
+- WHEN any verb that reads the configuration runs
+- THEN it refuses as `config-invalid` naming `dev_environment.github.setup[0].uses`, and nothing is written
+
+Verify: `cargo nextest run -E 'test(dev_environment)'`
 
 ### `target-config:an-open-migration-is-one-top-level-key` — An open migration is one top-level key
 

@@ -1,6 +1,6 @@
 {
   "schema_version": 12,
-  "rk_version": "0.9.2",
+  "rk_version": "0.9.3",
   "origin": "adopt",
   "landed_at": "2026-08-30T00:14:29Z",
   "profile": {
@@ -33,7 +33,28 @@
     "security_contact": "",
     "security_response": "best-effort",
     "required_check": "gate",
-    "required_workflow": "ci"
+    "required_workflow": "ci",
+    "dev_environment": {
+      "run": "nix develop --command",
+      "github": {
+        "setup": [
+          {
+            "uses": "DeterminateSystems/nix-installer-action@90bb610b90bf290cad97484ba341453bd1cbefea",
+            "tag": "v19"
+          }
+        ],
+        "cache": [
+          {
+            "uses": "DeterminateSystems/magic-nix-cache-action@565684385bcd71bad329742eefe8d12f2e765b39",
+            "tag": "v13",
+            "with": {
+              "use-flakehub": false,
+              "use-gha-cache": true
+            }
+          }
+        ]
+      }
+    }
   },
   "files": [
     {
@@ -49,7 +70,7 @@
     {
       "destination": ".github/workflows/release-plz.yml",
       "kind": "rendered",
-      "sha256": "0153222618886e7d40f8ac005c2480a266857e8a30d6efce9eeb5ea42c5bba59"
+      "sha256": "a0b9f7057c9fb5ea7723fb1bde70964955f88c882f9a9430998f240b7cf4d25d"
     },
     {
       "destination": ".github/workflows/scorecard.yml",

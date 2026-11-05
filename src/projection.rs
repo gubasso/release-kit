@@ -31,6 +31,7 @@
 pub mod evidence;
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 use serde::{Deserialize, Serialize};
 
@@ -1374,6 +1375,128 @@ fn release_gate_replacements(params: &Params) -> Result<[Option<Vec<u8>>; 3], Rk
     ])
 }
 
+/// The run prefix a release job calls a project tool through.
+///
+/// It renders as the recorded development environment's prefix and one
+/// space, or as nothing where the project gives no answer. It carries its
+/// trailing space so an unanswered rendering leaves the authored line
+/// exactly.
+pub const DEV_RUN_TOKEN: &[u8] = b"RK_DEV_RUN ";
+
+/// The setup steps a release job takes before its first project tool,
+/// rendered from the recorded answer.
+pub const DEV_SETUP_STEPS_TOKEN: &[u8] = b"RK_DEV_SETUP_STEPS";
+
+/// Where a GitHub release job's git identity step composes in.
+pub const DEV_GIT_USER_TOKEN: &[u8] = b"RK_DEV_GIT_USER";
+
+/// The GitHub release half under a recorded development environment.
+pub const DEV_ENVIRONMENT_RELEASE: &str = "blocks/dev-environment-release.yaml.in";
+
+/// The GitHub request half under a recorded development environment.
+pub const DEV_ENVIRONMENT_REQUEST: &str = "blocks/dev-environment-request.yaml.in";
+
+/// The git identity step both GitHub halves take under a recorded
+/// development environment.
+pub const DEV_ENVIRONMENT_GIT_USER: &str = "blocks/dev-environment-git-user.yaml.in";
+
+/// The four replaceable spans a recorded development environment answers.
+///
+/// Each is an ordered begin and end marker: the GitHub release half's
+/// tool steps, the GitHub request half's tool steps, the GitLab release
+/// template's image, and its tool download.
+///
+/// The markers are YAML comments at column zero carrying the newline in
+/// front of them, so a landing with no answer strips the pairs and leaves
+/// the authored bytes exactly.
+pub const DEV_ENVIRONMENT_SPANS: [(&[u8], &[u8]); 4] = [
+    (
+        b"\n# RK_DEV_ENV_RELEASE_BEGIN",
+        b"\n# RK_DEV_ENV_RELEASE_END",
+    ),
+    (
+        b"\n# RK_DEV_ENV_REQUEST_BEGIN",
+        b"\n# RK_DEV_ENV_REQUEST_END",
+    ),
+    (b"\n# RK_DEV_ENV_IMAGE_BEGIN", b"\n# RK_DEV_ENV_IMAGE_END"),
+    (b"\n# RK_DEV_ENV_SCRIPT_BEGIN", b"\n# RK_DEV_ENV_SCRIPT_END"),
+];
+
+/// One recorded action step as workflow lines, each ending in a newline,
+/// at a job's step indentation.
+fn action_step_lines(step: &crate::config::dev_environment::ActionStep) -> String {
+    let mut lines = format!("      - uses: {}", step.uses);
+    if !step.tag.is_empty() {
+        lines.push_str(" # ");
+        lines.push_str(&step.tag);
+    }
+    lines.push('\n');
+    if !step.inputs.is_empty() {
+        lines.push_str("        with:\n");
+        for (name, value) in &step.inputs {
+            let _ = writeln!(lines, "          {name}: {}", value.yaml());
+        }
+    }
+    lines
+}
+
+/// The replacement for each development environment span under one
+/// parameter set, or `None` where the authored steps stand.
+///
+/// A recorded answer replaces the toolchain and the release-plz action in
+/// both GitHub halves with the recorded setup and a direct run through the
+/// prefix, and replaces the GitLab image and download with the recorded
+/// image and setup lines. The cache steps join the request half alone: the
+/// release half publishes over OIDC and holds a write token, and a cache
+/// any other workflow writes must not feed it.
+///
+/// The operator's values enter after every token has substituted, so a
+/// value that happens to spell a token lands literally.
+///
+/// # Errors
+///
+/// A block this binary does not embed, a defect in the binary.
+fn dev_environment_replacements(params: &Params) -> Result<[Option<Vec<u8>>; 4], RkError> {
+    let Some(answer) = params.dev_environment() else {
+        return Ok([None, None, None, None]);
+    };
+    let git_user = embedded_block(DEV_ENVIRONMENT_GIT_USER)?.trim_end_matches('\n');
+    let half = |block: &str, steps: &[&crate::config::dev_environment::ActionStep]| {
+        let text = embedded_block(block)?.trim_end_matches('\n');
+        let text = substitute(text.as_bytes(), DEV_GIT_USER_TOKEN, git_user.as_bytes());
+        let text = substitute_tokens(&text, params);
+        let lines: String = steps.iter().map(|step| action_step_lines(step)).collect();
+        let mut out = b"\n".to_vec();
+        out.extend(substitute(&text, DEV_SETUP_STEPS_TOKEN, lines.as_bytes()));
+        Ok::<_, RkError>(out)
+    };
+    let release: Vec<_> = answer.github.setup.iter().collect();
+    let request: Vec<_> = answer
+        .github
+        .setup
+        .iter()
+        .chain(&answer.github.cache)
+        .collect();
+    let image = (!answer.gitlab.image.is_empty())
+        .then(|| format!("\n  image: {}", answer.gitlab.image).into_bytes());
+    let script = if answer.gitlab.before_script.is_empty() {
+        Vec::new()
+    } else {
+        let mut lines = "\n  before_script:".to_owned();
+        for line in &answer.gitlab.before_script {
+            lines.push_str("\n    - ");
+            lines.push_str(&serde_json::Value::String(line.clone()).to_string());
+        }
+        lines.into_bytes()
+    };
+    Ok([
+        Some(half(DEV_ENVIRONMENT_RELEASE, &release)?),
+        Some(half(DEV_ENVIRONMENT_REQUEST, &request)?),
+        image,
+        Some(script),
+    ])
+}
+
 /// The three replaceable spans of a landed security policy, each as its
 /// ordered begin and end marker.
 ///
@@ -1472,6 +1595,12 @@ pub fn render(baseline: &[u8], params: &Params) -> Vec<u8> {
             out = replace_span(&out, begin, end, value.as_deref());
         }
     }
+    // The development environment's spans resolve in the same place. A
+    // block this binary cannot read leaves the authored steps standing.
+    let environment = dev_environment_replacements(params).unwrap_or_default();
+    for ((begin, end), value) in DEV_ENVIRONMENT_SPANS.iter().zip(environment) {
+        out = replace_span(&out, begin, end, value.as_deref());
+    }
     for ((begin, end), value) in SECURITY_SPANS.iter().zip(security_replacements(params)) {
         out = replace_span(&out, begin, end, value.as_deref());
     }
@@ -1542,6 +1671,13 @@ fn substitute_tokens(baseline: &[u8], params: &Params) -> Vec<u8> {
     };
     out = substitute(&out, PUSH_GUARD_TOKEN, guard);
     out = substitute(&out, REPO_TOKEN, repo.as_bytes());
+    // The run prefix substitutes last, so a recorded prefix that happens
+    // to spell a token lands literally.
+    let run = params
+        .dev_environment()
+        .map(|answer| format!("{} ", answer.run))
+        .unwrap_or_default();
+    out = substitute(&out, DEV_RUN_TOKEN, run.as_bytes());
     out
 }
 

@@ -132,6 +132,10 @@ pub struct Parameters {
     /// nothing answered it.
     #[serde(default)]
     pub required_workflow: String,
+    /// How a command runs in the project's development environment,
+    /// absent where the project gives no answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dev_environment: Option<crate::config::dev_environment::DevEnvironment>,
 }
 
 impl From<&Params> for Parameters {
@@ -145,6 +149,7 @@ impl From<&Params> for Parameters {
             security_response: params.security_response().to_owned(),
             required_check: params.required_check().to_owned(),
             required_workflow: params.required_workflow().to_owned(),
+            dev_environment: params.dev_environment().cloned(),
         }
     }
 }
@@ -979,6 +984,7 @@ mod tests {
             security_contact: String::new(),
             required_check: String::new(),
             required_workflow: String::new(),
+            dev_environment: None,
             security_response: "best-effort".into(),
         }
     }

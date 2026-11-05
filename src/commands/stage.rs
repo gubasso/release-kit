@@ -351,6 +351,7 @@ mod tests {
                 security_contact: String::new(),
                 required_check: String::new(),
                 required_workflow: String::new(),
+                dev_environment: None,
                 security_response: "best-effort".into(),
             },
             capabilities: vec![],

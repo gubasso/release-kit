@@ -955,6 +955,7 @@ fn receipt(
             security_response: params.security_response().to_owned(),
             required_check: params.required_check().to_owned(),
             required_workflow: params.required_workflow().to_owned(),
+            dev_environment: params.dev_environment().cloned(),
         },
         files,
         pins: crate::registry::pins_for(&projection.capabilities)

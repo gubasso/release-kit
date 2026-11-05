@@ -23,6 +23,66 @@ The tag push retriggers `release.yml` only because the publish jobs authenticate
 
 On GitLab, `.gitlab-ci.yml` is the one landed pipeline, and a project declares its own jobs in `.gitlab/ci/project.yml`, which the rendered parent triggers as a child pipeline; [the forge document](../forges/gitlab.md) carries the rules that file follows.
 
+### The development environment
+
+By default, each release job installs its own tools: `dtolnay/rust-toolchain` and `release-plz/action` on GitHub, and the `rust:1` image with a downloaded release-plz binary on GitLab. A project whose rule is that CI installs no project tool outside its own development environment records how a command runs there, in the `[dev_environment]` table of `.release-kit/config.toml`. release-kit assumes no environment manager and reads none from a file the target carries. The operator writes the table, and the next `rk upgrade --apply` renders the release jobs through it. With no table, the jobs render as they did before the table existed.
+
+| Key                    | What it holds                                                                                                                                                              |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `run`                  | The command prefix, such as `nix develop --command`, `mise exec --`, or `devbox run --`. An empty `run` states that the project gives no answer and clears a recorded one. |
+| `github.setup`         | The action steps that put the environment on a GitHub runner, in both release jobs.                                                                                        |
+| `github.cache`         | The action steps that cache it, in the release-request job only.                                                                                                           |
+| `gitlab.image`         | The image of the GitLab release jobs.                                                                                                                                      |
+| `gitlab.before_script` | Lines those jobs run first, where the image needs them.                                                                                                                    |
+
+Each step is `uses`, pinned to a full commit SHA, an optional `tag` that renders as the trailing comment, and optional `with` inputs. An unpinned reference refuses as `config-invalid` and names its key. A `run` with no `github.setup` refuses on GitHub, and one with no `gitlab.image` refuses on GitLab.
+
+The cache stays out of the publishing job. That job holds `id-token: write` and a contents token, and any workflow that writes the same cache could feed it.
+
+With an answer, the release jobs run `release-plz release` and `release-plz release-pr` through the prefix, and set the git identity of the release app with the runner's `gh`. The environment carries what the action installed before:
+
+- release-plz and the Rust toolchain.
+- `cargo-semver-checks`, where `release-plz.toml` sets `semver_check = true`.
+
+The prefix keeps the caller's environment, because release-plz reads the GitHub OIDC variables to issue its crates.io token. `nix develop`, `mise exec`, and `devbox run` keep it. On GitLab, the image carries `curl` and `sed`, which the token exchange and the request arm call outside the prefix.
+
+Before the first release under the answer, prove that the environment carries release-plz:
+
+```bash
+nix develop --command release-plz --version
+# check: prints the release-plz version
+```
+
+Two example answers follow. The Nix answer is complete, with the pins this release reviewed. The mise answer shows the shape, and you fill in the pin of the release you review.
+
+```toml
+[dev_environment]
+run = "nix develop --command"
+
+[[dev_environment.github.setup]]
+uses = "DeterminateSystems/nix-installer-action@90bb610b90bf290cad97484ba341453bd1cbefea"
+tag = "v19"
+
+[[dev_environment.github.cache]]
+uses = "DeterminateSystems/magic-nix-cache-action@565684385bcd71bad329742eefe8d12f2e765b39"
+tag = "v13"
+with = { use-flakehub = false, use-gha-cache = true }
+
+[dev_environment.gitlab]
+image = "nixos/nix:2.35.2"
+```
+
+On GitLab, the official `nixos/nix` image enables neither `nix-command` nor `flakes`. There, `run` carries `--extra-experimental-features 'nix-command flakes'` as the first option after `nix`.
+
+```toml
+[dev_environment]
+run = "mise exec --"
+
+[[dev_environment.github.setup]]
+uses = "jdx/mise-action@<commit of the release you review>"
+tag = "<that release>"
+```
+
 ## The changelog
 
 release-plz writes `CHANGELOG.md` in its own form, and the seeded `release-plz.toml` carries no `[changelog]` section. Do not add one to satisfy a formatter or a prose gate: exclude the changelog from those checks, as [generated files](./README.md#generated-files) says, together with the other files that the landing and cargo-dist write.
