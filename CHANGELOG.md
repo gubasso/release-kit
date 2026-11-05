@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.4](https://github.com/gubasso/release-kit/compare/v0.9.3...v0.9.4) - 2026-11-05
+
+### Added
+
+- *(landing)* run the rust release jobs through a recorded dev environment
+
 ## [0.9.3](https://github.com/gubasso/release-kit/compare/v0.9.2...v0.9.3) - 2026-11-03
 
 ### Other
