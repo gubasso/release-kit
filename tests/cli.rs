@@ -23713,6 +23713,101 @@ fn a_committed_contact_lands_in_both_forge_policies() {
     }
 }
 
+/// Every template comment of `text` aligned to one column per table, and
+/// every one-line array split one element per line: the form a TOML
+/// formatter such as taplo gives the file.
+fn formatter_form(text: &str) -> String {
+    let mut out = String::new();
+    let mut block: Vec<(String, String)> = Vec::new();
+    let flush = |block: &mut Vec<(String, String)>, out: &mut String| {
+        let width = block.iter().map(|(code, _)| code.len()).max().unwrap_or(0);
+        for (code, comment) in block.drain(..) {
+            out.push_str(&code);
+            out.push_str(&" ".repeat(width - code.len() + 1));
+            out.push_str(&comment);
+            out.push('\n');
+        }
+    };
+    for line in text.lines() {
+        match line.split_once(" # ") {
+            Some((code, comment)) if !line.starts_with('#') && !line.starts_with('[') => {
+                let code = match code.split_once(" = [") {
+                    Some((key, rest)) if rest.ends_with(']') && rest.len() > 1 => {
+                        let items = rest.trim_end_matches(']');
+                        let mut split = String::new();
+                        for item in items.split(", ") {
+                            split.push_str("  ");
+                            split.push_str(item);
+                            split.push_str(",\n");
+                        }
+                        format!("{key} = [\n{split}]")
+                    }
+                    _ => code.to_owned(),
+                };
+                block.push((code, format!("# {comment}")));
+            }
+            _ => {
+                flush(&mut block, &mut out);
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+    }
+    flush(&mut block, &mut out);
+    out
+}
+
+/// A configuration that a formatter aligned survives an upgrade byte for
+/// byte where no answer changed, and a changed answer rewrites its own
+/// value alone, keeping the padding in front of its comment.
+///
+/// SATISFIES target-config:a-flag-overrides-and-a-landing-writes-back
+#[test]
+fn an_upgrade_keeps_the_form_a_formatter_gave_the_configuration() {
+    let target = land_pair("rust", "github");
+    let path = target.path().join(".release-kit/config.toml");
+    let landed = std::fs::read_to_string(&path).expect("config exists");
+    let formatted = formatter_form(&landed);
+    assert_ne!(formatted, landed, "the formatter changed the form");
+    assert!(
+        formatted.contains("technologies = [\n  \"rust\",\n]"),
+        "{formatted}"
+    );
+    std::fs::write(&path, &formatted).expect("config writes");
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("config reads"),
+        formatted
+    );
+
+    rk().args(["upgrade", "--apply", "--style", "lines", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let changed = std::fs::read_to_string(&path).expect("config reads");
+    let before: Vec<&str> = formatted.lines().collect();
+    let after: Vec<&str> = changed.lines().collect();
+    assert_eq!(before.len(), after.len(), "{changed}");
+    let differing: Vec<(&&str, &&str)> = before
+        .iter()
+        .zip(&after)
+        .filter(|(old, new)| old != new)
+        .collect();
+    assert_eq!(differing.len(), 1, "{differing:?}");
+    let (old, new) = differing[0];
+    assert!(old.starts_with("style = \"trunk\""), "{old}");
+    assert!(new.starts_with("style = \"lines\""), "{new}");
+    let padding = |line: &str| line.find(" # ").map(|at| line[..at].trim_end().len());
+    assert_eq!(
+        old.find("# P:").map(|at| at - padding(old).unwrap_or(0)),
+        new.find("# P:").map(|at| at - padding(new).unwrap_or(0)),
+        "the comment keeps the padding the file carried: {new}"
+    );
+}
+
 /// A development environment answer for the rust pair on `forge`, in
 /// the shape the binding's Nix example gives.
 fn dev_environment_answer(forge: &str) -> String {

@@ -67,7 +67,7 @@ Verify: `cargo nextest run -E 'test(config) or test(params_from_a_record) or tes
 
 ### `target-config:a-flag-overrides-and-a-landing-writes-back` — A flag overrides and a landing writes back
 
-When a landing applies a class P invocation flag, the verb MUST write that key back through the comment-preserving editor, with class N names and class F policy left to their use-time readers. Exactly three class F keys are excepted, because `git.integration` decides them and a configuration carrying one authority's keys beside the other's mode is one its own floor table refuses: `protection.bypass_actors`, `protection.owned_trunk_rules`, and `protection.gitlab.push_access_level` travel with that parameter where they still match a compiled authority's tuple, keep whatever a target narrowed or widened them to otherwise, and are excluded from the comparison that reports untaken configuration, because the record holds no baseline for a floored policy. Every write of the configuration MUST refuse, writing nothing, where `.release-kit` or `.release-kit/config.toml` is a symlink or of another kind, because a write through one would land outside the target.
+When a landing applies a class P invocation flag, the verb MUST write that key back through the comment-preserving editor, with class N names and class F policy left to their use-time readers. Exactly three class F keys are excepted, because `git.integration` decides them and a configuration carrying one authority's keys beside the other's mode is one its own floor table refuses: `protection.bypass_actors`, `protection.owned_trunk_rules`, and `protection.gitlab.push_access_level` travel with that parameter where they still match a compiled authority's tuple, keep whatever a target narrowed or widened them to otherwise, and are excluded from the comparison that reports untaken configuration, because the record holds no baseline for a floored policy. Every write of the configuration MUST refuse, writing nothing, where `.release-kit` or `.release-kit/config.toml` is a symlink or of another kind, because a write through one would land outside the target. A write to an existing configuration MUST keep every byte outside the keys it changes, the whitespace in front of a comment and the layout of an array included, so a project's own formatter runs once and no landing undoes it. A key the write adds takes the template's form: one key per line, one space before its class comment, and one blank line between tables.
 
 #### Scenario: The configuration directory is a symlink
 
@@ -81,13 +81,19 @@ When a landing applies a class P invocation flag, the verb MUST write that key b
 - WHEN a landing resolves the other authority
 - THEN all three keys are written to that authority's tuple, the configuration passes its own floor table, and status reports it aligned
 
+#### Scenario: A formatter aligned the configuration
+
+- GIVEN a configuration whose comments a formatter aligned and whose arrays it split
+- WHEN an upgrade applies with no changed answer, and again with a changed style
+- THEN the first leaves the file byte for byte, and the second changes the style's value alone, after the padding the file carried
+
 #### Scenario: A style flag overrides a commented key
 
 - GIVEN a commented `profile.release.style` value
 - WHEN a landing applies a different style flag
 - THEN the config carries the flag value and retains its comments and table ordering
 
-Verify: `cargo nextest run -E 'test(config) or test(params_from_a_record) or test(a_schema_1_config_migrates_into_its_domains)'`
+Verify: `cargo nextest run -E 'test(config) or test(params_from_a_record) or test(a_schema_1_config_migrates_into_its_domains) or test(an_upgrade_keeps_the_form_a_formatter_gave_the_configuration)'`
 
 ### `target-config:an-absent-config-changes-nothing` — An absent config changes nothing
 

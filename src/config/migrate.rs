@@ -94,11 +94,20 @@ fn refresh_comment(document: &mut DocumentMut, path: &[&str], add_missing: bool)
         return false;
     };
     let current = value.decor().suffix().and_then(|raw| raw.as_str());
-    if current == Some(comment.as_str()) {
+    // The whitespace in front of a comment is the file's form, which a
+    // project's formatter may have set: alignment is not a stale comment.
+    if current.map(str::trim_start) == Some(comment.trim_start()) {
         return false;
     }
-    if (current.is_none() && add_missing) || templated(current) {
+    if current.is_none() && add_missing {
         value.decor_mut().set_suffix(comment);
+        return true;
+    }
+    if let Some(current) = current.filter(|current| templated(Some(current))) {
+        let padding = &current[..current.len() - current.trim_start().len()];
+        let padding = if padding.is_empty() { " " } else { padding };
+        let refreshed = format!("{padding}{}", comment.trim_start());
+        value.decor_mut().set_suffix(refreshed);
         return true;
     }
     false
@@ -394,7 +403,27 @@ pub fn to_schema_2(text: &str) -> Result<String, RkError> {
 
 #[cfg(test)]
 mod tests {
-    use super::to_schema_2;
+    use super::{refresh_comments, to_schema_2};
+
+    /// A template comment a formatter padded is current, and a reworded
+    /// one refreshes after the padding the file carries, while the
+    /// operator's own comment is never touched.
+    #[test]
+    fn a_refresh_keeps_the_padding_in_front_of_a_comment() {
+        let aligned =
+            "[profile.release]\nmode = \"automatic\"       # P: automatic, external, or none\n";
+        let mut document = aligned.parse::<toml_edit::DocumentMut>().expect("parses");
+        assert!(!refresh_comments(&mut document));
+        assert_eq!(document.to_string(), aligned);
+
+        let stale = "[profile.release]\nmode = \"automatic\"       # P: an older sentence\nstyle = \"trunk\" # the operator's note\n";
+        let mut document = stale.parse::<toml_edit::DocumentMut>().expect("parses");
+        assert!(refresh_comments(&mut document));
+        assert_eq!(
+            document.to_string(),
+            "[profile.release]\nmode = \"automatic\"       # P: automatic, external, or none\nstyle = \"trunk\" # the operator's note\n"
+        );
+    }
 
     /// Every moved key keeps its trailing comment, the mode values rename,
     /// the reporting policy appears, and the unmoved tables survive.
