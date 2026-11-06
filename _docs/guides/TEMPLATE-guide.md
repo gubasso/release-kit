@@ -1,6 +1,6 @@
 # Template — Guide
 
-Copy the block below to `<root>/guides/<topic>/<task>.md`. A guide is executed rather than read: every step is one imperative action carrying its check, and the reader never guesses a field or a value.
+Copy the block below to `_docs/guides/<topic>/<task>.md`. A guide is executed rather than read: every step is one imperative action carrying its check, and the reader never guesses a field or a value.
 
 ````markdown
 # <Imperative title naming the task>

@@ -12,12 +12,13 @@
   - [`guides:a-divergent-result-names-its-destination` — A divergent result names its destination](#guidesa-divergent-result-names-its-destination--a-divergent-result-names-its-destination)
   - [`guides:an-external-fact-is-verified-upstream` — An external fact is verified upstream](#guidesan-external-fact-is-verified-upstream--an-external-fact-is-verified-upstream)
   - [`guides:citations-live-in-the-reference-zone` — Citations live in the reference zone](#guidescitations-live-in-the-reference-zone--citations-live-in-the-reference-zone)
+- [Unenforced](#unenforced)
 
 <!--TOC-->
 
 ## Purpose
 
-Rules governing step-by-step guides — the documents a reader executes rather than reads. Covers the step, its check, its ordering, and the upstream sources behind the facts a guide states. The markdown a guide is written in belongs to `SPEC-docs-format.md`; where a guide is placed and named belongs to `SPEC-docs-foundations.md`.
+Rules governing step-by-step guides: the documents a reader executes rather than reads. Covers the step, its check, its ordering, and the upstream sources behind the facts a guide states. The markdown a guide is written in belongs to `SPEC-docs-format.md`. Where a guide is placed and named belongs to `SPEC-docs-foundations.md`.
 
 ## Requirements
 
@@ -35,7 +36,7 @@ Verify: reviewer confirms each step carries a check stating what a correct resul
 
 ### `guides:a-manual-step-enumerates-its-interaction` — A manual step enumerates its interaction
 
-Where a step is performed in an interface rather than a shell, the author MUST enumerate every field, control, and value the reader sets as sub-items of the step.
+Where a step uses an interface rather than a shell, the author MUST enumerate as its sub-items every field, control, and value the reader sets.
 
 #### Scenario: A form carries more choices than the guide names
 
@@ -83,7 +84,7 @@ Verify: reviewer confirms each step is one imperative action
 
 ### `guides:a-divergent-result-names-its-destination` — A divergent result names its destination
 
-Where a rerun or a known failure produces a result other than the check, the author MUST state the condition and where the reader goes next.
+Where a rerun or known failure produces a result other than the check, the author MUST state the condition and where the reader goes next.
 
 #### Scenario: A rerun prints something the check does not name
 
@@ -95,7 +96,7 @@ Verify: reviewer confirms each known divergence states its condition and its des
 
 ### `guides:an-external-fact-is-verified-upstream` — An external fact is verified upstream
 
-Where a guide states a fact an upstream owns — an interface field, a tool's behavior, a default — the author MUST verify it against the official upstream source before stating it.
+Where a guide states a fact an upstream owns (an interface field, a tool's behavior, a default), the author MUST verify it against the official upstream source before stating it.
 
 #### Scenario: A form is described from memory
 
@@ -107,7 +108,7 @@ Verify: reviewer confirms each upstream-owned fact was checked against the offic
 
 ### `guides:citations-live-in-the-reference-zone` — Citations live in the reference zone
 
-Where a fact rests on an upstream source, the author MUST record the citation as a dated entry in the reference zone that the guide links, keeping the guide itself lean.
+Where a fact rests on an upstream source, the author MUST record a dated citation in the reference zone that the guide links. This keeps the guide itself lean.
 
 #### Scenario: Sources pile up inside the guide
 
@@ -116,3 +117,18 @@ Where a fact rests on an upstream source, the author MUST record the citation as
 - THEN the citations crowd out the procedure, and they move to a dated reference entry the guide links once
 
 Verify: reviewer confirms each upstream fact has a dated citation in the reference zone
+
+## Unenforced
+
+No command decides these rules, or a command decides only part of each. A reviewer confirms the rest.
+
+| Rule                                                | Reviewer confirms                                                                          |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `guides:every-step-carries-its-check`               | Each step carries a check that states what a correct result looks like                     |
+| `guides:a-manual-step-enumerates-its-interaction`   | Each interface step lists every field, control, and value the reader sets                  |
+| `guides:a-step-follows-its-producers`               | Each value a step consumes comes from an earlier step or a stated precondition             |
+| `guides:preconditions-open-and-verification-closes` | The guide opens with checkable preconditions and closes with a verification                |
+| `guides:a-step-is-one-imperative-action`            | Each step is one imperative action, and an outcome the tool does not print is its own step |
+| `guides:a-divergent-result-names-its-destination`   | Each known divergence states its condition and where the reader goes next                  |
+| `guides:an-external-fact-is-verified-upstream`      | Each upstream-owned fact was checked against the official source                           |
+| `guides:citations-live-in-the-reference-zone`       | Each upstream fact has a dated citation in the reference zone                              |

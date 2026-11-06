@@ -31378,6 +31378,13 @@ const RETIRED_PACKAGE_PATHS: [&str; 4] =
 /// reason)`: a hit on `path` whose line carries `pattern` is allowed for
 /// the stated reason and for no other.
 const RETIRED_SURFACE_ALLOWLIST: &[(&str, &str, &str)] = &[
+    // unrelated: the instance spec spec-driven-docs ships, whose tracking
+    // rule revalidates an expiring source on its cadence
+    (
+        "_docs/specs/SPEC-instance.md",
+        "revalidat",
+        "sdd's shipped instance spec revalidates a tracked source on its cadence, not a stored plan",
+    ),
     // historical: the guidance of the release that removed the design tells
     // a target still on 0.5.0 what to finish with that binary first
     (

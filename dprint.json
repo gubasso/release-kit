@@ -13,7 +13,9 @@
   // The generated files follow their generator (the dev environment rule of
   // nix-secrets, home/apps/claude-session/rules/dev-environment.md):
   // release-plz writes CHANGELOG.md, rk writes SECURITY.md and the
-  // .release-kit files, and sdd writes the rest.
+  // .release-kit files, and sdd writes the rest: its manifest and lint
+  // configuration, and the specs, the schema, and the templates it ships,
+  // which stay equal to the copy `sdd spec <name>` prints.
   "excludes": [
     ".git",
     "node_modules",
@@ -24,7 +26,26 @@
     ".release-kit/manifest.json",
     ".release-kit/setup-proof.json",
     ".spec-driven-docs/manifest.json",
-    "_docs/.markdownlint-cli2.jsonc"
+    "_docs/.markdownlint-cli2.jsonc",
+    "_docs/specs/SPEC-budget-debt.md",
+    "_docs/specs/SPEC-comparison-docs.md",
+    "_docs/specs/SPEC-decision-records.md",
+    "_docs/specs/SPEC-docs-format.md",
+    "_docs/specs/SPEC-docs-foundations.md",
+    "_docs/specs/SPEC-docs-specs.md",
+    "_docs/specs/SPEC-guides.md",
+    "_docs/specs/SPEC-instance.md",
+    "_docs/specs/SPEC-known-issues.md",
+    "_docs/specs/SPEC-spec-to-code.md",
+    "_docs/specs/SPEC-tracking.md",
+    "_docs/specs/SPEC-writing-policy.md",
+    "_docs/specs/SPEC-writing-style.md",
+    "_docs/specs/SPEC-tracking/tracking.schema.json",
+    "_docs/specs/TEMPLATE-spec.md",
+    "_docs/decisions/TEMPLATE-adr.md",
+    "_docs/guides/TEMPLATE-guide.md",
+    "_docs/reference/TEMPLATE-agents-digest.md",
+    "_docs/reference/TEMPLATE-known-issue.md"
   ],
   "plugins": [
     "https://plugins.dprint.dev/markdown-0.22.0.wasm",

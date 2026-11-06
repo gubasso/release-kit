@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Rules governing a comparison document — the table-shaped document that decides between candidates. Covers the verdict vocabulary, the legend, dating, references, and pipe escaping. The prose around a table and the size budget it sits under belong to `SPEC-docs-format.md`.
+Rules governing a comparison document: the table-shaped document that decides between candidates. Covers the verdict vocabulary, the legend, dating, references, and pipe escaping. The prose around a table and the size budget it sits under belong to `SPEC-docs-format.md`.
 
 ## Requirements
 

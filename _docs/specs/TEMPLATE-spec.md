@@ -1,6 +1,6 @@
 # Template — Spec
 
-Copy the block below to `<root>/specs/SPEC-<domain>.md`. One spec per domain, at or below 300 lines, with a `<!--TOC-->` marker added above 100 lines. The shape is fixed and gated.
+Copy the block below to `_docs/specs/SPEC-<domain>.md`. One spec per domain, at or below 300 lines, with a `<!--TOC-->` marker added above 100 lines. The shape is fixed and gated.
 
 ```markdown
 # <Domain> Specification
@@ -28,7 +28,15 @@ Verify: `<command that exits non-zero on violation>`
 ### `<domain-slug>:<next-rule-slug>` — <next, most consequential first>
 
 ...
+
+## Unenforced
+
+| Rule                        | Reviewer confirms                                    |
+| --------------------------- | ---------------------------------------------------- |
+| `<domain-slug>:<rule-slug>` | <what a reviewer confirms, where no command decides> |
 ```
+
+The `## Unenforced` section is optional. Keep it only where a rule of this spec has a part no command decides, and add no other section after the requirements.
 
 Checks before committing:
 

@@ -4,6 +4,8 @@
 
 Rules governing the inherited budget violations a project carries. A project that adopts this convention with documents written before it records each violation in `.spec-driven-docs/debt.yaml`, per gate, per path, per dimension, and the budget gates judge the record instead of the budget. The record can only shrink. The budgets themselves belong to `SPEC-docs-format.md`, `SPEC-docs-specs.md`, and `SPEC-decision-records.md`, and none of them moves for an inherited document.
 
+The documents a baseline measures are the ones under the documentation root the landing resolved and recorded, which `SPEC-staging.md` binds to one value for the whole run. A baseline that measured one root while the gates were configured for another would record debt for documents no gate reads.
+
 The file names a gate, a path under it, and one entry per dimension the gate measures. A count dimension carries `ceiling: <count>`. A flag dimension carries `true` and is removed once the condition is corrected.
 
 | Gate                 | Dimension        | Kind  |

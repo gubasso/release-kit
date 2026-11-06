@@ -17,7 +17,7 @@
 
 ## Purpose
 
-Rules governing known-issue records — the zone that holds an external defect this project works around. Covers the case id, the two state axes, the retirement condition, the mechanism walkthrough, and the body a filed record carries. Where the zone sits and how a suppression cites a record belong to `SPEC-spec-to-code.md`; the markdown a record is written in belongs to `SPEC-docs-format.md`.
+Rules governing known-issue records, the zone that holds an external defect this project works around. Covers the case id, the two state axes, the retirement condition, the mechanism walkthrough, and the body a filed record carries. Where the zone sits and how a suppression cites a record belong to `SPEC-spec-to-code.md`. The markdown a record is written in belongs to `SPEC-docs-format.md`.
 
 ## Requirements
 

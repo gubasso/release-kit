@@ -1,6 +1,6 @@
 # Template — Author-instructions digest
 
-Copy the block below to `<directory>/AGENTS.md`. A digest routes; it never owns a rule. At or below 100 lines at the repository root and 150 lines in a subtree.
+Copy the block below to `<directory>/AGENTS.md`. A digest routes. It never owns a rule. At or below 100 lines at the repository root and 150 lines in a subtree.
 
 Where a tool reads only its own filename, add a one-line `<directory>/CLAUDE.md` containing `@AGENTS.md` beside it. The import path resolves relative to the importing file, so the sibling is `@AGENTS.md`, not a repo-root path.
 
@@ -17,10 +17,10 @@ Load this file, find the owning document below, then read that document and the 
 
 ## Where the rules live
 
-| Question the agent arrives with | Owning document                       |
-| ------------------------------- | ------------------------------------- |
-| <question>                      | `<root>/specs/SPEC-<domain>.md`       |
-| <question>                      | `<root>/specs/SPEC-<other-domain>.md` |
+| Question the agent arrives with | Owning document                            |
+| ------------------------------- | ------------------------------------------ |
+| <question>                      | `_docs/specs/SPEC-<domain>.md`       |
+| <question>                      | `_docs/specs/SPEC-<other-domain>.md` |
 
 ## Non-negotiables
 

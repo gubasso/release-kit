@@ -15,13 +15,15 @@
 
 ## Purpose
 
-Rules governing how a project adopts and reaches the writing style. The style itself lives in `method/writing-style.md` and is available through `sdd method writing-style`. This spec does not restate its prose rules. An instance that already adopted `SPEC-simple-english.md` keeps that instance-owned copy, and `sdd` stops maintaining it.
+Rules governing how a project adopts and reaches the writing style. The style is the source the project selects in its declaration under `SPEC-writing-policy.md`: this convention's chapter, served by `sdd method writing-style`, a document of the project's own, or none. This spec does not restate any prose rule. An instance that already adopted `SPEC-simple-english.md` keeps that instance-owned copy, and `sdd` stops maintaining it.
 
 ## Requirements
 
 ### `writing-style:an-existing-document-converts-when-edited` — An existing document converts when edited
 
-When an author edits a document already in the tree, the author MUST apply the writing style to that document and MUST NOT sweep untouched documents.
+Where a writing-style source is selected and an author edits a document already in the tree, the author MUST apply the selected style to that document and MUST NOT sweep untouched documents.
+
+A project whose selection is `none` owes no conversion, under `writing-policy:none-imposes-no-obligation`.
 
 #### Scenario: A project adopts the style with an existing corpus
 
@@ -29,19 +31,19 @@ When an author edits a document already in the tree, the author MUST apply the w
 - WHEN an author edits one document
 - THEN that document converts and every untouched document stays as it was
 
-Verify: reviewer confirms each document the change edits follows the chapter, and that the change converts no untouched document
+Verify: reviewer confirms each document the change edits follows the selected source, and that the change converts no untouched document
 
 ### `writing-style:the-documentation-block-routes-to-the-style` — The documentation block routes to the style
 
-The documentation block MUST route an author to `sdd method writing-style` in one line and MUST NOT carry the style's rules.
+The documentation block MUST route an author to the selected writing-style source in one line, or carry no route where the selection is `none`, and MUST NOT carry the style's rules.
 
 #### Scenario: An agent prepares to author prose
 
 - GIVEN a root author-instructions file with the managed documentation block
 - WHEN the agent reads the block
-- THEN one line names the command and no line restates a prose rule
+- THEN one line names the selected source, or none does, and no line restates a prose rule
 
-Verify: reviewer confirms the managed documentation block carries one routing line and no writing rule
+Verify: `sdd verify --target .`
 
 ### `writing-style:no-delivered-gate-judges-prose` — No delivered gate judges prose
 
@@ -69,24 +71,25 @@ Verify: reviewer confirms each source row names a repository and a full revision
 
 ### `writing-style:the-style-lives-in-one-document` — The style lives in one document
 
-The project MUST keep the writing rules in `method/writing-style.md` alone and MUST route every other surface to that document without restating them.
+The project MUST keep the writing rules in the one document its selection names and MUST route every other surface to that document without restating them.
+
+For the `builtin` selection that document is `method/writing-style.md`, served by `sdd method writing-style`. For `project` it is the document the declaration's `path` names.
 
 #### Scenario: A template needs to tell an author how to write prose
 
 - GIVEN a template that provides author instructions
 - WHEN the template adds writing-style guidance
-- THEN it names `sdd method writing-style` instead of copying any rule
+- THEN it names the selected source instead of copying any rule
 
-Verify: reviewer confirms every writing-style route points to the method chapter and carries no copied rule
+Verify: reviewer confirms every writing-style route points to the selected document and carries no copied rule
 
 ## Unenforced
 
 These rules require review because structure alone cannot prove author intent.
 
-| Rule                                                        | Reviewer confirms                                                             |
-| ----------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `writing-style:an-existing-document-converts-when-edited`   | Each edited document follows the chapter, and no untouched document converted |
-| `writing-style:the-documentation-block-routes-to-the-style` | The block carries one route and no rule text                                  |
-| `writing-style:no-delivered-gate-judges-prose`              | No delivered gate judges the writing style                                    |
-| `writing-style:sources-name-the-revision-read`              | Every source has a repository and full revision                               |
-| `writing-style:the-style-lives-in-one-document`             | No other surface restates the rules                                           |
+| Rule                                                      | Reviewer confirms                                                                |
+| --------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `writing-style:an-existing-document-converts-when-edited` | Each edited document follows the selected source, and no untouched one converted |
+| `writing-style:no-delivered-gate-judges-prose`            | No delivered gate judges the writing style                                       |
+| `writing-style:sources-name-the-revision-read`            | Every source has a repository and full revision                                  |
+| `writing-style:the-style-lives-in-one-document`           | No other surface restates the rules                                              |

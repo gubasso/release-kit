@@ -1,6 +1,6 @@
 # Template — Known-issue record
 
-Copy the block below to `<root>/reference/known-issues/KI-<slug>.md`. The filename is the case id, and it is what a suppression cites from source. A record opens at `state: investigating` and `filing: gathering`, and it is deleted, not archived, when its retire condition is met.
+Copy the block below to `_docs/reference/known-issues/KI-<slug>.md`. The filename is the case id, and it is what a suppression cites from source. A record opens at `state: investigating` and `filing: gathering`, and it is deleted, not archived, when its retire condition is met.
 
 ```markdown
 ---
@@ -10,6 +10,7 @@ state: <investigating | mitigated | masked | monitoring>
 filing: <gathering | ready | filed | deferred>
 workaround: <what this project does instead>
 retire_when: <the condition that removes a mask; omit for a mitigation>
+checked: <ISO date the upstream state was last confirmed; masked or monitoring only>
 ---
 
 # <One line naming the defect, not the symptom>
@@ -40,5 +41,6 @@ Checks before committing:
 - The filename is `KI-<slug>.md`, with a slug that does not open with a digit.
 - The record states exactly one `state:` and exactly one `filing:`, each from its vocabulary.
 - A masked record carries a retire condition, and a mitigated one carries none.
+- A masked or monitoring record carries a `checked:` date that is not in the future.
 - The mechanism is a run a reader can follow, not a restatement of the defect.
 - A filed record names its upstream issue and carries the body it was filed with.

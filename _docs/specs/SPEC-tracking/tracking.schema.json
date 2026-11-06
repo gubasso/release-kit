@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:spec-driven-docs:tracking.schema.json",
   "title": "Tracking registry",
-  "description": "Structural shape of <root>/reference/tracking.yaml. The Rust validator enforces the cross-field, filesystem, and uniqueness rules this schema cannot.",
+  "description": "Structural shape of <root>/reference/tracking.yaml. This schema proves the object, the tracked array, the field types, the scalar formats, whole duplicate items, and basic path syntax. It cannot read the filesystem or compare one field to another, so the Rust validator enforces the rest: duplicate IDs, duplicate dependents, a path that escapes the tree, a symlink escape, an inconsistent source, and the existence of every declared file.",
   "type": "object",
   "required": ["schema_version", "tracked"],
   "additionalProperties": false,
