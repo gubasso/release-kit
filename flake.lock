@@ -121,16 +121,16 @@
         "rust-overlay": "rust-overlay_3"
       },
       "locked": {
-        "lastModified": 1793967278,
-        "narHash": "sha256-GlnNVohA4NIWnV5zXJU+lXN+iTYG7puZSh6o5FmhI54=",
+        "lastModified": 1793994198,
+        "narHash": "sha256-8D/OkWB6EXTK6rPu7XWGQA50QrorlsunUWIQjPsobx4=",
         "owner": "gubasso",
         "repo": "spec-driven-docs",
-        "rev": "2b07c42eb93b00aa995ffa98080e371af4f44ed3",
+        "rev": "59ae55dc011ad8730780d1626753fc2c53e8ed6b",
         "type": "github"
       },
       "original": {
         "owner": "gubasso",
-        "ref": "v0.14.5",
+        "ref": "v0.15.0",
         "repo": "spec-driven-docs",
         "type": "github"
       }

@@ -58,9 +58,9 @@ The documentation root's managed lint configuration holds the order up to the re
 
 - GIVEN a spec whose author adds `## Background` after its last requirement
 - WHEN the hooks run over the spec
-- THEN `spec-trailing-section` reports the heading and names where it moves, because the lint shape alone admits it
+- THEN `spec-trailing-section` fails naming the heading and where it moves, because the lint shape alone admits it
 
-Verify: `pre-commit run markdownlint-cli2 --all-files` passes, and `pre-commit run spec-trailing-section --all-files` prints no `WARN` line
+Verify: `pre-commit run markdownlint-cli2 --all-files && pre-commit run spec-trailing-section --all-files`
 
 ### `docs-specs:rule-id-is-unique-and-slugged` — A rule ID is a slug pair and is unique
 

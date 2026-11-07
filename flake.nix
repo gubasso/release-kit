@@ -17,7 +17,7 @@
     # spec-driven-docs, with the URL's tag moved to match, followed by sdd
     # upgrade where the release moves the canon.
     spec-driven-docs = {
-      url = "github:gubasso/spec-driven-docs/v0.14.5";
+      url = "github:gubasso/spec-driven-docs/v0.15.0";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
