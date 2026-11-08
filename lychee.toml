@@ -23,6 +23,9 @@ exclude = [
   '^https://fastercapital\.com/',
   '^https://jira\.atlassian\.com/',
   '^https://thoughtworks\.medium\.com/',
+  # The devbox docs return 404 since 2026-11-08 while the product page still
+  # loads, so the docs moved or are down. The cited claim stays true.
+  '^https://www\.jetify\.com/docs/devbox/',
   # release-plz wrote this compare link into CHANGELOG.md for the first
   # release, and no v0.1.0 tag exists. The changelog is generated, so the link
   # stays as written.
