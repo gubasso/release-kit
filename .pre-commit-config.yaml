@@ -224,15 +224,11 @@ repos:
   - repo: https://github.com/lycheeverse/lychee
     rev: lychee-v0.24.2
     hooks:
-      - id: lychee
+      # The devshell supplies the lychee binary, so the hook installs none.
+      - id: lychee-system
         stages: [pre-push]
         types: [markdown]
-        # The version is passed rather than discovered. The hook's shim reads it
-        # by running git describe inside its own checkout, and git exports an
-        # absolute GIT_DIR to a pre-push hook run from a linked worktree, which
-        # redirects that describe at this repository, where no lychee-v* tag
-        # exists. Keep it equal to the rev above.
-        args: [LYCHEE_VERSION=0.24.2, --no-progress]
+        args: [--no-progress]
 # BEGIN spec-driven-docs managed
   - repo: local
     hooks:
