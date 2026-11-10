@@ -7324,9 +7324,11 @@ fn protect_trunk_refuses_below_the_floor() {
     }
 }
 
-/// A pre-release carrying the floor's own number is refused. Nothing proves
-/// that `strategy: mirror` shipped in the pre-release that carries the
-/// number, so the step fails closed and names the suffix as the reason.
+/// A pre-release carrying the floor's own number is refused on a host other
+/// than gitlab.com. Nothing proves that `strategy: mirror` shipped in the
+/// pre-release that carries the number, so the step fails closed and names
+/// the suffix as the reason. This fixture has no remote, so its host is
+/// unknown, and an unknown host reads as not gitlab.com.
 #[test]
 fn a_pre_release_at_the_floor_is_refused() {
     let fixture = ForgeFixture::new();
@@ -7348,6 +7350,167 @@ fn a_pre_release_at_the_floor_is_refused() {
             "{version} is an edition, not a pre-release: {line}"
         );
     }
+}
+
+/// Observe `forge-version` with the fixture's `origin` at `url`, so the
+/// run detects that host, and hand back the step's one check line.
+fn forge_version_line_at(fixture: &ForgeFixture, url: &str, version: &str) -> String {
+    git_in(fixture.target.path(), &["remote", "add", "origin", url]);
+    forge_version_line(fixture, version)
+}
+
+/// SATISFIES forge-setup:the-setup-refuses-a-forge-below-the-floor
+/// gitlab.com answers every deployment with a `-pre` suffix, so there the
+/// number alone decides, and the line names the suffix as the hosted
+/// deployment's own.
+#[test]
+fn forge_version_accepts_the_saas_suffix_on_gitlab_com() {
+    let fixture = ForgeFixture::new();
+    let line = forge_version_line_at(&fixture, "https://gitlab.com/acme/widget.git", "19.6.0-pre");
+    assert!(
+        line.starts_with("ok forge-version"),
+        "gitlab.com's own suffix must satisfy the floor: {line}"
+    );
+    assert!(
+        line.contains("SaaS deployment's own"),
+        "the line names the suffix as the deployment's: {line}"
+    );
+}
+
+/// SATISFIES forge-setup:the-setup-refuses-a-forge-below-the-floor
+/// The same string from a self-managed host stays a pre-release, and the
+/// step fails closed on it.
+#[test]
+fn forge_version_still_refuses_a_pre_suffix_on_a_self_managed_host() {
+    let fixture = ForgeFixture::new();
+    let line = forge_version_line_at(
+        &fixture,
+        "https://gitlab.example.com/acme/widget.git",
+        "19.6.0-pre",
+    );
+    assert!(
+        line.starts_with("unsatisfied forge-version"),
+        "a self-managed suffix must not satisfy the floor: {line}"
+    );
+    assert!(
+        line.contains("fails closed"),
+        "the refusal names the fail-closed reason: {line}"
+    );
+}
+
+/// SATISFIES forge-setup:the-setup-refuses-a-forge-below-the-floor
+/// With no remote the host is unknown, and only a detected gitlab.com
+/// loosens the rule.
+#[test]
+fn forge_version_refuses_a_pre_suffix_from_an_unknown_host() {
+    let fixture = ForgeFixture::new();
+    let line = forge_version_line(&fixture, "19.6.0-pre");
+    assert!(
+        line.starts_with("unsatisfied forge-version"),
+        "an unknown host's suffix must not satisfy the floor: {line}"
+    );
+    assert!(
+        line.contains("pre-release"),
+        "the refusal names the pre-release suffix: {line}"
+    );
+}
+
+/// SATISFIES forge-setup:the-setup-refuses-a-forge-below-the-floor
+/// The gitlab.com exception loosens the suffix and never the number.
+#[test]
+fn forge_version_refuses_below_the_floor_on_gitlab_com_too() {
+    let fixture = ForgeFixture::new();
+    let line = forge_version_line_at(&fixture, "https://gitlab.com/acme/widget.git", "17.9.0-pre");
+    assert!(
+        line.starts_with("unsatisfied forge-version"),
+        "a number below the floor must not satisfy it on gitlab.com: {line}"
+    );
+}
+
+/// SATISFIES forge-setup:the-setup-refuses-a-forge-below-the-floor
+/// A remediation never names the state the target is already in.
+#[test]
+fn a_refusal_on_gitlab_com_never_names_gitlab_com_as_the_fix() {
+    let fixture = ForgeFixture::new();
+    let line = forge_version_line_at(&fixture, "https://gitlab.com/acme/widget.git", "17.9.0-pre");
+    assert!(
+        line.starts_with("unsatisfied forge-version"),
+        "the reading is below the floor: {line}"
+    );
+    assert!(
+        !line.contains("host the project on gitlab.com"),
+        "the fix must not name gitlab.com on gitlab.com: {line}"
+    );
+}
+
+/// SATISFIES forge-setup:the-setup-refuses-a-forge-below-the-floor
+/// SATISFIES target-config:an-exclusion-narrows-scope-and-not-policy
+/// An excluded prerequisite satisfies its dependent's gate: the step runs,
+/// the version is never read, and the preview, the apply, and the event
+/// stream each carry the exclusion with its reason.
+#[test]
+fn an_excluded_prerequisite_satisfies_its_dependent_gate() {
+    let fixture = ForgeFixture::new();
+    fixture.seed("default_branch", "master");
+    fixture.seed("gitlab_version", "17.0.0");
+    std::fs::create_dir_all(fixture.target.path().join(".release-kit"))
+        .expect("the config dir creates");
+    std::fs::write(
+        fixture.target.path().join(".release-kit/config.toml"),
+        concat!(
+            "schema_version = 2\n",
+            "[git]\ntrunk = \"master\"\nintegration = \"forge\"\n",
+            "[setup.excluded_steps]\n",
+            "\"forge-version\" = \"the floor is read by hand\"\n",
+        ),
+    )
+    .expect("the config writes");
+    let line = "prerequisite forge-version excluded: the floor is read by hand";
+
+    fixture
+        .rk(&["setup", "step", "protect-trunk"])
+        .args(["--repo", "acme/widget", "--forge", "gitlab"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(line));
+
+    fixture
+        .rk(&["setup", "step", "protect-trunk"])
+        .args(["--repo", "acme/widget", "--forge", "gitlab", "--apply"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(line));
+    assert!(
+        fixture.state("protected_master").exists(),
+        "the protection installs once the gate passes"
+    );
+    assert!(
+        !fixture.log().contains("api version"),
+        "an excluded prerequisite is never read: {}",
+        fixture.log()
+    );
+
+    let out = fixture
+        .rk(&["setup", "step", "protect-trunk"])
+        .args([
+            "--repo",
+            "acme/widget",
+            "--forge",
+            "gitlab",
+            "--apply",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let started = String::from_utf8_lossy(&out)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|event| event["type"] == "step_started" && event["step"] == "protect-trunk")
+        .expect("the step starts");
+    assert_eq!(started["detail"], line, "--json carries the exclusion");
 }
 
 /// The step resolves to no script, and the two forge trees stay identical.

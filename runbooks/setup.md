@@ -288,7 +288,8 @@ One `GET /version`, compared against the minimum [the forge document](../forges/
 ```bash
 rk setup step forge-version --target . --apply
 # check: reports the instance's version and that it is at or above the floor
-# unsatisfied: the instance is too old; upgrade it, or host the project on gitlab.com
+# unsatisfied: a self-managed instance is below 18.2 or reports a pre-release; upgrade it
+#   (gitlab.com satisfies the floor, and its -pre suffix is the deployment's own)
 # unknown: glab could not read the version; authenticate and rerun
 ```
 

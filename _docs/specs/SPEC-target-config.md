@@ -213,7 +213,7 @@ Verify: `cargo nextest run -E 'test(required_check) or test(release_gate) or tes
 
 ### `target-config:an-exclusion-narrows-scope-and-not-policy` — An exclusion narrows scope and not policy
 
-A target states the setup steps it does not run in `setup.excluded_steps`, as a step id against the reason a report prints. The reader MUST refuse an id that names no setup step, naming it and its nearest known step, MUST refuse an exclusion that states no reason, and MUST judge every floor unchanged, because an exclusion says which steps this target runs and says nothing about what the method requires of the steps it does run. Nothing in this file needs a landing to be read: the setup verbs load it wherever it is, so the target class that lands no file can still declare its model. [The setup specification](./SPEC-forge-setup.md) binds what a run does with the declaration.
+A target states the setup steps it does not run in `setup.excluded_steps`, as a step id against the reason a report prints. The reader MUST refuse an id that names no setup step, naming it and its nearest known step, MUST refuse an exclusion that states no reason, and MUST judge every floor unchanged, because an exclusion says which steps this target runs and says nothing about what the method requires of the steps it does run. Nothing in this file needs a landing to be read: the setup verbs load it wherever it is, so the target class that lands no file can still declare its model. An exclusion MUST reach every gate that names the excluded step as a prerequisite, so a dependent step runs without it and reports it. [The setup specification](./SPEC-forge-setup.md) binds what a run does with the declaration.
 
 #### Scenario: A target excludes a step and weakens a policy
 
@@ -221,7 +221,7 @@ A target states the setup steps it does not run in `setup.excluded_steps`, as a 
 - WHEN the reader loads it
 - THEN it refuses naming `protection.allowed_merge_methods`, because the exclusion lifts no floor
 
-Verify: `cargo nextest run -E 'test(config) or test(params_from_a_record) or test(a_schema_1_config_migrates_into_its_domains)'`
+Verify: `cargo nextest run -E 'test(config) or test(params_from_a_record) or test(a_schema_1_config_migrates_into_its_domains) or test(an_excluded_prerequisite_satisfies_its_dependent_gate)'`
 
 ### `target-config:an-unanswered-key-is-absent-and-not-empty` — An unanswered key is absent and not empty
 

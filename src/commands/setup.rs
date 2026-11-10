@@ -616,8 +616,13 @@ fn preview(out: Output, ctx: &Ctx, steps: &[&StepSpec]) -> Result<(), RkError> {
                 step.name
             ));
         }
+        let excluded = excluded_prerequisites(&engine.ctx, step);
+        for line in &excluded {
+            out.result_line(format!("  {line}"));
+        }
         let mut event = engine.event(EventKind::StepFinished, Some(step.name));
         event.status = Some("previewed".into());
+        event.detail = prerequisite_detail(&excluded);
         engine.emit(&event);
     }
     let next = next_for_apply(&engine.ctx, steps);
@@ -763,8 +768,13 @@ fn execute(
             step.name,
             step.proves_for(&engine.ctx)
         ));
+        let excluded = excluded_prerequisites(&engine.ctx, step);
+        for line in &excluded {
+            engine.out.frame(format!("  {line}"));
+        }
         let mut started = engine.event(EventKind::StepStarted, Some(step.name));
         started.status = Some("running".into());
+        started.detail = prerequisite_detail(&excluded);
         engine.emit(&started);
         let clock = Instant::now();
         let status = match apply_step(&mut engine, step) {
@@ -858,6 +868,55 @@ impl Done {
     }
 }
 
+/// What the prerequisite gate does with one prerequisite at this target.
+///
+/// SATISFIES forge-setup:the-setup-refuses-a-forge-below-the-floor
+#[derive(Debug, PartialEq, Eq)]
+enum PrereqGate {
+    /// The prerequisite is not part of this target's setup: the gate
+    /// passes and says nothing.
+    Silent,
+    /// The target excluded the prerequisite, with its stated reason: the
+    /// gate passes and the dependent step reports the exclusion.
+    Excluded(String),
+    /// The prerequisite applies: observe it, and refuse on anything but
+    /// satisfied.
+    Observe,
+}
+
+/// The gate's answer for one prerequisite's stance, read from the
+/// committed declaration and never from the forge.
+fn prereq_gate(stance: Stance) -> PrereqGate {
+    match stance {
+        Stance::Applies => PrereqGate::Observe,
+        Stance::NotApplicable(_) => PrereqGate::Silent,
+        Stance::Excluded(reason) | Stance::Redundant { reason, .. } => PrereqGate::Excluded(reason),
+    }
+}
+
+/// The lines a dependent step carries for each prerequisite the target
+/// excluded, in the order the step names them.
+fn excluded_prerequisites(ctx: &Ctx, step: &StepSpec) -> Vec<String> {
+    step.prereqs
+        .iter()
+        .filter_map(|prereq| {
+            let held = spec(prereq)?;
+            match prereq_gate(stance(ctx, held)) {
+                PrereqGate::Excluded(reason) => {
+                    Some(format!("prerequisite {prereq} excluded: {reason}"))
+                }
+                PrereqGate::Silent | PrereqGate::Observe => None,
+            }
+        })
+        .collect()
+}
+
+/// The event detail that carries a step's excluded prerequisites under
+/// `--json`, or none where the step has none.
+fn prerequisite_detail(lines: &[String]) -> Option<String> {
+    (!lines.is_empty()).then(|| lines.join("; "))
+}
+
 /// One step, full lifecycle.
 #[allow(
     clippy::too_many_lines,
@@ -865,8 +924,16 @@ impl Done {
 )]
 fn apply_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
     // Prerequisites are observed, not remembered: the forge is the
-    // authority on whether an earlier step's state holds.
+    // authority on whether an earlier step's state holds. A prerequisite
+    // the target excluded or does not run is not observed: the committed
+    // declaration is the answer, and the run reports it beside the step.
     for prereq in step.prereqs {
+        let gate = spec(prereq).map_or(PrereqGate::Observe, |held| {
+            prereq_gate(stance(&engine.ctx, held))
+        });
+        if gate != PrereqGate::Observe {
+            continue;
+        }
         let state = observe_with(engine, prereq)?;
         if !state.satisfied() {
             return Err(RkError::refusal(
@@ -928,7 +995,11 @@ fn apply_step(engine: &mut Engine, step: &StepSpec) -> Result<Done, RkError> {
                 Err(RkError::refusal(
                     Diagnostic::new(Reason::PrerequisiteUnmet, detail)
                         .expected(step.proves_for(&engine.ctx).to_owned())
-                        .action("upgrade the instance, or host the project on gitlab.com")
+                        .action(if engine.ctx.on_gitlab_com() {
+                            "rerun after the next gitlab.com deployment"
+                        } else {
+                            "upgrade the instance, or host the project on gitlab.com"
+                        })
                         .target_state("unchanged")
                         .step(step.name),
                 ))
@@ -2019,5 +2090,32 @@ mod tests {
         assert_eq!(super::step_count(0), "0 steps");
         assert_eq!(super::step_count(1), "1 step");
         assert_eq!(super::step_count(2), "2 steps");
+    }
+
+    /// SATISFIES forge-setup:the-setup-refuses-a-forge-below-the-floor
+    /// A prerequisite the target does not run never blocks its dependent,
+    /// and only an exclusion carries a line: the two states stay distinct.
+    /// No step pair today makes a prerequisite inapplicable where its
+    /// dependent applies, so the gate's answer is held here, at the pure
+    /// mapping both the preview and the apply read.
+    #[test]
+    fn an_inapplicable_prerequisite_never_blocks_a_gate() {
+        use super::{PrereqGate, Stance, prereq_gate};
+        assert_eq!(
+            prereq_gate(Stance::NotApplicable("the profile names no forge".into())),
+            PrereqGate::Silent
+        );
+        assert_eq!(
+            prereq_gate(Stance::Excluded("read by hand".into())),
+            PrereqGate::Excluded("read by hand".into())
+        );
+        assert_eq!(
+            prereq_gate(Stance::Redundant {
+                reason: "read by hand".into(),
+                inapplicable: "the profile names no forge".into(),
+            }),
+            PrereqGate::Excluded("read by hand".into())
+        );
+        assert_eq!(prereq_gate(Stance::Applies), PrereqGate::Observe);
     }
 }

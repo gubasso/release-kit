@@ -361,12 +361,15 @@ fn branch_reminder_state(ctx: &Ctx) -> StepState {
 pub const GITLAB_VERSION_FLOOR: (u64, u64) = (18, 2);
 
 /// The two suffixes that name an edition rather than a pre-release. Every
-/// other suffix is a pre-release, and the step fails closed on one.
+/// other suffix is a pre-release, and the step fails closed on one, except
+/// on gitlab.com, where the suffix names the deployment's own continuous
+/// build.
 const GITLAB_EDITIONS: [&str; 2] = ["ee", "ce"];
 
 /// The refusal an instance below the floor reads: the reading, the reason,
-/// and the fix.
-fn version_refusal(found: &str, prerelease: Option<&str>) -> String {
+/// and the fix. On gitlab.com the fix never names gitlab.com, the state the
+/// target is already in.
+fn version_refusal(found: &str, prerelease: Option<&str>, on_gitlab_com: bool) -> String {
     let (major, minor) = GITLAB_VERSION_FLOOR;
     let mut said = vec![format!(
         "this GitLab instance reports {found}; the convention needs {major}.{minor} or newer"
@@ -382,9 +385,15 @@ fn version_refusal(found: &str, prerelease: Option<&str>) -> String {
     said.push(
         "below it the child's status never reaches the parent pipeline, so a failing project job merges".to_owned(),
     );
-    said.push(format!(
-        "upgrade the instance to {major}.{minor} or newer, or host the project on gitlab.com"
-    ));
+    if on_gitlab_com {
+        said.push(format!(
+            "gitlab.com runs below {major}.{minor} only until its next deployment; rerun the check after it"
+        ));
+    } else {
+        said.push(format!(
+            "upgrade the instance to {major}.{minor} or newer, or host the project on gitlab.com"
+        ));
+    }
     said.join("; ")
 }
 
@@ -430,15 +439,26 @@ fn forge_version(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkError> {
             "the forge reports the version as '{found}', which names no major and minor pair; the floor cannot be read"
         )));
     };
-    if let Some(suffix) = suffix.filter(|s| !GITLAB_EDITIONS.contains(s)) {
-        return Ok(StepState::not(version_refusal(found, Some(suffix))));
+    // gitlab.com answers every deployment with a `-pre` suffix, so there
+    // the suffix is the SaaS build and the number alone decides. Only a
+    // detected gitlab.com loosens the rule: a self-managed or unknown host
+    // still fails closed on every suffix that is not an edition.
+    let on_gitlab_com = ctx.on_gitlab_com();
+    let prerelease = suffix.filter(|s| !GITLAB_EDITIONS.contains(s));
+    if let Some(suffix) = prerelease.filter(|_| !on_gitlab_com) {
+        return Ok(StepState::not(version_refusal(found, Some(suffix), false)));
     }
     if pair < GITLAB_VERSION_FLOOR {
-        return Ok(StepState::not(version_refusal(found, None)));
+        return Ok(StepState::not(version_refusal(found, None, on_gitlab_com)));
     }
     let (major, minor) = GITLAB_VERSION_FLOOR;
-    Ok(StepState::ok(format!(
-        "this instance reports {found}, at or above the {major}.{minor} floor"
+    Ok(StepState::ok(prerelease.map_or_else(
+        || format!("this instance reports {found}, at or above the {major}.{minor} floor"),
+        |suffix| {
+            format!(
+                "gitlab.com reports {found}, at or above the {major}.{minor} floor; the -{suffix} suffix is the SaaS deployment's own"
+            )
+        },
     )))
 }
 

@@ -853,6 +853,16 @@ impl Ctx {
                 .is_some_and(|host| host != "gitlab.com")
     }
 
+    /// Whether this run targets gitlab.com itself, as a detected host.
+    ///
+    /// Positive on purpose: a run with no detected host answers false, so
+    /// a rule that loosens only for gitlab.com stays closed where the host
+    /// is unknown.
+    #[must_use]
+    pub fn on_gitlab_com(&self) -> bool {
+        self.forge == Some(Forge::Gitlab) && self.host.as_deref() == Some("gitlab.com")
+    }
+
     /// The constructed environment a step receives. Secrets enter only for
     /// the step that consumes them; the caller records their handling.
     #[must_use]

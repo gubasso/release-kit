@@ -258,6 +258,12 @@ Verified 2026-09-08. `GET /version` answers an authenticated request with a JSON
 
 Bearing: `forge-setup:the-setup-refuses-a-forge-below-the-floor`, and the one read-only call `forge-version` makes. This is the only endpoint the step touches, and the shape of its answer is what the parser reads.
 
+gitlab.com answers the same endpoint with a `-pre` suffix on every deployment: `19.4.0-pre` on 2026-09-14 and `19.6.0-pre` on 2026-11-09, both read live through `glab api version` by an authenticated project member. The suffix there names the continuous build of the SaaS deployment, not a release that lags a stable one, so the number alone carries the floor.
+
+- <https://docs.gitlab.com/api/version/>
+
+Bearing: the gitlab.com half of `forge-setup:the-setup-refuses-a-forge-below-the-floor`. A detected gitlab.com host reads the number alone, and every other host keeps the fail-closed suffix rule.
+
 ## A skipped job reports success
 
 Verified 2026-09-06, re-checked 2026-09-08. A GitHub Actions job that is skipped — by its own `if` conditional, or because a job it `needs` failed — reports success to the required status check that names it, and does not block the merge: "successful check statuses are `success`, `skipped`, and `neutral`". Only a workflow that never runs at all, skipped by a path or branch filter or by a commit message, leaves its check pending and blocks, and the same page advises avoiding a required workflow that can be skipped. So a gate job holds the merge only when it runs on a failed dependency and itself fails on any `needs.*.result` other than `success`; without that, a red needed job skips the gate and the skip reads as green. The same page states that "if a check and a commit status have the same name, both must pass when that name is required", so a required name is matched by name alone and every reporter of it takes part in the decision.
