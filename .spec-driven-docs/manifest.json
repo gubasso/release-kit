@@ -1,6 +1,6 @@
 {
   "schema_version": 3,
-  "canon_version": "0.15.0",
+  "canon_version": "0.15.1",
   "canon_source": "https://github.com/gubasso/spec-driven-docs",
   "profile": "knowledge-base",
   "docs_root": "_docs",
