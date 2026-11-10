@@ -60,8 +60,11 @@
           toolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
         in
         {
-          # What belongs here: a tool this project pins, and a runtime pre-commit
-          # needs to build a hook environment. What does not: the host baseline.
+          # What belongs here: a tool this project pins that no more specific
+          # owner declares, and a runtime pre-commit needs to build or run a hook.
+          # A hook tool that pre-commit can build (typos, zizmor, actionlint,
+          # md-toc, ...) is pinned in .pre-commit-config.yaml, and a language
+          # library never enters this shell. What does not: the host baseline.
           # git is assumed present, because a pre-commit hook has no meaning
           # without it; the Rust toolchain comes from rust-toolchain.toml through
           # the overlay so CI and local development share one compiler. The
@@ -83,22 +86,15 @@
               pkgs.just
               pkgs.pre-commit
               pkgs.dprint
-              pkgs.editorconfig-checker
+              # The markdownlint-cli2 hook builds on this nodejs
+              # (default_language_version in .pre-commit-config.yaml).
               pkgs.nodejs
+              # The Verify lines of the specs that sdd ships call rg.
               pkgs.ripgrep
-              pkgs.python3Packages.md-toc
-              pkgs.typos
-              pkgs.markdownlint-cli2
               pkgs.lychee
-              pkgs.ripsecrets
-              # The snippets are GitHub Actions workflows, so the workflows are
-              # what this project lints. zizmor audits them for security and
-              # actionlint for correctness, both over snippets/ and over this
-              # repository's own .github/workflows/.
-              pkgs.zizmor
-              pkgs.actionlint
+              # actionlint, a hook that pre-commit builds, runs shellcheck from
+              # PATH on the `run:` scripts of the workflows it reads.
               pkgs.shellcheck
-              pkgs.shfmt
               pkgs.jq
               # The release jobs run release-plz from this shell, as
               # .release-kit/config.toml records, so CI installs no release

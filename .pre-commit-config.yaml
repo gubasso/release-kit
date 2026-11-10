@@ -1,5 +1,12 @@
 default_install_hook_types: [pre-commit, commit-msg, pre-push]
 
+# The node hook runs on the devshell nodejs. Without this line an empty
+# pre-commit cache can pick `default`, and nodeenv then fails on a prerelease
+# entry of the node index: "invalid literal for int() with base 10: '0-alpha'"
+# (2026-11-10).
+default_language_version:
+  node: system
+
 repos:
 # BEGIN release-kit
 # The release convention's hooks. Install every stage they run at:
@@ -121,6 +128,7 @@ repos:
         exclude: '\.md$'
   - repo: local
     hooks:
+      # owner: devshell (no-hook-language) upstream dprint publishes no pre-commit hook.
       - id: dprint
         name: dprint check
         # dprint exits 14 rather than passing when it receives only paths its
@@ -129,18 +137,21 @@ repos:
         entry: dprint check --allow-no-files
         language: system
         types_or: [markdown, json]
+      # owner: devshell (project-environment) cargo fmt is part of the Rust toolchain that the devshell pins.
       - id: cargo-fmt
         name: cargo fmt check
         entry: cargo fmt --check
         language: system
         types: [rust]
         pass_filenames: false
+      # owner: devshell (project-environment) cargo clippy is part of the Rust toolchain and builds the crate.
       - id: cargo-clippy
         name: cargo clippy
         entry: cargo clippy --all-targets --all-features -- -D warnings
         language: system
         types: [rust]
         pass_filenames: false
+      # owner: devshell (project-environment) cargo test runs the test suite of the crate.
       - id: cargo-test
         name: cargo test
         entry: cargo test
@@ -151,6 +162,7 @@ repos:
       # too expensive for a commit and belongs at the last boundary before
       # the trunk, and continuous integration reaches all three by invoking
       # the same stage through `just check`.
+      # owner: devshell (project-environment) cargo deny is a cargo subcommand that reads the lock file of the crate.
       - id: cargo-deny
         name: cargo deny check
         entry: cargo deny check
@@ -158,6 +170,7 @@ repos:
         always_run: true
         stages: [manual]
         pass_filenames: false
+      # owner: host (no-hook-language) nix comes from the host and has no hook in a language that pre-commit builds.
       - id: nix-flake-check
         name: nix flake check
         entry: nix flake check
@@ -168,6 +181,7 @@ repos:
       # The scratch landing round trip, through the recipe that owns it.
       # Never make this entry `just check`: that recipe invokes pre-commit
       # and the hook would re-enter itself.
+      # owner: devshell (project-environment) the just recipe builds rk and lands it in a scratch target.
       - id: scratch-landing
         name: scratch landing round trip
         entry: just build
@@ -175,29 +189,35 @@ repos:
         always_run: true
         stages: [manual]
         pass_filenames: false
+  # zizmor and actionlint take their upstream hooks, which pre-commit builds
+  # (python and golang). actionlint runs shellcheck from PATH on the `run:`
+  # scripts, so the devshell keeps shellcheck for it.
+  - repo: https://github.com/zizmorcore/zizmor-pre-commit
+    rev: v1.29.0
+    hooks:
       # The snippets are audited against nothing: --no-config keeps zizmor.yml
       # out of reach, because an ignore there is keyed by base filename alone
       # and would silence the shipped release.yml along with the generated
       # one. Every accepted finding in a snippet is an inline comment in that
       # snippet, which renders into each target and drifts no rendered file.
-      - id: zizmor-snippets
+      - id: zizmor
+        alias: zizmor-snippets
         name: zizmor over the snippets
-        entry: zizmor --no-progress --offline --no-config --min-confidence medium
-        language: system
+        args: [--no-progress, --offline, --no-config, --min-confidence, medium]
         files: '^snippets/.*/\.github/workflows/.*\.ya?ml$'
-      - id: zizmor-own
+      - id: zizmor
+        alias: zizmor-own
         name: zizmor over this project's workflows
-        entry: zizmor --no-progress --offline --config zizmor.yml --min-confidence medium
-        language: system
+        args: [--no-progress, --offline, --config, zizmor.yml, --min-confidence, medium]
         files: '^\.github/workflows/.*\.ya?ml$'
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.12
+    hooks:
       # actionlint reads release.yml too: .github/actionlint.yaml accepts the
       # five shellcheck relays of cargo-dist's output, which are not this
       # project's to fix. See
       # _docs/reference/known-issues/KI-dist-generates-an-unhardened-workflow.md
       - id: actionlint
-        name: actionlint
-        entry: actionlint
-        language: system
         files: '^(\.github|snippets/.*/\.github)/workflows/.*\.ya?ml$'
   - repo: https://github.com/frnmst/md-toc
     rev: 9.0.0
@@ -215,7 +235,6 @@ repos:
     rev: v1.49.0
     hooks:
       - id: typos
-        language: system
         args: [--force-exclude]
   - repo: https://github.com/sirwart/ripsecrets
     rev: v0.1.11
@@ -225,10 +244,21 @@ repos:
     rev: lychee-v0.24.2
     hooks:
       # The devshell supplies the lychee binary, so the hook installs none.
+      # owner: devshell (no-hook-language) upstream lychee offers only script, docker_image, and system ids.
       - id: lychee-system
         stages: [pre-push]
         types: [markdown]
         args: [--no-progress]
+  - repo: local
+    hooks:
+      # A flake holds no language library: a package belongs to the manifest
+      # of its stack, and the devshell keeps the toolchain.
+      - id: no-language-library-in-flake
+        name: a flake holds no language library
+        language: pygrep
+        entry: '^(?!\s*#).*(withPackages|python3[0-9]*Packages\.|pythonPackages\.|nodePackages\.|perlPackages\.)'
+        files: '(^|/)flake\.nix$|(^|/)nix/.*\.nix$'
+        stages: [pre-commit]
 # BEGIN spec-driven-docs managed
   - repo: local
     hooks:
