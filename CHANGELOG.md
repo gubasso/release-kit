@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.7](https://github.com/gubasso/release-kit/compare/v0.9.6...v0.9.7) - 2026-11-10
+
+### Fixed
+
+- *(setup)* pass the gitlab.com version floor and excluded prerequisites
+
 ## [0.9.6](https://github.com/gubasso/release-kit/compare/v0.9.5...v0.9.6) - 2026-11-06
 
 ### Other
