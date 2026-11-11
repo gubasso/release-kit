@@ -29,11 +29,11 @@ checked = 2026-11-11
 
 [[tool]]
 name = "cargo-dist"
-version = "0.32.0"
+version = "0.34.0"
 used_by = ["release.automation/rust"]
 purpose = "generates release.yml and builds and attaches the installers"
 check = "https://api.github.com/repos/axodotdev/cargo-dist/releases/latest"
-checked = 2026-09-02
+checked = 2026-11-11
 
 [[tool]]
 name = "rust-toolchain"

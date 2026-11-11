@@ -139,6 +139,13 @@
               # .release-kit/config.toml records, so CI installs no release
               # tool of its own.
               release-plz
+              # dist, the latest cargo-dist release. Its callers: the dist-plan
+              # and dist-build jobs of ci.yml, and the dist hook of
+              # .pre-commit-config.yaml. dist-workspace.toml pins the same
+              # version, and a CI step fails when the two differ. Should
+              # nixpkgs lag the latest release, build it here over the nixpkgs
+              # package, the way release-plz is built above.
+              pkgs.cargo-dist
             ];
           };
         }

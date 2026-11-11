@@ -1,4 +1,7 @@
 default_install_hook_types: [pre-commit, commit-msg, pre-push]
+# A hook with no stages: key runs at commit and in the manual sweep that
+# `just check` and `rk integrate` run, and never again at push.
+default_stages: [pre-commit, manual]
 
 # The node hook runs on the devshell nodejs. Without this line an empty
 # pre-commit cache can pick `default`, and nodeenv then fails on a prerelease
@@ -104,18 +107,22 @@ repos:
     rev: v6.0.0
     hooks:
       - id: trailing-whitespace
+        stages: [pre-commit, manual]
         args: [--markdown-linebreak-ext=md]
         exclude: '^(CHANGELOG\.md|SECURITY\.md|\.github/workflows/(code-scanning-codeql|pr-title|release-plz|release|scorecard)\.yml|\.release-kit/(manifest|setup-proof)\.json|\.spec-driven-docs/manifest\.json|_docs/\.markdownlint-cli2\.jsonc|_docs/specs/SPEC-(budget-debt|comparison-docs|decision-records|docs-format|docs-foundations|docs-specs|guides|instance|known-issues|spec-to-code|tracking|writing-policy|writing-style)\.md|_docs/specs/SPEC-tracking/tracking\.schema\.json|_docs/(specs|decisions|guides|reference)/TEMPLATE-[a-z-]+\.md)$|(^|/)(Cargo|flake)\.lock$'
       - id: end-of-file-fixer
+        stages: [pre-commit, manual]
         exclude: '^(CHANGELOG\.md|SECURITY\.md|\.github/workflows/(code-scanning-codeql|pr-title|release-plz|release|scorecard)\.yml|\.release-kit/(manifest|setup-proof)\.json|\.spec-driven-docs/manifest\.json|_docs/\.markdownlint-cli2\.jsonc|_docs/specs/SPEC-(budget-debt|comparison-docs|decision-records|docs-format|docs-foundations|docs-specs|guides|instance|known-issues|spec-to-code|tracking|writing-policy|writing-style)\.md|_docs/specs/SPEC-tracking/tracking\.schema\.json|_docs/(specs|decisions|guides|reference)/TEMPLATE-[a-z-]+\.md)$|(^|/)(Cargo|flake)\.lock$'
       - id: mixed-line-ending
         args: [--fix=lf]
         exclude: '^(CHANGELOG\.md|SECURITY\.md|\.github/workflows/(code-scanning-codeql|pr-title|release-plz|release|scorecard)\.yml|\.release-kit/(manifest|setup-proof)\.json|\.spec-driven-docs/manifest\.json|_docs/\.markdownlint-cli2\.jsonc|_docs/specs/SPEC-(budget-debt|comparison-docs|decision-records|docs-format|docs-foundations|docs-specs|guides|instance|known-issues|spec-to-code|tracking|writing-policy|writing-style)\.md|_docs/specs/SPEC-tracking/tracking\.schema\.json|_docs/(specs|decisions|guides|reference)/TEMPLATE-[a-z-]+\.md)$|(^|/)(Cargo|flake)\.lock$'
       - id: check-added-large-files
         args: ['--maxkb=16384']
+        stages: [pre-commit, manual]
       - id: check-case-conflict
       - id: check-merge-conflict
       - id: destroyed-symlinks
+        stages: [pre-commit, manual]
       - id: check-yaml
       - id: check-toml
       - id: detect-private-key
@@ -158,17 +165,16 @@ repos:
         language: system
         files: '^(src/|tests/|build\.rs$|Cargo\.(toml|lock)$|method/|bindings/|snippets/|blocks/|skills/|versions\.toml$|LICENSE)'
         pass_filenames: false
-      # The three checks below are scope `both` at moment `manual`: each is
-      # too expensive for a commit and belongs at the last boundary before
-      # the trunk, and continuous integration reaches all three by invoking
-      # the same stage through `just check`.
+      # The three checks below are scope `both` at moment push: each is too
+      # costly for a commit, so it runs at pre-push, and in the manual sweep
+      # that `rk integrate` and `just check` run, which CI invokes too.
       # owner: devshell (project-environment) cargo deny is a cargo subcommand that reads the lock file of the crate.
       - id: cargo-deny
         name: cargo deny check
         entry: cargo deny check
         language: system
         always_run: true
-        stages: [manual]
+        stages: [pre-push, manual]
         pass_filenames: false
       # owner: host (no-hook-language) nix comes from the host and has no hook in a language that pre-commit builds.
       - id: nix-flake-check
@@ -176,7 +182,7 @@ repos:
         entry: nix flake check
         language: system
         always_run: true
-        stages: [manual]
+        stages: [pre-push, manual]
         pass_filenames: false
       # The scratch landing round trip, through the recipe that owns it.
       # Never make this entry `just check`: that recipe invokes pre-commit
@@ -187,7 +193,20 @@ repos:
         entry: just build
         language: system
         always_run: true
-        stages: [manual]
+        stages: [pre-push, manual]
+        pass_filenames: false
+      # The two release proofs of the dist-plan job of ci.yml: the committed
+      # release.yml is what the pinned dist generates, and dist plan
+      # succeeds. The tracked check comes first, because git diff never
+      # shows an untracked path, so a deleted workflow would regenerate and
+      # diff clean.
+      # owner: devshell (project-environment) dist reads the workspace of the crate and generates its workflow.
+      - id: dist-plan
+        name: dist release proofs
+        entry: sh -c 'set -eu; pin=$(grep -m1 "^cargo-dist-version" dist-workspace.toml | cut -d\" -f2); [ -n "$pin" ] || { echo "dist-workspace.toml names no cargo-dist-version" >&2; exit 1; }; dist --version | grep -Fq "$pin" || { echo "the dist on PATH is not the pinned $pin" >&2; exit 1; }; git ls-files --error-unmatch -- .github/workflows/release.yml > /dev/null; dist generate; git diff --exit-code -- .github/workflows/release.yml; dist plan > /dev/null'
+        language: system
+        always_run: true
+        stages: [pre-push, manual]
         pass_filenames: false
   # zizmor and actionlint take their upstream hooks, which pre-commit builds
   # (python and golang). actionlint runs shellcheck from PATH on the `run:`
@@ -236,6 +255,7 @@ repos:
     hooks:
       - id: typos
         args: [--force-exclude]
+        stages: [pre-commit, manual]
   - repo: https://github.com/sirwart/ripsecrets
     rev: v0.1.11
     hooks:
@@ -258,7 +278,7 @@ repos:
         language: pygrep
         entry: '^(?!\s*#).*(withPackages|python3[0-9]*Packages\.|pythonPackages\.|nodePackages\.|perlPackages\.)'
         files: '(^|/)flake\.nix$|(^|/)nix/.*\.nix$'
-        stages: [pre-commit]
+        stages: [pre-commit, manual]
   # A flake reference reads the git tree of a checkout, never a path copy of
   # the whole folder into the Nix store. The hook is published by exobrain-tech.
   - repo: https://github.com/gubasso/exobrain-tech

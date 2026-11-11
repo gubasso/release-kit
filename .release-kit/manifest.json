@@ -1,6 +1,6 @@
 {
   "schema_version": 12,
-  "rk_version": "0.9.7",
+  "rk_version": "0.9.8",
   "origin": "adopt",
   "landed_at": "2026-08-30T00:14:29Z",
   "profile": {
@@ -103,7 +103,7 @@
     {
       "destination": "dist-workspace.toml",
       "kind": "seeded",
-      "sha256": "84b6e8a7658c4c3e1c9bfa12f44c8ffe021bc259d2e306c11b56734baa8f9cd6"
+      "sha256": "8b766c378f46fc262874b49ffe529d5851643de466e5450936b925c27ca3566c"
     },
     {
       "destination": "release-plz.toml",
@@ -113,7 +113,7 @@
   ],
   "pins": {
     "attest": "4",
-    "cargo-dist": "0.32.0",
+    "cargo-dist": "0.34.0",
     "checkout": "4",
     "codeql-analyze": "4",
     "codeql-init": "4",

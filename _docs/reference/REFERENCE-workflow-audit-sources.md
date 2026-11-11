@@ -62,10 +62,10 @@ Bearing: every mint in the snippets names its scope, in all three technology bin
 
 ## cargo-dist, on the workflow it generates
 
-The generated `release.yml` sets `contents: write` at workflow level and interpolates expressions into `run:` bodies. Both are open upstream. Re-checked on 2026-09-09: dist 0.32.0 is still the latest release, published 2026-05-22, and still the one this repository pins, so no upgrade removes them today.
+The generated `release.yml` sets `contents: write` at workflow level and interpolates expressions into `run:` bodies. Both are open upstream. Re-checked on 2026-11-11: dist 0.34.0 is the latest release, published 2026-11-02, and the one this repository pins, and its generated workflow keeps both, so no upgrade removes them today.
 
-- <https://github.com/axodotdev/cargo-dist/issues/2320> — open, 2026-03-04, on the interpolations, with a candidate fix linked. Unchanged at the 2026-09-09 re-check.
-- <https://github.com/axodotdev/cargo-dist/issues/62> — open, 2023-01-31, on the shell quoting. Unchanged at the 2026-09-09 re-check.
+- <https://github.com/axodotdev/cargo-dist/issues/2320> — open, 2026-03-04, on the interpolations, with a candidate fix linked. Still open at the 2026-11-11 re-check.
+- <https://github.com/axodotdev/cargo-dist/issues/62> — open, 2023-01-31, on the shell quoting. Unchanged at the 2026-11-11 re-check.
 - <https://github.com/axodotdev/cargo-dist/issues/2133> — closed completed 2025-10-22; moved `attestations` and `id-token` to the jobs and left `contents: write` at workflow level.
 
 Bearing: `_docs/reference/known-issues/KI-dist-generates-an-unhardened-workflow.md` records the acceptance and its retirement condition.
