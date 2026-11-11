@@ -102,6 +102,23 @@ fn needs_driver(ctx: &Ctx) -> Option<String> {
     })
 }
 
+/// A crate that publishes to no registry packages nothing, so the
+/// packaging gate has nothing to prove there.
+///
+/// SATISFIES forge-setup:a-package-check-states-policy-reach
+pub(crate) fn no_registry(ctx: &Ctx) -> Option<String> {
+    (ctx.automatic_release()
+        && ctx.driver() == Some(crate::profile::RegistryAnswer::DRIVER)
+        && ctx.profile.release.registry == Some(crate::profile::RegistryAnswer::None))
+    .then(|| "the crate publishes to no registry, so nothing is packaged".to_owned())
+}
+
+/// The packaging gate reads the driver's own command, and applies only
+/// where the release publishes to a registry.
+fn needs_packaging(ctx: &Ctx) -> Option<String> {
+    needs_driver(ctx).or_else(|| no_registry(ctx))
+}
+
 /// The private reporting channel pairs with the landed policy, so it
 /// applies where the target requested one at a forge this release drives.
 fn needs_reporting_policy(ctx: &Ctx) -> Option<String> {
@@ -155,6 +172,22 @@ impl std::fmt::Debug for StepSpec {
     }
 }
 
+/// The setup step that stores each stored secret a landed workflow reads,
+/// so a landing that moves a secret can name who stores the new one.
+const SECRET_STEPS: [(&str, &str); 2] = [
+    ("RELEASE_BOT_APP_ID", "bot-secrets"),
+    ("RELEASE_BOT_APP_PRIVATE_KEY", "bot-secrets"),
+];
+
+/// The setup step that stores the stored secret `name`, where one does.
+#[must_use]
+pub fn secret_step(name: &str) -> Option<&'static str> {
+    SECRET_STEPS
+        .iter()
+        .find(|(secret, _)| *secret == name)
+        .map(|(_, step)| *step)
+}
+
 /// The fifteen steps, with reporting intake last.
 ///
 /// `package-check`, `branch-reminder`, and `forge-version` belong to no
@@ -172,7 +205,7 @@ pub const STEPS: [StepSpec; 15] = [
         optional: false,
         forge_cli: &[],
         prereqs: &[],
-        applies: needs_driver,
+        applies: needs_packaging,
     },
     StepSpec {
         name: "default-branch",

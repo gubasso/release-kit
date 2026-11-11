@@ -878,6 +878,7 @@ mod tests {
                     driver: Some("rust".into()),
                     style: Some(Style::Trunk),
                     line_prefix: Some(crate::config::LINE_PREFIX_DEFAULT.to_owned()),
+                    registry: None,
                 },
             },
             git: GitWorkflow {
@@ -937,6 +938,7 @@ mod tests {
                     driver: None,
                     style: None,
                     line_prefix: None,
+                    registry: None,
                 },
             },
             capabilities: CapabilityRequests {

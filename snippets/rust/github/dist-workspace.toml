@@ -15,7 +15,9 @@ installers = ["shell"]
 # Target platforms to build apps for (Rust target-triple syntax). One
 # target: x86_64 GNU/Linux is the only platform this project builds,
 # tests, and supports. Add a target only together with the proof that
-# builds and runs it.
+# builds and runs it. The gated dist-build job of rk binding rust builds
+# each target before a merge, and rk status --check reports a target no
+# gated job builds.
 targets = ["x86_64-unknown-linux-gnu"]
 # Which actions to run on pull requests. Skip, because the forge resolves a
 # job's needs inside one workflow file: the trunk protection requires one

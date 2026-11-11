@@ -6,7 +6,13 @@ changelog_update = true
 # ordinary work merge publishes nothing and the release decision stays on the
 # one merge button.
 release_always = false
-publish = true
+publish = true # RK_IF_REGISTRY
+# RK_IF_NO_REGISTRY # The crate publishes to no registry, so release-plz reads the last
+# RK_IF_NO_REGISTRY # release from the v* tags that git_tag_name below writes, tags each
+# RK_IF_NO_REGISTRY # release, and publishes nothing. release-plz refuses publish = true
+# RK_IF_NO_REGISTRY # together with git_only = true, so the two change together.
+# RK_IF_NO_REGISTRY publish = false
+# RK_IF_NO_REGISTRY git_only = true
 # This tag shape assumes one released package.
 git_tag_name = "v{{ version }}"
 # This pair has no artifact builder, so release-plz owns the release page:

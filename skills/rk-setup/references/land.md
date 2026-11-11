@@ -29,6 +29,7 @@ Fill the pipeline:
 1. The Prove step passed.
 2. `SECURITY.md` names this target and its private reporting channel. Where it does not, stage again with the right repository.
 3. Answer each sentinel: `rk status --target . --json` lists each one in `sentinel_locations`, by file and line. Write the project's value into the seeded file as a gated edit.
-4. Take `rk guide setup` 4b, the artifact plan, then 4d, the hooks, last.
-5. State in the report that the landed files reach the trunk through the project's own workflow, which is `rk guide setup` 4c.
-6. `rk status --target . --json` reports `classification` `current`.
+4. Take `rk guide setup` 4b, the artifact plan.
+5. Write the proof the landing closes on: `rk setup check --target .`, then `rk setup checkpoint --target .` on a host that holds the bot key. A step this forge cannot run goes in `setup.excluded_steps` with its reason. Until then `rk status --check` reports `setup-proof-absent`.
+6. `rk status --target . --json` reports `classification` `current`, with `setup_proof` `compatible`.
+7. State in the report that the landed files and `.release-kit/setup-proof.json` reach the trunk together through the project's own workflow, which is `rk guide setup` 4c, and take 4d, the hooks, last.

@@ -20,7 +20,7 @@ Verify: `cargo nextest run -E 'test(release_status_reads_unknown_without_credent
 
 ### `release-state:the-report-joins-the-record-and-the-forge` — The report joins the record and the forge
 
-`rk release status` MUST report, in one `rk.release-status/1` document and writing nothing, the recorded release style, integration authority, checkout mode, and trunk read offline, the open release request with its number, its proposed version, and whether it is armed, its checks, and whether it is behind the trunk, the last release with its tag and whether it is published and its artifacts verified, and every release line `rk lines list` reports.
+`rk release status` MUST report, in one `rk.release-status/1` document and writing nothing, the recorded release style, integration authority, checkout mode, and trunk read offline, the open release request with its number, its proposed version, and whether it is armed, its checks, and whether it is behind the trunk, the last release with its tag and whether it is published and its artifacts verified, and every release line `rk lines list` reports. Where the pair publishes to no registry, `profile.release.registry = "none"`, a release MUST read published once its release page exists, and the report MUST read no registry.
 
 #### Scenario: The release request is open, unarmed, and behind the trunk
 
@@ -28,11 +28,11 @@ Verify: `cargo nextest run -E 'test(release_status_reads_unknown_without_credent
 - WHEN `rk release status --json` runs
 - THEN the request reads `open`, number and version stated, armed `no`, checks `failing`, and behind the trunk `yes`, beside the last release and its read-back
 
-Verify: `cargo nextest run -E 'test(release_status_reports_each_request_state)'`
+Verify: `cargo nextest run -E 'test(release_status_reports_each_request_state) or test(release_status_reads_the_release_page_for_a_crate_with_no_registry)'`
 
 ### `release-state:a-symptom-names-its-recovery` — A symptom names its recovery
 
-When the observed state shows a merged release request whose version has no tag or no published version, a published version whose release page carries no artifact, or an artifact no attestation covers, the report MUST list the symptom under its stable code, `request-merged-nothing-published`, `published-no-artifacts`, or `artifact-without-attestation`, with its evidence and the `rk method recovery` section that owns the path.
+When the observed state shows a merged release request whose version has no tag or no published version, a published version whose release page carries no artifact, or an artifact no attestation covers, the report MUST list the symptom under its stable code, `request-merged-nothing-published`, `published-no-artifacts`, or `artifact-without-attestation`, with its evidence and the `rk method recovery` section that owns the path. Each release tag newer than the newest complete release of its own line, with no complete page itself, MUST be listed as `tag-without-release`: the trunk and each release line keep their own cutoff, a complete page is one with artifacts for a pair that builds them and one that exists for any other, and the read walks each line newest first and stops at its first complete page, so a tag older than a complete release of its line drops out and an accepted gap needs no record.
 
 #### Scenario: The last release request merged and no tag followed
 
@@ -40,7 +40,13 @@ When the observed state shows a merged release request whose version has no tag 
 - WHEN `rk release status --json` runs
 - THEN the report lists `request-merged-nothing-published` with the request number and the missing tag, and names "The release request merged and nothing published"
 
-Verify: `cargo nextest run -E 'test(release_status_reports_each_detected_symptom)'`
+#### Scenario: Two tags followed the last complete release
+
+- GIVEN a forge whose tags are v0.6.6 with a complete page, and v0.6.7 and v0.6.8 with no page
+- WHEN `rk release status --json` runs
+- THEN the report lists `tag-without-release` for v0.6.8 and v0.6.7 and names "The tag exists and the release does not", and a complete v0.6.9 retires both
+
+Verify: `cargo nextest run -E 'test(release_status_reports_each_detected_symptom) or test(every_tag_after_the_newest_complete_release_is_reported) or test(each_release_line_keeps_its_own_cutoff)'`
 
 ### `release-state:a-wait-selects-runs-by-commit` — A wait selects runs by commit
 

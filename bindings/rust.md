@@ -25,7 +25,7 @@ On GitLab, `.gitlab-ci.yml` is the one landed pipeline, and a project declares i
 
 ### The development environment
 
-By default, each release job installs its own tools: `dtolnay/rust-toolchain` and `release-plz/action` on GitHub, and the `rust:1` image with a downloaded release-plz binary on GitLab. A project whose rule is that CI installs no project tool outside its own development environment records how a command runs there, in the `[dev_environment]` table of `.release-kit/config.toml`. release-kit assumes no environment manager and reads none from a file the target carries. The operator writes the table, and the next `rk upgrade --apply` renders the release jobs through it. With no table, the jobs render as they did before the table existed.
+By default, each release job installs its own tools: `dtolnay/rust-toolchain` and `release-plz/action` on GitHub, and the `rust:1` image with a downloaded release-plz binary on GitLab. Both forges run the release-plz that `versions.toml` pins: the action step names it through its `version` input, and the GitLab job downloads that release. So the binary that CI runs moves only with the registry row, never with the action's own default. A project whose rule is that CI installs no project tool outside its own development environment records how a command runs there, in the `[dev_environment]` table of `.release-kit/config.toml`. release-kit assumes no environment manager and reads none from a file the target carries. The operator writes the table, and the next `rk upgrade --apply` renders the release jobs through it. With no table, the jobs render as they did before the table existed.
 
 | Key                    | What it holds                                                                                                                                                              |
 | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -41,7 +41,7 @@ The cache stays out of the publishing job. That job holds `id-token: write` and 
 
 With an answer, the release jobs run `release-plz release` and `release-plz release-pr` through the prefix, and set the git identity of the release app with the runner's `gh`. The environment carries what the action installed before:
 
-- release-plz and the Rust toolchain.
+- release-plz and the Rust toolchain. No action `version` input reaches this path, so the environment owns the release-plz version. A crate that publishes to no registry needs release-plz 0.3.168 or later: from that release on, git-only mode reconstructs the last release without packaging it.
 - `cargo-semver-checks`, where `release-plz.toml` sets `semver_check = true`.
 
 The prefix keeps the caller's environment, because release-plz reads the GitHub OIDC variables to issue its crates.io token. `nix develop`, `mise exec`, and `devbox run` keep it. On GitLab, the image carries `curl` and `sed`, which the token exchange and the request arm call outside the prefix.
@@ -83,6 +83,19 @@ uses = "jdx/mise-action@<commit of the release you review>"
 tag = "<that release>"
 ```
 
+### A crate that publishes to no registry
+
+A crate that publishes to no registry records `profile.release.registry = "none"` in `.release-kit/config.toml`. The answer is valid for the rust driver alone, and an absent answer reads as `crates-io`. Under `none`, the landing seeds `release-plz.toml` with these two lines:
+
+```toml
+publish = false
+git_only = true
+```
+
+In git-only mode, release-plz reads the last release from the `v*` tags that `git_tag_name` writes, tags each new release, and publishes nothing. The GitHub release still comes from cargo-dist on the tag push. The rendered `release-plz.yml` requests no `id-token: write`, the GitLab release job reads no registry token, `package-check` does not apply, and `rk release status` reads the release page as the publication. `rk status --check` fails a `release-plz.toml` whose `publish` and `git_only` contradict each other or the answer.
+
+A target that moves back to crates.io sets the answer to `crates-io`, removes `git_only`, and sets `publish = true` in the same change, because a landing never rewrites the seeded file. Then it runs `rk upgrade --apply`, and the registry steps of `rk guide setup` apply again.
+
 ## The changelog
 
 release-plz writes `CHANGELOG.md` in its own form, and the seeded `release-plz.toml` carries no `[changelog]` section. Do not add one to satisfy a formatter or a prose gate: exclude the changelog from those checks, as [generated files](./README.md#generated-files) says, together with the other files that the landing and cargo-dist write.
@@ -110,11 +123,13 @@ dist plan
 # check: prints the artifact list for every target in dist-workspace.toml
 ```
 
-The same two proofs, as the job the project's gate needs. Its id joins that gate's `needs` beside the project's other jobs, and the pin is read from the file so a `cargo-dist-version` bump moves the job with it. The tracked check runs before the generate, because `git diff` compares the index with the working tree and shows no untracked path: without it, a request deleting the workflow regenerates it and diffs clean. The extraction reads the one presentation the seed writes, so a requoted or indented key yields no pin; the emptiness check and the version assertion make that failure loud rather than a silently wrong version. A target whose CI runs through a devshell wraps every `dist` command the way its other jobs are wrapped. A target large enough to split its CI across called workflows keeps the job in whichever called file the gate reaches, which is the one escape from a single gated file.
+The same two proofs, as the jobs the project's gate needs. Both ids join that gate's `needs` beside the project's other jobs, and the pin is read from the file so a `cargo-dist-version` bump moves the job with it. The tracked check runs before the generate, because `git diff` compares the index with the working tree and shows no untracked path: without it, a request deleting the workflow regenerates it and diffs clean. The extraction reads the one presentation the seed writes, so a requoted or indented key yields no pin; the emptiness check and the version assertion make that failure loud rather than a silently wrong version. A target whose CI runs through a devshell wraps every `dist` command the way its other jobs are wrapped. A target large enough to split its CI across called workflows keeps the job in whichever called file the gate reaches, which is the one escape from a single gated file.
 
 ```yaml
 dist-plan:
   runs-on: ubuntu-latest
+  outputs:
+    plan: ${{ steps.plan.outputs.plan }}
   steps:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
     - name: install dist at the configured pin
@@ -135,8 +150,58 @@ dist-plan:
         dist generate
         git diff --exit-code -- .github/workflows/release.yml
     - name: the configuration produces a viable release
-      run: dist plan
+      id: plan
+      run: |
+        set -euo pipefail
+        dist plan --output-format=json > plan-dist-manifest.json
+        echo "plan=$(jq -c . plan-dist-manifest.json)" >> "$GITHUB_OUTPUT"
+
+dist-build:
+  needs: dist-plan
+  strategy:
+    fail-fast: false
+    matrix: ${{ fromJson(needs.dist-plan.outputs.plan).ci.github.artifacts_matrix }}
+  runs-on: ${{ matrix.runner }}
+  container: ${{ matrix.container && matrix.container.image || null }}
+  steps:
+    - name: enable windows longpaths
+      run: git config --global core.longpaths true
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      with:
+        persist-credentials: false
+        submodules: recursive
+    - name: install Rust where the container has none
+      if: ${{ matrix.container }}
+      run: |
+        if ! command -v cargo > /dev/null 2>&1; then
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+        fi
+    - name: install dist
+      run: ${{ matrix.install_dist.run }}
+    - name: dist runs at the configured pin
+      shell: bash
+      run: |
+        set -euo pipefail
+        pin="$(grep -m1 '^cargo-dist-version' dist-workspace.toml | cut -d'"' -f2)"
+        dist --version | grep -Fq "$pin"
+    - name: install the system packages the target needs
+      run: ${{ matrix.packages_install }}
+    - name: build the matrix target
+      env:
+        DIST_ARGS: ${{ matrix.dist_args }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        # shellcheck disable=SC2086
+        dist build $DIST_ARGS
 ```
+
+`dist-build` builds every target before a merge. Its matrix is the `ci.github.artifacts_matrix` of the plan, the same matrix the generated `release.yml` builds from on the tag, so a target added to `dist-workspace.toml` joins the gate with no edit here, and a target the code cannot build fails the request instead of the release that already pushed its tag. A matrix job inherits nothing from `dist-plan`, so each one checks out, installs dist from the plan's own install step and proves the pin, runs in the matrix container where one is named, and installs the matrix's system packages, the way the generated template's `build-local-artifacts` job does. A target whose CI runs through a devshell runs `dist build` through it too.
+
+The job runs on every pull request. A job with an `if:` condition, or a workflow with a `paths` filter, does not prove every merge, so `rk status --check` reports `dist-build-conditional` as a limitation and counts no target for it. A macOS or Windows runner costs minutes on a private repository, and whether a target gets a supported way to run the build on fewer requests is an open question. Every GitHub target with an automatic release is public today, where the runners cost nothing.
+
+`rk status --check` reports `dist-target-unbuilt` for each target of `dist-workspace.toml` that no job the gate needs builds. The gate is the job whose check context is `setup.required_check`; where that names nothing, every job of every pull-request workflow is judged, and the report states the limitation `gate-unnamed`. A gate it cannot resolve to one job reports `gate-unresolved`, a gate in a workflow that runs on neither `pull_request` nor `merge_group` reports `gate-not-on-requests`, and a `dist build` whose arguments or matrix it cannot read reports `dist-build-unreadable` rather than passing.
 
 `rk status --check` judges the committed workflow against `dist-workspace.toml` without `dist` installed: every reference the workflow runs is immutable, it is the configuration's own value wherever the configuration pins that action, a step the check cannot resolve is reported rather than passed, and an attest step is present while `github-attestations` is true. It reads from the workflow to the configuration, so a pin the workflow never runs is the target's own tuning; a table entry naming a movable tag pins nothing, so every reference is judged for itself whatever the configuration says about it. It reads the grammar cargo-dist writes — block and flow steps, quoted and unquoted keys — and a workflow hand-authored in some further YAML presentation is beyond a text reader, which is one more reason the `dist generate` proof above stays the whole-file check. It is the gate a target carries after the landing, and the `dist generate` proof above stays the stronger check, because only regenerating sees the rest of the workflow body. It also faults a configuration whose `pr-run-mode` is not `skip`, and a generated workflow that still carries a pull-request trigger, because the two are the same defect at the two ends of the generator. A workflow that was never generated is reported by nothing: `rk init` writes none, so generating it is a step the operator owes. The generated workflow always builds with `--profile dist`; only `dist init` writes `[profile.dist]`, while `dist generate --mode ci` never touches `Cargo.toml`, and cargo-dist fixes `dist` as a constant with no configuration key. `rk status --check` therefore requires that root profile whenever parsed configuration selects GitHub CI.
 
@@ -147,7 +212,7 @@ cargo-dist's output does not pass a strict workflow audit. It interpolates `${{ 
 The proof above and a hand-hardened workflow cannot both hold, because only cargo-dist's unmodified output satisfies the proof. The project chooses one, and the choice is the project's, not this convention's.
 
 - Keep the proof: the project commits the generated file as it is, and records each accepted finding in its own audit configuration, with the upstream issue that retires it. The workflow stays provably equal to what the pin produces.
-- Keep the hardening: the project sets `allow-dirty = ["ci"]` in `dist-workspace.toml`, edits the workflow, and runs `dist plan` alone in CI. The `dist generate` proof comes out of the gate, and `rk status --check` becomes the only judge the workflow still has.
+- Keep the hardening: the project sets `allow-dirty = ["ci"]` in `dist-workspace.toml`, edits the workflow, and runs `dist plan` and `dist build` alone in CI. The `dist generate` proof comes out of the gate, and `rk status --check` becomes the only judge the workflow still has.
 
 The second path carries an obligation that the first one automates. At every `cargo-dist-version` bump the operator regenerates into a scratch copy, reads the whole diff, and ports every change except the hardening. The project records that duty where its operator meets it. A project that takes this path silently keeps the hardening for one release and loses it at the next bump.
 
@@ -264,6 +329,9 @@ Three providers were considered and refused, named here rather than left for eac
 - `git_release_enable = false`: cargo-dist owns the GitHub release, because it is the half holding the installers. Both creating it leaves dist failing on an existing tag name and every release page empty. The tag stays release-plz's.
 - `semver_check = false` for a binary-only crate, or one whose lib target exists only for its own tests; cargo-semver-checks gates the bump only when external consumers hold the API.
 - `cargo binstall <crate>` resolves cargo-dist's artifacts from the first release with no configuration.
+- The pinned release-plz is 0.4.3. Between 0.3.160 and the pin, no configuration key that the seed sets changed its meaning. The breaking entry of 0.4.0, pull request 3263, changes a library function and no key. Pull request 3280 in 0.4.2 rejects only an explicit `publish = true` on a package that Cargo cannot publish. Pull request 3282 in 0.4.1 concerns `changelog_include`, which the seed does not set.
+- Two changes in that range move which commits ask for a release under the seed, with no key involved. From 0.4.2, a change to a dev-dependency requirement that a package takes from the workspace `Cargo.toml` through `workspace = true` asks for no release, unless it updates the `Cargo.lock` dependencies of a package with binaries. From 0.3.170, release-plz reads the package history across merged branches, and keeps a change that survives through another merge lineage.
+- The git-only fixes are why the pin moved: pull request 3039 in 0.3.164 reconstructs a git-only package without verifying it, and pull request 3058 in 0.3.168 builds no crate archive for it.
 
 ## Provenance
 

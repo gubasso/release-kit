@@ -108,15 +108,14 @@ pub fn observe(ctx: &Ctx) -> Vec<Milestone> {
             },
         ];
     };
-    let registry = match driver {
-        "rust" => Some(Registry::CratesIo),
-        "python" => Some(Registry::Pypi),
-        _ => None,
-    };
+    let registry = release_state::registry_for(driver, ctx.profile.release.registry);
     let package = release_state::package_name(ctx.target.as_std_path(), driver);
     let mut found = vec![first_version(registry, package.as_deref())];
     found.push(automated_release(ctx, driver));
-    if let Some(package) = package.as_deref() {
+    // The operator's registry forms exist only where a registry receives
+    // the release, so a crate that publishes to none reports no
+    // crates.io instruction.
+    if let Some(package) = package.as_deref().filter(|_| registry.is_some()) {
         for (id, check) in operator_forms(driver, package) {
             found.push(Milestone {
                 id,
@@ -132,7 +131,7 @@ fn first_version(registry: Option<Registry>, package: Option<&str>) -> Milestone
     let (status, detail) = match (registry, package) {
         (None, _) => (
             "not-applicable",
-            "the driver publishes to no registry; the release page is the distribution".to_owned(),
+            "the release publishes to no registry; the release page is the distribution".to_owned(),
         ),
         (Some(_), None) => (
             "unknown",

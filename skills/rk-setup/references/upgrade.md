@@ -7,7 +7,8 @@ Take a record older than the installed `rk` to this binary's projection, and app
 1. Read `config.pending` in `rk status --target . --json`. Ask each key the record predates, with its consequence. Ask first a key the upgrade refuses without, the release style: under `trunk`, the release request is armed and a green trunk ships on its own.
 2. A record that predates the integration mode reads as `forge`. State that, offer the change once, and add the answer to the Stage step's flags.
 3. A record that predates the workflow guards reads them as a pending answer. Ask once whether to keep them or drop them, with keep as the default.
-4. Read `legacy_state` in the same report.
+4. Read the guidance files the stage copies into `reference/guidance`, each release above the recorded one whose destinations the target has. `0.9.8.md` carries the order an upgrade to it takes: the registry answer, the upgrade, the gated dist jobs, the checkpoint, and one commit with the proof.
+5. Read `legacy_state` in `rk status --target . --json`.
    - An entry with `active` true is an operation a 0.4.x release could still apply. Ask whether the operator finishes it with the old binary, or records that it is abandoned. The update waits for the answer. `rk guide landing` 1b carries the procedure.
    - Hold each inactive entry for the post-flight.
 
@@ -28,8 +29,10 @@ Fill the pipeline:
 
 ## Post-flight
 
-1. The Prove step passed, and `rk status --target . --json` reports `classification` `current`.
+1. The Prove step passed.
 2. Regenerate what a landed configuration generates, such as the artifact plan, through the binding's step, before any check reads it. `rk guide setup` 4b carries the command.
-3. Remove each retired file the operator chose to remove, as a gated step.
-4. Remove each inactive legacy path by its exact path, only under explicit cleanup authorization, as `rk guide landing` 5b carries it. No `rk` verb removes this state.
-5. Route each saved copy as the pipeline says.
+3. Read `setup_proof` in `rk status --target . --json`. Where it reads `absent` or `stale`, the upgrade moved the setup contract: route to the `setup` task, then to `rk setup checkpoint --target .` on a host that holds the bot key, and commit the proof with the upgrade. Where a step this forge cannot run blocks the checkpoint, exclude it in `setup.excluded_steps` with its reason.
+4. `rk status --target . --json` reports `classification` `current`.
+5. Remove each retired file the operator chose to remove, as a gated step.
+6. Remove each inactive legacy path by its exact path, only under explicit cleanup authorization, as `rk guide landing` 5b carries it. No `rk` verb removes this state.
+7. Route each saved copy as the pipeline says.

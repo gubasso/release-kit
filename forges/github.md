@@ -92,7 +92,7 @@ The grant above is the ceiling. Each landed workflow mints a token narrower than
 On the App's own settings page, which the registration lands on:
 
 1. About section, copy the App ID.
-   - the numeric id, not the Client ID: the landed `release-plz.yml` reads the pair through `actions/create-github-app-token@v3`, which prefers `client-id` and still accepts `app-id`, and this convention stays on the App ID
+   - the numeric id, not the Client ID: the landed workflows pass it through the `client-id` input of `actions/create-github-app-token@v3`, which hands the value to GitHub as the JWT issuer, and GitHub accepts the numeric App ID there. The secret keeps its name `RELEASE_BOT_APP_ID`, and a Client ID stored in it works too. `rk setup` reads the numeric App ID to sign its own token and refuses any other value, so this walkthrough copies the App ID.
 2. Private keys section, click Generate a private key.
    - a `.pem` downloads at once; GitHub keeps only the public half and never shows the file again, so store it before leaving the page
 3. Move the file outside every repository, then `chmod 600` it; `bot-secrets` refuses a group-readable key.

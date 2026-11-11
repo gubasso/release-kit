@@ -36,10 +36,11 @@ jobs:
       # carries every permission the installation holds. This half pushes the
       # bump branch and opens, refreshes, and arms the request, so it takes
       # contents and pull-requests.
-      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         id: app-token
         with:
-          app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
+          # client-id takes the client ID or the numeric App ID; GitHub accepts either as the JWT issuer: https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app
+          client-id: ${{ secrets.RELEASE_BOT_APP_ID }}
           private-key: ${{ secrets.RELEASE_BOT_APP_PRIVATE_KEY }}
           permission-contents: write
           permission-pull-requests: write
@@ -122,10 +123,10 @@ jobs:
       # pull request, so contents alone carries it. A target whose tag ruleset
       # blocks creation needs administration here too; the convention's ruleset
       # restricts deletion and update only.
-      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         id: app-token
         with:
-          app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
+          client-id: ${{ secrets.RELEASE_BOT_APP_ID }}
           private-key: ${{ secrets.RELEASE_BOT_APP_PRIVATE_KEY }}
           permission-contents: write
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

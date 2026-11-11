@@ -56,7 +56,7 @@ Verify: `cargo nextest run -E 'test(a_target_with_no_technology_and_no_forge_lan
 
 ### `project-profile:release-intent-has-three-modes` — Release intent has three modes
 
-`profile.release.mode` MUST be one of `automatic`, `external`, and `none`. `automatic` MUST require a forge, a repository identity, a driver present in `profile.technologies`, and a style, and `external` and `none` MUST carry no driver, no style, and no line prefix. `external` names a release the target owns through a process release-kit does not drive, and it MUST route the operator to no bot-operate chapter.
+`profile.release.mode` MUST be one of `automatic`, `external`, and `none`. `automatic` MUST require a forge, a repository identity, a driver present in `profile.technologies`, and a style, and `external` and `none` MUST carry no driver, no style, and no line prefix. `external` names a release the target owns through a process release-kit does not drive, and it MUST route the operator to no bot-operate chapter. `profile.release.registry` names where the crate publishes, `crates-io` or `none`, and it MUST be refused, naming the key and the shape it needs, under any mode but `automatic` and any driver but `rust`. An absent key MUST read as `crates-io` and leave the record and every landed byte as they were, so a target that never answered keeps its behavior. `none` MUST seed `publish = false` with `git_only = true`, and MUST land a release workflow that requests no registry credential.
 
 #### Scenario: A release-less profile carries a style
 
@@ -64,7 +64,7 @@ Verify: `cargo nextest run -E 'test(a_target_with_no_technology_and_no_forge_lan
 - WHEN the reader loads it
 - THEN it refuses naming `profile.release.style` and the shape a `none` mode takes
 
-Verify: `cargo nextest run -E 'test(every_invalid_release_state_names_its_key)'`
+Verify: `cargo nextest run -E 'test(every_invalid_release_state_names_its_key) or test(a_registry_answer_is_valid_only_for_an_automatic_rust_release) or test(an_absent_registry_answer_resolves_to_crates_io_and_moves_no_byte) or test(a_registry_less_seed_pairs_publish_off_with_git_only)'`
 
 ### `project-profile:an-unknown-category-is-preserved` — An unknown category is preserved
 

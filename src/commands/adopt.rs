@@ -207,6 +207,7 @@ pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
         out.result_line(format!("withheld {}: {}", entry.destination, entry.reason));
     }
 
+    crate::commands::init::report_moved_secrets(out, &held, &prepared)?;
     let replaced = if let Some(lock) = &lock {
         let landed = apply::land(&held, None, &prepared, apply::Origin::Adopt, lock)?;
         for entry in &landed.replaced {
@@ -464,6 +465,7 @@ mod tests {
                     driver: Some("rust".into()),
                     style: Some(crate::landing::Style::Trunk),
                     line_prefix: Some("release/".into()),
+                    registry: None,
                 },
             },
             git: GitWorkflow {

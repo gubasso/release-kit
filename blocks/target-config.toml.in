@@ -17,6 +17,7 @@ mode = RK_CONFIG_PROFILE_RELEASE_MODE # P: automatic, external, or none
 driver = RK_CONFIG_PROFILE_RELEASE_DRIVER # P: the technology that states the version and takes the bot; automatic alone
 style = RK_CONFIG_PROFILE_RELEASE_STYLE # P: trunk or lines; automatic alone
 line_prefix = RK_CONFIG_PROFILE_RELEASE_LINE_PREFIX # P: release-line branch prefix, rendered into the release triggers; automatic alone
+registry = RK_CONFIG_PROFILE_RELEASE_REGISTRY # P: crates-io or none, where the crate publishes, rust driver alone
 
 [git]
 trunk = RK_CONFIG_GIT_TRUNK # P: the one permanent branch, rendered into every artifact naming it

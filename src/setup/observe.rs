@@ -177,6 +177,11 @@ const BASH_LIMITATION: &str = "the make dist tarball is not inspected: git archi
 /// unproved inclusion named. A target that opted out of the policy owes no
 /// policy in its artifact, so nothing about one is judged or named there.
 fn package_check(ctx: &Ctx, run: &mut Runner) -> Result<StepState, RkError> {
+    // The stance already reports the step as not applicable; this keeps
+    // any caller that observes it anyway from running a packaging command.
+    if let Some(reason) = super::steps::no_registry(ctx) {
+        return Ok(StepState::ok(reason));
+    }
     let policy = ctx.reporting_policy();
     let (program, args): (&str, &[&str]) = match ctx.tech {
         Some("rust") => ("cargo", &["publish", "--dry-run", "--allow-dirty"]),

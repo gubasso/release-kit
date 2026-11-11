@@ -77,7 +77,7 @@ $ ( for f in "$tmp"/*; do
 ✓ Verification succeeded! ... and so on, once per asset — the installers included; one failure fails the loop
 ```
 
-The `--event push` filter on the second watch narrows it to the tag push, which is the only event `release.yml` runs on: `pr-run-mode` is `skip`, and the release proofs are the `dist-plan` job under the gate.
+The `--event push` filter on the second watch narrows it to the tag push, which is the only event `release.yml` runs on: `pr-run-mode` is `skip`, and the release proofs are the `dist-plan` and `dist-build` jobs under the gate.
 
 ## A request that falls behind the trunk
 

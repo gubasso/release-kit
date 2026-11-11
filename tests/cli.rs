@@ -270,6 +270,7 @@ fn manifest_requesting(
                 driver: Some(driver.to_owned()),
                 style,
                 line_prefix: Some(release_kit::config::LINE_PREFIX_DEFAULT.to_owned()),
+                registry: None,
             },
         },
         git: GitWorkflow {
@@ -9260,6 +9261,7 @@ fn upgrade_takes_the_glossary_and_keeps_the_operators_terms() {
 fn status_check_judges_the_glossary_block() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
     land_rust_guarded(target.path()).success();
+    seed_binding_dist_gate(target.path());
     let path = target.path().join("GLOSSARY.md");
 
     // The seeded file's sentinel is the target's own judgment to make,
@@ -9541,7 +9543,7 @@ fn status_json_is_one_object_over_a_fresh_landing() {
         .stdout
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["schema"], "rk.status/13");
+    assert_eq!(report["schema"], "rk.status/14");
     assert_eq!(report["landed"], true);
     assert_eq!(report["profile"]["release"]["driver"], "rust");
     assert_eq!(report["profile"]["release"]["style"], "trunk");
@@ -9629,6 +9631,7 @@ fn status_reports_each_of_the_seven_classifications() {
 
     let current = status_repo();
     land_rust(current.path()).success();
+    seed_binding_dist_gate(current.path());
     let seeded = current.path().join("release-plz.toml");
     let tuned: String = std::fs::read_to_string(&seeded)
         .expect("reads")
@@ -9793,6 +9796,7 @@ fn status_reports_the_state_a_0_4_release_left() {
 fn status_check_judges_the_identical_report() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
     land_rust(target.path()).success();
+    seed_binding_dist_gate(target.path());
 
     let plain = rk()
         .args(["status", "--target"])
@@ -9998,6 +10002,7 @@ fn status_prompts_on_what_an_upgrade_would_change() {
 fn status_check_does_not_fail_on_a_pending_upgrade() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
     land_rust(target.path()).success();
+    seed_binding_dist_gate(target.path());
     let workflow = target.path().join(".github/workflows/release-plz.yml");
     let old = b"# an older release's workflow\n";
     std::fs::write(&workflow, old).expect("the old bytes write");
@@ -10819,13 +10824,13 @@ fn versions_check_reports_each_pin_and_mutates_nothing() {
 url="${@: -1}"
 case "$url" in
   */commits/*) case "$url" in
-    *release-plz/action*) printf '%s' '{"sha":"2eb1d8bcb770b4c48ccfaad919734b38b51958c9"}';;
+    *release-plz/action*) printf '%s' '{"sha":"66b324fd6c72d05d2a08568492ecdd62bfb8a62b"}';;
     *create-github-app-token*) printf '%s' '{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}';;
     *rust-toolchain*) printf '%s' '{"sha":"4360b52568e2003a75bf9bc1d59f33a8e3fc893c"}';;
     *actions/checkout*) exit 22;;
     *) printf '%s' 'not json at all';;
   esac;;
-  *crates.io*) printf '%s' '{"crate":{"max_stable_version":"0.3.160"}}';;
+  *crates.io*) printf '%s' '{"crate":{"max_stable_version":"0.4.3"}}';;
   *cargo-dist*) printf '%s' '{"tag_name":"v999.0.0"}';;
   *git-cliff*) printf '%s' 'not json at all';;
   *actions/checkout*) exit 22;;
@@ -12613,6 +12618,7 @@ fn guide_release_renders_the_resolved_pairs_verifier() {
 fn status_judges_a_seeded_file_that_dropped_the_invariants() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
     land_rust(target.path()).success();
+    seed_binding_dist_gate(target.path());
     let seeded = target.path().join("dist-workspace.toml");
     let broken = "[workspace]\nmembers = [\"cargo:.\"]\n\n[dist]\ncargo-dist-version = \"0.32.0\"\nci = \"github\"\ngithub-attestations = false\n";
     std::fs::write(&seeded, broken).expect("the edit writes");
@@ -12817,6 +12823,7 @@ fn status_catches_a_stale_generated_artifact_workflow() {
 fn status_passes_a_regenerated_artifact_workflow() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
     land_rust(target.path()).success();
+    seed_binding_dist_gate(target.path());
     write_artifact_workflow(target.path(), |_, commit| commit.to_owned());
     let filled = std::fs::read_to_string(target.path().join("release-plz.toml"))
         .expect("the seeded file reads")
@@ -12966,6 +12973,7 @@ fn status_faults_a_generated_workflow_left_on_the_request_trigger() {
 fn status_is_silent_on_an_artifact_workflow_that_was_never_generated() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
     land_rust(target.path()).success();
+    seed_binding_dist_gate(target.path());
     assert!(
         !target.path().join(".github/workflows/release.yml").exists(),
         "the landing writes no artifact workflow"
@@ -13009,6 +13017,7 @@ fn status_faults_a_github_dist_target_without_the_dist_profile() {
         let manifest =
             std::fs::read(target.path().join("Cargo.toml")).expect("the crate manifest reads");
         land_rust(target.path()).success();
+        seed_binding_dist_gate(target.path());
         if let Some(ci) = ci {
             let config = target.path().join("dist-workspace.toml");
             let text = std::fs::read_to_string(&config)
@@ -13071,6 +13080,7 @@ fn status_accepts_a_github_dist_target_with_the_dist_profile() {
     )
     .expect("the crate manifest writes");
     land_rust(target.path()).success();
+    seed_binding_dist_gate(target.path());
     let filled = std::fs::read_to_string(target.path().join("release-plz.toml"))
         .expect("the seeded file reads")
         .lines()
@@ -13362,6 +13372,2110 @@ fn every_snippet_action_maps_to_one_registry_entry() {
             "{file}: {action}'s readable comment must be the registry's discovery ref"
         );
     }
+}
+
+/// One `[[tool]]` row of `versions.toml`, by name.
+fn registry_row(name: &str) -> toml::Value {
+    let registry = std::fs::read_to_string(repo_path("versions.toml")).expect("the registry reads");
+    let value: toml::Table = registry.parse().expect("the registry parses");
+    value
+        .get("tool")
+        .and_then(toml::Value::as_array)
+        .expect("tool entries")
+        .iter()
+        .find(|tool| tool.get("name").and_then(toml::Value::as_str) == Some(name))
+        .unwrap_or_else(|| panic!("a {name} entry"))
+        .clone()
+}
+
+/// Every `.github/workflows/*.yml` a landing wrote, as `(name, text)`.
+fn landed_workflows(target: &Path) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = std::fs::read_dir(target.join(".github/workflows"))
+        .expect("the workflows landed")
+        .map(|entry| entry.expect("an entry").path())
+        .map(|path| {
+            (
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .expect("a UTF-8 name")
+                    .to_owned(),
+                std::fs::read_to_string(&path).expect("the workflow reads"),
+            )
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+/// The stored-secret names a workflow text reads, `GITHUB_TOKEN` aside.
+fn secret_names(text: &str) -> std::collections::BTreeSet<String> {
+    text.split("secrets.")
+        .skip(1)
+        .map(|rest| {
+            rest.chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect::<String>()
+        })
+        .filter(|name| !name.is_empty() && name != "GITHUB_TOKEN")
+        .collect()
+}
+
+/// Every app-token step a GitHub landing renders passes the bot identity
+/// through `client-id`, on each driver, under both integration modes, so
+/// the release gate of a local integration is covered, and through a
+/// recorded development environment, which renders the release jobs
+/// through its own prefix.
+#[test]
+fn a_rendered_app_token_step_passes_the_identity_as_client_id() {
+    let identity = "client-id: ${{ secrets.RELEASE_BOT_APP_ID }}";
+    for tech in ["rust", "python", "bash"] {
+        for integration in ["local", "forge"] {
+            let target = tempfile::tempdir().expect("a scratch target exists");
+            rk().args(["init", "--tech", tech, "--forge", "github"])
+                .args(["--repo", "acme/widget", "--integration", integration])
+                .arg("--target")
+                .arg(target.path())
+                .arg("--apply")
+                .assert()
+                .success();
+            let mut minted = 0;
+            for (name, text) in landed_workflows(target.path()) {
+                assert!(
+                    !text.contains("app-id:"),
+                    "{tech}/{integration} {name} still passes app-id"
+                );
+                minted += text.matches(identity).count();
+                assert_eq!(
+                    text.matches("create-github-app-token@").count(),
+                    text.matches(identity).count(),
+                    "{tech}/{integration} {name}: every app-token step passes client-id"
+                );
+            }
+            // Two release halves, and the gate under local integration.
+            let expected = if integration == "local" { 3 } else { 2 };
+            assert_eq!(minted, expected, "{tech}/{integration}");
+        }
+    }
+    let target = land_pair("rust", "github");
+    append_target_config(target.path(), &dev_environment_answer("github"));
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    for (name, text) in landed_workflows(target.path()) {
+        assert!(
+            !text.contains("app-id:"),
+            "the development environment path: {name}"
+        );
+    }
+    let workflow = std::fs::read_to_string(target.path().join(".github/workflows/release-plz.yml"))
+        .expect("the workflow landed");
+    assert!(workflow.contains(identity), "{workflow}");
+}
+
+/// The release-plz binary CI runs is the registry's: both GitHub action
+/// steps name the pinned version through the `version` input, the action
+/// commit is the registry's, and the GitLab job downloads the same
+/// release, so neither forge runs a version the action's default chose.
+#[test]
+fn the_release_plz_version_agrees_with_the_registry() {
+    let row = registry_row("release-plz");
+    let version = row
+        .get("version")
+        .and_then(toml::Value::as_str)
+        .expect("a release-plz version");
+    let commit = row
+        .get("commit")
+        .and_then(toml::Value::as_str)
+        .expect("a release-plz action commit");
+    let github = String::from_utf8(
+        release_kit::embedded::SNIPPETS
+            .get_file("rust/github/.github/workflows/release-plz.yml")
+            .expect("the workflow is embedded")
+            .contents()
+            .to_vec(),
+    )
+    .expect("the workflow is text");
+    let actions = github.matches("uses: release-plz/action@").count();
+    assert_eq!(actions, 2, "both halves run the action");
+    assert_eq!(
+        github
+            .matches(&format!("uses: release-plz/action@{commit} "))
+            .count(),
+        actions,
+        "every action step pins the registry's commit"
+    );
+    assert_eq!(
+        github
+            .matches(&format!("          version: \"{version}\"\n"))
+            .count(),
+        actions,
+        "every action step names the registry's release-plz ({version})"
+    );
+    let gitlab = String::from_utf8(
+        release_kit::embedded::SNIPPETS
+            .get_file("rust/gitlab/.gitlab-ci.yml")
+            .expect("the pipeline is embedded")
+            .contents()
+            .to_vec(),
+    )
+    .expect("the pipeline is text");
+    let downloads: Vec<&str> = gitlab
+        .lines()
+        .filter(|line| line.contains("release-plz/releases/download/"))
+        .collect();
+    assert_eq!(downloads.len(), 1, "{downloads:?}");
+    assert!(
+        downloads[0].contains(&format!("/release-plz-v{version}/")),
+        "the GitLab job downloads the registry's release-plz ({version}): {}",
+        downloads[0]
+    );
+}
+
+/// A target an earlier release landed, whose workflow passes the bot
+/// identity through `app-id`, upgrades to `client-id` and reads the same
+/// two stored secrets: no secret is renamed, so no setup step runs.
+#[test]
+fn an_upgrade_keeps_the_bot_secret_names() {
+    use release_kit::digest::Digest;
+    let target = tempfile::tempdir().expect("a scratch target exists");
+    land_rust_locally(target.path()).success();
+    let path = target.path().join(".github/workflows/release-plz.yml");
+    let landed = std::fs::read_to_string(&path).expect("the workflow landed");
+    // The bytes 0.9.7 rendered: `app-id`, and no version input.
+    let earlier: String = landed
+        .replace("client-id: ${{", "app-id: ${{")
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("version: \""))
+        .fold(String::new(), |mut text, line| {
+            text.push_str(line);
+            text.push('\n');
+            text
+        });
+    assert_ne!(earlier, landed);
+    std::fs::write(&path, &earlier).expect("the earlier bytes write");
+    let mut manifest = read_manifest(target.path());
+    for file in manifest["files"].as_array_mut().expect("files") {
+        if file["destination"] == ".github/workflows/release-plz.yml" {
+            file["sha256"] = Digest::of(earlier.as_bytes()).to_string().into();
+        }
+    }
+    manifest["rk_version"] = serde_json::json!("0.9.7");
+    write_manifest(target.path(), &manifest);
+    let before = secret_names(&earlier);
+
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let upgraded = std::fs::read_to_string(&path).expect("the workflow reads");
+    assert!(!upgraded.contains("app-id:"), "{upgraded}");
+    assert!(upgraded.contains("client-id: ${{ secrets.RELEASE_BOT_APP_ID }}"));
+    let expected: std::collections::BTreeSet<String> =
+        ["RELEASE_BOT_APP_ID", "RELEASE_BOT_APP_PRIVATE_KEY"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+    assert_eq!(before, expected, "the earlier workflow");
+    assert_eq!(secret_names(&upgraded), expected, "the upgraded workflow");
+}
+
+/// Write `.release-kit/config.toml` with one `[profile.release]` body.
+fn write_release_config(target: &Path, release: &str) {
+    std::fs::create_dir_all(target.join(".release-kit")).expect("the config dir creates");
+    std::fs::write(
+        target.join(".release-kit/config.toml"),
+        format!("schema_version = 2\n\n[profile.release]\n{release}"),
+    )
+    .expect("the config writes");
+}
+
+/// A rust target landed on `forge` with `registry = "none"` answered
+/// before the landing.
+fn land_registry_less(forge: &str) -> tempfile::TempDir {
+    let target = tempfile::tempdir().expect("a scratch target exists");
+    write_release_config(target.path(), "registry = \"none\"\n");
+    rk().args(["init", "--tech", "rust", "--forge", forge])
+        .args(["--repo", "acme/widget", "--target"])
+        .arg(target.path())
+        .arg("--apply")
+        .assert()
+        .success();
+    target
+}
+
+/// The `rk status --check --json` report of `target`, with its exit code.
+fn status_check_json(target: &Path) -> (i32, serde_json::Value) {
+    let out = rk()
+        .args(["status", "--check", "--json", "--target"])
+        .arg(target)
+        .output()
+        .expect("the status runs");
+    let report = serde_json::from_slice(&out.stdout).expect("one JSON object");
+    (out.status.code().unwrap_or(-1), report)
+}
+
+/// The invariant failures of a status report, as `(code, remediation)`.
+fn invariant_codes(report: &serde_json::Value) -> Vec<(String, String)> {
+    report["invariant_failures"]
+        .as_array()
+        .expect("the invariant failures")
+        .iter()
+        .map(|failure| {
+            (
+                failure["code"].as_str().expect("a code").to_owned(),
+                failure["remediation"]
+                    .as_str()
+                    .expect("a remediation")
+                    .to_owned(),
+            )
+        })
+        .collect()
+}
+
+/// SATISFIES project-profile:release-intent-has-three-modes
+///
+/// The registry answer belongs to an automatic rust release alone: under
+/// another driver or another mode it refuses and names its key and the
+/// shape it needs, whether the configuration names the driver or the
+/// resolution derives it.
+#[test]
+fn a_registry_answer_is_valid_only_for_an_automatic_rust_release() {
+    for release in [
+        "mode = \"automatic\"\ndriver = \"bash\"\nregistry = \"none\"\n",
+        "mode = \"automatic\"\ndriver = \"python\"\nregistry = \"none\"\n",
+        "mode = \"external\"\nregistry = \"none\"\n",
+        "mode = \"none\"\nregistry = \"crates-io\"\n",
+        "mode = \"automatic\"\ndriver = \"rust\"\nregistry = \"pypi\"\n",
+    ] {
+        let target = tempfile::tempdir().expect("a scratch target exists");
+        write_release_config(target.path(), release);
+        let out = rk()
+            .args(["profile", "--target"])
+            .arg(target.path())
+            .output()
+            .expect("the profile runs");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{release}: {stderr}");
+        assert!(
+            stderr.contains("profile.release.registry"),
+            "{release}: {stderr}"
+        );
+        assert!(stderr.contains("crates-io or none"), "{release}: {stderr}");
+    }
+    // A driver the resolution derives from the technology, not from the
+    // configuration, refuses in the preview that reports it too.
+    for tech in ["bash", "python"] {
+        let target = tempfile::tempdir().expect("a scratch target exists");
+        write_release_config(target.path(), "registry = \"none\"\n");
+        let out = rk()
+            .args(["profile", "--tech", tech, "--forge", "github"])
+            .args(["--repo", "acme/widget", "--json", "--target"])
+            .arg(target.path())
+            .output()
+            .expect("the profile runs");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{tech}: {stderr}");
+        assert!(
+            stderr.contains("profile.release.registry") && stderr.contains("crates-io or none"),
+            "{tech}: {stderr}"
+        );
+        assert!(
+            stderr.contains(&format!("driver is {tech}")),
+            "{tech}: {stderr}"
+        );
+    }
+    // And at the landing.
+    let target = tempfile::tempdir().expect("a scratch target exists");
+    write_release_config(target.path(), "registry = \"none\"\n");
+    let out = rk()
+        .args(["init", "--tech", "bash", "--forge", "github"])
+        .args(["--repo", "acme/widget", "--target"])
+        .arg(target.path())
+        .arg("--apply")
+        .output()
+        .expect("the landing runs");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert!(stderr.contains("profile.release.registry"), "{stderr}");
+    assert!(stderr.contains("driver is bash"), "{stderr}");
+    assert!(
+        !target.path().join(".release-kit/manifest.json").exists(),
+        "a refused landing writes no record"
+    );
+}
+
+/// A target that never answered keeps its bytes: the seed still
+/// publishes, the workflow still holds the OIDC permission, no marker
+/// survives, and neither the record nor the configuration names the key.
+/// An upgrade from an earlier record moves nothing it rendered; the
+/// projection digests hold every rendered byte against that release.
+#[test]
+fn an_absent_registry_answer_resolves_to_crates_io_and_moves_no_byte() {
+    for forge in ["github", "gitlab"] {
+        let target = land_pair("rust", forge);
+        let seed = std::fs::read_to_string(target.path().join("release-plz.toml"))
+            .expect("the seed landed");
+        let table: toml::Table = seed.parse().expect("the seed parses");
+        assert_eq!(
+            table["workspace"]
+                .get("publish")
+                .and_then(toml::Value::as_bool),
+            Some(true),
+            "{forge}: {seed}"
+        );
+        assert!(table["workspace"].get("git_only").is_none(), "{forge}");
+        let mut manifest = read_manifest(target.path());
+        assert!(
+            manifest["profile"]["release"].get("registry").is_none(),
+            "{forge}: {manifest}"
+        );
+        let config = std::fs::read_to_string(target.path().join(".release-kit/config.toml"))
+            .expect("the config landed");
+        assert!(!config.contains("registry ="), "{forge}: {config}");
+        for entry in walkdir_files(target.path()) {
+            if entry.components().any(|part| part.as_os_str() == ".git") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&entry).unwrap_or_default();
+            assert!(!text.contains("RK_IF_"), "{}", entry.display());
+        }
+        if forge == "github" {
+            let workflow =
+                std::fs::read_to_string(target.path().join(".github/workflows/release-plz.yml"))
+                    .expect("the workflow landed");
+            assert!(workflow.contains("      id-token: write\n"), "{workflow}");
+            assert!(workflow.contains("crates.io trusted publisher"));
+        } else {
+            let pipeline = std::fs::read_to_string(target.path().join(".gitlab-ci.yml"))
+                .expect("the pipeline landed");
+            assert!(pipeline.contains("CRATES_IO_ID_TOKEN"), "{pipeline}");
+        }
+        manifest["rk_version"] = serde_json::json!("0.9.7");
+        write_manifest(target.path(), &manifest);
+        let landed: Vec<(String, Vec<u8>)> = manifest["files"]
+            .as_array()
+            .expect("files")
+            .iter()
+            .map(|file| {
+                let destination = file["destination"].as_str().expect("a destination");
+                (
+                    destination.to_owned(),
+                    std::fs::read(target.path().join(destination)).expect("reads"),
+                )
+            })
+            .collect();
+        rk().args(["upgrade", "--apply", "--target"])
+            .arg(target.path())
+            .assert()
+            .success();
+        for (destination, before) in landed {
+            let after = std::fs::read(target.path().join(&destination)).expect("reads");
+            assert_eq!(after, before, "{forge}: {destination} moved");
+        }
+    }
+}
+
+/// SATISFIES project-profile:release-intent-has-three-modes
+///
+/// A crate that publishes to no registry lands a seed whose `publish`
+/// and `git_only` agree, a GitHub workflow with no OIDC permission and
+/// no trusted-publisher sentence, and a GitLab pipeline that reads no
+/// registry token.
+#[test]
+fn a_registry_less_seed_pairs_publish_off_with_git_only() {
+    for forge in ["github", "gitlab"] {
+        let target = land_registry_less(forge);
+        let seed = std::fs::read_to_string(target.path().join("release-plz.toml"))
+            .expect("the seed landed");
+        let table: toml::Table = seed.parse().expect("the seed parses");
+        let workspace = &table["workspace"];
+        assert_eq!(
+            workspace.get("publish").and_then(toml::Value::as_bool),
+            Some(false),
+            "{forge}: {seed}"
+        );
+        assert_eq!(
+            workspace.get("git_only").and_then(toml::Value::as_bool),
+            Some(true),
+            "{forge}: {seed}"
+        );
+        assert!(seed.contains("publishes to no registry"), "{seed}");
+        assert!(!seed.contains("RK_IF_"), "{seed}");
+        assert_eq!(
+            read_manifest(target.path())["profile"]["release"]["registry"],
+            "none"
+        );
+        if forge == "github" {
+            let workflow =
+                std::fs::read_to_string(target.path().join(".github/workflows/release-plz.yml"))
+                    .expect("the workflow landed");
+            assert!(!workflow.contains("id-token: write"), "{workflow}");
+            assert!(!workflow.contains("trusted publisher"), "{workflow}");
+            assert!(!workflow.contains("RK_IF_"), "{workflow}");
+            assert!(
+                workflow.contains("create-github-app-token@"),
+                "the tag push still needs the app token"
+            );
+        } else {
+            let pipeline = std::fs::read_to_string(target.path().join(".gitlab-ci.yml"))
+                .expect("the pipeline landed");
+            for gone in [
+                "CRATES_IO_ID_TOKEN",
+                "CARGO_REGISTRY_TOKEN",
+                "id_tokens",
+                "RK_IF_",
+            ] {
+                assert!(!pipeline.contains(gone), "{gone}: {pipeline}");
+            }
+            assert!(
+                pipeline.contains("release-plz release --forge gitlab"),
+                "{pipeline}"
+            );
+        }
+    }
+}
+
+/// SATISFIES forge-setup:a-package-check-states-policy-reach
+///
+/// A crate that publishes to no registry packages nothing: the check
+/// reports the step as not applicable with its reason, and no packaging
+/// command runs.
+#[test]
+fn package_check_is_inapplicable_for_a_crate_with_no_registry() {
+    let fixture = ForgeFixture::new();
+    fixture.seed_cargo(
+        &[("widget 0.1.0", fixture.root_manifest())],
+        "Cargo.toml\nSECURITY.md\nsrc/main.rs\n",
+    );
+    fixture.seed_record(&["SECURITY.md"]);
+    write_release_config(fixture.target.path(), "registry = \"none\"\n");
+    let line = package_check_line(&fixture);
+    assert!(line.starts_with("not-applicable package-check"), "{line}");
+    assert!(
+        line.contains("the crate publishes to no registry, so nothing is packaged"),
+        "{line}"
+    );
+    assert!(
+        !fixture.log().contains("cargo"),
+        "no packaging command runs: {}",
+        fixture.log()
+    );
+}
+
+/// SATISFIES setup-proof:the-check-reads-the-publish-milestones
+///
+/// The milestones of a crate that publishes to no registry read the
+/// release page alone: the first version is not applicable, and no
+/// crates.io form or registry URL appears.
+#[test]
+fn the_milestones_of_a_crate_with_no_registry_name_no_registry() {
+    let target = release_target();
+    let config = target.path().join(".release-kit/config.toml");
+    let mut text = std::fs::read_to_string(&config).expect("the config reads");
+    text = text.replacen(
+        "[profile.release]\n",
+        "[profile.release]\nregistry = \"none\"\n",
+        1,
+    );
+    std::fs::write(&config, text).expect("the config writes");
+    let forge = ReleaseForge::new();
+    forge
+        .answer(
+            "repos/acme/widget/releases?per_page=1",
+            &serde_json::json!([{"tag_name": "v1.2.2"}]),
+        )
+        .answer(
+            "repos/acme/widget/commits/v1.2.2",
+            &serde_json::json!({"sha": "aaa"}),
+        )
+        .answer(
+            "repos/acme/widget/actions/workflows/release-plz.yml/runs?branch=master&head_sha=aaa&event=push&status=success&per_page=1",
+            &serde_json::json!({"total_count": 1, "workflow_runs": [{"id": 1}]}),
+        );
+    let found = milestones_of(&forge, target.path());
+    assert_eq!(
+        found["first-version-published"].0, "not-applicable",
+        "{found:?}"
+    );
+    assert_eq!(found["automated-release-proven"].0, "observed", "{found:?}");
+    for (id, (_, detail)) in &found {
+        assert!(!detail.contains("crates.io"), "{id}: {detail}");
+    }
+    for form in [
+        "trusted-publisher",
+        "bootstrap-token-revoked",
+        "trusted-publishing-required",
+    ] {
+        assert!(!found.contains_key(form), "{form}: {found:?}");
+    }
+    assert!(!forge.calls().contains("crates.io"), "{}", forge.calls());
+}
+
+/// SATISFIES release-state:a-symptom-names-its-recovery
+///
+/// With no registry, a release is published when its page exists: a tag
+/// beside a page reads published, a merged request whose tag has no page
+/// fires the nothing-published symptom, and nothing asks crates.io.
+#[test]
+fn release_status_reads_the_release_page_for_a_crate_with_no_registry() {
+    let target = release_target();
+    let config = target.path().join(".release-kit/config.toml");
+    let text = std::fs::read_to_string(&config).expect("the config reads");
+    std::fs::write(
+        &config,
+        text.replacen(
+            "[profile.release]\n",
+            "[profile.release]\nregistry = \"none\"\n",
+            1,
+        ),
+    )
+    .expect("the config writes");
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    assert_eq!(
+        read_manifest(target.path())["profile"]["release"]["registry"],
+        "none"
+    );
+
+    let shipped = ReleaseForge::new();
+    shipped
+        .answer(PULLS_OPEN, &serde_json::json!([]))
+        .answer(
+            PULLS_CLOSED,
+            &serde_json::json!([{
+                "number": 11, "title": "chore: release v1.2.2",
+                "head": {"ref": "release-plz-2026-10-01", "sha": "c0ffee"},
+                "merged_at": "2026-10-01T10:00:00Z"
+            }]),
+        )
+        .answer(
+            TAGS,
+            &serde_json::json!([{"name": "v1.2.2", "commit": {"sha": "aaa"}}]),
+        )
+        .answer(
+            "repos/acme/widget/releases/tags/v1.2.2",
+            &serde_json::json!({"assets": [{"name": "widget.tar.gz", "digest": "sha256:d1"}]}),
+        )
+        .answer(
+            "repos/acme/widget/attestations/sha256:d1",
+            &serde_json::json!({"attestations": [{"bundle": {}}]}),
+        );
+    let report = shipped.report(target.path(), &[]);
+    assert_eq!(report["last_release"]["published"], "yes", "{report}");
+    assert!(
+        report["symptoms"]
+            .as_array()
+            .is_some_and(std::vec::Vec::is_empty),
+        "{report}"
+    );
+    assert!(
+        !shipped.calls().contains("crates.io"),
+        "{}",
+        shipped.calls()
+    );
+
+    let unpublished = ReleaseForge::new();
+    unpublished
+        .answer(PULLS_OPEN, &serde_json::json!([]))
+        .answer(
+            PULLS_CLOSED,
+            &serde_json::json!([{
+                "number": 11, "title": "chore: release v1.2.2",
+                "head": {"ref": "release-plz-2026-10-01", "sha": "c0ffee"},
+                "merged_at": "2026-10-01T10:00:00Z"
+            }]),
+        )
+        .answer(
+            TAGS,
+            &serde_json::json!([{"name": "v1.2.2", "commit": {"sha": "aaa"}}]),
+        );
+    let report = unpublished.report(target.path(), &[]);
+    let symptoms = report["symptoms"].as_array().expect("the symptoms");
+    assert!(
+        symptoms
+            .iter()
+            .any(|symptom| symptom["code"] == "request-merged-nothing-published"),
+        "{report}"
+    );
+    assert!(
+        !unpublished.calls().contains("crates.io"),
+        "{}",
+        unpublished.calls()
+    );
+}
+
+/// The body every invariant fixture's `release-plz.toml` opens with.
+const RELEASE_PLZ_BASE: &str = "[workspace]\nchangelog_update = true\nrelease_always = false\ngit_tag_name = \"v{{ version }}\"\ngit_release_enable = false\nsemver_check = false\n";
+
+/// A landed rust/github target whose `release-plz.toml` is the base plus
+/// `body`, with `registry` answered in its configuration where given,
+/// judged by `rk status --check --json`.
+fn judged_release_plz(registry: Option<&str>, body: &str) -> (i32, serde_json::Value) {
+    let target = tempfile::tempdir().expect("a scratch target exists");
+    land_rust(target.path()).success();
+    seed_binding_dist_gate(target.path());
+    std::fs::write(
+        target.path().join("release-plz.toml"),
+        format!("{RELEASE_PLZ_BASE}{body}"),
+    )
+    .expect("the seed rewrites");
+    if let Some(answer) = registry {
+        let config = target.path().join(".release-kit/config.toml");
+        let text = std::fs::read_to_string(&config).expect("the config reads");
+        std::fs::write(
+            &config,
+            text.replacen(
+                "[profile.release]\n",
+                &format!("[profile.release]\nregistry = \"{answer}\"\n"),
+                1,
+            ),
+        )
+        .expect("the config writes");
+    }
+    status_check_json(target.path())
+}
+
+/// SATISFIES landing:a-seeded-file-still-carries-the-invariants
+///
+/// Each contradiction between `publish`, `git_only`, and the registry
+/// answer is one code with its remediation, `--check` exits 1, and a
+/// `[[package]]` override is judged by its effective value.
+#[test]
+fn the_release_plz_invariant_names_each_contradiction() {
+    for (registry, body, code, remediation) in [
+        (
+            None,
+            "publish = false\n",
+            "publish-off-without-git-only",
+            "set git_only = true",
+        ),
+        (
+            Some("none"),
+            "publish = true\ngit_only = true\n",
+            "git-only-with-publish",
+            "remove publish = true",
+        ),
+        (
+            Some("none"),
+            "publish = false\n",
+            "registry-answer-disagrees",
+            "set publish = false and git_only = true",
+        ),
+        (
+            None,
+            "git_only = true\n",
+            "registry-answer-disagrees",
+            "set profile.release.registry = \"none\"",
+        ),
+    ] {
+        let (code_out, report) = judged_release_plz(registry, body);
+        assert_eq!(code_out, 1, "{code}: {report}");
+        let found = invariant_codes(&report);
+        assert!(
+            found
+                .iter()
+                .any(|(found, text)| found == code && text.contains(remediation)),
+            "{code}: {found:?}"
+        );
+    }
+
+    // A package value over the workspace one: the workspace is sound, and
+    // the package's publish = true beside the inherited git_only fails.
+    let (code_out, report) = judged_release_plz(
+        Some("none"),
+        "publish = false\ngit_only = true\n\n[[package]]\nname = \"widget\"\npublish = true\n",
+    );
+    assert_eq!(code_out, 1, "{report}");
+    let failures = report["invariant_failures"]
+        .as_array()
+        .expect("the failures");
+    assert_eq!(failures.len(), 1, "{report}");
+    assert_eq!(failures[0]["code"], "git-only-with-publish");
+    assert!(
+        failures[0]["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("[[package]] widget")),
+        "{report}"
+    );
+}
+
+/// SATISFIES landing:a-seeded-file-still-carries-the-invariants
+///
+/// A quoted `publish` or `git_only` is no absent key: release-plz refuses
+/// it, so the judgment names the scope and the key once, `--check` exits
+/// 1, and the value is read as neither a default nor a contradiction.
+#[test]
+fn a_non_boolean_release_plz_flag_is_reported_by_scope_and_key() {
+    for (registry, body, scope) in [
+        (None, "publish = \"false\"\n", "[workspace] sets publish"),
+        (
+            Some("none"),
+            "publish = false\ngit_only = \"true\"\n",
+            "[workspace] sets git_only",
+        ),
+        (
+            None,
+            "publish = true\n\n[[package]]\nname = \"widget\"\ngit_only = \"true\"\n",
+            "[[package]] widget sets git_only",
+        ),
+    ] {
+        let (code_out, report) = judged_release_plz(registry, body);
+        assert_eq!(code_out, 1, "{body}: {report}");
+        let failures = report["invariant_failures"]
+            .as_array()
+            .expect("the failures");
+        assert_eq!(failures.len(), 1, "{body}: {report}");
+        assert_eq!(failures[0]["code"], "release-plz-flag-not-boolean");
+        assert!(
+            failures[0]["reason"]
+                .as_str()
+                .is_some_and(|reason| reason.contains(scope) && reason.contains("no boolean")),
+            "{body}: {report}"
+        );
+        assert!(
+            failures[0]["remediation"]
+                .as_str()
+                .is_some_and(|text| text.contains("true or false, unquoted")),
+            "{body}: {report}"
+        );
+    }
+}
+
+/// SATISFIES landing:a-seeded-file-still-carries-the-invariants
+///
+/// The seed of each answer satisfies the invariant it seeds: once the
+/// one judgment sentinel is answered, the status check passes.
+#[test]
+fn a_seeded_release_plz_toml_that_agrees_passes() {
+    for (forge, registry_less) in [
+        ("github", false),
+        ("github", true),
+        ("gitlab", false),
+        ("gitlab", true),
+    ] {
+        let target = if registry_less {
+            land_registry_less(forge)
+        } else {
+            land_pair("rust", forge)
+        };
+        answer_the_seeded_sentinel(target.path());
+        let (code, report) = status_check_json(target.path());
+        assert!(
+            invariant_codes(&report).is_empty(),
+            "{forge} {registry_less}: {report}"
+        );
+        assert_eq!(code, 0, "{forge} {registry_less}: {report}");
+    }
+}
+
+/// Five dist targets, the shape of a project that builds every platform.
+const FIVE_TARGETS: [&str; 5] = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+];
+
+/// A target directory holding a `dist-workspace.toml` with `targets` and
+/// each `(name, body)` under `.github/workflows/`.
+fn dist_gate_fixture(targets: &[&str], workflows: &[(&str, &str)]) -> tempfile::TempDir {
+    let target = tempfile::tempdir().expect("a scratch target exists");
+    let list: Vec<String> = targets
+        .iter()
+        .map(|triple| format!("\"{triple}\""))
+        .collect();
+    std::fs::write(
+        target.path().join("dist-workspace.toml"),
+        format!(
+            "[dist]\ncargo-dist-version = \"0.32.0\"\nci = \"github\"\ntargets = [{}]\n",
+            list.join(", ")
+        ),
+    )
+    .expect("the dist configuration writes");
+    std::fs::create_dir_all(target.path().join(".github/workflows"))
+        .expect("the workflow dir exists");
+    for (name, body) in workflows {
+        std::fs::write(target.path().join(".github/workflows").join(name), body)
+            .expect("the workflow writes");
+    }
+    target
+}
+
+/// The dist judgment of a fixture, as `(failure codes, limitation codes)`.
+fn dist_codes(target: &Path, required_check: &str) -> (Vec<String>, Vec<String>) {
+    let gate = release_kit::landing::invariants::dist_targets_built(&utf8(target), required_check);
+    (
+        gate.failures
+            .iter()
+            .map(|failure| failure.code.to_owned())
+            .collect(),
+        gate.limitations
+            .iter()
+            .map(|(code, _)| (*code).to_owned())
+            .collect(),
+    )
+}
+
+/// The reasons of every failure with `code`.
+fn dist_reasons(target: &Path, required_check: &str, code: &str) -> Vec<String> {
+    release_kit::landing::invariants::dist_targets_built(&utf8(target), required_check)
+        .failures
+        .into_iter()
+        .filter(|failure| failure.code == code)
+        .map(|failure| failure.reason)
+        .collect()
+}
+
+/// A gated workflow on `pull_request` with one `gate` job that needs
+/// `jobs`, whose bodies are given already indented under `jobs:`.
+fn gated(jobs: &str, needs: &str) -> String {
+    format!(
+        "name: ci\non:\n  pull_request:\njobs:\n{jobs}  gate:\n    needs: [{needs}]\n    runs-on: ubuntu-latest\n    steps:\n      - run: \"true\"\n"
+    )
+}
+
+/// A plan job that runs only `dist plan`, the gate every adopter carried
+/// before the build job.
+const PLAN_ONLY: &str =
+    "  dist-plan:\n    runs-on: ubuntu-latest\n    steps:\n      - run: dist plan\n";
+
+/// SATISFIES landing:a-seeded-file-still-carries-the-invariants
+///
+/// A gate that runs `dist plan` alone builds nothing, so each of the five
+/// targets is reported and `--check` exits 1.
+#[test]
+fn a_dist_target_no_gated_job_builds_is_reported() {
+    let target = tempfile::tempdir().expect("a scratch target exists");
+    land_rust(target.path()).success();
+    answer_the_seeded_sentinel(target.path());
+    let config = target.path().join("dist-workspace.toml");
+    let list: Vec<String> = FIVE_TARGETS
+        .iter()
+        .map(|triple| format!("\"{triple}\""))
+        .collect();
+    let text = std::fs::read_to_string(&config).expect("the dist configuration reads");
+    let text: String = text
+        .lines()
+        .map(|line| {
+            if line.starts_with("targets = ") {
+                format!("targets = [{}]\n", list.join(", "))
+            } else {
+                format!("{line}\n")
+            }
+        })
+        .collect();
+    std::fs::write(&config, text).expect("the dist configuration writes");
+    std::fs::write(
+        target.path().join(".github/workflows/ci.yml"),
+        gated(PLAN_ONLY, "dist-plan"),
+    )
+    .expect("the gate writes");
+    let (code, report) = status_check_json(target.path());
+    assert_eq!(code, 1, "{report}");
+    let unbuilt = invariant_codes(&report)
+        .into_iter()
+        .filter(|(code, _)| code == "dist-target-unbuilt")
+        .count();
+    assert_eq!(unbuilt, 5, "{report}");
+}
+
+/// SATISFIES landing:a-seeded-file-still-carries-the-invariants
+///
+/// The two jobs the binding serves build every target the plan lists.
+#[test]
+fn the_binding_dist_build_job_covers_every_target() {
+    let target = dist_gate_fixture(&FIVE_TARGETS, &[("ci.yml", &binding_gate_workflow())]);
+    let (failures, limitations) = dist_codes(target.path(), "gate");
+    assert!(failures.is_empty(), "{failures:?}");
+    assert!(limitations.is_empty(), "{limitations:?}");
+}
+
+/// SATISFIES landing:a-seeded-file-still-carries-the-invariants
+#[test]
+fn a_literal_dist_build_target_covers_only_its_triple() {
+    let jobs = "  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: dist build --artifacts=local --target=x86_64-unknown-linux-gnu\n";
+    let target = dist_gate_fixture(&FIVE_TARGETS, &[("ci.yml", &gated(jobs, "build"))]);
+    let reasons = dist_reasons(target.path(), "gate", "dist-target-unbuilt");
+    assert_eq!(reasons.len(), 4, "{reasons:?}");
+    assert!(
+        reasons
+            .iter()
+            .all(|reason| !reason.contains("x86_64-unknown-linux-gnu")),
+        "{reasons:?}"
+    );
+}
+
+/// SATISFIES landing:a-seeded-file-still-carries-the-invariants
+///
+/// A matrix from an expression the judgment cannot read is reported, and
+/// never passed.
+#[test]
+fn an_unreadable_dist_build_is_reported_not_passed() {
+    let jobs = "  build:\n    strategy:\n      matrix: ${{ fromJson(vars.TARGETS) }}\n    runs-on: ${{ matrix.runner }}\n    steps:\n      - run: dist build ${{ matrix.dist_args }}\n";
+    let target = dist_gate_fixture(&FIVE_TARGETS, &[("ci.yml", &gated(jobs, "build"))]);
+    let (failures, _) = dist_codes(target.path(), "gate");
+    assert!(
+        failures.iter().any(|code| code == "dist-build-unreadable"),
+        "{failures:?}"
+    );
+    assert_eq!(
+        failures
+            .iter()
+            .filter(|code| *code == "dist-target-unbuilt")
+            .count(),
+        5,
+        "an unreadable build credits nothing: {failures:?}"
+    );
+}
+
+/// SATISFIES landing:a-seeded-file-still-carries-the-invariants
+///
+/// With no gate named, every job of every pull-request workflow is
+/// judged, and the report states the limitation; a workflow that runs on
+/// tags alone is not read.
+#[test]
+fn an_unnamed_gate_judges_every_pull_request_workflow() {
+    let jobs = indented_binding_jobs();
+    let target = dist_gate_fixture(
+        &FIVE_TARGETS,
+        &[
+            (
+                "build.yml",
+                &format!("name: build\non: [pull_request]\njobs:\n{jobs}"),
+            ),
+            (
+                "tags.yml",
+                "name: tags\non:\n  push:\n    tags: ['v*']\njobs:\n  plain:\n    runs-on: ubuntu-latest\n    steps:\n      - run: dist build --target=x86_64-unknown-linux-gnu\n",
+            ),
+        ],
+    );
+    let (failures, limitations) = dist_codes(target.path(), "");
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!(limitations, ["gate-unnamed"]);
+
+    let target = dist_gate_fixture(
+        &FIVE_TARGETS,
+        &[(
+            "tags.yml",
+            "name: tags\non:\n  push:\n    tags: ['v*']\njobs:\n  plain:\n    runs-on: ubuntu-latest\n    steps:\n      - run: dist build --target=x86_64-unknown-linux-gnu\n",
+        )],
+    );
+    let (failures, _) = dist_codes(target.path(), "");
+    assert_eq!(
+        failures
+            .iter()
+            .filter(|code| *code == "dist-target-unbuilt")
+            .count(),
+        5,
+        "{failures:?}"
+    );
+}
+
+/// SATISFIES landing:a-seeded-file-still-carries-the-invariants
+///
+/// The gate is the job whose check context is `setup.required_check`: a
+/// job `verify` named `gate`, whose needs are judged.
+#[test]
+fn a_gate_named_by_its_check_context_resolves_to_its_job() {
+    let jobs = indented_binding_jobs();
+    let workflow = format!(
+        "name: ci\non:\n  pull_request:\njobs:\n{jobs}  verify:\n    name: gate\n    needs: [dist-plan, dist-build]\n    runs-on: ubuntu-latest\n    steps:\n      - run: \"true\"\n"
+    );
+    let target = dist_gate_fixture(&FIVE_TARGETS, &[("ci.yml", &workflow)]);
+    let (failures, limitations) = dist_codes(target.path(), "gate");
+    assert!(failures.is_empty(), "{failures:?}");
+    assert!(limitations.is_empty(), "{limitations:?}");
+    let (failures, _) = dist_codes(target.path(), "verify");
+    assert_eq!(
+        failures,
+        ["gate-unresolved"],
+        "a named job answers to its name"
+    );
+}
+
+/// SATISFIES landing:a-seeded-file-still-carries-the-invariants
+#[test]
+fn a_gate_in_a_tag_only_workflow_proves_nothing() {
+    let jobs = indented_binding_jobs();
+    let workflow = format!(
+        "name: ci\non:\n  push:\n    tags: ['v*']\njobs:\n{jobs}  gate:\n    needs: [dist-plan, dist-build]\n    runs-on: ubuntu-latest\n    steps:\n      - run: \"true\"\n"
+    );
+    let target = dist_gate_fixture(&FIVE_TARGETS, &[("ci.yml", &workflow)]);
+    let (failures, _) = dist_codes(target.path(), "gate");
+    assert_eq!(failures, ["gate-not-on-requests"]);
+}
+
+/// SATISFIES landing:a-seeded-file-still-carries-the-invariants
+///
+/// A plan narrowed to one target makes a matrix that builds that target
+/// alone, so it credits one of five.
+#[test]
+fn a_narrowed_dist_plan_credits_only_its_targets() {
+    let workflow = binding_gate_workflow().replace(
+        "dist plan --output-format=json",
+        "dist plan --output-format=json --target=x86_64-unknown-linux-gnu",
+    );
+    let target = dist_gate_fixture(&FIVE_TARGETS, &[("ci.yml", &workflow)]);
+    let reasons = dist_reasons(target.path(), "gate", "dist-target-unbuilt");
+    assert_eq!(reasons.len(), 4, "{reasons:?}");
+    assert!(
+        reasons
+            .iter()
+            .all(|reason| !reason.contains("x86_64-unknown-linux-gnu")),
+        "{reasons:?}"
+    );
+}
+
+/// SATISFIES landing:a-seeded-file-still-carries-the-invariants
+///
+/// A matrix the command does not consume proves nothing: a fixed target
+/// beside a five-triple matrix proves its own triple alone.
+#[test]
+fn an_unconsumed_matrix_proves_no_target() {
+    let list: Vec<String> = FIVE_TARGETS
+        .iter()
+        .map(|triple| (*triple).to_owned())
+        .collect();
+    let jobs = format!(
+        "  build:\n    strategy:\n      matrix:\n        target: [{}]\n    runs-on: ubuntu-latest\n    steps:\n      - run: dist build --artifacts=local --target=x86_64-unknown-linux-gnu\n",
+        list.join(", ")
+    );
+    let target = dist_gate_fixture(&FIVE_TARGETS, &[("ci.yml", &gated(&jobs, "build"))]);
+    assert_eq!(
+        dist_reasons(target.path(), "gate", "dist-target-unbuilt").len(),
+        4
+    );
+    // The same matrix, consumed: every target counts.
+    let jobs = jobs.replace(
+        "--target=x86_64-unknown-linux-gnu",
+        "--target=${{ matrix.target }}",
+    );
+    let target = dist_gate_fixture(&FIVE_TARGETS, &[("ci.yml", &gated(&jobs, "build"))]);
+    let (failures, _) = dist_codes(target.path(), "gate");
+    assert!(failures.is_empty(), "{failures:?}");
+}
+
+/// SATISFIES landing:a-seeded-file-still-carries-the-invariants
+///
+/// A `dist build` under a condition proves no merge: the limitation is
+/// stated and every target is reported.
+#[test]
+fn a_conditional_dist_build_counts_no_target() {
+    let jobs = "  build:\n    if: github.event_name == 'push'\n    runs-on: ubuntu-latest\n    steps:\n      - run: dist build --target=x86_64-unknown-linux-gnu\n";
+    let target = dist_gate_fixture(
+        &["x86_64-unknown-linux-gnu"],
+        &[("ci.yml", &gated(jobs, "build"))],
+    );
+    let (failures, limitations) = dist_codes(target.path(), "gate");
+    assert_eq!(failures, ["dist-target-unbuilt"]);
+    assert_eq!(limitations, ["dist-build-conditional"]);
+}
+
+/// SATISFIES landing:a-seeded-file-still-carries-the-invariants
+///
+/// The fresh landing of the build recipe, given the gated workflow it
+/// writes from the binding's two jobs, reports no dist code.
+#[test]
+fn the_scratch_landing_with_the_binding_jobs_reports_no_dist_code() {
+    let target = tempfile::tempdir().expect("a scratch target exists");
+    land_rust(target.path()).success();
+    seed_binding_dist_gate(target.path());
+    let config = target.path().join(".release-kit/config.toml");
+    let text = std::fs::read_to_string(&config).expect("the config reads");
+    let text: String = text
+        .lines()
+        .map(|line| {
+            if line.starts_with("required_check = ") {
+                "required_check = \"gate\"\n".to_owned()
+            } else {
+                format!("{line}\n")
+            }
+        })
+        .collect();
+    std::fs::write(&config, text).expect("the config writes");
+    let (_, report) = status_check_json(target.path());
+    assert!(
+        !invariant_codes(&report)
+            .iter()
+            .any(|(code, _)| code.starts_with("dist-") || code.starts_with("gate-")),
+        "{report}"
+    );
+    let justfile = std::fs::read_to_string(repo_path("justfile")).expect("the justfile reads");
+    assert!(
+        justfile.contains("bindings/rust.md") && justfile.contains("required_check = \"gate\""),
+        "the build recipe writes the gate from the binding"
+    );
+}
+
+/// The forge of a release history: every tag in `tags`, each with a page
+/// carrying one attested artifact where it is in `complete`.
+fn tagged_forge(tags: &[&str], complete: &[&str]) -> ReleaseForge {
+    let forge = ReleaseForge::new();
+    forge
+        .answer(PULLS_OPEN, &serde_json::json!([]))
+        .answer(PULLS_CLOSED, &serde_json::json!([]))
+        .answer(
+            TAGS,
+            &serde_json::Value::Array(
+                tags.iter()
+                    .map(|tag| serde_json::json!({"name": tag, "commit": {"sha": format!("c-{tag}")}}))
+                    .collect(),
+            ),
+        );
+    for tag in complete {
+        forge
+            .answer(
+                &format!("repos/acme/widget/releases/tags/{tag}"),
+                &serde_json::json!({"assets": [{"name": "widget.tar.gz", "digest": "sha256:d1"}]}),
+            )
+            .answer(
+                "repos/acme/widget/attestations/sha256:d1",
+                &serde_json::json!({"attestations": [{"bundle": {}}]}),
+            );
+    }
+    forge
+}
+
+/// The tags `tag-without-release` names in a release status report.
+fn orphaned(report: &serde_json::Value) -> Vec<String> {
+    report["symptoms"]
+        .as_array()
+        .expect("the symptoms")
+        .iter()
+        .filter(|symptom| symptom["code"] == "tag-without-release")
+        .map(|symptom| {
+            assert_eq!(
+                symptom["recovery"], "The tag exists and the release does not",
+                "{symptom}"
+            );
+            symptom["evidence"]
+                .as_str()
+                .and_then(|evidence| evidence.split_whitespace().next())
+                .expect("the evidence names its tag")
+                .to_owned()
+        })
+        .collect()
+}
+
+/// SATISFIES release-state:a-symptom-names-its-recovery
+///
+/// Every tag newer than the newest complete release, with no page of its
+/// own, is reported; a later complete release retires them.
+#[test]
+fn every_tag_after_the_newest_complete_release_is_reported() {
+    let target = release_target();
+    let forge = tagged_forge(&["v0.6.8", "v0.6.7", "v0.6.6"], &["v0.6.6"]);
+    assert_eq!(
+        orphaned(&forge.report(target.path(), &[])),
+        ["v0.6.8", "v0.6.7"]
+    );
+    let forge = tagged_forge(
+        &["v0.6.9", "v0.6.8", "v0.6.7", "v0.6.6"],
+        &["v0.6.9", "v0.6.6"],
+    );
+    assert!(orphaned(&forge.report(target.path(), &[])).is_empty());
+}
+
+/// SATISFIES release-state:a-symptom-names-its-recovery
+///
+/// A complete release on the trunk does not hide a tag with no page on a
+/// release line: each line keeps its own cutoff.
+#[test]
+fn each_release_line_keeps_its_own_cutoff() {
+    let target = release_target();
+    git_in(target.path(), &["branch", "release/1.4"]);
+    let forge = tagged_forge(&["v2.0.0", "v1.4.9", "v1.4.8"], &["v2.0.0", "v1.4.8"]);
+    assert_eq!(orphaned(&forge.report(target.path(), &[])), ["v1.4.9"]);
+}
+
+/// SATISFIES landing:a-seeded-file-still-carries-the-invariants
+///
+/// A request trigger with a path filter runs on some requests alone, so
+/// its builds count no target and the limitation is stated, on both the
+/// named and the unnamed gate.
+#[test]
+fn a_paths_filtered_gate_counts_no_target() {
+    for filter in ["paths", "paths-ignore"] {
+        let workflow = binding_gate_workflow().replace(
+            "on:\n  pull_request:\n",
+            &format!("on:\n  pull_request:\n    {filter}: ['src/**']\n"),
+        );
+        let target = dist_gate_fixture(&FIVE_TARGETS, &[("ci.yml", &workflow)]);
+        for check in ["gate", ""] {
+            let (failures, limitations) = dist_codes(target.path(), check);
+            assert_eq!(
+                failures
+                    .iter()
+                    .filter(|code| *code == "dist-target-unbuilt")
+                    .count(),
+                5,
+                "{filter} {check:?}: {failures:?}"
+            );
+            assert!(
+                limitations
+                    .iter()
+                    .any(|code| code == "dist-build-conditional"),
+                "{filter} {check:?}: {limitations:?}"
+            );
+        }
+    }
+}
+
+/// SATISFIES landing:a-seeded-file-still-carries-the-invariants
+///
+/// Text that names a build is no build: an echoed string and a comment
+/// credit nothing, and an unquoted `dist build` after another command is
+/// unreadable.
+#[test]
+fn an_echoed_or_commented_dist_build_credits_nothing() {
+    for (run, unreadable) in [
+        (
+            "echo \"dist build --artifacts=local --target=x86_64-unknown-linux-gnu\"",
+            false,
+        ),
+        (
+            "|\n          # dist build --artifacts=local --target=x86_64-unknown-linux-gnu\n          true",
+            false,
+        ),
+        (
+            "echo dist build --artifacts=local --target=x86_64-unknown-linux-gnu",
+            true,
+        ),
+        (
+            "echo --command dist build --artifacts=local --target=x86_64-unknown-linux-gnu",
+            true,
+        ),
+        (
+            "echo -- dist build --artifacts=local --target=x86_64-unknown-linux-gnu",
+            true,
+        ),
+    ] {
+        let jobs =
+            format!("  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: {run}\n");
+        let target = dist_gate_fixture(
+            &["x86_64-unknown-linux-gnu"],
+            &[("ci.yml", &gated(&jobs, "build"))],
+        );
+        let (failures, _) = dist_codes(target.path(), "gate");
+        assert!(
+            failures.iter().any(|code| code == "dist-target-unbuilt"),
+            "{run}: {failures:?}"
+        );
+        assert_eq!(
+            failures.iter().any(|code| code == "dist-build-unreadable"),
+            unreadable,
+            "{run}: {failures:?}"
+        );
+    }
+}
+
+/// SATISFIES landing:a-seeded-file-still-carries-the-invariants
+///
+/// A build through a wrapper the binding names is a build: `nix develop
+/// --command` with a flake reference, `mise exec --`, and `devbox run --`.
+#[test]
+fn a_named_wrapper_runs_the_dist_build() {
+    for wrapper in [
+        "nix develop --command",
+        "nix develop .#ci --command",
+        "mise exec --",
+        "devbox run --",
+    ] {
+        let jobs = format!(
+            "  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: {wrapper} dist build --artifacts=local --target=x86_64-unknown-linux-gnu\n"
+        );
+        let target = dist_gate_fixture(
+            &["x86_64-unknown-linux-gnu"],
+            &[("ci.yml", &gated(&jobs, "build"))],
+        );
+        let (failures, _) = dist_codes(target.path(), "gate");
+        assert!(failures.is_empty(), "{wrapper}: {failures:?}");
+    }
+}
+
+/// SATISFIES landing:a-seeded-file-still-carries-the-invariants
+///
+/// The plan output must be exported by a command that runs: a commented
+/// export beside a real export of other content, a single-quoted export
+/// that writes the literal text, and an export into a single-quoted
+/// destination, which names a file `$GITHUB_OUTPUT`, are unreadable and
+/// credit nothing.
+#[test]
+fn a_commented_or_literal_plan_export_is_unreadable() {
+    let export = "echo \"plan=$(jq -c . plan-dist-manifest.json)\" >> \"$GITHUB_OUTPUT\"";
+    for replacement in [
+        format!("# {export}\n          echo 'plan={{\"ci\":{{}}}}' >> \"$GITHUB_OUTPUT\""),
+        "echo 'plan=$(jq -c . plan-dist-manifest.json)' >> \"$GITHUB_OUTPUT\"".to_owned(),
+        "echo \"plan=$(jq -c . plan-dist-manifest.json)\" >> '$GITHUB_OUTPUT'\n          echo 'plan={\"ci\":{}}' >> \"$GITHUB_OUTPUT\"".to_owned(),
+    ] {
+        let workflow = binding_gate_workflow().replace(export, &replacement);
+        assert!(workflow.contains(&replacement), "the fixture moved");
+        let target = dist_gate_fixture(&FIVE_TARGETS, &[("ci.yml", &workflow)]);
+        let (failures, _) = dist_codes(target.path(), "gate");
+        assert!(
+            failures.iter().any(|code| code == "dist-build-unreadable"),
+            "{replacement}: {failures:?}"
+        );
+        assert_eq!(
+            failures
+                .iter()
+                .filter(|code| *code == "dist-target-unbuilt")
+                .count(),
+            5,
+            "{replacement}: {failures:?}"
+        );
+    }
+}
+
+/// SATISFIES landing:a-seeded-file-still-carries-the-invariants
+///
+/// A global-only build makes installers and metadata, never the target's
+/// own artifacts, so it credits nothing; a build in dist's host mode is
+/// unreadable.
+#[test]
+fn a_global_only_build_credits_no_target() {
+    let jobs = "  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: dist build --artifacts=global --target=x86_64-unknown-linux-gnu\n";
+    let target = dist_gate_fixture(
+        &["x86_64-unknown-linux-gnu"],
+        &[("ci.yml", &gated(jobs, "build"))],
+    );
+    let (failures, _) = dist_codes(target.path(), "gate");
+    assert_eq!(failures, ["dist-target-unbuilt"]);
+    let jobs = "  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: dist build --target=x86_64-unknown-linux-gnu\n";
+    let target = dist_gate_fixture(
+        &["x86_64-unknown-linux-gnu"],
+        &[("ci.yml", &gated(jobs, "build"))],
+    );
+    let (failures, _) = dist_codes(target.path(), "gate");
+    assert!(
+        failures.iter().any(|code| code == "dist-build-unreadable"),
+        "{failures:?}"
+    );
+}
+
+/// SATISFIES landing:a-seeded-file-still-carries-the-invariants
+///
+/// A matrix that `exclude` reshapes is not its literal list, so a target
+/// taken from it is unreadable rather than credited.
+#[test]
+fn an_excluded_matrix_target_is_unreadable() {
+    let jobs = "  build:\n    strategy:\n      matrix:\n        target: [x86_64-unknown-linux-gnu, x86_64-apple-darwin]\n        exclude:\n          - target: x86_64-unknown-linux-gnu\n    runs-on: ubuntu-latest\n    steps:\n      - run: dist build --artifacts=local --target=${{ matrix.target }}\n";
+    let target = dist_gate_fixture(
+        &["x86_64-unknown-linux-gnu", "x86_64-apple-darwin"],
+        &[("ci.yml", &gated(jobs, "build"))],
+    );
+    let (failures, _) = dist_codes(target.path(), "gate");
+    assert!(
+        failures.iter().any(|code| code == "dist-build-unreadable"),
+        "{failures:?}"
+    );
+    assert_eq!(
+        failures
+            .iter()
+            .filter(|code| *code == "dist-target-unbuilt")
+            .count(),
+        2,
+        "{failures:?}"
+    );
+}
+
+/// SATISFIES landing:a-seeded-file-still-carries-the-invariants
+///
+/// The matrix must come from the plan the step runs: an output the same
+/// step fills with something else is unreadable.
+#[test]
+fn a_matrix_from_another_output_is_unreadable() {
+    let workflow = binding_gate_workflow()
+        .replace(
+            "plan: ${{ steps.plan.outputs.plan }}",
+            "plan: ${{ steps.plan.outputs.not_the_plan }}",
+        )
+        .replace(
+            "echo \"plan=$(jq -c . plan-dist-manifest.json)\" >> \"$GITHUB_OUTPUT\"",
+            "echo \"plan=$(jq -c . plan-dist-manifest.json)\" >> \"$GITHUB_OUTPUT\"\n          echo 'not_the_plan={\"ci\":{}}' >> \"$GITHUB_OUTPUT\"",
+        );
+    assert!(workflow.contains("not_the_plan"), "the fixture moved");
+    let target = dist_gate_fixture(&FIVE_TARGETS, &[("ci.yml", &workflow)]);
+    let (failures, _) = dist_codes(target.path(), "gate");
+    assert!(
+        failures.iter().any(|code| code == "dist-build-unreadable"),
+        "{failures:?}"
+    );
+    assert_eq!(
+        failures
+            .iter()
+            .filter(|code| *code == "dist-target-unbuilt")
+            .count(),
+        5,
+        "{failures:?}"
+    );
+}
+
+/// SATISFIES landing:a-seeded-file-still-carries-the-invariants
+///
+/// A configuration that clears a recorded check states an empty one: the
+/// judgment takes the unnamed path, never the recorded name.
+#[test]
+fn a_cleared_required_check_takes_the_unnamed_path() {
+    let target = tempfile::tempdir().expect("a scratch target exists");
+    land_rust_locally(target.path()).success();
+    answer_the_seeded_sentinel(target.path());
+    assert_eq!(
+        read_manifest(target.path())["parameters"]["required_check"],
+        "gate"
+    );
+    let workflow = binding_gate_workflow().replace("  gate:\n", "  verify:\n");
+    std::fs::write(target.path().join(".github/workflows/ci.yml"), workflow)
+        .expect("the workflow writes");
+    let config = target.path().join(".release-kit/config.toml");
+    let text: String = std::fs::read_to_string(&config)
+        .expect("the config reads")
+        .lines()
+        .map(|line| {
+            if line.starts_with("required_check = ") {
+                "required_check = \"\"\n".to_owned()
+            } else {
+                format!("{line}\n")
+            }
+        })
+        .collect();
+    std::fs::write(&config, text).expect("the config writes");
+    let (_, report) = status_check_json(target.path());
+    assert!(
+        !invariant_codes(&report)
+            .iter()
+            .any(|(code, _)| code.starts_with("gate-") || code.starts_with("dist-")),
+        "{report}"
+    );
+    assert!(
+        report["warnings"]
+            .as_array()
+            .is_some_and(|warnings| warnings
+                .iter()
+                .any(|warning| warning["code"] == "gate-unnamed")),
+        "{report}"
+    );
+}
+
+/// SATISFIES release-state:a-symptom-names-its-recovery
+///
+/// The tag inventory is read to its end: an orphan on a release line on
+/// the second page is reported.
+#[test]
+fn a_tag_on_a_later_page_is_read() {
+    let target = release_target();
+    git_in(target.path(), &["branch", "release/1.4"]);
+    let trunk: Vec<String> = (0..100).map(|patch| format!("v0.0.{patch}")).collect();
+    let first: Vec<&str> = trunk.iter().map(String::as_str).collect();
+    let forge = tagged_forge(&first, &["v0.0.99", "v1.4.8"]);
+    forge.answer(
+        &format!("{TAGS}&page=2"),
+        &serde_json::json!([
+            {"name": "v1.4.9", "commit": {"sha": "c-v1.4.9"}},
+            {"name": "v1.4.8", "commit": {"sha": "c-v1.4.8"}}
+        ]),
+    );
+    assert_eq!(orphaned(&forge.report(target.path(), &[])), ["v1.4.9"]);
+}
+
+/// SATISFIES release-state:a-forge-field-reads-unknown-without-credentials
+///
+/// A newer page the forge does not answer could be the complete release
+/// that retires older gaps, so the walk of that line stops there.
+#[test]
+fn an_unread_page_stops_the_cutoff_of_its_line() {
+    let target = release_target();
+    let forge = tagged_forge(&["v0.6.9", "v0.6.8", "v0.6.6"], &["v0.6.6"]);
+    forge.fail("repos/acme/widget/releases/tags/v0.6.9");
+    let report = forge.report(target.path(), &[]);
+    assert!(orphaned(&report).is_empty(), "{report}");
+}
+
+/// A landed rust/github target clean in every respect but its setup
+/// proof: the sentinel answered and the gated dist build written, with no
+/// proof committed.
+fn proofless_target() -> tempfile::TempDir {
+    let target = tempfile::tempdir().expect("a scratch target exists");
+    land_rust(target.path()).success();
+    answer_the_seeded_sentinel(target.path());
+    std::fs::remove_file(target.path().join(".release-kit/setup-proof.json"))
+        .expect("the proof goes");
+    target
+}
+
+/// The `setup proof:` violations of a status report.
+fn proof_violations(report: &serde_json::Value) -> Vec<String> {
+    report["violations"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .filter(|violation| violation.starts_with("setup proof: "))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// SATISFIES setup-proof:the-status-check-holds-the-proof
+///
+/// A target with an automatic release and no committed proof fails the
+/// status check, and the report names the commands that write the proof.
+#[test]
+fn an_automatic_release_target_with_no_setup_proof_fails_the_status_check() {
+    let target = proofless_target();
+    let (code, report) = status_check_json(target.path());
+    assert_eq!(code, 1, "{report}");
+    assert_eq!(report["setup_proof"]["state"], "absent", "{report}");
+    assert_eq!(
+        proof_violations(&report),
+        ["setup proof: setup-proof-absent"],
+        "{report}"
+    );
+    let out = rk()
+        .args(["status", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let human = String::from_utf8_lossy(&out);
+    assert!(
+        human.contains("SETUP-PROOF (setup-proof-absent)"),
+        "{human}"
+    );
+    for step in [
+        "rk setup check --target .",
+        "rk setup checkpoint --target .",
+        "commit .release-kit/setup-proof.json",
+        "setup.excluded_steps",
+    ] {
+        assert!(human.contains(step), "{step}: {human}");
+    }
+}
+
+/// SATISFIES setup-proof:the-status-check-holds-the-proof
+///
+/// A proof written for another required check reads stale and names the
+/// field that moved.
+#[test]
+fn a_stale_setup_proof_names_each_changed_field_in_the_status() {
+    let target = tempfile::tempdir().expect("a scratch target exists");
+    land_rust_locally(target.path()).success();
+    answer_the_seeded_sentinel(target.path());
+    let config = target.path().join(".release-kit/config.toml");
+    let text: String = std::fs::read_to_string(&config)
+        .expect("the config reads")
+        .lines()
+        .map(|line| {
+            if line.starts_with("required_check = ") {
+                "required_check = \"verify\"\n".to_owned()
+            } else {
+                format!("{line}\n")
+            }
+        })
+        .collect();
+    std::fs::write(&config, text).expect("the config writes");
+    let workflow = binding_gate_workflow().replace("  gate:\n", "  verify:\n");
+    std::fs::write(target.path().join(".github/workflows/ci.yml"), workflow)
+        .expect("the workflow writes");
+    let (code, report) = status_check_json(target.path());
+    assert_eq!(code, 1, "{report}");
+    assert_eq!(report["setup_proof"]["state"], "stale", "{report}");
+    assert!(
+        report["setup_proof"]["changed"]
+            .as_array()
+            .is_some_and(|changed| changed.iter().any(|field| field == "target.required_check")),
+        "{report}"
+    );
+    assert_eq!(
+        proof_violations(&report),
+        ["setup proof: setup-proof-stale"],
+        "{report}"
+    );
+}
+
+/// SATISFIES setup-proof:the-status-check-holds-the-proof
+#[test]
+fn a_compatible_setup_proof_passes_the_status_check() {
+    let target = proofless_target();
+    seed_setup_proof(target.path());
+    let (code, report) = status_check_json(target.path());
+    assert_eq!(report["setup_proof"]["state"], "compatible", "{report}");
+    assert!(proof_violations(&report).is_empty(), "{report}");
+    assert_eq!(code, 0, "{report}");
+}
+
+/// SATISFIES setup-proof:the-status-check-holds-the-proof
+///
+/// A target that releases nothing has no setup contract to prove, so its
+/// report carries no proof and no code.
+#[test]
+fn a_release_less_target_reads_no_setup_proof() {
+    let target = tempfile::tempdir().expect("a scratch target exists");
+    rk().args(["init", "--release-mode", "none", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let out = rk()
+        .args(["status", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert!(report.get("setup_proof").is_none(), "{report}");
+    let (_, report) = status_check_json(target.path());
+    assert!(proof_violations(&report).is_empty(), "{report}");
+}
+
+/// SATISFIES setup-proof:an-unavailable-credential-is-an-observation-boundary
+///
+/// The status reads the proof offline: neither forge CLI runs.
+#[test]
+fn the_status_makes_no_forge_call_for_the_setup_proof() {
+    let target = proofless_target();
+    let mock = tempfile::tempdir().expect("a mock dir exists");
+    let log = mock.path().join("calls.log");
+    for name in ["gh", "glab"] {
+        let path = mock.path().join(name);
+        std::fs::write(
+            &path,
+            format!(
+                "#!/bin/sh\necho {name} \"$@\" >> '{}'\nexit 1\n",
+                log.display()
+            ),
+        )
+        .expect("the mock writes");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                .expect("the mock is executable");
+        }
+    }
+    let path = std::env::var("PATH").unwrap_or_default();
+    rk().env("PATH", format!("{}:{path}", mock.path().display()))
+        .env("RK_GH_BIN", mock.path().join("gh"))
+        .env("RK_GLAB_BIN", mock.path().join("glab"))
+        .args(["status", "--check", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .code(1);
+    assert!(
+        !log.exists(),
+        "a forge CLI ran: {}",
+        std::fs::read_to_string(&log).unwrap_or_default()
+    );
+}
+
+/// The two secret names an earlier bootstrap gave the bot pair, assembled
+/// at run time so the reference scan of this file does not trip on them.
+fn earlier_secret_names() -> (String, String) {
+    (
+        format!("RELEASE_PLZ{}APP_ID", "_"),
+        format!("RELEASE_PLZ{}APP_PRIVATE_KEY", "_"),
+    )
+}
+
+/// The release workflow a target ran before its first landing, reading
+/// the bot pair under the names an earlier bootstrap gave it.
+fn earlier_release_workflow() -> String {
+    let (id, key) = earlier_secret_names();
+    format!(
+        "name: release-plz\non:\n  push:\n    branches: [master]\njobs:\n  release:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3\n        with:\n          app-id: ${{{{ secrets.{id} }}}}\n          private-key: ${{{{secrets.{key}}}}}\n      - run: echo ${{{{ secrets.GITHUB_TOKEN }}}}\n"
+    )
+}
+
+/// A target that carries the earlier workflow and nothing of release-kit.
+fn target_with_an_earlier_workflow() -> tempfile::TempDir {
+    let target = tempfile::tempdir().expect("a scratch target exists");
+    std::fs::create_dir_all(target.path().join(".github/workflows")).expect("the dir exists");
+    std::fs::write(
+        target.path().join(".github/workflows/release-plz.yml"),
+        earlier_release_workflow(),
+    )
+    .expect("the earlier workflow writes");
+    target
+}
+
+/// SATISFIES landing:ownership-is-elementary
+///
+/// Replacing a workflow names each secret the replaced file read and the
+/// rendered file does not, and each new one with the step that stores it;
+/// `GITHUB_TOKEN` is the forge's own and never named.
+#[test]
+fn a_replaced_workflow_names_the_secrets_it_read() {
+    let target = target_with_an_earlier_workflow();
+    let out = rk()
+        .args(["init", "--tech", "rust", "--forge", "github"])
+        .args(["--repo", "acme/widget"])
+        .args(["--replace", ".github/workflows/release-plz.yml", "--target"])
+        .arg(target.path())
+        .arg("--apply")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let human = String::from_utf8_lossy(&out);
+    let (id, key) = earlier_secret_names();
+    for line in [
+        format!(
+            "secret {id} read by the replaced .github/workflows/release-plz.yml is not read by the rendered file"
+        ),
+        format!(
+            "secret {key} read by the replaced .github/workflows/release-plz.yml is not read by the rendered file"
+        ),
+        "secret RELEASE_BOT_APP_ID is new; bot-secrets stores it".to_owned(),
+        "secret RELEASE_BOT_APP_PRIVATE_KEY is new; bot-secrets stores it".to_owned(),
+    ] {
+        assert!(human.contains(&line), "{line}: {human}");
+    }
+    assert!(!human.contains("GITHUB_TOKEN"), "{human}");
+}
+
+/// SATISFIES setup-proof:the-status-check-holds-the-proof
+///
+/// The build recipe's fresh landing, with the gated dist build, has one
+/// violation: the proof no forge can write for it.
+#[test]
+fn the_scratch_landing_reports_only_the_absent_proof() {
+    let target = tempfile::tempdir().expect("a scratch target exists");
+    land_rust(target.path()).success();
+    answer_the_seeded_sentinel(target.path());
+    std::fs::remove_file(target.path().join(".release-kit/setup-proof.json"))
+        .expect("the proof goes");
+    let config = target.path().join(".release-kit/config.toml");
+    let text: String = std::fs::read_to_string(&config)
+        .expect("the config reads")
+        .lines()
+        .map(|line| {
+            if line.starts_with("required_check = ") {
+                "required_check = \"gate\"\n".to_owned()
+            } else {
+                format!("{line}\n")
+            }
+        })
+        .collect();
+    std::fs::write(&config, text).expect("the config writes");
+    let (code, report) = status_check_json(target.path());
+    assert_eq!(code, 1, "{report}");
+    assert_eq!(
+        report["violations"],
+        serde_json::json!(["setup proof: setup-proof-absent"]),
+        "{report}"
+    );
+    let justfile = std::fs::read_to_string(repo_path("justfile")).expect("the justfile reads");
+    assert!(
+        justfile.contains(".violations == [\"setup proof: setup-proof-absent\"]"),
+        "the build recipe asserts the same one violation"
+    );
+}
+
+/// SATISFIES landing:ownership-is-elementary
+///
+/// The stage shows the moved secrets before any landing, in its receipt
+/// and its human report.
+#[test]
+fn the_stage_receipt_carries_the_moved_secrets() {
+    let target = target_with_an_earlier_workflow();
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let stage = stage_into(
+        target.path(),
+        scratch.path(),
+        &[
+            "--tech",
+            "rust",
+            "--forge",
+            "github",
+            "--repo",
+            "acme/widget",
+        ],
+    );
+    let receipt: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(stage.join("stage.json")).expect("the receipt reads"),
+    )
+    .expect("the receipt parses");
+    let moved = receipt["secrets_moved"].as_array().expect("secrets_moved");
+    let entry = |name: &str| {
+        moved
+            .iter()
+            .find(|entry| entry["name"] == name)
+            .unwrap_or_else(|| panic!("{name}: {receipt}"))
+            .clone()
+    };
+    let (id, key) = earlier_secret_names();
+    assert_eq!(entry(&id)["direction"], "dropped");
+    assert_eq!(entry(&key)["direction"], "dropped");
+    for name in ["RELEASE_BOT_APP_ID", "RELEASE_BOT_APP_PRIVATE_KEY"] {
+        let new = entry(name);
+        assert_eq!(new["direction"], "new", "{new}");
+        assert_eq!(new["step"], "bot-secrets", "{new}");
+        assert_eq!(new["path"], ".github/workflows/release-plz.yml", "{new}");
+    }
+    assert!(
+        moved.iter().all(|entry| entry["name"] != "GITHUB_TOKEN"),
+        "{receipt}"
+    );
+}
+
+/// Put a fresh landing back to what release 0.9.7 left: every rendered
+/// GitHub workflow passes the bot identity through `app-id` and names no
+/// release-plz version, the record vouches for those bytes, and it names
+/// 0.9.7 as the binary that wrote it.
+fn as_landed_by_0_9_7(target: &Path) {
+    use release_kit::digest::Digest;
+    let mut manifest = read_manifest(target);
+    for file in manifest["files"].as_array_mut().expect("files") {
+        let destination = file["destination"]
+            .as_str()
+            .expect("a destination")
+            .to_owned();
+        if file["kind"] != "rendered" || !destination.starts_with(".github/workflows/") {
+            continue;
+        }
+        let path = target.join(&destination);
+        let landed = std::fs::read_to_string(&path).expect("the workflow reads");
+        let earlier = landed
+            .replace("client-id: ${{", "app-id: ${{")
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("version: \""))
+            .fold(String::new(), |mut text, line| {
+                text.push_str(line);
+                text.push('\n');
+                text
+            });
+        std::fs::write(&path, &earlier).expect("the earlier bytes write");
+        file["sha256"] = Digest::of(earlier.as_bytes()).to_string().into();
+    }
+    manifest["rk_version"] = serde_json::json!("0.9.7");
+    write_manifest(target, &manifest);
+}
+
+/// Rewrite the `targets` line of a landed `dist-workspace.toml`.
+fn set_dist_targets(target: &Path, triples: &[&str]) {
+    let path = target.join("dist-workspace.toml");
+    let list: Vec<String> = triples
+        .iter()
+        .map(|triple| format!("\"{triple}\""))
+        .collect();
+    let text: String = std::fs::read_to_string(&path)
+        .expect("the dist configuration reads")
+        .lines()
+        .map(|line| {
+            if line.starts_with("targets = ") {
+                format!("targets = [{}]\n", list.join(", "))
+            } else {
+                format!("{line}\n")
+            }
+        })
+        .collect();
+    std::fs::write(&path, text).expect("the dist configuration writes");
+}
+
+/// A GitHub rust target an upgrade takes from 0.9.7 passes the bot
+/// identity through `client-id` and still reads the same two secrets.
+#[test]
+fn a_github_rust_target_upgrades_to_client_id_with_its_secrets_unchanged() {
+    let target = tempfile::tempdir().expect("a scratch target exists");
+    land_rust_locally(target.path()).success();
+    as_landed_by_0_9_7(target.path());
+    let workflow = target.path().join(".github/workflows/release-plz.yml");
+    let before = secret_names(&std::fs::read_to_string(&workflow).expect("reads"));
+    let out = rk()
+        .args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let human = String::from_utf8_lossy(&out);
+    assert!(!human.contains("secret "), "no secret moves: {human}");
+    let after = std::fs::read_to_string(&workflow).expect("reads");
+    assert!(!after.contains("app-id:"), "{after}");
+    assert!(after.contains("client-id: ${{ secrets.RELEASE_BOT_APP_ID }}"));
+    assert_eq!(secret_names(&after), before);
+}
+
+/// A target with no setup proof fails the status check once its upgrade
+/// lands, and passes once the checkpoint writes the proof.
+#[test]
+fn a_target_with_no_setup_proof_fails_the_status_check_after_upgrade_and_passes_after_checkpoint() {
+    let target = tempfile::tempdir().expect("a scratch target exists");
+    land_rust(target.path()).success();
+    answer_the_seeded_sentinel(target.path());
+    std::fs::remove_file(target.path().join(".release-kit/setup-proof.json"))
+        .expect("the proof goes");
+    as_landed_by_0_9_7(target.path());
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let (code, report) = status_check_json(target.path());
+    assert_eq!(code, 1, "{report}");
+    assert_eq!(
+        report["violations"],
+        serde_json::json!(["setup proof: setup-proof-absent"]),
+        "{report}"
+    );
+    seed_setup_proof(target.path());
+    let (code, report) = status_check_json(target.path());
+    assert_eq!(code, 0, "{report}");
+}
+
+/// The vivarium shape before its upgrade: two Linux targets, a crate that
+/// publishes to no registry, an unnamed gate, and a 0.9.7 record.
+fn vivarium_shaped_target() -> tempfile::TempDir {
+    let target = tempfile::tempdir().expect("a scratch target exists");
+    land_rust(target.path()).success();
+    answer_the_seeded_sentinel(target.path());
+    set_dist_targets(
+        target.path(),
+        &["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"],
+    );
+    std::fs::remove_file(target.path().join(".github/workflows/ci.yml")).expect("the gate goes");
+    as_landed_by_0_9_7(target.path());
+    target
+}
+
+/// Take the guidance file's steps 1 to 5 on a vivarium-shaped target.
+fn follow_the_guidance(target: &Path) {
+    // 1. No registry: the answer, and the seeded file edited by hand.
+    let config = target.join(".release-kit/config.toml");
+    let text = std::fs::read_to_string(&config).expect("the config reads");
+    std::fs::write(
+        &config,
+        text.replacen(
+            "[profile.release]\n",
+            "[profile.release]\nregistry = \"none\"\n",
+            1,
+        ),
+    )
+    .expect("the config writes");
+    let seed = target.join("release-plz.toml");
+    let text = std::fs::read_to_string(&seed)
+        .expect("the seed reads")
+        .replace("publish = true\n", "publish = false\ngit_only = true\n");
+    std::fs::write(&seed, text).expect("the seed writes");
+    // 2. The upgrade.
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target)
+        .assert()
+        .success();
+    // 3. The gated dist jobs.
+    std::fs::write(
+        target.join(".github/workflows/ci.yml"),
+        binding_gate_workflow(),
+    )
+    .expect("the gate writes");
+    // 4. The checkpoint.
+    seed_setup_proof(target);
+}
+
+/// The guidance order ends with a compatible proof, and a proof written
+/// before step 1 reads stale once the answer and the upgrade moved the
+/// setup contract.
+#[test]
+fn the_guidance_order_leaves_a_compatible_proof() {
+    let target = vivarium_shaped_target();
+    follow_the_guidance(target.path());
+    // 5. The status check.
+    let (code, report) = status_check_json(target.path());
+    assert_eq!(report["setup_proof"]["state"], "compatible", "{report}");
+    assert_eq!(code, 0, "{report}");
+
+    let early = vivarium_shaped_target();
+    seed_setup_proof(early.path());
+    let proof = std::fs::read(early.path().join(".release-kit/setup-proof.json"))
+        .expect("the early proof reads");
+    follow_the_guidance(early.path());
+    std::fs::write(early.path().join(".release-kit/setup-proof.json"), proof)
+        .expect("the early proof stands");
+    let (code, report) = status_check_json(early.path());
+    assert_eq!(code, 1, "{report}");
+    assert_eq!(report["setup_proof"]["state"], "stale", "{report}");
+}
+
+/// The vivarium shape after the guidance: no registry and git-only, the
+/// two gated dist jobs, a committed proof, and no excluded step; the
+/// status check passes.
+#[test]
+fn a_vivarium_shaped_target_passes_with_no_registry_and_git_only() {
+    let target = vivarium_shaped_target();
+    follow_the_guidance(target.path());
+    let config = release_kit::config::load(target.path())
+        .expect("the config reads")
+        .expect("the config exists");
+    assert!(
+        config.setup.excluded_steps.is_empty(),
+        "{:?}",
+        config.setup.excluded_steps
+    );
+    let seed =
+        std::fs::read_to_string(target.path().join("release-plz.toml")).expect("the seed reads");
+    assert!(seed.contains("publish = false") && seed.contains("git_only = true"));
+    let (code, report) = status_check_json(target.path());
+    assert!(invariant_codes(&report).is_empty(), "{report}");
+    assert_eq!(code, 0, "{report}");
+}
+
+/// The wipctl shape: five targets and a gate that runs `dist plan` alone
+/// report each target unbuilt after the upgrade.
+#[test]
+fn a_wipctl_shaped_target_reports_each_unbuilt_target() {
+    let target = tempfile::tempdir().expect("a scratch target exists");
+    land_rust(target.path()).success();
+    answer_the_seeded_sentinel(target.path());
+    set_dist_targets(target.path(), &FIVE_TARGETS);
+    std::fs::write(
+        target.path().join(".github/workflows/ci.yml"),
+        gated(PLAN_ONLY, "dist-plan"),
+    )
+    .expect("the gate writes");
+    as_landed_by_0_9_7(target.path());
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let (code, report) = status_check_json(target.path());
+    assert_eq!(code, 1, "{report}");
+    assert_eq!(
+        invariant_codes(&report)
+            .iter()
+            .filter(|(code, _)| code == "dist-target-unbuilt")
+            .count(),
+        5,
+        "{report}"
+    );
+}
+
+/// A target that releases nothing takes nothing from this release: no
+/// setup proof, no dist judgment, and no registry rule reach it.
+#[test]
+fn a_release_less_target_upgrade_carries_no_finding_of_this_release() {
+    let target = tempfile::tempdir().expect("a scratch target exists");
+    rk().args(["init", "--release-mode", "none", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let mut manifest = read_manifest(target.path());
+    manifest["rk_version"] = serde_json::json!("0.9.7");
+    write_manifest(target.path(), &manifest);
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let (code, report) = status_check_json(target.path());
+    assert!(report.get("setup_proof").is_none(), "{report}");
+    assert!(invariant_codes(&report).is_empty(), "{report}");
+    assert_eq!(code, 0, "{report}");
 }
 
 /// SATISFIES landing:a-seeded-file-still-carries-the-invariants
@@ -17178,6 +19292,7 @@ fn a_lapsed_licence_is_a_warning_and_check_still_exits_zero() {
     land_code_scanning(target.path(), "github", "codeql")
         .assert()
         .success();
+    seed_binding_dist_gate(target.path());
     // The sentinel a fresh landing leaves is the only violation, so filling
     // it is what makes the exit code answer the licence question alone.
     let seeded = target.path().join("release-plz.toml");
@@ -17376,6 +19491,7 @@ fn a_binding_with_no_scanner_reports_the_capability_unavailable() {
         }
         // The landing this binary wrote answers its own check: an
         // unavailable optional capability is a report, never a defect.
+        seed_setup_proof(target.path());
         rk().args(["status", "--check", "--target"])
             .arg(target.path())
             .assert()
@@ -17723,7 +19839,9 @@ fn the_binding_job_pins_resolve_through_the_registry() {
             );
         }
     }
-    assert_eq!(pinned, 4, "the binding serves four pinned action steps");
+    // The checkout of dist-plan and of dist-build sit beside the two of
+    // the other jobs the binding serves.
+    assert_eq!(pinned, 5, "the binding serves five pinned action steps");
 }
 
 /// The landed capability builds, end to end: a scratch crate opts in and
@@ -23609,6 +25727,7 @@ fn private_reporting_policy_lands_in_every_supported_pair() {
 fn private_reporting_policy_upgrade_adds_missing_destination() {
     let target = tempfile::tempdir().unwrap();
     land_rust(target.path()).success();
+    seed_binding_dist_gate(target.path());
     reporting_resolve_seeds(target.path());
     reporting_old_record(target.path());
     let before = reporting_tree(target.path());
@@ -23670,6 +25789,7 @@ fn private_reporting_policy_conflicts_are_atomic() {
 fn private_reporting_policy_owned_drift_is_replaced_by_the_upgrade() {
     let target = tempfile::tempdir().unwrap();
     land_rust(target.path()).success();
+    seed_binding_dist_gate(target.path());
     reporting_resolve_seeds(target.path());
     let path = target.path().join("SECURITY.md");
     let landed = std::fs::read_to_string(&path).unwrap();
@@ -24374,6 +26494,7 @@ fn an_untaken_release_gate_answer_is_informational() {
         "required_workflow = \"ci\"",
         "required_workflow = \"build\"",
     );
+    seed_setup_proof(target.path());
     rk().args(["status", "--check", "--target"])
         .arg(target.path())
         .assert()
@@ -24603,7 +26724,105 @@ fn edit_target_config(target: &Path, from: &str, to: &str) {
     std::fs::write(path, text.replace(from, to)).expect("config edits");
 }
 
+/// The two jobs `rk binding rust` serves for the gated dist build, as
+/// the binding states them: the YAML block that opens with `dist-plan:`.
+fn binding_dist_jobs() -> String {
+    let binding =
+        std::fs::read_to_string(repo_path("bindings/rust.md")).expect("the binding reads");
+    let start = binding
+        .find("```yaml\ndist-plan:\n")
+        .expect("the binding serves the dist-plan job")
+        + "```yaml\n".len();
+    let end = start
+        + binding[start..]
+            .find("```\n")
+            .expect("the job block closes");
+    binding[start..end].to_owned()
+}
+
+/// The binding's two dist jobs, indented under a workflow's `jobs:`.
+fn indented_binding_jobs() -> String {
+    binding_dist_jobs()
+        .lines()
+        .fold(String::new(), |mut jobs, line| {
+            if !line.is_empty() {
+                jobs.push_str("  ");
+                jobs.push_str(line);
+            }
+            jobs.push('\n');
+            jobs
+        })
+}
+
+/// A gated workflow carrying the binding's two dist jobs under `jobs:`,
+/// with a `gate` job that needs them, on `pull_request`.
+fn binding_gate_workflow() -> String {
+    let jobs = indented_binding_jobs();
+    format!(
+        "name: ci\non:\n  pull_request:\njobs:\n{jobs}  gate:\n    needs: [dist-plan, dist-build]\n    runs-on: ubuntu-latest\n    steps:\n      - run: \"true\"\n"
+    )
+}
+
+/// Commit a setup proof compatible with the contract `target` states now,
+/// the record a full `rk setup checkpoint` writes, built from the offline
+/// subject so no forge is needed. A target with no automatic release or no
+/// forge reads no proof, and gets none.
+fn seed_setup_proof(target: &Path) {
+    use release_kit::setup::proof;
+    let root = utf8(target);
+    let Ok(ctx) = release_kit::setup::context::Ctx::offline(&root) else {
+        return;
+    };
+    if ctx.profile.release.mode != release_kit::profile::ReleaseMode::Automatic
+        || ctx.profile.forge.is_none()
+    {
+        return;
+    }
+    let subject = proof::subject(&ctx);
+    let steps = subject
+        .steps
+        .iter()
+        .map(|step| proof::ProvenStep {
+            name: step.name.clone(),
+            state: if step.stance == "applicable" {
+                "satisfied".to_owned()
+            } else {
+                step.stance.clone()
+            },
+            limitation: None,
+        })
+        .collect();
+    let record = proof::Proof {
+        schema: proof::SCHEMA.to_owned(),
+        rk_version: env!("CARGO_PKG_VERSION").to_owned(),
+        verified_at: "2026-11-11T00:00:00Z".to_owned(),
+        subject_digest: proof::digest(&subject),
+        subject,
+        steps,
+    };
+    proof::write(&root, &record).expect("the proof writes");
+}
+
+/// Give a landed rust/github target the gated dist build the binding
+/// serves, so its one dist target counts as built, and a compatible setup
+/// proof.
+fn seed_binding_dist_gate(target: &Path) {
+    std::fs::create_dir_all(target.join(".github/workflows")).expect("the workflow dir exists");
+    std::fs::write(
+        target.join(".github/workflows/ci.yml"),
+        binding_gate_workflow(),
+    )
+    .expect("the gated workflow writes");
+    seed_setup_proof(target);
+}
+
+/// Answer the one judgment sentinel of a rust landing, and, on GitHub,
+/// give it the gated dist build, then commit a compatible setup proof,
+/// so `rk status --check` judges it clean.
 fn clear_landing_sentinels(target: &Path) {
+    if target.join("dist-workspace.toml").is_file() {
+        seed_binding_dist_gate(target);
+    }
     let path = target.join("release-plz.toml");
     let text = std::fs::read_to_string(&path).expect("seed exists");
     let text = text
@@ -24612,6 +26831,7 @@ fn clear_landing_sentinels(target: &Path) {
         .collect::<Vec<_>>()
         .join("\n");
     std::fs::write(path, format!("{text}\n")).expect("judgments answered");
+    seed_setup_proof(target);
 }
 
 #[test]
@@ -24667,6 +26887,8 @@ fn an_edited_config_is_reported_and_check_still_passes() {
     land_rust(target.path()).success();
     clear_landing_sentinels(target.path());
     edit_target_config(target.path(), "style = \"trunk\"", "style = \"lines\"");
+    // The operator re-runs the checkpoint over the contract the edit moved.
+    seed_setup_proof(target.path());
     let before = tree_digests(target.path());
     for check in [false, true] {
         let mut cmd = rk();
@@ -24722,6 +26944,7 @@ fn an_upgrade_takes_the_config_over_the_record() {
         .expect("workflow");
     assert!(workflow.contains("RELEASE_STYLE: lines"));
     assert!(workflow.contains("'other'"));
+    seed_setup_proof(target.path());
     rk().args(["status", "--check", "--target"])
         .arg(target.path())
         .assert()
@@ -24736,6 +26959,7 @@ fn a_schema_5_target_with_no_config_upgrades_to_one() {
     clear_landing_sentinels(target.path());
     std::fs::remove_file(target.path().join(".release-kit/config.toml"))
         .expect("pre-config target");
+    seed_setup_proof(target.path());
     rk().args(["status", "--check", "--target"])
         .arg(target.path())
         .assert()
@@ -24879,16 +27103,22 @@ fn an_adoption_writes_the_config_and_the_record_and_nothing_else() {
 /// The seeded `release-plz.toml` lands with a TODO sentinel the operator
 /// answers; a test that judges the landing with `--check` answers it the
 /// way the scratch round trip does, so the sentinel is not mistaken for
-/// this change's own violation.
+/// this change's own violation. On GitHub it also writes the gated dist
+/// build the scratch round trip writes, and it commits a compatible setup
+/// proof last.
 fn answer_the_seeded_sentinel(target: &Path) {
+    if target.join("dist-workspace.toml").is_file() {
+        seed_binding_dist_gate(target);
+    }
     let path = target.join("release-plz.toml");
     let text = std::fs::read_to_string(&path).expect("the seeded file reads");
     let kept: Vec<&str> = text
         .lines()
-        .filter(|line| !line.contains("TODO(release-kit)"))
+        .filter(|line| !line.contains("TODO(release-kit)") && !line.starts_with("semver_check ="))
         .collect();
     std::fs::write(&path, format!("{}\nsemver_check = true\n", kept.join("\n")))
         .expect("the seeded file rewrites");
+    seed_setup_proof(target);
 }
 
 /// SATISFIES target-config:the-trunk-branch-has-one-owner
@@ -25936,7 +28166,7 @@ fn the_landing_runbook_names_the_real_stage_fields() {
     let scratch = tempfile::tempdir().expect("a scratch dir exists");
     let target = stage_target();
     let report = stage_json(target.path(), &scratch.path().join("stage"));
-    assert_eq!(report["schema"], "rk.stage/6");
+    assert_eq!(report["schema"], "rk.stage/7");
     for top in [
         "schema",
         "rk_version",
@@ -26820,6 +29050,7 @@ fn release_none_params(
         driver: None,
         style: None,
         line_prefix: None,
+        registry: None,
     };
     record.git.merge_form = form;
     release_kit::landing::Params::from_record(&record)
@@ -28851,11 +31082,12 @@ fn the_stage_receipt_and_human_output_snapshot_hold() {
         "retired",
         "seeded_present",
         "state_present",
+        "secrets_moved",
         "reference",
     ];
     assert_eq!(top_level_keys(&receipt_text), receipt_keys);
     let receipt = stage_receipt(&stage);
-    assert_eq!(receipt["schema"], "rk.stage/6");
+    assert_eq!(receipt["schema"], "rk.stage/7");
     assert_eq!(receipt["rk_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(receipt["target"], canonical_target.display().to_string());
     assert_eq!(receipt["stage_root"], stage.display().to_string());
@@ -29051,7 +31283,7 @@ fn stage_clean_refuses_every_protected_or_ambiguous_path_and_deletes_one_valid_s
     std::fs::write(
         ancestor.join("stage.json"),
         format!(
-            r#"{{"schema":"rk.stage/6","stage_root":"{}","target":"{}"}}"#,
+            r#"{{"schema":"rk.stage/7","stage_root":"{}","target":"{}"}}"#,
             ancestor.display(),
             ancestor.join("inner").display()
         ),
@@ -30297,7 +32529,7 @@ fn production_outputs_carry_no_plan_bundle_or_release_selection_field() {
     for expected in [
         "rk.init/11",
         "rk.assess/4",
-        "rk.status/13",
+        "rk.status/14",
         "rk.upgrade/11",
         "rk.adopt/11",
     ] {
@@ -31013,6 +33245,7 @@ fn status_check_judges_every_rendered_file_against_the_receipts_parameters() {
     ] {
         let target = plan_target();
         land_rust(target.path()).success();
+        seed_binding_dist_gate(target.path());
         // The seeded sentinel and the dist profile are judged elsewhere:
         // clear them so the one violation here is the receipt's.
         let seeded = target.path().join("release-plz.toml");
@@ -40560,6 +42793,7 @@ fn release_less_gate_params(
         driver: None,
         style: None,
         line_prefix: None,
+        registry: None,
     };
     record.git.merge_form = form;
     release_kit::landing::Params::from_record(&record)

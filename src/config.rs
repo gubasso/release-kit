@@ -167,6 +167,9 @@ pub struct Release {
     pub style: Option<Style>,
     /// P: release-line branch prefix; automatic alone.
     pub line_prefix: Option<String>,
+    /// P: where the crate publishes, `crates-io` or `none`; an automatic
+    /// rust release alone. Absent reads as crates.io.
+    pub registry: Option<crate::profile::RegistryAnswer>,
 }
 
 /// The `git` table: the Git workflow parameters.
@@ -556,6 +559,51 @@ fn current_text(text: &str) -> Result<String, RkError> {
     }
 }
 
+/// Refuse a release mode or a registry answer outside its vocabulary.
+///
+/// Each is read as a string first, so a value outside the vocabulary
+/// refuses naming its own key rather than a span and a variant list the
+/// reader must locate for itself.
+fn release_vocabulary(raw: &toml::Value) -> Result<(), RkError> {
+    let release = raw
+        .get("profile")
+        .and_then(|profile| profile.get("release"));
+    if let Some(mode) = release.and_then(|release| release.get("mode")) {
+        let named = mode.as_str().ok_or_else(|| {
+            invalid("profile.release.mode must be a string: automatic, external, or none")
+        })?;
+        crate::profile::ReleaseMode::parse(named)
+            .map_err(|error| invalid(format!("profile.release.mode: {error}")))?;
+    }
+    match release.and_then(|release| release.get("registry")) {
+        Some(registry) if !matches!(registry.as_str(), Some("crates-io" | "none")) => {
+            Err(invalid(format!(
+                "profile.release.registry is {registry}; it takes crates-io or none, where the crate publishes, for an automatic rust release alone"
+            )))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Refuse a registry answer under a mode or a driver the configuration
+/// names; a driver the resolution derives settles the fit there.
+fn registry_fit(release: &Release) -> Result<(), RkError> {
+    if release.registry.is_some()
+        && (release.driver.is_some()
+            || matches!(
+                release.mode,
+                Some(ReleaseMode::External | ReleaseMode::None)
+            ))
+    {
+        crate::profile::catalog::registry_answer_fits(
+            release.mode.unwrap_or(ReleaseMode::Automatic),
+            release.driver.as_deref(),
+        )
+        .map_err(invalid)?;
+    }
+    Ok(())
+}
+
 fn parse(text: &str) -> Result<Config, RkError> {
     let text = current_text(text)?;
     let raw: toml::Value =
@@ -565,20 +613,7 @@ fn parse(text: &str) -> Result<Config, RkError> {
             "schema_version must be {SCHEMA_VERSION}, or 1 for a file this binary migrates"
         )));
     }
-    // The release mode is read as a string first, so a value outside the
-    // vocabulary refuses naming its own key rather than a span and a
-    // variant list the reader must locate for itself.
-    if let Some(mode) = raw
-        .get("profile")
-        .and_then(|profile| profile.get("release"))
-        .and_then(|release| release.get("mode"))
-    {
-        let named = mode.as_str().ok_or_else(|| {
-            invalid("profile.release.mode must be a string: automatic, external, or none")
-        })?;
-        crate::profile::ReleaseMode::parse(named)
-            .map_err(|error| invalid(format!("profile.release.mode: {error}")))?;
-    }
+    release_vocabulary(&raw)?;
     let config: Config = toml::from_str(&text).map_err(|error: toml::de::Error| {
         let mut message = error.to_string();
         if let Some(rest) = error.message().strip_prefix("unknown field `") {
@@ -638,6 +673,7 @@ fn parse(text: &str) -> Result<Config, RkError> {
             }
         }
     }
+    registry_fit(&config.profile.release)?;
     if let Some(contact) = &config.security.contact {
         canonical_contact(contact).map_err(invalid)?;
     }
@@ -827,6 +863,14 @@ fn fields(config: &Config) -> Result<Vec<(&'static str, Option<toml_edit::Value>
                 .line_prefix
                 .clone()
                 .map(toml_edit::Value::from),
+        ),
+        (
+            "RK_CONFIG_PROFILE_RELEASE_REGISTRY",
+            config
+                .profile
+                .release
+                .registry
+                .map(|answer| answer.as_str().into()),
         ),
         ("RK_CONFIG_GIT_TRUNK", Some(trunk.clone().into())),
         (
@@ -1189,7 +1233,7 @@ const DERIVED_POLICY_KEYS: [&str; 5] = [
 ];
 
 /// The keys a landing writes back: every class P answer.
-const PARAMETER_KEYS: [&str; 26] = [
+const PARAMETER_KEYS: [&str; 27] = [
     "project.repo",
     "profile.technologies",
     "profile.forge",
@@ -1197,6 +1241,7 @@ const PARAMETER_KEYS: [&str; 26] = [
     "profile.release.driver",
     "profile.release.style",
     "profile.release.line_prefix",
+    "profile.release.registry",
     "git.trunk",
     "git.checkout_mode",
     "git.integration",
@@ -1846,6 +1891,7 @@ impl Plan {
                 driver: params.driver().map(str::to_owned),
                 style: params.style(),
                 line_prefix: params.profile().release.line_prefix.clone(),
+                registry: params.profile().release.registry,
             },
         };
         resolved.git = Git {
@@ -1964,6 +2010,14 @@ fn parameter_values(config: &Config) -> Vec<(&'static str, Option<toml_edit::Val
                 .line_prefix
                 .clone()
                 .map(toml_edit::Value::from),
+        ));
+        values.push((
+            "profile.release.registry",
+            config
+                .profile
+                .release
+                .registry
+                .map(|answer| answer.as_str().into()),
         ));
     }
     if let Some(trunk) = config.git.trunk.clone() {
@@ -2248,6 +2302,7 @@ mod tests {
                     driver: Some("rust".into()),
                     style: Some(Style::Trunk),
                     line_prefix: Some(super::LINE_PREFIX_DEFAULT.into()),
+                    registry: None,
                 },
             },
             git: super::Git {
@@ -2455,6 +2510,7 @@ mod tests {
             driver: Some("bash".into()),
             style: Some(Style::Lines),
             line_prefix: Some("stable/".into()),
+            registry: None,
         };
         config.git.trunk = Some("main".into());
         config.git.checkout_mode = Some(CheckoutMode::MainWorktree);
@@ -2517,6 +2573,7 @@ mod tests {
             driver: None,
             style: None,
             line_prefix: None,
+            registry: None,
         };
         release_less.capabilities.reporting_policy = Some(false);
         // A release-less target with no reporting policy states no

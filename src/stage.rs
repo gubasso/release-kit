@@ -39,7 +39,7 @@ use crate::projection::{Placement, Projection};
 use crate::skills;
 
 /// The shape version of the stage receipt and of the `rk stage` report.
-pub const STAGE_SCHEMA: &str = "rk.stage/6";
+pub const STAGE_SCHEMA: &str = "rk.stage/7";
 
 /// The receipt's name at the stage root.
 pub const RECEIPT_NAME: &str = "stage.json";
@@ -106,6 +106,11 @@ pub struct Receipt {
     /// The recorded `state` destinations present on disk, which a
     /// production landing preserves.
     pub state_present: Vec<String>,
+    /// Every stored secret a GitHub workflow of the target reads and its
+    /// candidate does not, or the reverse, so the operator stores a new
+    /// one before the landing.
+    #[serde(default)]
+    pub secrets_moved: Vec<crate::landing::apply::SecretMove>,
     /// The reference roots written under `reference/`.
     pub reference: Vec<String>,
 }
@@ -583,6 +588,7 @@ pub fn compose(
             }
         }
     }
+    let secrets_moved = moved_secrets(projection, canonical_target);
     let receipt = Receipt {
         schema: STAGE_SCHEMA.to_owned(),
         rk_version: env!("CARGO_PKG_VERSION").to_owned(),
@@ -617,12 +623,40 @@ pub fn compose(
         retired,
         seeded_present,
         state_present,
+        secrets_moved,
         reference: REFERENCE_ROOTS
             .iter()
             .map(|root| (*root).to_owned())
             .collect(),
     };
     Composed { files, receipt }
+}
+
+/// Every stored secret a GitHub workflow of the target reads and its
+/// candidate does not, or the reverse: a workflow the target carries and a
+/// candidate rewrites moves each one.
+///
+/// SATISFIES landing:ownership-is-elementary
+fn moved_secrets(
+    projection: &Projection,
+    canonical_target: &Path,
+) -> Vec<crate::landing::apply::SecretMove> {
+    projection
+        .candidates
+        .iter()
+        .filter(|candidate| candidate.destination.starts_with(".github/workflows/"))
+        .filter_map(|candidate| {
+            let current = fs::read(canonical_target.join(&candidate.destination)).ok()?;
+            (current != candidate.bytes).then(|| {
+                crate::landing::apply::secrets_moved(
+                    &candidate.destination,
+                    &String::from_utf8_lossy(&current),
+                    &String::from_utf8_lossy(&candidate.bytes),
+                )
+            })
+        })
+        .flatten()
+        .collect()
 }
 
 /// Every file the reference tree carries, as `(path, bytes)` below
@@ -965,6 +999,7 @@ mod tests {
                     driver: Some("rust".into()),
                     style: Some(Style::Trunk),
                     line_prefix: Some("release/".into()),
+                    registry: None,
                 },
             },
             git: GitWorkflow {
@@ -989,7 +1024,7 @@ mod tests {
         }
     }
 
-    /// The complete `rk.stage/6` receipt shape, held by snapshot: a field
+    /// The complete `rk.stage/7` receipt shape, held by snapshot: a field
     /// rename or removal fails here and becomes a schema-version bump.
     #[test]
     fn the_stage_receipt_schema_snapshot_holds() {
@@ -1028,6 +1063,7 @@ mod tests {
             retired: vec!["old.yml".into()],
             seeded_present: vec!["release-plz.toml".into()],
             state_present: vec![],
+            secrets_moved: Vec::new(),
             reference: REFERENCE_ROOTS
                 .iter()
                 .map(|root| (*root).to_owned())
@@ -1036,7 +1072,7 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&receipt).expect("a receipt serializes"),
             format!(
-                r#"{{"schema":"rk.stage/6","rk_version":"0.0.0","target":"/tmp/t","stage_root":"/tmp/s","parameters":{{"profile":{{"technologies":["rust"],"forge":"github","release":{{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}}}},"git":{{"trunk":"master","checkout_mode":"linked-worktree","integration":"local","merge_form":"squash"}},"capabilities":{{"nix_packaging":false,"reporting_policy":true,"scorecard":false,"workflow_guards":false}},"repo":"acme/widget","security_contact":"","security_response":"best-effort","required_check":"","required_workflow":""}},"capabilities":[],"receipt_schema_version":6,"candidates":[{{"destination":"AGENTS.md","kind":"rendered","placement":"region","sha256":"{}","region_sha256":"{}","sources":["blocks/routing.md.in"]}},{{"destination":"release-plz.toml","kind":"seeded","placement":"whole","sha256":"{}","sources":["snippets/rust/github/release-plz.toml"]}}],"omissions":[{{"destination":"flake.nix","reason":"the target already carries flake.nix"}}],"collisions":[],"retired":["old.yml"],"seeded_present":["release-plz.toml"],"state_present":[],"reference":["CHANGELOG.md","guidance","method","bindings","runbooks","forges","skills"]}}"#,
+                r#"{{"schema":"rk.stage/7","rk_version":"0.0.0","target":"/tmp/t","stage_root":"/tmp/s","parameters":{{"profile":{{"technologies":["rust"],"forge":"github","release":{{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}}}},"git":{{"trunk":"master","checkout_mode":"linked-worktree","integration":"local","merge_form":"squash"}},"capabilities":{{"nix_packaging":false,"reporting_policy":true,"scorecard":false,"workflow_guards":false}},"repo":"acme/widget","security_contact":"","security_response":"best-effort","required_check":"","required_workflow":""}},"capabilities":[],"receipt_schema_version":6,"candidates":[{{"destination":"AGENTS.md","kind":"rendered","placement":"region","sha256":"{}","region_sha256":"{}","sources":["blocks/routing.md.in"]}},{{"destination":"release-plz.toml","kind":"seeded","placement":"whole","sha256":"{}","sources":["snippets/rust/github/release-plz.toml"]}}],"omissions":[{{"destination":"flake.nix","reason":"the target already carries flake.nix"}}],"collisions":[],"retired":["old.yml"],"seeded_present":["release-plz.toml"],"state_present":[],"secrets_moved":[],"reference":["CHANGELOG.md","guidance","method","bindings","runbooks","forges","skills"]}}"#,
                 Digest::of(b"a"),
                 Digest::of(b"r"),
                 Digest::of(b"b")
@@ -1199,6 +1235,7 @@ mod tests {
             retired: vec![],
             seeded_present: vec![],
             state_present: vec![],
+            secrets_moved: Vec::new(),
             reference: vec![],
         }
     }

@@ -87,10 +87,14 @@ Bearing: `forge-setup:a-package-check-states-policy-reach` — the metadata call
 
 ## release-plz, on which commits count toward a package
 
-For each package, release-plz walks the commits since its last release and keeps a commit only when the files it changes intersect the files `cargo package --list` prints for that package at that commit. A kept commit is listed in the package's changelog and is what makes a release necessary. No configuration option admits a commit that changes only files outside the package, and the FAQ gives the same answer for a release request that opens too often. `release_commits` narrows the kept commits further by a message pattern; with it unset, every kept commit asks for a release, whatever its type.
+For each package, release-plz walks the commits since its last release and keeps a commit only when the files it changes intersect the files `cargo package --list` prints for that package at that commit. A kept commit is listed in the package's changelog and is what makes a release necessary. No configuration option admits a commit that changes only files outside the package, and the FAQ gives the same answer for a release request that opens too often. `release_commits` narrows the kept commits further by a message pattern; with it unset, every kept commit asks for a release, whatever its type. A dependency change in `Cargo.toml` or `Cargo.lock` asks for a release too. At the pinned 0.4.3, release-plz ignores a change to a dev-dependency requirement that a package takes from the workspace `Cargo.toml` through `workspace = true`, unless it updates the `Cargo.lock` dependencies of a package with binaries (pull request 3290). It collects the package history across merged branches, and keeps a change that survives an equal package snapshot through another merge lineage (pull requests 3078 and 3079).
 
-- <https://github.com/release-plz/release-plz/blob/release-plz-v0.3.160/crates/release_plz_core/src/command/update/updater.rs#L834-L865>
+- <https://github.com/release-plz/release-plz/blob/release-plz-v0.4.3/crates/release_plz_core/src/command/update/updater.rs#L950-L970>
 - <https://release-plz.dev/docs/faq>
+- <https://github.com/release-plz/release-plz/blob/release-plz-v0.4.3/website/docs/why.md#conventional-commits-arent-required->
+- <https://github.com/release-plz/release-plz/pull/3290>
+- <https://github.com/release-plz/release-plz/pull/3078>
+- <https://github.com/release-plz/release-plz/pull/3079>
 - <https://release-plz.dev/docs/config#the-release_commits-field>
 
 Bearing: `forge-setup:a-package-check-states-policy-reach` — a packaged file a landing rewrites makes that landing a release, so the check faults each packaged release-kit path — and `git:a-local-integration-warns-of-an-uncounted-release` — a release-intent message on a change the listing does not reach is invisible to the bot.

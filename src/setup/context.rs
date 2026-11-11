@@ -504,6 +504,17 @@ impl Ctx {
         })
     }
 
+    /// The context of a target as its configuration and its record state
+    /// it, with no setup flag and no forge call, for a reader that judges
+    /// offline.
+    ///
+    /// # Errors
+    ///
+    /// The resolution's refusals, as [`Self::resolve`] raises them.
+    pub fn offline(target: &Utf8PathBuf) -> Result<Self, RkError> {
+        Self::resolve(target, None, None, None)
+    }
+
     /// Resolve the forge CLI where this run will call the forge for one of
     /// `steps`, and refuse where it cannot be found.
     ///
@@ -565,6 +576,7 @@ impl Ctx {
                     driver: tech.map(str::to_owned),
                     style: Some(crate::landing::Style::Trunk),
                     line_prefix: Some(crate::config::LINE_PREFIX_DEFAULT.to_owned()),
+                    registry: None,
                 },
             },
             capabilities: CapabilityRequests {

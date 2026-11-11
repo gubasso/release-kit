@@ -228,6 +228,20 @@ pub fn write(target: &Utf8Path, proof: &Proof) -> std::io::Result<()> {
     crate::atomic::write(path.as_std_path(), render(proof).as_bytes())
 }
 
+/// The committed proof judged against the contract the target states
+/// now, from its configuration and its record alone: no setup flag and
+/// no forge call, so `rk status` reads it where no credential is.
+///
+/// # Errors
+///
+/// The context's resolution refusals.
+///
+/// SATISFIES setup-proof:the-status-check-holds-the-proof
+pub fn offline(target: &camino::Utf8PathBuf) -> Result<Standing, crate::error::RkError> {
+    let ctx = Ctx::offline(target)?;
+    Ok(judge(&ctx.target, &subject(&ctx)))
+}
+
 /// Read the committed proof and judge it against `current`, offline.
 ///
 /// SATISFIES setup-proof:the-status-reads-the-proof-offline

@@ -204,12 +204,14 @@ pub fn run(args: &InitArgs) -> Result<(), RkError> {
         refuse_a_recorded_target(&held)?;
         let mut prepared = apply::prepare(&held, None, &params, config.as_ref())?;
         apply::name_replacements(&mut prepared, &args.replace)?;
+        report_moved_secrets(out, &held, &prepared)?;
         let landed = apply::land(&held, None, &prepared, apply::Origin::Init, &lock)?;
         drop(lock);
         report_apply(out, args, &held, &params, &prepared, &landed)
     } else {
         let mut prepared = apply::prepare(&held, None, &params, config.as_ref())?;
         apply::name_replacements(&mut prepared, &args.replace)?;
+        report_moved_secrets(out, &held, &prepared)?;
         let repo = (params.repo() != landing::REPO_PLACEHOLDER && !params.repo().is_empty())
             .then(|| params.repo().to_owned());
         if params.repo() == landing::REPO_PLACEHOLDER {
@@ -219,6 +221,25 @@ pub fn run(args: &InitArgs) -> Result<(), RkError> {
         }
         preview(out, args, &params, repo, &prepared)
     }
+}
+
+/// Print each secret a replaced GitHub workflow moves, before the write,
+/// so the operator stores a new one before the rendered workflow runs.
+///
+/// # Errors
+///
+/// A read of the held target that fails for a reason other than absence.
+///
+/// SATISFIES landing:ownership-is-elementary
+pub fn report_moved_secrets(
+    out: Output,
+    held: &apply::Held,
+    prepared: &Prepared,
+) -> Result<(), RkError> {
+    for moved in apply::replaced_secrets(held, prepared)? {
+        out.result_line(moved.line());
+    }
+    Ok(())
 }
 
 /// The report's shape version.
@@ -628,6 +649,7 @@ mod tests {
                     driver: Some("rust".into()),
                     style: Some(crate::landing::Style::Trunk),
                     line_prefix: Some("release/".into()),
+                    registry: None,
                 },
             },
             git: GitWorkflow {

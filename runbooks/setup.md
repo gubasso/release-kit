@@ -61,7 +61,7 @@ A project that runs part of what still applies declares that before its first ap
 
 ## 0. Gate the package metadata
 
-Before anything that needs credentials or cannot be undone; the binding names what the registry rejects here.
+Before anything that needs credentials or cannot be undone; the binding names what the registry rejects here. A rust crate whose `profile.release.registry` is `none` packages nothing, so the step reports not applicable there.
 
 ```bash
 rk binding <tech>
@@ -361,13 +361,11 @@ Check `SECURITY.md` after landing: its project path must name this target and it
 
 After the policy is published on the target through step 4c, check that the hosted file is visible and that the reporter can reach the intended private form. On GitLab, open this project's new issue form on its own instance and verify confidentiality is selected; do not guess a host for the policy. On private GitHub, verify the stated existing private conversation is available instead. Submit no report for this check. If the channel is unavailable, return to 3g; if the hosted file is absent, return to 4c.
 
-Then answer every reported sentinel and confirm the record:
+Then answer every reported sentinel:
 
 ```bash
 grep -rn 'TODO(release-kit)' . --exclude-dir=.git
 # check: prints nothing once each sentinel is answered
-rk status --check --target .
-# check: reports the landing as current
 ```
 
 ### 4b. Gate the artifact plan
@@ -378,7 +376,18 @@ On github, add the release proofs to the project's own gated workflow first, the
 
 ### 4c. Put the files on the trunk
 
-The landed files reach the trunk through the project's own workflow: a direct commit while no protection stands, or the project's usual change path once one does. Release-kit prescribes neither.
+First write the setup proof the landing closes on, from a host that holds the bot's key, and confirm the landing. Steps 0 to 3 have run, and 4b put the gated jobs in place, so every step the check reads can hold:
+
+```bash
+rk setup check --target .
+# check: every applicable step satisfied; a step this forge cannot run goes in setup.excluded_steps with its reason
+rk setup checkpoint --target .
+# check: wrote .release-kit/setup-proof.json
+rk status --check --target .
+# check: reports the landing as current, with the setup proof compatible
+```
+
+The landed files and `.release-kit/setup-proof.json` reach the trunk together, through the project's own workflow: a direct commit while no protection stands, or the project's usual change path once one does. Release-kit prescribes neither.
 
 ```bash
 git fetch origin
@@ -397,7 +406,7 @@ pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type pre
 
 ## 5. Publish the first version by hand
 
-The upload is permanent: the registry never lets a version be overwritten, and the name is claimed for good.
+The upload is permanent: the registry never lets a version be overwritten, and the name is claimed for good. A rust crate whose `profile.release.registry` is `none` skips steps 5, 6, and 8: like bash, it publishes to no registry, and step 7 proves its first release.
 
 ### 5a. Gate the tree and read the version
 
@@ -440,13 +449,13 @@ python -m build
 python -m twine upload dist/*                # reads the token from the environment
 ```
 
-On bash:
+On bash, and for a rust crate whose `profile.release.registry` is `none`:
 
 There is no registry; the first release is proven by the automated path in step 7, and nothing is published by hand.
 
 ## 6. Register the trusted publisher
 
-Manual — registry web UI, no API, once per package; the binding walks the form and its read-back check. Register the owner, the repository, and the publish workflow's filename, which must be the one that stays true. Then revoke the bootstrap token, both halves — the registry-side revoke and the host-side logout the binding carries — so the package has exactly one publishing path.
+Not for a crate that publishes to no registry. Manual — registry web UI, no API, once per package; the binding walks the form and its read-back check. Register the owner, the repository, and the publish workflow's filename, which must be the one that stays true. Then revoke the bootstrap token, both halves — the registry-side revoke and the host-side logout the binding carries — so the package has exactly one publishing path.
 
 ## 7. Prove the automated path
 
@@ -507,19 +516,21 @@ rk guide release
 
 The chapter names its passing verify step as the proof the next step depends on.
 
-### 7e. Record the setup proof
+### 7e. Refresh the setup proof
 
-From a host that holds the bot's key, once every step reports satisfied:
+4c wrote the first proof. Read it again once the automated path is proven, and where it reads anything but compatible, write it again from a host that holds the bot's key:
 
 ```bash
+rk setup status --target .
+# check: setup proof: compatible; anything else runs the checkpoint below
 rk setup checkpoint --target .
 # check: wrote .release-kit/setup-proof.json; an unsatisfied or unknown step writes nothing, so return to the substep that owns it
-rk setup status --target .
-# check: setup proof: compatible
 ```
 
-Commit `.release-kit/setup-proof.json` through the trunk's protected path, as 7a. A runtime without the key reads `rk setup status` instead of repeating the check. After any change to the setup configuration, `rk setup status` names the changed field, and this substep runs again.
+Commit a refreshed `.release-kit/setup-proof.json` through the trunk's protected path, as 7a. The proof closes the setup: `rk status --check` counts an absent, stale, or invalid proof as a violation on a target with an automatic release. A step this forge cannot run goes in `setup.excluded_steps` with its reason, which keeps the proof complete. A runtime without the key reads `rk setup status` instead of repeating the check. After any change to the setup configuration, `rk setup status` names the changed field, and this substep runs again.
+
+An upgrade or a new answer that moves the setup contract takes the same order: land, then `rk setup check --target .` and `rk setup checkpoint --target .`, then commit the landed files, the configuration, and the proof together.
 
 ## 8. Require trusted publishing
 
-Manual — registry web UI, no API, once per package, and only after step 7 proved one OIDC release; the binding names the switch, what it rejects from here on, and the recovery escape that starts by turning it off.
+Not for a crate that publishes to no registry. Manual — registry web UI, no API, once per package, and only after step 7 proved one OIDC release; the binding names the switch, what it rejects from here on, and the recovery escape that starts by turning it off.

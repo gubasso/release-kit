@@ -685,6 +685,132 @@ pub enum Origin {
     Adopt,
 }
 
+/// One stored secret whose reading moved when a landing replaced a GitHub
+/// workflow: the replaced file read it and the rendered file does not, or
+/// the reverse.
+///
+/// SATISFIES landing:ownership-is-elementary
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub struct SecretMove {
+    /// The workflow, relative to the target.
+    pub path: String,
+    /// The secret's name.
+    pub name: String,
+    /// `dropped` where only the replaced file read it, `new` where only
+    /// the rendered file reads it.
+    pub direction: String,
+    /// The setup step that stores a new secret, where one does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step: Option<String>,
+}
+
+impl SecretMove {
+    /// The human line.
+    #[must_use]
+    pub fn line(&self) -> String {
+        if self.direction == "dropped" {
+            format!(
+                "secret {} read by the replaced {} is not read by the rendered file",
+                self.name, self.path
+            )
+        } else {
+            self.step.as_deref().map_or_else(
+                || {
+                    format!(
+                        "secret {} is new; no setup step stores it, so the operator does",
+                        self.name
+                    )
+                },
+                |step| format!("secret {} is new; {step} stores it", self.name),
+            )
+        }
+    }
+}
+
+/// The stored secrets a workflow text reads: every `secrets.NAME` inside a
+/// `${{ }}` expression, with or without spaces. `GITHUB_TOKEN` is the
+/// forge's own and no stored secret.
+#[must_use]
+pub fn secret_names(text: &str) -> std::collections::BTreeSet<String> {
+    let mut names = std::collections::BTreeSet::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("${{") {
+        let Some(end) = rest[start..].find("}}") else {
+            break;
+        };
+        let expression = &rest[start + 3..start + end];
+        let mut inner = expression;
+        while let Some(at) = inner.find("secrets.") {
+            let name: String = inner[at + "secrets.".len()..]
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            if !name.is_empty() && name != "GITHUB_TOKEN" {
+                names.insert(name);
+            }
+            inner = &inner[at + "secrets.".len()..];
+        }
+        rest = &rest[start + end + 2..];
+    }
+    names
+}
+
+/// The secrets that move when the workflow at `path` goes from `old` to
+/// `new`: each name `old` reads and `new` does not, then each name `new`
+/// reads and `old` did not, with the step that stores it.
+#[must_use]
+pub fn secrets_moved(path: &str, old: &str, new: &str) -> Vec<SecretMove> {
+    let (before, after) = (secret_names(old), secret_names(new));
+    let dropped = before.difference(&after).map(|name| SecretMove {
+        path: path.to_owned(),
+        name: name.clone(),
+        direction: "dropped".to_owned(),
+        step: None,
+    });
+    let added = after.difference(&before).map(|name| SecretMove {
+        path: path.to_owned(),
+        name: name.clone(),
+        direction: "new".to_owned(),
+        step: crate::setup::steps::secret_step(name).map(str::to_owned),
+    });
+    dropped.chain(added).collect()
+}
+
+/// The secrets every workflow this landing replaces would move: each
+/// destination under `.github/workflows/` the landing replaces, read
+/// before the write and set beside its candidate.
+///
+/// # Errors
+///
+/// A read of the held target that fails for a reason other than absence.
+pub fn replaced_secrets(target: &Held, prepared: &Prepared) -> Result<Vec<SecretMove>, RkError> {
+    let mut moved = Vec::new();
+    for decision in &prepared.decisions {
+        if decision.action != Action::Replaced
+            || !decision.destination.starts_with(".github/workflows/")
+        {
+            continue;
+        }
+        let Some(candidate) = prepared
+            .projection
+            .candidates
+            .iter()
+            .find(|candidate| candidate.destination == decision.destination)
+        else {
+            continue;
+        };
+        let Some(current) = read_relative(&target.root, &decision.destination)? else {
+            continue;
+        };
+        moved.extend(secrets_moved(
+            &decision.destination,
+            &String::from_utf8_lossy(&current),
+            &String::from_utf8_lossy(&candidate.bytes),
+        ));
+    }
+    Ok(moved)
+}
+
 /// What a landing completed.
 #[derive(Debug)]
 pub struct Landed {

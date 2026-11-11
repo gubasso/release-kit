@@ -71,6 +71,35 @@ impl ReleaseMode {
     }
 }
 
+/// Where an automatic rust release publishes: the answer of
+/// `profile.release.registry`. An absent answer reads as crates.io, so a
+/// target that never answered keeps its behavior and its record.
+///
+/// SATISFIES project-profile:release-intent-has-three-modes
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RegistryAnswer {
+    /// The crate publishes to crates.io.
+    CratesIo,
+    /// The crate publishes to no registry: release-plz reads the last
+    /// release from the tags, and the release page is the publication.
+    None,
+}
+
+impl RegistryAnswer {
+    /// The configuration, wire, and report form.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CratesIo => "crates-io",
+            Self::None => "none",
+        }
+    }
+
+    /// The one driver the answer is valid for.
+    pub const DRIVER: &'static str = "rust";
+}
+
 /// The release intent: the mode and, for an automatic release, its driver,
 /// style, and line prefix.
 ///
@@ -90,6 +119,11 @@ pub struct ReleaseIntent {
     /// alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_prefix: Option<String>,
+    /// Where the crate publishes; answered for an automatic rust release
+    /// alone, and absent where nothing answered it, which reads as
+    /// crates.io.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registry: Option<RegistryAnswer>,
 }
 
 /// What the project is, on the wire: values alone.
@@ -465,6 +499,20 @@ impl Params {
         self.profile.release.style
     }
 
+    /// Where an automatic rust release publishes, with an absent answer
+    /// read as crates.io; `None` for every other release.
+    #[must_use]
+    pub fn registry(&self) -> Option<RegistryAnswer> {
+        (self.release_mode() == ReleaseMode::Automatic
+            && self.driver() == Some(RegistryAnswer::DRIVER))
+        .then(|| {
+            self.profile
+                .release
+                .registry
+                .unwrap_or(RegistryAnswer::CratesIo)
+        })
+    }
+
     /// Whether this landing requested the Nix capability.
     #[must_use]
     pub const fn nix_packaging(&self) -> bool {
@@ -697,6 +745,7 @@ impl Params {
                     driver: Some("rust".to_owned()),
                     style,
                     line_prefix: Some(crate::config::LINE_PREFIX_DEFAULT.to_owned()),
+                    registry: None,
                 },
             },
             git: GitWorkflow {
@@ -745,6 +794,7 @@ impl Params {
             driver: None,
             style: None,
             line_prefix: None,
+            registry: None,
         };
         params.capabilities.reporting_policy = false;
         if forge.is_none() {
@@ -1066,6 +1116,26 @@ pub fn resolve(
         (Some(value), source)
     });
 
+    // Where the crate publishes: no flag and no observation answer it, and
+    // an absent answer stays absent, which reads as crates.io, so a target
+    // that never answered keeps its record byte for byte.
+    let (registry, registry_source) = answered([
+        (None, Source::Flag),
+        (
+            config.and_then(|c| c.profile.release.registry),
+            Source::Config,
+        ),
+        (
+            record.and_then(|r| r.profile.release.registry),
+            Source::Record,
+        ),
+        (None, Source::Observation),
+        (None, Source::Default),
+    ])
+    .map_or((None, Source::Default), |(value, source)| {
+        (Some(value), source)
+    });
+
     // A reporting purpose never refuses what it can state: `rk profile`
     // and every preview report an intent the target cannot yet take, and
     // the capability catalog says why. A purpose that writes refuses,
@@ -1122,9 +1192,17 @@ pub fn resolve(
                 (None, _) => Style::Trunk,
                 (Some(style), _) => style,
             };
+            // A preview reports what it cannot judge, but a known driver
+            // judges the answer in every purpose.
+            if registry.is_some() && (driver.is_some() || !reporting) {
+                catalog::registry_answer_fits(mode, driver.as_deref()).map_err(RkError::Usage)?;
+            }
             sources.insert("profile.release.driver", driver_source);
             sources.insert("profile.release.style", style_source);
             sources.insert("profile.release.line_prefix", prefix_source);
+            if driver.as_deref() == Some(RegistryAnswer::DRIVER) {
+                sources.insert("profile.release.registry", registry_source);
+            }
             ReleaseIntent {
                 mode,
                 driver,
@@ -1132,6 +1210,7 @@ pub fn resolve(
                 line_prefix: Some(
                     line_prefix.unwrap_or_else(|| crate::config::LINE_PREFIX_DEFAULT.to_owned()),
                 ),
+                registry,
             }
         }
         ReleaseMode::External | ReleaseMode::None => {
@@ -1149,6 +1228,11 @@ pub fn resolve(
                     line_prefix.is_some(),
                     prefix_source,
                 ),
+                (
+                    "profile.release.registry",
+                    registry.is_some(),
+                    registry_source,
+                ),
             ] {
                 if present
                     && matches!(value_source, Source::Flag | Source::Config)
@@ -1165,6 +1249,7 @@ pub fn resolve(
                 driver: None,
                 style: None,
                 line_prefix: None,
+                registry: None,
             }
         }
     };

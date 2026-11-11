@@ -58,6 +58,32 @@
         pkgs:
         let
           toolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
+          # The release jobs run this release-plz, so it stays at or above the
+          # registry's pin in versions.toml: git-only mode packages no earlier
+          # release from 0.3.168 on. nixpkgs carries 0.4.1, so the flake builds
+          # the pinned release over the nixpkgs package. Drop the override once
+          # nixpkgs carries the pin.
+          release-plz = pkgs.release-plz.overrideAttrs (
+            finalAttrs: prev: {
+              version = "0.4.3";
+              src = pkgs.fetchFromGitHub {
+                owner = "release-plz";
+                repo = "release-plz";
+                rev = "release-plz-v${finalAttrs.version}";
+                hash = "sha256-lUyhbf4KD9QVUBebgcrfTWkHV4PBxvNZMQlObCU8jwM=";
+              };
+              cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
+                inherit (finalAttrs) pname version src;
+                hash = "sha256-wYDAx23ayZCHFTTB3bLHt7ar6FOh+9kIR0WexbvGeyc=";
+              };
+              buildInputs = prev.buildInputs ++ [
+                pkgs.aws-lc
+                pkgs.libgit2
+                pkgs.sqlite
+                pkgs.zstd
+              ];
+            }
+          );
         in
         {
           # What belongs here: a tool this project pins that no more specific
@@ -99,7 +125,7 @@
               # The release jobs run release-plz from this shell, as
               # .release-kit/config.toml records, so CI installs no release
               # tool of its own.
-              pkgs.release-plz
+              release-plz
             ];
           };
         }

@@ -200,6 +200,7 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
 
     let mut prepared = apply::prepare(&held, Some(&recorded), &params, existing.as_ref())?;
     apply::name_replacements(&mut prepared, &args.replace)?;
+    crate::commands::init::report_moved_secrets(out, &held, &prepared)?;
     let landed = if let Some(lock) = lock {
         let landed = apply::land(
             &held,
@@ -599,6 +600,7 @@ mod tests {
                     driver: Some("rust".into()),
                     style: Some(crate::landing::Style::Trunk),
                     line_prefix: Some("release/".into()),
+                    registry: None,
                 },
             },
             git: GitWorkflow {

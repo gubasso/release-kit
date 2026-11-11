@@ -23,6 +23,7 @@ use crate::landing::invariants::{self, InvariantFailure};
 use crate::landing::manifest::{self, Alignment, Manifest};
 use crate::landing::{self, Kind};
 use crate::output::Output;
+use crate::profile::RegistryAnswer;
 use crate::profile::{CapabilityRequests, GitWorkflow, ProfileSnapshot, ReleaseMode};
 use crate::projection::{Candidate, Projection, ProjectionInput, TargetEvidence};
 use crate::stage::CapabilityNote;
@@ -59,6 +60,96 @@ struct Warning {
     code: &'static str,
     /// What the condition is, in the target's own terms.
     reason: String,
+}
+
+/// Where the committed setup proof stands against the contract the target
+/// states now, read offline.
+///
+/// SATISFIES setup-proof:the-status-check-holds-the-proof
+#[derive(Debug, Clone, Serialize)]
+struct SetupProof {
+    /// `compatible`, `stale`, `invalid`, or `absent`.
+    state: &'static str,
+    /// Each changed field of a stale proof.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    changed: Vec<String>,
+    /// Why an invalid proof cannot be read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<&'static str>,
+    /// What an invalid proof held, one line.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
+}
+
+/// What every setup proof code asks the operator to run, who holds the
+/// credentials the check reads.
+const SETUP_PROOF_REMEDIATION: &str = "run rk setup check --target ., then rk setup checkpoint --target ., and commit .release-kit/setup-proof.json; a step this forge cannot run goes in setup.excluded_steps with its reason, which keeps the proof complete";
+
+impl SetupProof {
+    fn of(standing: &crate::setup::proof::Standing) -> Self {
+        use crate::setup::proof::Standing;
+        let mut proof = Self {
+            state: standing.word(),
+            changed: Vec::new(),
+            reason: None,
+            detail: None,
+        };
+        match standing {
+            Standing::Stale { differences, .. } => proof.changed.clone_from(differences),
+            Standing::Invalid { reason, detail } => {
+                proof.reason = Some(reason);
+                proof.detail = Some(detail.clone());
+            }
+            Standing::Absent | Standing::Compatible(_) => {}
+        }
+        proof
+    }
+
+    /// The violation a proof that is not compatible counts under
+    /// `--check`.
+    fn failure(&self) -> Option<InvariantFailure> {
+        let (code, reason) = match self.state {
+            "absent" => (
+                "setup-proof-absent",
+                "no .release-kit/setup-proof.json is committed, so nothing proves the forge, the registry, and the bot meet the setup contract".to_owned(),
+            ),
+            "stale" => (
+                "setup-proof-stale",
+                format!(
+                    "the committed setup proof was written for another setup contract; changed: {}",
+                    self.changed.join(", ")
+                ),
+            ),
+            "invalid" => (
+                "setup-proof-invalid",
+                format!(
+                    "the committed setup proof cannot be read: {}: {}",
+                    self.reason.unwrap_or("invalid"),
+                    self.detail.as_deref().unwrap_or("")
+                ),
+            ),
+            _ => return None,
+        };
+        Some(InvariantFailure {
+            code,
+            destination: crate::setup::proof::PROOF_PATH.to_owned(),
+            reason,
+            remediation: SETUP_PROOF_REMEDIATION,
+        })
+    }
+}
+
+/// The committed setup proof, for a target whose automatic release has a
+/// forge to set up; `None` for every other target, whose report is
+/// unchanged.
+fn setup_proof_of(
+    target: &camino::Utf8PathBuf,
+    manifest: &Manifest,
+) -> Result<Option<SetupProof>, RkError> {
+    if manifest.profile.release.mode != ReleaseMode::Automatic || manifest.profile.forge.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(SetupProof::of(&crate::setup::proof::offline(target)?)))
 }
 
 /// The code a lapsed code scanning licence reports under.
@@ -203,7 +294,7 @@ const LEGACY_PLANS: &str = "plans";
 const LEGACY_RELEASE_CACHE: &str = "release";
 
 /// The status report's shape version.
-const SCHEMA: &str = "rk.status/13";
+const SCHEMA: &str = "rk.status/14";
 
 /// Configuration is informational, independent of every drift comparison.
 #[derive(Debug, serde::Serialize)]
@@ -289,6 +380,10 @@ struct Report {
     /// operator's.
     #[serde(skip_serializing_if = "Option::is_none")]
     warnings: Option<Vec<Warning>>,
+    /// Where the committed setup proof stands, on a target with an
+    /// automatic release and a forge; absent on every other target.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    setup_proof: Option<SetupProof>,
     /// How many destinations an upgrade would change: the count this
     /// binary's sources project under the recorded parameters against
     /// what the record names. Zero means nothing to take, whatever the two
@@ -411,6 +506,7 @@ fn report_absent(
         record_drift: None,
         invariant_failures: None,
         warnings: None,
+        setup_proof: None,
         pending: None,
         violations: args.check.then(|| vec!["no landing".to_owned()]),
         legacy_state: legacy,
@@ -447,6 +543,7 @@ struct Observed {
     invariants: Vec<InvariantFailure>,
     /// Reportable conditions that are not violations.
     warnings: Vec<Warning>,
+    setup_proof: Option<SetupProof>,
     /// Recorded intents this target cannot honour, counted in
     /// `record_drift` and kept separately because a plain upgrade cannot
     /// repair them: it re-reads the same recorded answer and refuses. An
@@ -487,6 +584,7 @@ pub fn run(args: &StatusArgs) -> Result<(), RkError> {
     };
 
     let migration = open_migration(&args.target, config.as_ref());
+    let stated = Stated::of(config.as_ref(), &manifest);
     let config = config_state(config.as_ref(), Some(&manifest));
     out.result_line(format!("config: {}", config.state));
     for key in &config.pending {
@@ -494,7 +592,8 @@ pub fn run(args: &StatusArgs) -> Result<(), RkError> {
             "config pending: {key}; rk upgrade --apply takes it up"
         ));
     }
-    let observed = observe(args, &manifest)?;
+    let mut observed = observe(args, &manifest, &stated)?;
+    observed.setup_proof = setup_proof_of(&args.target, &manifest)?;
     let alignment = manifest::alignment(&manifest.rk_version, env!("CARGO_PKG_VERSION"));
     render_human(out, args, &manifest, alignment, &observed);
 
@@ -551,6 +650,7 @@ pub fn run(args: &StatusArgs) -> Result<(), RkError> {
         ),
         invariant_failures: Some(observed.invariants),
         warnings: Some(observed.warnings),
+        setup_proof: observed.setup_proof.clone(),
         pending: observed.pending.as_ref().map(Vec::len),
         violations: args.check.then(|| violations.clone()),
         legacy_state: legacy,
@@ -630,7 +730,39 @@ fn violations_of(observed: &Observed) -> Vec<String> {
                 .iter()
                 .map(|failure| format!("invariant: {}: {}", failure.destination, failure.code)),
         )
+        .chain(
+            observed
+                .setup_proof
+                .as_ref()
+                .and_then(SetupProof::failure)
+                .map(|failure| format!("setup proof: {}", failure.code)),
+        )
         .collect()
+}
+
+/// The answers the target states now, for the judgments: a committed
+/// answer the landing verbs have yet to take up outranks the record.
+struct Stated {
+    /// Where the crate publishes.
+    registry: Option<RegistryAnswer>,
+    /// The check context of the gate.
+    required_check: String,
+}
+
+impl Stated {
+    fn of(config: Option<&crate::config::Config>, manifest: &Manifest) -> Self {
+        Self {
+            registry: config
+                .and_then(|config| config.profile.release.registry)
+                .or(manifest.profile.release.registry),
+            // The landing writes the check back as a class P answer, so a
+            // configuration that exists states it, an empty one included.
+            required_check: config.map_or_else(
+                || manifest.parameters.required_check.clone(),
+                |config| config.setup.required_check.clone(),
+            ),
+        }
+    }
 }
 
 /// One pass over the record and the disk: drift, missing files, stale
@@ -639,7 +771,7 @@ fn violations_of(observed: &Observed) -> Vec<String> {
     clippy::too_many_lines,
     reason = "one pass over the record and the disk answers every comparison the report states"
 )]
-fn observe(args: &StatusArgs, manifest: &Manifest) -> Result<Observed, RkError> {
+fn observe(args: &StatusArgs, manifest: &Manifest, stated: &Stated) -> Result<Observed, RkError> {
     let mut observed = Observed {
         drift_rendered: Vec::new(),
         drift_seeded: Vec::new(),
@@ -650,6 +782,7 @@ fn observe(args: &StatusArgs, manifest: &Manifest) -> Result<Observed, RkError> 
         sentinels: Vec::new(),
         invariants: Vec::new(),
         warnings: Vec::new(),
+        setup_proof: None,
         incompatible: Vec::new(),
         pending: None,
         selection: None,
@@ -683,6 +816,7 @@ fn observe(args: &StatusArgs, manifest: &Manifest) -> Result<Observed, RkError> 
             manifest.profile.forge.as_deref().unwrap_or(""),
             &file.destination,
             &bytes,
+            stated.registry,
         ));
         let text = String::from_utf8_lossy(&bytes);
         for (idx, line) in text.lines().enumerate() {
@@ -717,6 +851,19 @@ fn observe(args: &StatusArgs, manifest: &Manifest) -> Result<Observed, RkError> 
         manifest.profile.forge.as_deref().unwrap_or(""),
         &args.target,
     ));
+    // The gate builds every dist target before a merge, or the build
+    // fails only after the tag exists.
+    if manifest.profile.release.driver.as_deref() == Some("rust")
+        && manifest.profile.forge.as_deref() == Some("github")
+    {
+        let gate = invariants::dist_targets_built(&args.target, &stated.required_check);
+        observed.invariants.extend(gate.failures);
+        observed.warnings.extend(
+            gate.limitations
+                .into_iter()
+                .map(|(code, reason)| Warning { code, reason }),
+        );
+    }
     observed.selection = projected.as_ref().map(|projection| {
         projection
             .capabilities
@@ -991,8 +1138,18 @@ fn render_human(
     for warning in &observed.warnings {
         out.result_line(format!("WARNING ({}): {}", warning.code, warning.reason));
     }
+    let proof_failure = observed.setup_proof.as_ref().and_then(SetupProof::failure);
+    if let Some(proof) = &observed.setup_proof {
+        out.result_line(format!("setup proof: {}", proof.state));
+    }
+    if let Some(failure) = &proof_failure {
+        out.result_line(format!(
+            "SETUP-PROOF ({}): {}",
+            failure.code, failure.reason
+        ));
+    }
     let mut next = Vec::new();
-    for failure in &observed.invariants {
+    for failure in observed.invariants.iter().chain(&proof_failure) {
         next.push(format!("{}: {}", failure.destination, failure.remediation));
     }
     // The incompatible ones first, and with the override: a plain upgrade
@@ -1045,7 +1202,7 @@ mod tests {
         CapabilityRequests, GitWorkflow, ProfileSnapshot, ReleaseIntent, ReleaseMode,
     };
 
-    /// The complete `rk.status/13` shape, held by snapshot in both the
+    /// The complete `rk.status/14` shape, held by snapshot in both the
     /// landed and absent forms.
     #[test]
     #[allow(
@@ -1070,6 +1227,7 @@ mod tests {
                     driver: Some("rust".into()),
                     style: Some(crate::landing::Style::Trunk),
                     line_prefix: Some("release/".into()),
+                    registry: None,
                 },
             }),
             git: Some(GitWorkflow {
@@ -1116,6 +1274,12 @@ mod tests {
                 code: super::CODE_SCANNING_LICENCE,
                 reason: "the target's license, LicenseRef-proprietary, does not state a codebase this release recognizes as open source".into(),
             }]),
+            setup_proof: Some(super::SetupProof {
+                state: "stale",
+                changed: vec!["target.required_check".into()],
+                reason: None,
+                detail: None,
+            }),
             pending: Some(2),
             violations: None,
             legacy_state: vec![LegacyPath {
@@ -1133,7 +1297,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&landed).expect("a report serializes"),
-            r##"{"schema":"rk.status/13","landed":true,"classification":"upgrade","git_work_tree":true,"config":{"state":"pending","pending":["profile.release.style"]},"profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local","merge_form":"squash"},"capabilities":{"nix_packaging":true,"reporting_policy":true,"scorecard":false,"code_scanning":"semgrep","workflow_guards":false},"selection":[],"rk_version":"0.1.0","binary_version":"0.2.0","alignment":"binary-newer","drift":{"rendered":0,"seeded":1},"missing":[],"stale_pins":[{"tool":"release-plz","landed":"0.3.160","available":"0.3.170"}],"sentinels":1,"sentinel_locations":[{"file":"release-plz.toml","line":18,"text":"# TODO(release-kit): keep false for a binary-only crate"}],"record_drift":0,"invariant_failures":[{"code":"attestations-disabled","destination":"dist-workspace.toml","reason":"github-attestations is not effectively true","remediation":"set github-attestations = true in [dist]"}],"warnings":[{"code":"code-scanning-licence","reason":"the target's license, LicenseRef-proprietary, does not state a codebase this release recognizes as open source"}],"pending":2,"legacy_state":[{"path":"/state/release-kit/plans/0123456789abcdef","kind":"plan","active":true}],"migration":{"id":"20261009T140205Z","workspace":"/state/release-kit/migrations/widget-0123456789ab/20261009T140205Z","unfinished":2}}"##
+            r##"{"schema":"rk.status/14","landed":true,"classification":"upgrade","git_work_tree":true,"config":{"state":"pending","pending":["profile.release.style"]},"profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local","merge_form":"squash"},"capabilities":{"nix_packaging":true,"reporting_policy":true,"scorecard":false,"code_scanning":"semgrep","workflow_guards":false},"selection":[],"rk_version":"0.1.0","binary_version":"0.2.0","alignment":"binary-newer","drift":{"rendered":0,"seeded":1},"missing":[],"stale_pins":[{"tool":"release-plz","landed":"0.3.160","available":"0.3.170"}],"sentinels":1,"sentinel_locations":[{"file":"release-plz.toml","line":18,"text":"# TODO(release-kit): keep false for a binary-only crate"}],"record_drift":0,"invariant_failures":[{"code":"attestations-disabled","destination":"dist-workspace.toml","reason":"github-attestations is not effectively true","remediation":"set github-attestations = true in [dist]"}],"warnings":[{"code":"code-scanning-licence","reason":"the target's license, LicenseRef-proprietary, does not state a codebase this release recognizes as open source"}],"setup_proof":{"state":"stale","changed":["target.required_check"]},"pending":2,"legacy_state":[{"path":"/state/release-kit/plans/0123456789abcdef","kind":"plan","active":true}],"migration":{"id":"20261009T140205Z","workspace":"/state/release-kit/migrations/widget-0123456789ab/20261009T140205Z","unfinished":2}}"##
         );
         let absent = Report {
             landed: false,
@@ -1158,6 +1322,7 @@ mod tests {
             record_drift: None,
             invariant_failures: None,
             warnings: None,
+            setup_proof: None,
             pending: None,
             violations: None,
             legacy_state: vec![],
@@ -1166,7 +1331,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&absent).expect("a report serializes"),
-            r#"{"schema":"rk.status/13","landed":false,"classification":"setup","git_work_tree":false,"config":{"state":"absent","pending":[]},"legacy_state":[]}"#,
+            r#"{"schema":"rk.status/14","landed":false,"classification":"setup","git_work_tree":false,"config":{"state":"absent","pending":[]},"legacy_state":[]}"#,
             "an absent landing reports the fields a caller can branch on"
         );
         let newer = Report {

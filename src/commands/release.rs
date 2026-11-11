@@ -28,6 +28,12 @@ use crate::release_state::{
     self, Answer, Api, ForgeCli, LastRelease, Merged, Page, Pair, Request, Run, Symptom,
 };
 
+/// The tags one forge page holds.
+const TAG_PAGE: usize = 100;
+
+/// The most tag pages a read follows before it reports the list unread.
+const TAG_PAGES: usize = 50;
+
 /// The report's shape version.
 const SCHEMA: &str = "rk.release-status/1";
 
@@ -215,7 +221,8 @@ fn status(target: &Utf8Path, wait: Option<&str>, timeout: u64, out: Output) -> R
                     read: Answer::Yes,
                     failures: std::cell::RefCell::new(Vec::new()),
                 };
-                let observed = reader.observe(target, wait, timeout);
+                let line_names: Vec<&str> = lines.iter().map(|row| row.line.as_str()).collect();
+                let observed = reader.observe(target, wait, timeout, &line_names);
                 (
                     ForgeState {
                         name: Some(pair.forge.as_str().to_owned()),
@@ -291,6 +298,7 @@ fn pair_of(target: &Utf8Path, manifest: &Manifest) -> Result<Pair, String> {
     };
     Ok(Pair {
         package: release_state::package_name(target.as_std_path(), &driver),
+        registry_answer: manifest.profile.release.registry,
         driver,
         forge,
         repo: manifest.parameters.repo.clone(),
@@ -393,7 +401,13 @@ impl Reader<'_> {
         release_state::gitlab_project(&self.pair.repo)
     }
 
-    fn observe(&mut self, target: &Utf8Path, wait: Option<&str>, timeout: u64) -> Observed {
+    fn observe(
+        &mut self,
+        target: &Utf8Path,
+        wait: Option<&str>,
+        timeout: u64,
+        lines: &[&str],
+    ) -> Observed {
         let request = self.open_request();
         let mut wait = wait.map(|sha| self.wait(sha, timeout));
         // Read after the wait: a trunk run tags its own commit while it
@@ -474,8 +488,21 @@ impl Reader<'_> {
                 published,
             }
         });
-        let symptoms =
+        let mut symptoms =
             release_state::symptoms(merged.as_ref(), &last, page.as_ref(), self.pair.artifacts);
+        if let Some(tags) = tags.as_ref() {
+            let names: Vec<&str> = tags.iter().map(|(name, _)| name.as_str()).collect();
+            symptoms.extend(release_state::orphan_tags(&names, lines, |tag| {
+                // The last release's page is already read; every other
+                // page is read once, newest first, until a complete one.
+                let read = if last.tag.as_deref() == Some(tag) {
+                    page.clone()
+                } else {
+                    self.page(tag)
+                };
+                read.map_or(Answer::Unknown, |page| self.complete(&page))
+            }));
+        }
         if !self.failures.borrow().is_empty() {
             self.read = Answer::Unknown;
         }
@@ -485,6 +512,12 @@ impl Reader<'_> {
             symptoms,
             wait,
         }
+    }
+
+    /// Whether a release page is complete: one with artifacts for a pair
+    /// that builds them, one that exists for any other.
+    const fn complete(&self, page: &Page) -> Answer {
+        Answer::of(page.exists && (!self.pair.artifacts || !page.assets.is_empty()))
     }
 
     /// Whether the version a tag names is published: the registry's
@@ -643,30 +676,42 @@ impl Reader<'_> {
             .map(|(_, number, version)| (number, version))
     }
 
-    /// Every tag the forge holds, with the commit it names.
+    /// Every tag the forge holds, with the commit it names, read page by
+    /// page to the end. A page that cannot be read, or an inventory longer
+    /// than the bound, leaves the list unread, never silently truncated.
     fn tags(&self) -> Option<Vec<(String, String)>> {
         let (path, commit) = match self.pair.forge {
             Forge::Github => (
-                format!("repos/{}/tags?per_page=100", self.pair.repo),
+                format!("repos/{}/tags?per_page={TAG_PAGE}", self.pair.repo),
                 "/commit/sha",
             ),
             Forge::Gitlab => (
-                format!("projects/{}/repository/tags?per_page=100", self.project()),
+                format!(
+                    "projects/{}/repository/tags?per_page={TAG_PAGE}",
+                    self.project()
+                ),
                 "/commit/id",
             ),
         };
-        let body = self.api(&path)?;
-        Some(
-            body.as_array()?
-                .iter()
-                .filter_map(|tag| {
-                    Some((
-                        tag["name"].as_str()?.to_owned(),
-                        tag.pointer(commit)?.as_str()?.to_owned(),
-                    ))
-                })
-                .collect(),
-        )
+        let mut tags = Vec::new();
+        for page in 1..=TAG_PAGES {
+            let body = if page == 1 {
+                self.api(&path)?
+            } else {
+                self.api(&format!("{path}&page={page}"))?
+            };
+            let entries = body.as_array()?;
+            tags.extend(entries.iter().filter_map(|tag| {
+                Some((
+                    tag["name"].as_str()?.to_owned(),
+                    tag.pointer(commit)?.as_str()?.to_owned(),
+                ))
+            }));
+            if entries.len() < TAG_PAGE {
+                return Some(tags);
+            }
+        }
+        None
     }
 
     /// The release page for a tag, with each artifact's attestation.

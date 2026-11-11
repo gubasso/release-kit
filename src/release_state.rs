@@ -157,6 +157,13 @@ pub const PUBLISHED_NO_ARTIFACTS: &str = "published-no-artifacts";
 /// The code for an artifact no attestation covers.
 pub const ARTIFACT_WITHOUT_ATTESTATION: &str = "artifact-without-attestation";
 
+/// The code for a release tag with no complete release page.
+pub const TAG_WITHOUT_RELEASE: &str = "tag-without-release";
+
+/// The recovery section for a tag whose release page is missing or
+/// incomplete.
+const RECOVERY_TAG_WITHOUT_RELEASE: &str = "The tag exists and the release does not";
+
 /// The recovery section for a merged request that published nothing.
 const RECOVERY_NOTHING_PUBLISHED: &str = "The release request merged and nothing published";
 /// The recovery section for an artifact build that left nothing, or
@@ -178,6 +185,9 @@ pub struct Pair {
     pub artifacts: bool,
     /// The package name the registry knows, where the pair has one.
     pub package: Option<String>,
+    /// The recorded `profile.release.registry` answer, absent where the
+    /// target never answered it.
+    pub registry_answer: Option<crate::profile::RegistryAnswer>,
 }
 
 impl Pair {
@@ -219,11 +229,27 @@ impl Pair {
     /// The registry the driver publishes to, where it has one.
     #[must_use]
     pub fn registry(&self) -> Option<Registry> {
-        match self.driver.as_str() {
-            "rust" => Some(Registry::CratesIo),
-            "python" => Some(Registry::Pypi),
-            _ => None,
-        }
+        registry_for(&self.driver, self.registry_answer)
+    }
+}
+
+/// The registry a release publishes to, from its driver and its answer.
+///
+/// The one owner of the mapping from a driver and the recorded
+/// `profile.release.registry` answer, so the release status and the setup
+/// milestones read one registry. A rust release reads crates.io unless it
+/// answered `none`; a python release reads `PyPI`; every other driver
+/// publishes to no registry.
+#[must_use]
+pub fn registry_for(
+    driver: &str,
+    answer: Option<crate::profile::RegistryAnswer>,
+) -> Option<Registry> {
+    match (driver, answer) {
+        ("rust", Some(crate::profile::RegistryAnswer::None)) => None,
+        ("rust", _) => Some(Registry::CratesIo),
+        ("python", _) => Some(Registry::Pypi),
+        _ => None,
     }
 }
 
@@ -512,6 +538,69 @@ pub fn symptoms(
                     page.unattested.join(", ")
                 ),
                 recovery: RECOVERY_ARTIFACT_BUILD,
+            });
+        }
+    }
+    found
+}
+
+/// SATISFIES release-state:a-symptom-names-its-recovery
+///
+/// Each release tag newer than the newest complete release of its own
+/// line, with no complete page itself. The trunk and each release line
+/// keep their own cutoff: a `v<line>.*` tag belongs to that line, and
+/// every other release tag to the trunk. Each group is walked newest
+/// first and stops at its first complete release, so a tag older than a
+/// complete release of its line drops out, and an accepted gap needs no
+/// record. `complete` answers whether a tag's page is complete; an
+/// unknown answer stops the walk of its line, because the unread page
+/// could be the complete release that retires every older gap.
+pub fn orphan_tags(
+    tags: &[&str],
+    lines: &[&str],
+    mut complete: impl FnMut(&str) -> Answer,
+) -> Vec<Symptom> {
+    let line_of = |version: &str| {
+        lines
+            .iter()
+            .find(|line| version.starts_with(&format!("{line}.")))
+            .copied()
+    };
+    let mut groups: std::collections::BTreeMap<Option<&str>, Vec<&str>> =
+        std::collections::BTreeMap::new();
+    for tag in tags {
+        let Some(version) = tag.strip_prefix('v') else {
+            continue;
+        };
+        if !is_version(version) || version.contains('-') {
+            continue;
+        }
+        groups.entry(line_of(version)).or_default().push(tag);
+    }
+    let mut found = Vec::new();
+    for (line, mut group) in groups {
+        group.sort_by(|left, right| {
+            if version_is_newer(&left[1..], &right[1..]) {
+                std::cmp::Ordering::Less
+            } else if version_is_newer(&right[1..], &left[1..]) {
+                std::cmp::Ordering::Greater
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        });
+        let place = line.map_or_else(|| "the trunk".to_owned(), |line| format!("the line {line}"));
+        for tag in group {
+            // A complete page is the cutoff, and an unread page could be
+            // one, so either stops the walk of the line.
+            if complete(tag) != Answer::No {
+                break;
+            }
+            found.push(Symptom {
+                code: TAG_WITHOUT_RELEASE,
+                evidence: format!(
+                    "{tag} exists on {place} with no complete release page, and no complete release of that line is newer"
+                ),
+                recovery: RECOVERY_TAG_WITHOUT_RELEASE,
             });
         }
     }

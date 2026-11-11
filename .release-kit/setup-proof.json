@@ -1,11 +1,11 @@
 {
   "schema": "rk.setup-proof/1",
-  "rk_version": "0.8.7",
-  "verified_at": "2026-09-28T00:54:32Z",
+  "rk_version": "0.9.7",
+  "verified_at": "2026-11-11T13:34:45Z",
   "subject": {
     "target": {
       "bot_app_id": "",
-      "capabilities": "{\"nix_packaging\":false,\"reporting_policy\":true,\"scorecard\":true,\"code_scanning\":\"codeql\"}",
+      "capabilities": "{\"nix_packaging\":false,\"reporting_policy\":true,\"scorecard\":true,\"code_scanning\":\"codeql\",\"workflow_guards\":true}",
       "forge": "github",
       "host": "github.com",
       "integration": "\"local\"",
@@ -126,7 +126,7 @@
       }
     ]
   },
-  "subject_digest": "d5c0489e117c69a1a4c3698b146570d235417377cbb0f464e6bc14b015e9bbd0",
+  "subject_digest": "eb7b110406030295870137cdde3377912893f9d3dd58d9d6522737378fc2147f",
   "steps": [
     {
       "name": "package-check",

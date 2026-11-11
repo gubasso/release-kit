@@ -18,14 +18,14 @@
 
 [[tool]]
 name = "release-plz"
-version = "0.3.160"
+version = "0.4.3"
 action = "release-plz/action@v0.5"
-commit = "2eb1d8bcb770b4c48ccfaad919734b38b51958c9"
+commit = "66b324fd6c72d05d2a08568492ecdd62bfb8a62b"
 ref_class = "moving-minor-tag"
 used_by = ["release.automation/rust"]
 purpose = "maintains the release request and tags and publishes on master"
 check = "https://crates.io/api/v1/crates/release-plz"
-checked = 2026-09-02
+checked = 2026-11-11
 
 [[tool]]
 name = "cargo-dist"
@@ -95,12 +95,12 @@ checked = 2026-09-02
 name = "create-github-app-token"
 version = "3"
 action = "actions/create-github-app-token@v3"
-commit = "bcd2ba49218906704ab6c1aa796996da409d3eb1"
+commit = "64ab729a6294000f5aa4a4bc0b73d1f32bc45510"
 ref_class = "moving-major-tag"
 used_by = ["release.automation/rust", "release.automation/python", "release.automation/bash"]
 purpose = "mints the bot token that lets a tag push retrigger workflows"
 check = "https://api.github.com/repos/actions/create-github-app-token/releases/latest"
-checked = 2026-09-02
+checked = 2026-11-11
 
 [[tool]]
 name = "attest"

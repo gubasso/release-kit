@@ -465,6 +465,7 @@ mod tests {
         use super::{Params, manifest};
         let dir = tempfile::tempdir().expect("a scratch target exists");
         let target = camino::Utf8Path::from_path(dir.path()).expect("utf-8 path");
+        let prefix = Some(crate::config::LINE_PREFIX_DEFAULT.to_owned());
         for tech in ["rust", "bash"] {
             for forge in ["github", "gitlab"] {
                 for (checkout_mode, integration) in MODE_PAIRS {
@@ -487,9 +488,8 @@ mod tests {
                                         mode: ReleaseMode::Automatic,
                                         driver: Some(tech.to_owned()),
                                         style,
-                                        line_prefix: Some(
-                                            crate::config::LINE_PREFIX_DEFAULT.to_owned(),
-                                        ),
+                                        line_prefix: prefix.clone(),
+                                        registry: None,
                                     },
                                 },
                                 git: GitWorkflow {
@@ -626,7 +626,7 @@ mod tests {
         )
         .expect("the parameters resolve");
         let entries = Projection::compute(&ProjectionInput {
-            params,
+            params: params.clone(),
             evidence: TargetEvidence::default(),
         })
         .expect("the pair projects")
@@ -659,7 +659,15 @@ mod tests {
             .get_file("rust/github/release-plz.toml")
             .expect("the seed ships")
             .contents();
-        assert_eq!(seeded.bytes, authored, "a seeded file lands as authored");
+        assert_eq!(
+            seeded.bytes,
+            crate::projection::registry_lines(authored, &params),
+            "a seeded file lands as authored, with the lines of the unanswered registry"
+        );
+        assert!(
+            !String::from_utf8_lossy(&seeded.bytes).contains("RK_IF_"),
+            "no registry marker survives in a seed"
+        );
         assert!(String::from_utf8_lossy(&seeded.bytes).contains("TODO(release-kit)"));
         for block in BLOCK_DESTINATIONS {
             let entry = entries

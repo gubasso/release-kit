@@ -261,6 +261,9 @@ fn render(out: Output, receipt: &Receipt, source: OutputSource) {
             "retired {destination}: recorded, no longer produced; target-owned from the next landing"
         ));
     }
+    for moved in &receipt.secrets_moved {
+        out.result_line(moved.line());
+    }
     for destination in &receipt.seeded_present {
         out.result_line(format!("seeded present {destination}: a landing keeps it"));
     }
@@ -332,6 +335,7 @@ mod tests {
                         driver: Some("rust".into()),
                         style: None,
                         line_prefix: Some("release/".into()),
+                        registry: None,
                     },
                 },
                 git: crate::profile::GitWorkflow {
@@ -362,6 +366,7 @@ mod tests {
             retired: vec![],
             seeded_present: vec![],
             state_present: vec![],
+            secrets_moved: Vec::new(),
             reference: vec!["CHANGELOG.md".into()],
         };
         let report = Report {
@@ -373,7 +378,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.stage/6","rk_version":"0.0.0","target":"/tmp/t","stage_root":"/tmp/s","parameters":{"profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","line_prefix":"release/"}},"git":{"trunk":"main","checkout_mode":"main-worktree","integration":"local","merge_form":"squash"},"capabilities":{"nix_packaging":true,"reporting_policy":true,"scorecard":false,"workflow_guards":false},"repo":"acme/widget","security_contact":"","security_response":"best-effort","required_check":"","required_workflow":""},"capabilities":[],"receipt_schema_version":null,"candidates":[],"omissions":[],"collisions":[],"retired":[],"seeded_present":[],"state_present":[],"reference":["CHANGELOG.md"],"output_source":"--output","next":["rk stage clean /tmp/s removes the stage once the landing is verified"]}"#
+            r#"{"schema":"rk.stage/7","rk_version":"0.0.0","target":"/tmp/t","stage_root":"/tmp/s","parameters":{"profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","line_prefix":"release/"}},"git":{"trunk":"main","checkout_mode":"main-worktree","integration":"local","merge_form":"squash"},"capabilities":{"nix_packaging":true,"reporting_policy":true,"scorecard":false,"workflow_guards":false},"repo":"acme/widget","security_contact":"","security_response":"best-effort","required_check":"","required_workflow":""},"capabilities":[],"receipt_schema_version":null,"candidates":[],"omissions":[],"collisions":[],"retired":[],"seeded_present":[],"state_present":[],"secrets_moved":[],"reference":["CHANGELOG.md"],"output_source":"--output","next":["rk stage clean /tmp/s removes the stage once the landing is verified"]}"#
         );
     }
 

@@ -12,16 +12,17 @@ Return a release to the normal path with the smallest fix that works. The gate p
 
 Take the smallest recovery that returns to the normal path. Never operate on a tag, a published version, or the trunk: a published version is permanent, so the way out is a newer version.
 
-| Symptom                                                    | The recovery                                                                                                                                                    |
-| ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `request-merged-nothing-published`                         | re-run the release job on the same trunk commit, as a release action                                                                                            |
-| `published-no-artifacts` or `artifact-without-attestation` | re-run the artifact workflow on the same tag, as a release action                                                                                               |
-| a defective version                                        | fix forward through the project's own workflow and the `release` task, then withdraw the bad version with the registry's own step and the operator's credential |
-| a changelog that shipped wrong                             | amend the changelog on the trunk through the project's own workflow; it ships with the next release                                                             |
-| CI down, and the release cannot wait                       | the three-move hand-publish, with enforcement off first, all the operator's                                                                                     |
-| a release that must not ship, its request still open       | the hold of the `release` task                                                                                                                                  |
-| a release that must not ship, its request already merged   | a defective version, above                                                                                                                                      |
-| an older line that needs the fix                           | the `lines` task                                                                                                                                                |
+| Symptom                                                    | The recovery                                                                                                                                                                              |
+| ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `request-merged-nothing-published`                         | re-run the release job on the same trunk commit, as a release action                                                                                                                      |
+| `published-no-artifacts` or `artifact-without-attestation` | re-run the artifact workflow on the same tag, as a release action                                                                                                                         |
+| `tag-without-release`                                      | where the cause was transient, re-run the failed jobs of the tag's artifact run, as a release action; where it was in the code, fix forward, release the next version, and record the gap |
+| a defective version                                        | fix forward through the project's own workflow and the `release` task, then withdraw the bad version with the registry's own step and the operator's credential                           |
+| a changelog that shipped wrong                             | amend the changelog on the trunk through the project's own workflow; it ships with the next release                                                                                       |
+| CI down, and the release cannot wait                       | the three-move hand-publish, with enforcement off first, all the operator's                                                                                                               |
+| a release that must not ship, its request still open       | the hold of the `release` task                                                                                                                                                            |
+| a release that must not ship, its request already merged   | a defective version, above                                                                                                                                                                |
+| an older line that needs the fix                           | the `lines` task                                                                                                                                                                          |
 
 A credential is always the operator's. Turning enforcement off, publishing by hand, and withdrawing a version are printed for the operator unless the request names them.
 

@@ -266,9 +266,12 @@ impl Projection {
                         "the embedded sources do not classify {destination}; the kind table is stale"
                     )
                 })?;
+                // A seed takes no token, but a rust seed carries the lines
+                // that differ by where the crate publishes.
                 let rendered = match kind {
                     Kind::Rendered => render(bytes, params),
-                    Kind::Seeded | Kind::State => bytes.to_vec(),
+                    Kind::Seeded => registry_lines(bytes, params),
+                    Kind::State => bytes.to_vec(),
                 };
                 candidates.push(Candidate {
                     capability: selection.id,
@@ -1165,6 +1168,51 @@ pub const IF_RELEASE_TOKEN: &[u8] = b"RK_IF_RELEASE_";
 /// `none`: its release-less wording, dropped wherever a release stands.
 pub const IF_NO_RELEASE_TOKEN: &[u8] = b"RK_IF_NO_RELEASE_";
 
+/// Ends a line a rust pair carries wherever its crate publishes to a
+/// registry.
+///
+/// The line lands with the marker removed there, and is dropped where
+/// `profile.release.registry` is `none`. A trailing comment keeps the
+/// authored file valid in its own grammar, and an unanswered target keeps
+/// its bytes.
+pub const IF_REGISTRY_TOKEN: &[u8] = b" # RK_IF_REGISTRY";
+
+/// Opens the commented-out form of a line a rust pair carries only where
+/// its crate publishes to no registry.
+///
+/// The line lands with the marker removed there, and is dropped wherever
+/// a registry receives the crate.
+pub const IF_NO_REGISTRY_TOKEN: &[u8] = b"# RK_IF_NO_REGISTRY ";
+
+/// Keep the lines that fit where the crate publishes, each with its
+/// marker removed, and drop the rest. A file that carries neither marker
+/// passes through unchanged.
+///
+/// SATISFIES project-profile:release-intent-has-three-modes
+#[must_use]
+pub fn registry_lines(baseline: &[u8], params: &Params) -> Vec<u8> {
+    if find(baseline, IF_REGISTRY_TOKEN).is_none() && find(baseline, IF_NO_REGISTRY_TOKEN).is_none()
+    {
+        return baseline.to_vec();
+    }
+    let publishes = params.registry() != Some(crate::profile::RegistryAnswer::None);
+    let mut out = Vec::with_capacity(baseline.len());
+    for line in baseline.split_inclusive(|byte| *byte == b'\n') {
+        let (token, wanted) = if find(line, IF_NO_REGISTRY_TOKEN).is_some() {
+            (IF_NO_REGISTRY_TOKEN, !publishes)
+        } else if find(line, IF_REGISTRY_TOKEN).is_some() {
+            (IF_REGISTRY_TOKEN, publishes)
+        } else {
+            out.extend_from_slice(line);
+            continue;
+        };
+        if wanted {
+            out.extend(substitute(line, token, b""));
+        }
+    }
+    out
+}
+
 /// The word a gate's step name gives the Conventional Commit it requires:
 /// `scoped` wherever the record names a release, and nothing where a
 /// scope is preferred and not required.
@@ -1620,6 +1668,7 @@ fn substitute_tokens(baseline: &[u8], params: &Params) -> Vec<u8> {
     // release-less gate takes a header with none.
     let release = params.release_mode() != ReleaseMode::None;
     let mut out = release_lines(baseline, release);
+    out = registry_lines(&out, params);
     let (scoped, open, close): (&[u8], &[u8], &[u8]) = if release {
         (b"scoped ", b"", b"")
     } else {

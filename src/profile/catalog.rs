@@ -323,6 +323,36 @@ pub fn known_drivers() -> Vec<String> {
     Availability::embedded().drivers()
 }
 
+/// Judge a stated `profile.release.registry` answer against its release.
+///
+/// The answer is valid for an automatic release driven by `rust` alone,
+/// because only that driver's automation reads where the crate publishes.
+///
+/// # Errors
+///
+/// Returns the reason, naming the key and the shape it needs.
+///
+/// SATISFIES project-profile:release-intent-has-three-modes
+pub fn registry_answer_fits(mode: ReleaseMode, driver: Option<&str>) -> Result<(), String> {
+    let shape = format!(
+        "profile.release.registry takes crates-io or none, under profile.release.mode = \"automatic\" with profile.release.driver = \"{}\" alone",
+        crate::profile::RegistryAnswer::DRIVER
+    );
+    match (mode, driver) {
+        (ReleaseMode::Automatic, Some(crate::profile::RegistryAnswer::DRIVER)) => Ok(()),
+        (ReleaseMode::Automatic, Some(other)) => Err(format!(
+            "profile.release.registry is set while profile.release.driver is {other}; {shape}"
+        )),
+        (ReleaseMode::Automatic, None) => Err(format!(
+            "profile.release.registry is set while no profile.release.driver is named; {shape}"
+        )),
+        (mode, _) => Err(format!(
+            "profile.release.registry is set while profile.release.mode is {}; {shape}",
+            mode.as_str()
+        )),
+    }
+}
+
 /// Whether `name` is a forge this binary has an adapter for.
 fn known_forge(name: &str) -> bool {
     Forge::parse(name).is_some()

@@ -102,7 +102,7 @@ Three upstream facts carry the arming steps the landed release workflows render.
 
 - <https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows>
 - <https://release-plz.dev/docs/github/output>
-- <https://github.com/release-plz/action/blob/2eb1d8bcb770b4c48ccfaad919734b38b51958c9/action.yml>
+- <https://github.com/release-plz/action/blob/66b324fd6c72d05d2a08568492ecdd62bfb8a62b/action.yml>
 - <https://github.com/googleapis/release-please-action/blob/45996ed1f6d02564a971a2fa1b5860e934307cf7/README.md>
 
 Bearing: `landing:the-arming-identity-is-the-bot`, both scenarios, and the arming steps in every landed release workflow. The default-token fact is the single most load-bearing citation in the arming design: it is why the arm sits in the job that already mints the bot token.

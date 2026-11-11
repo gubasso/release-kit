@@ -206,6 +206,18 @@ pub fn run(args: &ProfileArgs) -> Result<(), RkError> {
             params.repo()
         )
     ));
+    // Where an automatic rust release publishes, stated beside its source
+    // so an unanswered target reads crates.io as the default it is.
+    if let Some(answer) = params.registry() {
+        out.result_line(format!(
+            "registry: {} ({})",
+            answer.as_str(),
+            resolved
+                .sources
+                .get("profile.release.registry")
+                .map_or("default", |source| source.as_str())
+        ));
+    }
     for (key, source) in &resolved.sources {
         out.result_line(format!("source {key}: {}", source.as_str()));
     }
@@ -352,6 +364,7 @@ mod tests {
                     driver: Some("rust".into()),
                     style: Some(crate::landing::Style::Trunk),
                     line_prefix: Some("release/".into()),
+                    registry: None,
                 },
             },
             git: GitWorkflow {

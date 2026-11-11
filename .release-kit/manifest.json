@@ -1,6 +1,6 @@
 {
   "schema_version": 12,
-  "rk_version": "0.9.3",
+  "rk_version": "0.9.7",
   "origin": "adopt",
   "landed_at": "2026-08-30T00:14:29Z",
   "profile": {
@@ -70,7 +70,7 @@
     {
       "destination": ".github/workflows/release-plz.yml",
       "kind": "rendered",
-      "sha256": "a0b9f7057c9fb5ea7723fb1bde70964955f88c882f9a9430998f240b7cf4d25d"
+      "sha256": "b4750e677008a2bd552556c46c394ce953c051ebae98f08b16c87c0c22688bfb"
     },
     {
       "destination": ".github/workflows/scorecard.yml",
@@ -123,7 +123,7 @@
     "dist-download-artifact": "8",
     "dist-upload-artifact": "7",
     "pre-commit-hooks": "6.0.0",
-    "release-plz": "0.3.160",
+    "release-plz": "0.4.3",
     "rust-toolchain": "stable",
     "scorecard-action": "2.4.4"
   }

@@ -28,10 +28,11 @@
       # nothing on its own: the merge is the only action this job takes, and
       # every proof precedes it. Reading a check run is what adds
       # permission-checks to the pair the request half takes.
-      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         id: app-token
         with:
-          app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
+          # client-id takes the client ID or the numeric App ID; GitHub accepts either as the JWT issuer: https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app
+          client-id: ${{ secrets.RELEASE_BOT_APP_ID }}
           private-key: ${{ secrets.RELEASE_BOT_APP_PRIVATE_KEY }}
           permission-contents: write
           permission-pull-requests: write

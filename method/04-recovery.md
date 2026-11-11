@@ -12,6 +12,15 @@ The tag stays. It names what was published, and release-tag immutability exists 
 
 The release job fires on the push that lands the version bump. When a transient failure — a rate limit, a network error — leaves the bump merged but no tag pushed and nothing published, re-run the release job from the CI interface on that same trunk commit. The job is idempotent: it checks whether the tag and the published version already exist and does only what is missing.
 
+## The tag exists and the release does not
+
+`rk release status` reports `tag-without-release` for a release tag whose page is missing, or carries no artifact where the pair builds artifacts, when no complete release of its line is newer. First make sure that the tag names the merged release commit, the bump the release request landed. Then take the routes on GitHub in this order:
+
+1. Where the cause was transient, such as a cancelled runner or a network error, re-run the failed jobs of the `release.yml` run that the tag push started. The run attaches the artifacts and mints their provenance.
+2. Where the cause was in the code, such as a target that does not build, fix it on the trunk and release the next version. Record the gap where the project keeps its known issues: the version shipped without its release page. Once a newer release of the line is complete, the symptom drops out.
+
+Never move or delete a protected tag. The gated `dist-build` job of the Rust binding is the prevention: it builds every target before the merge, so a target the code cannot build fails the request instead of the release.
+
 ## The changelog shipped wrong
 
 A published entry is never edited. Land the correction on the trunk as an ordinary commit amending the changelog file; it ships with the next release. The prevention is step 3 of [operate](./03-operate.md), the only point a correction reaches the release it describes.

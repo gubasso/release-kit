@@ -11,6 +11,7 @@
   - [`setup-proof:the-status-reads-the-proof-offline` — The status reads the proof offline](#setup-proofthe-status-reads-the-proof-offline--the-status-reads-the-proof-offline)
   - [`setup-proof:one-report-owns-every-classification` — One report owns every classification](#setup-proofone-report-owns-every-classification--one-report-owns-every-classification)
   - [`setup-proof:the-check-reads-the-publish-milestones` — The check reads the publish milestones](#setup-proofthe-check-reads-the-publish-milestones--the-check-reads-the-publish-milestones)
+  - [`setup-proof:the-status-check-holds-the-proof` — The status check holds the proof](#setup-proofthe-status-check-holds-the-proof--the-status-check-holds-the-proof)
 
 <!--TOC-->
 
@@ -94,7 +95,7 @@ Verify: `cargo nextest run -E 'test(only_a_complete_observation_is_checkpointabl
 
 ### `setup-proof:the-check-reads-the-publish-milestones` — The check reads the publish milestones
 
-`rk setup check` MUST report the first version published from the registry's public read-back, an automated release proven from the newest release and a successful publish run on the trunk at the commit its tag names, and `operator` with the binding's read-back check for each registry form no API exposes, each as a `milestone` event, and none of them MUST weigh on the check's verdict.
+`rk setup check` MUST report the first version published from the registry's public read-back, an automated release proven from the newest release and a successful publish run on the trunk at the commit its tag names, and `operator` with the binding's read-back check for each registry form no API exposes, each as a `milestone` event, and none of them MUST weigh on the check's verdict. Where the release publishes to no registry, the first version MUST read `not-applicable`, no registry form MUST be reported, and the automated release MUST read the release page and its publish run alone.
 
 #### Scenario: The forge cannot be read for the automated path
 
@@ -102,4 +103,16 @@ Verify: `cargo nextest run -E 'test(only_a_complete_observation_is_checkpointabl
 - WHEN `rk setup check --json` runs
 - THEN the first version reads `observed`, the automated release reads `unknown`, and the three crates.io forms read `operator`, each naming its read-back check
 
-Verify: `cargo nextest run -E 'test(setup_check_reports_the_publish_milestones)'`
+Verify: `cargo nextest run -E 'test(setup_check_reports_the_publish_milestones) or test(the_milestones_of_a_crate_with_no_registry_name_no_registry)'`
+
+### `setup-proof:the-status-check-holds-the-proof` — The status check holds the proof
+
+Where a landed target records an automatic release and a forge, `rk status` MUST judge the committed proof against the setup contract the target states now, from its configuration and its record alone, with no setup flag and no forge call, and MUST report it as `setup_proof` with its state: `compatible`, `stale` with each changed field, `invalid` with its reason, or `absent`. `rk status --check` MUST count `setup-proof-absent`, `setup-proof-stale`, and `setup-proof-invalid` each as a violation, with the remediation `rk setup check`, then `rk setup checkpoint`, then a commit of the proof, and a step the forge cannot run excluded with its reason, because a setup is closed only by a committed proof and a hook warning that passes is hidden. A target with no automatic release or no forge MUST report no proof and no code.
+
+#### Scenario: A first landing is committed without its proof
+
+- GIVEN a landed rust/github target with no `.release-kit/setup-proof.json`, and a forge CLI on `PATH` that records every call
+- WHEN `rk status --check --json` runs
+- THEN it reports `setup_proof` as `absent`, counts `setup-proof-absent` in its violations, names the three commands, exits 1, and the forge CLI records no call
+
+Verify: `cargo nextest run -E 'test(an_automatic_release_target_with_no_setup_proof_fails_the_status_check) or test(a_stale_setup_proof_names_each_changed_field_in_the_status) or test(a_compatible_setup_proof_passes_the_status_check) or test(a_release_less_target_reads_no_setup_proof) or test(the_status_makes_no_forge_call_for_the_setup_proof) or test(the_scratch_landing_reports_only_the_absent_proof)'`

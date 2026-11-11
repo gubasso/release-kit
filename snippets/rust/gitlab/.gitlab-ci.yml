@@ -1,4 +1,5 @@
-# The release automation and the crates.io trusted publisher for GitLab CI.
+# The release automation and the crates.io trusted publisher for GitLab CI. # RK_IF_REGISTRY
+# RK_IF_NO_REGISTRY # The release automation for GitLab CI, for a crate that publishes to no registry.
 #
 # Both jobs run on every push to the trunk, and to a RK_LINE_PREFIX* line when a
 # project keeps older lines. release-plz maintains the one release merge
@@ -72,7 +73,7 @@ project-jobs:
     GIT_DEPTH: "0"
 # RK_DEV_ENV_SCRIPT_BEGIN
   before_script:
-    - curl -fsSL "https://github.com/release-plz/release-plz/releases/download/release-plz-v0.3.160/release-plz-x86_64-unknown-linux-gnu.tar.gz" | tar -xz -C /usr/local/bin
+    - curl -fsSL "https://github.com/release-plz/release-plz/releases/download/release-plz-v0.4.3/release-plz-x86_64-unknown-linux-gnu.tar.gz" | tar -xz -C /usr/local/bin
 # RK_DEV_ENV_SCRIPT_END
 
 # The release request: the version bump and the changelog, as one merge
@@ -122,25 +123,27 @@ release-request:
         echo "could not arm !$iid yet — its pipeline has not started; the next trunk push re-arms."
       fi
 
-# The release itself: tag, GitLab release, and the crates.io publish over
-# OIDC. The job's ID token is exchanged for a short-lived registry token;
-# nothing long-lived exists on the publish path.
+# The release itself: tag, GitLab release, and the crates.io publish over # RK_IF_REGISTRY
+# OIDC. The job's ID token is exchanged for a short-lived registry token; # RK_IF_REGISTRY
+# nothing long-lived exists on the publish path. # RK_IF_REGISTRY
+# RK_IF_NO_REGISTRY # The release itself: the tag and the GitLab release. The crate publishes
+# RK_IF_NO_REGISTRY # to no registry, so the job reads no registry token.
 release:
   extends: .release-plz
   rules:
     - if: '$CI_COMMIT_BRANCH == "RK_TRUNK_BRANCH" || $CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/'
   resource_group: release
-  id_tokens:
-    CRATES_IO_ID_TOKEN:
-      aud: crates.io
+  id_tokens: # RK_IF_REGISTRY
+    CRATES_IO_ID_TOKEN: # RK_IF_REGISTRY
+      aud: crates.io # RK_IF_REGISTRY
   script:
     - |
       set -eu
-      response="$(curl -fsS -X PUT "https://crates.io/api/v1/trusted_publishing/tokens" \
-        -H 'Content-Type: application/json' \
-        -d "{\"jwt\":\"$CRATES_IO_ID_TOKEN\"}")"
-      CARGO_REGISTRY_TOKEN="$(printf '%s' "$response" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')"
-      export CARGO_REGISTRY_TOKEN
+      response="$(curl -fsS -X PUT "https://crates.io/api/v1/trusted_publishing/tokens" \ # RK_IF_REGISTRY
+        -H 'Content-Type: application/json' \ # RK_IF_REGISTRY
+        -d "{\"jwt\":\"$CRATES_IO_ID_TOKEN\"}")" # RK_IF_REGISTRY
+      CARGO_REGISTRY_TOKEN="$(printf '%s' "$response" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')" # RK_IF_REGISTRY
+      export CARGO_REGISTRY_TOKEN # RK_IF_REGISTRY
       RK_DEV_RUN release-plz release --forge gitlab --git-token "$RELEASE_BOT_TOKEN"
-      curl -fsS -X DELETE "https://crates.io/api/v1/trusted_publishing/tokens" \
-        -H "Authorization: Bearer $CARGO_REGISTRY_TOKEN" || true
+      curl -fsS -X DELETE "https://crates.io/api/v1/trusted_publishing/tokens" \ # RK_IF_REGISTRY
+        -H "Authorization: Bearer $CARGO_REGISTRY_TOKEN" || true # RK_IF_REGISTRY
