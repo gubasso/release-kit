@@ -1,5 +1,31 @@
 {
   "nodes": {
+    "exobrain-tech": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ],
+        "release-kit": [],
+        "rust-overlay": "rust-overlay",
+        "spec-driven-docs": [
+          "spec-driven-docs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1794417935,
+        "narHash": "sha256-tHYPUSvVvoXH4DtAt7HnLrS2rxeEWJ5agNuX7fJWJXQ=",
+        "owner": "gubasso",
+        "repo": "exobrain-tech",
+        "rev": "9abb55d665bc8c7b515e1bcc4cbfaeeb5410fa40",
+        "type": "github"
+      },
+      "original": {
+        "owner": "gubasso",
+        "ref": "v1.0.0",
+        "repo": "exobrain-tech",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1787736819,
@@ -22,7 +48,7 @@
           "spec-driven-docs",
           "nixpkgs"
         ],
-        "rust-overlay": "rust-overlay_2",
+        "rust-overlay": "rust-overlay_3",
         "spec-driven-docs": [
           "spec-driven-docs"
         ]
@@ -44,12 +70,34 @@
     },
     "root": {
       "inputs": {
+        "exobrain-tech": "exobrain-tech",
         "nixpkgs": "nixpkgs",
-        "rust-overlay": "rust-overlay",
+        "rust-overlay": "rust-overlay_2",
         "spec-driven-docs": "spec-driven-docs"
       }
     },
     "rust-overlay": {
+      "inputs": {
+        "nixpkgs": [
+          "exobrain-tech",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1787834454,
+        "narHash": "sha256-jXSvqn04IOecJCvSvl8+g3PsbDVNP6qKs6dKUs/b16k=",
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "rev": "dc2fd1acc537f3583744e1373597a5731ff7a6e3",
+        "type": "github"
+      },
+      "original": {
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "type": "github"
+      }
+    },
+    "rust-overlay_2": {
       "inputs": {
         "nixpkgs": [
           "nixpkgs"
@@ -69,7 +117,7 @@
         "type": "github"
       }
     },
-    "rust-overlay_2": {
+    "rust-overlay_3": {
       "inputs": {
         "nixpkgs": [
           "spec-driven-docs",
@@ -91,7 +139,7 @@
         "type": "github"
       }
     },
-    "rust-overlay_3": {
+    "rust-overlay_4": {
       "inputs": {
         "nixpkgs": [
           "spec-driven-docs",
@@ -118,7 +166,7 @@
           "nixpkgs"
         ],
         "release-kit": "release-kit",
-        "rust-overlay": "rust-overlay_3"
+        "rust-overlay": "rust-overlay_4"
       },
       "locked": {
         "lastModified": 1794289952,

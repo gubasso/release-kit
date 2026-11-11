@@ -20,6 +20,16 @@
       url = "github:gubasso/spec-driven-docs/v0.15.1";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # The store guard of the canon (exobrain): `exobrain store-guard --daily`
+    # in .envrc warns about working-tree copies in the Nix store.
+    exobrain-tech = {
+      url = "github:gubasso/exobrain-tech/v1.0.0";
+      inputs.nixpkgs.follows = "nixpkgs";
+      # Its rk and sdd serve only its own devShell, so it takes these: the
+      # empty string is the root flake, this repository.
+      inputs.release-kit.follows = "";
+      inputs.spec-driven-docs.follows = "spec-driven-docs";
+    };
   };
 
   outputs =
@@ -28,6 +38,7 @@
       nixpkgs,
       rust-overlay,
       spec-driven-docs,
+      exobrain-tech,
     }:
     let
       # The support claim, not a convenience: the one system named here is
@@ -107,6 +118,8 @@
             packages = [
               toolchain
               spec-driven-docs.packages.${pkgs.stdenv.hostPlatform.system}.default
+              # exobrain, the store guard that .envrc runs once a day.
+              exobrain-tech.packages.${pkgs.stdenv.hostPlatform.system}.default
               pkgs.cargo-nextest
               pkgs.cargo-deny
               pkgs.just
