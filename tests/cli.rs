@@ -47,7 +47,7 @@ fn package_file_count() -> usize {
     SKILLS.iter().map(|name| package_paths(name).len()).sum()
 }
 
-fn rk() -> Command {
+fn rk() -> Rk {
     // Scrubbed of the variables a running git hook exports: a suite that
     // executes under pre-commit from a linked worktree would otherwise
     // hand every child a GIT_DIR resolving to the real repository.
@@ -55,35 +55,113 @@ fn rk() -> Command {
     for var in GIT_HOOK_VARS {
         command.env_remove(var);
     }
-    // Every landing verb stores its plan and journals its run under the
-    // state root, so each invocation gets a scratch one: the operator's
-    // own store and journal are never written or pruned by the suite. A
-    // test that needs one root across two invocations sets its own.
-    command.env("XDG_STATE_HOME", scratch_state_root());
-    // `rk integrate` runs its gate through pre-commit, which records every
-    // run in its store database. The operator's store is shared with every
-    // pre-commit on the host, and one that holds its lock past sqlite's
-    // timeout fails the gate, so each invocation gets a scratch store too.
-    command.env("PRE_COMMIT_HOME", scratch_state_root());
-    command
+    let state = ScratchState::new();
+    command.envs(state.vars());
+    Rk {
+        command,
+        _state: state,
+        dirs: Vec::new(),
+    }
 }
 
-/// A fresh state root per invocation, under one directory per test
-/// process.
-fn scratch_state_root() -> PathBuf {
-    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let root = ROOT.get_or_init(|| {
-        tempfile::tempdir()
-            .expect("a scratch state root exists")
-            .keep()
-    });
-    let dir = root.join(
-        NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-            .to_string(),
+/// The scratch state of one invocation: a state root and a pre-commit
+/// store inside one temporary directory, removed when the value drops.
+struct ScratchState {
+    dir: tempfile::TempDir,
+}
+
+impl ScratchState {
+    fn new() -> Self {
+        let dir = tempfile::tempdir().expect("a scratch state root exists");
+        for sub in ["state", "pre-commit"] {
+            std::fs::create_dir(dir.path().join(sub)).expect("the scratch state root creates");
+        }
+        Self { dir }
+    }
+
+    /// The variables that point a command at this scratch state.
+    fn vars(&self) -> [(&'static str, PathBuf); 2] {
+        [
+            // Every landing verb stores its plan and journals its run under
+            // the state root, so each invocation gets a scratch one: the
+            // operator's own store and journal are never written or pruned
+            // by the suite. A test that needs one root across two
+            // invocations sets its own.
+            ("XDG_STATE_HOME", self.dir.path().join("state")),
+            // `rk integrate` runs its gate through pre-commit, which records
+            // every run in its store database. The operator's store is
+            // shared with every pre-commit on the host, and one that holds
+            // its lock past sqlite's timeout fails the gate, so each
+            // invocation gets a scratch store too.
+            ("PRE_COMMIT_HOME", self.dir.path().join("pre-commit")),
+        ]
+    }
+}
+
+/// An `rk` command with the scratch directories it reads. They live as
+/// long as the command does, so a statement that runs it and reads its
+/// output finds them, and they go when the value drops.
+struct Rk {
+    command: Command,
+    _state: ScratchState,
+    dirs: Vec<tempfile::TempDir>,
+}
+
+impl std::ops::Deref for Rk {
+    type Target = Command;
+
+    fn deref(&self) -> &Command {
+        &self.command
+    }
+}
+
+impl std::ops::DerefMut for Rk {
+    fn deref_mut(&mut self) -> &mut Command {
+        &mut self.command
+    }
+}
+
+/// The tests that reach every way the suite gives `rk` scratch state:
+/// through `rk()` with the stand-in `gh`, through a pre-commit gate with
+/// the scratch store, through `PausedLanding`, and through a spawned
+/// `std::process::Command`.
+const LEAK_SAMPLES: [&str; 4] = [
+    "the_setup_preview_prints_the_configured_trunk",
+    "integrate_writes_one_squash_commit_and_records_it",
+    "a_component_swapped_to_a_symlink_after_validation_cannot_redirect_a_write",
+    "stage_clean_stays_confined_after_an_adversarial_swap",
+];
+
+#[test]
+fn a_test_run_leaves_nothing_in_the_temporary_directory() {
+    assert!(
+        pre_commit_present(),
+        "pre-commit is not on PATH, so the integrate sample would pass without running its gate"
     );
-    std::fs::create_dir_all(&dir).expect("the scratch state root creates");
-    dir
+    let exe = std::env::current_exe().expect("the test binary has a path");
+    for sample in LEAK_SAMPLES {
+        let tmp = tempfile::tempdir().expect("a temporary directory exists");
+        let out = std::process::Command::new(&exe)
+            .args(["--exact", sample, "--test-threads", "1"])
+            .env("TMPDIR", tmp.path())
+            .output()
+            .expect("the test binary runs");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success(),
+            "{sample} failed:\n{stdout}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            stdout.contains("test result: ok. 1 passed;"),
+            "{sample} did not run exactly one test:\n{stdout}"
+        );
+        let left: Vec<_> = std::fs::read_dir(tmp.path())
+            .expect("the temporary directory reads")
+            .map(|entry| entry.expect("an entry reads").path())
+            .collect();
+        assert!(left.is_empty(), "{sample} left {left:?}");
+    }
 }
 
 /// A scratch home the skill commands run against, so no test touches the
@@ -103,7 +181,7 @@ impl Home {
         self.dir.path()
     }
 
-    fn rk(&self) -> Command {
+    fn rk(&self) -> Rk {
         let mut command = rk_scrubbed();
         command.env("HOME", self.path());
         command
@@ -5735,7 +5813,7 @@ impl ForgeFixture {
 
     /// The same command with the mock directory ahead of `PATH`, so the
     /// packaging gate spawns the stand-ins rather than a real toolchain.
-    fn rk_with_cargo(&self, args: &[&str]) -> Command {
+    fn rk_with_cargo(&self, args: &[&str]) -> Rk {
         let mut command = self.rk(args);
         let path = std::env::var("PATH").unwrap_or_default();
         command.env(
@@ -5762,7 +5840,7 @@ impl ForgeFixture {
         self.home.path().join("release-kit/runs")
     }
 
-    fn rk(&self, args: &[&str]) -> Command {
+    fn rk(&self, args: &[&str]) -> Rk {
         let mut command = rk_scrubbed();
         command
             .env("HOME", self.home.path())
@@ -6106,7 +6184,7 @@ fn a_proven_setup() -> (ForgeFixture, PathBuf) {
 }
 
 /// A setup command run with the App's credentials.
-fn with_app(fixture: &ForgeFixture, key: &Path, args: &[&str]) -> Command {
+fn with_app(fixture: &ForgeFixture, key: &Path, args: &[&str]) -> Rk {
     let mut command = fixture.rk(args);
     command
         .args(["--repo", "acme/widget", "--forge", "github"])
@@ -8780,7 +8858,7 @@ fn the_journal_retention_bound_holds_and_runs_verbs_read_it() {
 impl ForgeFixture {
     /// The same environment without the trailing `--target`, for verbs that
     /// take none.
-    fn rk_bare(&self, args: &[&str]) -> Command {
+    fn rk_bare(&self, args: &[&str]) -> Rk {
         let mut command = rk();
         command
             .env("HOME", self.home.path())
@@ -11221,7 +11299,7 @@ fn branch_names(dir: &Path) -> String {
 
 /// An rk command with the hook variables scrubbed, so the suite behaves
 /// the same under a pre-commit run as it does standalone.
-fn rk_scrubbed() -> Command {
+fn rk_scrubbed() -> Rk {
     let mut command = rk();
     for var in GIT_HOOK_VARS {
         command.env_remove(var);
@@ -19105,7 +19183,7 @@ fn seed_licensed_crate(target: &Path, licence: &str) {
 }
 
 /// Land with the code scanning capability under one provider on one forge.
-fn land_code_scanning(target: &Path, forge: &str, provider: &str) -> Command {
+fn land_code_scanning(target: &Path, forge: &str, provider: &str) -> Rk {
     let mut command = rk();
     command
         .args(["init", "--tech", "rust", "--forge", forge])
@@ -20360,7 +20438,7 @@ impl SelfDependFixture {
         .expect("writes");
     }
 
-    fn rk(&self, args: &[&str]) -> Command {
+    fn rk(&self, args: &[&str]) -> Rk {
         let mut command = rk_scrubbed();
         command
             .env("HOME", self.home.path())
@@ -23687,7 +23765,7 @@ fn with_remote_branch(repo: &Path, branch: &str) {
 }
 
 /// One `rk issue start` invocation against the GitHub mock.
-fn issue_start(repo: &Path, gh: &Path, mock_dir: &Path, extra: &[&str]) -> Command {
+fn issue_start(repo: &Path, gh: &Path, mock_dir: &Path, extra: &[&str]) -> Rk {
     let mut command = rk_scrubbed();
     command
         .args(["issue", "start", "57", "--target"])
@@ -23700,7 +23778,7 @@ fn issue_start(repo: &Path, gh: &Path, mock_dir: &Path, extra: &[&str]) -> Comma
 
 /// [`issue_start`] against a fixture whose origin is a real repository,
 /// which reads no host, so the coordinates come from the flags.
-fn issue_start_seatable(repo: &Path, gh: &Path, mock_dir: &Path, extra: &[&str]) -> Command {
+fn issue_start_seatable(repo: &Path, gh: &Path, mock_dir: &Path, extra: &[&str]) -> Rk {
     let mut command = issue_start(repo, gh, mock_dir, extra);
     command.args(["--forge", "github", "--repo", "acme/widget"]);
     command
@@ -23932,7 +24010,7 @@ fn gitlab_fixture() -> (tempfile::TempDir, PathBuf) {
 }
 
 /// One `rk issue start` invocation against the GitLab mock.
-fn gitlab_start(repo: &Path, glab: &Path, mock_dir: &Path, extra: &[&str]) -> Command {
+fn gitlab_start(repo: &Path, glab: &Path, mock_dir: &Path, extra: &[&str]) -> Rk {
     let mut command = rk_scrubbed();
     command
         .args(["issue", "start", "57", "--target"])
@@ -23944,7 +24022,7 @@ fn gitlab_start(repo: &Path, glab: &Path, mock_dir: &Path, extra: &[&str]) -> Co
 }
 
 /// [`gitlab_start`] against a fixture whose origin is a real repository.
-fn gitlab_start_seatable(repo: &Path, glab: &Path, mock_dir: &Path, extra: &[&str]) -> Command {
+fn gitlab_start_seatable(repo: &Path, glab: &Path, mock_dir: &Path, extra: &[&str]) -> Rk {
     let mut command = gitlab_start(repo, glab, mock_dir, extra);
     command.args(["--forge", "gitlab", "--repo", "acme/widget"]);
     command
@@ -25079,13 +25157,13 @@ fn an_ssh_alias_clone_refuses_its_web_url_and_names_the_remedy() {
 
 const PRIVATE_REPORTING: &str = "private-vulnerability-reporting";
 
-fn reporting_apply(fixture: &ForgeFixture, forge: &str) -> Command {
+fn reporting_apply(fixture: &ForgeFixture, forge: &str) -> Rk {
     let mut command = fixture.rk(&["setup", "step", PRIVATE_REPORTING]);
     command.args(["--repo", "acme/widget", "--forge", forge, "--apply"]);
     command
 }
 
-fn reporting_full_apply(fixture: &ForgeFixture) -> Command {
+fn reporting_full_apply(fixture: &ForgeFixture) -> Rk {
     fixture.seed_gate();
     let mut command = fixture.rk(&["setup"]);
     command
@@ -27296,24 +27374,21 @@ fn the_setup_preview_prints_the_configured_trunk() {
 /// `gh` carries the operator's forge credentials and is not the suite's to
 /// need, so the stand-in fails every call: a preview that starts calling it
 /// fails here instead of reaching the network.
-fn rk_with_stub_gh() -> Command {
+fn rk_with_stub_gh() -> Rk {
     use std::os::unix::fs::PermissionsExt as _;
 
-    static GH: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-    let gh = GH.get_or_init(|| {
-        let dir = tempfile::tempdir().expect("a scratch bin exists").keep();
-        let gh = dir.join("gh");
-        std::fs::write(
-            &gh,
-            "#!/bin/sh\nprintf 'unexpected gh call: %s\\n' \"$*\" >&2\nexit 1\n",
-        )
-        .expect("the stand-in gh writes");
-        std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755))
-            .expect("the stand-in gh is executable");
-        gh
-    });
+    let dir = tempfile::tempdir().expect("a scratch bin exists");
+    let gh = dir.path().join("gh");
+    std::fs::write(
+        &gh,
+        "#!/bin/sh\nprintf 'unexpected gh call: %s\\n' \"$*\" >&2\nexit 1\n",
+    )
+    .expect("the stand-in gh writes");
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755))
+        .expect("the stand-in gh is executable");
     let mut command = rk();
-    command.env("RK_GH_BIN", gh);
+    command.env("RK_GH_BIN", &gh);
+    command.dirs.push(dir);
     command
 }
 
@@ -28061,7 +28136,7 @@ fn plan_target() -> tempfile::TempDir {
 }
 
 /// A scratch state root, so no test touches the operator's own store.
-fn rk_home(home: &Path) -> Command {
+fn rk_home(home: &Path) -> Rk {
     let mut command = rk();
     command
         .env("HOME", home)
@@ -30149,7 +30224,7 @@ fn stage_target() -> tempfile::TempDir {
 
 /// `rk stage` against `target` with the section's flags and no
 /// `RK_STAGE_ROOT` inherited from the test's own environment.
-fn stage_cmd(target: &Path) -> Command {
+fn stage_cmd(target: &Path) -> Rk {
     let mut command = rk();
     command
         .env_remove("RK_STAGE_ROOT")
@@ -31438,12 +31513,13 @@ fn stage_clean_stays_confined_after_an_adversarial_swap() {
     let pause = canonical.join("pause");
     std::fs::create_dir(&pause).expect("creates");
 
+    let scratch = ScratchState::new();
     let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_rk"));
     for var in GIT_HOOK_VARS {
         child.env_remove(var);
     }
     let child = child
-        .env("XDG_STATE_HOME", scratch_state_root())
+        .envs(scratch.vars())
         .env("RK_STAGE_CLEAN_PAUSE_AFTER_VALIDATE", &pause)
         .args(["stage", "clean"])
         .arg(&stage)
@@ -31514,7 +31590,8 @@ fn stage_clean_reports_a_stage_moved_aside_during_removal_as_a_swap() {
     stage_json(target.path(), &stage);
     let pause = canonical.join("pause");
     std::fs::create_dir(&pause).expect("creates");
-    let child = spawn_clean(&stage, &pause, None);
+    let scratch = ScratchState::new();
+    let child = spawn_clean(&scratch, &stage, &pause, None);
     wait_for(&pause.join("validated"));
     let moved = canonical.join("moved");
     std::fs::rename(&stage, &moved).expect("the stage moves aside");
@@ -31555,7 +31632,8 @@ fn stage_clean_stays_confined_after_a_nested_directory_exchange() {
     let decoy_before = tree_digests(&decoy);
     let pause = canonical.join("pause");
     std::fs::create_dir(&pause).expect("creates");
-    let child = spawn_clean(&stage, &pause, Some("reference"));
+    let scratch = ScratchState::new();
+    let child = spawn_clean(&scratch, &stage, &pause, Some("reference"));
     wait_for(&pause.join("validated"));
     std::fs::write(pause.join("proceed"), b"").expect("the first go-ahead writes");
     wait_for(&pause.join("checked"));
@@ -31588,13 +31666,18 @@ fn stage_clean_stays_confined_after_a_nested_directory_exchange() {
 
 /// `rk stage clean <stage>` spawned with the proof seams: `pause` is the
 /// pause directory, and `before_open` names the child whose open waits.
-fn spawn_clean(stage: &Path, pause: &Path, before_open: Option<&str>) -> std::process::Child {
+fn spawn_clean(
+    scratch: &ScratchState,
+    stage: &Path,
+    pause: &Path,
+    before_open: Option<&str>,
+) -> std::process::Child {
     let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_rk"));
     for var in GIT_HOOK_VARS {
         child.env_remove(var);
     }
     child
-        .env("XDG_STATE_HOME", scratch_state_root())
+        .envs(scratch.vars())
         .env("RK_STAGE_CLEAN_PAUSE_AFTER_VALIDATE", pause)
         .env_remove("RK_STAGE_CLEAN_PAUSE_BEFORE_OPEN");
     if let Some(name) = before_open {
@@ -31638,13 +31721,18 @@ fn quarantined_entries(dir: &Path) -> Vec<PathBuf> {
 
 /// `rk stage` spawned as a child with the section's flags and the given
 /// extra variables, so a test can act while the run is paused.
-fn spawn_stage(target: &Path, output: &Path, vars: &[(&str, &Path)]) -> std::process::Child {
+fn spawn_stage(
+    scratch: &ScratchState,
+    target: &Path,
+    output: &Path,
+    vars: &[(&str, &Path)],
+) -> std::process::Child {
     let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_rk"));
     for var in GIT_HOOK_VARS {
         child.env_remove(var);
     }
     child
-        .env("XDG_STATE_HOME", scratch_state_root())
+        .envs(scratch.vars())
         .env_remove("RK_STAGE_ROOT")
         .env_remove("RK_STAGE_INTERRUPT_AT")
         .env_remove("RK_STAGE_PAUSE_BEFORE_CLEANUP")
@@ -31680,7 +31768,10 @@ fn a_temp_sibling_exchanged_before_cleanup_is_left_in_place() {
     let output = canonical.join("stage");
     let pause = canonical.join("pause");
     std::fs::create_dir(&pause).expect("creates");
+    let scratch = ScratchState::new();
+
     let child = spawn_stage(
+        &scratch,
         target.path(),
         &output,
         &[
@@ -31740,13 +31831,18 @@ fn a_temp_sibling_exchanged_before_cleanup_is_left_in_place() {
 
 /// The run paused after quarantining `name`: the stage at `stage`, the
 /// pause directory, and the child, for the three quarantine proofs.
-fn paused_after_quarantine(stage: &Path, pause: &Path, name: &str) -> std::process::Child {
+fn paused_after_quarantine(
+    scratch: &ScratchState,
+    stage: &Path,
+    pause: &Path,
+    name: &str,
+) -> std::process::Child {
     let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_rk"));
     for var in GIT_HOOK_VARS {
         child.env_remove(var);
     }
     let child = child
-        .env("XDG_STATE_HOME", scratch_state_root())
+        .envs(scratch.vars())
         .env("RK_STAGE_CLEAN_PAUSE_AFTER_VALIDATE", pause)
         .env_remove("RK_STAGE_CLEAN_PAUSE_BEFORE_OPEN")
         .env("RK_STAGE_CLEAN_PAUSE_AFTER_QUARANTINE", name)
@@ -31777,7 +31873,8 @@ fn stage_clean_removes_only_the_quarantined_file_after_its_check() {
     stage_json(target.path(), &stage);
     let pause = canonical.join("pause");
     std::fs::create_dir(&pause).expect("creates");
-    let child = paused_after_quarantine(&stage, &pause, "stage.json");
+    let scratch = ScratchState::new();
+    let child = paused_after_quarantine(&scratch, &stage, &pause, "stage.json");
     assert!(
         !stage.join("stage.json").exists(),
         "the receipt was not quarantined"
@@ -31823,7 +31920,8 @@ fn stage_clean_removes_only_the_quarantined_directory_after_its_check() {
     let decoy_before = tree_digests(&decoy);
     let pause = canonical.join("pause");
     std::fs::create_dir(&pause).expect("creates");
-    let child = paused_after_quarantine(&stage, &pause, "reference");
+    let scratch = ScratchState::new();
+    let child = paused_after_quarantine(&scratch, &stage, &pause, "reference");
     assert!(
         !stage.join("reference").exists(),
         "the directory was not quarantined"
@@ -31871,7 +31969,8 @@ fn stage_clean_removes_only_the_quarantined_root_after_its_check() {
     let decoy_before = tree_digests(&decoy);
     let pause = canonical.join("pause");
     std::fs::create_dir(&pause).expect("creates");
-    let child = paused_after_quarantine(&stage, &pause, "stage");
+    let scratch = ScratchState::new();
+    let child = paused_after_quarantine(&scratch, &stage, &pause, "stage");
     assert!(!stage.exists(), "the root was not quarantined");
     let quarantined = quarantined_entries(&canonical);
     assert_eq!(quarantined.len(), 1, "{quarantined:?}");
@@ -31910,7 +32009,10 @@ fn a_sibling_exchanged_before_publication_is_not_published() {
     let output = canonical.join("stage");
     let pause = canonical.join("pause");
     std::fs::create_dir(&pause).expect("creates");
+    let scratch = ScratchState::new();
+
     let child = spawn_stage(
+        &scratch,
         target.path(),
         &output,
         &[("RK_STAGE_PAUSE_BEFORE_LAND", &pause)],
@@ -31985,7 +32087,10 @@ fn a_parent_replaced_after_it_was_opened_receives_no_stage() {
     let output = parent.join("stage");
     let pause = canonical.join("pause");
     std::fs::create_dir(&pause).expect("creates");
+    let scratch = ScratchState::new();
+
     let child = spawn_stage(
+        &scratch,
         target.path(),
         &output,
         &[("RK_STAGE_PAUSE_AFTER_LAND", &pause)],
@@ -32054,7 +32159,7 @@ impl OfflineCurl {
         Self { dir }
     }
 
-    fn rk(&self) -> Command {
+    fn rk(&self) -> Rk {
         let mut command = rk();
         let path = std::env::var_os("PATH").unwrap_or_default();
         let mut shimmed = self.dir.path().as_os_str().to_owned();
@@ -32940,6 +33045,8 @@ fn a_reported_rename_failure_is_observed_again_before_it_is_named() {
 struct PausedLanding {
     child: std::process::Child,
     pause: tempfile::TempDir,
+    /// The child's scratch state, kept as long as the child runs.
+    _state: ScratchState,
 }
 
 impl PausedLanding {
@@ -32953,12 +33060,13 @@ impl PausedLanding {
     /// landing announces `tag` through the pause seam.
     fn start_at(target: &Path, args: &[&str], tag: &str) -> Self {
         let pause = tempfile::tempdir().expect("a pause dir exists");
+        let scratch = ScratchState::new();
         let mut child = std::process::Command::new(assert_cmd::cargo::cargo_bin("rk"));
         for var in GIT_HOOK_VARS {
             child.env_remove(var);
         }
         let child = child
-            .env("XDG_STATE_HOME", scratch_state_root())
+            .envs(scratch.vars())
             .env("RK_APPLY_PAUSE_DIR", pause.path())
             .args(args)
             .args(["--json", "--target"])
@@ -32981,7 +33089,11 @@ impl PausedLanding {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert!(reached.exists(), "the landing paused at {tag}");
-        Self { child, pause }
+        Self {
+            child,
+            pause,
+            _state: scratch,
+        }
     }
 
     /// Let the landing proceed and return its exit code and diagnostic.
@@ -37230,7 +37342,7 @@ if [ -f "$dir/curl-$key" ]; then cat "$dir/curl-$key"; else printf 404; fi
         std::fs::read_to_string(self.mock.path().join("answers/calls.log")).unwrap_or_default()
     }
 
-    fn rk(&self, target: &Path, extra: &[&str]) -> Command {
+    fn rk(&self, target: &Path, extra: &[&str]) -> Rk {
         let mut command = rk();
         command
             .env("RK_GH_BIN", self.mock.path().join("gh"))
@@ -39034,7 +39146,7 @@ impl MigrateFixture {
         self.target.path()
     }
 
-    fn rk(&self, args: &[&str]) -> Command {
+    fn rk(&self, args: &[&str]) -> Rk {
         let mut command = rk_scrubbed();
         command
             .env("HOME", self.state.path())
