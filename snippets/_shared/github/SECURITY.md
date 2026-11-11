@@ -2,7 +2,7 @@
 
 ## Report a vulnerability
 
-Please report a suspected vulnerability through [this project's private vulnerability reporting form](https://github.com/RK_REPO/security/advisories/new). Sign in to GitHub to use the form. This channel is available for public repositories after private reporting is enabled. If it is unavailable, contact <!--RK_SECURITY_CONTACT_BEGIN-->a maintainer through an existing private conversation<!--RK_SECURITY_CONTACT_END--> before sending sensitive details.
+Please report a suspected vulnerability through [this project's private vulnerability reporting form](https://github.com/RK_REPO/security/advisories/new). Sign in to GitHub to use the form. This channel is available for public repositories after private reporting is enabled. If it is unavailable, contact <!--RK_SECURITY_CONTACT_BEGIN-->a maintainer through an existing private conversation<!--RK_SECURITY_CONTACT_END--> before sending sensitive details.<!--RK_SECURITY_SCOPE_BEGIN--><!--RK_SECURITY_SCOPE_END-->
 
 Do not disclose a vulnerability in a public issue, pull request, discussion, or commit. Keep reproduction material and any proposed fix private while the report is assessed.
 

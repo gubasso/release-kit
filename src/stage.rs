@@ -130,6 +130,10 @@ pub struct Parameters {
     pub security_contact: String,
     /// The acknowledgment window.
     pub security_response: String,
+    /// The paragraph naming what the project does not own, omitted where
+    /// the policy states none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub security_scope: String,
     /// The check the release gate believes, empty where nothing answered it.
     #[serde(default)]
     pub required_check: String,
@@ -152,6 +156,7 @@ impl From<&Params> for Parameters {
             repo: params.repo().to_owned(),
             security_contact: params.security_contact().to_owned(),
             security_response: params.security_response().to_owned(),
+            security_scope: params.security_scope().to_owned(),
             required_check: params.required_check().to_owned(),
             required_workflow: params.required_workflow().to_owned(),
             dev_environment: params.dev_environment().cloned(),
@@ -1021,6 +1026,7 @@ mod tests {
             required_workflow: String::new(),
             dev_environment: None,
             security_response: "best-effort".into(),
+            security_scope: String::new(),
         }
     }
 

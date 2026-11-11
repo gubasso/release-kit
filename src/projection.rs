@@ -1545,7 +1545,7 @@ fn dev_environment_replacements(params: &Params) -> Result<[Option<Vec<u8>>; 4],
     ])
 }
 
-/// The three replaceable spans of a landed security policy, each as its
+/// The four replaceable spans of a landed security policy, each as its
 /// ordered begin and end marker.
 ///
 /// A span is not a token. Each forge's policy carries its own authored
@@ -1555,7 +1555,11 @@ fn dev_environment_replacements(params: &Params) -> Result<[Option<Vec<u8>>; 4],
 /// that answers one replaces the interior of the spans that fact belongs
 /// to. The markers are HTML comments because the snippet is Markdown a
 /// reader may open before it is ever rendered.
-pub const SECURITY_SPANS: [(&[u8], &[u8]); 3] = [
+///
+/// The scope span is empty in every snippet and closes the channel
+/// paragraph, so an unanswered scope strips to the authored bytes exactly
+/// and an answered one adds its own paragraph after the channel's.
+pub const SECURITY_SPANS: [(&[u8], &[u8]); 4] = [
     (
         b"<!--RK_SECURITY_CONTACT_BEGIN-->",
         b"<!--RK_SECURITY_CONTACT_END-->",
@@ -1567,6 +1571,10 @@ pub const SECURITY_SPANS: [(&[u8], &[u8]); 3] = [
     (
         b"<!--RK_SECURITY_DEADLINE_BEGIN-->",
         b"<!--RK_SECURITY_DEADLINE_END-->",
+    ),
+    (
+        b"<!--RK_SECURITY_SCOPE_BEGIN-->",
+        b"<!--RK_SECURITY_SCOPE_END-->",
     ),
 ];
 
@@ -1583,7 +1591,7 @@ const DISCLOSURE_ONLY: &[u8] = b"This policy commits to no disclosure deadline."
 
 /// The replacement for each span under one parameter set, or `None` where
 /// the forge's authored interior stands.
-fn security_replacements(params: &Params) -> [Option<Vec<u8>>; 3] {
+fn security_replacements(params: &Params) -> [Option<Vec<u8>>; 4] {
     let contact = (!params.security_contact().is_empty())
         .then(|| params.security_contact().as_bytes().to_vec());
     let promised = params.security_response() != crate::config::RESPONSE_DEFAULT;
@@ -1591,6 +1599,13 @@ fn security_replacements(params: &Params) -> [Option<Vec<u8>>; 3] {
         contact,
         promised.then(|| acknowledgment(params.security_response()).into_bytes()),
         promised.then(|| DISCLOSURE_ONLY.to_vec()),
+        // A blank line closes the channel paragraph, so the scope stands as
+        // a paragraph of its own.
+        (!params.security_scope().is_empty()).then(|| {
+            ["\n".repeat(2).as_str(), params.security_scope()]
+                .concat()
+                .into_bytes()
+        }),
     ]
 }
 

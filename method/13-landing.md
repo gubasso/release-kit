@@ -19,8 +19,8 @@ A stage is never an installation transaction. The production verb reads the stag
 Production decides each destination by its recorded kind alone, and its report uses one word per decision.
 
 - `created`: the destination was absent, and the candidate now stands there.
-- `replaced`: the receipt recorded a generated whole file or a marked region and vouches for its bytes, and the candidate replaced it. Every byte outside a region survives. A conflict the operator named with `--replace` is replaced too, after its bytes are saved.
-- `matched`: no receipt named the whole file, and it already held the candidate's bytes.
+- `replaced`: the receipt recorded a generated whole file or a marked region and vouches for its bytes, and the candidate replaced it. Every byte outside a region survives. A marked region is always replaced, because the bytes outside its markers are the target's. A conflict the operator named with `--replace` is replaced too, after its bytes are saved.
+- `matched`: the whole file already held the candidate's bytes, so nothing was written. The receipt recorded it as generated, or no receipt named it.
 - `preserved`: a seeded or state file stays as the target left it, and its current digest enters the receipt.
 - `drift`: a seeded file differs from the receipt. It stays, and the report says so.
 - `released`: the receipt named a destination this binary no longer produces. The file stays on disk and leaves the receipt, target-owned from that moment.

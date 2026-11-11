@@ -36,6 +36,7 @@ workflow_guards = RK_CONFIG_CAPABILITIES_WORKFLOW_GUARDS # P: opt-in workflow gu
 advisories = RK_CONFIG_SECURITY_ADVISORIES # N: project receiving vulnerability reports
 contact = RK_CONFIG_SECURITY_CONTACT # P: one line naming who receives a report when the forge channel is unavailable; empty keeps the forge's own wording
 response = RK_CONFIG_SECURITY_RESPONSE # P: the acknowledgment window the policy promises: best-effort, 1 day, <n> days, 1 business day, or <n> business days
+scope = RK_CONFIG_SECURITY_SCOPE # P: one paragraph naming what the project does not own and where to report it instead; empty renders nothing
 
 [setup]
 required_check = RK_CONFIG_SETUP_REQUIRED_CHECK # P: the check the release gate believes, and the check the trunk ruleset requires under forge integration

@@ -63,13 +63,16 @@ struct Report {
     next: Vec<String>,
 }
 
-/// The two security answers.
+/// The three security answers.
 #[derive(Debug, Serialize)]
 struct Security {
     /// The contact, empty for the forge's own wording.
     contact: String,
     /// The acknowledgment window.
     response: String,
+    /// The paragraph naming what the project does not own, empty where the
+    /// policy states none.
+    scope: String,
 }
 
 /// The setup answers a landing renders.
@@ -316,7 +319,7 @@ pub fn run(args: &ProfileArgs) -> Result<(), RkError> {
     ));
     out.next(&next);
     out.emit(&Report {
-        schema: "rk.profile/3",
+        schema: "rk.profile/4",
         target: args.target.to_string(),
         profile: params.profile().clone(),
         git: params.git().clone(),
@@ -325,6 +328,7 @@ pub fn run(args: &ProfileArgs) -> Result<(), RkError> {
         security: Security {
             contact: params.security_contact().to_owned(),
             response: params.security_response().to_owned(),
+            scope: params.security_scope().to_owned(),
         },
         setup: Setup {
             required_check: params.required_check().to_owned(),
@@ -350,11 +354,11 @@ mod tests {
     };
     use crate::stage::{CapabilityNote, Note};
 
-    /// The complete `rk.profile/1` shape, held by snapshot.
+    /// The complete `rk.profile/4` shape, held by snapshot.
     #[test]
     fn the_profile_report_schema_snapshot_holds() {
         let report = Report {
-            schema: "rk.profile/3",
+            schema: "rk.profile/4",
             target: "/tmp/t".into(),
             profile: ProfileSnapshot {
                 technologies: vec!["python".into(), "rust".into()],
@@ -384,6 +388,7 @@ mod tests {
             security: Security {
                 contact: String::new(),
                 response: "best-effort".into(),
+                scope: String::new(),
             },
             setup: Setup {
                 required_check: String::new(),
@@ -411,7 +416,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.profile/3","target":"/tmp/t","profile":{"technologies":["python","rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local","merge_form":"squash"},"capabilities":{"nix_packaging":false,"reporting_policy":true,"scorecard":false,"workflow_guards":false},"repo":"acme/widget","security":{"contact":"","response":"best-effort"},"setup":{"required_check":"","required_workflow":""},"sources":{"profile.technologies":"observation"},"unknown":[],"proposal":{"state":"ambiguous","drivers":["python","rust"]},"selection":[{"id":"git.guards","status":"selected","destinations":["AGENTS.md"]}],"omissions":[{"destination":".gitlab-ci.yml","reason":"the target owns it","action":"add the include"}],"collisions":[],"next":["rk init --target /tmp/t previews the landing"]}"#
+            r#"{"schema":"rk.profile/4","target":"/tmp/t","profile":{"technologies":["python","rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"linked-worktree","integration":"local","merge_form":"squash"},"capabilities":{"nix_packaging":false,"reporting_policy":true,"scorecard":false,"workflow_guards":false},"repo":"acme/widget","security":{"contact":"","response":"best-effort","scope":""},"setup":{"required_check":"","required_workflow":""},"sources":{"profile.technologies":"observation"},"unknown":[],"proposal":{"state":"ambiguous","drivers":["python","rust"]},"selection":[{"id":"git.guards","status":"selected","destinations":["AGENTS.md"]}],"omissions":[{"destination":".gitlab-ci.yml","reason":"the target owns it","action":"add the include"}],"collisions":[],"next":["rk init --target /tmp/t previews the landing"]}"#
         );
     }
 }

@@ -51,12 +51,14 @@ pub const PAUSE_VAR: &str = "RK_APPLY_PAUSE_DIR";
 pub enum Action {
     /// The destination is absent and the candidate is written.
     Created,
-    /// A recorded generated whole file or marked region is rewritten from
-    /// the candidate, whatever its bytes were.
+    /// A recorded marked region, or a recorded rendered whole file whose
+    /// bytes the record vouches for and the candidate changes, is
+    /// rewritten from the candidate.
     Replaced,
-    /// A whole-file destination the receipt does not name already holds
-    /// the candidate's bytes: nothing is written, and the receipt records
-    /// it, because replacing identical bytes changes nothing and a run
+    /// A whole-file destination already holds the candidate's bytes:
+    /// nothing is written, and the receipt records it. A recorded rendered
+    /// file the landing leaves byte for byte is matched, not replaced, and
+    /// an unrecorded one is attributed by its content, because a run
     /// stopped after creating it must be rerunnable.
     Matched,
     /// A recorded seeded or state file stays as it is, its current digest
@@ -496,10 +498,13 @@ pub fn decide(
                 // edit, which only a named replace overwrites.
                 (Kind::Rendered, Kind::Rendered) => {
                     let bytes = current()?;
-                    // Bytes equal to the candidate are what a landing
-                    // stopped part way wrote: attributed by content, as a
-                    // matched file is, so the rerun lands the rest.
-                    if Digest::of(&bytes) == record.sha256 || bytes == candidate.bytes {
+                    // Bytes equal to the candidate need no write, whether
+                    // the record vouches for them or a landing stopped part
+                    // way wrote them: the file is matched, so the report
+                    // tells an untouched file from a rewritten one.
+                    if bytes == candidate.bytes {
+                        Action::Matched
+                    } else if Digest::of(&bytes) == record.sha256 {
                         Action::Replaced
                     } else {
                         collisions.push(Collision {
@@ -1079,6 +1084,7 @@ fn receipt(
             repo: params.repo().to_owned(),
             security_contact: params.security_contact().to_owned(),
             security_response: params.security_response().to_owned(),
+            security_scope: params.security_scope().to_owned(),
             required_check: params.required_check().to_owned(),
             required_workflow: params.required_workflow().to_owned(),
             dev_environment: params.dev_environment().cloned(),
@@ -1209,8 +1215,9 @@ mod tests {
     }
 
     /// A fresh target: every candidate is created, the receipt is written
-    /// last at schema 7, and a rerun replaces the rendered files and
-    /// preserves the seeded ones from the receipt alone.
+    /// last at schema 7, and a rerun matches the unchanged rendered whole
+    /// files, replaces the marked regions, and preserves the seeded ones
+    /// from the receipt alone.
     #[test]
     fn a_fresh_landing_creates_and_a_rerun_decides_by_the_receipt() {
         let (_dir, target) = target();
@@ -1231,8 +1238,16 @@ mod tests {
         let record = manifest::load(&target).expect("loads").expect("exists");
         let again = prepared(&target, Some(&record));
         for decision in &again.decisions {
+            let region = again.projection.candidates.iter().any(|candidate| {
+                candidate.destination == decision.destination
+                    && matches!(
+                        candidate.placement,
+                        crate::projection::Placement::Region { .. }
+                    )
+            });
             let expected = match decision.kind {
-                crate::landing::Kind::Rendered => Action::Replaced,
+                crate::landing::Kind::Rendered if region => Action::Replaced,
+                crate::landing::Kind::Rendered => Action::Matched,
                 crate::landing::Kind::Seeded | crate::landing::Kind::State => Action::Preserved,
             };
             assert_eq!(decision.action, expected, "{}", decision.destination);

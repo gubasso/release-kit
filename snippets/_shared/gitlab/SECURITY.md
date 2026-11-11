@@ -2,7 +2,7 @@
 
 ## Report a vulnerability
 
-Report a suspected vulnerability as a confidential issue in the RK_REPO project on the GitLab instance where this repository is hosted. Sign in and open this project's new issue form. Follow [GitLab's confidential issue instructions](https://docs.gitlab.com/user/project/issues/confidential_issues/) and verify that confidentiality is selected before submitting any sensitive details. Confidential submission depends on your access to the project. If the form is unavailable, use <!--RK_SECURITY_CONTACT_BEGIN-->an existing private conversation with a maintainer<!--RK_SECURITY_CONTACT_END--> to arrange access.
+Report a suspected vulnerability as a confidential issue in the RK_REPO project on the GitLab instance where this repository is hosted. Sign in and open this project's new issue form. Follow [GitLab's confidential issue instructions](https://docs.gitlab.com/user/project/issues/confidential_issues/) and verify that confidentiality is selected before submitting any sensitive details. Confidential submission depends on your access to the project. If the form is unavailable, use <!--RK_SECURITY_CONTACT_BEGIN-->an existing private conversation with a maintainer<!--RK_SECURITY_CONTACT_END--> to arrange access.<!--RK_SECURITY_SCOPE_BEGIN--><!--RK_SECURITY_SCOPE_END-->
 
 Do not disclose a vulnerability in a public issue, merge request, comment, or commit. The confidential issue is the reporting channel; project members with sufficient permissions can read it.
 

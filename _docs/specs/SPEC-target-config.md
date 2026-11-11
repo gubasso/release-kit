@@ -19,6 +19,7 @@
   - [`target-config:an-untaken-config-is-reported-and-not-judged` — An untaken config is reported and not judged](#target-configan-untaken-config-is-reported-and-not-judged--an-untaken-config-is-reported-and-not-judged)
   - [`target-config:a-host-install-is-a-recorded-answer` — A host install is a recorded answer](#target-configa-host-install-is-a-recorded-answer--a-host-install-is-a-recorded-answer)
   - [`target-config:a-dev-environment-is-a-recorded-answer` — A dev environment is a recorded answer](#target-configa-dev-environment-is-a-recorded-answer--a-dev-environment-is-a-recorded-answer)
+  - [`target-config:a-security-scope-is-one-paragraph` — A security scope is one paragraph](#target-configa-security-scope-is-one-paragraph--a-security-scope-is-one-paragraph)
   - [`target-config:an-open-migration-is-one-top-level-key` — An open migration is one top-level key](#target-configan-open-migration-is-one-top-level-key--an-open-migration-is-one-top-level-key)
 
 <!--TOC-->
@@ -151,7 +152,7 @@ Verify: `cargo nextest run -E 'test(release_less) or test(merge_form)'`
 
 ### `target-config:a-release-less-template-carries-no-release-table` — A release-less template carries no release table
 
-Under `profile.release.mode = "none"`, the configuration a landing writes MUST leave out the tag protection keys `protection.tag_ruleset`, `protection.tag_pattern`, and `protection.lines_ruleset`, and the `[setup.bot]` table, because no step of a release-less target reads them, and MUST leave out the `[security]` table unless the target requests the reporting policy, whose landed `SECURITY.md` reads that table's contact and response.
+Under `profile.release.mode = "none"`, the configuration a landing writes MUST leave out the tag protection keys `protection.tag_ruleset`, `protection.tag_pattern`, and `protection.lines_ruleset`, and the `[setup.bot]` table, because no step of a release-less target reads them, and MUST leave out the `[security]` table unless the target requests the reporting policy, whose landed `SECURITY.md` reads that table's contact, response, and scope.
 
 #### Scenario: A workflow-only landing writes its configuration
 
@@ -280,6 +281,18 @@ Every action step MUST pin `uses` to a full commit SHA. An unpinned step, a `run
 - THEN it refuses as `config-invalid` naming `dev_environment.github.setup[0].uses`, and nothing is written
 
 Verify: `cargo nextest run -E 'test(dev_environment)'`
+
+### `target-config:a-security-scope-is-one-paragraph` — A security scope is one paragraph
+
+Where a project does not own all the code a reporter can reach, the configuration MAY state what it does not own in `security.scope`, a class P key whose one paragraph the landed `SECURITY.md` renders after its channel paragraph. The value is prose the operator writes, so the reader MUST refuse as `config-invalid`, naming the key, only what breaks the policy: a blank line, a control character other than a line feed, a line that opens or underlines a Markdown heading, and `<!--` or `-->`. An empty value MUST render nothing and record nothing, so the policy and the record of a target that leaves it empty keep their bytes. The record's `parameters.security_scope` MUST be held to the same grammar on read.
+
+#### Scenario: A wrapper states what it does not own
+
+- GIVEN a GitHub target whose `security.scope` names the wrapped CLI and where to report a flaw in it
+- WHEN `rk upgrade --apply` runs, then runs with the key omitted, then with it empty
+- THEN the policy carries the paragraph after the channel paragraph and the record carries it, the omitted key leaves both in force, and the empty key removes the paragraph and the recorded field
+
+Verify: `cargo nextest run -E 'test(the_security_scope_is_one_paragraph) or test(a_record_carrying_an_uncanonical_security_parameter_refuses) or test(an_empty_scope_keeps_the_policy_and_the_record_unchanged) or test(a_committed_scope_lands_after_the_channel_paragraph) or test(a_policy_breaking_scope_refuses_before_any_write) or test(a_landed_scope_holds_and_an_edited_one_reports_as_pending) or test(the_profile_reports_the_scope_with_its_source) or test(a_scope_survives_an_omitted_key_and_clears_on_empty)'`
 
 ### `target-config:an-open-migration-is-one-top-level-key` — An open migration is one top-level key
 

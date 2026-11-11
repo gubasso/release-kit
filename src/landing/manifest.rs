@@ -392,6 +392,16 @@ pub struct Parameters {
     /// landing wrote.
     #[serde(default = "response_best_effort", deserialize_with = "read_response")]
     pub security_response: String,
+    /// The paragraph the landed policy states about what the project does
+    /// not own, empty where it states none. A record predating the field
+    /// reads as empty, which is what such a landing wrote, and an empty
+    /// answer omits the key, so the record's bytes do not change.
+    #[serde(
+        default,
+        skip_serializing_if = "String::is_empty",
+        deserialize_with = "read_scope"
+    )]
+    pub security_scope: String,
     /// The check the release gate believes. A record predating the field
     /// reads as empty, which is what such a landing wrote: it rendered a
     /// standing arm that named no check.
@@ -453,6 +463,11 @@ fn read_response<'de, D: serde::Deserializer<'de>>(reader: D) -> Result<String, 
         "security_response",
         crate::config::canonical_response,
     )
+}
+
+/// A recorded scope paragraph, held to the same grammar as the key.
+fn read_scope<'de, D: serde::Deserializer<'de>>(reader: D) -> Result<String, D::Error> {
+    canonical(reader, "security_scope", crate::config::canonical_scope)
 }
 
 /// One recorded string held to its canonical form.
@@ -898,6 +913,7 @@ mod tests {
                 repo: "acme/widget".into(),
                 security_contact: String::new(),
                 security_response: crate::config::RESPONSE_DEFAULT.to_owned(),
+                security_scope: String::new(),
                 required_check: String::new(),
                 required_workflow: String::new(),
                 dev_environment: None,
@@ -952,6 +968,7 @@ mod tests {
                 repo: String::new(),
                 security_contact: String::new(),
                 security_response: crate::config::RESPONSE_DEFAULT.to_owned(),
+                security_scope: String::new(),
                 required_check: String::new(),
                 dev_environment: None,
                 required_workflow: String::new(),
@@ -1141,6 +1158,11 @@ mod tests {
             ("security_response", "07 days"),
             ("security_response", "1 days"),
             ("security_response", ""),
+            ("security_scope", "one\\n\\ntwo"),
+            ("security_scope", "# Out of scope"),
+            ("security_scope", "Out of scope\\n---"),
+            ("security_scope", "see <!-- here"),
+            ("security_scope", "  padded  "),
         ] {
             let record = format!(
                 r#"{{"schema_version":10,"rk_version":"0.1.0","origin":"init","landed_at":"2026-08-29T00:00:00Z","profile":{{"technologies":["rust"],"forge":"github","release":{{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}}}},"git":{{"trunk":"master","checkout_mode":"linked-worktree","integration":"local"}},"capabilities":{{"nix_packaging":false,"reporting_policy":true,"scorecard":false}},"parameters":{{"repo":"acme/widget","{field}":"{value}"}},"files":[],"pins":{{}}}}"#

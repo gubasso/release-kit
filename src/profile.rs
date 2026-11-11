@@ -266,6 +266,7 @@ pub struct Params {
     repo: String,
     security_contact: String,
     security_response: String,
+    security_scope: String,
     required_check: String,
     required_workflow: String,
     dev_environment: Option<DevEnvironment>,
@@ -418,6 +419,7 @@ impl Params {
             repo: record.parameters.repo.clone(),
             security_contact: record.parameters.security_contact.clone(),
             security_response: record.parameters.security_response.clone(),
+            security_scope: record.parameters.security_scope.clone(),
             // A record predating the two answers carries neither, and
             // the compiled default is what such a landing renders now.
             required_check: gate_answer(
@@ -598,6 +600,13 @@ impl Params {
         &self.security_response
     }
 
+    /// The paragraph naming what the project does not own, empty where the
+    /// landed policy states none.
+    #[must_use]
+    pub fn security_scope(&self) -> &str {
+        &self.security_scope
+    }
+
     /// The check the release gate believes, empty where this target
     /// renders no gate that reads one.
     #[must_use]
@@ -764,17 +773,19 @@ impl Params {
             repo: repo.to_owned(),
             security_contact: String::new(),
             security_response: crate::config::RESPONSE_DEFAULT.to_owned(),
+            security_scope: String::new(),
             required_check: "gate".to_owned(),
             required_workflow: "ci".to_owned(),
             dev_environment: None,
         }
     }
 
-    /// The same set with the two security parameters answered.
-    pub(crate) fn for_test_security(contact: &str, response: &str) -> Self {
+    /// The same set with the three security parameters answered.
+    pub(crate) fn for_test_security(contact: &str, response: &str, scope: &str) -> Self {
         Self {
             security_contact: contact.to_owned(),
             security_response: response.to_owned(),
+            security_scope: scope.to_owned(),
             ..Self::for_test("acme/widget", Some(Style::Trunk))
         }
     }
@@ -1421,7 +1432,7 @@ pub fn resolve(
     // `project-profile:an-operation-refuses-only-what-it-requires` says
     // must happen: only the selected release automation blocks an apply.
 
-    // The security policy's two answers.
+    // The security policy's three answers.
     let (security_contact, source) = answered([
         (None, Source::Flag),
         (
@@ -1459,6 +1470,23 @@ pub fn resolve(
     let security_response =
         crate::config::canonical_response(&security_response).map_err(crate::config::invalid)?;
     sources.insert("security.response", source);
+    let (security_scope, source) = answered([
+        (None, Source::Flag),
+        (
+            config.and_then(|c| c.security.scope.clone()),
+            Source::Config,
+        ),
+        (
+            record.map(|r| r.parameters.security_scope.clone()),
+            Source::Record,
+        ),
+        (None, Source::Observation),
+        (Some(String::new()), Source::Default),
+    ])
+    .unwrap_or((String::new(), Source::Default));
+    let security_scope =
+        crate::config::canonical_scope(&security_scope).map_err(crate::config::invalid)?;
+    sources.insert("security.scope", source);
 
     // The release gate's two answers. Neither has an observation: nothing
     // in the target proposes a name. The compiled default is the
@@ -1591,6 +1619,7 @@ pub fn resolve(
             repo,
             security_contact,
             security_response,
+            security_scope,
             required_check,
             required_workflow,
             dev_environment,

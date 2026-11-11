@@ -228,6 +228,11 @@ pub struct Security {
     /// P: the acknowledgment window the landed policy promises. Absent
     /// means unanswered, exactly as `contact` does.
     pub response: Option<String>,
+    /// P: one paragraph naming what the project does not own, rendered
+    /// after the channel paragraph of the landed policy. Absent means
+    /// unanswered, exactly as `contact` does; an explicit empty string
+    /// renders nothing.
+    pub scope: Option<String>,
 }
 
 /// The compiled response stance, used where nothing else answers: the
@@ -256,6 +261,55 @@ pub fn canonical_contact(raw: &str) -> Result<String, String> {
         return Err(format!(
             "security.contact carries a control character; it is one line naming an address, a URL, a person, or a team, and empty selects the forge's own wording, found {trimmed:?}"
         ));
+    }
+    Ok(trimmed.to_owned())
+}
+
+/// The canonical form of a security scope, or why it is refused.
+///
+/// One trimmed paragraph. The value is prose the operator writes, so the
+/// grammar refuses only what breaks the policy it renders into: a blank
+/// line, which would end the paragraph; a control character other than a
+/// line feed; a line that opens a Markdown heading, or that underlines
+/// one; and the comment delimiters the policy's span markers use. Emptiness is not a refusal:
+/// it renders nothing.
+///
+/// # Errors
+/// The refusal text, naming the key and what it accepts.
+pub fn canonical_scope(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    let refusal = |why: &str| {
+        format!(
+            "security.scope {why}; it is one paragraph naming what the project does not own, and empty renders nothing, found {trimmed:?}"
+        )
+    };
+    if trimmed.chars().any(|c| c.is_control() && c != '\n') {
+        return Err(refusal(
+            "carries a control character other than a line feed",
+        ));
+    }
+    if trimmed.lines().any(|line| line.trim().is_empty()) {
+        return Err(refusal("carries a blank line"));
+    }
+    if trimmed
+        .lines()
+        .any(|line| line.trim_start().starts_with('#'))
+    {
+        return Err(refusal("carries a line that opens a Markdown heading"));
+    }
+    // A line of `=` or `-` alone underlines the line above it into a
+    // heading, and a `-` line that underlines nothing is a thematic break:
+    // either way the paragraph ends there. No line is empty by now.
+    if trimmed.lines().any(|line| {
+        let line = line.trim();
+        line.chars().all(|c| c == '=') || line.chars().all(|c| c == '-')
+    }) {
+        return Err(refusal(
+            "carries a line of = or - alone, which underlines a Markdown heading",
+        ));
+    }
+    if trimmed.contains("<!--") || trimmed.contains("-->") {
+        return Err(refusal("carries a comment delimiter, <!-- or -->"));
     }
     Ok(trimmed.to_owned())
 }
@@ -680,6 +734,9 @@ fn parse(text: &str) -> Result<Config, RkError> {
     if let Some(response) = &config.security.response {
         canonical_response(response).map_err(invalid)?;
     }
+    if let Some(scope) = &config.security.scope {
+        canonical_scope(scope).map_err(invalid)?;
+    }
     exclusions(&config.setup.excluded_steps)?;
     if let Some(acquisition) = &config.acquisition
         && !is_release_version(&acquisition.minimum)
@@ -977,6 +1034,10 @@ fn fields(config: &Config) -> Result<Vec<(&'static str, Option<toml_edit::Value>
             ),
         ),
         (
+            "RK_CONFIG_SECURITY_SCOPE",
+            Some(config.security.scope.clone().unwrap_or_default().into()),
+        ),
+        (
             "RK_CONFIG_SETUP_REQUIRED_CHECK",
             Some(config.setup.required_check.clone().into()),
         ),
@@ -1052,10 +1113,11 @@ const RELEASE_ONLY_TOKENS: [&str; 4] = [
 
 /// The `[security]` table's tokens, which a release-less configuration
 /// leaves out unless it requested the landed reporting policy.
-const SECURITY_TOKENS: [&str; 3] = [
+const SECURITY_TOKENS: [&str; 4] = [
     "RK_CONFIG_SECURITY_ADVISORIES",
     "RK_CONFIG_SECURITY_CONTACT",
     "RK_CONFIG_SECURITY_RESPONSE",
+    "RK_CONFIG_SECURITY_SCOPE",
 ];
 
 fn render(config: &Config) -> Result<Vec<u8>, RkError> {
@@ -1233,7 +1295,7 @@ const DERIVED_POLICY_KEYS: [&str; 5] = [
 ];
 
 /// The keys a landing writes back: every class P answer.
-const PARAMETER_KEYS: [&str; 27] = [
+const PARAMETER_KEYS: [&str; 28] = [
     "project.repo",
     "profile.technologies",
     "profile.forge",
@@ -1263,6 +1325,7 @@ const PARAMETER_KEYS: [&str; 27] = [
     "capabilities.workflow_guards",
     "security.contact",
     "security.response",
+    "security.scope",
     // The release gate's two answers. One names the check the gate
     // believes, the other names the workflow whose completion wakes it.
     "setup.required_check",
@@ -1926,6 +1989,7 @@ impl Plan {
         if params.release_mode() != crate::profile::ReleaseMode::None || params.reporting_policy() {
             resolved.security.contact = Some(params.security_contact().to_owned());
             resolved.security.response = Some(params.security_response().to_owned());
+            resolved.security.scope = Some(params.security_scope().to_owned());
         }
         params
             .required_check()
@@ -2093,6 +2157,9 @@ fn parameter_values(config: &Config) -> Vec<(&'static str, Option<toml_edit::Val
     }
     if let Some(value) = config.security.response.clone() {
         values.push(("security.response", Some(value.into())));
+    }
+    if let Some(value) = config.security.scope.clone() {
+        values.push(("security.scope", Some(value.into())));
     }
     // The gate's two answers project like any other class P string. An
     // empty answer is an answer: it says this target renders no standing
@@ -2323,6 +2390,7 @@ mod tests {
             security: super::Security {
                 contact: Some(String::new()),
                 response: Some(super::RESPONSE_DEFAULT.into()),
+                scope: Some(String::new()),
                 ..super::Security::default()
             },
             // Writing resolves the derived ruleset name, so the file states
@@ -2529,6 +2597,10 @@ mod tests {
             "A \"quoted\" project\nRK_CONFIG_SECURITY_RESPONSE\\end".into();
         config.security.contact = Some("security team, room 3 \"the vault\"".into());
         config.security.response = Some("14 business days".into());
+        // A scope is one paragraph, so it may break its lines, and a quote
+        // or a token name inside it survives the round trip.
+        config.security.scope =
+            Some("Wraps the \"claude\" CLI; report it upstream.\nRK_CONFIG_SECURITY_SCOPE stays literal.".into());
         config.setup.required_check = "build / test".into();
         config.setup.retired_branches = vec!["develop".into(), "old\"branch".into()];
         config.setup.release_lines = true;
@@ -2580,6 +2652,7 @@ mod tests {
         // security answer, so the file carries no `[security]` to read back.
         release_less.security.contact = None;
         release_less.security.response = None;
+        release_less.security.scope = None;
         for expected in [resolved_defaults(), config, release_less] {
             write(dir.path(), &expected).expect("the template renders");
             assert_eq!(load(dir.path()).expect("the config reads"), Some(expected));
@@ -2855,6 +2928,43 @@ mod tests {
             .expect_err("the reader refuses it too")
             .to_string();
         assert!(refusal.contains("security.response"), "{refusal}");
+    }
+
+    /// The scope is prose: one paragraph, which may break its lines, held
+    /// only against what would break the policy it renders into.
+    #[test]
+    fn the_security_scope_is_one_paragraph() {
+        for value in [
+            "",
+            "This wraps the claude CLI. Report a flaw in it upstream.",
+            "One line,\nand a second line of the same paragraph.",
+            "A #hashtag mid-line and a <comment> stay prose.",
+            "A dash - and an = sign mid-line,\nand a line ending in --- stay prose.",
+        ] {
+            assert_eq!(super::canonical_scope(value), Ok(value.to_owned()));
+        }
+        assert_eq!(
+            super::canonical_scope("  wrapped  \n"),
+            Ok("wrapped".to_owned()),
+            "surrounding whitespace is trimmed"
+        );
+        for (value, why) in [
+            ("one\n\ntwo", "blank line"),
+            ("one\n   \ntwo", "blank line"),
+            ("one\r\ntwo", "control character"),
+            ("one\ttwo", "control character"),
+            ("# Out of scope", "heading"),
+            ("intro\n  ## Out of scope", "heading"),
+            ("Out of scope\n===", "underlines a Markdown heading"),
+            ("Out of scope\n  ---  ", "underlines a Markdown heading"),
+            ("see <!-- here", "comment delimiter"),
+            ("here --> there", "comment delimiter"),
+        ] {
+            let refusal =
+                super::canonical_scope(value).expect_err("a policy-breaking scope refuses");
+            assert!(refusal.contains("security.scope"), "{value:?}: {refusal}");
+            assert!(refusal.contains(why), "{value:?}: {refusal}");
+        }
     }
 
     /// SATISFIES target-config:an-open-migration-is-one-top-level-key

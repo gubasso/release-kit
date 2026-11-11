@@ -362,6 +362,7 @@ fn manifest_requesting(
             repo: repo.to_owned(),
             security_contact: String::new(),
             security_response: release_kit::config::RESPONSE_DEFAULT.to_owned(),
+            security_scope: String::new(),
             required_check: String::new(),
             required_workflow: String::new(),
             dev_environment: None,
@@ -26795,6 +26796,268 @@ fn a_customized_policy_adopts_only_against_a_matching_config() {
     }
 }
 
+/// The paragraph a scope test commits, as TOML and as the policy states it.
+const SCOPE_TOML: &str = "scope = \"This wraps the claude CLI. A flaw in claude itself belongs upstream.\\nThis policy covers the wrapper.\"";
+const SCOPE_TEXT: &str = "This wraps the claude CLI. A flaw in claude itself belongs upstream.\nThis policy covers the wrapper.";
+
+/// The landed policy's paragraphs, as the blank lines between them cut it.
+fn policy_paragraphs(target: &Path) -> Vec<String> {
+    landed_policy(target)
+        .split("\n\n")
+        .map(str::to_owned)
+        .collect()
+}
+
+/// An unanswered scope lands the policy and the record exactly as a
+/// release without the key did: no paragraph, no recorded field.
+#[test]
+fn an_empty_scope_keeps_the_policy_and_the_record_unchanged() {
+    for forge in ["github", "gitlab"] {
+        let target = land_pair("rust", forge);
+        let config = std::fs::read_to_string(target.path().join(".release-kit/config.toml"))
+            .expect("the config reads");
+        assert!(config.contains("scope = \"\""), "{forge}: {config}");
+        assert_eq!(
+            landed_policy(target.path()),
+            authored_policy(forge).replace("RK_REPO", "acme/widget"),
+            "{forge}"
+        );
+        let manifest = std::fs::read_to_string(target.path().join(".release-kit/manifest.json"))
+            .expect("the record reads");
+        assert!(!manifest.contains("security_scope"), "{forge}: {manifest}");
+    }
+}
+
+/// A committed scope lands as one paragraph right after the channel
+/// paragraph in each forge's policy, and the record carries it.
+#[test]
+fn a_committed_scope_lands_after_the_channel_paragraph() {
+    for (forge, channel) in [
+        ("github", "before sending sensitive details."),
+        ("gitlab", "to arrange access."),
+    ] {
+        let target = land_pair("rust", forge);
+        let authored = policy_paragraphs(target.path());
+        edit_target_config(target.path(), "scope = \"\"", SCOPE_TOML);
+        rk().args(["upgrade", "--apply", "--target"])
+            .arg(target.path())
+            .assert()
+            .success();
+        let paragraphs = policy_paragraphs(target.path());
+        let at = paragraphs
+            .iter()
+            .position(|paragraph| paragraph == SCOPE_TEXT)
+            .unwrap_or_else(|| panic!("{forge}: the scope is one paragraph: {paragraphs:?}"));
+        assert!(
+            paragraphs[at - 1].ends_with(channel),
+            "{forge}: {paragraphs:?}"
+        );
+        let mut without = paragraphs.clone();
+        without.remove(at);
+        assert_eq!(without, authored, "{forge}: every authored paragraph stays");
+        assert_eq!(
+            read_manifest(target.path())["parameters"]["security_scope"],
+            SCOPE_TEXT
+        );
+    }
+}
+
+/// A scope that would break the policy refuses as `config-invalid`
+/// naming the key, before anything is written.
+#[test]
+fn a_policy_breaking_scope_refuses_before_any_write() {
+    for value in [
+        "scope = \"one\\n\\ntwo\"",
+        "scope = \"intro\\n## Out of scope\"",
+        "scope = \"Out of scope\\n===\"",
+        "scope = \"see <!-- here\"",
+    ] {
+        let target = land_pair("rust", "github");
+        edit_target_config(target.path(), "scope = \"\"", value);
+        let before = reporting_tree(target.path());
+        let out = rk()
+            .args(["upgrade", "--json", "--apply", "--target"])
+            .arg(target.path())
+            .assert()
+            .code(73)
+            .get_output()
+            .stderr
+            .clone();
+        let diagnostic: serde_json::Value =
+            serde_json::from_slice(&out).expect("the failure is one JSON diagnostic");
+        assert_eq!(
+            diagnostic["reason"], "config-invalid",
+            "{value}: {diagnostic}"
+        );
+        assert!(
+            diagnostic["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("security.scope")),
+            "{value}: {diagnostic}"
+        );
+        assert_eq!(reporting_tree(target.path()), before, "{value}");
+    }
+}
+
+/// `rk status --check` holds the policy a scope rendered, and an edited
+/// scope is pending configuration until the next upgrade takes it.
+#[test]
+fn a_landed_scope_holds_and_an_edited_one_reports_as_pending() {
+    let target = land_pair("rust", "github");
+    edit_target_config(target.path(), "scope = \"\"", SCOPE_TOML);
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    clear_landing_sentinels(target.path());
+    rk().args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("security.scope").not());
+    edit_target_config(
+        target.path(),
+        SCOPE_TOML,
+        "scope = \"This policy covers the wrapper alone.\"",
+    );
+    rk().args(["status", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("security.scope"));
+    rk().args(["status", "--check", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+}
+
+/// `rk profile` reports the scope and where it came from.
+#[test]
+fn the_profile_reports_the_scope_with_its_source() {
+    let target = land_pair("rust", "github");
+    edit_target_config(target.path(), "scope = \"\"", SCOPE_TOML);
+    let out = rk()
+        .args(["profile", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(report["schema"], "rk.profile/4");
+    assert_eq!(report["security"]["scope"], SCOPE_TEXT);
+    assert_eq!(report["sources"]["security.scope"], "config");
+}
+
+/// An omitted scope key leaves the recorded answer in force, and an
+/// explicit empty one clears it: the paragraph goes and the record omits
+/// the field again.
+#[test]
+fn a_scope_survives_an_omitted_key_and_clears_on_empty() {
+    let target = land_pair("rust", "github");
+    let authored = landed_policy(target.path());
+    edit_target_config(target.path(), "scope = \"\"", SCOPE_TOML);
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    assert!(landed_policy(target.path()).contains(SCOPE_TEXT));
+
+    // Deleting the key leaves the recorded answer in force.
+    edit_target_config(target.path(), SCOPE_TOML, "");
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    assert!(landed_policy(target.path()).contains(SCOPE_TEXT));
+    assert_eq!(
+        read_manifest(target.path())["parameters"]["security_scope"],
+        SCOPE_TEXT
+    );
+
+    // An explicit empty answer clears it, which an omitted key could
+    // never do. The upgrade wrote the recorded answer back, in the TOML
+    // form its writer chooses, so the edit goes through the document.
+    let path = target.path().join(".release-kit/config.toml");
+    let mut document: toml_edit::DocumentMut = std::fs::read_to_string(&path)
+        .expect("the config reads")
+        .parse()
+        .expect("the config parses");
+    assert_eq!(document["security"]["scope"].as_str(), Some(SCOPE_TEXT));
+    document["security"]["scope"] = toml_edit::value("");
+    std::fs::write(&path, document.to_string()).expect("the config writes");
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    assert_eq!(landed_policy(target.path()), authored);
+    let manifest = read_manifest(target.path());
+    assert!(
+        manifest["parameters"].get("security_scope").is_none(),
+        "{manifest}"
+    );
+}
+
+/// An upgrade that changes nothing reports every recorded rendered whole
+/// file as matched, every marked region as replaced, and saves no copy.
+#[test]
+fn an_unchanged_upgrade_matches_every_rendered_whole_file() {
+    for forge in ["github", "gitlab"] {
+        let target = land_pair("rust", forge);
+        let before = reporting_tree(target.path());
+        let out = rk()
+            .args(["upgrade", "--json", "--apply", "--target"])
+            .arg(target.path())
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+        let actions: std::collections::BTreeMap<String, String> = report["files"]
+            .as_array()
+            .expect("files")
+            .iter()
+            .map(|file| {
+                (
+                    file["path"].as_str().expect("a path").to_owned(),
+                    file["action"].as_str().expect("an action").to_owned(),
+                )
+            })
+            .collect();
+        let manifest = read_manifest(target.path());
+        let mut whole = 0;
+        for file in manifest["files"].as_array().expect("files") {
+            if file["kind"] != "rendered" {
+                continue;
+            }
+            let destination = file["destination"].as_str().expect("a destination");
+            let expected = if file["placement"] == "region" {
+                "replaced"
+            } else {
+                whole += 1;
+                "matched"
+            };
+            assert_eq!(
+                actions.get(destination).map(String::as_str),
+                Some(expected),
+                "{forge}: {destination}: {report}"
+            );
+        }
+        assert!(whole > 0, "{forge}: a rendered whole file is recorded");
+        assert_eq!(
+            actions.get("SECURITY.md").map(String::as_str),
+            Some("matched")
+        );
+        assert!(
+            report["replaced"].as_array().is_none_or(Vec::is_empty),
+            "{forge}: no copy is saved: {report}"
+        );
+        assert_eq!(reporting_tree(target.path()), before, "{forge}");
+    }
+}
+
 fn edit_target_config(target: &Path, from: &str, to: &str) {
     let path = target.join(".release-kit/config.toml");
     let text = std::fs::read_to_string(&path).expect("config exists");
@@ -29379,6 +29642,7 @@ fn record_signature_line(
             repo: params.repo().to_owned(),
             security_contact: params.security_contact().to_owned(),
             security_response: params.security_response().to_owned(),
+            security_scope: params.security_scope().to_owned(),
             required_check: params.required_check().to_owned(),
             required_workflow: params.required_workflow().to_owned(),
             dev_environment: None,
@@ -35581,7 +35845,7 @@ fn profile_reports_values_sources_and_the_selection_and_writes_nothing() {
         "rk profile writes nothing"
     );
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["schema"], "rk.profile/3");
+    assert_eq!(report["schema"], "rk.profile/4");
     assert_eq!(report["profile"]["release"]["driver"], "rust");
     assert_eq!(report["git"]["checkout_mode"], "linked-worktree");
     assert_eq!(report["sources"]["profile.technologies"], "config");

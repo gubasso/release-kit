@@ -357,6 +357,7 @@ mod tests {
                 required_workflow: String::new(),
                 dev_environment: None,
                 security_response: "best-effort".into(),
+                security_scope: String::new(),
             },
             capabilities: vec![],
             receipt_schema_version: None,

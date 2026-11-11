@@ -257,6 +257,25 @@ mod tests {
                     "{forge}: {begin} must precede {end}"
                 );
             }
+            // The scope span is empty and closes the channel paragraph, so
+            // stripping it leaves the authored bytes and filling it opens
+            // one paragraph right after the channel's.
+            let (begin, end) = super::SECURITY_SPANS[3];
+            let span = format!(
+                "{}{}\n\n",
+                String::from_utf8_lossy(begin),
+                String::from_utf8_lossy(end)
+            );
+            let at = text
+                .find(&span)
+                .expect("the scope span is empty and ends a paragraph");
+            let channel = text[..at]
+                .rfind("\n\n")
+                .expect("a paragraph opens before it");
+            assert!(
+                text[channel..at].contains("RK_SECURITY_CONTACT_END"),
+                "{forge}: the scope span closes the channel paragraph"
+            );
         }
     }
 
@@ -280,7 +299,8 @@ mod tests {
                 }
                 text
             };
-            let mut default = super::Params::for_test_security("", crate::config::RESPONSE_DEFAULT);
+            let mut default =
+                super::Params::for_test_security("", crate::config::RESPONSE_DEFAULT, "");
             default.set_pair_for_test("rust", forge);
             let rendered = String::from_utf8(render(bytes, &default)).expect("text");
             assert_eq!(
@@ -290,8 +310,12 @@ mod tests {
             );
             assert!(!rendered.contains("RK_SECURITY"), "{forge}: {rendered}");
 
-            let mut answered =
-                super::Params::for_test_security("OWNER RK_REPO <team@acme.example>", "14 days");
+            let scope = "This wraps the RK_REPO CLI. Report a flaw in it upstream.\nThis policy covers the wrapper.";
+            let mut answered = super::Params::for_test_security(
+                "OWNER RK_REPO <team@acme.example>",
+                "14 days",
+                scope,
+            );
             answered.set_pair_for_test("rust", forge);
             let rendered = String::from_utf8(render(bytes, &answered)).expect("text");
             assert!(
@@ -314,6 +338,19 @@ mod tests {
                 !rendered.contains("no response or disclosure deadline"),
                 "{forge}: a stated window contradicts the response disclaimer: {rendered}"
             );
+            // The scope lands literally, as its own paragraph right after
+            // the channel paragraph, and the next authored paragraph keeps
+            // its place.
+            let paragraphs: Vec<&str> = rendered.split("\n\n").collect();
+            let at = paragraphs
+                .iter()
+                .position(|paragraph| *paragraph == scope)
+                .unwrap_or_else(|| panic!("{forge}: the scope is one paragraph: {rendered}"));
+            assert!(
+                paragraphs[at - 1].contains("team@acme.example"),
+                "{forge}: the scope follows the channel paragraph: {rendered}"
+            );
+            assert!(!rendered.contains("RK_SECURITY"), "{forge}: {rendered}");
         }
     }
 
@@ -324,7 +361,7 @@ mod tests {
         let (begin, end) = super::SECURITY_SPANS[0];
         let begin = String::from_utf8_lossy(begin).into_owned();
         let end = String::from_utf8_lossy(end).into_owned();
-        let params = super::Params::for_test_security("team@acme.example", "1 day");
+        let params = super::Params::for_test_security("team@acme.example", "1 day", "");
         for baseline in [
             format!("contact {begin}a maintainer\n"),
             format!("contact a maintainer{end}\n"),
@@ -461,6 +498,10 @@ mod tests {
     /// A loaded record reaches the projection unchanged, including old
     /// records' absent style and the two checkout modes.
     #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one sweep builds a whole record for every combination it round-trips"
+    )]
     fn params_from_a_record_round_trips() {
         use super::{Params, manifest};
         let dir = tempfile::tempdir().expect("a scratch target exists");
@@ -509,6 +550,7 @@ mod tests {
                                     repo: "acme/team/widget".to_owned(),
                                     security_contact: String::new(),
                                     security_response: crate::config::RESPONSE_DEFAULT.to_owned(),
+                                    security_scope: String::new(),
                                     required_check: "gate".to_owned(),
                                     required_workflow: "ci".to_owned(),
                                     dev_environment: None,
