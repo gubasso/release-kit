@@ -170,6 +170,7 @@ fn status(target: &Utf8Path, wait: Option<&str>, timeout: u64, out: Output) -> R
         });
     };
     let lines = lines::rows(target)?;
+    let local = local_release_tags(target);
     let pair = pair_of(target, &manifest);
     let (forge, observed) = match &pair {
         Err(reason) => (
@@ -183,7 +184,7 @@ fn status(target: &Utf8Path, wait: Option<&str>, timeout: u64, out: Output) -> R
             Observed {
                 request: Request::none(),
                 last: LastRelease {
-                    tag: local_newest_release(target),
+                    tag: newest_local(&local),
                     published: Answer::NotApplicable,
                     artifacts_verified: Answer::NotApplicable,
                 },
@@ -202,7 +203,7 @@ fn status(target: &Utf8Path, wait: Option<&str>, timeout: u64, out: Output) -> R
                 Observed {
                     request: Request::unknown(),
                     last: LastRelease {
-                        tag: local_newest_release(target),
+                        tag: newest_local(&local),
                         published: Answer::Unknown,
                         artifacts_verified: if pair.artifacts {
                             Answer::Unknown
@@ -222,7 +223,7 @@ fn status(target: &Utf8Path, wait: Option<&str>, timeout: u64, out: Output) -> R
                     failures: std::cell::RefCell::new(Vec::new()),
                 };
                 let line_names: Vec<&str> = lines.iter().map(|row| row.line.as_str()).collect();
-                let observed = reader.observe(target, wait, timeout, &line_names);
+                let observed = reader.observe(&local, wait, timeout, &line_names);
                 (
                     ForgeState {
                         name: Some(pair.forge.as_str().to_owned()),
@@ -307,23 +308,54 @@ fn pair_of(target: &Utf8Path, manifest: &Manifest) -> Result<Pair, String> {
     })
 }
 
-/// The newest release tag the clone holds, read offline.
-fn local_newest_release(target: &Utf8Path) -> Option<String> {
+/// Every release tag the clone holds, `v<version>` with a candidate
+/// included, with the commit it names, read offline. An annotated tag
+/// names the commit it points to, as the forge's tag list does. A clone
+/// whose tags cannot be read holds none here, so nothing is compared.
+fn local_release_tags(target: &Utf8Path) -> Vec<(String, String)> {
     let mut command = std::process::Command::new(crate::probes::git_bin());
     for var in crate::maintenance::GIT_HOOK_VARS {
         command.env_remove(var);
     }
-    let output = command
+    let Ok(output) = command
         .arg("-C")
         .arg(target.as_std_path())
-        .args(["tag", "--list", "v*"])
+        .args([
+            "for-each-ref",
+            "--format=%(refname:strip=2) %(objectname) %(*objectname)",
+            "refs/tags/v*",
+        ])
         .output()
-        .ok()?;
+    else {
+        return Vec::new();
+    };
     if !output.status.success() {
-        return None;
+        return Vec::new();
     }
-    let text = String::from_utf8_lossy(&output.stdout).into_owned();
-    release_state::newest_release(text.lines().map(str::trim))
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let tag = fields.next()?;
+            let object = fields.next()?;
+            let commit = fields.next().unwrap_or(object);
+            tag.strip_prefix('v')
+                .is_some_and(release_state::is_version)
+                .then(|| (tag.to_owned(), commit.to_owned()))
+        })
+        .collect()
+}
+
+/// Each tag paired with its commit, borrowed.
+fn borrowed(tags: &[(String, String)]) -> Vec<(&str, &str)> {
+    tags.iter()
+        .map(|(tag, commit)| (tag.as_str(), commit.as_str()))
+        .collect()
+}
+
+/// The newest release among the clone's tags.
+fn newest_local(local: &[(String, String)]) -> Option<String> {
+    release_state::newest_release(local.iter().map(|(tag, _)| tag.as_str()))
 }
 
 /// The run that failed a wait, as the error the verb exits with after it
@@ -403,7 +435,7 @@ impl Reader<'_> {
 
     fn observe(
         &mut self,
-        target: &Utf8Path,
+        local: &[(String, String)],
         wait: Option<&str>,
         timeout: u64,
         lines: &[&str],
@@ -428,7 +460,7 @@ impl Reader<'_> {
         let tag = wait.as_ref().map_or_else(
             || {
                 tags.as_ref().map_or_else(
-                    || local_newest_release(target),
+                    || newest_local(local),
                     |tags| {
                         release_state::newest_release(tags.iter().map(|(name, _)| name.as_str()))
                     },
@@ -502,6 +534,10 @@ impl Reader<'_> {
                 };
                 read.map_or(Answer::Unknown, |page| self.complete(&page))
             }));
+            symptoms.extend(release_state::local_tag_drift(
+                &borrowed(local),
+                &borrowed(tags),
+            ));
         }
         if !self.failures.borrow().is_empty() {
             self.read = Answer::Unknown;

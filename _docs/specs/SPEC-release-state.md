@@ -32,7 +32,7 @@ Verify: `cargo nextest run -E 'test(release_status_reports_each_request_state) o
 
 ### `release-state:a-symptom-names-its-recovery` — A symptom names its recovery
 
-When the observed state shows a merged release request whose version has no tag or no published version, a published version whose release page carries no artifact, or an artifact no attestation covers, the report MUST list the symptom under its stable code, `request-merged-nothing-published`, `published-no-artifacts`, or `artifact-without-attestation`, with its evidence and the `rk method recovery` section that owns the path. Each release tag newer than the newest complete release of its own line, with no complete page itself, MUST be listed as `tag-without-release`: the trunk and each release line keep their own cutoff, a complete page is one with artifacts for a pair that builds them and one that exists for any other, and the read walks each line newest first and stops at its first complete page, so a tag older than a complete release of its line drops out and an accepted gap needs no record.
+When the observed state shows a merged release request whose version has no tag or no published version, a published version whose release page carries no artifact, or an artifact no attestation covers, the report MUST list the symptom under its stable code, `request-merged-nothing-published`, `published-no-artifacts`, or `artifact-without-attestation`, with its evidence and the `rk method recovery` section that owns the path. Each release tag newer than the newest complete release of its own line, with no complete page itself, MUST be listed as `tag-without-release`: the trunk and each release line keep their own cutoff, a complete page is one with artifacts for a pair that builds them and one that exists for any other, and the read walks each line newest first and stops at its first complete page, so a tag older than a complete release of its line drops out and an accepted gap needs no record. Where the forge's tag list was read, each `v<version>` tag the clone holds, a candidate included, MUST be compared with it by commit, an annotated tag by the commit it points to: a tag the forge holds at another commit MUST be listed as `local-tag-differs` with both commits, and a tag the forge does not hold as `local-tag-not-on-forge` with its commit, each naming "A clone holds a stale release tag", stating that the forge holds the true release tags, and ending with its refresh, the single-tag forced fetch for the first and the pruning fetch of every `v*` tag for the second. A tag only the forge holds is no symptom.
 
 #### Scenario: The last release request merged and no tag followed
 
@@ -46,7 +46,13 @@ When the observed state shows a merged release request whose version has no tag 
 - WHEN `rk release status --json` runs
 - THEN the report lists `tag-without-release` for v0.6.8 and v0.6.7 and names "The tag exists and the release does not", and a complete v0.6.9 retires both
 
-Verify: `cargo nextest run -E 'test(release_status_reports_each_detected_symptom) or test(every_tag_after_the_newest_complete_release_is_reported) or test(each_release_line_keeps_its_own_cutoff)'`
+#### Scenario: The clone kept a release tag that moved on the forge
+
+- GIVEN a clone that holds v0.1.0 at one commit and a forge that holds v0.1.0 at another
+- WHEN `rk release status --json` runs
+- THEN the report lists `local-tag-differs` with v0.1.0, both commits, and `git fetch origin '+refs/tags/v0.1.0:refs/tags/v0.1.0'`, and names "A clone holds a stale release tag"
+
+Verify: `cargo nextest run -E 'test(release_status_reports_each_detected_symptom) or test(every_tag_after_the_newest_complete_release_is_reported) or test(each_release_line_keeps_its_own_cutoff) or test(local_tag_drift_reports_a_moved_and_a_local_only_tag) or test(release_status_reports_a_local_tag_at_another_commit) or test(release_status_compares_a_prerelease_and_ignores_a_non_version_tag) or test(release_status_reports_a_local_tag_the_forge_lacks) or test(an_annotated_local_tag_compares_by_its_commit) or test(a_tag_only_the_forge_holds_is_no_symptom) or test(release_status_compares_no_tag_when_the_forge_list_is_unread) or test(the_recovery_chapter_names_the_stale_local_tag)'`
 
 ### `release-state:a-wait-selects-runs-by-commit` — A wait selects runs by commit
 

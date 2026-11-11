@@ -164,6 +164,16 @@ pub const TAG_WITHOUT_RELEASE: &str = "tag-without-release";
 /// incomplete.
 const RECOVERY_TAG_WITHOUT_RELEASE: &str = "The tag exists and the release does not";
 
+/// The code for a release tag the clone holds at another commit than the
+/// forge.
+pub const LOCAL_TAG_DIFFERS: &str = "local-tag-differs";
+/// The code for a release tag the clone holds and the forge does not.
+pub const LOCAL_TAG_NOT_ON_FORGE: &str = "local-tag-not-on-forge";
+
+/// The recovery section for a clone whose release tag the forge no longer
+/// holds at that commit.
+const RECOVERY_STALE_LOCAL_TAG: &str = "A clone holds a stale release tag";
+
 /// The recovery section for a merged request that published nothing.
 const RECOVERY_NOTHING_PUBLISHED: &str = "The release request merged and nothing published";
 /// The recovery section for an artifact build that left nothing, or
@@ -607,6 +617,50 @@ pub fn orphan_tags(
     found
 }
 
+/// SATISFIES release-state:a-symptom-names-its-recovery
+///
+/// Each release tag the clone holds that the forge holds at another
+/// commit, or does not hold at all, in tag order. `local` and `forge` pair
+/// each tag with the commit it names; a local tag that is no
+/// `v<version>`, a candidate included, is skipped. A tag only the forge
+/// holds is no symptom: an ordinary fetch brings it. The forge holds the
+/// true release tags, because a release tag is derived and never
+/// authored, so the evidence ends with the fetch that refreshes the
+/// clone: the single-tag form where the commits differ, and the prune
+/// form where the forge lacks the tag, because an explicit refspec cannot
+/// remove a tag the remote does not hold.
+#[must_use]
+pub fn local_tag_drift(local: &[(&str, &str)], forge: &[(&str, &str)]) -> Vec<Symptom> {
+    let mut local: Vec<(&str, &str)> = local
+        .iter()
+        .filter(|(tag, _)| tag.strip_prefix('v').is_some_and(is_version))
+        .copied()
+        .collect();
+    local.sort_unstable();
+    local
+        .into_iter()
+        .filter_map(|(tag, commit)| {
+            match forge.iter().find(|(name, _)| *name == tag) {
+                Some((_, held)) if *held == commit => None,
+                Some((_, held)) => Some(Symptom {
+                    code: LOCAL_TAG_DIFFERS,
+                    evidence: format!(
+                        "the clone holds {tag} at {commit} and the forge holds it at {held}; the forge holds the true release tags, so refresh the clone: git fetch origin '+refs/tags/{tag}:refs/tags/{tag}'"
+                    ),
+                    recovery: RECOVERY_STALE_LOCAL_TAG,
+                }),
+                None => Some(Symptom {
+                    code: LOCAL_TAG_NOT_ON_FORGE,
+                    evidence: format!(
+                        "the clone holds {tag} at {commit} and the forge holds no such tag; the forge holds the true release tags, so refresh the clone: git fetch --prune origin '+refs/tags/v*:refs/tags/v*'"
+                    ),
+                    recovery: RECOVERY_STALE_LOCAL_TAG,
+                }),
+            }
+        })
+        .collect()
+}
+
 /// One read-only forge API answer.
 #[derive(Debug)]
 pub enum Api {
@@ -737,7 +791,7 @@ mod tests {
 
     use super::{
         Answer, Checks, LastRelease, Merged, Page, github_checks, github_run_on, gitlab_checks,
-        newest_release, proposed_version, symptoms,
+        local_tag_drift, newest_release, proposed_version, symptoms,
     };
 
     #[test]
@@ -879,6 +933,28 @@ mod tests {
         assert!(
             symptoms(None, &last("v1.2.3", Answer::Yes), Some(&empty), false).is_empty(),
             "a pair that builds no artifact has no artifact symptom"
+        );
+    }
+
+    #[test]
+    fn local_tag_drift_reports_a_moved_and_a_local_only_tag() {
+        let found = local_tag_drift(
+            &[("v0.3.0", "ccc"), ("v0.1.0", "aaa"), ("v0.2.0", "bbb")],
+            &[("v0.1.0", "fff"), ("v0.3.0", "ccc"), ("v0.4.0", "ddd")],
+        );
+        let codes: Vec<&str> = found.iter().map(|symptom| symptom.code).collect();
+        assert_eq!(
+            codes,
+            [super::LOCAL_TAG_DIFFERS, super::LOCAL_TAG_NOT_ON_FORGE],
+            "the moved tag and the local-only tag, in tag order: {found:?}"
+        );
+        assert!(found[0].evidence.contains("v0.1.0 at aaa"));
+        assert!(found[0].evidence.contains("holds it at fff"));
+        assert!(found[1].evidence.contains("v0.2.0 at bbb"));
+        assert!(
+            found
+                .iter()
+                .all(|symptom| symptom.recovery == "A clone holds a stale release tag")
         );
     }
 

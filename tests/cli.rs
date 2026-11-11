@@ -37643,6 +37643,228 @@ fn release_status_reports_each_detected_symptom() {
     );
 }
 
+/// The commit the clone of a release target holds at its head.
+fn release_head(target: &Path) -> String {
+    let out = scrubbed_git(target, &["rev-parse", "HEAD"]);
+    assert!(out.status.success(), "git rev-parse HEAD failed");
+    String::from_utf8_lossy(&out.stdout).trim().to_owned()
+}
+
+/// The symptoms of a report with one code.
+fn symptoms_coded<'a>(report: &'a serde_json::Value, code: &str) -> Vec<&'a serde_json::Value> {
+    report["symptoms"]
+        .as_array()
+        .expect("the symptoms")
+        .iter()
+        .filter(|symptom| symptom["code"] == code)
+        .collect()
+}
+
+/// The two codes a stale local release tag reports.
+const STALE_TAG_CODES: [&str; 2] = ["local-tag-differs", "local-tag-not-on-forge"];
+
+/// SATISFIES release-state:a-symptom-names-its-recovery
+///
+/// A release tag the clone holds at another commit than the forge names
+/// both commits, says the forge holds the true tags, and carries the
+/// single-tag refresh, in the JSON and on the human SYMPTOM line.
+#[test]
+fn release_status_reports_a_local_tag_at_another_commit() {
+    let target = release_target();
+    git_in(target.path(), &["tag", "v0.1.0"]);
+    let local = release_head(target.path());
+    let forge_commit = "1111111111111111111111111111111111111111";
+    let forge = shipped_forge();
+    forge.answer(
+        TAGS,
+        &serde_json::json!([
+            {"name": "v1.2.2", "commit": {"sha": "aaa"}},
+            {"name": "v0.1.0", "commit": {"sha": forge_commit}}
+        ]),
+    );
+    let report = forge.report(target.path(), &[]);
+    let differs = symptoms_coded(&report, "local-tag-differs");
+    assert_eq!(differs.len(), 1, "{report}");
+    assert!(
+        symptoms_coded(&report, "local-tag-not-on-forge").is_empty(),
+        "{report}"
+    );
+    let evidence = differs[0]["evidence"].as_str().expect("the evidence");
+    for part in [
+        "v0.1.0",
+        local.as_str(),
+        forge_commit,
+        "the forge holds the true release tags",
+        "git fetch origin '+refs/tags/v0.1.0:refs/tags/v0.1.0'",
+    ] {
+        assert!(evidence.contains(part), "{part} missing: {evidence}");
+    }
+    assert_eq!(
+        differs[0]["recovery"], "A clone holds a stale release tag",
+        "{report}"
+    );
+
+    let human = rk()
+        .env("RK_GH_BIN", forge.mock.path().join("gh"))
+        .env("RK_CURL_BIN", forge.mock.path().join("curl"))
+        .args(["release", "status", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let human = String::from_utf8_lossy(&human);
+    assert!(
+        human.contains("SYMPTOM local-tag-differs:")
+            && human.contains("git fetch origin '+refs/tags/v0.1.0:refs/tags/v0.1.0'"),
+        "{human}"
+    );
+}
+
+/// SATISFIES release-state:a-symptom-names-its-recovery
+///
+/// A candidate tag compares like a release, though the newest-release
+/// selection drops candidates, and a tag that is no `v<version>` is never
+/// compared.
+#[test]
+fn release_status_compares_a_prerelease_and_ignores_a_non_version_tag() {
+    let target = release_target();
+    git_in(target.path(), &["tag", "v0.2.0-rc.1"]);
+    git_in(target.path(), &["tag", "v-latest"]);
+    let forge = shipped_forge();
+    forge.answer(
+        TAGS,
+        &serde_json::json!([
+            {"name": "v1.2.2", "commit": {"sha": "aaa"}},
+            {"name": "v0.2.0-rc.1", "commit": {"sha": "2222222222222222222222222222222222222222"}}
+        ]),
+    );
+    let report = forge.report(target.path(), &[]);
+    let differs = symptoms_coded(&report, "local-tag-differs");
+    assert_eq!(differs.len(), 1, "{report}");
+    assert!(
+        differs[0]["evidence"]
+            .as_str()
+            .is_some_and(|evidence| evidence.contains("v0.2.0-rc.1")),
+        "{report}"
+    );
+    assert!(
+        symptoms_coded(&report, "local-tag-not-on-forge").is_empty(),
+        "{report}"
+    );
+    assert!(
+        !report["symptoms"].to_string().contains("v-latest"),
+        "{report}"
+    );
+}
+
+/// SATISFIES release-state:a-symptom-names-its-recovery
+///
+/// A release tag the clone holds and the forge does not names its commit
+/// and carries the prune form, which alone removes a tag the forge lacks.
+#[test]
+fn release_status_reports_a_local_tag_the_forge_lacks() {
+    let target = release_target();
+    git_in(target.path(), &["tag", "v0.1.1"]);
+    let local = release_head(target.path());
+    let report = shipped_forge().report(target.path(), &[]);
+    let missing = symptoms_coded(&report, "local-tag-not-on-forge");
+    assert_eq!(missing.len(), 1, "{report}");
+    assert!(
+        symptoms_coded(&report, "local-tag-differs").is_empty(),
+        "{report}"
+    );
+    let evidence = missing[0]["evidence"].as_str().expect("the evidence");
+    for part in [
+        "v0.1.1",
+        local.as_str(),
+        "the forge holds the true release tags",
+        "git fetch --prune origin '+refs/tags/v*:refs/tags/v*'",
+    ] {
+        assert!(evidence.contains(part), "{part} missing: {evidence}");
+    }
+    assert_eq!(missing[0]["recovery"], "A clone holds a stale release tag");
+}
+
+/// An annotated local tag compares by the commit it points to, the way
+/// the forge's tag list names it, so a tag both sides hold at one commit
+/// is no symptom.
+#[test]
+fn an_annotated_local_tag_compares_by_its_commit() {
+    let target = release_target();
+    git_in(
+        target.path(),
+        &["tag", "-a", "v1.2.2", "-m", "release v1.2.2"],
+    );
+    let commit = release_head(target.path());
+    let forge = shipped_forge();
+    forge.answer(
+        TAGS,
+        &serde_json::json!([{"name": "v1.2.2", "commit": {"sha": commit}}]),
+    );
+    let report = forge.report(target.path(), &[]);
+    for code in STALE_TAG_CODES {
+        assert!(symptoms_coded(&report, code).is_empty(), "{report}");
+    }
+    assert_eq!(report["symptoms"], serde_json::json!([]), "{report}");
+}
+
+/// A release tag only the forge holds is a fetch not yet run, not a wrong
+/// tag, so it is no symptom.
+#[test]
+fn a_tag_only_the_forge_holds_is_no_symptom() {
+    let target = release_target();
+    let forge = shipped_forge();
+    forge.answer(
+        TAGS,
+        &serde_json::json!([
+            {"name": "v1.2.2", "commit": {"sha": "aaa"}},
+            {"name": "v0.2.0", "commit": {"sha": "bbb"}}
+        ]),
+    );
+    let report = forge.report(target.path(), &[]);
+    assert_eq!(report["symptoms"], serde_json::json!([]), "{report}");
+}
+
+/// Without the forge's tag list nothing is compared: the last release
+/// reads unknown, and the forge field names why.
+#[test]
+fn release_status_compares_no_tag_when_the_forge_list_is_unread() {
+    let target = release_target();
+    git_in(target.path(), &["tag", "v0.1.1"]);
+    let forge = ReleaseForge::new();
+    forge.fail(PULLS_OPEN).fail(PULLS_CLOSED).fail(TAGS);
+    let report = forge.report(target.path(), &[]);
+    for code in STALE_TAG_CODES {
+        assert!(symptoms_coded(&report, code).is_empty(), "{report}");
+    }
+    assert_eq!(report["last_release"]["published"], "unknown", "{report}");
+    assert_eq!(report["forge"]["read"], "unknown", "{report}");
+}
+
+/// The recovery chapter carries the section the two symptoms name, with
+/// the refresh for every release tag.
+#[test]
+fn the_recovery_chapter_names_the_stale_local_tag() {
+    let out = rk()
+        .args(["method", "recovery"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let chapter = String::from_utf8_lossy(&out);
+    assert!(
+        chapter.contains("A clone holds a stale release tag"),
+        "{chapter}"
+    );
+    assert!(
+        chapter.contains("git fetch --prune origin '+refs/tags/v*:refs/tags/v*'"),
+        "{chapter}"
+    );
+}
+
 /// SATISFIES release-state:a-wait-selects-runs-by-commit
 ///
 /// `--wait <sha>` selects the publish and the artifact run on that

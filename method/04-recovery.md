@@ -21,6 +21,18 @@ The release job fires on the push that lands the version bump. When a transient 
 
 Never move or delete a protected tag. The gated `dist-build` job of the Rust binding is the prevention: it builds every target before the merge, so a target the code cannot build fails the request instead of the release.
 
+## A clone holds a stale release tag
+
+`rk release status` reports `local-tag-differs` for a release tag that the clone holds at another commit than the forge, and `local-tag-not-on-forge` for a release tag that the clone holds and the forge does not. Both come from a tag that moved or went away on the forge after the clone fetched it. `git fetch` never moves a tag that already exists in the clone, and it does not prune a tag that it fetched by auto-follow, so the clone keeps the old tag with no warning. The forge holds the true release tags, because a release tag is derived and never authored.
+
+Refresh every release tag of the clone from the forge:
+
+```sh
+git fetch --prune origin '+refs/tags/v*:refs/tags/v*'
+```
+
+The `+` refspec replaces each tag that differs, and `--prune` removes each local `v*` tag that the forge does not hold. To refresh one tag, run `git fetch origin '+refs/tags/<tag>:refs/tags/<tag>'`. Both commands take `origin` to be the forge repository that the record names. Each command changes only the clone. It moves no tag on the forge, so it keeps the rule never to move or delete a protected tag.
+
 ## The changelog shipped wrong
 
 A published entry is never edited. Land the correction on the trunk as an ordinary commit amending the changelog file; it ships with the next release. The prevention is step 3 of [operate](./03-operate.md), the only point a correction reaches the release it describes.
