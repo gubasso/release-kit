@@ -1,0 +1,6 @@
+    # The project records that its environment carries no rk, so this job
+    # installs rk at the landing version into a directory it puts on PATH.
+    # The installer checks the archive's SHA-256 before it installs, and the
+    # prefix keeps that PATH.
+    - RK_TOOLS="${TMPDIR:-/tmp}/rk-bin" && mkdir -p "$RK_TOOLS" && export PATH="$RK_TOOLS:$PATH"
+    - curl --proto '=https' --tlsv1.2 -LsSf "RK_SELF_RELEASES/vRK_SELF_VERSION/release-kit-installer.sh" | RELEASE_KIT_UNMANAGED_INSTALL="$RK_TOOLS" sh

@@ -1,0 +1,14 @@
+      # The project records that its environment carries no rk, so this job
+      # installs rk at the landing version. The installer checks the
+      # archive's SHA-256 before it installs, and puts rk at
+      # $RUNNER_TEMP/rk/rk. The prefix keeps the runner's PATH, so the
+      # steps below find that rk, and every tool rk calls still comes from
+      # the environment. Where a comment below says the environment must
+      # carry rk, this step answers for it.
+      - name: install rk
+        env:
+          RK_VERSION: "RK_SELF_VERSION"
+        run: |
+          set -eu
+          curl --proto '=https' --tlsv1.2 -LsSf "RK_SELF_RELEASES/v${RK_VERSION}/release-kit-installer.sh" | RELEASE_KIT_UNMANAGED_INSTALL="$RUNNER_TEMP/rk" sh
+          echo "$RUNNER_TEMP/rk" >> "$GITHUB_PATH"

@@ -26,6 +26,32 @@ pub struct DevEnvironment {
     /// How a GitLab job obtains the environment.
     #[serde(skip_serializing_if = "GitlabSetup::is_empty")]
     pub gitlab: GitlabSetup,
+    /// Where a landed job takes `rk`: from the environment, the default,
+    /// or through the shell installer where the environment carries none.
+    #[serde(skip_serializing_if = "RkRoute::is_environment")]
+    pub rk: RkRoute,
+}
+
+/// Where a landed job that runs `rk` takes it under a recorded
+/// environment. Either way the job runs `rk` through the prefix, so the
+/// tools `rk` calls still come from the environment.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RkRoute {
+    /// The environment carries `rk`.
+    #[default]
+    Environment,
+    /// The environment carries no `rk`, so the job installs it at the
+    /// landing version on the runner's PATH, which the prefix keeps.
+    Installer,
+}
+
+impl RkRoute {
+    /// Whether this is the default route, which the record omits.
+    #[must_use]
+    pub fn is_environment(&self) -> bool {
+        *self == Self::Environment
+    }
 }
 
 /// The GitHub steps that put the environment on a runner.
@@ -119,6 +145,9 @@ impl DevEnvironment {
     /// The refusal text, naming the key and what it must be.
     pub fn check(&self) -> Result<(), String> {
         if self.run.is_empty() {
+            if self.rk == RkRoute::Installer {
+                return Err("dev_environment.rk is \"installer\" while dev_environment.run is empty; the route of rk applies only beside a recorded run prefix".to_owned());
+            }
             if self.github.is_empty() && self.gitlab.is_empty() {
                 return Ok(());
             }
@@ -256,7 +285,7 @@ fn one_line(key: &str, value: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ActionStep, DevEnvironment, GithubSetup, GitlabSetup, Input};
+    use super::{ActionStep, DevEnvironment, GithubSetup, GitlabSetup, Input, RkRoute};
 
     const SHA: &str = "90bb610b90bf290cad97484ba341453bd1cbefea";
 
@@ -272,6 +301,7 @@ mod tests {
                 cache: Vec::new(),
             },
             gitlab: GitlabSetup::default(),
+            rk: RkRoute::Environment,
         }
     }
 

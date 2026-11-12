@@ -1594,6 +1594,18 @@ pub const SELF_RELEASES_TOKEN: &[u8] = b"RK_SELF_RELEASES";
 /// development environment.
 pub const DEV_ENVIRONMENT_GIT_USER: &str = "blocks/dev-environment-git-user.yaml.in";
 
+/// The step a GitHub job that runs `rk` takes after the recorded setup
+/// where the project records that its environment carries no `rk`.
+pub const DEV_ENVIRONMENT_RK_INSTALL: &str = "blocks/dev-environment-rk-install.yaml.in";
+
+/// The rust candidate job's GitLab `rk` install where the project records
+/// that its environment carries no `rk`.
+///
+/// It takes a directory on PATH that any image can write, and installs
+/// into it.
+pub const DEV_ENVIRONMENT_RK_INSTALL_GITLAB: &str =
+    "blocks/dev-environment-rk-install-gitlab.yaml.in";
+
 /// The tool steps of each GitHub job that runs `rk release` under a
 /// recorded development environment: the recorded setup, and no install
 /// of `rk` or git-cliff, which the environment carries.
@@ -1676,15 +1688,35 @@ fn dev_environment_replacements(params: &Params) -> Result<[Option<Vec<u8>>; 6],
         return Ok([None, None, None, None, None, None]);
     };
     let git_user = embedded_block(DEV_ENVIRONMENT_GIT_USER)?.trim_end_matches('\n');
-    let half = |block: &str, steps: &[&crate::config::dev_environment::ActionStep]| {
-        let text = embedded_block(block)?.trim_end_matches('\n');
-        let text = substitute(text.as_bytes(), DEV_GIT_USER_TOKEN, git_user.as_bytes());
-        let text = substitute_tokens(&text, params);
-        let lines: String = steps.iter().map(|step| action_step_lines(step)).collect();
-        let mut out = b"\n".to_vec();
-        out.extend(substitute(&text, DEV_SETUP_STEPS_TOKEN, lines.as_bytes()));
-        Ok::<_, RkError>(out)
+    // Where the environment carries no `rk`, each job that runs it takes
+    // the install step after the recorded setup, and still runs `rk`
+    // through the prefix, which keeps the runner's PATH.
+    let installer = answer.rk == crate::config::dev_environment::RkRoute::Installer;
+    let rk_install = if installer {
+        substitute_tokens(
+            embedded_block(DEV_ENVIRONMENT_RK_INSTALL)?.as_bytes(),
+            params,
+        )
+    } else {
+        Vec::new()
     };
+    let half =
+        |block: &str, steps: &[&crate::config::dev_environment::ActionStep], runs_rk: bool| {
+            let text = embedded_block(block)?.trim_end_matches('\n');
+            let text = substitute(text.as_bytes(), DEV_GIT_USER_TOKEN, git_user.as_bytes());
+            let text = substitute_tokens(&text, params);
+            let mut lines: Vec<u8> = steps
+                .iter()
+                .map(|step| action_step_lines(step))
+                .collect::<String>()
+                .into_bytes();
+            if runs_rk {
+                lines.extend_from_slice(&rk_install);
+            }
+            let mut out = b"\n".to_vec();
+            out.extend(substitute(&text, DEV_SETUP_STEPS_TOKEN, &lines));
+            Ok::<_, RkError>(out)
+        };
     let release: Vec<_> = answer.github.setup.iter().collect();
     let request: Vec<_> = answer
         .github
@@ -1708,13 +1740,15 @@ fn dev_environment_replacements(params: &Params) -> Result<[Option<Vec<u8>>; 6],
         // fetches into that directory in either state. The candidate job
         // pushes, so like the release job it takes the setup and never the
         // cache.
+        // Where the environment carries no `rk`, the GitLab base keeps its
+        // own install into the tool directory it puts on PATH.
         return Ok([
-            Some(half(DEV_ENVIRONMENT_ENGINE, &release)?),
-            Some(half(DEV_ENVIRONMENT_ENGINE, &request)?),
+            Some(half(DEV_ENVIRONMENT_ENGINE, &release, true)?),
+            Some(half(DEV_ENVIRONMENT_ENGINE, &request, true)?),
             image,
             Some(items.into_bytes()),
-            Some(half(DEV_ENVIRONMENT_ENGINE_CANDIDATE, &release)?),
-            Some(Vec::new()),
+            Some(half(DEV_ENVIRONMENT_ENGINE_CANDIDATE, &release, true)?),
+            (!installer).then(Vec::new),
         ]);
     }
     let script = if items.is_empty() {
@@ -1722,15 +1756,26 @@ fn dev_environment_replacements(params: &Params) -> Result<[Option<Vec<u8>>; 6],
     } else {
         format!("\n  before_script:{items}").into_bytes()
     };
+    // The rust candidate job on GitLab installs `rk` into /usr/local/bin,
+    // which a recorded image need not carry on PATH, so where the
+    // environment carries no `rk` it takes a directory it puts on PATH.
+    let gitlab_rk = if installer {
+        let text = embedded_block(DEV_ENVIRONMENT_RK_INSTALL_GITLAB)?.trim_end_matches('\n');
+        let mut out = b"\n".to_vec();
+        out.extend(substitute_tokens(text.as_bytes(), params));
+        out
+    } else {
+        Vec::new()
+    };
     Ok([
-        Some(half(DEV_ENVIRONMENT_RELEASE, &release)?),
-        Some(half(DEV_ENVIRONMENT_REQUEST, &request)?),
+        Some(half(DEV_ENVIRONMENT_RELEASE, &release, false)?),
+        Some(half(DEV_ENVIRONMENT_REQUEST, &request, false)?),
         image,
         Some(script),
         // The candidate job publishes, so like the release half it takes
         // the setup steps and never the cache.
-        Some(half(DEV_ENVIRONMENT_CANDIDATE, &release)?),
-        Some(Vec::new()),
+        Some(half(DEV_ENVIRONMENT_CANDIDATE, &release, true)?),
+        Some(gitlab_rk),
     ])
 }
 

@@ -49651,6 +49651,334 @@ fn each_python_job_takes_rk_from_a_recorded_environment() {
     assert_no_landing_token(&gitlab);
 }
 
+/// The release pipeline a pair lands, by technology and forge.
+fn landed_release_pipeline(target: &Path, tech: &str, forge: &str) -> String {
+    if tech == "rust" && forge == "github" {
+        std::fs::read_to_string(target.join(".github/workflows/release-plz.yml"))
+            .expect("the workflow landed")
+    } else {
+        landed_bash_pipeline(target, forge)
+    }
+}
+
+/// The development environment answer of `dev_environment_answer`, with
+/// `line` added to the `[dev_environment]` table.
+fn dev_environment_answer_with(forge: &str, line: &str) -> String {
+    let run = "run = \"nix develop --command\"\n";
+    dev_environment_answer(forge).replacen(run, &format!("{run}{line}\n"), 1)
+}
+
+/// A pair landed under a development environment answer, then upgraded,
+/// with its release pipeline.
+fn pipeline_under(tech: &str, forge: &str, answer: &str) -> (tempfile::TempDir, String) {
+    let target = land_pair(tech, forge);
+    append_target_config(target.path(), answer);
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let pipeline = landed_release_pipeline(target.path(), tech, forge);
+    (target, pipeline)
+}
+
+/// The position of `needle` in `text`, which must hold it.
+fn position(text: &str, needle: &str) -> usize {
+    text.find(needle)
+        .unwrap_or_else(|| panic!("{needle} is missing: {text}"))
+}
+
+/// The six pairs a recorded environment renders through.
+const ENVIRONMENT_PAIRS: [(&str, &str); 6] = [
+    ("rust", "github"),
+    ("rust", "gitlab"),
+    ("bash", "github"),
+    ("bash", "gitlab"),
+    ("python", "github"),
+    ("python", "gitlab"),
+];
+
+/// A table that names no `rk` route, and one that names the default, land
+/// the same bytes, record no route, and install no `rk`: the environment
+/// carries it, as before the key existed.
+///
+/// SATISFIES packaging:a-landed-job-takes-rk-by-one-route
+#[test]
+fn a_dev_environment_rk_key_defaults_to_the_environment() {
+    for (tech, forge) in ENVIRONMENT_PAIRS {
+        let (_, plain) = pipeline_under(tech, forge, &dev_environment_answer(forge));
+        let (target, named) = pipeline_under(
+            tech,
+            forge,
+            &dev_environment_answer_with(forge, "rk = \"environment\""),
+        );
+        assert_eq!(plain, named, "{tech} {forge}");
+        assert!(
+            !plain.contains("release-kit-installer.sh"),
+            "{tech} {forge}: {plain}"
+        );
+        let recorded = read_manifest(target.path());
+        assert!(
+            recorded["parameters"]["dev_environment"]
+                .get("rk")
+                .is_none(),
+            "{tech} {forge}: {recorded}"
+        );
+    }
+}
+
+/// An installer route beside an empty run refuses, naming the key, and
+/// writes nothing.
+///
+/// SATISFIES target-config:a-dev-environment-is-a-recorded-answer
+#[test]
+fn an_installer_rk_key_beside_an_empty_run_refuses() {
+    let target = land_pair("rust", "github");
+    let before =
+        std::fs::read(target.path().join(".release-kit/manifest.json")).expect("the record reads");
+    append_target_config(
+        target.path(),
+        "\n[dev_environment]\nrun = \"\"\nrk = \"installer\"\n",
+    );
+    let out = rk()
+        .args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(text.contains("dev_environment.rk"), "{text}");
+    assert_eq!(
+        std::fs::read(target.path().join(".release-kit/manifest.json")).expect("the record reads"),
+        before,
+        "nothing is written"
+    );
+}
+
+/// A route that is neither name refuses, naming the value.
+///
+/// SATISFIES target-config:a-dev-environment-is-a-recorded-answer
+#[test]
+fn an_unknown_rk_route_refuses() {
+    let target = land_pair("rust", "github");
+    append_target_config(
+        target.path(),
+        &dev_environment_answer_with("github", "rk = \"nix\""),
+    );
+    let out = rk()
+        .args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(text.contains("nix") && text.contains("installer"), "{text}");
+}
+
+/// Assert that a GitHub job takes the recorded setup, then installs rk at
+/// the landing version onto the runner's PATH, where the installer puts
+/// it, and only then runs `rk` through the prefix, which keeps that PATH.
+fn assert_installs_rk_before(job: &str, first_rk: &str) {
+    let setup = position(
+        job,
+        "nix-installer-action@90bb610b90bf290cad97484ba341453bd1cbefea # v19",
+    );
+    let install = position(job, "      - name: install rk\n");
+    let run = position(job, first_rk);
+    assert!(setup < install && install < run, "{job}");
+    let step = &job[install..run];
+    assert!(
+        step.contains(&format!("RK_VERSION: \"{}\"", env!("CARGO_PKG_VERSION"))),
+        "{step}"
+    );
+    assert!(
+        step.contains(
+            "/release-kit-installer.sh\" | RELEASE_KIT_UNMANAGED_INSTALL=\"$RUNNER_TEMP/rk\" sh"
+        ),
+        "{step}"
+    );
+    assert!(
+        step.contains("echo \"$RUNNER_TEMP/rk\" >> \"$GITHUB_PATH\""),
+        "{step}"
+    );
+}
+
+/// Under `rk = "installer"`, the rust candidate job takes the recorded
+/// setup, installs rk at the landing version onto PATH, and runs the mint
+/// and release-plz through the prefix. The release halves run no rk, so
+/// they install none.
+///
+/// SATISFIES packaging:a-landed-job-takes-rk-by-one-route
+#[test]
+fn the_rust_candidate_job_installs_rk_under_an_installer_answer() {
+    let (_, workflow) = pipeline_under(
+        "rust",
+        "github",
+        &dev_environment_answer_with("github", "rk = \"installer\""),
+    );
+    let _: serde_json::Value = yaml_serde::from_str(&workflow).expect("the workflow parses");
+    assert_no_landing_token(&workflow);
+    let candidate = workflow_job(&workflow, "release-candidate");
+    assert_installs_rk_before(candidate, "nix develop --command rk lines mint");
+    assert!(
+        candidate.contains("nix develop --command release-plz release --git-token"),
+        "{candidate}"
+    );
+    for half in ["release-plz-release", "release-plz-pr"] {
+        let job = workflow_job(&workflow, half);
+        assert!(!job.contains("release-kit-installer.sh"), "{job}");
+    }
+}
+
+/// Under `rk = "installer"`, every bash and python GitHub job that runs
+/// rk installs it after the recorded setup and runs it through the prefix.
+///
+/// SATISFIES packaging:a-landed-job-takes-rk-by-one-route
+#[test]
+fn each_engine_job_installs_rk_under_an_installer_answer() {
+    for tech in ["bash", "python"] {
+        let (_, workflow) = pipeline_under(
+            tech,
+            "github",
+            &dev_environment_answer_with("github", "rk = \"installer\""),
+        );
+        let _: serde_json::Value = yaml_serde::from_str(&workflow).expect("the workflow parses");
+        assert_no_landing_token(&workflow);
+        for (job, first_rk) in [
+            (
+                "release-request",
+                "nix develop --command rk release request",
+            ),
+            ("release", "nix develop --command rk release build"),
+            ("release-candidate", "nix develop --command rk lines mint"),
+        ] {
+            assert_installs_rk_before(workflow_job(&workflow, job), first_rk);
+        }
+    }
+}
+
+/// Under `rk = "installer"`, each GitLab pipeline installs rk at the
+/// landing version into a directory it puts on PATH before the prefix
+/// runs rk: the rust candidate job into its own, and the bash and python
+/// base into the tool directory it already exports.
+///
+/// SATISFIES packaging:a-landed-job-takes-rk-by-one-route
+#[test]
+fn the_gitlab_rk_install_stays_under_an_installer_answer() {
+    let version = env!("CARGO_PKG_VERSION");
+    let (_, rust) = pipeline_under(
+        "rust",
+        "gitlab",
+        &dev_environment_answer_with("gitlab", "rk = \"installer\""),
+    );
+    let _: serde_json::Value = yaml_serde::from_str(&rust).expect("the pipeline parses");
+    assert_no_landing_token(&rust);
+    let candidate = gitlab_job(&rust, "release-candidate");
+    let path = position(
+        candidate,
+        "    - RK_TOOLS=\"${TMPDIR:-/tmp}/rk-bin\" && mkdir -p \"$RK_TOOLS\" && export PATH=\"$RK_TOOLS:$PATH\"\n",
+    );
+    let install = position(
+        candidate,
+        &format!(
+            "/v{version}/release-kit-installer.sh\" | RELEASE_KIT_UNMANAGED_INSTALL=\"$RK_TOOLS\" sh\n"
+        ),
+    );
+    let mint = position(candidate, "nix develop --command rk lines mint");
+    assert!(path < install && install < mint, "{candidate}");
+    assert!(!candidate.contains("/usr/local/bin"), "{candidate}");
+    for tech in ["bash", "python"] {
+        let (_, pipeline) = pipeline_under(
+            tech,
+            "gitlab",
+            &dev_environment_answer_with("gitlab", "rk = \"installer\""),
+        );
+        let _: serde_json::Value = yaml_serde::from_str(&pipeline).expect("the pipeline parses");
+        assert_no_landing_token(&pipeline);
+        let path = position(&pipeline, "export PATH=\"$RELEASE_TOOLS/bin:$PATH\"");
+        let install = position(
+            &pipeline,
+            &format!(
+                "/v{version}/release-kit-installer.sh\" | RELEASE_KIT_UNMANAGED_INSTALL=\"$RELEASE_TOOLS/bin\" sh"
+            ),
+        );
+        let run = position(
+            &pipeline,
+            "    - nix develop --command rk release request\n",
+        );
+        assert!(path < install && install < run, "{tech}: {pipeline}");
+    }
+}
+
+/// The installer route lives through the table's lifecycle: set, then the
+/// table omitted, which keeps the recorded answer, then cleared through an
+/// empty run, which drops it.
+///
+/// SATISFIES target-config:a-dev-environment-is-a-recorded-answer
+#[test]
+fn the_installer_rk_answer_survives_a_rewrite() {
+    let (target, workflow) = pipeline_under(
+        "rust",
+        "github",
+        &dev_environment_answer_with("github", "rk = \"installer\""),
+    );
+    let installs = |workflow: &str| {
+        workflow_job(workflow, "release-candidate").contains("      - name: install rk\n")
+    };
+    assert!(installs(&workflow), "{workflow}");
+    assert_eq!(
+        read_manifest(target.path())["parameters"]["dev_environment"]["rk"],
+        "installer"
+    );
+    let config_path = target.path().join(".release-kit/config.toml");
+    let config = std::fs::read_to_string(&config_path).expect("config exists");
+    let mut kept = Vec::new();
+    let mut inside = false;
+    for line in config.lines() {
+        if line.starts_with('[') {
+            inside = line.starts_with("[dev_environment") || line.starts_with("[[dev_environment");
+        }
+        if !inside {
+            kept.push(line);
+        }
+    }
+    assert!(config.contains("rk = \"installer\""), "{config}");
+    std::fs::write(&config_path, format!("{}\n", kept.join("\n"))).expect("config writes");
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    let workflow = landed_release_pipeline(target.path(), "rust", "github");
+    assert!(
+        installs(&workflow),
+        "the record keeps the route: {workflow}"
+    );
+    assert_eq!(
+        read_manifest(target.path())["parameters"]["dev_environment"]["rk"],
+        "installer"
+    );
+    append_target_config(target.path(), "\n[dev_environment]\nrun = \"\"\n");
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    assert!(
+        read_manifest(target.path())["parameters"]
+            .get("dev_environment")
+            .is_none_or(serde_json::Value::is_null),
+        "an empty run clears the answer, the route included"
+    );
+}
+
 /// With no development environment every python job installs rk through
 /// the shell installer of the landing binary's version, uv at its version,
 /// and git-cliff at its pin, and runs rk with no prefix.

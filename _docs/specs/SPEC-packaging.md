@@ -157,13 +157,19 @@ Verify: `cargo nextest run -E 'test(stage_and_landing_need_no_release_resolution
 
 ### `packaging:a-landed-job-takes-rk-by-one-route` — A landed job takes rk by one route
 
-Where a landed job runs `rk`, the job MUST run it through the recorded development environment's run prefix when the target records one, and MUST otherwise install it through the shell installer of the release whose version equals the landing binary's own, because a recorded environment is the project's one source of its tools, and the landing binary is the one version known to carry every verb its own jobs call. A job under a recorded environment names no `rk` version, and the binding states that the environment must carry `rk`.
+Where a landed job runs `rk`, the job MUST take it from the recorded development environment when the target records one that carries `rk`, and MUST otherwise install it through the shell installer of the release whose version equals the landing binary's own, because a recorded environment is the project's one source of its tools, and the landing binary is the one version known to carry every verb its own jobs call. A recorded `dev_environment.rk = "installer"` states that the environment carries no `rk`: the job MUST then take the recorded setup, install `rk` at the landing version into a directory on the job's PATH, and still run `rk` through the run prefix, which keeps that PATH, so every tool `rk` calls comes from the environment. A job whose environment carries `rk` names no `rk` version, and the binding states that the environment must carry it.
 
 #### Scenario: A target with no recorded environment is landed by a new release
 
 - GIVEN a target with no development environment, landed by the `rk` release that first carries the minting verb
 - WHEN the landing renders the job that mints a candidate
 - THEN the job fetches `release-kit-installer.sh` from that same release, and `versions.toml` names no `rk` version
+
+#### Scenario: A recorded environment carries no rk
+
+- GIVEN a GitHub rust target whose configuration records `run = "nix develop --command"`, a setup step, and `rk = "installer"`
+- WHEN `rk upgrade --apply` renders the job that mints a candidate
+- THEN the job takes the setup step, installs `rk` at the landing version and appends its directory to `$GITHUB_PATH`, and runs `nix develop --command rk lines mint`
 
 Verify: `cargo nextest run -E 'binary(cli)'`
 
