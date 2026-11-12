@@ -43,6 +43,7 @@ With an answer, the release jobs run `release-plz release` and `release-plz rele
 
 - release-plz and the Rust toolchain. No action `version` input reaches this path, so the environment owns the release-plz version. A crate that publishes to no registry needs release-plz 0.3.168 or later: from that release on, git-only mode reconstructs the last release without packaging it.
 - `cargo-semver-checks`, where `release-plz.toml` sets `semver_check = true`.
+- `dist`, at the pin of `dist-workspace.toml`, where the target builds artifacts. The dist jobs take it from the environment too, as [the artifact workflow pin](#the-artifact-workflow-pin) shows.
 
 The prefix keeps the caller's environment, because release-plz reads the GitHub OIDC variables to issue its crates.io token. `nix develop`, `mise exec`, and `devbox run` keep it. On GitLab, the image carries `curl` and `sed`, which the token exchange and the request arm call outside the prefix.
 
@@ -108,7 +109,7 @@ release-plz writes `CHANGELOG.md` in its own form, and the seeded `release-plz.t
 
 ### The artifact workflow pin
 
-`versions.toml` owns the cargo-dist pin and `dist-workspace.toml` carries it, beside `pr-run-mode = "skip"`. The generated workflow is tag-only, because the forge resolves a job's `needs` inside one workflow file and the trunk protection requires one project-owned check: a plan job in the generated file is in no gate's `needs`, so it reports a status nothing holds and a red one merges anyway. The two proofs run as a job of the project's own gated workflow instead. The nix devshell does not carry `dist`; install it at the pin with the installer the workflow itself uses, then prove the committed workflow is what that pin produces and read what a release will build.
+`versions.toml` owns the cargo-dist pin and `dist-workspace.toml` carries it, beside `pr-run-mode = "skip"`. The generated workflow is tag-only, because the forge resolves a job's `needs` inside one workflow file and the trunk protection requires one project-owned check: a plan job in the generated file is in no gate's `needs`, so it reports a status nothing holds and a red one merges anyway. The two proofs run as a job of the project's own gated workflow instead. Where the target records `[dev_environment]`, `dist` comes from that environment, at the pin. Otherwise, install it at the pin with the installer the workflow itself uses. Then prove the committed workflow is what that pin produces, and read what a release will build. With a recorded environment, run each `dist` command below through its `run` prefix and skip the installer.
 
 ```bash
 PIN="$(grep -m1 '^cargo-dist-version' dist-workspace.toml | cut -d'"' -f2)"
@@ -123,7 +124,7 @@ dist plan
 # check: prints the artifact list for every target in dist-workspace.toml
 ```
 
-The same two proofs, as the jobs the project's gate needs. Both ids join that gate's `needs` beside the project's other jobs, and the pin is read from the file so a `cargo-dist-version` bump moves the job with it. The tracked check runs before the generate, because `git diff` compares the index with the working tree and shows no untracked path: without it, a request deleting the workflow regenerates it and diffs clean. The extraction reads the one presentation the seed writes, so a requoted or indented key yields no pin; the emptiness check and the version assertion make that failure loud rather than a silently wrong version. A target whose CI runs through a devshell wraps every `dist` command the way its other jobs are wrapped. A target large enough to split its CI across called workflows keeps the job in whichever called file the gate reaches, which is the one escape from a single gated file.
+The same two proofs, as the jobs the project's gate needs. Both ids join that gate's `needs` beside the project's other jobs, and the pin is read from the file so a `cargo-dist-version` bump moves the job with it. The tracked check runs before the generate, because `git diff` compares the index with the working tree and shows no untracked path: without it, a request deleting the workflow regenerates it and diffs clean. The extraction reads the one presentation the seed writes, so a requoted or indented key yields no pin; the emptiness check and the version assertion make that failure loud rather than a silently wrong version. The block below is the installer form, for a target with no `[dev_environment]`. The environment form follows it. A target large enough to split its CI across called workflows keeps the job in whichever called file the gate reaches, which is the one escape from a single gated file.
 
 ```yaml
 dist-plan:
@@ -197,7 +198,78 @@ dist-build:
         dist build $DIST_ARGS
 ```
 
-`dist-build` builds every target before a merge. Its matrix is the `ci.github.artifacts_matrix` of the plan, the same matrix the generated `release.yml` builds from on the tag, so a target added to `dist-workspace.toml` joins the gate with no edit here, and a target the code cannot build fails the request instead of the release that already pushed its tag. A matrix job inherits nothing from `dist-plan`, so each one checks out, installs dist from the plan's own install step and proves the pin, runs in the matrix container where one is named, and installs the matrix's system packages, the way the generated template's `build-local-artifacts` job does. A target whose CI runs through a devshell runs `dist build` through it too.
+`dist-build` builds every target before a merge. Its matrix is the `ci.github.artifacts_matrix` of the plan, the same matrix the generated `release.yml` builds from on the tag, so a target added to `dist-workspace.toml` joins the gate with no edit here, and a target the code cannot build fails the request instead of the release that already pushed its tag. A matrix job inherits nothing from `dist-plan`, so each one checks out, installs dist from the plan's own install step and proves the pin, runs in the matrix container where one is named, and installs the matrix's system packages, the way the generated template's `build-local-artifacts` job does.
+
+A target that records `[dev_environment]` takes `dist` from that environment in both jobs and installs no `dist` of its own, because the environment owns the tool. Each job takes the recorded `github.setup` steps and may take the `github.cache` steps, since neither job publishes or holds a write token. The environment carries the toolchain and the system packages, so the job installs neither. The pin is still read from `dist-workspace.toml`, an empty pin still refuses, and a step still fails where the environment carries another `dist` than the pin. Every `dist` command runs after the recorded `run` prefix, word for word. `rk status --check` reads `dist build` and `dist plan` after exactly that prefix, or after `nix develop … --command`, `mise exec --`, or `devbox run --`, and reports `dist-build-unreadable` after any other words. The block shows the Nix answer above. Write the recorded prefix and steps in their place. A matrix runner that the environment cannot reach, such as Windows for Nix, keeps the installer form in a job of its own.
+
+```yaml
+# The environment form, for the answer run = "nix develop --command".
+dist-plan:
+  runs-on: ubuntu-latest
+  outputs:
+    plan: ${{ steps.plan.outputs.plan }}
+  steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      with:
+        persist-credentials: false
+    - uses: DeterminateSystems/nix-installer-action@90bb610b90bf290cad97484ba341453bd1cbefea # v19
+    - uses: DeterminateSystems/magic-nix-cache-action@565684385bcd71bad329742eefe8d12f2e765b39 # v13
+      with:
+        use-flakehub: false
+        use-gha-cache: true
+    - name: read the configured pin
+      run: |
+        set -euo pipefail
+        pin="$(grep -m1 '^cargo-dist-version' dist-workspace.toml | cut -d'"' -f2)"
+        [ -n "$pin" ] || { echo "dist-workspace.toml names no cargo-dist-version"; exit 1; }
+        echo "DIST_PIN=$pin" >> "$GITHUB_ENV"
+    - name: dist runs at the configured pin
+      run: nix develop --command dist --version | grep -Fq "$DIST_PIN"
+    - name: the committed workflow is what the pin produces
+      run: |
+        set -euo pipefail
+        git ls-files --error-unmatch -- .github/workflows/release.yml > /dev/null
+        nix develop --command dist generate
+        git diff --exit-code -- .github/workflows/release.yml
+    - name: the configuration produces a viable release
+      id: plan
+      run: |
+        set -euo pipefail
+        nix develop --command dist plan --output-format=json > plan-dist-manifest.json
+        echo "plan=$(jq -c . plan-dist-manifest.json)" >> "$GITHUB_OUTPUT"
+
+dist-build:
+  needs: dist-plan
+  strategy:
+    fail-fast: false
+    matrix: ${{ fromJson(needs.dist-plan.outputs.plan).ci.github.artifacts_matrix }}
+  runs-on: ${{ matrix.runner }}
+  steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      with:
+        persist-credentials: false
+        submodules: recursive
+    - uses: DeterminateSystems/nix-installer-action@90bb610b90bf290cad97484ba341453bd1cbefea # v19
+    - uses: DeterminateSystems/magic-nix-cache-action@565684385bcd71bad329742eefe8d12f2e765b39 # v13
+      with:
+        use-flakehub: false
+        use-gha-cache: true
+    - name: dist runs at the configured pin
+      run: |
+        set -euo pipefail
+        pin="$(grep -m1 '^cargo-dist-version' dist-workspace.toml | cut -d'"' -f2)"
+        [ -n "$pin" ] || { echo "dist-workspace.toml names no cargo-dist-version"; exit 1; }
+        nix develop --command dist --version | grep -Fq "$pin"
+    - name: build the matrix target
+      env:
+        DIST_ARGS: ${{ matrix.dist_args }}
+      run: |
+        set -euo pipefail
+        # shellcheck disable=SC2086
+        nix develop --command dist build $DIST_ARGS
+```
+
+By default, the dist artifacts build in CI alone, in `dist-build`. A full build with the dist profile is too costly for every push, and a target that needs another runner can build only in CI. So the binding teaches no local `dist build` hook. A target that wants one opts in explicitly and sets up the hook itself. The two proofs of `dist-plan`, the generate-and-diff check and `dist plan`, cost far less. Where the development environment carries `dist`, a target can also run them in a local pre-push hook. That hook is an option, not a default.
 
 The job runs on every pull request. A job with an `if:` condition, or a workflow with a `paths` filter, does not prove every merge, so `rk status --check` reports `dist-build-conditional` as a limitation and counts no target for it. A macOS or Windows runner costs minutes on a private repository, and whether a target gets a supported way to run the build on fewer requests is an open question. Every GitHub target with an automatic release is public today, where the runners cost nothing.
 

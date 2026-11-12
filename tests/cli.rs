@@ -14286,7 +14286,8 @@ fn dist_gate_fixture(targets: &[&str], workflows: &[(&str, &str)]) -> tempfile::
 
 /// The dist judgment of a fixture, as `(failure codes, limitation codes)`.
 fn dist_codes(target: &Path, required_check: &str) -> (Vec<String>, Vec<String>) {
-    let gate = release_kit::landing::invariants::dist_targets_built(&utf8(target), required_check);
+    let gate =
+        release_kit::landing::invariants::dist_targets_built(&utf8(target), required_check, "");
     (
         gate.failures
             .iter()
@@ -14301,7 +14302,7 @@ fn dist_codes(target: &Path, required_check: &str) -> (Vec<String>, Vec<String>)
 
 /// The reasons of every failure with `code`.
 fn dist_reasons(target: &Path, required_check: &str, code: &str) -> Vec<String> {
-    release_kit::landing::invariants::dist_targets_built(&utf8(target), required_check)
+    release_kit::landing::invariants::dist_targets_built(&utf8(target), required_check, "")
         .failures
         .into_iter()
         .filter(|failure| failure.code == code)
@@ -14371,6 +14372,167 @@ fn the_binding_dist_build_job_covers_every_target() {
     let (failures, limitations) = dist_codes(target.path(), "gate");
     assert!(failures.is_empty(), "{failures:?}");
     assert!(limitations.is_empty(), "{limitations:?}");
+}
+
+/// The environment form of the binding's two dist jobs, without its
+/// leading comment, with the recorded prefix `run` in place of the Nix one,
+/// as a gated workflow whose `gate` job needs both.
+fn binding_environment_workflow(run: &str) -> String {
+    let binding =
+        std::fs::read_to_string(repo_path("bindings/rust.md")).expect("the binding reads");
+    let opening = "```yaml\n# The environment form";
+    let start = binding
+        .find(opening)
+        .expect("the binding serves the environment form");
+    let body = &binding[start..];
+    let body = &body[body
+        .find("\ndist-plan:\n")
+        .expect("the block opens with dist-plan")
+        + 1..];
+    let body = &body[..body.find("```\n").expect("the block closes")];
+    let jobs =
+        body.replace("nix develop --command", run)
+            .lines()
+            .fold(String::new(), |mut jobs, line| {
+                if !line.is_empty() {
+                    jobs.push_str("  ");
+                    jobs.push_str(line);
+                }
+                jobs.push('\n');
+                jobs
+            });
+    gated(&jobs, "dist-plan, dist-build")
+}
+
+/// The dist judgment of a fixture whose record names the run prefix
+/// `dev_run`, as `(failure codes, limitation codes)`.
+fn dist_codes_recorded(
+    target: &Path,
+    required_check: &str,
+    dev_run: &str,
+) -> (Vec<String>, Vec<String>) {
+    let gate = release_kit::landing::invariants::dist_targets_built(
+        &utf8(target),
+        required_check,
+        dev_run,
+    );
+    (
+        gate.failures
+            .iter()
+            .map(|failure| failure.code.to_owned())
+            .collect(),
+        gate.limitations
+            .iter()
+            .map(|(code, _)| (*code).to_owned())
+            .collect(),
+    )
+}
+
+/// SATISFIES landing:a-seeded-file-still-carries-the-invariants
+///
+/// The environment form the binding serves builds every target the plan
+/// lists, through the Nix prefix of its example answer.
+#[test]
+fn the_binding_environment_form_covers_every_target() {
+    let workflow = binding_environment_workflow("nix develop --command");
+    let target = dist_gate_fixture(&FIVE_TARGETS, &[("ci.yml", &workflow)]);
+    let (failures, limitations) =
+        dist_codes_recorded(target.path(), "gate", "nix develop --command");
+    assert!(failures.is_empty(), "{failures:?}");
+    assert!(limitations.is_empty(), "{limitations:?}");
+}
+
+/// SATISFIES landing:a-seeded-file-still-carries-the-invariants
+///
+/// `rk status --check` reads a gated `dist build` that runs through the
+/// recorded `dev_environment.run` as a build, though no fixed wrapper
+/// names that prefix, and reports no `dist-build-unreadable` for it.
+#[test]
+fn a_dist_build_through_the_recorded_dev_environment_counts_as_built() {
+    let target = land_pair("rust", "github");
+    append_target_config(
+        target.path(),
+        &dev_environment_answer("github").replace("nix develop --command", "direnv exec ."),
+    );
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    clear_landing_sentinels(target.path());
+    std::fs::write(
+        target.path().join(".github/workflows/ci.yml"),
+        binding_environment_workflow("direnv exec ."),
+    )
+    .expect("the gated workflow writes");
+    seed_setup_proof(target.path());
+    let (_, report) = status_check_json(target.path());
+    assert!(
+        !invariant_codes(&report)
+            .iter()
+            .any(|(code, _)| code.starts_with("dist-")),
+        "{report}"
+    );
+    assert_eq!(
+        read_manifest(target.path())["parameters"]["dev_environment"]["run"],
+        "direnv exec ."
+    );
+}
+
+/// SATISFIES landing:a-seeded-file-still-carries-the-invariants
+///
+/// The recorded prefix counts only as an exact leading match: a prefix
+/// that is only similar, or the same prefix with no record, stays
+/// unreadable and credits no target.
+#[test]
+fn a_prefix_only_similar_to_the_recorded_one_stays_unreadable() {
+    let target = dist_gate_fixture(
+        &FIVE_TARGETS,
+        &[(
+            "ci.yml",
+            &binding_environment_workflow("direnv exec ./other"),
+        )],
+    );
+    for recorded in ["direnv exec .", "direnv exec", "direnv exec ./other --", ""] {
+        let (failures, _) = dist_codes_recorded(target.path(), "gate", recorded);
+        assert!(
+            failures.iter().any(|code| code == "dist-build-unreadable"),
+            "{recorded:?}: {failures:?}"
+        );
+        assert_eq!(
+            failures
+                .iter()
+                .filter(|code| *code == "dist-target-unbuilt")
+                .count(),
+            5,
+            "{recorded:?}: an unreadable build credits nothing: {failures:?}"
+        );
+    }
+    let (failures, _) = dist_codes_recorded(target.path(), "gate", "direnv exec ./other");
+    assert!(failures.is_empty(), "the exact prefix reads: {failures:?}");
+}
+
+/// No hook, recipe, or binding text adds a local `dist build` by default:
+/// the binding states the CI-only default, and this repository's own
+/// hooks and recipes run no `dist build`.
+#[test]
+fn no_local_dist_build_runs_by_default() {
+    let binding =
+        std::fs::read_to_string(repo_path("bindings/rust.md")).expect("the binding reads");
+    assert!(
+        binding.contains("By default, the dist artifacts build in CI alone, in `dist-build`."),
+        "the binding states the default"
+    );
+    assert!(
+        binding.contains("the binding teaches no local `dist build` hook"),
+        "the binding names no local build hook"
+    );
+    for file in [".pre-commit-config.yaml", "justfile"] {
+        let text = std::fs::read_to_string(repo_path(file)).expect("the file reads");
+        assert!(
+            !text.contains("dist build"),
+            "{file} runs a local dist build"
+        );
+    }
 }
 
 /// SATISFIES landing:a-seeded-file-still-carries-the-invariants
@@ -19919,8 +20081,9 @@ fn the_binding_job_pins_resolve_through_the_registry() {
         }
     }
     // The checkout of dist-plan and of dist-build sit beside the two of
-    // the other jobs the binding serves.
-    assert_eq!(pinned, 5, "the binding serves five pinned action steps");
+    // the other jobs the binding serves, and the environment form adds
+    // its own two checkouts and the Nix setup and cache steps of each job.
+    assert_eq!(pinned, 11, "the binding serves eleven pinned action steps");
 }
 
 /// The landed capability builds, end to end: a scratch crate opts in and

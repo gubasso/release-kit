@@ -856,7 +856,12 @@ fn observe(args: &StatusArgs, manifest: &Manifest, stated: &Stated) -> Result<Ob
     if manifest.profile.release.driver.as_deref() == Some("rust")
         && manifest.profile.forge.as_deref() == Some("github")
     {
-        let gate = invariants::dist_targets_built(&args.target, &stated.required_check);
+        let dev_run = manifest
+            .parameters
+            .dev_environment
+            .as_ref()
+            .map_or("", |answer| answer.run.as_str());
+        let gate = invariants::dist_targets_built(&args.target, &stated.required_check, dev_run);
         observed.invariants.extend(gate.failures);
         observed.warnings.extend(
             gate.limitations

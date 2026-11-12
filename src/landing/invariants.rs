@@ -518,9 +518,13 @@ enum Credit {
 /// from the `artifacts_matrix` of an unnarrowed `dist plan` in a judged
 /// job. The generated `release.yml` runs on the tag and proves nothing
 /// before a merge, so it is not read. An absent configuration or an
-/// absent workflow directory reports nothing.
+/// absent workflow directory reports nothing. `dev_run` is the run prefix
+/// of the recorded `dev_environment`, empty where none is recorded: a
+/// `dist` command after exactly that prefix, word for word, runs in the
+/// target's own environment and is read like a bare one.
 #[must_use]
-pub fn dist_targets_built(target: &Utf8Path, required_check: &str) -> DistGate {
+pub fn dist_targets_built(target: &Utf8Path, required_check: &str, dev_run: &str) -> DistGate {
+    let recorded: Vec<&str> = dev_run.split_whitespace().collect();
     let mut gate = DistGate::default();
     let Some(targets) = dist_targets(target) else {
         return gate;
@@ -550,7 +554,7 @@ pub fn dist_targets_built(target: &Utf8Path, required_check: &str) -> DistGate {
             if !run.contains("dist build") {
                 continue;
             }
-            match credit(workflow, job, step, run, &peers, &targets) {
+            match credit(workflow, job, step, run, &peers, &targets, &recorded) {
                 Credit::Targets(triples) => built.extend(triples),
                 Credit::Conditional => gate.limitations.push((
                     DIST_BUILD_CONDITIONAL,
@@ -944,11 +948,14 @@ fn segments_of(line: &str) -> Vec<Vec<(String, Quoting)>> {
 /// Whether the words before `dist` are a wrapper the binding names: none,
 /// `nix develop` with any flake reference or flag before `--command`,
 /// `mise exec --`, or `devbox run --`, every word unquoted.
-fn wrapper_supported(prefix: &[(String, Quoting)]) -> bool {
+fn wrapper_supported(prefix: &[(String, Quoting)], recorded: &[&str]) -> bool {
     if prefix.iter().any(|(_, quoting)| quoting.any()) {
         return false;
     }
     let words: Vec<&str> = prefix.iter().map(|(word, _)| word.as_str()).collect();
+    if !recorded.is_empty() && words == recorded {
+        return true;
+    }
     matches!(
         words.as_slice(),
         [] | ["mise", "exec", "--"] | ["devbox", "run", "--"] | ["nix", "develop", .., "--command"]
@@ -957,10 +964,10 @@ fn wrapper_supported(prefix: &[(String, Quoting)]) -> bool {
 
 /// Every `dist <command>` a run executes, in the grammar the binding
 /// writes: the subcommand at the start of a command segment, or after a
-/// wrapper the binding names. Text inside quotes or after a comment is no
+/// wrapper the binding names or the target's recorded run prefix. Text inside quotes or after a comment is no
 /// command. An unquoted `dist <command>` after any other words is
 /// unreadable rather than credited.
-fn invocations(run: &str, command: &str) -> Result<Vec<Invocation>, String> {
+fn invocations(run: &str, command: &str, recorded: &[&str]) -> Result<Vec<Invocation>, String> {
     let mut found = Vec::new();
     for line in run.lines() {
         for words in segments_of(&squeeze(line)) {
@@ -969,7 +976,7 @@ fn invocations(run: &str, command: &str) -> Result<Vec<Invocation>, String> {
             }) else {
                 continue;
             };
-            if !wrapper_supported(&words[..at]) {
+            if !wrapper_supported(&words[..at], recorded) {
                 let prefix: Vec<&str> = words[..at].iter().map(|(word, _)| word.as_str()).collect();
                 return Err(format!(
                     "dist {command} after {}, which is no wrapper the binding names",
@@ -1117,6 +1124,7 @@ fn credit(
     run: &str,
     peers: &[&str],
     targets: &[String],
+    recorded: &[&str],
 ) -> Credit {
     if job.get("if").is_some() || step.get("if").is_some() {
         return Credit::Conditional;
@@ -1127,7 +1135,7 @@ fn credit(
     let mut env = workflow.env.clone();
     env.extend(env_of(job.get("env")));
     env.extend(env_of(step.get("env")));
-    let builds = match invocations(&expand(run, &env), "build") {
+    let builds = match invocations(&expand(run, &env), "build", recorded) {
         Ok(builds) => builds,
         Err(what) => return Credit::Unreadable(what),
     };
@@ -1161,7 +1169,7 @@ fn credit(
                     "--artifacts beside matrix.dist_args, which already carries it".to_owned(),
                 );
             }
-            match planned_triples(workflow, job, peers) {
+            match planned_triples(workflow, job, peers, recorded) {
                 Ok(PlanCredit::Every) => triples.extend(targets.iter().cloned()),
                 Ok(PlanCredit::Named(found)) => triples.extend(found),
                 Err(what) => return Credit::Unreadable(what),
@@ -1180,6 +1188,7 @@ fn planned_triples(
     workflow: &GatedWorkflow,
     job: &yaml_serde::Value,
     peers: &[&str],
+    recorded: &[&str],
 ) -> Result<PlanCredit, String> {
     let matrix = job
         .get("strategy")
@@ -1219,7 +1228,7 @@ fn planned_triples(
         .and_then(|step| step.get("run"))
         .and_then(yaml_serde::Value::as_str)
         .ok_or_else(|| format!("matrix.dist_args from step {step_id} of {planner}"))?;
-    let plans = invocations(plan, "plan")?;
+    let plans = invocations(plan, "plan", recorded)?;
     let [invocation] = plans.as_slice() else {
         return Err(format!(
             "matrix.dist_args from step {step_id} of {planner}, which runs dist plan {} times",
