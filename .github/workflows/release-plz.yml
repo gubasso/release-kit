@@ -3,7 +3,9 @@
 # must never be registered there.
 #
 # Both halves run on every push to the trunk, and to a release/* line when a
-# project keeps older lines. The pull-request half maintains the one release
+# project keeps older lines. A third job, release-candidate, runs only when a
+# person dispatches it for a line, and mints or promotes that line's release
+# candidate. The pull-request half maintains the one release
 # pull request against the pushed branch; the release half publishes and tags
 # only on the push that lands the bot's own bump, which release_always = false
 # recognizes by its release-plz-* head branch. The publish half runs free of
@@ -17,6 +19,23 @@ permissions: {}
 on:
   push:
     branches: [master, 'release/**']
+  # A person mints a release candidate on purpose: the line, and the tip they
+  # read, so a line that moved since then refuses. Nothing watches a push.
+  workflow_dispatch:
+    inputs:
+      line:
+        description: The release line, <major>.<minor>, as in 1.4
+        required: true
+        type: string
+      expect:
+        description: The line's tip you read, as a full commit SHA
+        required: true
+        type: string
+      promote:
+        description: Promote the line's newest candidate to its stable version instead of minting a new one
+        required: false
+        type: boolean
+        default: false
   # zizmor: ignore[dangerous-triggers] the gate below trusts no value this
   # event carries: it reads the candidate back from the forge, proves its
   # author, base, and head repository there, and merges nothing else.
@@ -121,11 +140,46 @@ jobs:
           name="$(printf '%s\n' "$viewer" | sed -n 3p)"
           git config --global user.name "${name:-$login}"
           git config --global user.email "$id+$login@users.noreply.github.com"
+      # A line that carries a candidate's version keeps this half out of the
+      # candidate numbering: release-plz would propose the next rc in a
+      # request. The request returns once the promotion writes the stable
+      # version, and it then proposes that version with its changelog. Cargo
+      # reads the version, so any valid manifest form and an inherited
+      # workspace version count, and a version it cannot read fails the job.
+      - name: hold the request while the line carries a candidate
+        id: candidate
+        env:
+          REF: ${{ github.ref_name }}
+        run: |
+          set -eu
+          case "$REF" in
+            release/*) ;;
+            *)
+              echo "held=false" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
+          metadata="$(nix develop --command cargo metadata --no-deps --format-version 1 --offline)"
+          version="$(printf '%s' "$metadata" | jq -r --arg manifest "$PWD/Cargo.toml" '.packages[] | select(.manifest_path == $manifest) | .version')"
+          if [ -z "$version" ]; then
+            echo "cargo names no package version for $PWD/Cargo.toml; no request opens past an unreadable manifest." >&2
+            exit 1
+          fi
+          case "$version" in
+            *-*)
+              echo "$REF carries the candidate $version; no release request until it is promoted."
+              echo "held=true" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "held=false" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
       # The request half writes the whole JSON report as the pr output. The
       # arm below reads the first request number in it, which is the one
       # request release-plz maintains, and reads none where it opened none.
       - name: release-pr
         id: release-pr
+        if: steps.candidate.outputs.held != 'true'
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
@@ -133,6 +187,89 @@ jobs:
           output="$(nix develop --command release-plz release-pr --git-token "$GITHUB_TOKEN" --repo-url "https://github.com/$GITHUB_REPOSITORY" -o json)"
           printf '%s\n' "$output"
           printf 'pr=%s\n' "$(printf '%s' "$output" | tr -d '\n')" >> "$GITHUB_OUTPUT"
+
+  # A release candidate, minted on purpose. The job checks out the requested
+  # line under the app token and persists it, because rk pushes the
+  # candidate's version before release-plz configures git; the push starts
+  # the push jobs above, which publish nothing for a commit no release
+  # request carries. release-plz then releases that commit under a config
+  # derived from release-plz.toml with release_always = true, the one key
+  # that releases a commit no request carries. It runs in this file because
+  # a registry binds its publishing to the workflow file, so a second file
+  # could not publish. A promotion writes the stable version alone, and the
+  # line's release request proposes it.
+  release-candidate:
+    if: github.repository_owner == 'gubasso' && github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: release-candidate-${{ inputs.line }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        id: app-token
+        with:
+          client-id: ${{ secrets.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_APP_PRIVATE_KEY }}
+          permission-contents: write
+          # release-plz looks up the pull requests of the released commit
+          # before it reads release_always, and that lookup needs this read
+          # on a private repository.
+          permission-pull-requests: read
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: release/${{ inputs.line }}
+          fetch-depth: 0
+          # zizmor: ignore[artipacked] the persisted credential is what pushes
+          # the candidate's version and reads the line's remote tags below.
+          token: ${{ steps.app-token.outputs.token }}
+      - name: configure git as the release app
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: |
+          set -eu
+          uid="$(gh api "/users/${APP_SLUG}[bot]" -q .id)"
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${uid}+${APP_SLUG}[bot]@users.noreply.github.com"
+      - name: derive the candidate's release config
+        if: ${{ !inputs.promote }}
+        run: |
+          set -eu
+          count="$(grep -c '^release_always = false$' release-plz.toml || true)"
+          if [ "$count" != "1" ]; then
+            echo "release-plz.toml carries 'release_always = false' $count times; the candidate's config flips exactly one." >&2
+            exit 1
+          fi
+          sed 's/^release_always = false$/release_always = true/' release-plz.toml > "$RUNNER_TEMP/release-plz-rc.toml"
+      - uses: DeterminateSystems/nix-installer-action@90bb610b90bf290cad97484ba341453bd1cbefea # v19
+
+      # rk, release-plz, and the toolchain come from the project's development
+      # environment, through the prefix the project records, so the
+      # environment must carry rk. The binary issues the crates.io token
+      # itself over OIDC, from the job's own environment, which the prefix
+      # keeps.
+      - name: mint
+        env:
+          LINE: ${{ inputs.line }}
+          EXPECT: ${{ inputs.expect }}
+          PROMOTE: ${{ inputs.promote }}
+        run: |
+          set -eu
+          if [ "$PROMOTE" = "true" ]; then
+            nix develop --command rk lines mint "$LINE" --promote --expect "$EXPECT" --apply
+          else
+            nix develop --command rk lines mint "$LINE" --expect "$EXPECT" --apply
+          fi
+      - name: release the candidate
+        if: ${{ !inputs.promote }}
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -eu
+          nix develop --command release-plz release --git-token "$GITHUB_TOKEN" --config "$RUNNER_TEMP/release-plz-rc.toml" -o json
 
   # The release request's merger, never its authority. Under local
   # integration the repository administrator bypasses the trunk ruleset for
