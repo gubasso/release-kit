@@ -101,7 +101,7 @@ Compose them this way:
 
 Run these once, after the last task post-flight, in this order.
 
-1. Check. Run `rk status --check --target .`, then `prek run --hook-stage manual --all-files`, the suite every integration runs, or `pre-commit run` with the same arguments where prek is not on `PATH`. Where the pre-flight found neither runner, skip the second command and state in the report that the suite did not run.
+1. Check. Run `rk status --check --target .`. Under local integration, confirm the `pre-merge-commit` hook, the gate every integration runs. On git 2.54 or newer, run `git hook list pre-merge-commit`. On older git, `git hook list` does not exist, so report the listing as unavailable, not the hook as missing, and rely on the hook manager's install output. Where git lists no hook, state in the report that the clone has no gate yet, and name the install command of the project's hook manager.
 2. Clean. Where this run staged and every check passed, print `rk stage clean <path>`, wait, and run it on a yes. It removes the stage alone. Saved copies, forge snapshots, and a migration workspace stay, and the report lists each path.
 3. Report. Fill the template from observation, with every answer the operator gave.
 

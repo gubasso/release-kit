@@ -8,15 +8,21 @@ Rules governing what `rk release status` reports about a landed target's release
 
 ### `release-state:a-forge-field-reads-unknown-without-credentials` — A forge field reads unknown without credentials
 
-If the runtime cannot read the forge or the registry, then every field that read serves MUST read `unknown`, the report MUST name why, and `rk release status` MUST still report the recorded fields and exit 0, asking for no credential.
+If the runtime holds no credential for the forge or the registry, or the forge or the registry does not answer, then every field that read serves MUST read `unknown`, the report MUST name why, and `rk release status` MUST still report the recorded fields and exit 0, asking for no credential. A forge CLI that is missing or below its floor is no such boundary: the verb stops before its first read under `tool-requirements:a-verb-checks-its-tools-first`.
 
-#### Scenario: The forge CLI is missing on the host
+#### Scenario: The forge refuses the runtime's credential
 
-- GIVEN a landed rust target and no usable `gh`
+- GIVEN a landed rust target and a `gh` that holds no credential the forge accepts
 - WHEN `rk release status --json` runs
 - THEN the style, the integration authority, and the checkout mode read from the record, the request and the last release read `unknown` field by field, and the command exits 0
 
-Verify: `cargo nextest run -E 'test(release_status_reads_unknown_without_credentials)'`
+#### Scenario: The forge CLI is missing on the host
+
+- GIVEN a landed rust target and no `gh` on the host
+- WHEN `rk release status --json` runs
+- THEN it refuses before any read, naming gh and how to install it
+
+Verify: `cargo nextest run -E 'test(release_status_reads_unknown_without_credentials) or test(release_status_stops_without_its_forge_cli)'`
 
 ### `release-state:the-report-joins-the-record-and-the-forge` — The report joins the record and the forge
 

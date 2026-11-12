@@ -12,7 +12,7 @@
   - [`git:integration-mode-selects-the-authority-that-squashes` — Integration mode selects the authority that squashes](#gitintegration-mode-selects-the-authority-that-squashes--integration-mode-selects-the-authority-that-squashes)
   - [`git:the-merge-form-is-a-landing-parameter` — The merge form is a landing parameter](#gitthe-merge-form-is-a-landing-parameter--the-merge-form-is-a-landing-parameter)
   - [`git:the-release-request-integrates-at-the-forge` — The release request integrates at the forge](#gitthe-release-request-integrates-at-the-forge--the-release-request-integrates-at-the-forge)
-  - [`git:the-manual-stage-is-the-pre-integrate-contract` — The manual stage is the pre-integrate contract](#gitthe-manual-stage-is-the-pre-integrate-contract--the-manual-stage-is-the-pre-integrate-contract)
+  - [`git:the-pre-merge-commit-hook-is-the-pre-integrate-contract` — The pre-merge-commit hook is the pre-integrate contract](#gitthe-pre-merge-commit-hook-is-the-pre-integrate-contract--the-pre-merge-commit-hook-is-the-pre-integrate-contract)
   - [`git:a-check-declares-where-it-runs` — A check declares where it runs](#gita-check-declares-where-it-runs--a-check-declares-where-it-runs)
   - [`git:a-local-integration-is-a-transaction` — A local integration is a transaction](#gita-local-integration-is-a-transaction--a-local-integration-is-a-transaction)
   - [`git:a-rebase-integration-publishes-the-branch-tip` — A rebase integration publishes the branch tip](#gita-rebase-integration-publishes-the-branch-tip--a-rebase-integration-publishes-the-branch-tip)
@@ -136,21 +136,33 @@ The release request MUST integrate at the forge in both integration modes, becau
 
 Verify: `cargo nextest run -E 'test(the_tag_floors_hold_under_both_integration_modes) or test(the_release_request_is_gated_under_both_integration_modes)'`
 
-### `git:the-manual-stage-is-the-pre-integrate-contract` — The manual stage is the pre-integrate contract
+### `git:the-pre-merge-commit-hook-is-the-pre-integrate-contract` — The pre-merge-commit hook is the pre-integrate contract
 
-Release-kit MUST express the pre-integrate gate as one run of the hook runner over the `manual` stage across all files, `prek` where it resolves on `PATH` and `pre-commit` otherwise, with the same arguments, and MUST read no hook identifier, revision, language, or test category from the target's own hook configuration, because neither runner admits a custom stage and the project owns everything outside the marked block. Release-kit MUST land no continuous-integration workflow for the project's own checks and MUST judge no parity between those checks and the hook stages.
+Release-kit MUST express the pre-integrate gate as git running the clone's `pre-merge-commit` hook through `git hook run`, with the seat's `HEAD` pointed at the trunk commit and its index and files at the branch tip, so the staged change is the squash and the project's hook manager selects its files from it natively, because git fires no hook during an integration. It MUST name no hook runner, MUST look for no hook before git runs, and MUST refuse with git's own error where the clone installs none. It MUST restore the seat's `HEAD` on every ordinary exit, MUST refuse and leave the seat as the hook left it where the hook moved `HEAD` or changed the index, and MUST refuse a seat left detached at the trunk with the branch's tree staged. It MUST read no hook identifier, revision, language, or test category from the target's own hook configuration, because the project owns everything outside the marked block. Release-kit MUST land no continuous-integration workflow for the project's own checks and MUST judge no parity between those checks and the hook stages.
 
-#### Scenario: A project assigns its own checks to stages
+#### Scenario: A project gates on its own hook
 
-- GIVEN a target whose hook configuration puts an expensive suite on the `manual` stage
+- GIVEN a clone whose installed `pre-merge-commit` hook runs the project's checks
 - WHEN `rk integrate` runs its gate
-- THEN it invokes the stage as one command of the runner it found, prek before pre-commit, and names no hook the project declared
+- THEN git runs that hook once on the staged squash, rk names no hook runner, and the seat stands on its branch afterwards
 
-Verify: `cargo nextest run -E 'test(integrate_refuses_when_the_manual_stage_fails) or test(the_gate_runs_prek_when_it_is_on_path) or test(the_gate_runs_pre_commit_when_prek_is_absent) or test(the_gate_names_both_runners_when_neither_is_on_path)'`
+#### Scenario: A clone installs no gate hook
+
+- GIVEN a clone with no `pre-merge-commit` hook
+- WHEN `rk integrate --apply` runs
+- THEN it refuses with git's error and the install action, and the trunk stands where it stood
+
+#### Scenario: The hook changes the seat
+
+- GIVEN a `pre-merge-commit` hook that commits or stages a change
+- WHEN the gate runs
+- THEN the integration refuses, nothing reaches the trunk, and the seat stays as the hook left it
+
+Verify: `cargo nextest run -E 'test(the_gate_runs_the_installed_pre_merge_commit_hook) or test(the_gate_refuses_when_the_hook_fails) or test(the_gate_refuses_when_no_hook_is_installed) or test(the_gate_stages_the_squash) or test(the_gate_restores_the_seat_head) or test(the_gate_honors_core_hooks_path) or test(the_gate_names_no_runner) or test(a_hook_that_commits_is_refused) or test(a_hook_that_stages_a_change_is_refused) or test(a_seat_left_detached_at_the_trunk_is_refused)'`
 
 ### `git:a-check-declares-where-it-runs` — A check declares where it runs
 
-A project MUST assign every check both a scope and a boundary moment, and the landed guidance MUST teach that assignment. Scope MUST be one of `both`, `local-only`, or `ci-only`. The moment MUST be a native `pre-commit` stage where the check has a local path, and a named remote boundary where the scope is `ci-only`, because a check that is not a hook has no honest hook stage. A check classified `both` MUST have a local execution path and a remote execution path of equivalent coverage rather than identical commands, and a check that is neither a hook nor a recorded `ci-only` check is unclassified, which is a defect in the project's own policy. This requires nothing of release-kit's readers: a scope declared forward by the author at the check duplicates nothing and infers nothing, where a parity claim derived backward from a workflow file infers intent that no file states, which is why `git:the-manual-stage-is-the-pre-integrate-contract` still refuses the second and this rule does not reintroduce it.
+A project MUST assign every check both a scope and a boundary moment, and the landed guidance MUST teach that assignment. Scope MUST be one of `both`, `local-only`, or `ci-only`. The moment MUST be a native `pre-commit` stage where the check has a local path, and a named remote boundary where the scope is `ci-only`, because a check that is not a hook has no honest hook stage. A check classified `both` MUST have a local execution path and a remote execution path of equivalent coverage rather than identical commands, and a check that is neither a hook nor a recorded `ci-only` check is unclassified, which is a defect in the project's own policy. This requires nothing of release-kit's readers: a scope declared forward by the author at the check duplicates nothing and infers nothing, where a parity claim derived backward from a workflow file infers intent that no file states, which is why `git:the-pre-merge-commit-hook-is-the-pre-integrate-contract` still refuses the second and this rule does not reintroduce it.
 
 #### Scenario: A project puts an expensive suite on the manual stage alone
 
@@ -204,7 +216,7 @@ Verify: `cargo nextest run -E 'test(integrate)'`
 
 ### `git:a-rebase-integration-publishes-the-branch-tip` — A rebase integration publishes the branch tip
 
-Where the recorded merge form is `rebase`, a local integration MUST rebase the branch on the trunk tip, run the `manual` stage, refuse when the branch moved during the gate, judge the message of every commit between the trunk and the branch tip with the whole landed `commit-msg` judgment, and move the trunk to the branch tip by the publication of `git:a-local-integration-is-a-transaction`, writing no new commit. Its rebase MUST flatten every merge and move no other ref, whatever the Git configuration asks, and the published range MUST hold no merge commit, whatever the Git configuration: the range is read back before the publication, and a merge commit in it refuses with the trunk unmoved. Its ledger entry MUST name the branch tip as the integrated commit, and it MUST refuse a trunk message given with `-m`, because every commit keeps its own message.
+Where the recorded merge form is `rebase`, a local integration MUST rebase the branch on the trunk tip, run the gate of `git:the-pre-merge-commit-hook-is-the-pre-integrate-contract`, refuse when the branch moved during the gate, judge the message of every commit between the trunk and the branch tip with the whole landed `commit-msg` judgment, and move the trunk to the branch tip by the publication of `git:a-local-integration-is-a-transaction`, writing no new commit. Its rebase MUST flatten every merge and move no other ref, whatever the Git configuration asks, and the published range MUST hold no merge commit, whatever the Git configuration: the range is read back before the publication, and a merge commit in it refuses with the trunk unmoved. Its ledger entry MUST name the branch tip as the integrated commit, and it MUST refuse a trunk message given with `-m`, because every commit keeps its own message.
 
 #### Scenario: A branch of three commits integrates by rebase
 

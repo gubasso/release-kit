@@ -401,7 +401,12 @@ impl Projection {
             let (begin, end) = block_markers(destination).ok_or_else(|| {
                 anyhow::anyhow!("{destination} is a block destination with no markers")
             })?;
-            match propose_document(destination, evidence.document(destination), &region) {
+            match propose_document(
+                destination,
+                evidence.document(destination),
+                &region,
+                params.integration(),
+            ) {
                 Ok(bytes) => candidates.push(Candidate {
                     capability,
                     destination: destination.to_owned(),
@@ -2079,6 +2084,21 @@ pub const HOOKS_END: &str = "# END release-kit";
 /// hook types are installed.
 pub const HOOK_TYPES_LINE: &str = "default_install_hook_types: [pre-commit, commit-msg, pre-push]";
 
+/// The same key under local integration, whose gate is the clone's
+/// `pre-merge-commit` hook: a plain install arms it too. Under forge
+/// integration the forge is the gate, and the stage stays out.
+pub const LOCAL_HOOK_TYPES_LINE: &str =
+    "default_install_hook_types: [pre-commit, commit-msg, pre-push, pre-merge-commit]";
+
+/// The hook-types key a fresh hook file carries under `integration`.
+#[must_use]
+pub const fn hook_types_line(integration: Integration) -> &'static str {
+    match integration {
+        Integration::Forge => HOOK_TYPES_LINE,
+        Integration::Local => LOCAL_HOOK_TYPES_LINE,
+    }
+}
+
 /// The authored routing-block template.
 pub const AGENTS_BLOCK: &str = "blocks/agents-block.md.in";
 
@@ -2724,8 +2744,8 @@ pub fn splice_marked_block(existing: Option<&[u8]>, block: &str) -> Vec<u8> {
 /// The whole `.pre-commit-config.yaml` content after splicing the
 /// rendered hook block.
 ///
-/// A fresh file carries the hook-types key, the `repos:` key, and the
-/// block; a marked file takes the block in place; an unmarked file takes
+/// A fresh file carries the hook-types key of `integration`, the `repos:`
+/// key, and the block; a marked file takes the block in place; an unmarked file takes
 /// it directly under its `repos:` line, above the target's own hooks. An
 /// unmarked file with no `repos:` line is refused by name: the block's
 /// entries are list items and have nowhere honest to go.
@@ -2733,9 +2753,14 @@ pub fn splice_marked_block(existing: Option<&[u8]>, block: &str) -> Vec<u8> {
 /// # Errors
 ///
 /// The reason the block has no place, for the caller's refusal to carry.
-pub fn splice_hooks_block(existing: Option<&str>, block: &str) -> Result<String, String> {
+pub fn splice_hooks_block(
+    existing: Option<&str>,
+    block: &str,
+    integration: Integration,
+) -> Result<String, String> {
     let Some(text) = existing else {
-        return Ok(format!("{HOOK_TYPES_LINE}\n\nrepos:\n{block}\n"));
+        let types = hook_types_line(integration);
+        return Ok(format!("{types}\n\nrepos:\n{block}\n"));
     };
     if let Some(defect) = hooks_marker_defect(text) {
         return Err(defect);
@@ -2807,6 +2832,7 @@ fn propose_document(
     destination: &str,
     existing: Option<&[u8]>,
     region: &[u8],
+    integration: Integration,
 ) -> Result<Vec<u8>, String> {
     // The block is release-kit's own text. The document is the target's
     // bytes: the markdown splice works on them directly, and the marker
@@ -2830,7 +2856,7 @@ fn propose_document(
                 )
             })?),
         };
-        return splice_hooks_block(text, &block).map(String::into_bytes);
+        return splice_hooks_block(text, &block, integration).map(String::into_bytes);
     }
     Ok(splice_marked_block(existing, &block))
 }
@@ -3524,8 +3550,8 @@ mod tests {
             "std::net",
             "Command::new",
             "registry::",
-            "curl",
-            "reqwest",
+            "ureq",
+            "http::",
             "blob(",
         ];
         let mut hits = Vec::new();

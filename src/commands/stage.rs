@@ -66,9 +66,13 @@ pub fn run(args: &StageArgs) -> Result<(), RkError> {
     match &args.action {
         Some(StageAction::Clean { path, json }) => remove(Output::new(*json), path),
         Some(StageAction::Compare { root, target, json }) => {
+            crate::requirements::require("rk stage compare", &[crate::requirements::Tool::Git])?;
             compare(Output::new(*json), root, target)
         }
-        None => create(args),
+        None => {
+            crate::requirements::require("rk stage", &[crate::requirements::Tool::Git])?;
+            create(args)
+        }
     }
 }
 

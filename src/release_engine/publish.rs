@@ -62,6 +62,7 @@ struct Local {
 /// or of an asset whose bytes differ from what shipped; a forge failure.
 pub fn run(target: &Utf8Path) -> Result<Done<PublishReport>, RkError> {
     let context = Context::load(target)?;
+    context.require_tools("publish")?;
     let build = read_build(target)?;
     let mut report = PublishReport {
         schema: SCHEMA,

@@ -80,7 +80,7 @@
     {
       "destination": ".pre-commit-config.yaml",
       "kind": "rendered",
-      "sha256": "311c199e5fb5a4b781939cc56cfc98829aabb7f4b4cdebe5768c320da3132596",
+      "sha256": "6af1a9b4f22433dff5c8401adf982bbab2ac1f70b675d9a6464055a3c1529746",
       "placement": "region"
     },
     {

@@ -7,9 +7,8 @@
 //! an unreachable or unparsable source is a reported result at exit 0,
 //! not an error — and it never edits `versions.toml`, because a pin
 //! update is a reviewed change in this repository. The fetch goes through
-//! `curl`, resolved like the forge CLIs with `RK_CURL_BIN` as the
-//! override, so the check needs no HTTP stack of its own and a test can
-//! substitute the network.
+//! `crate::http`, the one owner of the requests rk sends, whose test seam
+//! lets a test serve the network locally.
 
 use serde::Serialize;
 
@@ -163,13 +162,8 @@ fn resolve_ref(action: &str, pinned_commit: &str) -> (&'static str, Option<Strin
         })
         .collect();
     let url = format!("https://api.github.com/repos/{owner}/{repo}/commits/{encoded}");
-    let curl = std::env::var_os("RK_CURL_BIN").unwrap_or_else(|| "curl".into());
-    let fetched = std::process::Command::new(curl)
-        .args(["-fsSL", "--max-time", "10", &url])
-        .output();
-    let body = match fetched {
-        Ok(output) if output.status.success() => output.stdout,
-        _ => return ("ref-unreachable", None),
+    let Some(body) = fetch(&url) else {
+        return ("ref-unreachable", None);
     };
     let Some(sha) = serde_json::from_slice::<serde_json::Value>(&body)
         .ok()
@@ -196,16 +190,15 @@ fn resolve_ref(action: &str, pinned_commit: &str) -> (&'static str, Option<Strin
 /// guessed.
 const MAX_PAGES: u32 = 10;
 
-/// One GET, or `None` where the fetch failed.
+/// One GET, following redirects within ten seconds, or `None` where the
+/// fetch got no answer or a status other than a success.
 fn fetch(url: &str) -> Option<Vec<u8>> {
-    let curl = std::env::var_os("RK_CURL_BIN").unwrap_or_else(|| "curl".into());
-    let fetched = std::process::Command::new(curl)
-        .args(["-fsSL", "--max-time", "10", url])
-        .output();
-    match fetched {
-        Ok(output) if output.status.success() => Some(output.stdout),
-        _ => None,
-    }
+    crate::http::send(
+        &crate::http::Request::get(url, std::time::Duration::from_secs(10)).following(),
+    )
+    .ok()
+    .filter(crate::http::Response::ok)
+    .map(|response| response.body)
 }
 
 /// The same URL at a later page, in the query form every paged source here

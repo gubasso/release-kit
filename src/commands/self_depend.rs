@@ -175,8 +175,8 @@ struct SyncReport<'a> {
     /// `skipped-disabled`, `skipped-stamped`, `skipped-locked`,
     /// `lock-unavailable`, `not-wired`, `unpinned`, `no-manager`,
     /// `ambiguous-pin`, `refused-dirty`, `unreachable`, `unparsable`,
-    /// `update-failed`, `build-failed`, `restore-failed`, or
-    /// `cleanup-failed`.
+    /// `update-failed`, `build-failed`, `restore-failed`,
+    /// `cleanup-failed`, or `prerequisite-unmet`.
     outcome: &'static str,
     /// The pinned version before the run, as the manager records it,
     /// where the pin was read.
@@ -688,6 +688,29 @@ fn gate_and_decide(
             }
         }
     }
+    // The tools a sync runs, checked once the stamp and the lock let it
+    // act and before the recovery or the decision can touch the target:
+    // git always, and nix where an applied sync updates a flake. A missing tool
+    // is a reported outcome, so the unattended caller still exits 0, and
+    // the operator's caller fails with it.
+    let mut tools = vec![crate::requirements::Tool::Git];
+    if args.apply
+        && args.manager.or(observed.wired) == Some(crate::self_depend::manager::Manager::Flake)
+    {
+        tools.push(crate::requirements::Tool::Nix);
+    }
+    let unmet = crate::requirements::unmet(&tools, Some(observed.target.as_std_path()));
+    if !unmet.is_empty() {
+        let problems: Vec<&str> = unmet.iter().map(|found| found.problem.as_str()).collect();
+        let actions: Vec<&str> = unmet.iter().map(|found| found.action.as_str()).collect();
+        run.outcome = "prerequisite-unmet";
+        run.detail = Some(format!(
+            "rk self-depend sync runs tools this host cannot serve: {}; next: {}",
+            problems.join("; "),
+            actions.join("; ")
+        ));
+        return Ok(());
+    }
     if args.apply {
         // A marker that cannot be read is a reported outcome, never an
         // error: the unattended caller must still exit 0.
@@ -1156,6 +1179,9 @@ fn sync_next(observed: &Observed, run: &SyncRun) -> Vec<String> {
             "rk self-depend sync --caller operator --apply --target {target} runs the attempt now, whatever the stamp says"
         )],
         "skipped-locked" => vec!["let the other run finish; nothing here is owed".to_owned()],
+        "prerequisite-unmet" => vec![
+            "install or upgrade each tool the detail names; the sync runs again on the next entry".to_owned(),
+        ],
         "lock-unavailable" => vec!["make the state root writable: rk doctor reports it".to_owned()],
         "unreachable" | "unparsable" => vec![
             "retry when the release page answers; --tag <TAG> makes no request at all".to_owned(),
@@ -1190,6 +1216,12 @@ fn exit_for(caller: Caller, run: &SyncRun) -> Result<(), RkError> {
     }
     let detail = run.detail.clone().unwrap_or_default();
     match run.outcome {
+        "prerequisite-unmet" => Err(RkError::refusal(
+            Diagnostic::new(Reason::PrerequisiteUnmet, detail)
+                .expected("every tool rk self-depend sync runs, on PATH and at or above its floor")
+                .action("install or upgrade each tool the message names, then run the sync again")
+                .target_state("nothing was written"),
+        )),
         "ambiguous-pin" | "refused-dirty" => Err(RkError::refusal(
             Diagnostic::new(Reason::StateDrift, detail)
                 .expected("exactly one committed pin line in one manager file")

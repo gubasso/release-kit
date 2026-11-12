@@ -109,6 +109,39 @@ pub struct Context {
 }
 
 impl Context {
+    /// The tools one engine action runs for this record: git and the
+    /// forge CLI always, git-cliff for the request and the build, the
+    /// python driver's uv, and the bash driver's shell for its build
+    /// command.
+    #[must_use]
+    pub fn tools(&self, action: &str) -> Vec<crate::requirements::Tool> {
+        use crate::requirements::Tool;
+        let mut tools = vec![Tool::Git, Tool::ForgeCli(self.forge)];
+        if matches!(action, "request" | "build") {
+            tools.push(Tool::GitCliff);
+        }
+        match self.adapter.driver() {
+            "python" => tools.push(Tool::Uv),
+            "bash" if action == "build" => tools.push(Tool::Sh),
+            _ => {}
+        }
+        tools
+    }
+
+    /// Check the tools of one engine action before it acts.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::diagnostic::Reason::PrerequisiteUnmet`] naming every tool
+    /// that cannot serve the action.
+    pub fn require_tools(&self, action: &str) -> Result<(), RkError> {
+        crate::requirements::require_in(
+            &format!("rk release {action}"),
+            &self.tools(action),
+            Some(self.target.as_std_path()),
+        )
+    }
+
     /// Read the record at `target`.
     ///
     /// # Errors

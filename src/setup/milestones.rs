@@ -149,11 +149,15 @@ fn first_version(registry: Option<Registry>, package: Option<&str>) -> Milestone
             "the version file names no package the registry can be asked about".to_owned(),
         ),
         (Some(registry), Some(package)) => {
-            let answer = release_state::registry_serves(registry, package, None);
-            (
-                word(answer),
-                format!("{} answers for {package}", registry.url(package, None)),
-            )
+            // A report: a registry that gives no answer leaves the
+            // milestone unknown, and its detail names why.
+            match release_state::registry_serves(registry, package, None) {
+                Ok(answer) => (
+                    word(answer),
+                    format!("{} answers for {package}", registry.url(package, None)),
+                ),
+                Err(reason) => ("unknown", reason),
+            }
         }
     };
     Milestone {

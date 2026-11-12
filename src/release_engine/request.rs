@@ -93,6 +93,7 @@ pub fn run(target: &Utf8Path) -> Result<Done<RequestReport>, RkError> {
             .target_state("unchanged; nothing was pushed"),
         ));
     }
+    context.require_tools("request")?;
     let Some(base) = context
         .pushed_branch()
         .filter(|branch| context.is_base(branch))

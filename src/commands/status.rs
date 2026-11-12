@@ -152,6 +152,10 @@ fn setup_proof_of(
     Ok(Some(SetupProof::of(&crate::setup::proof::offline(target)?)))
 }
 
+/// The warning code of a nested hook configuration that no `.prekignore`
+/// line excludes.
+const NESTED_HOOK_CONFIGURATION: &str = "nested-hook-configuration";
+
 /// The code a lapsed code scanning licence reports under.
 const CODE_SCANNING_LICENCE: &str = "code-scanning-licence";
 
@@ -600,6 +604,7 @@ struct Observed {
     reason = "one pass reads the target, judges it, and emits the one report every reader takes"
 )]
 pub fn run(args: &StatusArgs) -> Result<(), RkError> {
+    crate::requirements::require("rk status", &[crate::requirements::Tool::Git])?;
     let out = Output::new(args.json);
     if !args.target.is_dir() {
         return Err(RkError::missing(
@@ -988,6 +993,16 @@ fn observe(args: &StatusArgs, manifest: &Manifest, stated: &Stated) -> Result<Ob
         observed.warnings.push(Warning {
             code: CODE_SCANNING_LICENCE,
             reason,
+        });
+    }
+    // A nested hook configuration that prek would run as a project of its
+    // own: reported, never a violation, because the file is the project's.
+    for path in crate::hooks::unexcluded_nested_configs(args.target.as_std_path()) {
+        observed.warnings.push(Warning {
+            code: NESTED_HOOK_CONFIGURATION,
+            reason: format!(
+                "{path} is a hook configuration below the root, which prek runs as a project of its own; where it is no hook configuration of this project, list its directory in a root .prekignore"
+            ),
         });
     }
     // A receipt naming a release intent nothing can honour is judged at

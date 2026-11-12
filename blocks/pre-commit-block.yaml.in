@@ -1,7 +1,7 @@
 # BEGIN release-kit
-# The release convention's hooks. Install every stage they run at, with
-# the hook runner on PATH, prek or pre-commit, which take the same flags:
-# prek install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push
+# The release convention's hooks. Install every stage they run at with
+# the hook manager this project uses, for example:
+# prek install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push --hook-type pre-merge-commit
 RK_SWEEP_NOTERK_MESSAGE_GUARDSRK_TRUNK_COMMIT_GUARD  - repo: local
     hooks:
 RK_BRANCH_NAME_GUARDRK_WORKTREE_GUARDRK_TRUNK_PUSH_GUARDRK_TAG_GUARD      - id: rk-status-check

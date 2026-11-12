@@ -28,6 +28,7 @@ use crate::release_engine;
 use crate::release_state::{
     self, Answer, Api, ForgeCli, LastRelease, Merged, Page, Pair, Request, Run, Symptom,
 };
+use crate::requirements::Tool;
 
 /// The tags one forge page holds.
 const TAG_PAGE: usize = 100;
@@ -191,9 +192,19 @@ fn status(target: &Utf8Path, wait: Option<&str>, timeout: u64, out: Output) -> R
             wait: None,
         });
     };
+    let pair = pair_of(target, &manifest);
+    // The tools the report reads with, checked before the first read: git
+    // always, and for a pair this binary reads, its forge CLI at its floor.
+    // A missing tool is no observation boundary; a credential the runtime
+    // lacks, and a forge or a registry that does not answer, still read
+    // unknown. The registry is read in-process, through crate::http.
+    let mut tools = vec![Tool::Git];
+    if let Ok(pair) = &pair {
+        tools.push(Tool::ForgeCli(pair.forge));
+    }
+    crate::requirements::require("rk release status", &tools)?;
     let lines = lines::rows(target)?;
     let local = local_release_tags(target);
-    let pair = pair_of(target, &manifest);
     let (forge, observed) = match &pair {
         Err(reason) => (
             ForgeState {
@@ -595,7 +606,12 @@ impl Reader<'_> {
         );
         match (self.pair.registry(), self.pair.package.as_deref()) {
             (Some(registry), Some(package)) => {
-                release_state::registry_serves(registry, package, Some(&version))
+                release_state::registry_serves(registry, package, Some(&version)).unwrap_or_else(
+                    |reason| {
+                        self.failures.borrow_mut().push(reason);
+                        Answer::Unknown
+                    },
+                )
             }
             (Some(_), None) => Answer::Unknown,
             (None, _) => page

@@ -21,7 +21,7 @@
 //!
 //! SATISFIES git:a-local-integration-is-a-transaction
 //! SATISFIES git:a-rebase-integration-publishes-the-branch-tip
-//! SATISFIES git:the-manual-stage-is-the-pre-integrate-contract
+//! SATISFIES git:the-pre-merge-commit-hook-is-the-pre-integrate-contract
 //! SATISFIES git:a-local-integration-warns-of-an-uncounted-release
 
 use camino::{Utf8Path, Utf8PathBuf};
@@ -34,6 +34,7 @@ use crate::integrate::{self, Entry, Ledger};
 use crate::landing::{Integration, MergeForm};
 use crate::maintenance::{GIT_HOOK_VARS, last_line};
 use crate::output::Output;
+use crate::requirements::Tool;
 
 /// The machine form of a report.
 #[derive(Debug, Serialize)]
@@ -78,6 +79,25 @@ struct Report {
 pub fn run(args: &IntegrateArgs) -> Result<(), RkError> {
     let out = Output::new(args.json);
     let target = &args.target;
+    // git always, at the floor that `git hook run` needs. cargo, where the
+    // record releases a rust crate, is checked in the seat, where the
+    // listing the uncounted release warning reads runs it. Where git cannot
+    // serve, no seat can be found, so cargo is judged from the target and
+    // one refusal names both.
+    let rust = rust_automatic(target);
+    let git_unmet = crate::requirements::unmet(&[Tool::Git], None);
+    if !git_unmet.is_empty() {
+        let mut found = git_unmet;
+        let mut tools = vec![Tool::Git];
+        if rust {
+            tools.push(Tool::Cargo);
+            found.extend(crate::requirements::check(
+                Tool::Cargo,
+                Some(target.as_std_path()),
+            ));
+        }
+        return Err(crate::requirements::refusal("rk integrate", &tools, &found));
+    }
     let trunk = crate::config::trunk_of(target.as_std_path())?;
 
     let (integration, authority_source) = authority(args, target)?;
@@ -89,7 +109,22 @@ pub fn run(args: &IntegrateArgs) -> Result<(), RkError> {
 
     let git_dir = common_git_dir(target)?;
     let seats = seats(target)?;
-    let seat = seat_for(&seats, &args.branch, target)?;
+    let seat = match seat_for(&seats, &args.branch, target) {
+        Ok(seat) => seat,
+        Err(error) => {
+            return Err(left_detached(&seats, &args.branch, target, &trunk).unwrap_or(error));
+        }
+    };
+    if rust {
+        let unmet = crate::requirements::unmet(&[Tool::Git, Tool::Cargo], Some(seat.as_std_path()));
+        if !unmet.is_empty() {
+            return Err(crate::requirements::refusal(
+                "rk integrate",
+                &[Tool::Git, Tool::Cargo],
+                &unmet,
+            ));
+        }
+    }
     let dirty = is_dirty(&seat)?;
     if dirty {
         return Err(refuse(
@@ -417,7 +452,7 @@ fn preview(args: &IntegrateArgs, out: Output, run: &LocalRun<'_>) -> Result<(), 
         args.branch,
         integrate::short(&trunk_before)
     ));
-    steps.push("would run the manual stage in the seat".to_owned());
+    steps.push("would run the pre-merge-commit hook in the seat".to_owned());
     steps.push(format!("would write one squash commit onto {}", run.trunk));
     report(
         args,
@@ -482,20 +517,11 @@ fn local_path(args: &IntegrateArgs, out: Output, run: &LocalRun<'_>) -> Result<(
     // stands where it stood and can stop to retype the message.
     warn_if_uncounted(out, run, message, &[&trunk_before, &branch_tip], false);
 
-    // The gate. One line, one stage, no hook identifier read.
-    let (runner, gate) = gate(run.seat)?;
-    if !gate.status.success() {
-        out.child_passthrough(crate::events::ChildStream::Stderr, &gate.stderr);
-        out.child_passthrough(crate::events::ChildStream::Stdout, &gate.stdout);
-        return Err(refuse(
-            Reason::StateDrift,
-            format!(
-                "the manual stage failed in {} under {runner}, so nothing reached {}",
-                run.seat, run.trunk
-            ),
-        ));
-    }
-    steps.push(format!("the manual stage passed under {runner}"));
+    // The gate: the repository's pre-merge-commit hook, through git, on
+    // the squash staged in the seat. No hook identifier is read.
+    let answer = gate(run.seat, &args.branch, &trunk_before, &branch_tip)?;
+    judge_gate(out, run, &args.branch, answer)?;
+    steps.push("the pre-merge-commit hook passed".to_owned());
 
     // The re-observation. One object feeds the tree that is integrated
     // and the tip the evidence certifies, and that object is the one the
@@ -606,19 +632,9 @@ fn rebase_path(args: &IntegrateArgs, out: Output, run: &LocalRun<'_>) -> Result<
         if commits.len() == 1 { "" } else { "s" }
     ));
 
-    let (runner, gate) = gate(run.seat)?;
-    if !gate.status.success() {
-        out.child_passthrough(crate::events::ChildStream::Stderr, &gate.stderr);
-        out.child_passthrough(crate::events::ChildStream::Stdout, &gate.stdout);
-        return Err(refuse(
-            Reason::StateDrift,
-            format!(
-                "the manual stage failed in {} under {runner}, so nothing reached {}",
-                run.seat, run.trunk
-            ),
-        ));
-    }
-    steps.push(format!("the manual stage passed under {runner}"));
+    let answer = gate(run.seat, &args.branch, &trunk_before, &branch_tip)?;
+    judge_gate(out, run, &args.branch, answer)?;
+    steps.push("the pre-merge-commit hook passed".to_owned());
 
     let now = rev_parse(run.seat, &args.branch)?;
     if now != branch_tip {
@@ -701,7 +717,7 @@ fn rebase_preview(args: &IntegrateArgs, out: Output, run: &LocalRun<'_>) -> Resu
             args.branch,
             integrate::short(&trunk_before)
         ),
-        "would run the manual stage in the seat".to_owned(),
+        "would run the pre-merge-commit hook in the seat".to_owned(),
         format!(
             "would move {} to the tip of {}, carrying its {} commit{} with their own messages and writing no new commit",
             run.trunk,
@@ -1466,15 +1482,7 @@ fn warn_if_uncounted(
     let Some(intent) = integrate::release_intent(message) else {
         return;
     };
-    let rust_release = crate::landing::manifest::load(run.target)
-        .ok()
-        .flatten()
-        .is_some_and(|record| {
-            let release = &record.profile.release;
-            release.mode == crate::profile::ReleaseMode::Automatic
-                && release.driver.as_deref() == Some("rust")
-        });
-    if !rust_release {
+    if !rust_automatic(run.target) {
         return;
     }
     let mut diff = vec!["diff", "--name-only", "--no-renames", "-z"];
@@ -1502,6 +1510,19 @@ fn warn_if_uncounted(
     }
 }
 
+/// Whether the target's record releases a rust crate automatically, which
+/// is when the uncounted-release warning asks cargo for a listing.
+fn rust_automatic(target: &Utf8Path) -> bool {
+    crate::landing::manifest::load(target)
+        .ok()
+        .flatten()
+        .is_some_and(|record| {
+            let release = &record.profile.release;
+            release.mode == crate::profile::ReleaseMode::Automatic
+                && release.driver.as_deref() == Some("rust")
+        })
+}
+
 /// One cargo call in the seat, for the listing the warning reads.
 fn cargo_in(seat: &Utf8Path, args: &[&str]) -> Result<crate::cargo_package::Answer, ()> {
     let mut command = std::process::Command::new("cargo");
@@ -1521,71 +1542,300 @@ fn cargo_in(seat: &Utf8Path, args: &[&str]) -> Result<crate::cargo_package::Answ
         .map_err(|_| ())
 }
 
-/// The hook runner the gate calls, with the executable it resolved to:
-/// prek where it resolves on `PATH`, because the host supplies it, else
-/// pre-commit, which a project that has not moved still carries in its own
-/// environment. Both read the same configuration and take the same
-/// arguments. None when neither resolves.
-fn hook_runner() -> Option<(&'static str, std::path::PathBuf)> {
-    ["prek", "pre-commit"]
-        .into_iter()
-        .find_map(|name| program_on_path(name).map(|path| (name, path)))
+/// The hook event the gate asks git to run: the checks a project runs
+/// before work merges into its trunk.
+const GATE_HOOK: &str = "pre-merge-commit";
+
+/// The line git prints when the repository installs no hook for the
+/// event. git prints it untranslated, so it reads the same in every
+/// locale.
+const NO_HOOK: &str = "cannot find a hook named pre-merge-commit";
+
+/// What the gate saw: the hook's output, or a hook that left the seat
+/// changed.
+enum Gate {
+    /// The hook ran and the seat stands as the gate staged it.
+    Ran(std::process::Output),
+    /// The hook committed on the detached `HEAD` or changed the index, so
+    /// the staged change is no longer the squash it judged. It carries
+    /// what changed and the hook's output.
+    ChangedTheSeat(SeatChange, std::process::Output),
 }
 
-/// The executable file of this name in the first `PATH` directory that
-/// holds one. A relative entry resolves from this process's current
-/// directory, the way a shell resolves it, so the path stays right when the
-/// caller runs it from another directory.
-fn program_on_path(name: &str) -> Option<std::path::PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    let cwd = std::env::current_dir().ok();
-    std::env::split_paths(&path).find_map(|dir| {
-        let dir = if dir.is_relative() {
-            cwd.as_ref()?.join(dir)
-        } else {
-            dir
-        };
-        let candidate = dir.join(name);
-        let executable = std::fs::metadata(&candidate).is_ok_and(|meta| {
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt as _;
-                meta.is_file() && meta.permissions().mode() & 0o111 != 0
-            }
-            #[cfg(not(unix))]
-            {
-                meta.is_file()
-            }
-        });
-        executable.then_some(candidate)
-    })
-}
-
-/// Run the pre-integrate gate: one stage, one command, under the runner
-/// that `hook_runner` chooses, which it returns beside the output.
-fn gate(seat: &Utf8Path) -> Result<(&'static str, std::process::Output), RkError> {
-    let unrunnable = |message: String| {
-        RkError::subprocess(
-            Diagnostic::new(Reason::SubprocessSpawn, message)
-                .expected(
-                    "prek or pre-commit on PATH, the hook runner that installs and runs this project's hooks",
-                )
-                .action("install prek on the host, or enter the project's environment that carries pre-commit, and run it again")
-                .target_state("unchanged"),
-        )
+/// Run the pre-integrate gate: the repository's `pre-merge-commit` hook,
+/// through git, on the squash staged in the seat.
+///
+/// The seat's `HEAD` points at the trunk commit while the index and the
+/// files stay at the branch tip, so the staged change is exactly what the
+/// integration writes onto the trunk, and the project's hook manager
+/// selects its files from that change natively. rk names no hook runner:
+/// git runs whatever hook the project installed, and a clone with none
+/// fails with git's own error.
+fn gate(
+    seat: &Utf8Path,
+    branch: &str,
+    trunk_commit: &str,
+    branch_tip: &str,
+) -> Result<Gate, RkError> {
+    let tree = rev_parse(seat, &format!("{branch_tip}^{{tree}}"))?;
+    let pointed = git(
+        seat,
+        &[
+            "update-ref",
+            "--no-deref",
+            "-m",
+            "rk integrate: stage the squash for the pre-merge-commit hook",
+            "HEAD",
+            trunk_commit,
+        ],
+    )?;
+    if !pointed.status.success() {
+        return Err(refuse(
+            Reason::StateDrift,
+            format!(
+                "the seat's HEAD in {seat} could not point at the trunk commit {}: {}",
+                integrate::short(trunk_commit),
+                last_line(&pointed.stderr)
+            ),
+        ));
+    }
+    let restore = SeatHead {
+        seat,
+        branch,
+        armed: true,
     };
-    let (runner, executable) = hook_runner()
-        .ok_or_else(|| unrunnable(format!("no hook runner is on PATH to run in {seat}")))?;
-    let mut command = std::process::Command::new(&executable);
+    let mut command = std::process::Command::new(crate::probes::git_bin());
     for var in GIT_HOOK_VARS {
         command.env_remove(var);
     }
-    command
-        .current_dir(seat.as_std_path())
-        .args(["run", "--hook-stage", "manual", "--all-files"])
+    let ran = command
+        .arg("-C")
+        .arg(seat.as_std_path())
+        .args(["hook", "run", GATE_HOOK])
+        .stdin(std::process::Stdio::null())
         .output()
-        .map(|output| (runner, output))
-        .map_err(|source| unrunnable(format!("{runner} did not run in {seat}: {source}")))
+        .map_err(|source| {
+            RkError::subprocess(
+                Diagnostic::new(
+                    Reason::SubprocessSpawn,
+                    format!("git did not run in {seat}: {source}"),
+                )
+                .target_state("unchanged; the trunk stands where it stood"),
+            )
+        })?;
+    // An inspection that fails is an error, not a change: the `?` drops
+    // the armed guard, which points `HEAD` back at the branch.
+    if let Some(change) = seat_change(seat, trunk_commit, &tree)? {
+        restore.leave();
+        return Ok(Gate::ChangedTheSeat(change, ran));
+    }
+    restore.restore()?;
+    Ok(Gate::Ran(ran))
+}
+
+/// How a hook left the seat changed.
+enum SeatChange {
+    /// `HEAD` moved off the trunk commit to this commit: the hook
+    /// committed.
+    Committed(String),
+    /// `HEAD` still names the trunk commit, and the index no longer holds
+    /// the branch tip's tree: the hook staged a change.
+    Staged,
+}
+
+/// How the hook left the seat changed, or `None` where `HEAD` still names
+/// the trunk commit and the index still writes the branch tip's tree. A
+/// git call that fails is an error, so it never reads as a change.
+fn seat_change(
+    seat: &Utf8Path,
+    trunk_commit: &str,
+    tree: &str,
+) -> Result<Option<SeatChange>, RkError> {
+    let inspect = |args: &[&str], what: &str| -> Result<String, RkError> {
+        let answer = git(seat, args)?;
+        if !answer.status.success() {
+            return Err(refuse(
+                Reason::StateDrift,
+                format!(
+                    "{what} in {seat} after the pre-merge-commit hook could not be read: {}",
+                    last_line(&answer.stderr)
+                ),
+            ));
+        }
+        Ok(String::from_utf8_lossy(&answer.stdout).trim().to_owned())
+    };
+    let head = inspect(&["rev-parse", "--verify", "--quiet", "HEAD"], "HEAD")?;
+    if head != trunk_commit {
+        return Ok(Some(SeatChange::Committed(head)));
+    }
+    let written = inspect(&["write-tree"], "the index")?;
+    Ok((written != tree).then_some(SeatChange::Staged))
+}
+
+/// The seat's `HEAD`, pointed at the trunk for the gate, with the branch
+/// it goes back to. Dropped while armed, it restores `HEAD` on any early
+/// exit; [`SeatHead::restore`] does it on the ordinary path and reports a
+/// failure, and [`SeatHead::leave`] keeps the seat as the hook left it.
+struct SeatHead<'a> {
+    seat: &'a Utf8Path,
+    branch: &'a str,
+    armed: bool,
+}
+
+impl SeatHead<'_> {
+    /// The symbolic ref that points `HEAD` back at the branch.
+    fn point_back(&self) -> Result<std::process::Output, RkError> {
+        git(
+            self.seat,
+            &[
+                "symbolic-ref",
+                "HEAD",
+                &format!("refs/heads/{}", self.branch),
+            ],
+        )
+    }
+
+    /// Point `HEAD` back at the branch, and refuse where git does not.
+    fn restore(mut self) -> Result<(), RkError> {
+        self.armed = false;
+        let answer = self.point_back()?;
+        if answer.status.success() {
+            return Ok(());
+        }
+        Err(refuse(
+            Reason::StateDrift,
+            format!(
+                "the seat {} stays detached at the trunk commit, because HEAD did not point back at {}: {}; run git -C {} symbolic-ref HEAD refs/heads/{}",
+                self.seat,
+                self.branch,
+                last_line(&answer.stderr),
+                self.seat,
+                self.branch
+            ),
+        ))
+    }
+
+    /// Keep the seat as the hook left it, for the operator to read.
+    fn leave(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for SeatHead<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = self.point_back();
+        }
+    }
+}
+
+/// Judge what the gate answered: `Ok` where the hook passed, and the
+/// refusal that names what stopped it otherwise.
+fn judge_gate(out: Output, run: &LocalRun<'_>, branch: &str, gate: Gate) -> Result<(), RkError> {
+    let ran = match gate {
+        Gate::Ran(ran) => ran,
+        Gate::ChangedTheSeat(change, ran) => {
+            out.child_passthrough(crate::events::ChildStream::Stderr, &ran.stderr);
+            out.child_passthrough(crate::events::ChildStream::Stdout, &ran.stdout);
+            let seat = run.seat;
+            let repair = format!("git -C {seat} symbolic-ref HEAD refs/heads/{branch}");
+            let (what, action) = match change {
+                SeatChange::Committed(head) => (
+                    format!(
+                        "the hook committed, so HEAD moved from the trunk commit to {}",
+                        integrate::short(&head)
+                    ),
+                    format!(
+                        "read what the hook left in {seat}; keep the hook's commit if you want it with git -C {seat} branch <name> HEAD, because the next step leaves it on no ref; then run {repair} and integrate again"
+                    ),
+                ),
+                SeatChange::Staged => (
+                    "the hook staged a change, so the index no longer holds the branch tip's tree"
+                        .to_owned(),
+                    format!(
+                        "read what the hook staged in {seat}, then run {repair}, restore the index with git -C {seat} reset -q, and integrate again"
+                    ),
+                ),
+            };
+            return Err(RkError::refusal(
+                Diagnostic::new(
+                    Reason::StateDrift,
+                    format!(
+                        "the hook changed the seat {seat}: {what}; nothing reached {}",
+                        run.trunk
+                    ),
+                )
+                .expected("a pre-merge-commit hook that judges the staged squash and changes nothing")
+                .action(action)
+                .target_state(
+                    "unchanged; the trunk stands where it stood, and the seat stays as the hook left it",
+                ),
+            ));
+        }
+    };
+    if ran.status.success() {
+        return Ok(());
+    }
+    out.child_passthrough(crate::events::ChildStream::Stderr, &ran.stderr);
+    out.child_passthrough(crate::events::ChildStream::Stdout, &ran.stdout);
+    if String::from_utf8_lossy(&ran.stderr).contains(NO_HOOK) {
+        return Err(RkError::subprocess(
+            Diagnostic::new(
+                Reason::SubprocessSpawn,
+                format!(
+                    "the repository of {} installs no pre-merge-commit hook, so the gate has nothing to run",
+                    run.seat
+                ),
+            )
+            .expected("a pre-merge-commit hook installed in this clone, the gate that the project's hook manager runs")
+            .action("install the hook with the project's hook manager, for example prek install --hook-type pre-merge-commit, then integrate again")
+            .target_state("unchanged; the trunk stands where it stood"),
+        ));
+    }
+    Err(refuse(
+        Reason::StateDrift,
+        format!(
+            "the pre-merge-commit hook failed in {}, so nothing reached {}",
+            run.seat, run.trunk
+        ),
+    ))
+}
+
+/// The refusal for a seat that a gate left detached at the trunk: a run
+/// that a signal killed while the hook ran, or a hook that changed the
+/// seat. `None` where no such seat holds this branch's work.
+fn left_detached(
+    seats: &[crate::worktree::Worktree],
+    branch: &str,
+    target: &Utf8Path,
+    trunk: &str,
+) -> Option<RkError> {
+    let trunk_commit = rev_parse(target, trunk).ok()?;
+    let tree = rev_parse(target, &format!("refs/heads/{branch}^{{tree}}")).ok()?;
+    let seat = seats.iter().find(|seat| {
+        !seat.bare
+            && seat.branch.is_none()
+            && seat.head == trunk_commit
+            && git(&seat.path, &["write-tree"])
+                .ok()
+                .filter(|answer| answer.status.success())
+                .is_some_and(|answer| String::from_utf8_lossy(&answer.stdout).trim() == tree)
+    })?;
+    Some(RkError::refusal(
+        Diagnostic::new(
+            Reason::StateDrift,
+            format!(
+                "{} is detached at the trunk commit with {branch}'s tree staged, as an interrupted gate leaves it",
+                seat.path
+            ),
+        )
+        .expected(format!("{branch} checked out in its seat"))
+        .action(format!(
+            "git -C {} symbolic-ref HEAD refs/heads/{branch} puts the seat back on the branch; then integrate again",
+            seat.path
+        ))
+        .target_state("unchanged; the trunk stands where it stood"),
+    ))
 }
 
 /// Emit one report.

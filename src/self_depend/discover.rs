@@ -3,9 +3,9 @@
 //!
 //! The answer is the redirect of the forge's `releases/latest` page. It
 //! costs no API quota and no token, and it excludes prereleases, which
-//! the tag list does not. The fetch goes through `curl`, resolved like
-//! every other soft tool with `RK_CURL_BIN` as the override, so a test
-//! substitutes the network and the binary needs no HTTP stack.
+//! the tag list does not. The fetch goes through `crate::http`, the one
+//! owner of the requests rk sends, whose test seam lets a test serve the
+//! network locally.
 
 use std::cmp::Ordering;
 
@@ -17,7 +17,7 @@ use super::pin::PIN_PREFIX;
 pub enum Discovery {
     /// The latest release's tag, normalized.
     Tag(String),
-    /// The source did not answer; the detail is curl's last line.
+    /// The source did not answer; the detail is the client's reason.
     Unreachable(String),
     /// The source answered something that names no tag.
     Unparsable(String),
@@ -33,31 +33,24 @@ pub fn latest_url() -> String {
     format!("https://github.com/{path}/releases/latest")
 }
 
-/// The latest release's tag, through one curl call that follows the
-/// redirect and prints the effective URL alone.
+/// The latest release's tag, through one request that follows the
+/// redirect and reads the URL that answered.
 #[must_use]
 pub fn latest_tag() -> Discovery {
-    let curl = std::env::var_os("RK_CURL_BIN").unwrap_or_else(|| "curl".into());
-    let fetched = std::process::Command::new(curl)
-        .args([
-            "-fsSL",
-            "--max-time",
-            "10",
-            "-o",
-            "/dev/null",
-            "-w",
-            "%{url_effective}",
-            &latest_url(),
-        ])
-        .output();
-    let output = match fetched {
-        Ok(output) if output.status.success() => output,
-        Ok(output) => {
-            return Discovery::Unreachable(crate::maintenance::last_line(&output.stderr));
+    let fetched = crate::http::send(
+        &crate::http::Request::get(&latest_url(), std::time::Duration::from_secs(10)).following(),
+    );
+    let answer = match fetched {
+        Ok(answer) if answer.ok() => answer,
+        Ok(answer) => {
+            return Discovery::Unreachable(format!(
+                "{} answered {}",
+                answer.final_url, answer.status
+            ));
         }
-        Err(source) => return Discovery::Unreachable(format!("curl did not run: {source}")),
+        Err(reason) => return Discovery::Unreachable(reason),
     };
-    let url = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    let url = answer.final_url;
     match url.rsplit_once("/releases/tag/") {
         Some((_, tail)) => {
             normalize_tag(tail).map_or_else(|| Discovery::Unparsable(url.clone()), Discovery::Tag)

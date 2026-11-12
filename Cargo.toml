@@ -55,12 +55,17 @@ clap = { version = "4.6.6", features = ["derive", "wrap_help"] }
 clap_complete = "4.6.9"
 humantime = "2.4.0"
 include_dir = "0.7.4"
+ring = "0.17.14"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-native-certs = "0.8.5"
+rustls-pki-types = { version = "1.16.0", features = ["std"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.11.0"
 thiserror = "2.0.20"
 toml = "1.1.4"
 toml_edit = "0.25.13"
+ureq = { version = "=3.5.2", default-features = false, features = ["rustls-no-provider"] }
 yaml_serde = "0.10"
 zeroize = "1.9.0"
 
@@ -95,7 +100,12 @@ allow_attributes_without_reason = "deny"
 assert_cmd = "2.2.2"
 inotify = { version = "0.11.5", default-features = false }
 predicates = "3.1.4"
+rcgen = "0.14.10"
+rsa = "0.10.0"
 tempfile = "3.27.0"
 
 [target."cfg(unix)".dependencies]
 libc = "0.2.189"
+
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+openssl-probe = "0.2"

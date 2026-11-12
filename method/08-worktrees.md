@@ -43,11 +43,11 @@ The blocks are branch-versioned files, so a bare branch opened before a change t
 
 ## The escape and its cost
 
-Every desk-level mirror dies to `--no-verify`, and the forge cannot see local topology: the linked-worktree mode's guard is honest about both. Its one named escape is the sweep: a CI checkout is commonly detached on the main worktree, so a linked-worktree target's hook runner sweep, `prek run` or `pre-commit run`, sets `SKIP=no-commit-to-branch,rk-worktree-location` in its environment. The same escape serves deliberate main-checkout surgery, stated here once.
+Every desk-level mirror dies to `--no-verify`, and the forge cannot see local topology: the linked-worktree mode's guard is honest about both. Its one named escape is the sweep: a CI checkout is commonly detached on the main worktree, so a linked-worktree target's sweep with its hook manager sets `SKIP=no-commit-to-branch,rk-worktree-location` in its environment. The same escape serves deliberate main-checkout surgery, stated here once.
 
 ## What a worktree does not isolate
 
-A worktree isolates the working tree — HEAD, index, uncommitted files — and nothing else on the machine: ports, services, containers, and shared build caches are still shared. Hooks are per clone: the block is committed, the hook runner's install, `prek install` or `pre-commit install`, arms it once in the clone, and the armed hooks fire in every linked worktree through the common git dir.
+A worktree isolates the working tree — HEAD, index, uncommitted files — and nothing else on the machine: ports, services, containers, and shared build caches are still shared. Hooks are per clone: the block is committed, the install command of the project's hook manager arms it once in the clone, and the armed hooks fire in every linked worktree through the common git dir.
 
 ## Enforcement distances
 

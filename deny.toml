@@ -16,6 +16,8 @@ allow = [
   "Unlicense",
   # inotify and inotify-sys, dev-only, behind the stage isolation proof.
   "ISC",
+  # subtle, the constant-time primitives rustls verifies TLS with.
+  "BSD-3-Clause",
 ]
 exceptions = [
   { name = "release-kit", allow = ["CC-BY-4.0"] },
@@ -23,6 +25,13 @@ exceptions = [
 
 [bans]
 multiple-versions = "deny"
+# ring 0.17, the crypto provider of rk's TLS client and its App token
+# signer, still depends on getrandom 0.2 and windows-sys 0.52, older than
+# the versions the rest of the tree takes.
+skip = [
+  { crate = "getrandom@0.2", reason = "ring 0.17 depends on it" },
+  { crate = "windows-sys@0.52", reason = "ring 0.17 depends on it" },
+]
 deny = [{ name = "openssl-sys" }]
 
 [sources]

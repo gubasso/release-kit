@@ -153,6 +153,7 @@ struct Report {
     reason = "one pass holds the target, resolves the answers once from the flags or the stage, and lands"
 )]
 pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
+    crate::requirements::require("rk upgrade", &[crate::requirements::Tool::Git])?;
     let out = Output::new(args.json);
     // An apply takes the target before it reads anything of it, the
     // receipt and the configuration included. A preview holds nothing.

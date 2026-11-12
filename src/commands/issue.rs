@@ -18,7 +18,6 @@ use crate::error::RkError;
 use crate::issue::{self, Resolved};
 use crate::landing::manifest::{self, CheckoutMode};
 use crate::output::Output;
-use crate::probes;
 use crate::setup::context::resolve_cli;
 
 /// One `rk issue start` report.
@@ -68,6 +67,7 @@ struct StartReport {
 /// GitLab template rendering a name the landed grammar refuses, and every
 /// seating refusal `rk worktree add` already carries.
 pub fn run(args: &IssueArgs) -> Result<(), RkError> {
+    crate::requirements::require("rk issue", &[crate::requirements::Tool::Git])?;
     match &args.action {
         IssueAction::Start {
             issue,
@@ -324,7 +324,10 @@ fn start(
     let main = crate::commands::worktree::main_checkout(target)?;
     // The gate before the first forge call, so a stale CLI costs one
     // local process rather than a half-finished remote change.
-    probes::require_forge_cli(ground.forge)?;
+    crate::requirements::require(
+        "rk issue start",
+        &[crate::requirements::Tool::ForgeCli(ground.forge)],
+    )?;
     let cli = resolve_cli(ground.forge)?;
     // Where the forge lets rk know the name before it writes, every
     // local refusal the seat carries runs first.

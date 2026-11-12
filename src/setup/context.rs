@@ -539,11 +539,42 @@ impl Ctx {
         let Some(forge) = self.forge else {
             return Ok(());
         };
-        let calls = steps.iter().any(|step| {
-            step.forge_cli.contains(&forge) && crate::setup::report::stance(self, step).acts()
-        });
+        let acting: Vec<&&crate::setup::steps::StepSpec> = steps
+            .iter()
+            .filter(|step| crate::setup::report::stance(self, step).acts())
+            .collect();
+        let calls = acting.iter().any(|step| step.forge_cli.contains(&forge));
+        // The tools the acting steps run, checked before the first of them:
+        // the shell every step script runs through, and the forge CLI where
+        // a step calls the forge. The bot install signs and sends its App
+        // token in-process.
+        let mut tools = Vec::new();
+        if !acting.is_empty() {
+            tools.push(crate::requirements::Tool::Sh);
+        }
+        if calls {
+            tools.push(crate::requirements::Tool::ForgeCli(forge));
+        }
+        crate::requirements::require_in("rk setup", &tools, Some(self.target.as_std_path()))?;
         if calls && self.cli.as_os_str().is_empty() {
             self.cli = resolve_cli(forge)?;
+        }
+        // The step's search path leads with the checked CLI's directory, so
+        // the shell is judged again under that path, from the target, where
+        // the step resolves it, before the first forge read.
+        if !acting.is_empty()
+            && let Some(path) = self.child_path()
+            && let Some(unmet) = crate::requirements::check_under_path(
+                crate::requirements::Tool::Sh,
+                Some(self.target.as_std_path()),
+                &path,
+            )
+        {
+            return Err(crate::requirements::refusal(
+                "rk setup",
+                &[crate::requirements::Tool::Sh],
+                &[unmet],
+            ));
         }
         Ok(())
     }
@@ -1041,18 +1072,14 @@ impl Ctx {
                 env.push((name.into(), value));
             }
         }
-        // The forge CLI override substitutes the binary for the run's own
-        // calls; a step resolves the CLI by name, so the override's
-        // directory leads the child's search path.
-        if let Some(dir) = self.cli_override_dir() {
-            let mut paths: Vec<PathBuf> = vec![dir];
-            if let Some(existing) = std::env::var_os("PATH") {
-                paths.extend(std::env::split_paths(&existing));
-            }
-            if let Ok(joined) = std::env::join_paths(paths) {
-                env.retain(|(name, _)| name != "PATH");
-                env.push(("PATH".into(), joined));
-            }
+        // A step resolves the forge CLI by name, so the directory of the
+        // file `resolve_cli` checked leads the child's search path. The
+        // step runs in the target, and the directory is absolute, so the
+        // name resolves to the checked file there too. The rest of the
+        // search path passes through unchanged.
+        if let Some(joined) = self.child_path() {
+            env.retain(|(name, _)| name != "PATH");
+            env.push(("PATH".into(), joined));
         }
         if step == "bot-secrets" {
             for name in SECRET_VARS {
@@ -1064,13 +1091,25 @@ impl Ctx {
         env
     }
 
-    /// The directory of an explicitly overridden forge CLI, where one is set.
-    fn cli_override_dir(&self) -> Option<PathBuf> {
-        let overridden = std::env::var_os(match self.forge? {
-            Forge::Github => "RK_GH_BIN",
-            Forge::Gitlab => "RK_GLAB_BIN",
-        })?;
-        Path::new(&overridden).parent().map(Path::to_path_buf)
+    /// The search path a step receives where it differs from this
+    /// process's own: the checked CLI's directory first, then the rest.
+    fn child_path(&self) -> Option<std::ffi::OsString> {
+        let dir = self.cli_dir()?;
+        let mut paths: Vec<PathBuf> = vec![dir];
+        if let Some(existing) = std::env::var_os("PATH") {
+            paths.extend(std::env::split_paths(&existing));
+        }
+        std::env::join_paths(paths).ok()
+    }
+
+    /// The absolute directory of the forge CLI this run resolved and
+    /// checked, where it resolved one.
+    fn cli_dir(&self) -> Option<PathBuf> {
+        if self.cli.as_os_str().is_empty() {
+            return None;
+        }
+        let cli = std::path::absolute(&self.cli).unwrap_or_else(|_| self.cli.clone());
+        cli.parent().map(Path::to_path_buf)
     }
 
     /// The secret bytes a run must keep out of its own output: the values
@@ -1093,71 +1132,108 @@ impl Ctx {
 /// Resolve the forge CLI once, at context time: the `RK_GH_BIN` and
 /// `RK_GLAB_BIN` overrides first, then a `PATH` search.
 ///
-/// Not found and not executable are distinct failures, in the shell
-/// convention. `rk branches prune` shares it for the verify path.
+/// The search takes the first executable file named for the CLI, as the
+/// operating system's own search does, so a file that cannot run never
+/// shadows one that can. `rk branches prune` shares it for the verify
+/// path. The shared tool check then judges that exact file, by its
+/// absolute path, so every caller runs the file the check judged.
 ///
 /// # Errors
 ///
-/// Refuses when the override or the search resolves no usable binary.
+/// Refuses when the override or the search resolves no usable binary,
+/// or the binary it resolves runs below its floor.
 pub fn resolve_cli(forge: Forge) -> Result<PathBuf, RkError> {
-    let override_var = match forge {
-        Forge::Github => "RK_GH_BIN",
-        Forge::Gitlab => "RK_GLAB_BIN",
-    };
-    if let Some(overridden) = std::env::var_os(override_var).filter(|v| !v.is_empty()) {
-        let path = PathBuf::from(&overridden);
-        if !path.is_file() {
-            return Err(RkError::refusal(
-                Diagnostic::new(
-                    Reason::PrerequisiteUnmet,
-                    format!(
-                        "{override_var} names {}, which does not exist",
-                        path.display()
-                    ),
-                )
-                .expected("the override to name the forge CLI binary"),
-            ));
-        }
-        // The scripts invoke the CLI by its canonical name through the
-        // child's search path, so an override under any other name would
-        // split one lifecycle across two binaries: observed through the
-        // override, applied through whatever the name resolves to.
-        if path.file_name().is_none_or(|name| name != forge.cli()) {
-            return Err(RkError::refusal(
-                Diagnostic::new(
-                    Reason::PrerequisiteUnmet,
-                    format!(
-                        "{override_var} must name a binary called {}, and {} is not one",
-                        forge.cli(),
-                        path.display()
-                    ),
-                )
-                .expected(format!(
-                    "an override whose file name is {}, so scripts and observations run one binary",
-                    forge.cli()
-                )),
-            ));
-        }
-        return Ok(path);
+    let tool = crate::requirements::Tool::ForgeCli(forge);
+    let override_var = forge.cli_override();
+    let resolved =
+        if let Some(overridden) = std::env::var_os(override_var).filter(|v| !v.is_empty()) {
+            let path = PathBuf::from(&overridden);
+            if !path.is_file() {
+                // The shared check names the missing override, with its action.
+                crate::requirements::require("rk", &[tool])?;
+                return Err(RkError::refusal(
+                    Diagnostic::new(
+                        Reason::PrerequisiteUnmet,
+                        format!(
+                            "{override_var} names {}, which does not exist",
+                            path.display()
+                        ),
+                    )
+                    .expected("the override to name the forge CLI binary")
+                    .action(format!(
+                        "point {override_var} at the {} binary, or unset it",
+                        forge.cli()
+                    )),
+                ));
+            }
+            std::path::absolute(&path).unwrap_or(path)
+        } else {
+            let name = forge.cli();
+            let found = std::env::var_os("PATH").and_then(|path| {
+                std::env::split_paths(&path)
+                    .map(|dir| dir.join(name))
+                    .find(|candidate| runnable(candidate))
+                    .map(|candidate| std::path::absolute(&candidate).unwrap_or(candidate))
+            });
+            let Some(found) = found else {
+                // The shared check names what it finds, with its action.
+                crate::requirements::require("rk", &[tool])?;
+                return Err(RkError::refusal(
+                    Diagnostic::new(
+                        Reason::PrerequisiteUnmet,
+                        format!(
+                            "{name} is not on PATH, and a step this run acts on calls it on {}",
+                            forge.as_str()
+                        ),
+                    )
+                    .expected(format!("the {name} CLI installed and authenticated"))
+                    .action(format!("install {name}, then run {name} auth login")),
+                ));
+            };
+            found
+        };
+    if let Some(unmet) = crate::requirements::check_program(tool, resolved.as_os_str(), None) {
+        return Err(crate::requirements::refusal("rk", &[tool], &[unmet]));
     }
-    let name = forge.cli();
-    let found = std::env::var_os("PATH").and_then(|path| {
-        std::env::split_paths(&path)
-            .map(|dir| dir.join(name))
-            .find(|candidate| candidate.is_file())
-    });
-    found.ok_or_else(|| {
-        RkError::refusal(
+    // The scripts invoke the CLI by its canonical name through the
+    // child's search path, so an override under any other name would
+    // split one lifecycle across two binaries: observed through the
+    // override, applied through whatever the name resolves to.
+    if resolved.file_name().is_none_or(|name| name != forge.cli()) {
+        return Err(RkError::refusal(
             Diagnostic::new(
                 Reason::PrerequisiteUnmet,
                 format!(
-                    "{name} is not on PATH, and a step this run acts on calls it on {}",
-                    forge.as_str()
+                    "{override_var} must name a binary called {}, and {} is not one",
+                    forge.cli(),
+                    resolved.display()
                 ),
             )
-            .expected(format!("the {name} CLI installed and authenticated"))
-            .action(format!("install {name}, then run {name} auth login")),
-        )
+            .expected(format!(
+                "an override whose file name is {}, so scripts and observations run one binary",
+                forge.cli()
+            ))
+            .action(format!(
+                "point {override_var} at a file named {}, or unset it",
+                forge.cli()
+            )),
+        ));
+    }
+    Ok(resolved)
+}
+
+/// Whether `path` is a file the operating system's search would run.
+fn runnable(path: &Path) -> bool {
+    std::fs::metadata(path).is_ok_and(|meta| {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            meta.is_file() && meta.permissions().mode() & 0o111 != 0
+        }
+        #[cfg(not(unix))]
+        {
+            meta.is_file()
+        }
     })
 }
 

@@ -38,6 +38,7 @@ use crate::snapshot::Snapshot as Saved;
 ///
 /// Each verb's own refusals; every failure is typed.
 pub fn run(args: &MigrateArgs) -> Result<(), RkError> {
+    crate::requirements::require("rk migrate", &[crate::requirements::Tool::Git])?;
     match &args.action {
         MigrateAction::Inventory { target, json } => inventory(target, Output::new(*json)),
         MigrateAction::Archive {

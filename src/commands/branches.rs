@@ -130,6 +130,7 @@ impl Row {
 /// subprocess failure of a deletion git itself refused, after the report
 /// has named every branch's outcome.
 pub fn run(args: &BranchesArgs) -> Result<(), RkError> {
+    crate::requirements::require("rk branches", &[crate::requirements::Tool::Git])?;
     match &args.action {
         BranchesAction::Prune {
             target,

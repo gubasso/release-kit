@@ -32,10 +32,13 @@ build:
     grep -q '# tuned by the target' "$n/nix/package.nix"
     cargo nextest run --run-ignored ignored-only -E 'test(the_published_crate_carries_every_root) or test(the_published_crate_carries_the_two_new_roots) or test(the_landed_nix_capability_builds_end_to_end) or test(a_release_changing_a_destination_without_guidance_is_named)'
 
-# The pre-integrate gate, which is the one line `rk integrate` runs. Every
-# check this project classifies `both` is a hook at its declared stage, so
-# the desk and continuous integration reach the same set by invoking the
-# same stage rather than by anyone remembering to add a check twice.
+# The handoff sweep: the manual stage across all files, which CI runs too.
+# Every check this project classifies `both` is a hook at its declared
+# stage, so the desk and continuous integration reach the same set by
+# invoking the same stage rather than by anyone remembering to add a check
+# twice. rk integrate runs the pre-merge-commit hook on the staged squash
+# instead, and every check on the manual stage carries pre-merge-commit
+# too, so this sweep is a superset of the integration gate.
 #
 # The build comes first because several hooks call this checkout's own rk,
 # which they find on PATH. Loading the configuration for the manual run is

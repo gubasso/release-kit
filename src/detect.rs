@@ -59,12 +59,13 @@ impl Forge {
 
     /// The lowest forge-CLI version this binary calls.
     ///
-    /// `gh issue develop` was introduced in gh 2.19.0, so below that the
-    /// command does not exist and the floor is a fact rather than a
-    /// preference. The default naming this binary depends on is a property
-    /// of the GraphQL API — `CreateLinkedBranchInput.name` is optional and
-    /// documented to default to the issue number and title — so no higher
-    /// floor buys correctness.
+    /// `gh auth status --active`, which `rk doctor` runs to judge only the
+    /// credential this tool would use, first shipped in gh 2.57.0, the
+    /// newest of the gh calls: `gh issue develop` needs 2.19.0. The
+    /// default naming this binary depends on is a property of the GraphQL
+    /// API — `CreateLinkedBranchInput.name` is optional and documented to
+    /// default to the issue number and title — so no higher floor buys
+    /// correctness.
     ///
     /// The `glab` floor is the version whose source this behavior was
     /// written against. Only `glab api` is called, which is much older, so
@@ -72,7 +73,7 @@ impl Forge {
     #[must_use]
     pub const fn cli_floor(self) -> (u32, u32, u32) {
         match self {
-            Self::Github => (2, 19, 0),
+            Self::Github => (2, 57, 0),
             Self::Gitlab => (1, 114, 0),
         }
     }

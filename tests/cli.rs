@@ -73,14 +73,12 @@ struct ScratchState {
 impl ScratchState {
     fn new() -> Self {
         let dir = tempfile::tempdir().expect("a scratch state root exists");
-        for sub in ["state", "pre-commit"] {
-            std::fs::create_dir(dir.path().join(sub)).expect("the scratch state root creates");
-        }
+        std::fs::create_dir(dir.path().join("state")).expect("the scratch state root creates");
         Self { dir }
     }
 
     /// The variables that point a command at this scratch state.
-    fn vars(&self) -> [(&'static str, PathBuf); 3] {
+    fn vars(&self) -> [(&'static str, PathBuf); 1] {
         [
             // Every landing verb stores its plan and journals its run under
             // the state root, so each invocation gets a scratch one: the
@@ -88,13 +86,6 @@ impl ScratchState {
             // by the suite. A test that needs one root across two
             // invocations sets its own.
             ("XDG_STATE_HOME", self.dir.path().join("state")),
-            // `rk integrate` runs its gate through the hook runner, prek or
-            // pre-commit, which records every run in its store. The
-            // operator's store is shared with every run on the host, and one
-            // that holds its lock past the timeout fails the gate, so each
-            // invocation gets a scratch store for either runner.
-            ("PRE_COMMIT_HOME", self.dir.path().join("pre-commit")),
-            ("PREK_HOME", self.dir.path().join("prek")),
         ]
     }
 }
@@ -135,10 +126,6 @@ const LEAK_SAMPLES: [&str; 4] = [
 
 #[test]
 fn a_test_run_leaves_nothing_in_the_temporary_directory() {
-    assert!(
-        hook_runner_present(),
-        "neither prek nor pre-commit is on PATH, so the integrate sample would pass without running its gate"
-    );
     let exe = std::env::current_exe().expect("the test binary has a path");
     for sample in LEAK_SAMPLES {
         let tmp = tempfile::tempdir().expect("a temporary directory exists");
@@ -1770,8 +1757,6 @@ fn doctor_reports_every_probe_and_exits_0() {
             "glab-auth",
             "gh-version",
             "glab-version",
-            "openssl",
-            "curl",
             "registry",
             "nix",
             "direnv",
@@ -2108,17 +2093,22 @@ fn the_gh_probe_judges_only_the_active_account() {
     assert_eq!(gh_auth["status"], "ok");
 }
 
-/// The gh probe prefers `auth status --active` — the bare form fails
-/// while any stored account is broken, even though the active one works
-/// — and falls back to the bare form where the CLI predates the flag,
-/// so an older gh that is authenticated still reports authenticated.
+/// The gh probe runs `auth status --active` alone: the bare form fails
+/// while any stored account is broken, even though the active one works,
+/// and the gh floor is the release that added the flag, so there is no
+/// retry without it. A gh that refuses the flag reads as not
+/// authenticated.
 #[test]
-fn the_gh_probe_falls_back_where_active_is_unknown() {
+fn the_gh_auth_probe_runs_active_alone() {
     let home = Home::new();
     let gh = home.path().join("fake-gh");
+    let log = home.path().join("gh.log");
     std::fs::write(
         &gh,
-        "#!/bin/sh\nfor arg in \"$@\"; do [ \"$arg\" = --active ] && exit 1; done\nexit 0\n",
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nfor arg in \"$@\"; do [ \"$arg\" = --active ] && exit 1; done\nexit 0\n",
+            log.display()
+        ),
     )
     .expect("the mock writes");
     #[cfg(unix)]
@@ -2147,7 +2137,13 @@ fn the_gh_probe_falls_back_where_active_is_unknown() {
         .find(|probe| probe["id"] == "gh-auth")
         .expect("the probe reports")
         .clone();
-    assert_eq!(gh_auth["status"], "ok");
+    assert_eq!(gh_auth["status"], "failed", "{gh_auth}");
+    let calls = std::fs::read_to_string(&log).expect("the mock ran");
+    let auth: Vec<&str> = calls
+        .lines()
+        .filter(|line| line.starts_with("auth"))
+        .collect();
+    assert_eq!(auth, ["auth status --active"], "{calls}");
 }
 
 /// A credential in a malformed remote must never reach a probe message:
@@ -5208,13 +5204,117 @@ fn the_embedded_sources_carry_no_retired_branch_model() {
 const FAKE_PEM: &str =
     "-----BEGIN FAKE PRIVATE KEY-----\nc2VrcmV0LXBlbS1ieXRlcyE=\n-----END FAKE PRIVATE KEY-----\n";
 
-/// The needle inside `FAKE_PEM`: what must reach stdin and nothing else.
-const PEM_NEEDLE: &str = "c2VrcmV0LXBlbS1ieXRlcyE=";
+/// A real RSA key for the App, PKCS#1 PEM, which rk signs its JWT with:
+/// generated once and kept beside the test binaries, so every test process
+/// reads the same key and none pays the generation again.
+fn test_app_key() -> &'static str {
+    static KEY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    KEY.get_or_init(|| {
+        let path = Path::new(env!("CARGO_TARGET_TMPDIR")).join("rk-test-app-key.pem");
+        if let Ok(text) = std::fs::read_to_string(&path)
+            && text.contains("PRIVATE KEY")
+        {
+            return text;
+        }
+        let key = <rsa::PrivateKey as rsa::Generate>::generate();
+        let pem = rsa::pkcs1::EncodeRsaPrivateKey::to_pkcs1_pem(&key, rsa::pkcs1::LineEnding::LF)
+            .expect("the key encodes")
+            .to_string();
+        let scratch = path.with_extension(format!("pem.{}", std::process::id()));
+        std::fs::write(&scratch, &pem).expect("the key writes");
+        std::fs::rename(&scratch, &path).expect("the key lands");
+        pem
+    })
+}
+
+/// A slice of the App key's body that every leak assertion looks for.
+fn app_key_needle() -> String {
+    test_app_key()
+        .lines()
+        .nth(2)
+        .expect("a body line")
+        .chars()
+        .take(40)
+        .collect()
+}
+
+/// The forge's HTTP API for the setup tests, kept in the fixture's state
+/// directory: each request is logged to `curl-log` as its method and URL
+/// and its headers to `curl-stdin-log`; `curl_fail` makes the forge give
+/// no answer, and `http_reply` (a status line, then the body) overrides
+/// every answer.
+fn forge_http(state: PathBuf) -> LocalHttp {
+    LocalHttp::start(move |seen| {
+        use std::io::Write as _;
+        let append = |name: &str, text: &str| {
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(state.join(name))
+                .expect("the log opens");
+            file.write_all(text.as_bytes()).expect("the log writes");
+        };
+        append("curl-log", &format!("{} {}\n", seen.method, seen.url()));
+        let mut headers = String::new();
+        for (name, value) in &seen.headers {
+            headers.push_str(name);
+            headers.push_str(": ");
+            headers.push_str(value);
+            headers.push('\n');
+        }
+        append("curl-stdin-log", &headers);
+        if state.join("curl_fail").exists() {
+            return Reply::Hangup;
+        }
+        if let Ok(to) = std::fs::read_to_string(state.join("http_redirect"))
+            && seen.path != to.trim()
+        {
+            return Reply::Redirect(to.trim().to_owned());
+        }
+        if let Ok(text) = std::fs::read_to_string(state.join("http_reply")) {
+            let (status, body) = text.split_once('\n').unwrap_or((&text, ""));
+            return Reply::Body(
+                status.trim().parse().unwrap_or(500),
+                body.as_bytes().to_vec(),
+            );
+        }
+        let path = seen.path.as_str();
+        if path.ends_with("/users/acme/installation") {
+            return Reply::json(200, r#"{"id":42,"account":{"login":"acme"}}"#);
+        }
+        if path.starts_with("/orgs/") && path.ends_with("/installation") {
+            return Reply::json(404, r#"{"message":"Not Found"}"#);
+        }
+        if path.starts_with("/repos/") && path.ends_with("/installation") {
+            if state.join("installed").is_file() {
+                // The permissions the installation holds, which the
+                // observation reads back: the two writes always, and
+                // checks where a rendered release gate reads one. A
+                // fixture dropping the key stands for an older
+                // installation whose owner has not approved the widened
+                // grant.
+                let perms = if state.join("old_grant").is_file() {
+                    r#"{"contents":"write","pull_requests":"write"}"#
+                } else {
+                    r#"{"contents":"write","pull_requests":"write","checks":"read"}"#
+                };
+                return Reply::json(
+                    200,
+                    &format!(r#"{{"id":42,"app_id":7,"app_slug":"bot","permissions":{perms}}}"#),
+                );
+            }
+            return Reply::json(404, r#"{"message":"Not Found"}"#);
+        }
+        Reply::json(200, "{}")
+    })
+}
 
 /// A cargo stand-in for the packaging gate: each of the three calls
 /// succeeds by default and fails where its state file exists, and the
 /// metadata and listing answers are whatever the test seeded.
 const MOCK_CARGO: &str = r#"#!/usr/bin/env bash
+# The version call of rk's tool check, answered before anything is logged.
+[ "$1" = --version ] && { echo "cargo 1.98.0"; exit 0; }
 STATE="__STATE__"
 printf 'cargo %s\n' "$*" >> "$STATE/log"
 case "$1" in
@@ -5235,6 +5335,8 @@ exit 0
 /// wheel into dist/ and the run is logged, so no test depends on a build
 /// backend being installed.
 const MOCK_UV: &str = r#"#!/usr/bin/env bash
+# The version call of rk's tool check, answered before anything is logged.
+[ "$1" = --version ] && { echo "uv 0.9.0"; exit 0; }
 STATE="__STATE__"
 printf 'uv %s\n' "$*" >> "$STATE/log"
 if [ "$1" = build ]; then
@@ -5247,6 +5349,13 @@ exit 0
 
 const MOCK_GH: &str = r#"#!/usr/bin/env bash
 STATE="__STATE__"
+# The version call every verb's tool check makes, answered before the log
+# so a test that reads the forge calls sees the calls alone. A test seeds
+# another version through the state file.
+if [ "$1" = --version ]; then
+  echo "gh version $(cat "$STATE/gh_cli_version" 2>/dev/null || echo 2.57.0) (2024-09-16)"
+  exit 0
+fi
 printf '%s\n' "$*" >> "$STATE/log"
 env >> "$STATE/env-log"
 stdin=""
@@ -5432,6 +5541,11 @@ exit 0
 
 const MOCK_GLAB: &str = r#"#!/usr/bin/env bash
 STATE="__STATE__"
+# The version call every verb's tool check makes, as in the gh mock.
+if [ "$1" = --version ]; then
+  echo "glab $(cat "$STATE/glab_cli_version" 2>/dev/null || echo 1.114.0) (abc1234)"
+  exit 0
+fi
 printf '%s\n' "$*" >> "$STATE/log"
 cmd="$1"; shift
 case "$cmd" in
@@ -5576,55 +5690,6 @@ esac
 exit 0
 "#;
 
-/// The OpenSSL stand-in: it records its argument list, its environment,
-/// and the key bytes it received on standard input, then emits a fixed
-/// signature — enough for the JWT to assemble and for the tests to prove
-/// where the key travelled.
-const MOCK_OPENSSL: &str = r#"#!/usr/bin/env bash
-STATE="__STATE__"
-printf '%s\n' "$*" >> "$STATE/openssl-log"
-env >> "$STATE/openssl-env-log"
-cat >> "$STATE/openssl-stdin-log"
-printf 'sig-bytes'
-"#;
-
-/// The curl stand-in for the App-credential reads: the repository
-/// installation answers by the shared `installed` state file, so a grant
-/// the mock forge records flips the observation, and the account listing
-/// names installation 42 — the id the grant must then carry.
-const MOCK_CURL: &str = r#"#!/usr/bin/env bash
-STATE="__STATE__"
-printf '%s\n' "$*" >> "$STATE/curl-log"
-cat >> "$STATE/curl-stdin-log"
-if [[ -f "$STATE/curl_fail" ]]; then
-  echo "curl: (6) Could not resolve host: api.github.com" >&2
-  exit 6
-fi
-url="${@: -1}"
-case "$url" in
-  *"/users/acme/installation")
-    printf '{"id":42,"account":{"login":"acme"}}\n200';;
-  *"/orgs/"*"/installation")
-    printf '{"message":"Not Found"}\n404';;
-  *"/repos/"*"/installation")
-    if [[ -f "$STATE/installed" ]]; then
-      # The permissions the installation holds, which the observation reads
-      # back: the two writes always, and checks where a rendered release
-      # gate reads one. A fixture dropping the key stands for an older
-      # installation whose owner has not approved the widened grant.
-      perms='{"contents":"write","pull_requests":"write","checks":"read"}'
-      if [[ -f "$STATE/old_grant" ]]; then
-        perms='{"contents":"write","pull_requests":"write"}'
-      fi
-      printf '{"id":42,"app_id":7,"app_slug":"bot","permissions":%s}\n200' "$perms"
-    else
-      printf '{"message":"Not Found"}\n404'
-    fi;;
-  *)
-    printf '{}\n200';;
-esac
-"#;
-
 /// The make stand-in package-check reaches: `make -n <target>` resolves
 /// where the makefile in the working directory names that target, the way
 /// make answers, so no test depends on the host's make.
@@ -5648,20 +5713,23 @@ struct ForgeFixture {
     home: tempfile::TempDir,
     target: tempfile::TempDir,
     mock: tempfile::TempDir,
+    /// The forge's HTTP API, which the App reads through rk's own client.
+    http: LocalHttp,
 }
 
 impl ForgeFixture {
     fn new() -> Self {
+        let mock = tempfile::tempdir().expect("a scratch mock dir exists");
+        let http = forge_http(mock.path().to_path_buf());
         let fixture = Self {
             home: tempfile::tempdir().expect("a scratch home exists"),
             target: tempfile::tempdir().expect("a scratch target exists"),
-            mock: tempfile::tempdir().expect("a scratch mock dir exists"),
+            mock,
+            http,
         };
         for (name, body) in [
             ("gh", MOCK_GH),
             ("glab", MOCK_GLAB),
-            ("openssl", MOCK_OPENSSL),
-            ("curl", MOCK_CURL),
             ("cargo", MOCK_CARGO),
             ("uv", MOCK_UV),
             ("make", MOCK_MAKE),
@@ -5746,7 +5814,7 @@ impl ForgeFixture {
 
     /// The ordinary case: a well-formed, owner-only PEM.
     fn key_file(&self) -> PathBuf {
-        self.key_file_with("bot.pem", FAKE_PEM, 0o600)
+        self.key_file_with("bot.pem", test_app_key(), 0o600)
     }
 
     /// Substitute the mock forge CLI, for the cases that need a child
@@ -5754,20 +5822,11 @@ impl ForgeFixture {
     /// working forge.
     fn replace_gh(&self, body: &str) {
         let path = self.mock.path().join("gh");
-        std::fs::write(&path, body).expect("the mock writes");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
-                .expect("the mock is executable");
-        }
-    }
-
-    /// Substitute the curl stand-in, for the cases that need the App
-    /// read to fail or to echo.
-    fn replace_curl(&self, body: &str) {
-        let path = self.mock.path().join("curl");
-        std::fs::write(&path, body).expect("the mock writes");
+        std::fs::write(
+            &path,
+            with_version_answer(body, "gh version 2.57.0 (2024-09-16)"),
+        )
+        .expect("the mock writes");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
@@ -5929,8 +5988,7 @@ impl ForgeFixture {
             .env("XDG_STATE_HOME", self.home.path())
             .env("RK_GH_BIN", self.mock.path().join("gh"))
             .env("RK_GLAB_BIN", self.mock.path().join("glab"))
-            .env("RK_OPENSSL_BIN", self.mock.path().join("openssl"))
-            .env("RK_CURL_BIN", self.mock.path().join("curl"))
+            .env("RK_HTTP_ORIGIN", self.http.origin())
             .env_remove("RK_BOT_APP_ID")
             .env_remove("RK_BOT_PRIVATE_KEY")
             .env_remove("RK_BOT_PRIVATE_KEY_FILE")
@@ -6095,13 +6153,13 @@ fn a_full_github_apply_lands_reasserts_and_checks_clean() {
 
     // The key reached stdin and nothing else — not an argument list, and
     // not the environment, which carried only the path.
-    assert!(fixture.stdin_log().contains(PEM_NEEDLE));
+    assert!(fixture.stdin_log().contains(&app_key_needle()));
     assert!(
-        !fixture.log().contains(PEM_NEEDLE),
+        !fixture.log().contains(&app_key_needle()),
         "a secret reached a process argument list"
     );
     assert!(
-        !fixture.env_log().contains(PEM_NEEDLE),
+        !fixture.env_log().contains(&app_key_needle()),
         "a secret reached a child environment"
     );
     assert!(
@@ -6109,36 +6167,18 @@ fn a_full_github_apply_lands_reasserts_and_checks_clean() {
         "a child was told where the key file is, and could have reopened it"
     );
 
-    // The App JWT path: the key bytes reached openssl on standard input
-    // and nowhere else, and the token itself travelled to curl in a
-    // header read from standard input, never an argument list.
-    let openssl_stdin =
-        std::fs::read_to_string(fixture.state("openssl-stdin-log")).expect("openssl saw stdin");
-    assert!(openssl_stdin.contains(PEM_NEEDLE));
-    let openssl_args =
-        std::fs::read_to_string(fixture.state("openssl-log")).expect("openssl logged its argv");
-    assert!(!openssl_args.contains(PEM_NEEDLE));
+    // The App JWT path: rk signs the token in-process and carries it as a
+    // bearer header of its own request, so no child is told the key or the
+    // token, and no argument list carries either.
     assert!(
-        !openssl_args.contains("bot.pem"),
-        "the signer was told the key's path: {openssl_args}"
-    );
-    let openssl_args_full =
-        std::fs::read_to_string(fixture.state("openssl-log")).expect("openssl logged its argv");
-    assert_eq!(
-        openssl_args_full.lines().count(),
-        1,
-        "a full apply mints one JWT, so the key is read once: {openssl_args_full}"
-    );
-    let curl_args = std::fs::read_to_string(fixture.state("curl-log")).expect("curl logged argv");
-    assert!(
-        !curl_args.contains("Bearer"),
-        "the App JWT reached an argument list: {curl_args}"
+        !fixture.log().contains("Bearer"),
+        "the App JWT reached a child's argument list"
     );
     assert!(
         std::fs::read_to_string(fixture.state("curl-stdin-log"))
-            .expect("curl saw stdin")
-            .contains("Authorization: Bearer "),
-        "the App JWT travels as a bearer header on standard input"
+            .expect("the forge saw a request")
+            .contains("authorization: Bearer "),
+        "the App JWT travels as a bearer header"
     );
     let mut journal_dirs: Vec<PathBuf> = std::fs::read_dir(fixture.runs_root())
         .expect("the journal root reads")
@@ -6149,7 +6189,10 @@ fn a_full_github_apply_lands_reasserts_and_checks_clean() {
     let run = &journal_dirs[0];
     for file in ["meta.json", "events.jsonl", "transcript.txt"] {
         let text = std::fs::read_to_string(run.join(file)).expect("the journal file reads");
-        assert!(!text.contains(PEM_NEEDLE), "{file} carries key material");
+        assert!(
+            !text.contains(&app_key_needle()),
+            "{file} carries key material"
+        );
     }
     assert!(
         !run.join("scripts").exists(),
@@ -6642,15 +6685,12 @@ fn install_bot_grants_with_the_discovered_installation_id() {
         !log.contains("GET user/installations"),
         "a user token cannot list installations, and nothing may try: {log}"
     );
-    let curl = std::fs::read_to_string(fixture.state("curl-log")).expect("curl ran");
-    assert!(curl.contains("repos/acme/widget/installation"), "{curl}");
-    assert!(curl.contains("users/acme/installation"), "{curl}");
-    let openssl = std::fs::read_to_string(fixture.state("openssl-log")).expect("openssl ran");
-    assert_eq!(
-        openssl.lines().count(),
-        1,
-        "one run mints one JWT, so the key is read exactly once: {openssl}"
+    let requests = std::fs::read_to_string(fixture.state("curl-log")).expect("the forge was read");
+    assert!(
+        requests.contains("repos/acme/widget/installation"),
+        "{requests}"
     );
+    assert!(requests.contains("users/acme/installation"), "{requests}");
 
     // A rerun observes satisfied and grants nothing twice.
     let before = fixture.log();
@@ -6665,20 +6705,14 @@ fn install_bot_grants_with_the_discovered_installation_id() {
     );
 }
 
-/// A curl that echoes what it was handed cannot leak the token, because
-/// the credential-carrying spawn bypasses the journaling executor
-/// entirely: no stream of it reaches any journal file, and the token and
-/// its signature segment are redaction needles besides.
+/// A forge that answers an error cannot put the token in the journal: the
+/// request runs in-process, no stream of it reaches any journal file, and
+/// the token and the key never appear there.
 #[test]
-fn an_echoing_curl_cannot_put_the_jwt_in_the_journal() {
+fn a_forge_error_cannot_put_the_jwt_in_the_journal() {
     let fixture = ForgeFixture::new();
     let key = fixture.key_file();
-    fixture.replace_curl(
-        "#!/usr/bin/env bash
-cat
-printf '{}\n500'
-",
-    );
+    fixture.seed("http_reply", "500\n{}");
     fixture
         .rk(&["setup", "step", "install-bot"])
         .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
@@ -6691,29 +6725,54 @@ printf '{}\n500'
         let text = std::fs::read_to_string(run.join(file)).expect("the journal file reads");
         assert!(
             !text.contains("Authorization"),
-            "{file} carries the curl child's streams"
+            "{file} carries a request header"
         );
         assert!(
             !text.contains("eyJhbGciOiJSUzI1NiI"),
             "{file} carries the App JWT"
         );
-        assert!(!text.contains(PEM_NEEDLE), "{file} carries key material");
+        assert!(
+            !text.contains(&app_key_needle()),
+            "{file} carries key material"
+        );
     }
 }
 
-/// A curl that echoes its input and then fails cannot leak the token into
-/// the surfaced diagnostic: the failure detail is scrubbed against the
-/// token and its signature before anything is printed or journaled.
+/// The App API follows no redirect, as the curl call it replaced did not:
+/// a 302 is the answer, judged as a failed status, and the place it names
+/// is never asked.
 #[test]
-fn a_failing_curl_cannot_put_the_jwt_in_the_diagnostic() {
+fn the_app_api_follows_no_redirect() {
     let fixture = ForgeFixture::new();
     let key = fixture.key_file();
-    fixture.replace_curl(
-        "#!/usr/bin/env bash
-grep Authorization >&2
-exit 7
-",
+    fixture.seed("http_redirect", "/redirected");
+    fixture
+        .rk(&["setup", "step", "install-bot"])
+        .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
+        .env("RK_BOT_APP_ID", "314159")
+        .env("RK_BOT_PRIVATE_KEY_FILE", &key)
+        .assert()
+        .code(73);
+    let paths: Vec<String> = fixture
+        .http
+        .seen()
+        .into_iter()
+        .map(|seen| seen.path)
+        .collect();
+    assert!(!paths.is_empty(), "the App read the forge");
+    assert!(
+        paths.iter().all(|path| path != "/redirected"),
+        "the redirect was not followed: {paths:?}"
     );
+}
+
+/// A forge that gives no answer leaves a diagnostic that names why and
+/// carries no token, in the output and in the journal.
+#[test]
+fn an_unanswered_forge_names_the_reason_and_not_the_jwt() {
+    let fixture = ForgeFixture::new();
+    let key = fixture.key_file();
+    fixture.seed("curl_fail", "1");
     let out = fixture
         .rk(&["setup", "step", "install-bot"])
         .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
@@ -6725,12 +6784,12 @@ exit 7
         .clone();
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        !stderr.contains("eyJhbGciOiJSUzI1NiI"),
-        "the diagnostic carries the App JWT: {stderr}"
+        stderr.contains("did not reach the forge"),
+        "the diagnostic names no reason: {stderr}"
     );
     assert!(
-        stderr.contains("[redacted]"),
-        "the echoed header must surface redacted: {stderr}"
+        !stderr.contains("eyJhbGciOiJSUzI1NiI"),
+        "the diagnostic carries the App JWT: {stderr}"
     );
     let run = fixture.latest_run();
     for file in ["meta.json", "events.jsonl", "transcript.txt"] {
@@ -6742,108 +6801,41 @@ exit 7
     }
 }
 
-/// The signing and carrying helpers inherit no forge credential, so a
-/// helper that dumps its whole environment on failure has nothing of the
-/// operator's to dump. The carrier alone inherits the variables naming
-/// this host's certificate authorities — every one of them, because a
-/// `curl` that locates its trust store by environment cannot verify the
-/// forge without the one its host uses — and the signer, which opens no
-/// connection, inherits none.
+/// The App token travels as a bearer header of rk's own request, and no
+/// child process holds it: no forge CLI call carries it in its arguments,
+/// its environment, or its input.
 #[test]
-fn the_carrier_alone_inherits_the_trust_store_and_neither_helper_the_forge_token() {
-    const TRUST: [(&str, &str); 4] = [
-        ("CURL_CA_BUNDLE", "/scratch/curl-bundle.pem"),
-        ("SSL_CERT_DIR", "/scratch/certs"),
-        ("SSL_CERT_FILE", "/scratch/ca-bundle.pem"),
-        ("NIX_SSL_CERT_FILE", "/scratch/nix-bundle.pem"),
-    ];
+fn the_app_token_reaches_no_child_process() {
     let fixture = ForgeFixture::new();
     let key = fixture.key_file();
-    let env_log = fixture.state("curl-env-log");
-    fixture.replace_curl(&format!(
-        "#!/usr/bin/env bash
-cat > /dev/null
-env > '{}'
-exit 7
-",
-        env_log.display()
-    ));
-    let mut command = fixture.rk(&["setup", "step", "install-bot"]);
-    command
+    fixture
+        .rk(&["setup", "step", "install-bot"])
         .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
         .env("GH_TOKEN", "gh-secret-value")
         .env("RK_BOT_APP_ID", "314159")
-        .env("RK_BOT_PRIVATE_KEY_FILE", &key);
-    for (name, value) in TRUST {
-        command.env(name, value);
-    }
-    let out = command.assert().code(73).get_output().clone();
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        !stderr.contains("gh-secret-value"),
-        "a helper child was handed the forge token: {stderr}"
-    );
-    let carrier = std::fs::read_to_string(&env_log).expect("curl saw an env");
-    let signer =
-        std::fs::read_to_string(fixture.state("openssl-env-log")).expect("openssl saw an env");
-    for (helper, seen) in [("the carrier", &carrier), ("the signer", &signer)] {
-        assert!(
-            !seen.contains("gh-secret-value"),
-            "{helper} was handed the forge token"
-        );
-    }
-    for (name, value) in TRUST {
-        assert!(
-            carrier.contains(&format!("{name}={value}")),
-            "the carrier lost {name}: {carrier}"
-        );
-        assert!(
-            !signer.contains(&format!("{name}={value}")),
-            "the signer was handed {name}, which it has no connection to verify: {signer}"
-        );
-    }
-}
-
-/// A curl failure surfaces the line curl leads with: what follows it is
-/// prose pointing at a web page, so a diagnostic built from the last line
-/// would name nothing an operator could act on.
-#[test]
-fn a_curl_failure_names_the_reason_curl_led_with() {
-    let fixture = ForgeFixture::new();
-    let key = fixture.key_file();
-    fixture.replace_curl(
-        "#!/usr/bin/env bash
-cat > /dev/null
-cat >&2 <<'REASON'
-curl: (60) SSL certificate problem: unable to get local issuer certificate
-More details here: https://curl.se/docs/sslcerts.html
-
-curl failed to verify the legitimacy of the server and therefore could not
-establish a secure connection to it. To learn more about this situation and
-how to fix it, please visit the web page mentioned above.
-REASON
-exit 60
-",
-    );
-    let out = fixture
-        .rk(&["setup", "step", "install-bot"])
-        .args(["--repo", "acme/widget", "--forge", "github", "--apply"])
-        .env("RK_BOT_APP_ID", "314159")
         .env("RK_BOT_PRIVATE_KEY_FILE", &key)
         .assert()
-        .code(73)
-        .get_output()
-        .clone();
-    let stderr = String::from_utf8_lossy(&out.stderr);
+        .success();
+    let bearer = fixture
+        .http
+        .seen()
+        .into_iter()
+        .filter_map(|seen| seen.header("authorization").map(str::to_owned))
+        .collect::<Vec<_>>();
     assert!(
-        stderr.contains("exit 60")
-            && stderr.contains("SSL certificate problem: unable to get local issuer certificate"),
-        "the diagnostic drops what curl named: {stderr}"
+        !bearer.is_empty() && bearer.iter().all(|value| value.starts_with("Bearer eyJ")),
+        "the App reads the forge with its JWT: {bearer:?}"
     );
-    assert!(
-        !stderr.contains("web page mentioned above"),
-        "the diagnostic carries the epilogue instead of the reason: {stderr}"
-    );
+    for (what, text) in [
+        ("argv", fixture.log()),
+        ("environment", fixture.env_log()),
+        ("input", fixture.stdin_log()),
+    ] {
+        assert!(
+            !text.contains("Bearer eyJ"),
+            "a child's {what} carries the App JWT"
+        );
+    }
 }
 
 /// An unreachable forge leaves the observation undecided, and an apply on
@@ -8611,7 +8603,7 @@ fn the_validated_bytes_are_the_transmitted_bytes() {
         .assert()
         .success();
     assert!(
-        fixture.stdin_log().contains(PEM_NEEDLE),
+        fixture.stdin_log().contains(&app_key_needle()),
         "the validated bytes were not the ones stored"
     );
     assert!(
@@ -8762,14 +8754,18 @@ fn a_read_only_state_root_refuses_apply_and_warns_preview() {
 #[test]
 fn an_absent_sh_refuses_before_any_step() {
     let fixture = ForgeFixture::new();
+    // git stays reachable through its override, so the shell is the one
+    // tool the empty PATH takes away.
+    let git = Path::new(&git_out(fixture.target.path(), &["--exec-path"])).join("git");
     fixture
         .rk(&["setup"])
         .args(["--repo", "acme/widget", "--forge", "github"])
         .args(["--apply", "--required-check", "test-check"])
         .env("PATH", "/no/such/dir")
+        .env("RK_GIT_BIN", &git)
         .assert()
         .code(73)
-        .stderr(predicate::str::contains("sh"));
+        .stderr(predicate::str::contains("sh is missing"));
     assert_eq!(fixture.log(), "", "nothing may run without a shell");
 }
 
@@ -11383,7 +11379,7 @@ fn git_metadata(root: &Path) -> Vec<String> {
 #[test]
 fn a_sub_path_actions_discovery_ref_resolves_against_its_repository() {
     let mock = tempfile::tempdir().expect("a scratch dir exists");
-    let curl = mock.path().join("curl");
+    let curl = mock.path().join("http-answers");
     // The mock answers exactly one URL, the repository-rooted one, and fails
     // every other: a resolver that kept the entry-point segment would ask for
     // /repos/github/codeql-action/init/commits/v4 and read unreachable.
@@ -11408,7 +11404,7 @@ esac
     }
     let out = rk()
         .args(["versions", "--check", "--json"])
-        .env("RK_CURL_BIN", &curl)
+        .env("RK_HTTP_ORIGIN", script_http(curl).origin())
         .assert()
         .success()
         .get_output()
@@ -11443,7 +11439,7 @@ esac
 #[test]
 fn a_discovery_ref_carrying_a_slash_is_encoded_as_one_segment() {
     let mock = tempfile::tempdir().expect("a scratch dir exists");
-    let curl = mock.path().join("curl");
+    let curl = mock.path().join("http-answers");
     // The mock answers the encoded URL alone. A resolver that passed the raw
     // slash through would ask for /commits/release/v1 and read unreachable.
     std::fs::write(
@@ -11467,7 +11463,7 @@ esac
     }
     let out = rk()
         .args(["versions", "--check", "--json"])
-        .env("RK_CURL_BIN", &curl)
+        .env("RK_HTTP_ORIGIN", script_http(curl).origin())
         .assert()
         .success()
         .get_output()
@@ -11493,7 +11489,7 @@ esac
 #[test]
 fn versions_check_reports_each_pin_and_mutates_nothing() {
     let mock = tempfile::tempdir().expect("a scratch dir exists");
-    let curl = mock.path().join("curl");
+    let curl = mock.path().join("http-answers");
     std::fs::write(
         &curl,
         r#"#!/usr/bin/env bash
@@ -11530,7 +11526,7 @@ esac
 
     let out = rk()
         .args(["versions", "--check"])
-        .env("RK_CURL_BIN", &curl)
+        .env("RK_HTTP_ORIGIN", script_http(curl.clone()).origin())
         .assert()
         .success()
         .get_output()
@@ -11549,7 +11545,7 @@ esac
 
     let out = rk()
         .args(["versions", "--check", "--json"])
-        .env("RK_CURL_BIN", &curl)
+        .env("RK_HTTP_ORIGIN", script_http(curl).origin())
         .assert()
         .success()
         .get_output()
@@ -11615,7 +11611,7 @@ esac
 #[test]
 fn a_paged_check_source_is_read_past_its_first_page() {
     let mock = tempfile::tempdir().expect("a scratch dir exists");
-    let curl = mock.path().join("curl");
+    let curl = mock.path().join("http-answers");
     std::fs::write(
         &curl,
         r#"#!/usr/bin/env bash
@@ -11639,7 +11635,7 @@ esac
     }
     let out = rk()
         .args(["versions", "--check", "--json"])
-        .env("RK_CURL_BIN", &curl)
+        .env("RK_HTTP_ORIGIN", script_http(curl).origin())
         .assert()
         .success()
         .get_output()
@@ -11661,7 +11657,7 @@ esac
 #[test]
 fn a_paged_source_past_the_bound_reads_as_unreachable() {
     let mock = tempfile::tempdir().expect("a scratch dir exists");
-    let curl = mock.path().join("curl");
+    let curl = mock.path().join("http-answers");
     std::fs::write(
         &curl,
         r#"#!/usr/bin/env bash
@@ -11681,7 +11677,7 @@ esac
     }
     let out = rk()
         .args(["versions", "--check", "--json"])
-        .env("RK_CURL_BIN", &curl)
+        .env("RK_HTTP_ORIGIN", script_http(curl).origin())
         .assert()
         .success()
         .get_output()
@@ -11705,7 +11701,7 @@ esac
 #[test]
 fn a_paged_source_that_changes_shape_reads_as_unparsable() {
     let mock = tempfile::tempdir().expect("a scratch dir exists");
-    let curl = mock.path().join("curl");
+    let curl = mock.path().join("http-answers");
     std::fs::write(
         &curl,
         r#"#!/usr/bin/env bash
@@ -11729,7 +11725,7 @@ esac
     }
     let out = rk()
         .args(["versions", "--check", "--json"])
-        .env("RK_CURL_BIN", &curl)
+        .env("RK_HTTP_ORIGIN", script_http(curl).origin())
         .assert()
         .success()
         .get_output()
@@ -11867,11 +11863,27 @@ fn tip_of(dir: &Path, name: &str) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_owned()
 }
 
+/// A stand-in's body with the version call of rk's tool check answered
+/// first, as `version` prints it, where the body answers no version call
+/// of its own: a test that replaces a stand-in models the tool, and the
+/// real tool answers its version.
+fn with_version_answer(body: &str, version: &str) -> String {
+    if body.contains("--version") {
+        return body.to_owned();
+    }
+    let (shebang, rest) = body.split_once('\n').unwrap_or((body, ""));
+    format!("{shebang}\n[ \"$1\" = --version ] && {{ echo '{version}'; exit 0; }}\n{rest}")
+}
+
 /// A mock forge CLI named `gh`, wired through `RK_GH_BIN`.
 fn mock_gh(body: &str) -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().expect("a mock dir exists");
     let path = dir.path().join("gh");
-    std::fs::write(&path, body).expect("the mock writes");
+    std::fs::write(
+        &path,
+        with_version_answer(body, "gh version 2.57.0 (2024-09-16)"),
+    )
+    .expect("the mock writes");
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
@@ -19826,7 +19838,7 @@ impl MintLine {
             },
         );
         let script = format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\n[ \"$GITLAB_TOKEN\" = bot-token ] || {{ echo 'no bot credential' >&2; exit 1; }}\n[ \"$*\" = 'api --method GET user' ] || {{ echo \"unexpected: $*\" >&2; exit 2; }}\n{reply}\n",
+            "#!/bin/sh\n[ \"$1\" = --version ] && {{ echo 'glab 1.114.0 (abc1234)'; exit 0; }}\nprintf '%s\\n' \"$*\" >> '{}'\n[ \"$GITLAB_TOKEN\" = bot-token ] || {{ echo 'no bot credential' >&2; exit 1; }}\n[ \"$*\" = 'api --method GET user' ] || {{ echo \"unexpected: $*\" >&2; exit 2; }}\n{reply}\n",
             log.display()
         );
         let path = stubs.join("glab");
@@ -22133,8 +22145,8 @@ fn a_dep_edge_suppresses_the_implicit_feature() {
 /// and fails the verb a seeded file names.
 const MOCK_NIX: &str = r#"#!/usr/bin/env bash
 STATE="__STATE__"
-printf '%s\n' "$*" >> "$STATE/nix-log"
 if [[ "$1" == "--version" ]]; then echo "nix (Nix) 2.34.8"; exit 0; fi
+printf '%s\n' "$*" >> "$STATE/nix-log"
 if [[ "$*" == "eval --raw --impure --expr builtins.currentSystem" ]]; then printf 'x86_64-linux'; exit 0; fi
 if [[ "$1" == "flake" ]]; then
   if [[ -f "$STATE/nix_fail_update" ]]; then echo "error: could not update the lock" >&2; exit 1; fi
@@ -22149,18 +22161,31 @@ fi
 exit 0
 "#;
 
-/// The curl stand-in for the release redirect: logs argv, fails on
-/// demand, and prints the release URL of the seeded latest tag.
-const MOCK_RELEASE_CURL: &str = r#"#!/usr/bin/env bash
-STATE="__STATE__"
-printf '%s\n' "$*" >> "$STATE/curl-log"
-if [[ -f "$STATE/curl_fail" ]]; then
-  echo "curl: (6) Could not resolve host: github.com" >&2
-  exit 6
-fi
-tag=$(cat "$STATE/latest_tag" 2>/dev/null || echo v0.2.16)
-printf 'https://github.com/owner/release-kit/releases/tag/%s' "$tag"
-"#;
+/// The forge's release pages for discovery: a request for the latest
+/// release is logged to `curl-log` as its URL and redirected to the page
+/// of the seeded `latest_tag`, which answers empty; `curl_fail` makes the
+/// forge give no answer.
+fn release_redirect_http(state: PathBuf) -> LocalHttp {
+    LocalHttp::start(move |seen| {
+        use std::io::Write as _;
+        if !seen.path.ends_with("/releases/latest") {
+            return Reply::Body(200, Vec::new());
+        }
+        let mut log = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(state.join("curl-log"))
+            .expect("the log opens");
+        writeln!(log, "{} {}", seen.method, seen.url()).expect("the log writes");
+        if state.join("curl_fail").exists() {
+            return Reply::Hangup;
+        }
+        let tag = std::fs::read_to_string(state.join("latest_tag"))
+            .map_or_else(|_| "v0.2.16".to_owned(), |tag| tag.trim().to_owned());
+        let owner = seen.path.trim_end_matches("/releases/latest");
+        Reply::Redirect(format!("{owner}/releases/tag/{tag}"))
+    })
+}
 
 /// The direnv stand-in: logs argv and answers the version call.
 const MOCK_DIRENV: &str = r#"#!/usr/bin/env bash
@@ -22175,20 +22200,21 @@ struct SelfDependFixture {
     home: tempfile::TempDir,
     target: tempfile::TempDir,
     mock: tempfile::TempDir,
+    /// The forge's release pages, which discovery reads.
+    http: LocalHttp,
 }
 
 impl SelfDependFixture {
     fn new() -> Self {
+        let mock = tempfile::tempdir().expect("a scratch mock dir exists");
+        let http = release_redirect_http(mock.path().to_path_buf());
         let fixture = Self {
             home: tempfile::tempdir().expect("a scratch home exists"),
             target: tempfile::tempdir().expect("a scratch target exists"),
-            mock: tempfile::tempdir().expect("a scratch mock dir exists"),
+            mock,
+            http,
         };
-        for (name, body) in [
-            ("nix", MOCK_NIX),
-            ("curl", MOCK_RELEASE_CURL),
-            ("direnv", MOCK_DIRENV),
-        ] {
+        for (name, body) in [("nix", MOCK_NIX), ("direnv", MOCK_DIRENV)] {
             let path = fixture.mock.path().join(name);
             std::fs::write(
                 &path,
@@ -22284,7 +22310,18 @@ impl SelfDependFixture {
 
     /// A sync run's parsed report, whatever its exit code.
     fn sync_json(&self, args: &[&str]) -> (Option<i32>, serde_json::Value) {
-        let out = self.rk(args).arg("--json").output().expect("rk runs");
+        Self::report_of(&mut self.rk(args))
+    }
+
+    /// [`Self::sync_json`] with `path` as the whole `PATH`.
+    fn sync_json_with_path(&self, args: &[&str], path: &Path) -> (Option<i32>, serde_json::Value) {
+        let mut command = self.rk(args);
+        command.env("PATH", path);
+        Self::report_of(&mut command)
+    }
+
+    fn report_of(command: &mut Rk) -> (Option<i32>, serde_json::Value) {
+        let out = command.arg("--json").output().expect("rk runs");
         let report = serde_json::from_slice(&out.stdout).unwrap_or_else(|_| {
             panic!(
                 "one JSON object expected on stdout: {}\n{}",
@@ -22362,7 +22399,7 @@ impl SelfDependFixture {
             .env("HOME", self.home.path())
             .env("XDG_STATE_HOME", self.home.path())
             .env("RK_NIX_BIN", self.mock.path().join("nix"))
-            .env("RK_CURL_BIN", self.mock.path().join("curl"))
+            .env("RK_HTTP_ORIGIN", self.http.origin())
             .env("RK_DIRENV_BIN", self.mock.path().join("direnv"))
             .env_remove("RK_DEVSHELL_SYNC");
         for var in [
@@ -22801,7 +22838,7 @@ fn self_depend_status_reports_the_two_host_probes() {
     assert_eq!(failed["host"]["nix"], "failed");
     assert_eq!(failed["host"]["direnv"], "failed");
     // The doctor carries the same two probes, Soft, in catalog order after
-    // curl and the registry probe.
+    // The registry probe, which rk makes in-process, then the two host tools.
     let doctor = {
         let out = rk_scrubbed()
             .args(["doctor", "--json"])
@@ -22819,13 +22856,16 @@ fn self_depend_status_reports_the_two_host_probes() {
         .iter()
         .map(|probe| probe["id"].as_str().expect("an id"))
         .collect();
-    let curl = ids
+    assert!(
+        !ids.contains(&"curl"),
+        "rk reads the network itself: {ids:?}"
+    );
+    let registry = ids
         .iter()
-        .position(|id| *id == "curl")
-        .expect("curl probed");
-    assert_eq!(ids[curl + 1], "registry");
-    assert_eq!(ids[curl + 2], "nix");
-    assert_eq!(ids[curl + 3], "direnv");
+        .position(|id| *id == "registry")
+        .expect("the registry probed");
+    assert_eq!(ids[registry + 1], "nix");
+    assert_eq!(ids[registry + 2], "direnv");
     for probe in doctor["probes"].as_array().expect("probes") {
         if probe["id"] == "nix" || probe["id"] == "direnv" {
             assert_eq!(probe["class"], "soft", "{}", probe["id"]);
@@ -24026,12 +24066,7 @@ fn discovery_reads_the_redirect_and_spends_no_api_call() {
     let lines: Vec<&str> = curl.lines().collect();
     assert_eq!(lines.len(), 1, "one curl call: {curl}");
     let line = lines[0];
-    for needle in [
-        "-o /dev/null",
-        "-w %{url_effective}",
-        "--max-time",
-        "releases/latest",
-    ] {
+    for needle in ["GET https://github.com/", "releases/latest"] {
         assert!(line.contains(needle), "{line} lacks {needle}");
     }
     assert!(!line.contains("api.github.com"), "no API host: {line}");
@@ -24042,10 +24077,8 @@ fn discovery_reads_the_redirect_and_spends_no_api_call() {
     assert_eq!(code, Some(70));
     assert_eq!(report["outcome"], "unreachable");
     assert!(
-        report["detail"]
-            .as_str()
-            .unwrap()
-            .contains("Could not resolve host")
+        !report["detail"].as_str().unwrap_or_default().is_empty(),
+        "the outcome names why: {report}"
     );
     assert!(fixture.nix_log().is_empty());
     assert!(fixture.read("flake.nix").contains("v0.2.15"));
@@ -24407,6 +24440,14 @@ fn every_envrc_path_exits_zero() {
                 f.write_flake("v0.2.15");
                 f.commit_all();
                 f.block_state_root();
+            }),
+        ),
+        (
+            "prerequisite-unmet",
+            Box::new(|f| {
+                f.write_flake("v0.2.15");
+                f.commit_all();
+                std::fs::remove_file(f.mock.path().join("nix")).expect("the nix stand-in goes");
             }),
         ),
         (
@@ -25033,7 +25074,7 @@ fn assess_refuses_when_git_cannot_answer() {
     let fake = repo.path().join("failing-git");
     std::fs::write(
         &fake,
-        "#!/bin/sh\ncase \"$*\" in *rev-parse*) exit 0;; esac\necho 'fatal: bad object' >&2\nexit 128\n",
+        "#!/bin/sh\n[ \"$1\" = --version ] && { echo 'git version 2.56.0'; exit 0; }\ncase \"$*\" in *rev-parse*) exit 0;; esac\necho 'fatal: bad object' >&2\nexit 128\n",
     )
     .expect("the fake git writes");
     let mut permissions = std::fs::metadata(&fake).expect("metadata").permissions();
@@ -25100,7 +25141,7 @@ fn assess_discovers_the_repository_under_a_foreign_git_dir_and_locale() {
     let fake = repo.path().join("localized-git");
     std::fs::write(
         &fake,
-        "#!/bin/sh\n[ \"$LC_ALL\" = C ] || { echo 'fatal: locale leaked' >&2; exit 128; }\necho 'fatal: not a git repository' >&2\nexit 128\n",
+        "#!/bin/sh\n[ \"$1\" = --version ] && { echo 'git version 2.56.0'; exit 0; }\n[ \"$LC_ALL\" = C ] || { echo 'fatal: locale leaked' >&2; exit 128; }\necho 'fatal: not a git repository' >&2\nexit 128\n",
     )
     .expect("the fake git writes");
     let mut permissions = std::fs::metadata(&fake).expect("metadata").permissions();
@@ -25710,7 +25751,9 @@ fn mock_log(dir: &Path) -> String {
 #[test]
 fn a_stale_forge_cli_refuses_before_any_call() {
     let (_parent, repo) = worktree_fixture();
-    let (mock, gh) = mock_forge("gh", "#!/bin/sh\necho 'gh version 2.18.0'\n");
+    // gh 2.56.0 is one release below the floor: `gh auth status --active`
+    // first shipped in 2.57.0.
+    let (mock, gh) = mock_forge("gh", "#!/bin/sh\necho 'gh version 2.56.0'\n");
     let out = issue_start(&repo, &gh, mock.path(), &[])
         .assert()
         .code(73)
@@ -25718,8 +25761,10 @@ fn a_stale_forge_cli_refuses_before_any_call() {
         .stderr
         .clone();
     let text = String::from_utf8_lossy(&out).into_owned();
-    assert!(text.contains("2.18.0"), "{text}");
-    assert!(text.contains("2.19.0"), "{text}");
+    assert!(
+        text.contains("gh 2.56.0 is below the 2.57.0 rk calls"),
+        "{text}"
+    );
 }
 
 #[test]
@@ -29604,7 +29649,7 @@ fn rk_with_stub_gh() -> Rk {
     let gh = dir.path().join("gh");
     std::fs::write(
         &gh,
-        "#!/bin/sh\nprintf 'unexpected gh call: %s\\n' \"$*\" >&2\nexit 1\n",
+        "#!/bin/sh\n[ \"$1\" = --version ] && { echo 'gh version 2.57.0 (2024-09-16)'; exit 0; }\nprintf 'unexpected gh call: %s\\n' \"$*\" >&2\nexit 1\n",
     )
     .expect("the stand-in gh writes");
     std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755))
@@ -35024,8 +35069,9 @@ fn a_parent_replaced_after_it_was_opened_receives_no_stage() {
 // held-directory writes, and the schema 8 receipt.
 // ---------------------------------------------------------------------
 
-/// A `curl` that records every call and fails, on `PATH` and as
-/// `RK_CURL_BIN`, so a verb that reaches for the network leaves a line.
+/// A `curl` that records every call and fails, on `PATH` and behind the
+/// local server rk's own client reaches, so a verb that reaches for the
+/// network leaves a line.
 struct OfflineCurl {
     dir: tempfile::TempDir,
 }
@@ -35055,9 +35101,10 @@ impl OfflineCurl {
         let mut shimmed = self.dir.path().as_os_str().to_owned();
         shimmed.push(":");
         shimmed.push(path);
-        command
-            .env("PATH", shimmed)
-            .env("RK_CURL_BIN", self.dir.path().join("curl"));
+        command.env("PATH", shimmed).env(
+            "RK_HTTP_ORIGIN",
+            script_http(self.dir.path().join("curl")).origin(),
+        );
         command
     }
 
@@ -38931,8 +38978,6 @@ fn integrate_fixture_shaped(
         .expect("the crate manifest writes");
     }
     let technologies: Vec<&str> = if crate_root { vec!["rust"] } else { vec![] };
-    std::fs::write(repo.join(".pre-commit-config.yaml"), PASSING_MANUAL_HOOKS)
-        .expect("the hook file writes");
     std::fs::create_dir_all(repo.join(".release-kit")).expect("the record dir creates");
     std::fs::write(
         repo.join(".release-kit/config.toml"),
@@ -38978,6 +39023,7 @@ fn integrate_fixture_shaped(
     git_in(&repo, &["add", "-A"]);
     git_in(&repo, &["commit", "-qm", "chore(rk): seed the local mode"]);
     git_in(&repo, &["push", "-q", "origin", "master"]);
+    install_gate_hook(&repo, PASSING_GATE_HOOK);
     git_in(&repo, &["branch", "feat/greeting"]);
     let seat = seat(&repo, "feat/greeting");
     for (index, message) in messages.iter().enumerate() {
@@ -39007,22 +39053,36 @@ fn integrate_fixture_shaped(
     (parent, repo)
 }
 
-/// A hook configuration with one passing hook on the manual stage, as a
-/// landed target always has hooks: prek refuses a configuration that
-/// declares no hook at all, where pre-commit passes it.
-const PASSING_MANUAL_HOOKS: &str = "repos:\n  - repo: local\n    hooks:\n      - id: pass\n        name: pass\n        stages: [manual]\n        language: system\n        always_run: true\n        pass_filenames: false\n        entry: 'true'\n";
-
-/// Whether a hook runner, prek or pre-commit, is on this host's PATH. The
-/// gate is one command against the project's own hooks, and a host with
-/// neither cannot run the success path at all.
-fn hook_runner_present() -> bool {
-    ["prek", "pre-commit"].iter().any(|runner| {
-        std::process::Command::new(runner)
-            .arg("--version")
-            .output()
-            .is_ok_and(|out| out.status.success())
-    })
+/// Install the integration gate's hook in a fixture repository: a
+/// `pre-merge-commit` script whose body is `body`, in a hooks directory
+/// that the repository's own configuration names, so no hook the host
+/// configures reaches the fixture. `at` is the repository or any of its
+/// worktrees. A hook that runs git against another checkout unsets
+/// `GIT_DIR` first, because git exports the seat's own to the hook.
+fn install_gate_hook(at: &Path, body: &str) -> PathBuf {
+    let common = PathBuf::from(git_out(
+        at,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    ));
+    let hooks = common.join("rk-test-hooks");
+    std::fs::create_dir_all(&hooks).expect("the hooks dir creates");
+    let hook = hooks.join("pre-merge-commit");
+    std::fs::write(&hook, format!("#!/bin/sh\nset -eu\n{body}\n")).expect("the hook writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))
+            .expect("the hook is executable");
+    }
+    git_bare_config(
+        at,
+        &["config", "core.hooksPath", hooks.to_str().expect("utf-8")],
+    );
+    hooks
 }
+
+/// The body of a gate hook that passes.
+const PASSING_GATE_HOOK: &str = "exit 0";
 
 /// A release driven by release-plz, as a record states it.
 fn rust_release() -> serde_json::Value {
@@ -39160,9 +39220,6 @@ fn integrate_stays_silent_when_the_listing_cannot_run() {
 /// SATISFIES git:a-local-integration-warns-of-an-uncounted-release
 #[test]
 fn integrate_warns_before_the_gate_on_apply() {
-    if !hook_runner_present() {
-        return;
-    }
     let (_parent, repo) = integrate_fixture_with(&rust_release(), true);
     let before = rev_parse(&repo, "master");
     let mock = integrate_cargo(&repo, "Cargo.toml\n");
@@ -39195,9 +39252,6 @@ fn integrate_warns_before_the_gate_on_apply() {
 /// SATISFIES git:a-local-integration-is-a-transaction
 #[test]
 fn integrate_writes_one_squash_commit_and_records_it() {
-    if !hook_runner_present() {
-        return;
-    }
     let (_parent, repo) = integrate_fixture();
     let before = rev_parse(&repo, "master");
     let branch_tip = rev_parse(&repo, "feat/greeting");
@@ -39255,49 +39309,6 @@ fn integrate_writes_one_squash_commit_and_records_it() {
     assert_ne!(
         git_out(&repo, &["rev-parse", "refs/remotes/origin/master"]),
         after
-    );
-}
-
-/// The integration gate runs its hook runner against a store of the call's
-/// own, never the operator's: another run on the host that holds the
-/// shared store's lock past its timeout would fail the gate, and with it a
-/// test that has nothing to do with the store.
-#[test]
-fn integrate_runs_its_gate_against_a_store_of_its_own() {
-    if !hook_runner_present() {
-        return;
-    }
-    let (_parent, repo) = integrate_fixture();
-    let mut command = rk_scrubbed();
-    // The gate's own choice: prek where it is on PATH, else pre-commit.
-    let prek = std::process::Command::new("prek")
-        .arg("--version")
-        .output()
-        .is_ok_and(|out| out.status.success());
-    let (variable, record) = if prek {
-        ("PREK_HOME", ".lock")
-    } else {
-        ("PRE_COMMIT_HOME", "db.db")
-    };
-    let store = command
-        .get_envs()
-        .find(|(key, _)| *key == variable)
-        .and_then(|(_, value)| value)
-        .map(PathBuf::from)
-        .expect("every rk call names a store of its own for each runner");
-    assert!(
-        !store.join(record).exists(),
-        "the call's store starts empty"
-    );
-    command
-        .args(["integrate", "feat/greeting", "--apply"])
-        .args(["-m", "feat(greeting): add it", "--target"])
-        .arg(&repo)
-        .assert()
-        .success();
-    assert!(
-        store.join(record).is_file(),
-        "the gate recorded its run in the call's own store"
     );
 }
 
@@ -39381,43 +39392,205 @@ fn integrate_holds_the_trunk_message_to_the_landed_convention() {
     }
 }
 
-/// A failing `manual` stage refuses, names the stage, and leaves the
-/// trunk at its prior tip.
-///
-/// SATISFIES git:the-manual-stage-is-the-pre-integrate-contract
-#[test]
-fn integrate_refuses_when_the_manual_stage_fails() {
-    if !hook_runner_present() {
-        return;
-    }
-    let (_parent, repo) = integrate_fixture();
-    let seat = repo
-        .parent()
+/// The integrate fixture's seat: where the branch is checked out and the
+/// gate runs.
+fn integrate_seat(repo: &Path) -> PathBuf {
+    repo.parent()
         .expect("a parent")
-        .join("widget@feat-greeting");
-    // The project's own hook, on the project's own stage. release-kit
-    // reads no identifier from it and invokes the stage alone.
-    std::fs::write(
-        seat.join(".pre-commit-config.yaml"),
-        "repos:\n  - repo: local\n    hooks:\n      - id: refuse\n        name: refuse\n        stages: [manual]\n        language: system\n        always_run: true\n        pass_filenames: false\n        entry: sh -c 'exit 1'\n",
-    )
-    .expect("the hook file writes");
-    git_in(&seat, &["add", "-A"]);
-    git_in(&seat, &["commit", "-qm", "ci(hooks): refuse at the gate"]);
+        .join("widget@feat-greeting")
+}
+
+/// Whether the seat stands on its branch, at its tip, with nothing
+/// staged or changed: what the gate leaves behind on every ordinary exit.
+fn assert_seat_restored(seat: &Path, branch: &str) {
+    assert_eq!(
+        git_out(seat, &["symbolic-ref", "HEAD"]),
+        format!("refs/heads/{branch}"),
+        "the seat's HEAD names the branch again"
+    );
+    assert_eq!(
+        git_out(seat, &["write-tree"]),
+        git_out(seat, &["rev-parse", &format!("{branch}^{{tree}}")]),
+        "the index holds the branch tip"
+    );
+    assert_eq!(
+        git_out(seat, &["status", "--porcelain"]),
+        "",
+        "the seat is clean"
+    );
+}
+
+/// The gate asks git for the repository's `pre-merge-commit` hook and runs
+/// it once, in the seat, and the integration lands when it passes.
+///
+/// SATISFIES git:the-pre-merge-commit-hook-is-the-pre-integrate-contract
+#[test]
+fn the_gate_runs_the_installed_pre_merge_commit_hook() {
+    let (parent, repo) = integrate_fixture();
+    let log = parent.path().join("gate.log");
+    install_gate_hook(&repo, &format!("pwd >> '{}'", log.display()));
     let before = rev_parse(&repo, "master");
+    let out = rk_scrubbed()
+        .args(["integrate", "feat/greeting", "--apply"])
+        .args(["-m", "feat(greeting): add it", "--target"])
+        .arg(&repo)
+        .assert()
+        .success();
+    let text = String::from_utf8_lossy(&out.get_output().stdout).into_owned();
+    assert!(text.contains("the pre-merge-commit hook passed"), "{text}");
+    let ran = std::fs::read_to_string(&log).expect("the hook ran");
+    assert_eq!(ran.lines().count(), 1, "the hook ran once: {ran}");
+    assert!(ran.trim_end().ends_with("widget@feat-greeting"), "{ran}");
+    assert_ne!(rev_parse(&repo, "master"), before, "the integration landed");
+}
+
+/// A failing hook refuses with its own output, and leaves the trunk, the
+/// branch, and the seat as they were.
+///
+/// SATISFIES git:the-pre-merge-commit-hook-is-the-pre-integrate-contract
+#[test]
+fn the_gate_refuses_when_the_hook_fails() {
+    let (_parent, repo) = integrate_fixture();
+    install_gate_hook(&repo, "echo the project refuses >&2\nexit 1");
+    let before = rev_parse(&repo, "master");
+    let tip = rev_parse(&repo, "feat/greeting");
     rk_scrubbed()
         .args(["integrate", "feat/greeting", "--apply"])
         .args(["-m", "feat(greeting): add it", "--target"])
         .arg(&repo)
         .assert()
         .code(73)
-        .stderr(predicate::str::contains("the manual stage failed"));
+        .stderr(predicate::str::contains("the pre-merge-commit hook failed"))
+        .stderr(predicate::str::contains("the project refuses"));
     assert_eq!(rev_parse(&repo, "master"), before);
+    assert_eq!(rev_parse(&repo, "feat/greeting"), tip);
     assert!(!repo.join(".git/rk/integrations.json").exists());
+    assert_seat_restored(&integrate_seat(&repo), "feat/greeting");
 }
 
-/// A stand-in hook runner named `name`: it records each call in `log`
-/// and exits with `code`. The returned directory goes first on `PATH`.
+/// A clone with no `pre-merge-commit` hook refuses with git's own error
+/// and names how a project installs the hook, and nothing looks for the
+/// hook before git runs.
+///
+/// SATISFIES git:the-pre-merge-commit-hook-is-the-pre-integrate-contract
+#[test]
+fn the_gate_refuses_when_no_hook_is_installed() {
+    let (_parent, repo) = integrate_fixture();
+    git_bare_config(&repo, &["config", "--unset", "core.hooksPath"]);
+    let before = rev_parse(&repo, "master");
+    rk_scrubbed()
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .args(["integrate", "feat/greeting", "--apply"])
+        .args(["-m", "feat(greeting): add it", "--target"])
+        .arg(&repo)
+        .assert()
+        .code(70)
+        .stderr(predicate::str::contains(
+            "cannot find a hook named pre-merge-commit",
+        ))
+        .stderr(predicate::str::contains(
+            "installs no pre-merge-commit hook",
+        ))
+        .stderr(predicate::str::contains(
+            "prek install --hook-type pre-merge-commit",
+        ));
+    assert_eq!(rev_parse(&repo, "master"), before);
+    assert_seat_restored(&integrate_seat(&repo), "feat/greeting");
+}
+
+/// The hook sees the squash as the staged change: every file the branch
+/// changed against the trunk, across all of its commits, and no other.
+///
+/// SATISFIES git:the-pre-merge-commit-hook-is-the-pre-integrate-contract
+#[test]
+fn the_gate_stages_the_squash() {
+    let (parent, repo) = integrate_fixture_shaped(
+        &serde_json::json!({ "mode": "none" }),
+        false,
+        None,
+        &["feat(greeting): add it", "feat(greeting): add more"],
+    );
+    let log = parent.path().join("staged.log");
+    install_gate_hook(
+        &repo,
+        &format!("git diff --cached --name-only > '{}'", log.display()),
+    );
+    rk_scrubbed()
+        .args(["integrate", "feat/greeting", "--apply"])
+        .args(["-m", "feat(greeting): add it", "--target"])
+        .arg(&repo)
+        .assert()
+        .success();
+    assert_eq!(
+        std::fs::read_to_string(&log).expect("the hook logged"),
+        "greeting-1.txt\ngreeting.txt\n"
+    );
+}
+
+/// After a pass and after a failure, the seat stands on its branch again,
+/// at its tip, and clean.
+///
+/// SATISFIES git:the-pre-merge-commit-hook-is-the-pre-integrate-contract
+#[test]
+fn the_gate_restores_the_seat_head() {
+    for (body, passes) in [(PASSING_GATE_HOOK, true), ("exit 1", false)] {
+        let (_parent, repo) = integrate_fixture();
+        install_gate_hook(&repo, body);
+        let assert = rk_scrubbed()
+            .args(["integrate", "feat/greeting", "--apply"])
+            .args(["-m", "feat(greeting): add it", "--target"])
+            .arg(&repo)
+            .assert();
+        if passes {
+            assert.success();
+        } else {
+            assert.code(73);
+        }
+        assert_seat_restored(&integrate_seat(&repo), "feat/greeting");
+    }
+}
+
+/// A hook installed under a `core.hooksPath` directory outside the git
+/// directory runs, because git finds the hook and rk does not.
+///
+/// SATISFIES git:the-pre-merge-commit-hook-is-the-pre-integrate-contract
+#[test]
+fn the_gate_honors_core_hooks_path() {
+    let (parent, repo) = integrate_fixture();
+    let hooks = parent.path().join("project-hooks");
+    std::fs::create_dir(&hooks).expect("the hooks dir creates");
+    let log = parent.path().join("gate.log");
+    let hook = hooks.join("pre-merge-commit");
+    std::fs::write(
+        &hook,
+        format!("#!/bin/sh\necho ran >> '{}'\n", log.display()),
+    )
+    .expect("the hook writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))
+            .expect("the hook is executable");
+    }
+    git_bare_config(
+        &repo,
+        &["config", "core.hooksPath", hooks.to_str().expect("utf-8")],
+    );
+    rk_scrubbed()
+        .args(["integrate", "feat/greeting", "--apply"])
+        .args(["-m", "feat(greeting): add it", "--target"])
+        .arg(&repo)
+        .assert()
+        .success();
+    assert_eq!(
+        std::fs::read_to_string(&log).expect("the hook ran"),
+        "ran\n"
+    );
+}
+
+/// A stand-in program named `name`: it records each call in `log` and
+/// exits with `code`.
 fn stub_hook_runner(dir: &Path, name: &str, log: &Path, code: i32) {
     let path = dir.join(name);
     std::fs::write(
@@ -39436,127 +39609,51 @@ fn stub_hook_runner(dir: &Path, name: &str, log: &Path, code: i32) {
     }
 }
 
-/// This process's `PATH` with every directory dropped that holds one of
-/// `programs`, so a test controls which hook runner the gate can find.
-fn path_without(programs: &[&str]) -> std::ffi::OsString {
-    let path = std::env::var_os("PATH").unwrap_or_default();
-    std::env::join_paths(
-        std::env::split_paths(&path)
-            .filter(|dir| programs.iter().all(|program| !dir.join(program).exists())),
-    )
-    .expect("the PATH joins")
-}
-
-/// The gate runs prek when prek resolves on `PATH`, ahead of a pre-commit
-/// that is also there, with the arguments both runners accept.
+/// With prek and pre-commit both first on `PATH`, an integration calls
+/// neither: the gate names no hook runner and asks git for the hook.
 ///
-/// SATISFIES git:the-manual-stage-is-the-pre-integrate-contract
+/// SATISFIES git:the-pre-merge-commit-hook-is-the-pre-integrate-contract
 #[test]
-fn the_gate_runs_prek_when_it_is_on_path() {
+fn the_gate_names_no_runner() {
     let (_parent, repo) = integrate_fixture();
     let stubs = tempfile::tempdir().expect("a stub dir exists");
     let log = stubs.path().join("calls.log");
-    stub_hook_runner(stubs.path(), "prek", &log, 0);
-    stub_hook_runner(stubs.path(), "pre-commit", &log, 0);
+    stub_hook_runner(stubs.path(), "prek", &log, 1);
+    stub_hook_runner(stubs.path(), "pre-commit", &log, 1);
     let path = std::env::join_paths(std::iter::once(stubs.path().to_path_buf()).chain(
-        std::env::split_paths(&path_without(&["prek", "pre-commit"])),
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ))
     .expect("the PATH joins");
-    let out = rk_scrubbed()
+    rk_scrubbed()
         .env("PATH", path)
         .args(["integrate", "feat/greeting", "--apply"])
-        .args(["-m", "feat(greeting): add the greeting file", "--target"])
+        .args(["-m", "feat(greeting): add it", "--target"])
         .arg(&repo)
         .assert()
         .success();
-    let text = String::from_utf8_lossy(&out.get_output().stdout).into_owned();
-    assert!(
-        text.contains("the manual stage passed under prek"),
-        "{text}"
-    );
-    let calls = std::fs::read_to_string(&log).expect("the runner was called");
-    assert_eq!(calls, "prek run --hook-stage manual --all-files\n");
+    assert!(!log.exists(), "no runner was called");
 }
 
-/// With no prek on `PATH`, the gate runs pre-commit, the runner a project
-/// that has not moved carries in its own environment.
+/// A seat that an interrupted gate left detached at the trunk commit, with
+/// the branch's tree staged, refuses and names the repair.
 ///
-/// SATISFIES git:the-manual-stage-is-the-pre-integrate-contract
+/// SATISFIES git:the-pre-merge-commit-hook-is-the-pre-integrate-contract
 #[test]
-fn the_gate_runs_pre_commit_when_prek_is_absent() {
+fn a_seat_left_detached_at_the_trunk_is_refused() {
     let (_parent, repo) = integrate_fixture();
-    let stubs = tempfile::tempdir().expect("a stub dir exists");
-    let log = stubs.path().join("calls.log");
-    stub_hook_runner(stubs.path(), "pre-commit", &log, 0);
-    let path = std::env::join_paths(std::iter::once(stubs.path().to_path_buf()).chain(
-        std::env::split_paths(&path_without(&["prek", "pre-commit"])),
-    ))
-    .expect("the PATH joins");
-    let out = rk_scrubbed()
-        .env("PATH", path)
-        .args(["integrate", "feat/greeting", "--apply"])
-        .args(["-m", "feat(greeting): add the greeting file", "--target"])
-        .arg(&repo)
-        .assert()
-        .success();
-    let text = String::from_utf8_lossy(&out.get_output().stdout).into_owned();
-    assert!(
-        text.contains("the manual stage passed under pre-commit"),
-        "{text}"
-    );
-    let calls = std::fs::read_to_string(&log).expect("the runner was called");
-    assert_eq!(calls, "pre-commit run --hook-stage manual --all-files\n");
-}
-
-/// A relative `PATH` entry resolves from the directory `rk` starts in, the
-/// way a shell resolves it, and the gate runs that runner even though it
-/// runs it from the seat, which is another directory.
-///
-/// SATISFIES git:the-manual-stage-is-the-pre-integrate-contract
-#[test]
-fn the_gate_runs_a_runner_found_through_a_relative_path_entry() {
-    let (_parent, repo) = integrate_fixture();
-    let caller = tempfile::tempdir().expect("a caller dir exists");
-    std::fs::create_dir(caller.path().join("bin")).expect("the bin dir creates");
-    let log = caller.path().join("calls.log");
-    stub_hook_runner(&caller.path().join("bin"), "prek", &log, 0);
-    let path = std::env::join_paths(std::iter::once(PathBuf::from("bin")).chain(
-        std::env::split_paths(&path_without(&["prek", "pre-commit"])),
-    ))
-    .expect("the PATH joins");
-    let out = rk_scrubbed()
-        .current_dir(caller.path())
-        .env("PATH", path)
-        .args(["integrate", "feat/greeting", "--apply"])
-        .args(["-m", "feat(greeting): add the greeting file", "--target"])
-        .arg(&repo)
-        .assert()
-        .success();
-    let text = String::from_utf8_lossy(&out.get_output().stdout).into_owned();
-    assert!(
-        text.contains("the manual stage passed under prek"),
-        "{text}"
-    );
-    let calls = std::fs::read_to_string(&log).expect("the runner was called");
-    assert_eq!(calls, "prek run --hook-stage manual --all-files\n");
-}
-
-/// With neither runner on `PATH`, the gate refuses before the trunk moves
-/// and names both runners.
-///
-/// SATISFIES git:the-manual-stage-is-the-pre-integrate-contract
-#[test]
-fn the_gate_names_both_runners_when_neither_is_on_path() {
-    let (_parent, repo) = integrate_fixture();
+    let seat = integrate_seat(&repo);
+    git_in(&seat, &["update-ref", "--no-deref", "HEAD", "master"]);
     let before = rev_parse(&repo, "master");
     rk_scrubbed()
-        .env("PATH", path_without(&["prek", "pre-commit"]))
         .args(["integrate", "feat/greeting", "--apply"])
-        .args(["-m", "feat(greeting): add the greeting file", "--target"])
+        .args(["-m", "feat(greeting): add it", "--target"])
         .arg(&repo)
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("prek or pre-commit on PATH"));
+        .code(73)
+        .stderr(predicate::str::contains("detached at the trunk commit"))
+        .stderr(predicate::str::contains(
+            "symbolic-ref HEAD refs/heads/feat/greeting",
+        ));
     assert_eq!(rev_parse(&repo, "master"), before);
 }
 
@@ -39589,9 +39686,6 @@ fn integrate_forge_pushes_and_names_the_request_command() {
 /// SATISFIES maintenance:one-merge-proof-authorizes-both-removals
 #[test]
 fn a_local_integration_is_the_second_admissible_prune_proof() {
-    if !hook_runner_present() {
-        return;
-    }
     let (_parent, repo) = integrate_fixture();
     // A second implementation, so the advanced case and the confirmed
     // case are two branches rather than one branch rewound.
@@ -39754,7 +39848,7 @@ fn the_integration_mode_round_trips_through_the_landing() {
     );
     assert!(!hooks.contains("rk-no-push-to-trunk"), "{hooks}");
     assert!(
-        hooks.contains("prek run --hook-stage manual --all-files"),
+        hooks.contains("rk integrate runs this clone's pre-merge-commit hook through git"),
         "the block names the pre-integrate contract: {hooks}"
     );
     assert!(hooks.contains("- id: rk-worktree-location"), "{hooks}");
@@ -39864,9 +39958,6 @@ fn integrate_preview_refreshes_nothing() {
 /// is genuinely absent is a different fact and proceeds.
 #[test]
 fn integrate_refuses_a_configured_origin_that_will_not_answer() {
-    if !hook_runner_present() {
-        return;
-    }
     let (_parent, repo) = integrate_fixture();
     git_in(
         &repo,
@@ -39942,9 +40033,6 @@ fn integrate_reads_the_record_and_not_the_pending_configuration() {
 /// that work.
 #[test]
 fn the_recorded_tip_is_the_object_the_squash_was_built_from() {
-    if !hook_runner_present() {
-        return;
-    }
     let (_parent, repo) = integrate_fixture();
     rk_scrubbed()
         .args(["integrate", "feat/greeting", "--apply"])
@@ -39966,48 +40054,144 @@ fn the_recorded_tip_is_the_object_the_squash_was_built_from() {
     );
 }
 
-/// The gate judges the tree that reaches the trunk. A commit landing in
-/// the seat while the gate runs would otherwise be squashed without
-/// having passed it, so the branch is observed before the gate and
-/// re-observed after it.
+/// A hook that commits in the seat refuses: under the gate the seat's
+/// `HEAD` stands detached at the trunk commit, so the commit moves `HEAD`
+/// and not the branch, and the seat stays as the hook left it so the
+/// commit stays reachable for the operator.
 ///
-/// SATISFIES git:the-manual-stage-is-the-pre-integrate-contract
+/// SATISFIES git:the-pre-merge-commit-hook-is-the-pre-integrate-contract
+#[test]
+fn a_hook_that_commits_is_refused() {
+    let (_parent, repo) = integrate_fixture();
+    let seat = integrate_seat(&repo);
+    install_gate_hook(
+        &repo,
+        "echo late > late.txt\ngit add late.txt\ngit -c core.hooksPath=/dev/null commit -qm 'feat(greeting): late'",
+    );
+    let before = rev_parse(&repo, "master");
+    let tip = rev_parse(&repo, "feat/greeting");
+    rk_scrubbed()
+        .args(["integrate", "feat/greeting", "--apply"])
+        .args(["-m", "feat(greeting): add it", "--target"])
+        .arg(&repo)
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("the hook changed the seat"))
+        .stderr(predicate::str::contains(
+            "the hook committed, so HEAD moved",
+        ))
+        .stderr(predicate::str::contains(
+            "the seat stays as the hook left it",
+        ))
+        .stderr(predicate::str::contains("branch <name> HEAD"));
+    assert_eq!(rev_parse(&repo, "master"), before);
+    assert_eq!(rev_parse(&repo, "feat/greeting"), tip);
+    assert!(!repo.join(".git/rk/integrations.json").exists());
+    assert_eq!(
+        git_out(&seat, &["log", "-1", "--format=%s", "HEAD"]),
+        "feat(greeting): late",
+        "the hook's commit stays reachable from the seat's HEAD"
+    );
+}
+
+/// A gate whose git fails `fail` after the hook ran: the wrapper fails
+/// that one call once the hook has left its marker, and passes every
+/// other call to git.
+fn failing_inspection_after_the_hook(parent: &Path, fail: &str) -> PathBuf {
+    let marker = parent.join("hook-ran");
+    git_wrapper(
+        parent,
+        &format!(
+            "if [ -e '{}' ] && {fail}; then echo 'fatal: the inspection broke' >&2; exit 1; fi",
+            marker.display()
+        ),
+    )
+}
+
+/// A git error while the gate reads the index after a harmless hook is an
+/// error, not a change the hook made: the seat stands on its branch
+/// again, git's message is named, and the trunk is unchanged.
+///
+/// SATISFIES git:the-pre-merge-commit-hook-is-the-pre-integrate-contract
+#[test]
+fn a_failed_index_read_after_the_hook_restores_the_seat() {
+    for form in [Some("rebase"), None] {
+        let (parent, repo) = integrate_fixture_shaped(
+            &serde_json::json!({ "mode": "none" }),
+            false,
+            form,
+            &["feat(greeting): add it"],
+        );
+        let marker = parent.path().join("hook-ran");
+        install_gate_hook(&repo, &format!("touch '{}'", marker.display()));
+        let wrapper =
+            failing_inspection_after_the_hook(parent.path(), "[ \"$last\" = write-tree ]");
+        let before = rev_parse(&repo, "master");
+        let mut command = rk_scrubbed();
+        command.env("RK_GIT_BIN", &wrapper);
+        command.args(["integrate", "feat/greeting", "--apply"]);
+        if form.is_none() {
+            command.args(["-m", "feat(greeting): add it"]);
+        }
+        command
+            .args(["--target"])
+            .arg(&repo)
+            .assert()
+            .code(73)
+            .stderr(predicate::str::contains("the index in"))
+            .stderr(predicate::str::contains("the inspection broke"))
+            .stderr(predicate::str::contains("the hook changed the seat").not());
+        assert_eq!(rev_parse(&repo, "master"), before, "{form:?}");
+        assert_seat_restored(&integrate_seat(&repo), "feat/greeting");
+    }
+}
+
+/// The same for a git error while the gate reads `HEAD` after the hook.
+///
+/// SATISFIES git:the-pre-merge-commit-hook-is-the-pre-integrate-contract
+#[test]
+fn a_failed_head_read_after_the_hook_restores_the_seat() {
+    for form in [Some("rebase"), None] {
+        let (parent, repo) = integrate_fixture_shaped(
+            &serde_json::json!({ "mode": "none" }),
+            false,
+            form,
+            &["feat(greeting): add it"],
+        );
+        let marker = parent.path().join("hook-ran");
+        install_gate_hook(&repo, &format!("touch '{}'", marker.display()));
+        let wrapper = failing_inspection_after_the_hook(
+            parent.path(),
+            "case \"$*\" in *\"rev-parse --verify --quiet HEAD\") true;; *) false;; esac",
+        );
+        let before = rev_parse(&repo, "master");
+        let mut command = rk_scrubbed();
+        command.env("RK_GIT_BIN", &wrapper);
+        command.args(["integrate", "feat/greeting", "--apply"]);
+        if form.is_none() {
+            command.args(["-m", "feat(greeting): add it"]);
+        }
+        command
+            .args(["--target"])
+            .arg(&repo)
+            .assert()
+            .code(73)
+            .stderr(predicate::str::contains("HEAD in"))
+            .stderr(predicate::str::contains("the inspection broke"))
+            .stderr(predicate::str::contains("the hook changed the seat").not());
+        assert_eq!(rev_parse(&repo, "master"), before, "{form:?}");
+        assert_seat_restored(&integrate_seat(&repo), "feat/greeting");
+    }
+}
+
+/// A hook that moves the branch while the seat stands detached refuses:
+/// the branch is observed before the gate and re-observed after it.
+///
+/// SATISFIES git:the-pre-merge-commit-hook-is-the-pre-integrate-contract
 #[test]
 fn integrate_refuses_a_branch_that_moved_while_the_gate_ran() {
-    if !hook_runner_present() {
-        return;
-    }
     let (_parent, repo) = integrate_fixture();
-    let seat = repo
-        .parent()
-        .expect("a parent")
-        .join("widget@feat-greeting");
-    // The project's own manual hook commits in the seat, which is the
-    // hand at the desk the lock cannot bound.
-    std::fs::write(
-        seat.join("sneak.sh"),
-        "#!/bin/sh\nset -eu\necho late > late.txt\ngit add late.txt\ngit -c core.hooksPath=/dev/null commit -qm 'feat(greeting): late'\n",
-    )
-    .expect("the hook script writes");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(
-            seat.join("sneak.sh"),
-            std::fs::Permissions::from_mode(0o755),
-        )
-        .expect("the script is executable");
-    }
-    std::fs::write(
-        seat.join(".pre-commit-config.yaml"),
-        "repos:\n  - repo: local\n    hooks:\n      - id: sneak\n        name: sneak\n        stages: [manual]\n        language: script\n        always_run: true\n        pass_filenames: false\n        entry: sneak.sh\n",
-    )
-    .expect("the hook file writes");
-    git_in(&seat, &["add", "-A"]);
-    git_in(
-        &seat,
-        &["commit", "-qm", "ci(hooks): commit under the gate"],
-    );
+    install_gate_hook(&repo, "git branch -f feat/greeting feat/greeting~1");
     let before = rev_parse(&repo, "master");
     rk_scrubbed()
         .args(["integrate", "feat/greeting", "--apply"])
@@ -40058,9 +40242,6 @@ fn integrate_judges_the_message_against_the_seats_ignore_rules() {
 /// SATISFIES maintenance:gone-is-a-candidate-not-proof
 #[test]
 fn unreachable_evidence_confirms_nothing() {
-    if !hook_runner_present() {
-        return;
-    }
     let (_parent, repo) = integrate_fixture();
     rk_scrubbed()
         .args(["integrate", "feat/greeting", "--apply"])
@@ -40271,6 +40452,8 @@ impl ReleaseForge {
         let mock = tempfile::tempdir().expect("a mock dir exists");
         std::fs::create_dir(mock.path().join("answers")).expect("the answers dir creates");
         let gh = r#"#!/bin/sh
+# The version call of rk's tool check, answered before anything is logged.
+[ "$1" = --version ] && { echo "gh version 2.57.0 (2024-09-16)"; exit 0; }
 key=$(printf '%s' "$2" | tr '/?&=.:' '______')
 dir="$(dirname "$0")/answers"
 printf '%s\n' "$2" >> "$dir/calls.log"
@@ -40292,6 +40475,8 @@ echo "gh: Not Found (HTTP 404)" >&2
 exit 1
 "#;
         let curl = r#"#!/bin/sh
+# The version call of rk's tool check, answered before anything is logged.
+[ "$1" = --version ] && { echo "curl 8.11.0 (x86_64-pc-linux-gnu)"; exit 0; }
 for url; do :; done
 key=$(printf '%s' "$url" | tr '/?&=.:' '______')
 dir="$(dirname "$0")/answers"
@@ -40299,7 +40484,7 @@ printf '%s\n' "$url" >> "$dir/calls.log"
 if [ -f "$dir/curl-$key" ]; then cat "$dir/curl-$key"; else printf 404; fi
 "#;
         // glab answers the same API paths the same way, under its own name.
-        for (name, body) in [("gh", gh), ("glab", gh), ("curl", curl)] {
+        for (name, body) in [("gh", gh), ("glab", gh), ("http-answers", curl)] {
             let path = mock.path().join(name);
             std::fs::write(&path, body).expect("the mock writes");
             #[cfg(unix)]
@@ -40396,7 +40581,10 @@ if [ -f "$dir/curl-$key" ]; then cat "$dir/curl-$key"; else printf 404; fi
         command
             .env("RK_GH_BIN", self.mock.path().join("gh"))
             .env("RK_GLAB_BIN", self.mock.path().join("glab"))
-            .env("RK_CURL_BIN", self.mock.path().join("curl"))
+            .env(
+                "RK_HTTP_ORIGIN",
+                script_http(self.mock.path().join("http-answers")).origin(),
+            )
             .env("RK_RELEASE_WAIT_INTERVAL_MS", "10")
             .args(["release", "status", "--json", "--target"])
             .arg(target)
@@ -40465,14 +40653,44 @@ fn shipped_forge() -> ReleaseForge {
 }
 
 /// SATISFIES release-state:a-forge-field-reads-unknown-without-credentials
+/// SATISFIES tool-requirements:a-verb-checks-its-tools-first
+///
+/// A missing forge CLI is no observation boundary: the report stops
+/// before any read and names the tool and how to install it.
+#[test]
+fn release_status_stops_without_its_forge_cli() {
+    let target = release_target();
+    rk().env("RK_GH_BIN", "/no/such/gh")
+        .args(["release", "status", "--json", "--target"])
+        .arg(target.path())
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("gh is missing"))
+        .stderr(predicate::str::contains("install gh on PATH"));
+}
+
+/// SATISFIES release-state:a-forge-field-reads-unknown-without-credentials
 ///
 /// The record fields read offline; every forge field reads unknown where
-/// the forge CLI is missing or refuses, and the verb still exits 0.
+/// the forge refuses the runtime's credential, and the verb still exits 0.
 #[test]
 fn release_status_reads_unknown_without_credentials() {
     let target = release_target();
+    let mock = tempfile::tempdir().expect("a mock dir exists");
+    let gh = mock.path().join("gh");
+    std::fs::write(
+        &gh,
+        "#!/bin/sh\n[ \"$1\" = --version ] && { echo 'gh version 2.57.0 (2024-09-16)'; exit 0; }\necho 'gh: To get started with GitHub CLI, please run:  gh auth login' >&2\nexit 4\n",
+    )
+    .expect("the stand-in writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755))
+            .expect("the stand-in is executable");
+    }
     let out = rk()
-        .env("RK_GH_BIN", "/no/such/gh")
+        .env("RK_GH_BIN", &gh)
         .args(["release", "status", "--json", "--target"])
         .arg(target.path())
         .assert()
@@ -40533,6 +40751,26 @@ fn release_status_reads_unknown_without_credentials() {
     assert!(
         !calls.contains("releases/tags/v1.2.2") && !calls.contains("widget/1.2.2"),
         "no page or registry read runs for the clone's tag: {calls}"
+    );
+}
+
+/// The registry read of `rk release status` follows no redirect, as the
+/// curl call it replaced did not: a 302 reads unknown, and the place it
+/// names is never asked.
+#[test]
+fn release_status_reads_a_registry_redirect_as_unknown() {
+    let target = release_target();
+    let forge = shipped_forge();
+    forge.registry(
+        "https://crates.io/api/v1/crates/widget/1.2.2",
+        "/api/v1/crates/widget/elsewhere\n302",
+    );
+    let report = forge.report(target.path(), &[]);
+    assert_eq!(report["last_release"]["published"], "unknown", "{report}");
+    assert!(
+        !forge.calls().contains("elsewhere"),
+        "the redirect was not followed: {}",
+        forge.calls()
     );
 }
 
@@ -40605,7 +40843,10 @@ fn release_status_reports_each_request_state() {
 
     let human = rk()
         .env("RK_GH_BIN", forge.mock.path().join("gh"))
-        .env("RK_CURL_BIN", forge.mock.path().join("curl"))
+        .env(
+            "RK_HTTP_ORIGIN",
+            script_http(forge.mock.path().join("http-answers")).origin(),
+        )
         .args(["release", "status", "--target"])
         .arg(target.path())
         .assert()
@@ -40756,7 +40997,10 @@ fn release_status_reports_a_local_tag_at_another_commit() {
 
     let human = rk()
         .env("RK_GH_BIN", forge.mock.path().join("gh"))
-        .env("RK_CURL_BIN", forge.mock.path().join("curl"))
+        .env(
+            "RK_HTTP_ORIGIN",
+            script_http(forge.mock.path().join("http-answers")).origin(),
+        )
         .args(["release", "status", "--target"])
         .arg(target.path())
         .assert()
@@ -41497,7 +41741,10 @@ fn milestones_of(
 ) -> std::collections::BTreeMap<String, (String, String)> {
     let out = rk()
         .env("RK_GH_BIN", forge.mock.path().join("gh"))
-        .env("RK_CURL_BIN", forge.mock.path().join("curl"))
+        .env(
+            "RK_HTTP_ORIGIN",
+            script_http(forge.mock.path().join("http-answers")).origin(),
+        )
         .env_remove("RK_BOT_APP_ID")
         .env_remove("RK_BOT_PRIVATE_KEY")
         .env_remove("RK_BOT_PRIVATE_KEY_FILE")
@@ -41529,9 +41776,10 @@ fn milestones_of(
 fn setup_check_without_uv_still_reports_every_milestone() {
     let python = python_release_target("github", "");
     let forge = ReleaseForge::new();
+    let registry = script_http(forge.mock.path().join("http-answers"));
     let out = rk()
         .env("RK_GH_BIN", forge.mock.path().join("gh"))
-        .env("RK_CURL_BIN", forge.mock.path().join("curl"))
+        .env("RK_HTTP_ORIGIN", registry.origin())
         .env("RK_UV_BIN", forge.mock.path().join("no-such-uv"))
         .env_remove("RK_BOT_APP_ID")
         .env_remove("RK_BOT_PRIVATE_KEY")
@@ -41562,6 +41810,11 @@ fn setup_check_without_uv_still_reports_every_milestone() {
             .any(|event| event["type"] == "milestone" && event["step"] == "first-version-published"),
         "{events:?}"
     );
+    assert!(
+        registry.seen().iter().any(|seen| seen.host == "pypi.org"),
+        "the milestone read the registry through the local server: {:?}",
+        registry.seen()
+    );
 }
 
 /// The package step of a python target, run from `caller` with the given
@@ -41574,11 +41827,12 @@ fn python_package_step_from(
     path_prefix: Option<&str>,
 ) -> (String, String, bool) {
     let forge = ReleaseForge::new();
+    let registry = script_http(forge.mock.path().join("http-answers"));
     let mut command = rk();
     command
         .current_dir(caller)
         .env("RK_GH_BIN", forge.mock.path().join("gh"))
-        .env("RK_CURL_BIN", forge.mock.path().join("curl"))
+        .env("RK_HTTP_ORIGIN", registry.origin())
         .env_remove("RK_BOT_APP_ID")
         .env_remove("RK_BOT_PRIVATE_KEY")
         .env_remove("RK_BOT_PRIVATE_KEY_FILE")
@@ -41617,6 +41871,11 @@ fn python_package_step_from(
     let milestone = events
         .iter()
         .any(|event| event["type"] == "milestone" && event["step"] == "first-version-published");
+    assert!(
+        !milestone || registry.seen().iter().any(|seen| seen.host == "pypi.org"),
+        "the milestone read the registry through the local server: {:?}",
+        registry.seen()
+    );
     (
         package["status"].as_str().unwrap_or_default().to_owned(),
         package["detail"].as_str().unwrap_or_default().to_owned(),
@@ -44146,9 +44405,6 @@ fn rebase_integrate_apply(repo: &Path) -> serde_json::Value {
 /// SATISFIES git:a-rebase-integration-publishes-the-branch-tip
 #[test]
 fn rebase_integrate_puts_one_commit_on_the_trunk_as_it_is() {
-    if !hook_runner_present() {
-        return;
-    }
     let (_parent, repo) = rebase_fixture(&["feat(greeting): add it"]);
     let before = rev_parse(&repo, "master");
     let tip = rev_parse(&repo, "feat/greeting");
@@ -44198,9 +44454,6 @@ fn rebase_integrate_puts_one_commit_on_the_trunk_as_it_is() {
 /// SATISFIES git:a-rebase-integration-publishes-the-branch-tip
 #[test]
 fn rebase_integrate_puts_three_commits_on_the_trunk_in_order() {
-    if !hook_runner_present() {
-        return;
-    }
     let messages = [
         "feat(greeting): add it",
         "fix(greeting): mend it",
@@ -44285,50 +44538,31 @@ fn rebase_integrate_refuses_a_commit_message_the_judgment_refuses() {
     assert_eq!(rev_parse(&repo, "master"), before);
 }
 
-/// A commit landing in the seat while the gate runs refuses: the gate
-/// judged a tree that is no longer the branch's, and nothing reaches the
-/// trunk.
+/// A hook that stages a change in the seat refuses under the rebase form:
+/// the index no longer holds the branch tip's tree, so the hook did not
+/// judge what would reach the trunk, and nothing does.
 ///
 /// SATISFIES git:a-rebase-integration-publishes-the-branch-tip
 #[test]
-fn rebase_integrate_refuses_a_branch_that_moved_while_the_gate_ran() {
-    if !hook_runner_present() {
-        return;
-    }
+fn a_hook_that_stages_a_change_is_refused() {
     let (_parent, repo) = rebase_fixture(&["feat(greeting): add it"]);
-    let seat = greeting_seat(&repo);
-    std::fs::write(
-        seat.join("sneak.sh"),
-        "#!/bin/sh\nset -eu\necho late > late.txt\ngit add late.txt\ngit -c core.hooksPath=/dev/null commit -qm 'feat(greeting): late'\n",
-    )
-    .expect("the hook script writes");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(
-            seat.join("sneak.sh"),
-            std::fs::Permissions::from_mode(0o755),
-        )
-        .expect("the script is executable");
-    }
-    std::fs::write(
-        seat.join(".pre-commit-config.yaml"),
-        "repos:\n  - repo: local\n    hooks:\n      - id: sneak\n        name: sneak\n        stages: [manual]\n        language: script\n        always_run: true\n        pass_filenames: false\n        entry: sneak.sh\n",
-    )
-    .expect("the hook file writes");
-    git_in(&seat, &["add", "-A"]);
-    git_in(
-        &seat,
-        &["commit", "-qm", "ci(hooks): commit under the gate"],
+    install_gate_hook(
+        &repo,
+        "echo fixed > greeting.txt\ngit add greeting.txt\necho the hook says out\necho the hook says err >&2\nexit 1",
     );
     let before = rev_parse(&repo, "master");
+    let tip = rev_parse(&repo, "feat/greeting");
     rk_scrubbed()
         .args(["integrate", "feat/greeting", "--apply", "--target"])
         .arg(&repo)
         .assert()
         .code(73)
-        .stderr(predicate::str::contains("while the gate ran"));
+        .stderr(predicate::str::contains("the hook changed the seat"))
+        .stderr(predicate::str::contains("staged a change"))
+        .stderr(predicate::str::contains("the hook says err"))
+        .stderr(predicate::str::contains("the hook says out"));
     assert_eq!(rev_parse(&repo, "master"), before);
+    assert_eq!(rev_parse(&repo, "feat/greeting"), tip);
     assert!(!repo.join(".git/rk/integrations.json").exists());
 }
 
@@ -44432,9 +44666,6 @@ fn rebase_integrate_leaves_a_squash_record_on_the_squash_path() {
         .assert()
         .success()
         .stdout(predicate::str::contains("would write one squash commit"));
-    if !hook_runner_present() {
-        return;
-    }
     let out = rk_scrubbed()
         .args([
             "integrate",
@@ -44834,9 +45065,6 @@ fn prune_json(repo: &Path, verb: &str, mode: &str) -> serde_json::Value {
 /// SATISFIES maintenance:one-merge-proof-authorizes-both-removals
 #[test]
 fn reachable_tip_retires_the_worktree_of_a_rebase_integration() {
-    if !hook_runner_present() {
-        return;
-    }
     let (_parent, repo) = rebase_fixture(&["feat(greeting): add it", "fix(greeting): mend it"]);
     rebase_integrate_apply(&repo);
     let report = prune_json(&repo, "worktree", "--verify");
@@ -44862,9 +45090,6 @@ fn reachable_tip_retires_the_worktree_of_a_rebase_integration() {
 /// SATISFIES maintenance:gone-is-a-candidate-not-proof
 #[test]
 fn reachable_tip_retires_the_branch_of_a_rebase_integration() {
-    if !hook_runner_present() {
-        return;
-    }
     let (_parent, repo) = rebase_fixture(&["feat(greeting): add it"]);
     rebase_integrate_apply(&repo);
     git_in(
@@ -46285,9 +46510,6 @@ fn workflow_only_message_check_accepts_a_header_with_no_scope() {
 /// with no scope.
 #[test]
 fn workflow_only_integrate_accepts_a_header_with_no_scope() {
-    if !hook_runner_present() {
-        return;
-    }
     let (_parent, repo) = integrate_fixture();
     let before = rev_parse(&repo, "master");
     rk_scrubbed()
@@ -46337,9 +46559,6 @@ fn workflow_only_trunk_commit_refuses_and_integrate_still_moves_the_trunk() {
         "the trunk guard is the pinned hook, for the trunk, at the pre-commit stage alone: {block}"
     );
 
-    if !hook_runner_present() {
-        return;
-    }
     let (_parent, repo) = integrate_fixture();
     let hooks = repo.join(".git/hooks");
     std::fs::create_dir_all(&hooks).expect("the hooks dir");
@@ -46354,6 +46573,16 @@ fn workflow_only_trunk_commit_refuses_and_integrate_still_moves_the_trunk() {
         use std::os::unix::fs::PermissionsExt as _;
         std::fs::set_permissions(&guard, std::fs::Permissions::from_mode(0o755))
             .expect("the stand-in is executable");
+    }
+    // The integration gate's own hook, beside the stand-in guard, in
+    // the one hooks directory the clone names.
+    let gate = hooks.join("pre-merge-commit");
+    std::fs::write(&gate, "#!/bin/sh\nexit 0\n").expect("the gate hook writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&gate, std::fs::Permissions::from_mode(0o755))
+            .expect("the gate hook is executable");
     }
     git_in(
         &repo,
@@ -46546,6 +46775,131 @@ fn workflow_only_pre_push_guards_refuse_a_rewrite_and_a_merge_commit() {
     ];
     assert!(push_verdict(&repo, FORCE, &other).0);
     assert!(push_verdict(&repo, MERGE, &other).0);
+}
+
+/// A pre-push hook that runs one landed guard the way a hook manager
+/// does: for each pushed ref it exports the `PRE_COMMIT_*` variables, with
+/// the base that prek 0.5.7 computes. That base is the remote tip where the
+/// clone holds it as an ancestor of the pushed tip. Otherwise it is the
+/// parent of the first pushed commit that no remote-tracking ref of the
+/// remote holds (`pre_push_run_options` in `crates/prek/src/cli/hook_impl.rs`).
+/// Where no pushed commit is missing from the remote-tracking refs, prek
+/// runs no check for that ref, and pre-commit 4.5.1 does the same when it
+/// lacks the remote tip (`_pre_push_ns` in `pre_commit/commands/hook_impl.py`),
+/// so this hook skips the guard there too. The guard script is written
+/// beside the hook.
+fn runner_style_pre_push_hook(hooks: &Path, guard: &str) {
+    std::fs::create_dir_all(hooks).expect("the hooks dir creates");
+    std::fs::write(hooks.join("guard.sh"), guard).expect("the guard writes");
+    let hook = hooks.join("pre-push");
+    std::fs::write(
+        &hook,
+        format!(
+            "#!/bin/sh\nzero=0000000000000000000000000000000000000000\nwhile read -r local_ref local_sha remote_ref remote_sha; do\n  from=\"$remote_sha\"\n  if [ \"$remote_sha\" = \"$zero\" ] || ! git merge-base --is-ancestor \"$remote_sha\" \"$local_sha\" 2>/dev/null; then\n    first=$(git rev-list --topo-order --reverse \"$local_sha\" --not --remotes=\"$1\" | head -n 1)\n    [ -n \"$first\" ] || continue\n    from=$(git rev-parse --verify --quiet \"$first^\" || echo \"$zero\")\n  fi\n  PRE_COMMIT_REMOTE_NAME=\"$1\" PRE_COMMIT_REMOTE_URL=\"$2\" PRE_COMMIT_REMOTE_BRANCH=\"$remote_ref\" PRE_COMMIT_LOCAL_BRANCH=\"$local_ref\" PRE_COMMIT_FROM_REF=\"$from\" PRE_COMMIT_TO_REF=\"$local_sha\" sh '{}' || exit 1\ndone\n",
+            hooks.join("guard.sh").display()
+        ),
+    )
+    .expect("the hook writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))
+            .expect("the hook is executable");
+    }
+}
+
+/// One push from a clone, through its own hooks alone, with what git said.
+fn hooked_push(repo: &Path, args: &[&str]) -> (bool, String) {
+    let mut command = std::process::Command::new("git");
+    for var in GIT_HOOK_VARS {
+        command.env_remove(var);
+    }
+    let out = command
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .arg("push")
+        .args(args)
+        .current_dir(repo)
+        .output()
+        .expect("git runs");
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+/// The force-push guard reads the remote trunk itself. A force push from a
+/// clone that never fetched a commit the remote trunk gained would drop
+/// that commit, and under prek the push's own base cannot show it: prek
+/// replaces a remote tip the clone lacks with an ancestor of the pushed
+/// tip. So the guard refuses, and a fast-forward still passes.
+///
+/// SATISFIES maintenance:local-integration-guards-the-trunk
+#[test]
+fn the_force_push_guard_refuses_dropping_an_unfetched_trunk_commit() {
+    let (parent, repo) = seatable_fixture();
+    let origin = parent.path().join("origin.git");
+    let other = parent.path().join("other");
+    git_in(
+        parent.path(),
+        &["clone", "-q", origin.to_str().expect("utf-8"), "other"],
+    );
+    git_in(&other, &["config", "user.email", "rk@example.invalid"]);
+    git_in(&other, &["config", "user.name", "rk test"]);
+    git_bare_config(
+        &other,
+        &["commit", "--allow-empty", "-qm", "feat(two): land it"],
+    );
+    git_bare_config(&other, &["push", "-q", "origin", "master"]);
+    let landed = rev_parse(&other, "master");
+
+    let hooks = parent.path().join("hooks");
+    runner_style_pre_push_hook(&hooks, &local_guard_script("rk-no-force-push-to-trunk"));
+    git_in(
+        &repo,
+        &["config", "core.hooksPath", hooks.to_str().expect("utf-8")],
+    );
+    git_bare_config(
+        &repo,
+        &["commit", "--allow-empty", "-qm", "feat(one): add it"],
+    );
+
+    let (ok, said) = hooked_push(&repo, &["--force", "origin", "master"]);
+    assert!(!ok, "the force push refuses: {said}");
+    assert!(said.contains("has not fetched"), "{said}");
+    assert_eq!(
+        git_out(&origin, &["rev-parse", "master"]),
+        landed,
+        "the remote keeps the commit"
+    );
+
+    // Once the clone fetched and rebased, the push is a fast-forward.
+    git_bare_config(&repo, &["pull", "-q", "--rebase", "origin", "master"]);
+    let (ok, said) = hooked_push(&repo, &["origin", "master"]);
+    assert!(ok, "a fast-forward passes: {said}");
+    assert_eq!(
+        git_out(&origin, &["rev-parse", "master"]),
+        rev_parse(&repo, "master")
+    );
+
+    // The boundary no local guard reaches: a clone whose tip adds no commit
+    // the remote-tracking refs lack force-pushes over a commit it never
+    // fetched. Neither hook manager runs a check for that ref, so the
+    // guard never runs and the push goes through; only a forge rule that
+    // refuses a non-fast-forward push holds this case.
+    let stale = rev_parse(&repo, "master~1");
+    git_bare_config(&other, &["pull", "-q", "origin", "master"]);
+    git_bare_config(
+        &other,
+        &["commit", "--allow-empty", "-qm", "feat(three): land it"],
+    );
+    git_bare_config(&other, &["push", "-q", "origin", "master"]);
+    let (ok, said) = hooked_push(
+        &repo,
+        &["--force", "origin", &format!("{stale}:refs/heads/master")],
+    );
+    assert!(ok, "the runner runs no check, so nothing refuses: {said}");
+    assert_eq!(git_out(&origin, &["rev-parse", "master"]), stale);
 }
 
 /// SATISFIES target-config:a-release-less-template-carries-no-release-table
@@ -47044,30 +47398,14 @@ fn git_bare_config(dir: &Path, args: &[&str]) {
     assert!(status.success(), "git {args:?} failed");
 }
 
-/// A manual-stage hook in the seat, committed on the branch, whose script
-/// is `body`: the project's own gate, which the integration runs and which
-/// the lock bounds no more than a hand at the desk.
-fn seat_manual_hook(seat: &Path, body: &str) {
-    std::fs::write(
-        seat.join("gate.sh"),
-        format!("#!/bin/sh\nset -eu\n{body}\n"),
-    )
-    .expect("the hook script writes");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(seat.join("gate.sh"), std::fs::Permissions::from_mode(0o755))
-            .expect("the script is executable");
-    }
-    std::fs::write(
-        seat.join(".pre-commit-config.yaml"),
-        "repos:\n  - repo: local\n    hooks:\n      - id: gate\n        name: gate\n        stages: [manual]\n        language: script\n        always_run: true\n        pass_filenames: false\n        entry: gate.sh\n",
-    )
-    .expect("the hook file writes");
-    git_bare_config(seat, &["add", "-A"]);
-    git_bare_config(
+/// The gate hook of the seat's repository, whose script is `body`: the
+/// project's own gate, which the integration runs and which the lock
+/// bounds no more than a hand at the desk. The body runs with git's
+/// exported `GIT_DIR` unset, so its git calls act where they point.
+fn seat_gate_hook(seat: &Path, body: &str) {
+    install_gate_hook(
         seat,
-        &["commit", "-qm", "ci(hooks): run the project's gate"],
+        &format!("unset GIT_DIR GIT_INDEX_FILE GIT_PREFIX\n{body}"),
     );
 }
 
@@ -47098,9 +47436,6 @@ fn git_wrapper(dir: &Path, prelude: &str) -> PathBuf {
 /// SATISFIES git:a-rebase-integration-publishes-the-branch-tip
 #[test]
 fn rebase_integrate_publishes_a_linear_range_under_rebase_merges() {
-    if !hook_runner_present() {
-        return;
-    }
     let (_parent, repo) = rebase_fixture(&["feat(greeting): first"]);
     let seat = greeting_seat(&repo);
     git_bare_config(&repo, &["config", "rebase.rebaseMerges", "true"]);
@@ -47150,9 +47485,6 @@ fn rebase_integrate_publishes_a_linear_range_under_rebase_merges() {
 /// SATISFIES git:a-rebase-integration-publishes-the-branch-tip
 #[test]
 fn rebase_integrate_refuses_a_range_holding_a_merge() {
-    if !hook_runner_present() {
-        return;
-    }
     let (parent, repo) = rebase_fixture(&["feat(greeting): first"]);
     let seat = greeting_seat(&repo);
     git_bare_config(&seat, &["checkout", "-qb", "side", "HEAD~1"]);
@@ -47198,9 +47530,6 @@ fn rebase_integrate_refuses_a_range_holding_a_merge() {
 /// SATISFIES git:a-rebase-integration-publishes-the-branch-tip
 #[test]
 fn rebase_integrate_moves_no_other_branch_under_update_refs() {
-    if !hook_runner_present() {
-        return;
-    }
     let (_parent, repo) = rebase_fixture(&["feat(greeting): first", "feat(greeting): second"]);
     git_bare_config(&repo, &["config", "rebase.updateRefs", "true"]);
     git_bare_config(&repo, &["branch", "feat/stack", "feat/greeting~1"]);
@@ -47231,18 +47560,15 @@ fn rebase_integrate_moves_no_other_branch_under_update_refs() {
 /// SATISFIES git:a-local-integration-is-a-transaction
 #[test]
 fn integrate_refuses_a_held_trunk_moved_under_the_gate() {
-    if !hook_runner_present() {
-        return;
-    }
     for form in [Some("rebase"), None] {
         let (_parent, repo) = integrate_fixture_shaped(
             &serde_json::json!({ "mode": "none" }),
             false,
             form,
-            &["feat(greeting): add it"],
+            &["feat(greeting): add it", "feat(greeting): add more"],
         );
         let seat = greeting_seat(&repo);
-        seat_manual_hook(
+        seat_gate_hook(
             &seat,
             &format!(
                 "git -C '{}' merge -q --ff-only feat/greeting~1",
@@ -47282,19 +47608,16 @@ fn integrate_refuses_a_held_trunk_moved_under_the_gate() {
 /// SATISFIES git:a-local-integration-is-a-transaction
 #[test]
 fn integrate_refuses_an_unheld_trunk_moved_under_the_gate() {
-    if !hook_runner_present() {
-        return;
-    }
     for form in [Some("rebase"), None] {
         let (_parent, repo) = integrate_fixture_shaped(
             &serde_json::json!({ "mode": "none" }),
             false,
             form,
-            &["feat(greeting): add it"],
+            &["feat(greeting): add it", "feat(greeting): add more"],
         );
         git_bare_config(&repo, &["checkout", "-q", "--detach"]);
         let seat = greeting_seat(&repo);
-        seat_manual_hook(
+        seat_gate_hook(
             &seat,
             &format!(
                 "git -C '{}' update-ref refs/heads/master feat/greeting~1",
@@ -47329,9 +47652,6 @@ fn integrate_refuses_an_unheld_trunk_moved_under_the_gate() {
 /// SATISFIES git:a-local-integration-is-a-transaction
 #[test]
 fn integrate_refuses_a_trunk_seated_while_the_gate_ran() {
-    if !hook_runner_present() {
-        return;
-    }
     for form in [Some("rebase"), None] {
         let (parent, repo) = integrate_fixture_shaped(
             &serde_json::json!({ "mode": "none" }),
@@ -47342,7 +47662,7 @@ fn integrate_refuses_a_trunk_seated_while_the_gate_ran() {
         git_bare_config(&repo, &["checkout", "-q", "--detach"]);
         let seat = greeting_seat(&repo);
         let seated = parent.path().join("trunk-seat");
-        seat_manual_hook(
+        seat_gate_hook(
             &seat,
             &format!(
                 "git -C '{}' worktree add -q '{}' master",
@@ -47378,9 +47698,6 @@ fn integrate_refuses_a_trunk_seated_while_the_gate_ran() {
 /// SATISFIES git:a-local-integration-is-a-transaction
 #[test]
 fn integrate_reports_a_trunk_moved_during_its_publication() {
-    if !hook_runner_present() {
-        return;
-    }
     let (parent, repo) = rebase_fixture(&["feat(greeting): first", "feat(greeting): second"]);
     let mark = parent.path().join("raced");
     let wrapper = git_wrapper(
@@ -47806,7 +48123,6 @@ fn reftable_rebase_fixture() -> (tempfile::TempDir, PathBuf) {
     );
     git_bare_config(&repo, &["config", "user.email", "rk@example.invalid"]);
     git_bare_config(&repo, &["config", "user.name", "rk test"]);
-    std::fs::write(repo.join(".pre-commit-config.yaml"), PASSING_MANUAL_HOOKS).expect("writes");
     std::fs::create_dir_all(repo.join(".release-kit")).expect("the record dir creates");
     std::fs::write(
         repo.join(".release-kit/manifest.json"),
@@ -47855,6 +48171,7 @@ fn reftable_rebase_fixture() -> (tempfile::TempDir, PathBuf) {
         git_bare_config(&seat, &["add", "-A"]);
         git_bare_config(&seat, &["commit", "-qm", message]);
     }
+    install_gate_hook(&repo, PASSING_GATE_HOOK);
     git_bare_config(&repo, &["reflog", "expire", "--expire=now", "--all"]);
     git_bare_config(&repo, &["config", "core.logAllRefUpdates", "false"]);
     (parent, repo)
@@ -47868,9 +48185,6 @@ fn reftable_rebase_fixture() -> (tempfile::TempDir, PathBuf) {
 /// SATISFIES git:a-local-integration-is-a-transaction
 #[test]
 fn integrate_confirms_a_held_trunk_move_with_a_one_entry_reftable_reflog() {
-    if !hook_runner_present() {
-        return;
-    }
     let (_parent, repo) = reftable_rebase_fixture();
     let before = rev_parse(&repo, "master");
     let tip = rev_parse(&repo, "feat/greeting");
@@ -47905,9 +48219,6 @@ fn integrate_confirms_a_held_trunk_move_with_a_one_entry_reftable_reflog() {
 /// SATISFIES git:a-local-integration-is-a-transaction
 #[test]
 fn integrate_reports_an_unconfirmed_publication_as_published() {
-    if !hook_runner_present() {
-        return;
-    }
     let (parent, repo) = rebase_fixture(&["feat(greeting): first", "feat(greeting): second"]);
     let log = repo.join(".git/logs/refs/heads/master");
     let wrapper = git_wrapper(
@@ -51355,7 +51666,7 @@ fn the_recovery_chapter_carries_the_gitlab_routes_and_the_unbump_precondition() 
     // PyPI upload included where the python pair runs it.
     assert!(
         tag.contains(
-            "retry `build`, then `provenance` on that build, then `pypi` where it runs, then `publish`"
+            "retry these jobs in order, all on the same commit:\n   1. `build`\n   2. `provenance`, on that build\n   3. `pypi`, where it runs\n   4. `publish`"
         ),
         "{tag}"
     );
@@ -51410,6 +51721,8 @@ fn the_gitlab_forge_document_states_what_the_live_run_observed() {
 
 /// The stand-in `gh` of the engine tests: a stateful forge in a directory.
 const ENGINE_GH: &str = r#"#!/bin/sh
+# The version call of rk's tool check, answered before anything is logged.
+[ "$1" = --version ] && { echo "gh version 2.57.0 (2024-09-16)"; exit 0; }
 # A stand-in gh for the release engine tests: a stateful forge in a
 # directory, which answers the calls the engine makes and refuses what the
 # real gh refuses. A list answers one page, `per_page` long (30 by
@@ -51554,6 +51867,8 @@ esac
 
 /// The stand-in `glab` of the engine tests.
 const ENGINE_GLAB: &str = r#"#!/bin/sh
+# The version call of rk's tool check, answered before anything is logged.
+[ "$1" = --version ] && { echo "glab 1.114.0 (abc1234)"; exit 0; }
 # A stand-in glab for the release engine tests: a stateful GitLab in a
 # directory. A release create creates its tag first and keeps it when the
 # release save fails, as the forge's create service does. A list answers
@@ -51738,6 +52053,8 @@ esac
 
 /// The stand-in uv of the engine tests.
 const ENGINE_UV: &str = r#"#!/bin/sh
+# The version call of rk's tool check, answered before anything is logged.
+[ "$1" = --version ] && { echo "uv 0.9.0"; exit 0; }
 # A stand-in uv for a project with a static version: `uv version` reads and
 # writes [project].version and relocks the project's own entry, and
 # `uv build` writes an sdist, a wheel, and the .gitignore uv puts in dist/.
@@ -51770,12 +52087,15 @@ esac
 
 /// The stand-in curl of the engine tests, for the `PyPI` JSON API.
 const ENGINE_CURL: &str = r#"#!/bin/sh
+# The version call of rk's tool check, answered before anything is logged.
+[ "$1" = --version ] && { echo "curl 8.11.0 (x86_64-pc-linux-gnu)"; exit 0; }
 # A stand-in curl for PyPI's JSON API: the body seeded for a URL, then the
 # status code on its own line, as `-w '\n%{http_code}'` prints it.
 S="$(dirname "$0")/state"
 for url; do :; done
 printf 'curl %s\n' "$url" >> "$S/log"
 key="$(printf '%s' "$url" | tr '/:.?&=' '______')"
+if [ -f "$S/pypi/$key.redirect" ]; then cat "$S/pypi/$key.redirect"; printf '\n302'; exit 0; fi
 if [ -f "$S/pypi/$key" ]; then cat "$S/pypi/$key"; printf '\n200'; else printf '{"message": "Not Found"}\n404'; fi
 "#;
 
@@ -51876,7 +52196,7 @@ impl Engine {
             ("glab", ENGINE_GLAB),
             ("git-cliff", ENGINE_CLIFF),
             ("uv", ENGINE_UV),
-            ("curl", ENGINE_CURL),
+            ("http-answers", ENGINE_CURL),
         ] {
             let path = stubs.path().join(name);
             std::fs::write(&path, body).expect("the stand-in writes");
@@ -51920,7 +52240,10 @@ impl Engine {
             .env("RK_GLAB_BIN", self.stubs.path().join("glab"))
             .env("RK_GIT_CLIFF_BIN", self.stubs.path().join("git-cliff"))
             .env("RK_UV_BIN", self.stubs.path().join("uv"))
-            .env("RK_CURL_BIN", self.stubs.path().join("curl"))
+            .env(
+                "RK_HTTP_ORIGIN",
+                script_http(self.stubs.path().join("http-answers")).origin(),
+            )
             .env(token, "bot-token")
             .args(["release", action, "--json", "--target"])
             .arg(self.dir());
@@ -52868,6 +53191,32 @@ fn the_build_refuses_a_rebuild_that_differs_from_pypi() {
     )
     .expect("writes");
     assert_eq!(engine.ok("build")["state"], "release");
+}
+
+/// The build's read of the files `PyPI` serves follows no redirect, as the
+/// curl call it replaced did not: a 302 refuses the build, naming the
+/// status, and the place it names is never asked.
+#[test]
+fn the_pypi_read_follows_no_redirect() {
+    let engine = Engine::new("python", "github", &[], "0.1.0");
+    let report = engine.ok("request");
+    engine.merge(report["request"].as_u64().expect("a request"));
+    std::fs::write(
+        engine
+            .state()
+            .join("pypi/https___pypi_org_pypi_acme_0_1_0_json.redirect"),
+        "/pypi/acme/elsewhere/json",
+    )
+    .expect("writes");
+    engine.clear_log();
+    let out = engine.run("build").assert().failure().get_output().clone();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("302"), "{stderr}");
+    assert!(
+        !engine.log().contains("elsewhere"),
+        "the redirect was not followed: {}",
+        engine.log()
+    );
 }
 
 /// SATISFIES release-engine:the-request-never-numbers-a-candidate
@@ -54183,5 +54532,1501 @@ fn a_staged_engine_pipeline_carries_its_candidate_job() {
             manifest.to_string().contains(&format!("\"{destination}\"")),
             "{tech} {forge}: {manifest}"
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The tools rk itself runs: each verb checks them before it acts
+
+/// The marker of the one refusal a verb's tool check raises.
+const TOOLS_UNMET: &str = "runs tools this host cannot serve";
+
+/// The state of a repository a refused verb must leave alone: its refs,
+/// its index, and its files.
+fn repository_state(repo: &Path) -> String {
+    format!(
+        "{}\n{}",
+        git_out(repo, &["for-each-ref"]),
+        git_out(repo, &["status", "--porcelain", "--ignored"])
+    )
+}
+
+/// Every verb that runs git checks it first: with no git the verb exits
+/// with the prerequisite code, names git, and leaves the repository as it
+/// was.
+///
+/// SATISFIES tool-requirements:a-verb-checks-its-tools-first
+#[test]
+fn each_git_verb_checks_git_before_it_acts() {
+    let (_parent, repo) = integrate_fixture();
+    let target = repo.to_str().expect("utf-8");
+    let before = repository_state(&repo);
+    let verbs: [&[&str]; 14] = [
+        &[
+            "integrate",
+            "feat/greeting",
+            "--apply",
+            "-m",
+            "feat(greeting): add it",
+            "--target",
+            target,
+        ],
+        &["branches", "prune", "--apply", "--target", target],
+        &["worktree", "list", "--target", target],
+        &["lines", "list", "--target", target],
+        &["message", "--check", "--kind", "title", "--target", target],
+        &["issue", "start", "57", "--target", target],
+        &["init", "--target", target],
+        &["upgrade", "--apply", "--target", target],
+        &["adopt", "--target", target],
+        &["status", "--target", target],
+        &["stage", "--target", target],
+        &["assess", "--target", target],
+        &["migrate", "inventory", "--target", target],
+        &["release", "status", "--target", target],
+    ];
+    for args in verbs {
+        rk_scrubbed()
+            .env("RK_GIT_BIN", "/no/such/git")
+            .args(args)
+            .write_stdin("feat(greeting): add it\n")
+            .assert()
+            .code(73)
+            .stderr(predicate::str::contains(TOOLS_UNMET))
+            .stderr(predicate::str::contains("git is missing"));
+        assert_eq!(
+            repository_state(&repo),
+            before,
+            "{args:?} left the repository alone"
+        );
+    }
+}
+
+/// One refusal names every tool that cannot serve a verb: a python
+/// release request with neither uv nor git-cliff names both, and calls
+/// the forge not once.
+///
+/// SATISFIES tool-requirements:a-verb-checks-its-tools-first
+#[test]
+fn a_verb_names_every_missing_tool_at_once() {
+    let engine = Engine::new("python", "github", &[], "0.1.0");
+    let out = engine
+        .run("request")
+        .env("RK_UV_BIN", "/no/such/uv")
+        .env("RK_GIT_CLIFF_BIN", "/no/such/git-cliff")
+        .assert()
+        .code(73)
+        .get_output()
+        .stderr
+        .clone();
+    let text = String::from_utf8_lossy(&out);
+    assert!(text.contains("uv is missing"), "{text}");
+    assert!(text.contains("git-cliff is missing"), "{text}");
+    assert_eq!(engine.log(), "", "no tool and no forge call ran");
+
+    // An integration whose record releases a rust crate, with neither git
+    // nor cargo: git finds no seat, so cargo is judged from the target,
+    // and one refusal names both.
+    let (parent, repo) = integrate_fixture_with(&rust_release(), true);
+    let log = parent.path().join("gate.log");
+    install_gate_hook(&repo, &format!("echo ran >> '{}'", log.display()));
+    let empty = tempfile::tempdir().expect("an empty PATH dir exists");
+    let before = repository_state(&repo);
+    let out = rk_scrubbed()
+        .env("PATH", empty.path())
+        .env("RK_GIT_BIN", "/no/such/git")
+        .args([
+            "integrate",
+            "feat/greeting",
+            "--apply",
+            "-m",
+            "feat(greeting): add it",
+            "--target",
+        ])
+        .arg(&repo)
+        .assert()
+        .code(73)
+        .get_output()
+        .stderr
+        .clone();
+    let text = String::from_utf8_lossy(&out);
+    assert!(text.contains("git is missing"), "{text}");
+    assert!(text.contains("cargo is missing"), "{text}");
+    assert!(!log.exists(), "the gate never ran");
+    assert_eq!(
+        repository_state(&repo),
+        before,
+        "the repository is unchanged"
+    );
+}
+
+/// `rk integrate` on a target whose record releases a rust crate checks
+/// cargo in the seat, where the listing runs it, before the gate.
+///
+/// SATISFIES tool-requirements:a-verb-checks-its-tools-first
+#[test]
+fn integrate_checks_cargo_in_the_seat() {
+    let (parent, repo) = integrate_fixture_with(&rust_release(), true);
+    let log = parent.path().join("gate.log");
+    install_gate_hook(&repo, &format!("echo ran >> '{}'", log.display()));
+    let empty = tempfile::tempdir().expect("an empty PATH dir exists");
+    let git = Path::new(&git_out(&repo, &["--exec-path"])).join("git");
+    let before = rev_parse(&repo, "master");
+    rk_scrubbed()
+        .env("PATH", empty.path())
+        .env("RK_GIT_BIN", &git)
+        .args([
+            "integrate",
+            "feat/greeting",
+            "--apply",
+            "-m",
+            "feat(greeting): add it",
+            "--target",
+        ])
+        .arg(&repo)
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("cargo is missing"))
+        .stderr(predicate::str::contains("git is missing").not());
+    assert!(!log.exists(), "the gate never ran");
+    assert_eq!(rev_parse(&repo, "master"), before);
+}
+
+/// A git below the release that added `git hook run` stops the
+/// integration before its gate.
+///
+/// SATISFIES tool-requirements:a-verb-checks-its-tools-first
+#[test]
+fn a_git_below_its_floor_stops_the_verb() {
+    let (parent, repo) = integrate_fixture();
+    let log = parent.path().join("gate.log");
+    install_gate_hook(&repo, &format!("echo ran >> '{}'", log.display()));
+    let old = git_wrapper(
+        parent.path(),
+        "[ \"$last\" = --version ] && { echo 'git version 2.35.0'; exit 0; }",
+    );
+    let before = rev_parse(&repo, "master");
+    rk_scrubbed()
+        .env("RK_GIT_BIN", &old)
+        .args([
+            "integrate",
+            "feat/greeting",
+            "--apply",
+            "-m",
+            "feat(greeting): add it",
+            "--target",
+        ])
+        .arg(&repo)
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains(
+            "git 2.35.0 is below the 2.36.0 rk calls",
+        ));
+    assert!(!log.exists(), "the gate never ran");
+    assert_eq!(rev_parse(&repo, "master"), before);
+}
+
+/// A setup step that calls the forge checks the forge CLI first: a
+/// missing one and one below its floor each stop the step before any
+/// forge call.
+///
+/// SATISFIES tool-requirements:a-verb-checks-its-tools-first
+#[test]
+fn a_forge_cli_below_its_floor_stops_the_verb() {
+    let fixture = ForgeFixture::new();
+    let step = ["setup", "step", "default-branch", "--apply"];
+    fixture
+        .rk(&step)
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .env("RK_GH_BIN", "/no/such/gh")
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains(TOOLS_UNMET))
+        .stderr(predicate::str::contains("gh is missing"));
+    fixture.seed("gh_cli_version", "2.56.0");
+    fixture
+        .rk(&step)
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains(
+            "gh 2.56.0 is below the 2.57.0 rk calls",
+        ));
+    assert_eq!(fixture.log(), "", "no forge call ran");
+}
+
+/// The record decides the tools: a python target's release request needs
+/// uv, and a bash target's does not.
+///
+/// SATISFIES tool-requirements:a-verb-checks-its-tools-first
+#[test]
+fn a_condition_comes_from_the_record() {
+    let python = Engine::new("python", "github", &[], "0.1.0");
+    let out = python
+        .run("request")
+        .env("RK_UV_BIN", "/no/such/uv")
+        .assert()
+        .code(73)
+        .get_output()
+        .stderr
+        .clone();
+    let text = String::from_utf8_lossy(&out);
+    assert!(text.contains("uv is missing"), "{text}");
+
+    let bash = Engine::new("bash", "github", &[], "0.1.0");
+    let out = bash
+        .run("request")
+        .env("RK_UV_BIN", "/no/such/uv")
+        .assert()
+        .get_output()
+        .stderr
+        .clone();
+    let text = String::from_utf8_lossy(&out);
+    assert!(!text.contains("uv is missing"), "{text}");
+}
+
+/// rk reads the network itself: with a `PATH` that holds neither curl
+/// nor openssl, `rk versions --check`, `rk release status`, and
+/// `rk self-depend sync` read their sources from a local server.
+///
+/// SATISFIES tool-requirements:a-verb-checks-its-tools-first
+#[test]
+fn rk_runs_with_no_curl_or_openssl_on_path() {
+    let empty = tempfile::tempdir().expect("an empty PATH dir exists");
+    let git = Path::new(&git_out(empty.path(), &["--exec-path"])).join("git");
+    let unknown = LocalHttp::start(|_| Reply::json(404, "{}"));
+    rk_scrubbed()
+        .env("PATH", empty.path())
+        .env("RK_HTTP_ORIGIN", unknown.origin())
+        .args(["versions", "--check", "--json"])
+        .assert()
+        .success();
+    assert!(
+        !unknown.seen().is_empty(),
+        "the check read the local server"
+    );
+
+    let target = release_target();
+    let forge = ReleaseForge::new();
+    let report = {
+        let out = forge
+            .rk(target.path(), &[])
+            .env("PATH", empty.path())
+            .env("RK_GIT_BIN", &git)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        serde_json::from_slice::<serde_json::Value>(&out).expect("one JSON object")
+    };
+    assert_eq!(report["schema"], "rk.release-status/1", "{report}");
+
+    // The sync's stand-ins run through bash, so its PATH is the host's,
+    // less every curl and openssl: a directory of links to each other
+    // program the host's PATH holds.
+    let farm = tempfile::tempdir().expect("a link dir exists");
+    for dir in std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()) {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if name == "curl" || name == "openssl" || farm.path().join(&name).exists() {
+                continue;
+            }
+            let _ = std::os::unix::fs::symlink(entry.path(), farm.path().join(&name));
+        }
+    }
+    let sync = SelfDependFixture::new();
+    sync.write_flake("v0.2.15");
+    sync.commit_all();
+    let (_, report) = sync.sync_json_with_path(&["self-depend", "sync"], farm.path());
+    assert!(
+        !sync.curl_log().is_empty(),
+        "the sync read the latest release from the local server: {report}"
+    );
+    assert_ne!(report["outcome"], "prerequisite-unmet", "{report}");
+    assert_ne!(report["outcome"], "unreachable", "{report}");
+}
+
+// ---------------------------------------------------------------------------
+// A local HTTP server the in-process client reaches through RK_HTTP_ORIGIN
+
+/// One request the local server received.
+#[derive(Debug, Clone)]
+struct Seen {
+    method: String,
+    /// The path and query, as the client sent them.
+    path: String,
+    /// The host the request named, from the seam's header.
+    host: String,
+    /// Every header, names lower-cased.
+    headers: Vec<(String, String)>,
+}
+
+impl Seen {
+    /// The URL the request named before the seam redirected it.
+    fn url(&self) -> String {
+        format!("https://{}{}", self.host, self.path)
+    }
+
+    fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(key, _)| key == &name.to_ascii_lowercase())
+            .map(|(_, value)| value.as_str())
+    }
+}
+
+/// What the local server answers.
+enum Reply {
+    /// A status and a body.
+    Body(u16, Vec<u8>),
+    /// A redirect to a path on this server.
+    Redirect(String),
+    /// Close the connection with no answer, the way a host that does not
+    /// answer leaves the client.
+    Hangup,
+}
+
+impl Reply {
+    fn json(status: u16, body: &str) -> Self {
+        Self::Body(status, body.as_bytes().to_vec())
+    }
+}
+
+/// A local HTTP/1.1 server on 127.0.0.1 that answers every request
+/// through `handler` and records it. It lives as long as the test.
+struct LocalHttp {
+    port: u16,
+    seen: std::sync::Arc<std::sync::Mutex<Vec<Seen>>>,
+}
+
+impl LocalHttp {
+    fn start(handler: impl Fn(&Seen) -> Reply + Send + Sync + 'static) -> Self {
+        use std::io::{BufRead as _, Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a local port binds");
+        let port = listener.local_addr().expect("an address").port();
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let record = std::sync::Arc::clone(&seen);
+        let handler = std::sync::Arc::new(handler);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let record = std::sync::Arc::clone(&record);
+                let handler = std::sync::Arc::clone(&handler);
+                std::thread::spawn(move || {
+                    let mut reader = std::io::BufReader::new(stream.try_clone().expect("clones"));
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                        return;
+                    }
+                    let mut parts = line.split_whitespace();
+                    let method = parts.next().unwrap_or_default().to_owned();
+                    let path = parts.next().unwrap_or_default().to_owned();
+                    let mut headers = Vec::new();
+                    loop {
+                        let mut header = String::new();
+                        if reader.read_line(&mut header).unwrap_or(0) == 0 {
+                            break;
+                        }
+                        let header = header.trim_end();
+                        if header.is_empty() {
+                            break;
+                        }
+                        if let Some((name, value)) = header.split_once(':') {
+                            headers
+                                .push((name.trim().to_ascii_lowercase(), value.trim().to_owned()));
+                        }
+                    }
+                    let length = headers
+                        .iter()
+                        .find(|(name, _)| name == "content-length")
+                        .and_then(|(_, value)| value.parse::<usize>().ok())
+                        .unwrap_or(0);
+                    let mut body = vec![0; length];
+                    let _ = reader.read_exact(&mut body);
+                    drop(body);
+                    let host = headers
+                        .iter()
+                        .find(|(name, _)| name == "x-rk-original-host")
+                        .map(|(_, value)| value.clone())
+                        .unwrap_or_default();
+                    let request = Seen {
+                        method,
+                        path,
+                        host,
+                        headers,
+                    };
+                    let reply = handler(&request);
+                    record.lock().expect("the record locks").push(request);
+                    let (status, location, body) = match reply {
+                        Reply::Body(status, body) => (status, None, body),
+                        Reply::Redirect(to) => (
+                            302,
+                            Some(format!("http://127.0.0.1:{port}{to}")),
+                            Vec::new(),
+                        ),
+                        Reply::Hangup => return,
+                    };
+                    let mut head = format!(
+                        "HTTP/1.1 {status} X\r\nContent-Length: {}\r\nConnection: close\r\n",
+                        body.len()
+                    );
+                    if let Some(location) = location {
+                        head.push_str("Location: ");
+                        head.push_str(&location);
+                        head.push_str("\r\n");
+                    }
+                    head.push_str("\r\n");
+                    let _ = stream.write_all(head.as_bytes());
+                    let _ = stream.write_all(&body);
+                });
+            }
+        });
+        Self { port, seen }
+    }
+
+    /// The origin to name in `RK_HTTP_ORIGIN`.
+    fn origin(&self) -> String {
+        format!("http://127.0.0.1:{}", self.port)
+    }
+
+    /// Every request received so far, in order.
+    fn seen(&self) -> Vec<Seen> {
+        self.seen.lock().expect("the record locks").clone()
+    }
+}
+
+/// A local server that answers each request by running a stand-in
+/// script the way the tests once ran it as curl: with the URL the request
+/// named as its last argument. An output of three digits alone, or a
+/// trailing line of three digits, is the status, the way `-w` printed it;
+/// otherwise exit 0
+/// answers 200 with the output, exit 22 answers 404, as `curl -f` did,
+/// and any other exit gives no answer. A 3xx status whose body names a
+/// path redirects there. The script keeps its own logs.
+fn script_http(script: PathBuf) -> LocalHttp {
+    LocalHttp::start(move |seen| {
+        let Ok(out) = std::process::Command::new(&script)
+            .args(["-sS", "-w", "\n%{http_code}", &seen.url()])
+            .stdin(std::process::Stdio::null())
+            .output()
+        else {
+            return Reply::Hangup;
+        };
+        let text = String::from_utf8_lossy(&out.stdout).into_owned();
+        let whole = text.trim();
+        if whole.len() == 3 && whole.chars().all(|c| c.is_ascii_digit()) {
+            return Reply::Body(whole.parse().unwrap_or(500), Vec::new());
+        }
+        if let Some((body, status)) = text.rsplit_once('\n')
+            && status.len() == 3
+            && status.chars().all(|c| c.is_ascii_digit())
+        {
+            if status.starts_with('3') && body.trim().starts_with('/') {
+                return Reply::Redirect(body.trim().to_owned());
+            }
+            return Reply::Body(status.parse().unwrap_or(500), body.as_bytes().to_vec());
+        }
+        match out.status.code() {
+            Some(0) => Reply::Body(200, out.stdout),
+            Some(22) => Reply::Body(404, Vec::new()),
+            _ => Reply::Hangup,
+        }
+    })
+}
+
+// ---------------------------------------------------------------------------
+// The reports of a project's hooks: rk doctor and rk status
+
+/// A clone with its hooks as `hooks` names them: each event, and the body
+/// its hook manager writes, under the clone's own hooks directory.
+fn clone_with_hooks(hooks: &[(&str, &str)]) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("a scratch clone exists");
+    git_bare_config(dir.path(), &["init", "-q", "-b", "master"]);
+    let hooks_dir = dir.path().join(".git/hooks");
+    for (event, body) in hooks {
+        let path = hooks_dir.join(event);
+        std::fs::write(&path, body).expect("the hook writes");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                .expect("the hook is executable");
+        }
+    }
+    dir
+}
+
+/// The hook shim prek writes, as its header reads.
+const PREK_SHIM: &str = "#!/bin/sh\n# File generated by prek: https://github.com/j178/prek\n# ID: 182c10f181da4464a3eec51b83331688\nexit 0\n";
+
+/// The hook shim pre-commit writes, as its header reads.
+const PRE_COMMIT_SHIM: &str = "#!/usr/bin/env bash\n# File generated by pre-commit: https://pre-commit.com\n# ID: 138fd403232d2ddd5efb44317e38bf03\nexit 0\n";
+
+/// `rk doctor` in `dir`, with `path` first on `PATH`, as its probes by id.
+fn doctor_probes(
+    dir: &Path,
+    path: Option<&Path>,
+) -> std::collections::BTreeMap<String, serde_json::Value> {
+    let home = Home::new();
+    let mut command = home.rk();
+    command
+        .args(["doctor", "--json"])
+        .env("XDG_STATE_HOME", home.path())
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .current_dir(dir);
+    if let Some(first) = path {
+        let rest = std::env::var_os("PATH").unwrap_or_default();
+        let joined = std::env::join_paths(
+            std::iter::once(first.to_path_buf()).chain(std::env::split_paths(&rest)),
+        )
+        .expect("the PATH joins");
+        command.env("PATH", joined);
+    }
+    let out = command.assert().success().get_output().stdout.clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    report["probes"]
+        .as_array()
+        .expect("a probe list")
+        .iter()
+        .map(|probe| {
+            (
+                probe["id"].as_str().expect("an id").to_owned(),
+                probe.clone(),
+            )
+        })
+        .collect()
+}
+
+/// A stand-in hook manager that answers its version call, or fails it.
+fn stub_manager(dir: &Path, name: &str, answers: bool) {
+    let path = dir.join(name);
+    let body = if answers {
+        format!("#!/bin/sh\necho '{name} 1.0.0'\n")
+    } else {
+        "#!/bin/sh\nexit 1\n".to_owned()
+    };
+    std::fs::write(&path, body).expect("the stand-in writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .expect("the stand-in is executable");
+    }
+}
+
+/// A clone with no `pre-merge-commit` hook gets a failing soft probe that
+/// names the install, and the doctor still exits 0.
+///
+/// SATISFIES tool-requirements:the-doctor-reports-the-hook-runner
+#[test]
+fn the_doctor_reports_a_missing_pre_merge_commit_hook() {
+    let clone = clone_with_hooks(&[("pre-commit", PREK_SHIM)]);
+    let probes = doctor_probes(clone.path(), None);
+    let gate = &probes["pre-merge-commit-hook"];
+    assert_eq!(gate["status"], "failed", "{gate}");
+    assert_eq!(gate["class"], "soft", "{gate}");
+    assert!(
+        gate["remediation"]
+            .as_str()
+            .is_some_and(|text| text.contains("--hook-type pre-merge-commit")),
+        "{gate}"
+    );
+}
+
+/// Hooks prek wrote add the `prek` probe, which runs the prek on `PATH`.
+///
+/// SATISFIES tool-requirements:the-doctor-reports-the-hook-runner
+#[test]
+fn the_doctor_reports_prek_for_prek_hooks() {
+    let clone = clone_with_hooks(&[("pre-commit", PREK_SHIM), ("pre-merge-commit", PREK_SHIM)]);
+    let stubs = tempfile::tempdir().expect("a stub dir exists");
+    stub_manager(stubs.path(), "prek", true);
+    let probes = doctor_probes(clone.path(), Some(stubs.path()));
+    assert_eq!(probes["pre-merge-commit-hook"]["status"], "ok");
+    let prek = &probes["prek"];
+    assert_eq!(prek["status"], "ok", "{prek}");
+    assert!(
+        prek["message"]
+            .as_str()
+            .is_some_and(|text| text.contains("pre-commit, pre-merge-commit")),
+        "{prek}"
+    );
+    assert!(!probes.contains_key("pre-commit"));
+}
+
+/// Hooks pre-commit wrote add the `pre-commit` probe.
+///
+/// SATISFIES tool-requirements:the-doctor-reports-the-hook-runner
+#[test]
+fn the_doctor_reports_pre_commit_for_pre_commit_hooks() {
+    let clone = clone_with_hooks(&[
+        ("pre-commit", PRE_COMMIT_SHIM),
+        ("pre-push", PRE_COMMIT_SHIM),
+    ]);
+    let stubs = tempfile::tempdir().expect("a stub dir exists");
+    stub_manager(stubs.path(), "pre-commit", true);
+    let probes = doctor_probes(clone.path(), Some(stubs.path()));
+    assert_eq!(
+        probes["pre-commit"]["status"], "ok",
+        "{}",
+        probes["pre-commit"]
+    );
+    assert!(!probes.contains_key("prek"));
+}
+
+/// A plain shell hook is the project's own, with no manager probe.
+///
+/// SATISFIES tool-requirements:the-doctor-reports-the-hook-runner
+#[test]
+fn the_doctor_reports_a_custom_hook_as_the_projects_own() {
+    let clone = clone_with_hooks(&[("pre-merge-commit", "#!/bin/sh\nmake check\n")]);
+    let probes = doctor_probes(clone.path(), None);
+    assert_eq!(probes["pre-merge-commit-hook"]["status"], "ok");
+    assert_eq!(probes["own-hooks"]["status"], "ok");
+    assert!(!probes.contains_key("prek") && !probes.contains_key("pre-commit"));
+}
+
+/// A hook git's configuration defines is a gate too, on a git that runs
+/// one, and a hook under `core.hooksPath` is read where git reads it.
+///
+/// SATISFIES tool-requirements:the-doctor-reports-the-hook-runner
+#[test]
+fn the_doctor_reads_a_configured_hook_and_the_hooks_path() {
+    let clone = clone_with_hooks(&[]);
+    git_bare_config(
+        clone.path(),
+        &["config", "hook.review.event", "pre-merge-commit"],
+    );
+    git_bare_config(clone.path(), &["config", "hook.review.command", "true"]);
+    let probes = doctor_probes(clone.path(), None);
+    assert_eq!(
+        probes["pre-merge-commit-hook"]["status"], "ok",
+        "{}",
+        probes["pre-merge-commit-hook"]
+    );
+    let configured = &probes["configured-hooks"];
+    assert_eq!(configured["status"], "ok", "{configured}");
+    assert!(
+        configured["message"]
+            .as_str()
+            .is_some_and(|text| text.contains("pre-merge-commit")),
+        "{configured}"
+    );
+    assert!(!probes.contains_key("own-hooks"), "{probes:?}");
+
+    let clone = clone_with_hooks(&[]);
+    let hooks = clone.path().join(".hooks");
+    std::fs::create_dir_all(&hooks).expect("the hooks dir creates");
+    std::fs::write(hooks.join("pre-merge-commit"), PREK_SHIM).expect("the hook writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(
+            hooks.join("pre-merge-commit"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .expect("the hook is executable");
+    }
+    git_bare_config(clone.path(), &["config", "core.hooksPath", ".hooks"]);
+    let probes = doctor_probes(clone.path(), None);
+    assert_eq!(probes["pre-merge-commit-hook"]["status"], "ok");
+    assert!(probes.contains_key("prek"), "{probes:?}");
+    assert!(!probes.contains_key("configured-hooks"), "{probes:?}");
+}
+
+/// A manager that does not run fails its probe, and the doctor still
+/// exits 0.
+///
+/// SATISFIES tool-requirements:the-doctor-reports-the-hook-runner
+#[test]
+fn the_doctor_reports_a_missing_runner_and_exits_zero() {
+    let clone = clone_with_hooks(&[("pre-merge-commit", PREK_SHIM)]);
+    let stubs = tempfile::tempdir().expect("a stub dir exists");
+    stub_manager(stubs.path(), "prek", false);
+    let probes = doctor_probes(clone.path(), Some(stubs.path()));
+    let prek = &probes["prek"];
+    assert_eq!(prek["status"], "failed", "{prek}");
+    assert!(
+        prek["remediation"]
+            .as_str()
+            .is_some_and(|text| text.contains("install prek")),
+        "{prek}"
+    );
+}
+
+/// A landed target with a tracked hook configuration below its root.
+fn landed_with_nested_config() -> tempfile::TempDir {
+    let target = tempfile::tempdir().expect("a scratch target exists");
+    git_in(target.path(), &["init", "-q", "-b", "master"]);
+    land_rust(target.path()).success();
+    let nested = target.path().join("fixtures/x");
+    std::fs::create_dir_all(&nested).expect("the fixture dir creates");
+    std::fs::write(nested.join(".pre-commit-config.yaml"), "repos: []\n")
+        .expect("the nested config writes");
+    git_in(target.path(), &["add", "-A"]);
+    target
+}
+
+/// The warnings of `rk status --json` with `--check` or not, and its exit.
+fn status_warnings(target: &Path, check: bool) -> (Option<i32>, Vec<serde_json::Value>) {
+    let mut command = rk();
+    command.args(["status", "--json", "--target"]).arg(target);
+    if check {
+        command.arg("--check");
+    }
+    let out = command.output().expect("rk runs");
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one JSON object");
+    (
+        out.status.code(),
+        report["warnings"].as_array().cloned().unwrap_or_default(),
+    )
+}
+
+/// A tracked hook configuration below the root, which no `.prekignore`
+/// excludes, is reported by path with the repair.
+///
+/// SATISFIES tool-requirements:a-nested-hook-configuration-is-reported
+#[test]
+fn status_reports_a_nested_hook_configuration() {
+    let target = landed_with_nested_config();
+    let (_, warnings) = status_warnings(target.path(), false);
+    let nested: Vec<&serde_json::Value> = warnings
+        .iter()
+        .filter(|warning| warning["code"] == "nested-hook-configuration")
+        .collect();
+    assert_eq!(nested.len(), 1, "{warnings:?}");
+    let reason = nested[0]["reason"].as_str().expect("a reason");
+    assert!(
+        reason.contains("fixtures/x/.pre-commit-config.yaml"),
+        "{reason}"
+    );
+    assert!(reason.contains(".prekignore"), "{reason}");
+}
+
+/// A root `.prekignore` that lists the directory takes it out.
+///
+/// SATISFIES tool-requirements:a-nested-hook-configuration-is-reported
+#[test]
+fn status_omits_a_nested_configuration_that_prekignore_excludes() {
+    let target = landed_with_nested_config();
+    std::fs::write(target.path().join(".prekignore"), "fixtures/\n").expect("the ignore writes");
+    let (_, warnings) = status_warnings(target.path(), false);
+    assert!(
+        warnings
+            .iter()
+            .all(|warning| warning["code"] != "nested-hook-configuration"),
+        "{warnings:?}"
+    );
+}
+
+/// The nested configuration is a warning, so `--check` does not fail on
+/// it: a target that passes the check passes it still, with the warning.
+///
+/// SATISFIES tool-requirements:a-nested-hook-configuration-is-reported
+#[test]
+fn status_check_passes_with_a_nested_configuration() {
+    let target = tempfile::tempdir().expect("a scratch target exists");
+    git_in(target.path(), &["init", "-q", "-b", "master"]);
+    land_rust(target.path()).success();
+    answer_the_seeded_sentinel(target.path());
+    seed_setup_proof(target.path());
+    git_in(target.path(), &["add", "-A"]);
+    let (code, report) = status_check_json(target.path());
+    assert_eq!(code, 0, "the baseline passes the check: {report}");
+    let nested = target.path().join("fixtures/x");
+    std::fs::create_dir_all(&nested).expect("the fixture dir creates");
+    std::fs::write(nested.join(".pre-commit-config.yaml"), "repos: []\n")
+        .expect("the nested config writes");
+    git_in(target.path(), &["add", "-A"]);
+    let (code, report) = status_check_json(target.path());
+    assert_eq!(code, 0, "the warning fails no check: {report}");
+    assert!(
+        report["warnings"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|warning| warning["code"] == "nested-hook-configuration"),
+        "{report}"
+    );
+}
+
+/// The nested configurations `rk status` names, by path, once `files`
+/// are written into `target` and tracked.
+fn nested_reported(target: &Path, files: &[(&str, &str)]) -> Vec<String> {
+    for (path, body) in files {
+        let path = target.join(path);
+        std::fs::create_dir_all(path.parent().expect("a parent")).expect("the dir creates");
+        std::fs::write(&path, body).expect("the file writes");
+    }
+    git_in(target, &["add", "-A"]);
+    let (_, warnings) = status_warnings(target, false);
+    nested_paths(&warnings)
+}
+
+fn nested_paths(warnings: &[serde_json::Value]) -> Vec<String> {
+    let mut paths: Vec<String> = warnings
+        .iter()
+        .filter(|warning| warning["code"] == "nested-hook-configuration")
+        .filter_map(|warning| warning["reason"].as_str())
+        .filter_map(|reason| {
+            reason
+                .split_whitespace()
+                .find(|word| word.ends_with(".pre-commit-config.yaml"))
+                .map(|word| word.trim_matches(|c: char| c == ',' || c == '`').to_owned())
+        })
+        .collect();
+    paths.sort();
+    paths
+}
+
+/// The search walks directories as prek does: a `.prekignore` below the
+/// root counts for its own directory, a pattern that names only the file
+/// leaves its directory in the walk, and the global excludes still count
+/// beside a root `.prekignore`.
+///
+/// SATISFIES tool-requirements:a-nested-hook-configuration-is-reported
+#[test]
+fn the_nested_search_walks_directories_as_prek_does() {
+    let config = "repos: []\n";
+    let target = landed_with_nested_config();
+    let found = nested_reported(
+        target.path(),
+        &[
+            ("fixtures/.prekignore", "x/\n"),
+            ("fixtures/y/.pre-commit-config.yaml", config),
+        ],
+    );
+    assert_eq!(found, vec!["fixtures/y/.pre-commit-config.yaml"]);
+
+    let target = landed_with_nested_config();
+    let found = nested_reported(
+        target.path(),
+        &[(".prekignore", "fixtures/x/.pre-commit-config.yaml\n")],
+    );
+    assert_eq!(found, vec!["fixtures/x/.pre-commit-config.yaml"]);
+
+    let target = landed_with_nested_config();
+    let global = target.path().join(".git/rk-global-excludes");
+    std::fs::write(&global, "fixtures/\n").expect("the excludes write");
+    git_in(
+        target.path(),
+        &["config", "core.excludesFile", &global.display().to_string()],
+    );
+    let found = nested_reported(target.path(), &[(".prekignore", "unrelated/\n")]);
+    assert!(found.is_empty(), "{found:?}");
+}
+
+/// A relative target resolves its `.prekignore` where the target is: the
+/// directory it lists is left out, and another is still reported.
+///
+/// SATISFIES tool-requirements:a-nested-hook-configuration-is-reported
+#[test]
+fn a_relative_target_reads_its_own_prekignore() {
+    let target = landed_with_nested_config();
+    std::fs::write(target.path().join(".prekignore"), "fixtures/\n").expect("the ignore writes");
+    let other = target.path().join("other");
+    std::fs::create_dir_all(&other).expect("the dir creates");
+    std::fs::write(other.join(".pre-commit-config.yaml"), "repos: []\n")
+        .expect("the config writes");
+    git_in(target.path(), &["add", "-A"]);
+    let parent = target.path().parent().expect("a parent");
+    let name = target.path().file_name().expect("a name");
+    let out = rk()
+        .current_dir(parent)
+        .args(["status", "--json", "--target"])
+        .arg(name)
+        .output()
+        .expect("rk runs");
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one JSON object");
+    let warnings = report["warnings"].as_array().cloned().unwrap_or_default();
+    assert_eq!(
+        nested_paths(&warnings),
+        vec!["other/.pre-commit-config.yaml"],
+        "{warnings:?}"
+    );
+}
+
+/// Only a Cookiecutter template directory is skipped, not every name
+/// with braces, and a hidden directory is skipped unless a rule keeps it.
+///
+/// SATISFIES tool-requirements:a-nested-hook-configuration-is-reported
+#[test]
+fn the_nested_search_skips_templates_and_hidden_directories_as_prek_does() {
+    let config = "repos: []\n";
+    let target = landed_with_nested_config();
+    let found = nested_reported(
+        target.path(),
+        &[
+            (".prekignore", "fixtures/\n!.kept/\n"),
+            ("{{ordinary}}/.pre-commit-config.yaml", config),
+            ("{{cookiecutter.name}}/.pre-commit-config.yaml", config),
+            (".hidden/.pre-commit-config.yaml", config),
+            (".kept/.pre-commit-config.yaml", config),
+        ],
+    );
+    assert_eq!(
+        found,
+        vec![
+            ".kept/.pre-commit-config.yaml",
+            "{{ordinary}}/.pre-commit-config.yaml"
+        ]
+    );
+}
+
+/// This repository's own hooks: every check on the `manual` stage, which
+/// `just check` and CI run across all files, also carries
+/// `pre-merge-commit`, the stage of the hook `rk integrate` asks git to
+/// run, so the integration gate and CI cannot drift apart.
+#[test]
+fn every_manual_check_here_also_gates_the_integration() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let text = std::fs::read_to_string(root.join(".pre-commit-config.yaml"))
+        .expect("the hook configuration reads");
+    let mut checked = 0;
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        let Some(list) = trimmed
+            .strip_prefix("stages: [")
+            .or_else(|| trimmed.strip_prefix("default_stages: ["))
+        else {
+            continue;
+        };
+        let stages: Vec<&str> = list
+            .trim_end_matches(']')
+            .split(',')
+            .map(str::trim)
+            .collect();
+        if stages.contains(&"manual") {
+            checked += 1;
+            assert!(stages.contains(&"pre-merge-commit"), "{line}");
+        }
+    }
+    assert!(checked > 1, "the configuration lists manual checks");
+    assert!(
+        text.contains(
+            "default_install_hook_types: [pre-commit, commit-msg, pre-push, pre-merge-commit]"
+        ),
+        "a plain install arms the gate"
+    );
+}
+
+/// Both prune verbs check the forge CLI before they ask the forge: a gh
+/// that is missing, one that cannot start, and one below its floor each
+/// stop `--verify` before any forge call.
+///
+/// SATISFIES tool-requirements:a-verb-checks-its-tools-first
+#[test]
+fn prune_verify_checks_the_forge_cli_first() {
+    let stubs = tempfile::tempdir().expect("a stub dir exists");
+    let log = stubs.path().join("gh.log");
+    let old = stubs.path().join("old/gh");
+    std::fs::create_dir_all(old.parent().expect("a parent")).expect("the dir creates");
+    std::fs::write(
+        &old,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\necho 'gh version 2.56.0 (2024-09-01)'\n",
+            log.display()
+        ),
+    )
+    .expect("the stand-in writes");
+    let inert = stubs.path().join("inert/gh");
+    std::fs::create_dir_all(inert.parent().expect("a parent")).expect("the dir creates");
+    std::fs::write(&inert, "#!/bin/sh\nexit 0\n").expect("the stand-in writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&old, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        std::fs::set_permissions(&inert, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+    }
+    let repo = branch_fixture();
+    gone_branch(repo.path(), "feat/merged");
+    let (_parent, seated) = worktree_fixture();
+    gone_seat(&seated, "feat/merged");
+    for (gh, said) in [
+        (PathBuf::from("/no/such/gh"), "gh is missing"),
+        (inert, "gh does not start"),
+        (old, "gh 2.56.0 is below the 2.57.0 rk calls"),
+    ] {
+        for (verb, target) in [("branches", repo.path()), ("worktree", seated.as_path())] {
+            rk_scrubbed()
+                .args([verb, "prune", "--verify", "--target"])
+                .arg(target)
+                .env("RK_GH_BIN", &gh)
+                .assert()
+                .code(73)
+                .stderr(predicate::str::contains(said));
+        }
+    }
+    let calls = std::fs::read_to_string(&log).unwrap_or_default();
+    assert!(
+        calls.lines().all(|line| line == "--version"),
+        "no forge call ran: {calls}"
+    );
+}
+
+/// A sync whose day is stamped, or whose lock another run holds, skips as
+/// before when nix is missing: the tools are checked only once the sync
+/// acts. An acting envrc run reports the missing tool and exits 0; an
+/// operator run fails with it. A pending recovery waits for the check, so
+/// a missing tool touches no file.
+///
+/// SATISFIES tool-requirements:a-verb-checks-its-tools-first
+#[test]
+fn a_sync_checks_its_tools_only_when_it_acts() {
+    let missing_nix = |fixture: &SelfDependFixture| {
+        std::fs::remove_file(fixture.mock.path().join("nix")).expect("the nix stand-in goes");
+    };
+
+    let stamped = SelfDependFixture::new();
+    stamped.write_flake("v0.2.15");
+    stamped.commit_all();
+    missing_nix(&stamped);
+    std::fs::create_dir_all(stamped.state_dir()).expect("the state dir creates");
+    std::fs::write(
+        stamped.state_dir().join(format!("{}.stamp", stamped.key())),
+        format!("{}\n", today_utc()),
+    )
+    .expect("the stamp plants");
+    let (code, report) = stamped.sync_json(&["self-depend", "sync", "--apply"]);
+    assert_eq!(
+        (code, report["outcome"].as_str()),
+        (Some(0), Some("skipped-stamped")),
+        "{report}"
+    );
+
+    let locked = SelfDependFixture::new();
+    locked.write_flake("v0.2.15");
+    locked.commit_all();
+    missing_nix(&locked);
+    std::fs::create_dir_all(locked.state_dir()).expect("the state dir creates");
+    std::fs::write(
+        locked.state_dir().join(format!("{}.lock", locked.key())),
+        format!(
+            "pid={}\nstarted={}\n",
+            std::process::id(),
+            release_kit::applog::now_utc()
+        ),
+    )
+    .expect("the lock plants");
+    let (code, report) = locked.sync_json(&["self-depend", "sync", "--apply"]);
+    assert_eq!(
+        (code, report["outcome"].as_str()),
+        (Some(0), Some("skipped-locked")),
+        "{report}"
+    );
+
+    let acting = SelfDependFixture::new();
+    acting.write_flake("v0.2.15");
+    acting.commit_all();
+    missing_nix(&acting);
+    let (code, report) = acting.sync_json(&["self-depend", "sync", "--apply"]);
+    assert_eq!(code, Some(0), "{report}");
+    assert_eq!(report["outcome"], "prerequisite-unmet", "{report}");
+    let detail = report["detail"].as_str().unwrap_or_default();
+    assert!(
+        detail.contains("nix is missing") && detail.contains("next: install nix"),
+        "{detail}"
+    );
+    let (code, report) =
+        acting.sync_json(&["self-depend", "sync", "--apply", "--caller", "operator"]);
+    assert_ne!(code, Some(0), "{report}");
+    assert!(acting.curl_log().is_empty(), "no release page was read");
+
+    let pending = SelfDependFixture::new();
+    pending.write_flake("v0.2.15");
+    pending.commit_all();
+    missing_nix(&pending);
+    let flake = pending.read("flake.nix");
+    let backup = pending.state_dir().join(pending.key()).join("backup");
+    std::fs::create_dir_all(&backup).expect("the backup dir creates");
+    std::fs::write(backup.join("flake.nix"), &flake).expect("writes");
+    std::fs::write(backup.join("flake.lock"), pending.read("flake.lock")).expect("writes");
+    std::fs::write(
+        pending.state_dir().join(pending.key()).join("pending.json"),
+        r#"{"target":"x","pid":4294967295,"present":{"flake.nix":true,"flake.lock":true}}"#,
+    )
+    .expect("the marker writes");
+    let half = flake.replace("v0.2.15", "v0.2.16");
+    std::fs::write(pending.target().join("flake.nix"), &half).expect("half-moved");
+    let (_, report) = pending.sync_json(&["self-depend", "sync", "--apply"]);
+    assert_eq!(report["outcome"], "prerequisite-unmet", "{report}");
+    assert_eq!(
+        pending.read("flake.nix"),
+        half,
+        "the recovery waited for the check"
+    );
+}
+
+/// Each acting row of the tool table stops before its first forge read or
+/// write: the shell of a setup step and of a bash build, and git-cliff for
+/// the release request and the build.
+///
+/// SATISFIES tool-requirements:a-verb-checks-its-tools-first
+#[test]
+fn each_acting_row_checks_its_tool_first() {
+    let fixture = ForgeFixture::new();
+    let target = fixture.target.path().to_path_buf();
+    let before = (repository_state(&target), tree_listing(&target));
+    fixture
+        .rk(&["setup", "step", "default-branch", "--apply"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .env("RK_SH_BIN", "/no/such/sh")
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("sh is missing"));
+    assert_eq!(fixture.log(), "", "no forge call ran");
+    assert_eq!(
+        (repository_state(&target), tree_listing(&target)),
+        before,
+        "the target is unchanged"
+    );
+
+    // A merged release request, so the build would build: the seeded
+    // artifact and the repository stay as they were.
+    let bash = Engine::new("bash", "github", &[], "0.1.0");
+    let report = bash.ok("request");
+    bash.merge(report["request"].as_u64().expect("a request"));
+    std::fs::create_dir_all(bash.dir().join("dist")).expect("the dist dir creates");
+    std::fs::write(bash.dir().join("dist/kept.txt"), "kept\n").expect("the artifact seeds");
+    let before = (repository_state(bash.dir()), tree_listing(bash.dir()));
+    let calls = bash.log();
+    bash.run("build")
+        .env("RK_SH_BIN", "/no/such/sh")
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("sh is missing"));
+    let added = bash.log()[calls.len()..].to_owned();
+    assert!(
+        added.lines().all(|line| line.ends_with("--version")),
+        "only version calls ran: {added}"
+    );
+    assert_eq!(
+        (repository_state(bash.dir()), tree_listing(bash.dir())),
+        before,
+        "the build output and the repository are unchanged"
+    );
+
+    for action in ["request", "build"] {
+        let engine = Engine::new("bash", "github", &[], "0.1.0");
+        if action == "build" {
+            let report = engine.ok("request");
+            engine.merge(report["request"].as_u64().expect("a request"));
+        }
+        let before = (repository_state(engine.dir()), tree_listing(engine.dir()));
+        let calls = engine.log();
+        engine
+            .run(action)
+            .env("RK_GIT_CLIFF_BIN", "/no/such/git-cliff")
+            .assert()
+            .code(73)
+            .stderr(predicate::str::contains("git-cliff is missing"));
+        let added = engine.log()[calls.len()..].to_owned();
+        assert!(
+            added.lines().all(|line| line.ends_with("--version")),
+            "{action}: only version calls ran: {added}"
+        );
+        assert_eq!(
+            (repository_state(engine.dir()), tree_listing(engine.dir())),
+            before,
+            "{action}: the target is unchanged"
+        );
+    }
+}
+
+/// Every file below `dir` outside `.git`, with its bytes, so a test can
+/// compare a target before and after a refusal.
+fn tree_listing(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+    let mut found = Vec::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(next) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&next) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.file_name().is_some_and(|name| name == ".git") {
+                continue;
+            }
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                let bytes = std::fs::read(&path).unwrap_or_default();
+                found.push((path.strip_prefix(dir).unwrap_or(&path).to_path_buf(), bytes));
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
+/// The check judges the program that runs, from where it runs. An empty
+/// override is no override, for the check and the spawn alike. A relative
+/// override of a tool that runs in the target resolves in the target, not
+/// in the caller's directory.
+///
+/// SATISFIES tool-requirements:a-verb-checks-its-tools-first
+#[test]
+fn the_check_judges_the_program_that_runs() {
+    // An empty override falls back to sh, for the check and for the build
+    // alike: a merged release request builds its artifacts.
+    let bash = Engine::new("bash", "github", &[], "0.1.0");
+    let report = bash.ok("request");
+    bash.merge(report["request"].as_u64().expect("a request"));
+    let out = bash
+        .run("build")
+        .env("RK_SH_BIN", "")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let build: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
+    assert_eq!(build["state"], "release", "{build}");
+    assert!(
+        bash.dir().join("dist/widget-0.1.0.tar.gz").is_file(),
+        "the build wrote its artifact: {build}"
+    );
+
+    let caller = tempfile::tempdir().expect("a caller dir exists");
+    let stub = |dir: &Path| {
+        let path = dir.join("rk-uv");
+        std::fs::write(&path, "#!/bin/sh\nexit 0\n").expect("the stand-in writes");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        }
+    };
+    // Only beside the caller: the target has no such file, so the check
+    // refuses, the way the spawn in the target would fail.
+    let python = Engine::new("python", "github", &[], "0.1.0");
+    stub(caller.path());
+    python
+        .run("request")
+        .current_dir(caller.path())
+        .env("RK_UV_BIN", "./rk-uv")
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("uv is missing"));
+    // Only in the target's git directory: the check passes it.
+    let python = Engine::new("python", "github", &[], "0.1.0");
+    stub(&python.dir().join(".git"));
+    let out = python
+        .run("request")
+        .current_dir(caller.path())
+        .env("RK_UV_BIN", "./.git/rk-uv")
+        .output()
+        .expect("rk runs");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("uv is missing"), "{stderr}");
+
+    // A relative PATH entry resolves where the tool runs too: a uv found
+    // only through `uvbin` in the caller's directory is missing in the
+    // target, and one in the target's `uvbin` is found.
+    // The host's PATH with every directory that holds `tool` dropped, led
+    // by the relative `entry`.
+    let path_with = |entry: &str, tool: &str| {
+        let rest = std::env::var_os("PATH").unwrap_or_default();
+        std::env::join_paths(
+            std::iter::once(PathBuf::from(entry))
+                .chain(std::env::split_paths(&rest).filter(|dir| !dir.join(tool).exists())),
+        )
+        .expect("the PATH joins")
+    };
+    let python = Engine::new("python", "github", &[], "0.1.0");
+    std::fs::create_dir_all(caller.path().join("uvbin")).expect("the dir creates");
+    stub(&caller.path().join("uvbin"));
+    std::fs::rename(
+        caller.path().join("uvbin/rk-uv"),
+        caller.path().join("uvbin/uv"),
+    )
+    .expect("the stand-in is named uv");
+    python
+        .run("request")
+        .current_dir(caller.path())
+        .env_remove("RK_UV_BIN")
+        .env("PATH", path_with("uvbin", "uv"))
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("uv is missing"));
+}
+
+/// A setup step runs the forge CLI that the check judged: a relative
+/// `PATH` entry names the caller's gh, so the target's own `ghbin/gh`, an
+/// older stand-in, never runs, though the step runs in the target.
+///
+/// SATISFIES tool-requirements:a-verb-checks-its-tools-first
+#[test]
+fn a_setup_step_runs_the_forge_cli_the_check_judged() {
+    let fixture = ForgeFixture::new();
+    let caller = tempfile::tempdir().expect("a caller dir exists");
+    let exec = |path: &Path| {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        }
+    };
+    std::fs::create_dir_all(caller.path().join("ghbin")).expect("the dir creates");
+    let checked = caller.path().join("ghbin/gh");
+    std::fs::copy(fixture.mock.path().join("gh"), &checked).expect("the mock copies");
+    exec(&checked);
+    let marker = caller.path().join("unchecked-ran");
+    let target_bin = fixture.target.path().join("ghbin");
+    std::fs::create_dir_all(&target_bin).expect("the dir creates");
+    std::fs::write(
+        target_bin.join("gh"),
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\necho 'gh version 2.56.0 (2024-09-01)'\n",
+            marker.display()
+        ),
+    )
+    .expect("the stand-in writes");
+    exec(&target_bin.join("gh"));
+    fixture
+        .rk(&["setup", "step", "default-branch", "--apply"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .current_dir(caller.path())
+        .env_remove("RK_GH_BIN")
+        .env("PATH", relative_path_with("ghbin", "gh"))
+        .assert()
+        .success();
+    assert!(
+        !marker.exists(),
+        "the target's gh never ran: {}",
+        std::fs::read_to_string(&marker).unwrap_or_default()
+    );
+    assert!(
+        fixture
+            .log()
+            .lines()
+            .any(|line| !line.ends_with("--version")),
+        "the checked gh made the forge call: {}",
+        fixture.log()
+    );
+}
+
+/// A step's search path leads with the checked forge CLI's directory, so
+/// the setup judges the shell under that path: an `sh` beside gh that
+/// cannot run stops the step before any forge call, though the shell on
+/// the inherited PATH runs.
+///
+/// SATISFIES tool-requirements:a-verb-checks-its-tools-first
+#[test]
+fn a_setup_step_judges_the_shell_under_the_step_path() {
+    let fixture = ForgeFixture::new();
+    let bin = tempfile::tempdir().expect("a bin dir exists");
+    let gh = bin.path().join("gh");
+    std::fs::copy(fixture.mock.path().join("gh"), &gh).expect("the mock copies");
+    let sh = bin.path().join("sh");
+    std::fs::write(&sh, "#!/bin/sh\nexit 127\n").expect("the stand-in writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        for path in [&gh, &sh] {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        }
+    }
+    let target = fixture.target.path().to_path_buf();
+    let before = (repository_state(&target), tree_listing(&target));
+    fixture
+        .rk(&["setup", "step", "default-branch", "--apply"])
+        .args(["--repo", "acme/widget", "--forge", "github"])
+        .env("RK_GH_BIN", &gh)
+        .assert()
+        .code(73)
+        .stderr(predicate::str::contains("sh does not answer"));
+    assert!(
+        fixture
+            .log()
+            .lines()
+            .all(|line| line.ends_with("--version")),
+        "no forge call ran: {}",
+        fixture.log()
+    );
+    assert_eq!(
+        (repository_state(&target), tree_listing(&target)),
+        before,
+        "the target is unchanged"
+    );
+}
+
+/// The host's PATH with every directory that holds `tool` dropped, led by
+/// the relative `entry`.
+fn relative_path_with(entry: &str, tool: &str) -> std::ffi::OsString {
+    let rest = std::env::var_os("PATH").unwrap_or_default();
+    std::env::join_paths(
+        std::iter::once(PathBuf::from(entry))
+            .chain(std::env::split_paths(&rest).filter(|dir| !dir.join(tool).exists())),
+    )
+    .expect("the PATH joins")
+}
+
+/// The forge CLI runs from the absolute path the check judged: a relative
+/// override and a relative PATH entry both name the caller's file, though
+/// the forge calls run in the target.
+///
+/// SATISFIES tool-requirements:a-verb-checks-its-tools-first
+#[test]
+fn the_forge_cli_runs_from_the_path_the_check_judged() {
+    let caller = tempfile::tempdir().expect("a caller dir exists");
+    let path_with = relative_path_with;
+    // The forge CLI runs from the absolute path the check judged: a relative
+    // override and a relative PATH entry both name the caller's file, even
+    // though the forge calls run in the target.
+    let repo = branch_fixture();
+    gone_branch(repo.path(), "feat/merged");
+    let merged_tip = tip_of(repo.path(), "feat/merged");
+    std::fs::create_dir_all(caller.path().join("ghbin")).expect("the dir creates");
+    let gh = caller.path().join("ghbin/gh");
+    std::fs::write(
+        &gh,
+        with_version_answer(
+            &confirming_gh(&merged_tip),
+            "gh version 2.57.0 (2024-09-16)",
+        ),
+    )
+    .expect("the stand-in writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+    // A file named gh that cannot run, earlier on PATH, shadows nothing:
+    // the search takes the first one that runs, as the spawn's own does.
+    std::fs::create_dir_all(caller.path().join("shadow")).expect("the dir creates");
+    std::fs::write(caller.path().join("shadow/gh"), "#!/bin/sh\nexit 1\n")
+        .expect("the shadow writes");
+    let shadowed = {
+        let rest = path_with("ghbin", "gh");
+        std::env::join_paths(
+            std::iter::once(PathBuf::from("shadow")).chain(std::env::split_paths(&rest)),
+        )
+        .expect("the PATH joins")
+    };
+    for (override_bin, path) in [
+        (Some("./ghbin/gh"), path_with("nowhere", "gh")),
+        (None, path_with("ghbin", "gh")),
+        (None, shadowed),
+    ] {
+        let mut command = rk_scrubbed();
+        command
+            .current_dir(caller.path())
+            .env("PATH", &path)
+            .args(["branches", "prune", "--verify", "--target"])
+            .arg(repo.path());
+        match override_bin {
+            Some(bin) => command.env("RK_GH_BIN", bin),
+            None => command.env_remove("RK_GH_BIN"),
+        };
+        command
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("confirmed: #8"));
     }
 }

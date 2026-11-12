@@ -28,6 +28,7 @@ use crate::worktree::{Worktree, parse_worktrees};
 ///
 /// Each verb's own refusals; every failure is typed.
 pub fn run(args: &LinesArgs) -> Result<(), RkError> {
+    crate::requirements::require("rk lines", &[crate::requirements::Tool::Git])?;
     match &args.action {
         LinesAction::List { target, json } => list(target, Output::new(*json)),
         LinesAction::Open {

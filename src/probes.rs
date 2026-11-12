@@ -13,8 +13,6 @@ use camino::{Utf8Path, Utf8PathBuf};
 use serde::Serialize;
 
 use crate::detect::Forge;
-use crate::diagnostic::{Diagnostic, Reason};
-use crate::error::RkError;
 use crate::skills::record::{RECORD_PATH, Record};
 use crate::skills::{AGENTS_ROOT, CLAUDE_ROOT, Digest};
 
@@ -105,14 +103,14 @@ pub const HARD_RUNTIME_TOOLS: [(&str, &str); 2] = [("git", "git"), ("sh", "bash"
 /// the installed package's wrapper supplies.
 #[must_use]
 pub fn git_bin() -> std::ffi::OsString {
-    std::env::var_os("RK_GIT_BIN").unwrap_or_else(|| "git".into())
+    crate::requirements::Tool::Git.program()
 }
 
 /// One owner for the nix binary every devshell launch spawns: the lock
 /// refresh, the system probe, and the build. `RK_NIX_BIN` substitutes it.
 #[must_use]
 pub fn nix_bin() -> std::ffi::OsString {
-    std::env::var_os("RK_NIX_BIN").unwrap_or_else(|| "nix".into())
+    crate::requirements::Tool::Nix.program()
 }
 
 /// One owner for the direnv binary, which nothing here spawns but the
@@ -120,7 +118,9 @@ pub fn nix_bin() -> std::ffi::OsString {
 /// `RK_DIRENV_BIN` substitutes it.
 #[must_use]
 pub fn direnv_bin() -> std::ffi::OsString {
-    std::env::var_os("RK_DIRENV_BIN").unwrap_or_else(|| "direnv".into())
+    std::env::var_os("RK_DIRENV_BIN")
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "direnv".into())
 }
 
 /// Nix answers; `rk self-depend sync` updates and builds the pinned devshell
@@ -155,7 +155,7 @@ pub fn direnv() -> ProbeResult {
 /// a host whose `sh` is not the one under test.
 #[must_use]
 pub fn sh_bin() -> std::ffi::OsString {
-    std::env::var_os("RK_SH_BIN").unwrap_or_else(|| "sh".into())
+    crate::requirements::Tool::Sh.program()
 }
 
 /// One owner for the git-cliff binary the release engine spawns.
@@ -165,7 +165,7 @@ pub fn sh_bin() -> std::ffi::OsString {
 /// `versions.toml` pin before it trusts any output.
 #[must_use]
 pub fn git_cliff_bin() -> std::ffi::OsString {
-    std::env::var_os("RK_GIT_CLIFF_BIN").unwrap_or_else(|| "git-cliff".into())
+    crate::requirements::Tool::GitCliff.program()
 }
 
 /// One owner for the uv binary the python driver adapter spawns.
@@ -174,13 +174,13 @@ pub fn git_cliff_bin() -> std::ffi::OsString {
 /// and uv enforces the target's own `required-version`.
 #[must_use]
 pub fn uv_bin() -> std::ffi::OsString {
-    std::env::var_os("RK_UV_BIN").unwrap_or_else(|| "uv".into())
+    crate::requirements::Tool::Uv.program()
 }
 
 /// Run the whole catalog, in its stable order.
 #[must_use]
 pub fn run_all() -> Vec<ProbeResult> {
-    vec![
+    let mut probes = vec![
         shell(),
         git(),
         state_root(),
@@ -196,9 +196,9 @@ pub fn run_all() -> Vec<ProbeResult> {
             "gh auth login",
             // `gh auth status` fails when any stored account is broken,
             // even while the active one works; `--active` judges only the
-            // credential this tool would use. Older gh lacks the flag, so
-            // the bare form is the fallback.
-            &[&["auth", "status", "--active"], &["auth", "status"]],
+            // credential this tool would use, and the gh floor is the
+            // release that added it.
+            &[&["auth", "status", "--active"]],
         ),
         forge_cli(
             "glab-auth",
@@ -210,20 +210,6 @@ pub fn run_all() -> Vec<ProbeResult> {
         ),
         forge_cli_floor(Forge::Github),
         forge_cli_floor(Forge::Gitlab),
-        tool(
-            "openssl",
-            "RK_OPENSSL_BIN",
-            "openssl",
-            "OpenSSL; install-bot signs the App JWT with it",
-            &["version"],
-        ),
-        tool(
-            "curl",
-            "RK_CURL_BIN",
-            "curl",
-            "curl; install-bot reads the installation, and rk versions --check and rk self-depend sync fetch with it",
-            &["--version"],
-        ),
         registry(),
         nix(),
         direnv(),
@@ -241,7 +227,98 @@ pub fn run_all() -> Vec<ProbeResult> {
             "pypi-attestations; the release verify step checks a PyPI distribution's attestations with it",
             &["--help"],
         ),
-    ]
+    ];
+    probes.extend(hook_probes());
+    probes
+}
+
+/// The hooks of the repository at the current directory, a report for a
+/// project that uses rk: whether the `pre-merge-commit` hook that
+/// `rk integrate` asks git to run is installed, and whether each hook
+/// manager that wrote an installed hook answers. A hook no known manager
+/// wrote is the project's own. Nothing outside a repository, and nothing
+/// here changes what a verb runs.
+fn hook_probes() -> Vec<ProbeResult> {
+    let Ok(cwd) = std::env::current_dir() else {
+        return Vec::new();
+    };
+    let Some(installed) = crate::hooks::installed(&cwd) else {
+        return Vec::new();
+    };
+    let names = |filter: &dyn Fn(crate::hooks::Writer) -> bool| -> Vec<&'static str> {
+        installed
+            .iter()
+            .filter(|hook| filter(hook.writer))
+            .map(|hook| hook.event)
+            .collect()
+    };
+    let mut probes = vec![if installed
+        .iter()
+        .any(|hook| hook.event == "pre-merge-commit")
+    {
+        ProbeResult::ok(
+            "pre-merge-commit-hook",
+            ProbeClass::Soft,
+            "a pre-merge-commit hook is installed, the gate rk integrate asks git to run",
+        )
+    } else {
+        ProbeResult::failed(
+            "pre-merge-commit-hook",
+            ProbeClass::Soft,
+            "no pre-merge-commit hook is installed, so rk integrate has no gate to run in this clone",
+            "install it with the project's hook manager, for example prek install --hook-type pre-merge-commit",
+        )
+    }];
+    for (id, writer) in [
+        ("prek", crate::hooks::Writer::Prek),
+        ("pre-commit", crate::hooks::Writer::PreCommit),
+    ] {
+        let hooks = names(&|found| found == writer);
+        if hooks.is_empty() {
+            continue;
+        }
+        let answers = Command::new(id)
+            .arg("--version")
+            .output()
+            .is_ok_and(|out| out.status.success());
+        let wrote = hooks.join(", ");
+        probes.push(if answers {
+            ProbeResult::ok(id, ProbeClass::Soft, format!("{id} runs; it wrote the {wrote} hooks"))
+        } else {
+            ProbeResult::failed(
+                id,
+                ProbeClass::Soft,
+                format!("{id} does not run, and the {wrote} hooks call it"),
+                format!("install {id} on the host, or reinstall the hooks with the project's hook manager"),
+            )
+        });
+    }
+    let configured = names(&|found| found == crate::hooks::Writer::Configured);
+    if !configured.is_empty() {
+        let mut events = configured.clone();
+        events.dedup();
+        probes.push(ProbeResult::ok(
+            "configured-hooks",
+            ProbeClass::Soft,
+            format!(
+                "git's configuration defines {} hooks for {}",
+                configured.len(),
+                events.join(", ")
+            ),
+        ));
+    }
+    let own = names(&|found| found == crate::hooks::Writer::Own);
+    if !own.is_empty() {
+        probes.push(ProbeResult::ok(
+            "own-hooks",
+            ProbeClass::Soft,
+            format!(
+                "the {} hooks are the project's own, written by no known hook manager",
+                own.join(", ")
+            ),
+        ));
+    }
+    probes
 }
 
 /// A helper binary answers its version call. `env_override` names the
@@ -254,7 +331,10 @@ fn tool(
     label: &str,
     args: &[&str],
 ) -> ProbeResult {
-    let bin = std::env::var(env_override).unwrap_or_else(|_| default_bin.to_owned());
+    let bin = std::env::var(env_override)
+        .ok()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| default_bin.to_owned());
     match Command::new(&bin).args(args).output() {
         Ok(out) if out.status.success() => {
             ProbeResult::ok(id, ProbeClass::Soft, format!("{default_bin} runs"))
@@ -280,22 +360,14 @@ fn tool(
 /// never a broken install, and every offline verb runs without it.
 fn registry() -> ProbeResult {
     let id = "registry";
-    let curl = std::env::var_os("RK_CURL_BIN").unwrap_or_else(|| "curl".into());
-    // Captured rather than inherited, which is what every other probe in
-    // this file does. `curl -S` writes its own message to the stderr it is
-    // handed, so a probe that inherits this process's stream puts a line
-    // like `curl: (28) Resolving timed out` in front of whatever rk writes
-    // there next. On a verb emitting a JSON diagnostic that is a corrupted
-    // machine stream, and the probe already states its verdict in prose.
-    let answered = Command::new(curl)
-        .args([
-            "-fsSL",
-            "--max-time",
-            "5",
+    let answered = crate::http::send(
+        &crate::http::Request::get(
             "https://index.crates.io/config.json",
-        ])
-        .output()
-        .is_ok_and(|answer| answer.status.success());
+            std::time::Duration::from_secs(5),
+        )
+        .following(),
+    )
+    .is_ok_and(|answer| answer.ok());
     if answered {
         ProbeResult::ok(id, ProbeClass::Soft, "the crates.io index answers")
     } else {
@@ -719,7 +791,10 @@ fn forge_cli(
     login: &str,
     attempts: &[&[&str]],
 ) -> ProbeResult {
-    let bin = std::env::var(env_override).unwrap_or_else(|_| default_bin.to_owned());
+    let bin = std::env::var(env_override)
+        .ok()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| default_bin.to_owned());
     let mut spawned = false;
     for args in attempts {
         match Command::new(&bin).args(*args).output() {
@@ -755,7 +830,10 @@ fn forge_cli(
 /// keeps the tests hermetic.
 #[must_use]
 pub fn forge_bin(forge: Forge) -> String {
-    std::env::var(forge.cli_override()).unwrap_or_else(|_| forge.cli().to_owned())
+    crate::requirements::Tool::ForgeCli(forge)
+        .program()
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// The version probe's stable name.
@@ -847,50 +925,6 @@ fn forge_cli_floor(forge: Forge) -> ProbeResult {
 /// `<major>.<minor>.<patch>` for a message.
 fn show((major, minor, patch): (u32, u32, u32)) -> String {
     format!("{major}.{minor}.{patch}")
-}
-
-/// The gate a verb runs before its first forge call: the CLI is present
-/// and at or above [`Forge::cli_floor`]. Returns the binary to spawn and
-/// the version found.
-///
-/// It runs before anything is written, locally or remotely, so a stale CLI
-/// costs one local process and leaves the clone untouched.
-///
-/// # Errors
-///
-/// [`Reason::PrerequisiteUnmet`] where the CLI is absent, does not answer,
-/// or is below the floor.
-pub fn require_forge_cli(forge: Forge) -> Result<(String, (u32, u32, u32)), RkError> {
-    let bin = forge_bin(forge);
-    let name = forge.cli();
-    let floor = forge.cli_floor();
-    let Some(found) = forge_cli_version(&bin) else {
-        return Err(RkError::refusal(
-            Diagnostic::new(
-                Reason::PrerequisiteUnmet,
-                format!("{name} does not answer --version with a version"),
-            )
-            .expected(format!("{name} at or above {} on PATH", show(floor)))
-            .action(format!("install {name}, then rerun"))
-            .target_state("unchanged"),
-        ));
-    };
-    if found < floor {
-        return Err(RkError::refusal(
-            Diagnostic::new(
-                Reason::PrerequisiteUnmet,
-                format!(
-                    "{name} {} is below the {} rk calls",
-                    show(found),
-                    show(floor)
-                ),
-            )
-            .expected(format!("{name} at or above {}", show(floor)))
-            .action(forge.cli_upgrade())
-            .target_state("unchanged"),
-        ));
-    }
-    Ok((bin, found))
 }
 
 #[cfg(test)]

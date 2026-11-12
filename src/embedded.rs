@@ -275,7 +275,7 @@ mod tests {
     /// belongs on it.
     const GLUE: [&str; 3] = [
         "{}\\n\\n{block}\\n",
-        "{HOOK_TYPES_LINE}\\n\\nrepos:\\n{block}\\n",
+        "{types}\\n\\nrepos:\\n{block}\\n",
         concat!(
             "Authorization: Bearer {jwt}\\nAccept: application/vnd.github+json\\n",
             "X-GitHub-Api-Version: 2022-11-28\\n"

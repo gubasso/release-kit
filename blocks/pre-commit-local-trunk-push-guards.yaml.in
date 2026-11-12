@@ -4,7 +4,7 @@
         language: system
         always_run: true
         pass_filenames: false
-        entry: sh -c '[ "$PRE_COMMIT_REMOTE_BRANCH" = refs/heads/RK_TRUNK_BRANCH ] || exit 0; tracked=$(git rev-parse --verify --quiet "refs/remotes/$PRE_COMMIT_REMOTE_NAME/RK_TRUNK_BRANCH"); for base in "$PRE_COMMIT_FROM_REF" "$tracked"; do case "$base" in "") continue;; *[!0]*) ;; *) continue;; esac; git merge-base --is-ancestor "$base" "$PRE_COMMIT_TO_REF" 2>/dev/null && continue; echo "refusing a force push to RK_TRUNK_BRANCH, because $base is not an ancestor of the pushed tip; rebase onto the remote trunk instead of rewriting it" >&2; exit 1; done'
+        entry: sh -c '[ "$PRE_COMMIT_REMOTE_BRANCH" = refs/heads/RK_TRUNK_BRANCH ] || exit 0; listed=$(git ls-remote "${PRE_COMMIT_REMOTE_URL:-$PRE_COMMIT_REMOTE_NAME}" refs/heads/RK_TRUNK_BRANCH) || { echo "the remote RK_TRUNK_BRANCH cannot be read, so a push to it is refused" >&2; exit 1; }; remote=${listed%%[[:space:]]*}; tracked=$(git rev-parse --verify --quiet "refs/remotes/$PRE_COMMIT_REMOTE_NAME/RK_TRUNK_BRANCH"); for base in "$remote" "$PRE_COMMIT_FROM_REF" "$tracked"; do case "$base" in "") continue;; *[!0]*) ;; *) continue;; esac; git cat-file -e "$base^{commit}" 2>/dev/null || { echo "refusing a force push to RK_TRUNK_BRANCH, because the remote holds $base, which this clone has not fetched; fetch, then rebase onto the remote trunk" >&2; exit 1; }; git merge-base --is-ancestor "$base" "$PRE_COMMIT_TO_REF" 2>/dev/null && continue; echo "refusing a force push to RK_TRUNK_BRANCH, because $base is not an ancestor of the pushed tip; rebase onto the remote trunk instead of rewriting it" >&2; exit 1; done'
       - id: rk-no-merge-commit-to-trunk
         name: rk no merge commit to trunk
         stages: [pre-push]

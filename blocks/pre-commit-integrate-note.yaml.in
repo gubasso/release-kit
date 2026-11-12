@@ -1,6 +1,8 @@
-# rk integrate runs this project's pre-integrate suite as
-# `prek run --hook-stage manual --all-files`, or as `pre-commit run` with
-# the same arguments where prek is not on PATH. Assign to the manual
-# stage every check that must pass before work reaches the trunk, and have
-# continuous integration invoke the same stages: a check that runs on one
-# side of the boundary alone guards one side alone.
+# rk integrate runs this clone's pre-merge-commit hook through git, on the
+# change the integration squashes, and refuses where none is installed.
+# Tag pre-merge-commit on every check that must pass before work reaches
+# the trunk, and add it to default_stages where this file sets them. Have
+# continuous integration invoke the same checks: a check that runs on one
+# side of the boundary alone guards one side alone. prek runs each nested
+# .pre-commit-config.yaml as a project of its own, so a project that runs
+# prek lists a directory of fixtures in a root .prekignore.

@@ -127,6 +127,7 @@ fn withheld_of(prepared: &Prepared) -> Option<Vec<landing::Withheld>> {
 /// receipt, or a destination collides, [`RkError::Missing`] when an apply
 /// resolves no repository, and [`RkError::Io`] on filesystem failure.
 pub fn run(args: &InitArgs) -> Result<(), RkError> {
+    crate::requirements::require("rk init", &[crate::requirements::Tool::Git])?;
     let out = Output::new(args.json);
     if !args.target.is_dir() {
         return Err(RkError::refusal(

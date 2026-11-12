@@ -39,6 +39,13 @@ use crate::setup::steps::{Mutates, STEPS, StepSpec, spec};
 ///
 /// Every failure classified through the matrix, each carrying its `reason`.
 pub fn run(args: &SetupArgs) -> Result<(), RkError> {
+    // Every action that reads a target reads it with git; printing a step
+    // script and listing the steps read nothing.
+    let reads_nothing = matches!(args.action, Some(SetupAction::Script { .. }))
+        || (args.action.is_none() && args.list);
+    if !reads_nothing {
+        crate::requirements::require("rk setup", &[crate::requirements::Tool::Git])?;
+    }
     match &args.action {
         Some(SetupAction::Script { name, forge }) => script(name, forge.as_deref()),
         Some(SetupAction::Check {

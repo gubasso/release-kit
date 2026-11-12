@@ -36,6 +36,7 @@ const OPERATOR_LINE: &str = "Removing a worktree and deleting its branch are the
 /// each documented below; propagates subprocess failures through the
 /// matrix after the report has named every outcome.
 pub fn run(args: &WorktreeArgs) -> Result<(), RkError> {
+    crate::requirements::require("rk worktree", &[crate::requirements::Tool::Git])?;
     match &args.action {
         WorktreeAction::List { target, json } => list(target, Output::new(*json)),
         WorktreeAction::Add {

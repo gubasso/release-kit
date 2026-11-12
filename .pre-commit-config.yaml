@@ -1,10 +1,12 @@
 # The hook runner is prek, from the host. This is the oldest prek the
 # configuration accepts, and ci.yml installs the same version.
 minimum_prek_version: "0.5.7"
-default_install_hook_types: [pre-commit, commit-msg, pre-push]
-# A hook with no stages: key runs at commit and in the manual sweep that
-# `just check` and `rk integrate` run, and never again at push.
-default_stages: [pre-commit, manual]
+default_install_hook_types: [pre-commit, commit-msg, pre-push, pre-merge-commit]
+# A hook with no stages: key runs at commit, in the manual sweep that
+# `just check` and CI run, and in the pre-merge-commit hook that
+# `rk integrate` asks git to run on the staged squash, and never again at
+# push.
+default_stages: [pre-commit, manual, pre-merge-commit]
 
 # The node hook runs on the devshell nodejs. Without this line an empty
 # pre-commit cache can pick `default`, and nodeenv then fails on a prerelease
@@ -15,19 +17,21 @@ default_language_version:
 
 repos:
 # BEGIN release-kit
-# The release convention's hooks. Install every stage they run at, with
-# the hook runner on PATH, prek or pre-commit, which take the same flags:
-# prek install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push
-# A CI sweep commits nothing, so a job running the hook runner against a trunk
-# checkout sets SKIP=no-commit-to-branch,rk-worktree-location in its environment. Append the id of
-# every check this project classifies local-only: the value is a list the
-# project owns the tail of.
-# rk integrate runs this project's pre-integrate suite as
-# `prek run --hook-stage manual --all-files`, or as `pre-commit run` with
-# the same arguments where prek is not on PATH. Assign to the manual
-# stage every check that must pass before work reaches the trunk, and have
-# continuous integration invoke the same stages: a check that runs on one
-# side of the boundary alone guards one side alone.
+# The release convention's hooks. Install every stage they run at with
+# the hook manager this project uses, for example:
+# prek install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push --hook-type pre-merge-commit
+# A CI sweep commits nothing, so a job running the project's hook manager
+# against a trunk checkout sets SKIP=no-commit-to-branch,rk-worktree-location in its environment.
+# Append the id of every check this project classifies local-only: the
+# value is a list the project owns the tail of.
+# rk integrate runs this clone's pre-merge-commit hook through git, on the
+# change the integration squashes, and refuses where none is installed.
+# Tag pre-merge-commit on every check that must pass before work reaches
+# the trunk, and add it to default_stages where this file sets them. Have
+# continuous integration invoke the same checks: a check that runs on one
+# side of the boundary alone guards one side alone. prek runs each nested
+# .pre-commit-config.yaml as a project of its own, so a project that runs
+# prek lists a directory of fixtures in a root .prekignore.
   - repo: https://github.com/compilerla/conventional-pre-commit
     rev: v4.5.0
     hooks:
@@ -67,7 +71,7 @@ repos:
         language: system
         always_run: true
         pass_filenames: false
-        entry: sh -c '[ "$PRE_COMMIT_REMOTE_BRANCH" = refs/heads/master ] || exit 0; tracked=$(git rev-parse --verify --quiet "refs/remotes/$PRE_COMMIT_REMOTE_NAME/master"); for base in "$PRE_COMMIT_FROM_REF" "$tracked"; do case "$base" in "") continue;; *[!0]*) ;; *) continue;; esac; git merge-base --is-ancestor "$base" "$PRE_COMMIT_TO_REF" 2>/dev/null && continue; echo "refusing a force push to master, because $base is not an ancestor of the pushed tip; rebase onto the remote trunk instead of rewriting it" >&2; exit 1; done'
+        entry: sh -c '[ "$PRE_COMMIT_REMOTE_BRANCH" = refs/heads/master ] || exit 0; listed=$(git ls-remote "${PRE_COMMIT_REMOTE_URL:-$PRE_COMMIT_REMOTE_NAME}" refs/heads/master) || { echo "the remote master cannot be read, so a push to it is refused" >&2; exit 1; }; remote=${listed%%[[:space:]]*}; tracked=$(git rev-parse --verify --quiet "refs/remotes/$PRE_COMMIT_REMOTE_NAME/master"); for base in "$remote" "$PRE_COMMIT_FROM_REF" "$tracked"; do case "$base" in "") continue;; *[!0]*) ;; *) continue;; esac; git cat-file -e "$base^{commit}" 2>/dev/null || { echo "refusing a force push to master, because the remote holds $base, which this clone has not fetched; fetch, then rebase onto the remote trunk" >&2; exit 1; }; git merge-base --is-ancestor "$base" "$PRE_COMMIT_TO_REF" 2>/dev/null && continue; echo "refusing a force push to master, because $base is not an ancestor of the pushed tip; rebase onto the remote trunk instead of rewriting it" >&2; exit 1; done'
       - id: rk-no-merge-commit-to-trunk
         name: rk no merge commit to trunk
         stages: [pre-push]
@@ -112,22 +116,22 @@ repos:
     rev: v6.0.0
     hooks:
       - id: trailing-whitespace
-        stages: [pre-commit, manual]
+        stages: [pre-commit, manual, pre-merge-commit]
         args: [--markdown-linebreak-ext=md]
         exclude: '^(CHANGELOG\.md|SECURITY\.md|\.github/workflows/(code-scanning-codeql|pr-title|release-plz|release|scorecard)\.yml|\.release-kit/(manifest|setup-proof)\.json|\.spec-driven-docs/manifest\.json|_docs/\.markdownlint-cli2\.jsonc|_docs/specs/SPEC-(budget-debt|comparison-docs|decision-records|docs-format|docs-foundations|docs-specs|guides|instance|known-issues|spec-to-code|tracking|writing-policy|writing-style)\.md|_docs/specs/SPEC-tracking/tracking\.schema\.json|_docs/(specs|decisions|guides|reference)/TEMPLATE-[a-z-]+\.md)$|(^|/)(Cargo|flake)\.lock$'
       - id: end-of-file-fixer
-        stages: [pre-commit, manual]
+        stages: [pre-commit, manual, pre-merge-commit]
         exclude: '^(CHANGELOG\.md|SECURITY\.md|\.github/workflows/(code-scanning-codeql|pr-title|release-plz|release|scorecard)\.yml|\.release-kit/(manifest|setup-proof)\.json|\.spec-driven-docs/manifest\.json|_docs/\.markdownlint-cli2\.jsonc|_docs/specs/SPEC-(budget-debt|comparison-docs|decision-records|docs-format|docs-foundations|docs-specs|guides|instance|known-issues|spec-to-code|tracking|writing-policy|writing-style)\.md|_docs/specs/SPEC-tracking/tracking\.schema\.json|_docs/(specs|decisions|guides|reference)/TEMPLATE-[a-z-]+\.md)$|(^|/)(Cargo|flake)\.lock$'
       - id: mixed-line-ending
         args: [--fix=lf]
         exclude: '^(CHANGELOG\.md|SECURITY\.md|\.github/workflows/(code-scanning-codeql|pr-title|release-plz|release|scorecard)\.yml|\.release-kit/(manifest|setup-proof)\.json|\.spec-driven-docs/manifest\.json|_docs/\.markdownlint-cli2\.jsonc|_docs/specs/SPEC-(budget-debt|comparison-docs|decision-records|docs-format|docs-foundations|docs-specs|guides|instance|known-issues|spec-to-code|tracking|writing-policy|writing-style)\.md|_docs/specs/SPEC-tracking/tracking\.schema\.json|_docs/(specs|decisions|guides|reference)/TEMPLATE-[a-z-]+\.md)$|(^|/)(Cargo|flake)\.lock$'
       - id: check-added-large-files
         args: ['--maxkb=16384']
-        stages: [pre-commit, manual]
+        stages: [pre-commit, manual, pre-merge-commit]
       - id: check-case-conflict
       - id: check-merge-conflict
       - id: destroyed-symlinks
-        stages: [pre-commit, manual]
+        stages: [pre-commit, manual, pre-merge-commit]
       - id: check-yaml
       - id: check-toml
       - id: detect-private-key
@@ -179,7 +183,7 @@ repos:
         entry: cargo deny check
         language: system
         always_run: true
-        stages: [pre-push, manual]
+        stages: [pre-push, manual, pre-merge-commit]
         pass_filenames: false
       # owner: host (no-hook-language) nix comes from the host and has no hook in a language that pre-commit builds.
       - id: nix-flake-check
@@ -187,7 +191,7 @@ repos:
         entry: nix flake check
         language: system
         always_run: true
-        stages: [pre-push, manual]
+        stages: [pre-push, manual, pre-merge-commit]
         pass_filenames: false
       # The scratch landing round trip, through the recipe that owns it.
       # Never make this entry `just check`: that recipe invokes prek
@@ -198,7 +202,7 @@ repos:
         entry: just build
         language: system
         always_run: true
-        stages: [pre-push, manual]
+        stages: [pre-push, manual, pre-merge-commit]
         pass_filenames: false
       # The two release proofs of the dist-plan job of ci.yml: the committed
       # release.yml is what the pinned dist generates, and dist plan
@@ -211,7 +215,7 @@ repos:
         entry: sh -c 'set -eu; pin=$(grep -m1 "^cargo-dist-version" dist-workspace.toml | cut -d\" -f2); [ -n "$pin" ] || { echo "dist-workspace.toml names no cargo-dist-version" >&2; exit 1; }; dist --version | grep -Fq "$pin" || { echo "the dist on PATH is not the pinned $pin" >&2; exit 1; }; git ls-files --error-unmatch -- .github/workflows/release.yml > /dev/null; dist generate; git diff --exit-code -- .github/workflows/release.yml; dist plan > /dev/null'
         language: system
         always_run: true
-        stages: [pre-push, manual]
+        stages: [pre-push, manual, pre-merge-commit]
         pass_filenames: false
   # zizmor and actionlint take their upstream hooks, which prek builds
   # (python and golang). actionlint runs shellcheck from PATH on the `run:`
@@ -260,7 +264,7 @@ repos:
     hooks:
       - id: typos
         args: [--force-exclude]
-        stages: [pre-commit, manual]
+        stages: [pre-commit, manual, pre-merge-commit]
   - repo: https://github.com/sirwart/ripsecrets
     rev: v0.1.11
     hooks:
@@ -283,7 +287,7 @@ repos:
         language: pygrep
         entry: '^(?!\s*#).*(withPackages|python3[0-9]*Packages\.|pythonPackages\.|nodePackages\.|perlPackages\.)'
         files: '(^|/)flake\.nix$|(^|/)nix/.*\.nix$'
-        stages: [pre-commit, manual]
+        stages: [pre-commit, manual, pre-merge-commit]
   # A flake reference reads the git tree of a checkout, never a path copy of
   # the whole folder into the Nix store. The hook is published by exobrain-tech.
   - repo: https://github.com/gubasso/exobrain-tech

@@ -3,8 +3,8 @@
 //!
 //! The judgments are pure and take forge answers as JSON values, so each
 //! rule is testable without a forge. The reads spawn the forge CLI the
-//! setup verbs resolve, `gh api` or `glab api`, and the registry reads
-//! spawn `curl`. A read that fails for any reason other than a definite
+//! setup verbs resolve, `gh api` or `glab api`, and the registry reads go
+//! through `crate::http`, in-process. A read that fails for any reason other than a definite
 //! not-found answers `unknown`, because a credential this runtime cannot
 //! reach is an observation boundary and never a state of the release.
 //!
@@ -786,40 +786,36 @@ impl ForgeCli {
 }
 
 /// Whether the registry serves `package`, at `version` where one is
-/// named: a 200 answers yes, a 404 answers no, and anything else is
+/// named: a 200 answers yes, a 404 answers no, and any other answer is
 /// unknown.
-#[must_use]
-pub fn registry_serves(registry: Registry, package: &str, version: Option<&str>) -> Answer {
-    let curl = std::env::var_os("RK_CURL_BIN").unwrap_or_else(|| "curl".into());
-    let answered = std::process::Command::new(curl)
-        .args([
-            "-sS",
-            "-o",
-            "/dev/null",
-            "-w",
-            "%{http_code}",
-            "--max-time",
-            "20",
-        ])
-        .args(["-A", concat!("release-kit/", env!("CARGO_PKG_VERSION"))])
-        .arg(registry.url(package, version))
-        .output();
-    match answered {
-        Ok(output) => match String::from_utf8_lossy(&output.stdout).trim() {
-            "200" => Answer::Yes,
-            "404" => Answer::No,
-            _ => Answer::Unknown,
-        },
-        Err(_) => Answer::Unknown,
-    }
+///
+/// # Errors
+///
+/// The reason where the registry gave no answer within twenty seconds.
+pub fn registry_serves(
+    registry: Registry,
+    package: &str,
+    version: Option<&str>,
+) -> Result<Answer, String> {
+    let url = registry.url(package, version);
+    let answer = crate::http::send(&crate::http::Request::get(
+        &url,
+        std::time::Duration::from_secs(20),
+    ))
+    .map_err(|reason| format!("{url} gave no answer: {reason}"))?;
+    Ok(match answer.status {
+        200 => Answer::Yes,
+        404 => Answer::No,
+        _ => Answer::Unknown,
+    })
 }
 
 /// Every file the registry serves for `package` at `version`, with its
 /// SHA-256.
 ///
 /// `Ok(None)` where the registry answers 404 for the version, and the
-/// reason where it answers anything else. It reads through the curl
-/// launcher [`registry_serves`] reads through.
+/// reason where it answers anything else. It reads through the client
+/// [`registry_serves`] reads through.
 ///
 /// # Errors
 ///
@@ -829,23 +825,15 @@ pub fn registry_files(
     package: &str,
     version: &str,
 ) -> Result<Option<Vec<(String, String)>>, String> {
-    let curl = std::env::var_os("RK_CURL_BIN").unwrap_or_else(|| "curl".into());
-    let output = std::process::Command::new(curl)
-        .args(["-sS", "-w", "\n%{http_code}", "--max-time", "20"])
-        .args(["-A", concat!("release-kit/", env!("CARGO_PKG_VERSION"))])
-        .arg(registry.url(package, Some(version)))
-        .output()
-        .map_err(|source| format!("curl did not run: {source}"))?;
-    let text = String::from_utf8_lossy(&output.stdout);
-    let (body, code) = text
-        .trim_end()
-        .rsplit_once('\n')
-        .unwrap_or_else(|| ("", text.trim()));
-    match code.trim() {
-        "404" => Ok(None),
-        "200" => {
-            let value: Value =
-                serde_json::from_str(body).map_err(|_| "the answer is not JSON".to_owned())?;
+    let answer = crate::http::send(&crate::http::Request::get(
+        &registry.url(package, Some(version)),
+        std::time::Duration::from_secs(20),
+    ))?;
+    match answer.status {
+        404 => Ok(None),
+        200 => {
+            let value: Value = serde_json::from_slice(&answer.body)
+                .map_err(|_| "the answer is not JSON".to_owned())?;
             Ok(Some(
                 value["urls"]
                     .as_array()
@@ -860,7 +848,7 @@ pub fn registry_files(
                     .collect(),
             ))
         }
-        other => Err(format!("the registry answered {other:?}")),
+        other => Err(format!("the registry answered \"{other}\"")),
     }
 }
 

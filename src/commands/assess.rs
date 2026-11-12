@@ -40,6 +40,7 @@ struct Report<'a> {
 /// the record's own failure taxonomy for a landing record that exists but
 /// cannot be trusted; a verdict is never an error.
 pub fn run(args: &AssessArgs) -> Result<(), RkError> {
+    crate::requirements::require("rk assess", &[crate::requirements::Tool::Git])?;
     let out = Output::new(args.json);
     if !args.target.is_dir() {
         return Err(RkError::missing(

@@ -70,6 +70,7 @@ pub struct BuildReport {
 /// differs from the registry; a build failure.
 pub fn run(target: &Utf8Path) -> Result<Done<BuildReport>, RkError> {
     let context = Context::load(target)?;
+    context.require_tools("build")?;
     cliff::require_pin(target)?;
     let head = context.head()?;
     let version = context.adapter.read_version(target)?;

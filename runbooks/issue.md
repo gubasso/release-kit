@@ -47,8 +47,8 @@ The branch is checked out in the main checkout, whichever of the repository's wo
 A worktree is a fresh checkout: copy the untracked environment files the project needs, run its setup, and arm the hooks once per clone.
 
 ```bash
-prek install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push
-# check: reports the hook types installed; where the project still carries pre-commit, pre-commit install takes the same flags
+prek install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push --hook-type pre-merge-commit
+# check: names each hook it installed; on git 2.54 or newer, git hook list pre-merge-commit names one too
 ```
 
 Running the verb twice is safe. A second run adopts what the forge already carries, mints nothing, and reports the standing seat.

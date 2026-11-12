@@ -70,6 +70,7 @@ struct Report {
 /// stands, [`RkError::Io`] when the input cannot be read, and an error
 /// when the report cannot serialize.
 pub fn run(args: &MessageArgs) -> Result<(), RkError> {
+    crate::requirements::require("rk message", &[crate::requirements::Tool::Git])?;
     let text = read_input(args.file.as_deref().map(camino::Utf8Path::as_str))?;
     let out = Output::new(args.json);
 

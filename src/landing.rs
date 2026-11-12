@@ -27,10 +27,11 @@ pub use crate::projection::{
     AGENTS_DESTINATION, BLOCK_BEGIN, BLOCK_DESTINATIONS, BLOCK_END, BRANCH_GRAMMAR,
     CODE_SCANNING_DESTINATIONS, CODE_SCANNING_TECHS, GLOSSARY_DESTINATION, HOOK_TYPES_LINE,
     HOOKS_BEGIN, HOOKS_DESTINATION, HOOKS_END, Kind, LINE_PREFIX_RE_TOKEN, LINE_PREFIX_TOKEN,
-    NIX_DESTINATIONS, NIX_WITHHOLDABLE, OWNER_TOKEN, REPO_PLACEHOLDER, REPO_TOKEN, SCOPE_SHAPE,
-    SCOPE_SHAPE_TOKEN, SCORECARD_DESTINATIONS, SECURITY_SPANS, STYLE_TOKEN, TRUNK_BRANCH_TOKEN,
-    authored, block_markers, destinations, extract_block, hooks_marker_defect, kind_of,
-    marker_defect, render, scope_is_shaped, splice_hooks_block, splice_marked_block, substitute,
+    LOCAL_HOOK_TYPES_LINE, NIX_DESTINATIONS, NIX_WITHHOLDABLE, OWNER_TOKEN, REPO_PLACEHOLDER,
+    REPO_TOKEN, SCOPE_SHAPE, SCOPE_SHAPE_TOKEN, SCORECARD_DESTINATIONS, SECURITY_SPANS,
+    STYLE_TOKEN, TRUNK_BRANCH_TOKEN, authored, block_markers, destinations, extract_block,
+    hooks_marker_defect, kind_of, marker_defect, render, scope_is_shaped, splice_hooks_block,
+    splice_marked_block, substitute,
 };
 pub use manifest::{CheckoutMode, Integration, MergeForm, Provider, Style};
 use serde::Serialize;
@@ -186,8 +187,8 @@ mod tests {
     use super::{
         AGENTS_DESTINATION, BLOCK_BEGIN, BLOCK_DESTINATIONS, BLOCK_END, BRANCH_GRAMMAR,
         CheckoutMode, GLOSSARY_DESTINATION, HOOK_TYPES_LINE, HOOKS_BEGIN, HOOKS_DESTINATION,
-        HOOKS_END, Integration, Kind, Provider, SCOPE_SHAPE, Style, extract_block, kind_of, render,
-        splice_hooks_block, splice_marked_block,
+        HOOKS_END, Integration, Kind, LOCAL_HOOK_TYPES_LINE, Provider, SCOPE_SHAPE, Style,
+        extract_block, kind_of, render, splice_hooks_block, splice_marked_block,
     };
     use crate::embedded;
     use crate::profile::{
@@ -1100,14 +1101,24 @@ mod tests {
     fn the_hook_block_splices_under_repos() {
         let owned = hooks_block(CheckoutMode::MainWorktree);
         let block = owned.as_str();
-        let fresh = splice_hooks_block(None, block).expect("a fresh file splices");
-        assert!(fresh.starts_with(HOOK_TYPES_LINE));
+        let fresh =
+            splice_hooks_block(None, block, Integration::Forge).expect("a fresh file splices");
+        assert!(fresh.starts_with(&format!("{HOOK_TYPES_LINE}\n")));
+        // Under local integration a fresh file also arms the gate's stage,
+        // so a plain install of the hook manager installs the hook that
+        // rk integrate asks git to run.
+        let local =
+            splice_hooks_block(None, block, Integration::Local).expect("a fresh file splices");
+        assert!(local.starts_with(&format!("{LOCAL_HOOK_TYPES_LINE}\n")));
+        assert!(LOCAL_HOOK_TYPES_LINE.ends_with("pre-push, pre-merge-commit]"));
+        assert!(!HOOK_TYPES_LINE.contains("pre-merge-commit"));
         assert!(fresh.contains("\nrepos:\n# BEGIN release-kit\n"));
         assert_eq!(extract_block(&fresh, HOOKS_BEGIN, HOOKS_END), Some(block));
 
         let own =
             "repos:\n  - repo: https://example.com/own\n    rev: v1\n    hooks:\n      - id: own\n";
-        let spliced = splice_hooks_block(Some(own), block).expect("an unmarked file splices");
+        let spliced = splice_hooks_block(Some(own), block, Integration::Forge)
+            .expect("an unmarked file splices");
         assert!(spliced.starts_with("repos:\n# BEGIN release-kit\n"));
         assert!(spliced.contains("- id: own"), "the target's hooks survive");
         assert!(
@@ -1116,26 +1127,32 @@ mod tests {
         );
 
         let stale = spliced.replace("--force-scope", "--no-scope");
-        let refreshed = splice_hooks_block(Some(&stale), block).expect("a marked file re-splices");
+        let refreshed = splice_hooks_block(Some(&stale), block, Integration::Forge)
+            .expect("a marked file re-splices");
         assert_eq!(
             extract_block(&refreshed, HOOKS_BEGIN, HOOKS_END),
             Some(block)
         );
         assert_eq!(refreshed.matches(HOOKS_BEGIN).count(), 1);
 
-        let err = splice_hooks_block(Some("minimum_pre_commit_version: '3.2.0'\n"), block)
-            .expect_err("no repos: line refuses");
+        let err = splice_hooks_block(
+            Some("minimum_pre_commit_version: '3.2.0'\n"),
+            block,
+            Integration::Forge,
+        )
+        .expect_err("no repos: line refuses");
         assert!(err.contains("repos:"), "{err}");
 
         // The hooks between the markers execute, so ownership is exactly
         // one well-formed block: a duplicate or an unmatched marker
         // refuses rather than leaving a stale block active.
         let doubled = format!("repos:\n{block}\n{block}\n");
-        let err = splice_hooks_block(Some(&doubled), block).expect_err("a second block refuses");
+        let err = splice_hooks_block(Some(&doubled), block, Integration::Forge)
+            .expect_err("a second block refuses");
         assert!(err.contains("one block"), "{err}");
         let unmatched = "repos:\n# BEGIN release-kit\n  - repo: local\n";
-        let err =
-            splice_hooks_block(Some(unmatched), block).expect_err("an unmatched marker refuses");
+        let err = splice_hooks_block(Some(unmatched), block, Integration::Forge)
+            .expect_err("an unmatched marker refuses");
         assert!(err.contains("unmatched"), "{err}");
     }
 
@@ -1459,10 +1476,17 @@ mod tests {
                     assert!(!block.contains(token), "{token} survived: {block}");
                 }
                 assert_eq!(
-                    block.contains("--hook-stage manual"),
+                    block.contains("pre-merge-commit hook through git"),
                     integration == Integration::Local,
                     "{block}"
                 );
+                for gone in [
+                    "--hook-stage manual",
+                    "prek or pre-commit",
+                    "where prek is not",
+                ] {
+                    assert!(!block.contains(gone), "{gone}: {block}");
+                }
             }
         }
     }
@@ -1516,27 +1540,41 @@ mod tests {
             let located = mode == CheckoutMode::LinkedWorktree;
             assert_eq!(forge.contains("- id: rk-worktree-location"), located);
             assert_eq!(local.contains("- id: rk-worktree-location"), located);
-            // Both integration modes teach the install line, for either
-            // hook runner, with the three stages the block's hooks run at.
+            // Both integration modes teach the install line, with the
+            // project's own hook manager, for every stage the hooks and the
+            // integration gate run at.
             for block in [&forge, &local] {
                 assert!(
                     block.contains(
-                        "# prek install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push"
+                        "# prek install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push --hook-type pre-merge-commit"
                     ),
                     "{block}"
                 );
                 assert!(
-                    block.contains("prek or pre-commit, which take the same flags"),
+                    block.contains("with\n# the hook manager this project uses, for example:"),
                     "{block}"
                 );
             }
-            // Only local integration names the pre-integrate contract.
+            // Only local integration names the pre-integrate contract: the
+            // clone's pre-merge-commit hook, run through git.
             assert!(
-                local.contains("prek run --hook-stage manual --all-files"),
+                local.contains("rk integrate runs this clone's pre-merge-commit hook through git"),
                 "{local}"
             );
-            assert!(local.contains("or as `pre-commit run` with"), "{local}");
-            assert!(!forge.contains("--hook-stage manual"), "{forge}");
+            assert!(local.contains("a root .prekignore"), "{local}");
+            assert!(
+                !forge.contains("pre-merge-commit hook through git"),
+                "{forge}"
+            );
+            for block in [&forge, &local] {
+                for gone in [
+                    "--hook-stage manual",
+                    "prek or pre-commit",
+                    "pre-commit run",
+                ] {
+                    assert!(!block.contains(gone), "{gone}: {block}");
+                }
+            }
             for token in [
                 "RK_TRUNK_COMMIT_GUARD",
                 "RK_TRUNK_PUSH_GUARD",
@@ -1577,10 +1615,14 @@ mod tests {
         );
         assert!(with_skip.contains("local-only"), "{with_skip}");
         assert!(
-            with_skip.contains("a job running the hook runner against a trunk"),
+            with_skip
+                .contains("a job running the project's hook manager\n# against a trunk checkout"),
             "{with_skip}"
         );
-        assert!(with_skip.contains("the value is a list the"), "{with_skip}");
+        assert!(
+            with_skip.contains("value is a list the project owns"),
+            "{with_skip}"
+        );
 
         let without = unguarded_hooks_block(CheckoutMode::MainWorktree, Integration::Local);
         assert!(
@@ -1600,11 +1642,11 @@ mod tests {
         for mode in [CheckoutMode::LinkedWorktree, CheckoutMode::MainWorktree] {
             let local = hooks_block_for(mode, Integration::Local);
             assert!(
-                local.contains("prek run --hook-stage manual --all-files"),
+                local.contains("Tag pre-merge-commit on every check that must pass"),
                 "{local}"
             );
             assert!(
-                local.contains("continuous integration invoke the same stages"),
+                local.contains("continuous integration invoke the same checks"),
                 "{local}"
             );
             assert!(
@@ -1613,7 +1655,7 @@ mod tests {
             );
             // The note belongs to the mode that has a pre-integrate gate.
             let forge = hooks_block_for(mode, Integration::Forge);
-            assert!(!forge.contains("--hook-stage manual"), "{forge}");
+            assert!(!forge.contains("Tag pre-merge-commit"), "{forge}");
         }
     }
 

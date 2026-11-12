@@ -95,6 +95,7 @@ struct Report {
     reason = "one pass holds the target, resolves the answers once, verifies, and lands"
 )]
 pub fn run(args: &AdoptArgs) -> Result<(), RkError> {
+    crate::requirements::require("rk adopt", &[crate::requirements::Tool::Git])?;
     let out = Output::new(args.json);
     if !args.target.is_dir() {
         return Err(RkError::missing(

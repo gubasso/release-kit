@@ -4,28 +4,24 @@
 //! only: `GET /repos/{owner}/{repo}/installation` takes a JWT signed with
 //! the App's private key, and no personal access token of any class is
 //! accepted there. So the `install-bot` step observes as the App: `rk`
-//! builds the RS256 signing input, has the OpenSSL CLI sign it with the
-//! key bytes on standard input, and carries the resulting token to the
-//! forge through `curl`, in a header read from standard input — the JWT
-//! is a credential, and `forge-setup:a-secret-never-reaches-argv` binds
-//! it like any other.
+//! builds the RS256 signing input, signs it in-process with the key bytes
+//! it already holds, and carries the resulting token to the forge through
+//! `crate::http`, in a header — the JWT is a credential, and
+//! `forge-setup:a-secret-never-reaches-argv` binds it like any other. No
+//! child process holds the key or the token, so neither can reach an
+//! argument list, an environment, or a stream.
 //!
-//! Both spawns deliberately bypass the run's journaling executor: the
-//! executor records child output, the signer's output is the token's
-//! third segment, and a `curl` made verbose by a host configuration would
-//! echo the very header it was handed. Neither child's streams reach a
-//! journal, an event, or a transcript; the answers surface only as the
-//! classified [`AppApi`] and the step states built from it.
+//! The answers surface only as the classified [`AppApi`] and the step
+//! states built from it: no request or response reaches a journal, an
+//! event, or a transcript, and a failure's reason is scrubbed against the
+//! token before it is returned.
 
-use std::ffi::OsString;
-use std::io::Write as _;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 use zeroize::Zeroizing;
 
 use super::context::Ctx;
-use super::process::{self, Exec};
 use super::secrets;
 use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
@@ -88,7 +84,7 @@ pub fn app_id(configured: Option<&str>) -> Result<Option<String>, RkError> {
 /// A failure is a one-line detail for the caller to report — an
 /// observation maps it to `unknown`, an apply to a refusal — never a
 /// token that might be wrong.
-pub fn mint(ctx: &Ctx, credentials: &AppCredentials) -> Result<String, String> {
+pub fn mint(_ctx: &Ctx, credentials: &AppCredentials) -> Result<String, String> {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| "the system clock is before the epoch".to_owned())?
@@ -104,129 +100,37 @@ pub fn mint(ctx: &Ctx, credentials: &AppCredentials) -> Result<String, String> {
         .as_bytes(),
     );
     let input = format!("{header}.{claims}");
-    let signature = sign(ctx, credentials, input.as_bytes())?;
+    let signature = sign(credentials, input.as_bytes())?;
     Ok(format!("{input}.{}", base64url(&signature)))
 }
 
-/// The minimal environment a helper child receives: the search path and
-/// nothing else. Each helper holds one credential on its standard input,
-/// and an environment carrying any other — the forge CLI tokens the
-/// setup's own children inherit — would put that one within reach of a
-/// helper's error stream, which only the helper's own credential is
-/// scrubbed against.
-fn helper_env() -> Vec<(OsString, OsString)> {
-    std::env::var_os("PATH")
-        .map(|path| vec![(OsString::from("PATH"), path)])
-        .unwrap_or_default()
-}
-
-/// What the carrying child adds to that: the variables naming where this
-/// host keeps its certificate authorities.
-///
-/// They earn their exception by naming public files, and only the carrier
-/// takes them. A `curl` that locates its trust store by environment rather
-/// than by a compiled-in path — a Nix-provided one on a host whose
-/// distribution keeps its own bundle elsewhere is the ordinary case —
-/// verifies no certificate at all once they are cleared, and the call
-/// fails before the forge answers. The signer receives none of them: it
-/// opens no connection and has nothing to verify. Proxy variables stay
-/// out of both, because a proxy URL can carry a credential of its own,
-/// which is the one thing these environments must not hold.
-fn carrier_env() -> Vec<(OsString, OsString)> {
-    const TRUST: [&str; 4] = [
-        "CURL_CA_BUNDLE",
-        "SSL_CERT_DIR",
-        "SSL_CERT_FILE",
-        "NIX_SSL_CERT_FILE",
-    ];
-    let mut env = helper_env();
-    env.extend(
-        TRUST
-            .iter()
-            .filter_map(|name| std::env::var_os(name).map(|value| (OsString::from(*name), value))),
-    );
-    env
-}
-
-/// Sign the token's input with the App key, through the OpenSSL CLI: the
-/// key bytes travel on standard input, the non-secret signing input as a
-/// private scratch file, and no child is told the key's path.
-fn sign(ctx: &Ctx, credentials: &AppCredentials, input: &[u8]) -> Result<Vec<u8>, String> {
-    let scratch = scratch_input(input)?;
-    let program = std::env::var_os("RK_OPENSSL_BIN").unwrap_or_else(|| "openssl".into());
-    let exec = Exec {
-        program,
-        args: [
-            "dgst",
-            "-sha256",
-            "-binary",
-            "-sign",
-            "/dev/stdin",
-            scratch.file.as_str(),
-        ]
-        .map(OsString::from)
-        .to_vec(),
-        env: helper_env(),
-        cwd: ctx.target.as_std_path().to_path_buf(),
-        stdin: Some(credentials.key_bytes.clone()),
-    };
-    // Chunks are dropped as they stream: the signature is credential
-    // material, and nothing here may record it.
-    let outcome = process::run(&exec, |_, _| {})
-        .map_err(|source| format!("openssl did not spawn: {source}; install OpenSSL"))?;
-    if !outcome.success() {
-        // The child held the key on its standard input, so its error
-        // stream is scrubbed against the key bytes before one line of it
-        // can reach a diagnostic or a journal.
-        let stderr = process::redact(
-            &outcome.stderr,
-            std::slice::from_ref(&credentials.key_bytes),
-        );
-        return Err(format!(
-            "openssl could not sign the App JWT: {}",
-            last_line(&stderr)
-        ));
-    }
-    if outcome.stdout.is_empty() {
-        return Err("openssl signed the App JWT to an empty signature".to_owned());
-    }
-    Ok(outcome.stdout)
-}
-
-/// The signing input, written under a fresh owner-only scratch directory
-/// that lives exactly as long as the signing spawn. The bytes are not
-/// secret — an algorithm, two timestamps, and the public App id — but the
-/// directory is 0700 anyway, because a looser scratch is a habit.
-struct ScratchInput {
-    dir: std::path::PathBuf,
-    file: camino::Utf8PathBuf,
-}
-
-impl Drop for ScratchInput {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.dir);
-    }
-}
-
-fn scratch_input(input: &[u8]) -> Result<ScratchInput, String> {
-    let dir = std::env::temp_dir().join(format!("rk-app-jwt-{}", std::process::id()));
-    let make = || -> std::io::Result<()> {
-        std::fs::create_dir_all(&dir)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+/// Sign the token's input with the App key, in-process: RSASSA-PKCS1-v1_5
+/// with SHA-256, which is RS256. The key is the PEM the App's settings
+/// page issues, PKCS#1 or PKCS#8. Its bytes are read from what the run
+/// already holds, and no error names them.
+fn sign(credentials: &AppCredentials, input: &[u8]) -> Result<Vec<u8>, String> {
+    use rustls_pki_types::pem::PemObject as _;
+    let der = rustls_pki_types::PrivateKeyDer::from_pem_slice(&credentials.key_bytes)
+        .map_err(|_| "the App key is not a PEM private key".to_owned())?;
+    let pair = match &der {
+        rustls_pki_types::PrivateKeyDer::Pkcs1(key) => {
+            ring::rsa::KeyPair::from_der(key.secret_pkcs1_der())
         }
-        Ok(())
-    };
-    make().map_err(|source| format!("no scratch directory for the JWT input: {source}"))?;
-    let path = dir.join("signing-input");
-    std::fs::write(&path, input)
-        .map_err(|source| format!("the JWT input did not write: {source}"))?;
-    let Ok(file) = camino::Utf8PathBuf::from_path_buf(path) else {
-        return Err("the scratch path is not valid UTF-8".to_owned());
-    };
-    Ok(ScratchInput { dir, file })
+        rustls_pki_types::PrivateKeyDer::Pkcs8(key) => {
+            ring::rsa::KeyPair::from_pkcs8(key.secret_pkcs8_der())
+        }
+        _ => return Err("the App key is not an RSA private key".to_owned()),
+    }
+    .map_err(|rejected| format!("the App key is not a usable RSA key: {rejected}"))?;
+    let mut signature = Zeroizing::new(vec![0; pair.public().modulus_len()]);
+    pair.sign(
+        &ring::signature::RSA_PKCS1_SHA256,
+        &ring::rand::SystemRandom::new(),
+        input,
+        &mut signature,
+    )
+    .map_err(|_| "the App key could not sign the JWT".to_owned())?;
+    Ok(signature.to_vec())
 }
 
 /// One read-only forge answer, asked as the App itself.
@@ -243,111 +147,53 @@ pub enum AppApi {
 
 /// `GET https://api.github.com/{path}` with the JWT as a bearer token.
 ///
-/// The call goes through `curl`, spawned directly rather than through the
-/// run's executor so no stream of it can be journaled: the Authorization
-/// header arrives on standard input via `-H @-`, so the token never
-/// reaches an argument list, `-q` leads the arguments so no `.curlrc` can
-/// turn on an echoing verbosity or reshape the call, and the trailing
-/// `-w` line carries the status the answer is classified by.
+/// The call goes through `crate::http` in-process, with a ten-second
+/// bound: the Authorization header lives in this process alone, and a
+/// failure's reason is scrubbed against the token and its signature
+/// before it is returned.
 #[must_use]
-pub fn api_get(ctx: &Ctx, jwt: &str, path: &str) -> AppApi {
-    let mut headers = Zeroizing::new(Vec::new());
-    let _ = write!(
-        headers,
-        "Authorization: Bearer {jwt}\nAccept: application/vnd.github+json\nX-GitHub-Api-Version: 2022-11-28\n"
-    );
-    let program = std::env::var_os("RK_CURL_BIN").unwrap_or_else(|| "curl".into());
-    let exec = Exec {
-        program,
-        args: [
-            "-q",
-            "-sS",
-            "--max-time",
-            "10",
-            "-H",
-            "@-",
-            "-w",
-            "\n%{http_code}",
-            &format!("https://api.github.com/{path}"),
-        ]
-        .map(OsString::from)
-        .to_vec(),
-        env: carrier_env(),
-        cwd: ctx.target.as_std_path().to_path_buf(),
-        stdin: Some(headers),
+pub fn api_get(_ctx: &Ctx, jwt: &str, path: &str) -> AppApi {
+    let bearer = Zeroizing::new(format!("Bearer {jwt}"));
+    let url = format!("https://api.github.com/{path}");
+    let headers = [
+        ("Authorization", bearer.as_str()),
+        ("Accept", "application/vnd.github+json"),
+        ("X-GitHub-Api-Version", "2022-11-28"),
+    ];
+    let request = crate::http::Request {
+        method: crate::http::Method::Get,
+        url: &url,
+        headers: &headers,
+        body: &[],
+        timeout: std::time::Duration::from_secs(10),
+        // The curl call this replaced followed no redirect.
+        follow: false,
     };
-    let outcome = match process::run(&exec, |_, _| {}) {
-        Ok(outcome) => outcome,
-        Err(source) => {
-            return AppApi::Failed(format!("curl did not spawn: {source}; install curl"));
+    let scrub = |text: &str| -> String {
+        let signature = jwt.rsplit('.').next().unwrap_or(jwt);
+        text.replace(jwt, "[redacted]")
+            .replace(signature, "[redacted]")
+    };
+    let answer = match crate::http::send(&request) {
+        Ok(answer) => answer,
+        Err(reason) => {
+            return AppApi::Failed(format!(
+                "the request did not reach the forge: {}",
+                scrub(&reason)
+            ));
         }
     };
-    // The child held the bearer header on its standard input, so both of
-    // its streams are scrubbed against the token and its signature before
-    // one line of either can reach a diagnostic or an output stream.
-    let needles = [
-        jwt.as_bytes(),
-        jwt.rsplit('.').next().unwrap_or(jwt).as_bytes(),
-    ];
-    let stderr = process::redact(&outcome.stderr, &needles);
-    let stdout = process::redact(&outcome.stdout, &needles);
-    if !outcome.success() {
-        return AppApi::Failed(format!(
-            "curl could not reach the forge (exit {}): {}",
-            outcome.exit_code,
-            first_line(&stderr)
-        ));
-    }
-    let stdout = String::from_utf8_lossy(&stdout);
-    let (body, status) = stdout
-        .trim_end()
-        .rsplit_once('\n')
-        .unwrap_or_else(|| ("", stdout.trim_end()));
-    match status {
-        "200" => serde_json::from_str::<Value>(body).map_or_else(
+    match answer.status {
+        200 => serde_json::from_slice::<Value>(&answer.body).map_or_else(
             |_| AppApi::Failed("the forge answer did not parse as JSON".into()),
             AppApi::Ok,
         ),
-        "404" => AppApi::Missing,
-        "401" | "403" => AppApi::Refused(format!(
+        404 => AppApi::Missing,
+        status @ (401 | 403) => AppApi::Refused(format!(
             "the forge refused the App credentials ({status}); RK_BOT_APP_ID and the key file must name the same App"
         )),
         other => AppApi::Failed(format!("the forge answered {other}")),
     }
-}
-
-/// The first non-empty line of a byte stream, which is where `curl` names
-/// what went wrong; the lines after it are prose pointing at a web page,
-/// so the last line of a failure carries none of the reason.
-fn first_line(bytes: &[u8]) -> String {
-    non_empty_line(bytes, End::First)
-}
-
-/// The last non-empty line of a byte stream, where a CLI puts its verdict.
-fn last_line(bytes: &[u8]) -> String {
-    non_empty_line(bytes, End::Last)
-}
-
-/// Which end of a stream a line is taken from.
-#[derive(Clone, Copy)]
-enum End {
-    /// The first non-empty line.
-    First,
-    /// The last non-empty line.
-    Last,
-}
-
-/// One non-empty line of a byte stream, taken from the named end.
-fn non_empty_line(bytes: &[u8], end: End) -> String {
-    let text = String::from_utf8_lossy(bytes);
-    let mut lines = text.lines().filter(|line| !line.trim().is_empty());
-    match end {
-        End::First => lines.next(),
-        End::Last => lines.next_back(),
-    }
-    .unwrap_or("no output")
-    .trim()
-    .to_owned()
 }
 
 /// RFC 4648 base64url without padding, which is what a JWT's segments
@@ -373,7 +219,68 @@ fn base64url(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::base64url;
+    use super::{AppCredentials, base64url, mint};
+
+    /// The inverse of [`base64url`], for reading a token back.
+    fn unbase64url(text: &str) -> Vec<u8> {
+        const ALPHABET: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+        let mut bits: u32 = 0;
+        let mut count = 0;
+        let mut out = Vec::new();
+        for byte in text.bytes() {
+            let value = ALPHABET
+                .iter()
+                .position(|c| *c == byte)
+                .expect("a base64url byte");
+            bits = (bits << 6) | u32::try_from(value).expect("fits");
+            count += 6;
+            if count >= 8 {
+                count -= 8;
+                out.push(u8::try_from((bits >> count) & 0xff).expect("a byte"));
+            }
+        }
+        out
+    }
+
+    /// The token rk signs in-process verifies against the key pair's public
+    /// half under RS256, and carries the claims GitHub requires: `iss`, the
+    /// App id, `iat` a minute back, and `exp` inside the ten-minute cap.
+    #[test]
+    fn the_app_jwt_verifies_with_the_public_key() {
+        let key = <rsa::PrivateKey as rsa::Generate>::generate();
+        let pem = rsa::pkcs1::EncodeRsaPrivateKey::to_pkcs1_pem(&key, rsa::pkcs1::LineEnding::LF)
+            .expect("the key encodes");
+        let public = rsa::pkcs1::EncodeRsaPublicKey::to_pkcs1_der(&key.to_public_key())
+            .expect("the public key encodes");
+        let ctx = crate::setup::context::Ctx::for_tests(
+            camino::Utf8PathBuf::from("/srv/widget"),
+            "acme/widget".to_owned(),
+            crate::detect::Forge::Github,
+            std::path::PathBuf::from("gh"),
+            None,
+        );
+        let credentials = AppCredentials {
+            app_id: "314159".to_owned(),
+            key_bytes: zeroize::Zeroizing::new(pem.as_bytes().to_vec()),
+        };
+        let token = mint(&ctx, &credentials).expect("the token signs");
+        let (input, signature) = token.rsplit_once('.').expect("three segments");
+        ring::signature::UnparsedPublicKey::new(
+            &ring::signature::RSA_PKCS1_2048_8192_SHA256,
+            public.as_bytes(),
+        )
+        .verify(input.as_bytes(), &unbase64url(signature))
+        .expect("the signature verifies with the public key");
+        let (header, claims) = input.split_once('.').expect("a header and claims");
+        assert_eq!(unbase64url(header), br#"{"alg":"RS256","typ":"JWT"}"#);
+        let claims: serde_json::Value =
+            serde_json::from_slice(&unbase64url(claims)).expect("the claims parse");
+        assert_eq!(claims["iss"], "314159");
+        let iat = claims["iat"].as_u64().expect("an iat");
+        let exp = claims["exp"].as_u64().expect("an exp");
+        assert_eq!(exp - iat, 600, "a minute back and nine minutes out");
+    }
 
     /// The RFC 4648 vectors, in the url-safe alphabet, unpadded.
     #[test]
