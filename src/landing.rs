@@ -1476,11 +1476,26 @@ mod tests {
             let located = mode == CheckoutMode::LinkedWorktree;
             assert_eq!(forge.contains("- id: rk-worktree-location"), located);
             assert_eq!(local.contains("- id: rk-worktree-location"), located);
+            // Both integration modes teach the install line, for either
+            // hook runner, with the three stages the block's hooks run at.
+            for block in [&forge, &local] {
+                assert!(
+                    block.contains(
+                        "# prek install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push"
+                    ),
+                    "{block}"
+                );
+                assert!(
+                    block.contains("prek or pre-commit, which take the same flags"),
+                    "{block}"
+                );
+            }
             // Only local integration names the pre-integrate contract.
             assert!(
-                local.contains("pre-commit run --hook-stage manual --all-files"),
+                local.contains("prek run --hook-stage manual --all-files"),
                 "{local}"
             );
+            assert!(local.contains("or as `pre-commit run` with"), "{local}");
             assert!(!forge.contains("--hook-stage manual"), "{forge}");
             for token in [
                 "RK_TRUNK_COMMIT_GUARD",
@@ -1521,6 +1536,10 @@ mod tests {
             "{with_skip}"
         );
         assert!(with_skip.contains("local-only"), "{with_skip}");
+        assert!(
+            with_skip.contains("a job running the hook runner against a trunk"),
+            "{with_skip}"
+        );
         assert!(with_skip.contains("the value is a list the"), "{with_skip}");
 
         let without = unguarded_hooks_block(CheckoutMode::MainWorktree, Integration::Local);
@@ -1541,7 +1560,7 @@ mod tests {
         for mode in [CheckoutMode::LinkedWorktree, CheckoutMode::MainWorktree] {
             let local = hooks_block_for(mode, Integration::Local);
             assert!(
-                local.contains("pre-commit run --hook-stage manual --all-files"),
+                local.contains("prek run --hook-stage manual --all-files"),
                 "{local}"
             );
             assert!(

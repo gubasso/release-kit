@@ -35,6 +35,7 @@ workflow_guards = true # P: opt-in workflow guards: the agent and commit policy 
 advisories = "" # N: project receiving vulnerability reports
 contact = "" # P: one line naming who receives a report when the forge channel is unavailable; empty keeps the forge's own wording
 response = "best-effort" # P: the acknowledgment window the policy promises: best-effort, 1 day, <n> days, 1 business day, or <n> business days
+scope = "" # P: one paragraph naming what the project does not own and where to report it instead; empty renders nothing
 
 [setup]
 required_check = "gate" # P: the check the release gate believes, and the check the trunk ruleset requires under forge integration

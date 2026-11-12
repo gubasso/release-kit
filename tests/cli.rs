@@ -80,7 +80,7 @@ impl ScratchState {
     }
 
     /// The variables that point a command at this scratch state.
-    fn vars(&self) -> [(&'static str, PathBuf); 2] {
+    fn vars(&self) -> [(&'static str, PathBuf); 3] {
         [
             // Every landing verb stores its plan and journals its run under
             // the state root, so each invocation gets a scratch one: the
@@ -88,12 +88,13 @@ impl ScratchState {
             // by the suite. A test that needs one root across two
             // invocations sets its own.
             ("XDG_STATE_HOME", self.dir.path().join("state")),
-            // `rk integrate` runs its gate through pre-commit, which records
-            // every run in its store database. The operator's store is
-            // shared with every pre-commit on the host, and one that holds
-            // its lock past sqlite's timeout fails the gate, so each
-            // invocation gets a scratch store too.
+            // `rk integrate` runs its gate through the hook runner, prek or
+            // pre-commit, which records every run in its store. The
+            // operator's store is shared with every run on the host, and one
+            // that holds its lock past the timeout fails the gate, so each
+            // invocation gets a scratch store for either runner.
             ("PRE_COMMIT_HOME", self.dir.path().join("pre-commit")),
+            ("PREK_HOME", self.dir.path().join("prek")),
         ]
     }
 }
@@ -122,7 +123,7 @@ impl std::ops::DerefMut for Rk {
 }
 
 /// The tests that reach every way the suite gives `rk` scratch state:
-/// through `rk()` with the stand-in `gh`, through a pre-commit gate with
+/// through `rk()` with the stand-in `gh`, through a hook runner gate with
 /// the scratch store, through `PausedLanding`, and through a spawned
 /// `std::process::Command`.
 const LEAK_SAMPLES: [&str; 4] = [
@@ -135,8 +136,8 @@ const LEAK_SAMPLES: [&str; 4] = [
 #[test]
 fn a_test_run_leaves_nothing_in_the_temporary_directory() {
     assert!(
-        pre_commit_present(),
-        "pre-commit is not on PATH, so the integrate sample would pass without running its gate"
+        hook_runner_present(),
+        "neither prek nor pre-commit is on PATH, so the integrate sample would pass without running its gate"
     );
     let exe = std::env::current_exe().expect("the test binary has a path");
     for sample in LEAK_SAMPLES {
@@ -36471,7 +36472,7 @@ fn integrate_fixture_shaped(
         .expect("the crate manifest writes");
     }
     let technologies: Vec<&str> = if crate_root { vec!["rust"] } else { vec![] };
-    std::fs::write(repo.join(".pre-commit-config.yaml"), "repos: []\n")
+    std::fs::write(repo.join(".pre-commit-config.yaml"), PASSING_MANUAL_HOOKS)
         .expect("the hook file writes");
     std::fs::create_dir_all(repo.join(".release-kit")).expect("the record dir creates");
     std::fs::write(
@@ -36547,14 +36548,21 @@ fn integrate_fixture_shaped(
     (parent, repo)
 }
 
-/// Whether `pre-commit` is on this host's PATH. The gate is one command
-/// against the project's own hooks, and a host without it cannot run the
-/// success path at all.
-fn pre_commit_present() -> bool {
-    std::process::Command::new("pre-commit")
-        .arg("--version")
-        .output()
-        .is_ok_and(|out| out.status.success())
+/// A hook configuration with one passing hook on the manual stage, as a
+/// landed target always has hooks: prek refuses a configuration that
+/// declares no hook at all, where pre-commit passes it.
+const PASSING_MANUAL_HOOKS: &str = "repos:\n  - repo: local\n    hooks:\n      - id: pass\n        name: pass\n        stages: [manual]\n        language: system\n        always_run: true\n        pass_filenames: false\n        entry: 'true'\n";
+
+/// Whether a hook runner, prek or pre-commit, is on this host's PATH. The
+/// gate is one command against the project's own hooks, and a host with
+/// neither cannot run the success path at all.
+fn hook_runner_present() -> bool {
+    ["prek", "pre-commit"].iter().any(|runner| {
+        std::process::Command::new(runner)
+            .arg("--version")
+            .output()
+            .is_ok_and(|out| out.status.success())
+    })
 }
 
 /// A release driven by release-plz, as a record states it.
@@ -36693,7 +36701,7 @@ fn integrate_stays_silent_when_the_listing_cannot_run() {
 /// SATISFIES git:a-local-integration-warns-of-an-uncounted-release
 #[test]
 fn integrate_warns_before_the_gate_on_apply() {
-    if !pre_commit_present() {
+    if !hook_runner_present() {
         return;
     }
     let (_parent, repo) = integrate_fixture_with(&rust_release(), true);
@@ -36728,7 +36736,7 @@ fn integrate_warns_before_the_gate_on_apply() {
 /// SATISFIES git:a-local-integration-is-a-transaction
 #[test]
 fn integrate_writes_one_squash_commit_and_records_it() {
-    if !pre_commit_present() {
+    if !hook_runner_present() {
         return;
     }
     let (_parent, repo) = integrate_fixture();
@@ -36791,25 +36799,35 @@ fn integrate_writes_one_squash_commit_and_records_it() {
     );
 }
 
-/// The integration gate runs pre-commit against a store of the call's own,
-/// never the operator's: another pre-commit on the host that holds the
-/// shared store's lock past sqlite's timeout would fail the gate, and with
-/// it a test that has nothing to do with the store.
+/// The integration gate runs its hook runner against a store of the call's
+/// own, never the operator's: another run on the host that holds the
+/// shared store's lock past its timeout would fail the gate, and with it a
+/// test that has nothing to do with the store.
 #[test]
 fn integrate_runs_its_gate_against_a_store_of_its_own() {
-    if !pre_commit_present() {
+    if !hook_runner_present() {
         return;
     }
     let (_parent, repo) = integrate_fixture();
     let mut command = rk_scrubbed();
+    // The gate's own choice: prek where it is on PATH, else pre-commit.
+    let prek = std::process::Command::new("prek")
+        .arg("--version")
+        .output()
+        .is_ok_and(|out| out.status.success());
+    let (variable, record) = if prek {
+        ("PREK_HOME", ".lock")
+    } else {
+        ("PRE_COMMIT_HOME", "db.db")
+    };
     let store = command
         .get_envs()
-        .find(|(key, _)| *key == "PRE_COMMIT_HOME")
+        .find(|(key, _)| *key == variable)
         .and_then(|(_, value)| value)
         .map(PathBuf::from)
-        .expect("every rk call names a pre-commit store of its own");
+        .expect("every rk call names a store of its own for each runner");
     assert!(
-        !store.join("db.db").exists(),
+        !store.join(record).exists(),
         "the call's store starts empty"
     );
     command
@@ -36819,7 +36837,7 @@ fn integrate_runs_its_gate_against_a_store_of_its_own() {
         .assert()
         .success();
     assert!(
-        store.join("db.db").is_file(),
+        store.join(record).is_file(),
         "the gate recorded its run in the call's own store"
     );
 }
@@ -36910,7 +36928,7 @@ fn integrate_holds_the_trunk_message_to_the_landed_convention() {
 /// SATISFIES git:the-manual-stage-is-the-pre-integrate-contract
 #[test]
 fn integrate_refuses_when_the_manual_stage_fails() {
-    if !pre_commit_present() {
+    if !hook_runner_present() {
         return;
     }
     let (_parent, repo) = integrate_fixture();
@@ -36937,6 +36955,150 @@ fn integrate_refuses_when_the_manual_stage_fails() {
         .stderr(predicate::str::contains("the manual stage failed"));
     assert_eq!(rev_parse(&repo, "master"), before);
     assert!(!repo.join(".git/rk/integrations.json").exists());
+}
+
+/// A stand-in hook runner named `name`: it records each call in `log`
+/// and exits with `code`. The returned directory goes first on `PATH`.
+fn stub_hook_runner(dir: &Path, name: &str, log: &Path, code: i32) {
+    let path = dir.join(name);
+    std::fs::write(
+        &path,
+        format!(
+            "#!/bin/sh\nprintf '%s %s\\n' \"{name}\" \"$*\" >> '{}'\nexit {code}\n",
+            log.display()
+        ),
+    )
+    .expect("the stub runner writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .expect("the stub runner is executable");
+    }
+}
+
+/// This process's `PATH` with every directory dropped that holds one of
+/// `programs`, so a test controls which hook runner the gate can find.
+fn path_without(programs: &[&str]) -> std::ffi::OsString {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    std::env::join_paths(
+        std::env::split_paths(&path)
+            .filter(|dir| programs.iter().all(|program| !dir.join(program).exists())),
+    )
+    .expect("the PATH joins")
+}
+
+/// The gate runs prek when prek resolves on `PATH`, ahead of a pre-commit
+/// that is also there, with the arguments both runners accept.
+///
+/// SATISFIES git:the-manual-stage-is-the-pre-integrate-contract
+#[test]
+fn the_gate_runs_prek_when_it_is_on_path() {
+    let (_parent, repo) = integrate_fixture();
+    let stubs = tempfile::tempdir().expect("a stub dir exists");
+    let log = stubs.path().join("calls.log");
+    stub_hook_runner(stubs.path(), "prek", &log, 0);
+    stub_hook_runner(stubs.path(), "pre-commit", &log, 0);
+    let path = std::env::join_paths(std::iter::once(stubs.path().to_path_buf()).chain(
+        std::env::split_paths(&path_without(&["prek", "pre-commit"])),
+    ))
+    .expect("the PATH joins");
+    let out = rk_scrubbed()
+        .env("PATH", path)
+        .args(["integrate", "feat/greeting", "--apply"])
+        .args(["-m", "feat(greeting): add the greeting file", "--target"])
+        .arg(&repo)
+        .assert()
+        .success();
+    let text = String::from_utf8_lossy(&out.get_output().stdout).into_owned();
+    assert!(
+        text.contains("the manual stage passed under prek"),
+        "{text}"
+    );
+    let calls = std::fs::read_to_string(&log).expect("the runner was called");
+    assert_eq!(calls, "prek run --hook-stage manual --all-files\n");
+}
+
+/// With no prek on `PATH`, the gate runs pre-commit, the runner a project
+/// that has not moved carries in its own environment.
+///
+/// SATISFIES git:the-manual-stage-is-the-pre-integrate-contract
+#[test]
+fn the_gate_runs_pre_commit_when_prek_is_absent() {
+    let (_parent, repo) = integrate_fixture();
+    let stubs = tempfile::tempdir().expect("a stub dir exists");
+    let log = stubs.path().join("calls.log");
+    stub_hook_runner(stubs.path(), "pre-commit", &log, 0);
+    let path = std::env::join_paths(std::iter::once(stubs.path().to_path_buf()).chain(
+        std::env::split_paths(&path_without(&["prek", "pre-commit"])),
+    ))
+    .expect("the PATH joins");
+    let out = rk_scrubbed()
+        .env("PATH", path)
+        .args(["integrate", "feat/greeting", "--apply"])
+        .args(["-m", "feat(greeting): add the greeting file", "--target"])
+        .arg(&repo)
+        .assert()
+        .success();
+    let text = String::from_utf8_lossy(&out.get_output().stdout).into_owned();
+    assert!(
+        text.contains("the manual stage passed under pre-commit"),
+        "{text}"
+    );
+    let calls = std::fs::read_to_string(&log).expect("the runner was called");
+    assert_eq!(calls, "pre-commit run --hook-stage manual --all-files\n");
+}
+
+/// A relative `PATH` entry resolves from the directory `rk` starts in, the
+/// way a shell resolves it, and the gate runs that runner even though it
+/// runs it from the seat, which is another directory.
+///
+/// SATISFIES git:the-manual-stage-is-the-pre-integrate-contract
+#[test]
+fn the_gate_runs_a_runner_found_through_a_relative_path_entry() {
+    let (_parent, repo) = integrate_fixture();
+    let caller = tempfile::tempdir().expect("a caller dir exists");
+    std::fs::create_dir(caller.path().join("bin")).expect("the bin dir creates");
+    let log = caller.path().join("calls.log");
+    stub_hook_runner(&caller.path().join("bin"), "prek", &log, 0);
+    let path = std::env::join_paths(std::iter::once(PathBuf::from("bin")).chain(
+        std::env::split_paths(&path_without(&["prek", "pre-commit"])),
+    ))
+    .expect("the PATH joins");
+    let out = rk_scrubbed()
+        .current_dir(caller.path())
+        .env("PATH", path)
+        .args(["integrate", "feat/greeting", "--apply"])
+        .args(["-m", "feat(greeting): add the greeting file", "--target"])
+        .arg(&repo)
+        .assert()
+        .success();
+    let text = String::from_utf8_lossy(&out.get_output().stdout).into_owned();
+    assert!(
+        text.contains("the manual stage passed under prek"),
+        "{text}"
+    );
+    let calls = std::fs::read_to_string(&log).expect("the runner was called");
+    assert_eq!(calls, "prek run --hook-stage manual --all-files\n");
+}
+
+/// With neither runner on `PATH`, the gate refuses before the trunk moves
+/// and names both runners.
+///
+/// SATISFIES git:the-manual-stage-is-the-pre-integrate-contract
+#[test]
+fn the_gate_names_both_runners_when_neither_is_on_path() {
+    let (_parent, repo) = integrate_fixture();
+    let before = rev_parse(&repo, "master");
+    rk_scrubbed()
+        .env("PATH", path_without(&["prek", "pre-commit"]))
+        .args(["integrate", "feat/greeting", "--apply"])
+        .args(["-m", "feat(greeting): add the greeting file", "--target"])
+        .arg(&repo)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("prek or pre-commit on PATH"));
+    assert_eq!(rev_parse(&repo, "master"), before);
 }
 
 /// The forge path pushes and names the request command, and opens no
@@ -36968,7 +37130,7 @@ fn integrate_forge_pushes_and_names_the_request_command() {
 /// SATISFIES maintenance:one-merge-proof-authorizes-both-removals
 #[test]
 fn a_local_integration_is_the_second_admissible_prune_proof() {
-    if !pre_commit_present() {
+    if !hook_runner_present() {
         return;
     }
     let (_parent, repo) = integrate_fixture();
@@ -37133,7 +37295,7 @@ fn the_integration_mode_round_trips_through_the_landing() {
     );
     assert!(!hooks.contains("rk-no-push-to-trunk"), "{hooks}");
     assert!(
-        hooks.contains("pre-commit run --hook-stage manual --all-files"),
+        hooks.contains("prek run --hook-stage manual --all-files"),
         "the block names the pre-integrate contract: {hooks}"
     );
     assert!(hooks.contains("- id: rk-worktree-location"), "{hooks}");
@@ -37243,7 +37405,7 @@ fn integrate_preview_refreshes_nothing() {
 /// is genuinely absent is a different fact and proceeds.
 #[test]
 fn integrate_refuses_a_configured_origin_that_will_not_answer() {
-    if !pre_commit_present() {
+    if !hook_runner_present() {
         return;
     }
     let (_parent, repo) = integrate_fixture();
@@ -37321,7 +37483,7 @@ fn integrate_reads_the_record_and_not_the_pending_configuration() {
 /// that work.
 #[test]
 fn the_recorded_tip_is_the_object_the_squash_was_built_from() {
-    if !pre_commit_present() {
+    if !hook_runner_present() {
         return;
     }
     let (_parent, repo) = integrate_fixture();
@@ -37353,7 +37515,7 @@ fn the_recorded_tip_is_the_object_the_squash_was_built_from() {
 /// SATISFIES git:the-manual-stage-is-the-pre-integrate-contract
 #[test]
 fn integrate_refuses_a_branch_that_moved_while_the_gate_ran() {
-    if !pre_commit_present() {
+    if !hook_runner_present() {
         return;
     }
     let (_parent, repo) = integrate_fixture();
@@ -37437,7 +37599,7 @@ fn integrate_judges_the_message_against_the_seats_ignore_rules() {
 /// SATISFIES maintenance:gone-is-a-candidate-not-proof
 #[test]
 fn unreachable_evidence_confirms_nothing() {
-    if !pre_commit_present() {
+    if !hook_runner_present() {
         return;
     }
     let (_parent, repo) = integrate_fixture();
@@ -40893,7 +41055,7 @@ fn rebase_integrate_apply(repo: &Path) -> serde_json::Value {
 /// SATISFIES git:a-rebase-integration-publishes-the-branch-tip
 #[test]
 fn rebase_integrate_puts_one_commit_on_the_trunk_as_it_is() {
-    if !pre_commit_present() {
+    if !hook_runner_present() {
         return;
     }
     let (_parent, repo) = rebase_fixture(&["feat(greeting): add it"]);
@@ -40945,7 +41107,7 @@ fn rebase_integrate_puts_one_commit_on_the_trunk_as_it_is() {
 /// SATISFIES git:a-rebase-integration-publishes-the-branch-tip
 #[test]
 fn rebase_integrate_puts_three_commits_on_the_trunk_in_order() {
-    if !pre_commit_present() {
+    if !hook_runner_present() {
         return;
     }
     let messages = [
@@ -41039,7 +41201,7 @@ fn rebase_integrate_refuses_a_commit_message_the_judgment_refuses() {
 /// SATISFIES git:a-rebase-integration-publishes-the-branch-tip
 #[test]
 fn rebase_integrate_refuses_a_branch_that_moved_while_the_gate_ran() {
-    if !pre_commit_present() {
+    if !hook_runner_present() {
         return;
     }
     let (_parent, repo) = rebase_fixture(&["feat(greeting): add it"]);
@@ -41179,7 +41341,7 @@ fn rebase_integrate_leaves_a_squash_record_on_the_squash_path() {
         .assert()
         .success()
         .stdout(predicate::str::contains("would write one squash commit"));
-    if !pre_commit_present() {
+    if !hook_runner_present() {
         return;
     }
     let out = rk_scrubbed()
@@ -41581,7 +41743,7 @@ fn prune_json(repo: &Path, verb: &str, mode: &str) -> serde_json::Value {
 /// SATISFIES maintenance:one-merge-proof-authorizes-both-removals
 #[test]
 fn reachable_tip_retires_the_worktree_of_a_rebase_integration() {
-    if !pre_commit_present() {
+    if !hook_runner_present() {
         return;
     }
     let (_parent, repo) = rebase_fixture(&["feat(greeting): add it", "fix(greeting): mend it"]);
@@ -41609,7 +41771,7 @@ fn reachable_tip_retires_the_worktree_of_a_rebase_integration() {
 /// SATISFIES maintenance:gone-is-a-candidate-not-proof
 #[test]
 fn reachable_tip_retires_the_branch_of_a_rebase_integration() {
-    if !pre_commit_present() {
+    if !hook_runner_present() {
         return;
     }
     let (_parent, repo) = rebase_fixture(&["feat(greeting): add it"]);
@@ -43032,7 +43194,7 @@ fn workflow_only_message_check_accepts_a_header_with_no_scope() {
 /// with no scope.
 #[test]
 fn workflow_only_integrate_accepts_a_header_with_no_scope() {
-    if !pre_commit_present() {
+    if !hook_runner_present() {
         return;
     }
     let (_parent, repo) = integrate_fixture();
@@ -43084,7 +43246,7 @@ fn workflow_only_trunk_commit_refuses_and_integrate_still_moves_the_trunk() {
         "the trunk guard is the pinned hook, for the trunk, at the pre-commit stage alone: {block}"
     );
 
-    if !pre_commit_present() {
+    if !hook_runner_present() {
         return;
     }
     let (_parent, repo) = integrate_fixture();
@@ -43844,7 +44006,7 @@ fn git_wrapper(dir: &Path, prelude: &str) -> PathBuf {
 /// SATISFIES git:a-rebase-integration-publishes-the-branch-tip
 #[test]
 fn rebase_integrate_publishes_a_linear_range_under_rebase_merges() {
-    if !pre_commit_present() {
+    if !hook_runner_present() {
         return;
     }
     let (_parent, repo) = rebase_fixture(&["feat(greeting): first"]);
@@ -43896,7 +44058,7 @@ fn rebase_integrate_publishes_a_linear_range_under_rebase_merges() {
 /// SATISFIES git:a-rebase-integration-publishes-the-branch-tip
 #[test]
 fn rebase_integrate_refuses_a_range_holding_a_merge() {
-    if !pre_commit_present() {
+    if !hook_runner_present() {
         return;
     }
     let (parent, repo) = rebase_fixture(&["feat(greeting): first"]);
@@ -43944,7 +44106,7 @@ fn rebase_integrate_refuses_a_range_holding_a_merge() {
 /// SATISFIES git:a-rebase-integration-publishes-the-branch-tip
 #[test]
 fn rebase_integrate_moves_no_other_branch_under_update_refs() {
-    if !pre_commit_present() {
+    if !hook_runner_present() {
         return;
     }
     let (_parent, repo) = rebase_fixture(&["feat(greeting): first", "feat(greeting): second"]);
@@ -43977,7 +44139,7 @@ fn rebase_integrate_moves_no_other_branch_under_update_refs() {
 /// SATISFIES git:a-local-integration-is-a-transaction
 #[test]
 fn integrate_refuses_a_held_trunk_moved_under_the_gate() {
-    if !pre_commit_present() {
+    if !hook_runner_present() {
         return;
     }
     for form in [Some("rebase"), None] {
@@ -44028,7 +44190,7 @@ fn integrate_refuses_a_held_trunk_moved_under_the_gate() {
 /// SATISFIES git:a-local-integration-is-a-transaction
 #[test]
 fn integrate_refuses_an_unheld_trunk_moved_under_the_gate() {
-    if !pre_commit_present() {
+    if !hook_runner_present() {
         return;
     }
     for form in [Some("rebase"), None] {
@@ -44075,7 +44237,7 @@ fn integrate_refuses_an_unheld_trunk_moved_under_the_gate() {
 /// SATISFIES git:a-local-integration-is-a-transaction
 #[test]
 fn integrate_refuses_a_trunk_seated_while_the_gate_ran() {
-    if !pre_commit_present() {
+    if !hook_runner_present() {
         return;
     }
     for form in [Some("rebase"), None] {
@@ -44124,7 +44286,7 @@ fn integrate_refuses_a_trunk_seated_while_the_gate_ran() {
 /// SATISFIES git:a-local-integration-is-a-transaction
 #[test]
 fn integrate_reports_a_trunk_moved_during_its_publication() {
-    if !pre_commit_present() {
+    if !hook_runner_present() {
         return;
     }
     let (parent, repo) = rebase_fixture(&["feat(greeting): first", "feat(greeting): second"]);
@@ -44552,7 +44714,7 @@ fn reftable_rebase_fixture() -> (tempfile::TempDir, PathBuf) {
     );
     git_bare_config(&repo, &["config", "user.email", "rk@example.invalid"]);
     git_bare_config(&repo, &["config", "user.name", "rk test"]);
-    std::fs::write(repo.join(".pre-commit-config.yaml"), "repos: []\n").expect("writes");
+    std::fs::write(repo.join(".pre-commit-config.yaml"), PASSING_MANUAL_HOOKS).expect("writes");
     std::fs::create_dir_all(repo.join(".release-kit")).expect("the record dir creates");
     std::fs::write(
         repo.join(".release-kit/manifest.json"),
@@ -44614,7 +44776,7 @@ fn reftable_rebase_fixture() -> (tempfile::TempDir, PathBuf) {
 /// SATISFIES git:a-local-integration-is-a-transaction
 #[test]
 fn integrate_confirms_a_held_trunk_move_with_a_one_entry_reftable_reflog() {
-    if !pre_commit_present() {
+    if !hook_runner_present() {
         return;
     }
     let (_parent, repo) = reftable_rebase_fixture();
@@ -44651,7 +44813,7 @@ fn integrate_confirms_a_held_trunk_move_with_a_one_entry_reftable_reflog() {
 /// SATISFIES git:a-local-integration-is-a-transaction
 #[test]
 fn integrate_reports_an_unconfirmed_publication_as_published() {
-    if !pre_commit_present() {
+    if !hook_runner_present() {
         return;
     }
     let (parent, repo) = rebase_fixture(&["feat(greeting): first", "feat(greeting): second"]);

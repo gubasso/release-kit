@@ -18,8 +18,8 @@ git status --porcelain                   # check: empty; a dirty seat refuses at
 The project assigns every check to the earliest stage that can run it, and the stage before the boundary carries the full suite. Run it before the boundary rather than at it, so a failure costs nothing:
 
 ```bash
-pre-commit run --hook-stage manual --all-files
-# check: every hook reports Passed or Skipped
+prek run --hook-stage manual --all-files
+# check: every hook reports Passed or Skipped; where the project still carries pre-commit, pre-commit run takes the same arguments
 ```
 
 On local:

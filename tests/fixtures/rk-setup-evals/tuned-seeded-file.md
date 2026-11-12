@@ -27,7 +27,7 @@ Present "State: `upgrade`. Request: upgrade. Tasks: `upgrade`. Proceed?" and wai
 4. Compare, `rk guide landing` step 2b: run `rk stage compare <root> --target . --json`. The seeded row reads `differs` with the word `drift`: the landing keeps the project's bytes, so nothing is asked.
 5. Land, `rk guide landing` step 4: preview `rk upgrade --stage <root> --target .`, quote every word, then run it with `--apply` as a gated step.
 6. Prove, `rk guide landing` step 5a: run `rk stage compare <root> --target . --json` again. Every `rendered` and `region` row reads `equal`.
-7. General post-flight: run `rk status --check --target .`, then `pre-commit run --hook-stage manual --all-files`.
+7. General post-flight: run `rk status --check --target .`, then `prek run --hook-stage manual --all-files`.
 8. Clean: print `rk stage clean <root>`, wait, and run it only because the request's authority includes cleanup.
 9. Report: fill the template from observation, with every answer the operator gave.
 

@@ -40,10 +40,10 @@ A project assigns every check to the earliest native `pre-commit` stage that can
 
 One rule produces both columns: every check runs at the last moment before the work crosses a boundary it cannot be pulled back from. Under forge integration that boundary is the branch push, because the forge sees the branch from then on. Under local integration the branch never leaves the checkout, so the boundary is the integration itself, and `pre-push` fires on the trunk push instead.
 
-`pre-commit` accepts a closed set of stage names and admits no custom one, so no pre-integrate stage exists. `manual` runs for nobody by default and runs when a command asks for it, which makes it the pre-integrate contract. `rk integrate` invokes it with one line:
+The hook runner, prek or pre-commit, accepts a closed set of stage names and admits no custom one, so no pre-integrate stage exists. `manual` runs for nobody by default and runs when a command asks for it, which makes it the pre-integrate contract. `rk integrate` invokes it with one line, through prek where prek is on `PATH`, and through pre-commit otherwise, with the same arguments:
 
 ```bash
-pre-commit run --hook-stage manual --all-files
+prek run --hook-stage manual --all-files
 ```
 
 Release-kit reads no hook identifier, no revision, no language, and no test category. The project owns everything in `.pre-commit-config.yaml` outside the marked block, owns its stage assignment, and owns the second axis below. That judgment lives in the project's own agent instructions, and the `rk-setup` skill is what researches the current hooks for the project's technologies.

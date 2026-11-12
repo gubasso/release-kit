@@ -31,7 +31,7 @@ Present "State: `setup`. Request: set up. Tasks: `provision`, `forge-settings`, 
 8. Prove, `rk guide landing` step 5a: run `rk stage compare <root> --target . --json` again. Every `rendered` and `region` row reads `equal`.
 9. `land` post-flight: answer each sentinel `sentinel_locations` names, take `rk guide setup` 4b and 4d, and state that the landed files reach the trunk through the project's own workflow.
 10. `publish`: ask, stated plainly, before the first upload, because it is permanent. Print 5b and 5c for the operator, then §6. Stop at 7d with "Next: cut one release with the `rk-release` skill".
-11. General post-flight: run `rk status --check --target .`, then `pre-commit run --hook-stage manual --all-files`.
+11. General post-flight: run `rk status --check --target .`, then `prek run --hook-stage manual --all-files`.
 12. Clean: print `rk stage clean <root>`, wait, and run it only because the request's authority includes cleanup.
 13. Report: fill the template from observation, with every answer the operator gave.
 

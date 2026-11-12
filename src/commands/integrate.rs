@@ -483,19 +483,19 @@ fn local_path(args: &IntegrateArgs, out: Output, run: &LocalRun<'_>) -> Result<(
     warn_if_uncounted(out, run, message, &[&trunk_before, &branch_tip], false);
 
     // The gate. One line, one stage, no hook identifier read.
-    let gate = gate(run.seat)?;
+    let (runner, gate) = gate(run.seat)?;
     if !gate.status.success() {
         out.child_passthrough(crate::events::ChildStream::Stderr, &gate.stderr);
         out.child_passthrough(crate::events::ChildStream::Stdout, &gate.stdout);
         return Err(refuse(
             Reason::StateDrift,
             format!(
-                "the manual stage failed in {}, so nothing reached {}",
+                "the manual stage failed in {} under {runner}, so nothing reached {}",
                 run.seat, run.trunk
             ),
         ));
     }
-    steps.push("the manual stage passed".to_owned());
+    steps.push(format!("the manual stage passed under {runner}"));
 
     // The re-observation. One object feeds the tree that is integrated
     // and the tip the evidence certifies, and that object is the one the
@@ -606,19 +606,19 @@ fn rebase_path(args: &IntegrateArgs, out: Output, run: &LocalRun<'_>) -> Result<
         if commits.len() == 1 { "" } else { "s" }
     ));
 
-    let gate = gate(run.seat)?;
+    let (runner, gate) = gate(run.seat)?;
     if !gate.status.success() {
         out.child_passthrough(crate::events::ChildStream::Stderr, &gate.stderr);
         out.child_passthrough(crate::events::ChildStream::Stdout, &gate.stdout);
         return Err(refuse(
             Reason::StateDrift,
             format!(
-                "the manual stage failed in {}, so nothing reached {}",
+                "the manual stage failed in {} under {runner}, so nothing reached {}",
                 run.seat, run.trunk
             ),
         ));
     }
-    steps.push("the manual stage passed".to_owned());
+    steps.push(format!("the manual stage passed under {runner}"));
 
     let now = rev_parse(run.seat, &args.branch)?;
     if now != branch_tip {
@@ -1521,9 +1521,62 @@ fn cargo_in(seat: &Utf8Path, args: &[&str]) -> Result<crate::cargo_package::Answ
         .map_err(|_| ())
 }
 
-/// Run the pre-integrate gate: one stage, one command.
-fn gate(seat: &Utf8Path) -> Result<std::process::Output, RkError> {
-    let mut command = std::process::Command::new("pre-commit");
+/// The hook runner the gate calls, with the executable it resolved to:
+/// prek where it resolves on `PATH`, because the host supplies it, else
+/// pre-commit, which a project that has not moved still carries in its own
+/// environment. Both read the same configuration and take the same
+/// arguments. None when neither resolves.
+fn hook_runner() -> Option<(&'static str, std::path::PathBuf)> {
+    ["prek", "pre-commit"]
+        .into_iter()
+        .find_map(|name| program_on_path(name).map(|path| (name, path)))
+}
+
+/// The executable file of this name in the first `PATH` directory that
+/// holds one. A relative entry resolves from this process's current
+/// directory, the way a shell resolves it, so the path stays right when the
+/// caller runs it from another directory.
+fn program_on_path(name: &str) -> Option<std::path::PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    let cwd = std::env::current_dir().ok();
+    std::env::split_paths(&path).find_map(|dir| {
+        let dir = if dir.is_relative() {
+            cwd.as_ref()?.join(dir)
+        } else {
+            dir
+        };
+        let candidate = dir.join(name);
+        let executable = std::fs::metadata(&candidate).is_ok_and(|meta| {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                meta.is_file() && meta.permissions().mode() & 0o111 != 0
+            }
+            #[cfg(not(unix))]
+            {
+                meta.is_file()
+            }
+        });
+        executable.then_some(candidate)
+    })
+}
+
+/// Run the pre-integrate gate: one stage, one command, under the runner
+/// that `hook_runner` chooses, which it returns beside the output.
+fn gate(seat: &Utf8Path) -> Result<(&'static str, std::process::Output), RkError> {
+    let unrunnable = |message: String| {
+        RkError::subprocess(
+            Diagnostic::new(Reason::SubprocessSpawn, message)
+                .expected(
+                    "prek or pre-commit on PATH, the hook runner that installs and runs this project's hooks",
+                )
+                .action("install prek on the host, or enter the project's environment that carries pre-commit, and run it again")
+                .target_state("unchanged"),
+        )
+    };
+    let (runner, executable) = hook_runner()
+        .ok_or_else(|| unrunnable(format!("no hook runner is on PATH to run in {seat}")))?;
+    let mut command = std::process::Command::new(&executable);
     for var in GIT_HOOK_VARS {
         command.env_remove(var);
     }
@@ -1531,19 +1584,8 @@ fn gate(seat: &Utf8Path) -> Result<std::process::Output, RkError> {
         .current_dir(seat.as_std_path())
         .args(["run", "--hook-stage", "manual", "--all-files"])
         .output()
-        .map_err(|source| {
-            RkError::subprocess(
-                Diagnostic::new(
-                    Reason::SubprocessSpawn,
-                    format!("pre-commit did not run in {seat}: {source}"),
-                )
-                .expected(
-                    "pre-commit on PATH, which is what installs and runs this project's hooks",
-                )
-                .action("install pre-commit, or enter the project's devshell, and run it again")
-                .target_state("unchanged"),
-            )
-        })
+        .map(|output| (runner, output))
+        .map_err(|source| unrunnable(format!("{runner} did not run in {seat}: {source}")))
 }
 
 /// Emit one report.

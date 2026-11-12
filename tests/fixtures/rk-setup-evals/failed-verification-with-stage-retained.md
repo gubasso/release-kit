@@ -27,7 +27,7 @@ Present "State: `upgrade`. Request: upgrade. Tasks: `upgrade`. Proceed?" and wai
 4. Compare, `rk guide landing` step 2b: run `rk stage compare <root> --target . --json`. Every differing `rendered` row reads `attributed`, so the landing refreshes it.
 5. Land, `rk guide landing` step 4: preview `rk upgrade --stage <root> --target .`, quote every word, then run it with `--apply` as a gated step.
 6. Prove, `rk guide landing` step 5a: run `rk stage compare <root> --target . --json` again. Every `rendered` and `region` row reads `equal`.
-7. General post-flight: `rk status --check --target .` passes, and `pre-commit run --hook-stage manual --all-files` fails on the project's own test.
+7. General post-flight: `rk status --check --target .` passes, and `prek run --hook-stage manual --all-files` fails on the project's own test.
 8. The check failed, so the run leaves the stage in place as recoverable evidence, at `<root>`, and the cleanup is not shown.
 9. Report: the first failing line, the stage kept at `<root>` because a check failed, and the failing check routed to the project.
 

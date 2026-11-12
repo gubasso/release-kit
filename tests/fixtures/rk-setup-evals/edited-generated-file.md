@@ -28,7 +28,7 @@ Present "State: `upgrade`. Request: upgrade. Tasks: `upgrade`. Proceed?" and wai
 5. Prepare, `rk guide landing` step 3: the operator's answer is recorded, and the kept edit is routed to `configure` in the post-flight.
 6. Land, `rk guide landing` step 4: preview `rk upgrade --stage <root> --target .`, quote every word, then run it with `--apply` and `--replace .github/workflows/pr-title.yml` as a gated step.
 7. Prove, `rk guide landing` step 5a: run `rk stage compare <root> --target . --json` again. Every `rendered` and `region` row reads `equal`.
-8. General post-flight: run `rk status --check --target .`, then `pre-commit run --hook-stage manual --all-files`.
+8. General post-flight: run `rk status --check --target .`, then `prek run --hook-stage manual --all-files`.
 9. Clean: print `rk stage clean <root>`, wait, and run it only because the request's authority includes cleanup.
 10. Report: fill the template from observation, with every answer the operator gave.
 

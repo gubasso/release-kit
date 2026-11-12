@@ -28,7 +28,7 @@ Present "State: `upgrade`. Request: upgrade. Tasks: `upgrade`. Proceed?" and wai
 5. Land, `rk guide landing` step 4: preview `rk upgrade --stage <root> --target .`, quote every word, then run it with `--apply` as a gated step.
 6. Prove, `rk guide landing` step 5a: run `rk stage compare <root> --target . --json` again. Every `rendered` and `region` row reads `equal`.
 7. `upgrade` post-flight: show each inactive legacy path by its exact path, with why each is obsolete. Remove each by name only under explicit cleanup authorization, after confirming that no active old operation remains, as `rk guide landing` 5b carries it. No `rk` verb removes this state.
-8. General post-flight: run `rk status --check --target .`, then `pre-commit run --hook-stage manual --all-files`.
+8. General post-flight: run `rk status --check --target .`, then `prek run --hook-stage manual --all-files`.
 9. Clean: print `rk stage clean <root>`, wait, and run it only because the request's authority includes cleanup.
 10. Report: fill the template from observation, with every answer the operator gave.
 

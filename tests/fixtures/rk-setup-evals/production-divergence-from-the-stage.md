@@ -29,7 +29,7 @@ Present "State: `upgrade`. Request: upgrade. Tasks: `upgrade`. Proceed?" and wai
 6. Prove, `rk guide landing` step 5a: run `rk stage compare <root> --target . --json` again. Every `rendered` and `region` row reads `equal`.
 7. The landing exits 73: the target's answers moved since the stage. Stage again with `rk stage --target . --json`, hold the new `<root>`, compare again, and land from the new stage.
 8. Prove against the new stage: every `rendered` and `region` row reads `equal`.
-9. General post-flight: run `rk status --check --target .`, then `pre-commit run --hook-stage manual --all-files`.
+9. General post-flight: run `rk status --check --target .`, then `prek run --hook-stage manual --all-files`.
 10. Clean: print `rk stage clean <root>` for each stage the run created, wait, and run each only because the request's authority includes cleanup.
 11. Report: fill the template from observation, both stages named.
 

@@ -138,15 +138,15 @@ Verify: `cargo nextest run -E 'test(the_tag_floors_hold_under_both_integration_m
 
 ### `git:the-manual-stage-is-the-pre-integrate-contract` — The manual stage is the pre-integrate contract
 
-Release-kit MUST express the pre-integrate gate as one `pre-commit` run over the `manual` stage across all files, and MUST read no hook identifier, revision, language, or test category from the target's own hook configuration, because `pre-commit` admits no custom stage and the project owns everything outside the marked block. Release-kit MUST land no continuous-integration workflow for the project's own checks and MUST judge no parity between those checks and the hook stages.
+Release-kit MUST express the pre-integrate gate as one run of the hook runner over the `manual` stage across all files, `prek` where it resolves on `PATH` and `pre-commit` otherwise, with the same arguments, and MUST read no hook identifier, revision, language, or test category from the target's own hook configuration, because neither runner admits a custom stage and the project owns everything outside the marked block. Release-kit MUST land no continuous-integration workflow for the project's own checks and MUST judge no parity between those checks and the hook stages.
 
 #### Scenario: A project assigns its own checks to stages
 
 - GIVEN a target whose hook configuration puts an expensive suite on the `manual` stage
 - WHEN `rk integrate` runs its gate
-- THEN it invokes the stage as one command and names no hook the project declared
+- THEN it invokes the stage as one command of the runner it found, prek before pre-commit, and names no hook the project declared
 
-Verify: `cargo nextest run -E 'test(the_gate_invokes_the_manual_stage)'`
+Verify: `cargo nextest run -E 'test(integrate_refuses_when_the_manual_stage_fails) or test(the_gate_runs_prek_when_it_is_on_path) or test(the_gate_runs_pre_commit_when_prek_is_absent) or test(the_gate_names_both_runners_when_neither_is_on_path)'`
 
 ### `git:a-check-declares-where-it-runs` — A check declares where it runs
 

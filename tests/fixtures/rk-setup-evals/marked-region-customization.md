@@ -28,7 +28,7 @@ Present "State: `drift`. Request: fix the drift. Tasks: `repair`. Proceed?" and 
 5. Compare, `rk guide landing` step 2b: run `rk stage compare <root> --target . --json`. The region row reads `differs`, provenance `reduced`, and the word `collision`. Ask whether to keep the edit or discard it. Both answers save a copy first, and every byte outside the markers stays.
 6. Land, `rk guide landing` step 4: preview `rk upgrade --stage <root> --target .`, quote every word, then run it with `--apply` and `--replace AGENTS.md` as a gated step.
 7. Prove, `rk guide landing` step 5a: run `rk stage compare <root> --target . --json` again. Every `rendered` and `region` row reads `equal`.
-8. General post-flight: run `rk status --check --target .`, then `pre-commit run --hook-stage manual --all-files`.
+8. General post-flight: run `rk status --check --target .`, then `prek run --hook-stage manual --all-files`.
 9. Clean: print `rk stage clean <root>`, wait, and run it only because the request's authority includes cleanup.
 10. Report: fill the template from observation, with every answer the operator gave.
 
