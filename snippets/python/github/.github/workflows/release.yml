@@ -4,8 +4,10 @@
 # RK_IF_NO_REGISTRY # The whole release pipeline. The package publishes to no registry: the
 # RK_IF_NO_REGISTRY # tag and the release page with its attested distributions are the release.
 #
-# Both jobs run on every push to the trunk, and to a RK_LINE_PREFIX* line when a
-# project keeps older lines. Each job calls rk, which holds the release logic
+# Both release jobs run on every push to the trunk, and to a RK_LINE_PREFIX* line
+# when a project keeps older lines. A third job, release-candidate, runs only
+# when a person dispatches it for a line, and mints or promotes that line's
+# release candidate. Each job calls rk, which holds the release logic
 # and reads the driver, the style, the integration, and the registry answer
 # from the landing record. release-request runs rk release request, which
 # keeps the one release pull request, pyproject.toml and uv.lock through uv
@@ -28,6 +30,23 @@ permissions: {}
 on:
   push:
     branches: [RK_TRUNK_BRANCH, 'RK_LINE_PREFIX**']
+  # A person mints a release candidate on purpose: the line, and the tip they
+  # read, so a line that moved since then refuses. Nothing watches a push.
+  workflow_dispatch:
+    inputs:
+      line:
+        description: The release line, <major>.<minor>, as in 1.4
+        required: true
+        type: string
+      expect:
+        description: The line's tip you read, as a full commit SHA
+        required: true
+        type: string
+      promote:
+        description: Promote the line's newest candidate to its stable version instead of minting a new one
+        required: false
+        type: boolean
+        default: false
 # RK_GATE_TRIGGER_BEGIN
 # RK_GATE_TRIGGER_END
 
@@ -36,7 +55,7 @@ jobs:
   # place on every push, and arms it where the landing arms it
   # (release-engine:the-request-arms-where-the-projection-arms).
   release-request:
-    if: github.repository_owner == 'OWNER' # RK_PUSH_GUARD
+    if: github.repository_owner == 'OWNER' && github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -94,7 +113,7 @@ jobs:
   # upload, and only then does rk release publish create the release and its
   # tag, so nothing publicly reachable exists before its attestation does.
   release:
-    if: github.repository_owner == 'OWNER' # RK_PUSH_GUARD
+    if: github.repository_owner == 'OWNER' && github.event_name == 'push'
     runs-on: ubuntu-latest
     environment: pypi # RK_IF_REGISTRY
     permissions:
@@ -179,5 +198,77 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: RK_DEV_RUN rk release publish
+  # A release candidate, minted on purpose. The job checks out the requested
+  # line under the app token and persists it, because rk lines mint reads the
+  # line's remote tags and pushes the candidate's version, pyproject.toml and uv.lock through uv version,
+  # with it. A push made with the default token starts no workflow, and the
+  # release job above runs on that push: rk release build releases a
+  # candidate at the commit that writes it, and rk release publish creates
+  # its prerelease page and its tag (release-engine:a-candidate-is-a-prerelease).
+  # So this job publishes nothing and creates no tag. A promotion writes the
+  # stable version alone, its push releases nothing, and the line's release
+  # request proposes it (release-candidates:a-promotion-writes-only-tested-code).
+  release-candidate:
+    if: github.repository_owner == 'OWNER' && github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    concurrency:
+      group: release-candidate-${{ inputs.line }}
+      cancel-in-progress: false
+    steps:
+      # rk reads the line's tags and pushes one commit, and opens, reads, and
+      # tags nothing else, so the token takes contents alone.
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        id: app-token
+        with:
+          client-id: ${{ secrets.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_APP_PRIVATE_KEY }}
+          permission-contents: write
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: RK_LINE_PREFIX${{ inputs.line }}
+          fetch-depth: 0
+          # zizmor: ignore[artipacked] the persisted credential is what pushes
+          # the candidate's version and reads the line's remote tags below.
+          token: ${{ steps.app-token.outputs.token }}
+      - name: configure git as the release app
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: |
+          set -eu
+          uid="$(gh api "/users/${APP_SLUG}[bot]" -q .id)"
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${uid}+${APP_SLUG}[bot]@users.noreply.github.com"
+# RK_DEV_ENV_CANDIDATE_BEGIN
+      - name: install rk
+        env:
+          RK_VERSION: "RK_SELF_VERSION"
+        run: |
+          set -eu
+          curl --proto '=https' --tlsv1.2 -LsSf "RK_SELF_RELEASES/v${RK_VERSION}/release-kit-installer.sh" | RELEASE_KIT_UNMANAGED_INSTALL="$RUNNER_TEMP/rk" sh
+          echo "$RUNNER_TEMP/rk" >> "$GITHUB_PATH"
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.7" # RK_IF_UV_UNPINNED
+          enable-cache: false
+# RK_DEV_ENV_CANDIDATE_END
+      # A candidate the line already carries with no tag yet is pending: rk
+      # reports it, writes and pushes nothing, and exits 0, and a rerun of
+      # the release job publishes it
+      # (release-candidates:a-pending-candidate-is-published-not-reminted).
+      - name: mint
+        env:
+          LINE: ${{ inputs.line }}
+          EXPECT: ${{ inputs.expect }}
+          PROMOTE: ${{ inputs.promote }}
+        run: |
+          set -eu
+          if [ "$PROMOTE" = "true" ]; then
+            RK_DEV_RUN rk lines mint "$LINE" --promote --expect "$EXPECT" --apply
+          else
+            RK_DEV_RUN rk lines mint "$LINE" --expect "$EXPECT" --apply
+          fi
 # RK_GATE_JOB_BEGIN
 # RK_GATE_JOB_END

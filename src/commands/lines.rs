@@ -42,6 +42,7 @@ pub fn run(args: &LinesArgs) -> Result<(), RkError> {
             expect,
             promote,
             target,
+            as_bot,
             apply,
             json,
         } => mint(
@@ -49,6 +50,7 @@ pub fn run(args: &LinesArgs) -> Result<(), RkError> {
             expect.as_deref(),
             *promote,
             target,
+            *as_bot,
             *apply,
             Output::new(*json),
         ),
@@ -449,6 +451,8 @@ struct MintContext<'a> {
     tip: String,
     tags: Vec<RemoteTag>,
     manifest: Option<Version>,
+    /// Whether the commit takes the bot's identity instead of the caller's.
+    as_bot: bool,
 }
 
 impl MintContext<'_> {
@@ -476,6 +480,7 @@ fn mint(
     expect: Option<&str>,
     promote: bool,
     target: &Utf8Path,
+    as_bot: bool,
     apply: bool,
     out: Output,
 ) -> Result<(), RkError> {
@@ -490,6 +495,13 @@ fn mint(
         )));
     }
     let driver = recorded_driver(target)?;
+    // Only the engine drivers commit a cut in a job that holds a bot
+    // credential; a rust line's jobs set the App's identity themselves.
+    if as_bot && !matches!(driver.as_str(), "bash" | "python") {
+        return Err(RkError::Usage(format!(
+            "--as-bot commits as the bot on a bash or python line, and this line releases {driver}; drop --as-bot"
+        )));
+    }
     let (file, _) = adapter::version_file(&driver).ok_or_else(|| {
         RkError::refusal(
             Diagnostic::new(
@@ -517,6 +529,7 @@ fn mint(
         tip,
         tags,
         manifest,
+        as_bot,
     };
     if promote {
         promote_candidate(&context, apply, out)
@@ -689,6 +702,13 @@ fn commit_and_push(
         tip,
         ..
     } = context;
+    // The bot's identity is read before any file is written, so a forge
+    // that names no account leaves the checkout and the remote unchanged.
+    let identity = if context.as_bot {
+        Some(bot_identity(target)?)
+    } else {
+        None
+    };
     // A python version is written through the adapter, uv version, which
     // relocks, so the commit carries pyproject.toml and uv.lock together.
     let written = if *driver == "python" {
@@ -705,11 +725,29 @@ fn commit_and_push(
     let mut add = vec!["add", "--"];
     add.extend(written.iter().map(String::as_str));
     run_git(target, &add, "the version staged")?;
-    run_git(
-        target,
-        &["commit", "-q", "-m", message],
-        "a commit under the identity the checkout configures",
-    )?;
+    if let Some((name, email)) = identity {
+        // As the engine commits: the identity the forge names, with every
+        // identity variable the job exports scrubbed so none displaces it.
+        let user = format!("user.name={name}");
+        let mail = format!("user.email={email}");
+        let committed = crate::release_engine::git(
+            target,
+            &["-c", &user, "-c", &mail, "commit", "-q", "-m", message],
+        )?;
+        if !committed.status.success() {
+            return Err(RkError::subprocess(
+                Diagnostic::new(Reason::SubprocessFailed, last_line(&committed.stderr))
+                    .expected("a commit under the identity the forge names for the bot")
+                    .target_state("the version file is written and not pushed"),
+            ));
+        }
+    } else {
+        run_git(
+            target,
+            &["commit", "-q", "-m", message],
+            "a commit under the identity the checkout configures",
+        )?;
+    }
     let commit = resolve_commit(target, "HEAD")?;
     let refspec = format!("HEAD:refs/heads/{branch}");
     let pushed = git(target, &["push", "-q", "origin", &refspec])?;
@@ -747,6 +785,16 @@ fn commit_and_push(
             .expected(format!("a push of {branch} the remote accepts"))
             .target_state("the remote is unchanged; the local commit is not pushed"),
     ))
+}
+
+/// The name and the email of the account the forge names for the job's
+/// bot credential, read through the engine's own reader, so a cut and a
+/// release request commit under one identity.
+///
+/// SATISFIES bot-identity:the-bot-identity-reaches-one-project
+fn bot_identity(target: &Utf8Path) -> Result<(String, String), RkError> {
+    let engine = crate::release_engine::Context::load(target)?;
+    crate::release_engine::forge::Client::resolve(engine.forge, target, &engine.repo)?.identity()
 }
 
 /// Write the version into the rust or bash version file and, where git
@@ -1241,18 +1289,19 @@ fn run_git(target: &Utf8Path, args: &[&str], expected: &str) -> Result<(), RkErr
 }
 
 /// What `rc` says where a line carries no candidate yet: the mint verb on
-/// a pair that wires the path, and the plain gap on one that does not.
+/// a pair whose release pipeline carries the candidate job, the rust,
+/// bash, and python pairs, and the plain gap on any other driver.
 fn empty_candidate_message(target: &Utf8Path) -> &'static str {
     let driver = crate::landing::manifest::load(target)
         .ok()
         .flatten()
         .and_then(|manifest| manifest.profile.release.driver);
     match driver.as_deref() {
-        Some("rust") => {
+        Some("rust" | "bash" | "python") => {
             "no candidate is tagged on the line yet; rk lines mint previews the first one, and the release workflow's candidate job mints it"
         }
         Some(_) => {
-            "no candidate is tagged on the line; this pair has no candidate path yet, so the line's release request stays the human gate"
+            "no candidate is tagged on the line; release-kit lands no candidate job for this driver, so the line's release request stays the human gate"
         }
         None => {
             "no candidate is tagged on the line yet; the target records no release driver, so rk binding <tech> names its candidate path"

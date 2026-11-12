@@ -76,6 +76,12 @@ pub enum LinesAction {
         #[arg(long, default_value = ".")]
         target: Utf8PathBuf,
 
+        /// Commit as the account the forge names for the job's bot
+        /// credential, read before any file is written; a bash or python
+        /// line only. Without it the commit takes the caller's identity.
+        #[arg(long)]
+        as_bot: bool,
+
         /// Commit and push the candidate's version; without it the intent
         /// is reported and nothing is touched.
         #[arg(long)]

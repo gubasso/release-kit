@@ -13594,8 +13594,8 @@ fn a_rendered_app_token_step_passes_the_identity_as_client_id() {
                 );
             }
             // Two release halves, the gate under local integration, and the
-            // release-candidate job on the pair that wires one.
-            let candidate = usize::from(tech == "rust");
+            // release-candidate job every pair carries.
+            let candidate = 1;
             let expected = if integration == "local" { 3 } else { 2 } + candidate;
             assert_eq!(minted, expected, "{tech}/{integration}");
         }
@@ -18468,6 +18468,14 @@ fn every_app_token_mint_scopes_its_permissions() {
             "release",
             vec!["contents: write", "pull-requests: read"],
         ),
+        // The candidate job pushes the line's version commit with the
+        // token and reads the line's remote tags. It opens, reads, and tags
+        // nothing else, so contents alone carries it.
+        (
+            "bash/github/.github/workflows/release.yml",
+            "release-candidate",
+            vec!["contents: write"],
+        ),
         (
             "python/github/.github/workflows/release.yml",
             "release-request",
@@ -18477,6 +18485,11 @@ fn every_app_token_mint_scopes_its_permissions() {
             "python/github/.github/workflows/release.yml",
             "release",
             vec!["contents: write", "pull-requests: read"],
+        ),
+        (
+            "python/github/.github/workflows/release.yml",
+            "release-candidate",
+            vec!["contents: write"],
         ),
         (
             "rust/github/.github/workflows/release-plz.yml",
@@ -18888,6 +18901,11 @@ struct MintLine {
 
 impl MintLine {
     fn new(tech: &str) -> Self {
+        Self::on(tech, "github")
+    }
+
+    /// The same line, landed for `forge`.
+    fn on(tech: &str, forge: &str) -> Self {
         let dir = tempfile::tempdir().expect("a scratch dir exists");
         let work = dir.path().join("work");
         std::fs::create_dir(&work).expect("the work tree exists");
@@ -18909,7 +18927,7 @@ impl MintLine {
             std::fs::set_permissions(stubs.join("uv"), std::fs::Permissions::from_mode(0o755))
                 .expect("the stand-in is executable");
         }
-        rk().args(["init", "--tech", tech, "--forge", "github"])
+        rk().args(["init", "--tech", tech, "--forge", forge])
             .args(["--repo", "acme/widget", "--integration", "forge"])
             .args(["--style", "lines", "--target"])
             .arg(&work)
@@ -19269,6 +19287,197 @@ fn a_python_promote_commits_the_lock() {
             line.read(file)
         );
     }
+}
+
+impl MintLine {
+    /// A stand-in `glab` that answers the user read with `answer`, or
+    /// fails it where `answer` is `None`, logs every call, and requires
+    /// the bot credential the GitLab job sets.
+    fn glab(&self, answer: Option<&str>) -> PathBuf {
+        let stubs = self.dir.path().join("stubs");
+        let log = stubs.join("state/glab.log");
+        std::fs::write(&log, "").expect("writes");
+        let reply = answer.map_or_else(
+            || "echo 'glab: 401 Unauthorized' >&2\nexit 1".to_owned(),
+            |body| {
+                std::fs::write(stubs.join("state/user.json"), body).expect("writes");
+                format!("cat '{}'", stubs.join("state/user.json").display())
+            },
+        );
+        let script = format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\n[ \"$GITLAB_TOKEN\" = bot-token ] || {{ echo 'no bot credential' >&2; exit 1; }}\n[ \"$*\" = 'api --method GET user' ] || {{ echo \"unexpected: $*\" >&2; exit 2; }}\n{reply}\n",
+            log.display()
+        );
+        let path = stubs.join("glab");
+        std::fs::write(&path, script).expect("the stand-in writes");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                .expect("the stand-in is executable");
+        }
+        path
+    }
+
+    /// A mint as a GitLab job runs it: the stand-in `glab`, the bot
+    /// credential, the instance host, and an identity the job's
+    /// environment exports to git.
+    fn mint_in_job(&self, glab: &Path, args: &[&str]) -> assert_cmd::assert::Assert {
+        rk().env("RK_UV_BIN", self.dir.path().join("stubs/uv"))
+            .env("RK_GLAB_BIN", glab)
+            .env("GITLAB_TOKEN", "bot-token")
+            .env("CI_SERVER_HOST", "forge.invalid")
+            .env("GIT_AUTHOR_NAME", "Someone Else")
+            .env("GIT_AUTHOR_EMAIL", "else@example.invalid")
+            .env("GIT_COMMITTER_NAME", "Someone Else")
+            .env("GIT_COMMITTER_EMAIL", "else@example.invalid")
+            .args(["lines", "mint"])
+            .args(args)
+            .arg("--target")
+            .arg(&self.work)
+            .assert()
+    }
+
+    fn glab_log(&self) -> String {
+        std::fs::read_to_string(self.dir.path().join("stubs/state/glab.log")).unwrap_or_default()
+    }
+
+    /// The author and the committer of the line's tip on the remote.
+    fn remote_identity(&self) -> String {
+        git_in(&self.work, &["fetch", "-q", "origin", "release/1.4"]);
+        git_out(
+            &self.work,
+            &["log", "-1", "--format=%an <%ae> %cn <%ce>", "FETCH_HEAD"],
+        )
+    }
+}
+
+/// SATISFIES release-candidates:a-mint-creates-no-tag
+///
+/// Under `--as-bot`, a GitLab cut on an engine pair commits as the account
+/// the forge names for the bot's token, read through the engine's own
+/// identity reader: the account's name with the email it returns, or its
+/// username's noreply address on the instance. The forge's answer reads
+/// whether it is compact or spaced, and an identity the job exports to git
+/// does not displace the bot's.
+#[test]
+fn a_gitlab_cut_as_the_bot_commits_as_the_forge_names() {
+    for tech in ["bash", "python"] {
+        for (answer, identity) in [
+            (
+                r#"{"id":7,"username":"widget-bot","name":"Widget Bot"}"#,
+                "Widget Bot <widget-bot@noreply.forge.invalid>",
+            ),
+            (
+                r#"{"id": 7, "username": "widget-bot", "name": "Widget Bot"}"#,
+                "Widget Bot <widget-bot@noreply.forge.invalid>",
+            ),
+            (
+                "{\n  \"id\": 7,\n  \"username\": \"widget-bot\",\n  \"name\": \"Widget Bot\",\n  \"email\": \"bot@example.invalid\"\n}",
+                "Widget Bot <bot@example.invalid>",
+            ),
+        ] {
+            let line = MintLine::on(tech, "gitlab");
+            let glab = line.glab(Some(answer));
+            let tip = line.head();
+            line.mint_in_job(&glab, &["1.4", "--expect", &tip, "--as-bot", "--apply"])
+                .success();
+            assert_eq!(
+                line.remote_identity(),
+                format!("{identity} {identity}"),
+                "{tech}: {answer}"
+            );
+            assert_eq!(
+                line.glab_log(),
+                "api --method GET user\n",
+                "{tech}: {answer}"
+            );
+        }
+    }
+}
+
+/// SATISFIES release-candidates:a-mint-creates-no-tag
+///
+/// An identity the forge does not name refuses before the cut writes any
+/// file: the version file, the checkout, and the remote stay as they were.
+#[test]
+fn an_unreadable_bot_identity_refuses_before_writing() {
+    for tech in ["bash", "python"] {
+        for answer in [None, Some(r#"{"id":7}"#)] {
+            let line = MintLine::on(tech, "gitlab");
+            let glab = line.glab(answer);
+            let tip = line.head();
+            let remote = line.remote_refs("refs/heads/release/1.4");
+            line.mint_in_job(&glab, &["1.4", "--expect", &tip, "--as-bot", "--apply"])
+                .failure();
+            assert_eq!(
+                git_out(&line.work, &["status", "--porcelain"]),
+                "",
+                "{tech}: {answer:?}"
+            );
+            assert_eq!(line.head(), tip, "{tech}: {answer:?}");
+            assert_eq!(
+                line.remote_refs("refs/heads/release/1.4"),
+                remote,
+                "{tech}: {answer:?}"
+            );
+            assert_eq!(line.glab_log(), "api --method GET user\n", "{tech}");
+            let uv =
+                std::fs::read_to_string(line.dir.path().join("stubs/state/log")).expect("reads");
+            assert!(!uv.contains("uv version"), "{tech}: {uv}");
+        }
+    }
+}
+
+/// Without `--as-bot`, a cut commits under the caller's own identity and
+/// reads no account from the forge, as an interactive cut does.
+#[test]
+fn a_cut_without_as_bot_keeps_the_caller_identity() {
+    for tech in ["bash", "python"] {
+        let line = MintLine::on(tech, "gitlab");
+        let glab = line.glab(Some(
+            r#"{"id":7,"username":"widget-bot","name":"Widget Bot"}"#,
+        ));
+        let tip = line.head();
+        rk().env("RK_UV_BIN", line.dir.path().join("stubs/uv"))
+            .env("RK_GLAB_BIN", &glab)
+            .env("GITLAB_TOKEN", "bot-token")
+            .env_remove("GIT_AUTHOR_NAME")
+            .env_remove("GIT_AUTHOR_EMAIL")
+            .env_remove("GIT_COMMITTER_NAME")
+            .env_remove("GIT_COMMITTER_EMAIL")
+            .args([
+                "lines", "mint", "1.4", "--expect", &tip, "--apply", "--target",
+            ])
+            .arg(&line.work)
+            .assert()
+            .success();
+        assert_eq!(
+            line.remote_identity(),
+            "t <t@invalid> t <t@invalid>",
+            "{tech}"
+        );
+        assert_eq!(line.glab_log(), "", "{tech}: the forge is not read");
+    }
+}
+
+/// A rust line releases through release-plz, which owns no bot commit of
+/// this verb, so `--as-bot` refuses as usage before anything is read.
+#[test]
+fn a_rust_cut_refuses_as_bot() {
+    let line = MintLine::on("rust", "gitlab");
+    let glab = line.glab(Some(
+        r#"{"id":7,"username":"widget-bot","name":"Widget Bot"}"#,
+    ));
+    let tip = line.head();
+    line.mint_in_job(&glab, &["1.4", "--expect", &tip, "--as-bot", "--apply"])
+        .code(64)
+        .stderr(predicate::str::contains(
+            "--as-bot commits as the bot on a bash or python line, and this line releases rust",
+        ));
+    assert!(line.read("Cargo.toml").contains("\"1.4.2\""));
+    assert_eq!(line.head(), tip);
+    assert_eq!(line.glab_log(), "");
 }
 
 /// The mint edits exactly the tree of the requested line at the expected
@@ -19637,28 +19846,21 @@ fn a_policy_rejection_is_not_a_lost_race() {
     assert!(line.remote_refs("refs/heads/release/1.4").starts_with(&tip));
 }
 
-/// With no candidate yet, `rc` names the mint verb on a pair that wires the
-/// path, and the plain gap on a pair that does not.
+/// With no candidate yet, `rc` names the mint verb and the candidate job on
+/// every pair with a release driver, and the line chapters name every pair
+/// that cuts a candidate.
 #[test]
-fn an_empty_line_names_the_mint_or_the_gap_by_pair() {
-    let rust = MintLine::new("rust");
-    rk().args(["lines", "rc", "1.4", "--target"])
-        .arg(&rust.work)
-        .assert()
-        .success()
-        .stdout(predicate::str::contains(
-            "rk lines mint previews the first one",
-        ));
-    for tech in ["bash", "python"] {
+fn the_rc_text_names_every_pair_that_can_cut() {
+    for tech in ["rust", "bash", "python"] {
         let line = MintLine::new(tech);
         rk().args(["lines", "rc", "1.4", "--target"])
             .arg(&line.work)
             .assert()
             .success()
             .stdout(predicate::str::contains(
-                "this pair has no candidate path yet",
+                "rk lines mint previews the first one, and the release workflow's candidate job mints it",
             ))
-            .stdout(predicate::str::contains("rk lines mint").not());
+            .stdout(predicate::str::contains("no candidate path").not());
     }
     // A checkout with no landing record claims no candidate job.
     let bare = tempfile::tempdir().expect("a scratch checkout exists");
@@ -19672,6 +19874,28 @@ fn an_empty_line_names_the_mint_or_the_gap_by_pair() {
             "the target records no release driver",
         ))
         .stdout(predicate::str::contains("candidate job").not());
+    // Each line chapter's candidate step names every pair that cuts one.
+    for (path, step) in [
+        ("method/09-release-lines.md", "5. Mint a candidate"),
+        ("runbooks/release-lines.md", "## 5. Mint the candidate"),
+        ("skills/rk-release/references/lines.md", "3. A candidate"),
+    ] {
+        let text = std::fs::read_to_string(repo_path(path)).expect("the chapter reads");
+        let at = text
+            .find(step)
+            .unwrap_or_else(|| panic!("{path} has no step {step}"));
+        let paragraph = text[at..]
+            .split("\n\n")
+            .nth(usize::from(path.starts_with("runbooks")))
+            .expect("the step text");
+        for pair in ["rust", "bash", "python"] {
+            assert!(
+                paragraph.contains(pair),
+                "{path} names no {pair}: {paragraph}"
+            );
+        }
+        assert!(!text.contains("no candidate path"), "{path}");
+    }
 }
 
 /// The canon claims no candidate path a pair lacks: no text says a
@@ -19706,6 +19930,7 @@ fn the_canon_claims_no_candidate_path_it_lacks() {
         "rc automation",
         "candidate automation",
         "release-engine",
+        "no candidate path",
     ];
     for path in files {
         let Ok(text) = std::fs::read_to_string(&path) else {
@@ -31596,12 +31821,11 @@ fn a_forge_integrated_target_keeps_the_standing_arm() {
         assert!(!text.contains("release-gate:"), "{driver}");
         assert!(!text.contains("RK_GATE"), "{driver} leaks a marker");
         assert!(!text.contains("RK_PUSH_GUARD"), "{driver} leaks a token");
-        // The rust pair carries a release-candidate dispatch, so its push
+        // Every pair carries a release-candidate dispatch, so its push
         // jobs keep the event guard under either integration.
-        assert_eq!(
+        assert!(
             text.contains("github.event_name == 'push'"),
-            driver == "rust",
-            "{driver} guards exactly the triggers it carries"
+            "{driver} guards its push jobs against the dispatch"
         );
     }
 }
@@ -47966,9 +48190,12 @@ fn the_build_packages_install_through_apt_on_both_forges() {
     }
 }
 
-/// Neither bash pipeline carries release logic of its own: outside the gate
-/// job and the provenance job, no line computes a bump, pushes, or calls a
-/// forge API. rk holds all of it.
+/// No engine pipeline carries release logic of its own: outside the gate
+/// job and the provenance job, no line of the bash pipelines or of the
+/// python GitLab pipelines computes a bump, pushes, or calls a forge API,
+/// except the GitHub candidate job's one read of the App's account, which
+/// sets the commit identity. rk holds all of it, the GitLab candidate's
+/// bot identity included.
 ///
 /// SATISFIES release-engine:the-tag-is-created-last
 #[test]
@@ -48001,27 +48228,56 @@ fn the_bash_pipelines_carry_no_release_shell() {
     let mut bodies = Vec::new();
     for integration in [Integration::Local, Integration::Forge] {
         let workflow = release_workflow("bash", integration);
-        for job in ["release-request", "release"] {
+        for job in ["release-request", "release", "release-candidate"] {
             bodies.push((format!("github {job}"), code(workflow_job(&workflow, job))));
         }
     }
-    let pipeline = landed_bash_pipeline(land_pair("bash", "gitlab").path(), "gitlab");
-    for (name, body) in gitlab_sections_of(&pipeline) {
-        if name != "provenance" {
-            bodies.push((format!("gitlab {name}"), body));
+    let pipelines = engine_gitlab_pipelines();
+    for (label, pipeline) in &pipelines {
+        for (name, body) in gitlab_sections_of(pipeline) {
+            if name != "provenance" {
+                bodies.push((format!("gitlab {label} {name}"), body));
+            }
         }
     }
+    // The GitHub candidate job reads the App's account once, to commit
+    // under it. The GitLab candidate job reads none: rk reads it.
+    for (name, body) in &mut bodies {
+        if name.starts_with("github") && name.ends_with("release-candidate") {
+            let reads = body
+                .lines()
+                .filter(|line| line.contains("gh api \"/users/"))
+                .count();
+            assert_eq!(reads, 1, "{name}: {body}");
+            *body = body
+                .lines()
+                .filter(|line| !line.contains("gh api \"/users/"))
+                .collect::<Vec<_>>()
+                .join("\n");
+        }
+    }
+    assert_eq!(
+        bodies
+            .iter()
+            .filter(|(name, _)| name.ends_with("release-candidate"))
+            .count(),
+        2 + pipelines.len(),
+        "both GitHub renderings and every GitLab pipeline carry the candidate job"
+    );
     for (name, body) in &bodies {
         for shell in RELEASE_SHELL {
             assert!(!body.contains(shell), "{name} carries {shell}: {body}");
         }
     }
-    for action in ["request", "build", "publish"] {
-        assert!(
-            bodies.iter().any(|(name, body)| name.starts_with("gitlab")
-                && body.contains(&format!("rk release {action}"))),
-            "the GitLab pipeline runs rk release {action}"
-        );
+    for (label, _) in &pipelines {
+        for action in ["request", "build", "publish"] {
+            let prefix = format!("gitlab {label} ");
+            assert!(
+                bodies.iter().any(|(name, body)| name.starts_with(&prefix)
+                    && body.contains(&format!("rk release {action}"))),
+                "the GitLab {label} pipeline runs rk release {action}"
+            );
+        }
     }
 }
 
@@ -52043,4 +52299,793 @@ fn the_build_writes_its_report_to_the_github_output() {
         written.lines().last(),
         Some(format!("rk-release-{merge}").as_str())
     );
+}
+
+// ---- the candidate lanes of the engine pairs ----
+
+/// Every rendered GitHub release workflow of the engine pairs, under each
+/// integration mode, with a label naming the rendering.
+fn engine_github_workflows() -> Vec<(String, String)> {
+    use release_kit::landing::Integration;
+    let mut out = Vec::new();
+    for driver in ["bash", "python"] {
+        for (integration, mode) in [(Integration::Local, "local"), (Integration::Forge, "forge")] {
+            out.push((
+                format!("{driver} {mode}"),
+                release_workflow(driver, integration),
+            ));
+        }
+    }
+    out
+}
+
+/// Every rendered GitLab pipeline of the engine pairs with no recorded
+/// development environment, python under both registry answers, labelled.
+fn engine_gitlab_pipelines() -> Vec<(String, String)> {
+    vec![
+        (
+            "bash".to_owned(),
+            landed_bash_pipeline(land_pair("bash", "gitlab").path(), "gitlab"),
+        ),
+        (
+            "python pypi".to_owned(),
+            landed_bash_pipeline(land_python("gitlab", "").path(), "gitlab"),
+        ),
+        (
+            "python none".to_owned(),
+            landed_bash_pipeline(
+                land_python("gitlab", "registry = \"none\"\n").path(),
+                "gitlab",
+            ),
+        ),
+    ]
+}
+
+/// The trimmed lines of `job` that call the mint verb.
+fn mint_lines(job: &str) -> Vec<&str> {
+    job.lines()
+        .map(str::trim)
+        .filter(|line| line.contains("rk lines mint"))
+        .collect()
+}
+
+/// SATISFIES release-candidates:a-mint-creates-no-tag
+///
+/// The GitHub candidate job of each engine pair runs on a dispatch alone,
+/// checks out the requested line under the app token it mints, sets the
+/// bot's identity before the mint, hands the inputs to the shell through
+/// `env:` alone, and creates no tag and no release.
+#[test]
+fn each_github_candidate_job_pushes_as_the_bot() {
+    for (label, workflow) in engine_github_workflows() {
+        assert!(
+            workflow.contains("  workflow_dispatch:\n    inputs:\n      line:"),
+            "{label}: {workflow}"
+        );
+        for input in ["      expect:\n", "      promote:\n        description"] {
+            assert!(workflow.contains(input), "{label}: {input}");
+        }
+        let job = workflow_job(&workflow, "release-candidate");
+        assert!(
+            job.contains(
+                "    if: github.repository_owner == 'acme' && github.event_name == 'workflow_dispatch'\n"
+            ),
+            "{label}: {job}"
+        );
+        assert!(
+            job.contains(
+                "      group: release-candidate-${{ inputs.line }}\n      cancel-in-progress: false\n"
+            ),
+            "{label}: {job}"
+        );
+        let at = |needle: &str| {
+            job.find(needle)
+                .unwrap_or_else(|| panic!("{label}: {needle}: {job}"))
+        };
+        assert!(
+            at("create-github-app-token@") < at("actions/checkout@"),
+            "{label}"
+        );
+        assert!(
+            at("          ref: release/${{ inputs.line }}\n") > at("actions/checkout@"),
+            "{label}"
+        );
+        assert!(
+            at("          token: ${{ steps.app-token.outputs.token }}\n")
+                < at("- name: configure git as the release app"),
+            "{label}"
+        );
+        assert!(
+            at("git config user.email \"${uid}+${APP_SLUG}[bot]@users.noreply.github.com\"")
+                < at("- name: mint"),
+            "{label}"
+        );
+        let step = workflow_step(job, "mint");
+        for var in [
+            "LINE: ${{ inputs.line }}",
+            "EXPECT: ${{ inputs.expect }}",
+            "PROMOTE: ${{ inputs.promote }}",
+        ] {
+            assert!(step.contains(var), "{label}: {var}: {step}");
+        }
+        assert!(!step.contains("token"), "{label}: {step}");
+        assert!(
+            !step_script(job, "mint").contains("${{"),
+            "{label}: inputs reach the shell through env alone"
+        );
+        for absent in [
+            "git tag",
+            "gh release",
+            "rk release",
+            "git push",
+            "secrets.GITHUB_TOKEN",
+        ] {
+            assert!(!job.contains(absent), "{label}: {absent}: {job}");
+        }
+    }
+}
+
+/// No push job of either engine workflow runs on the candidate dispatch,
+/// and the release gate, where it renders, stays out of it too.
+#[test]
+fn the_github_push_jobs_skip_a_dispatch() {
+    for (label, workflow) in engine_github_workflows() {
+        for job in ["release-request", "release"] {
+            let body = workflow_job(&workflow, job);
+            assert!(
+                body.contains(
+                    "    if: github.repository_owner == 'acme' && github.event_name == 'push'\n"
+                ),
+                "{label}: {job}: {body}"
+            );
+        }
+        if workflow.contains("\n  release-gate:\n") {
+            let gate = workflow_job(&workflow, "release-gate");
+            assert!(
+                gate.contains("github.event_name == 'push'"),
+                "{label}: {gate}"
+            );
+            assert!(!gate.contains("workflow_dispatch"), "{label}: {gate}");
+        }
+    }
+}
+
+/// The python candidate job mints and pushes alone: the upload stays in
+/// the release job its push starts, which the trusted publisher names.
+#[test]
+fn the_python_candidate_job_publishes_nothing() {
+    use release_kit::landing::Integration;
+    let none = landed_bash_pipeline(
+        land_python("github", "registry = \"none\"\n").path(),
+        "github",
+    );
+    for (label, workflow) in [
+        ("local", release_workflow("python", Integration::Local)),
+        ("forge", release_workflow("python", Integration::Forge)),
+        ("none", none),
+    ] {
+        let job = workflow_job(&workflow, "release-candidate");
+        assert!(
+            job.contains("    permissions:\n      contents: read\n    concurrency:"),
+            "{label}: {job}"
+        );
+        for absent in [
+            "id-token",
+            "environment:",
+            "attestations:",
+            "pypi-publish",
+            "actions/attest",
+            "uv publish",
+            "uv build",
+            "rk release",
+        ] {
+            assert!(!job.contains(absent), "{label}: {absent}: {job}");
+        }
+    }
+}
+
+/// SATISFIES release-candidates:a-mint-acts-only-on-the-tip-its-caller-saw
+///
+/// The GitLab candidate job runs only by hand on a line pipeline, refuses
+/// a `LINE` that names another line before it touches git, and pushes
+/// under `RELEASE_BOT_TOKEN`, whose push starts the pipeline that
+/// publishes the candidate.
+#[test]
+fn each_gitlab_candidate_job_is_manual_and_pushes_as_the_bot() {
+    for (label, pipeline) in engine_gitlab_pipelines() {
+        let job = gitlab_job(&pipeline, "release-candidate");
+        assert!(job.contains("  extends: .tooling\n"), "{label}: {job}");
+        assert!(
+            job.contains("  rules:\n    - if: '$CI_COMMIT_BRANCH =~ /^release\\//'\n      when: manual\n      allow_failure: true\n"),
+            "{label}: {job}"
+        );
+        let at = |needle: &str| {
+            job.find(needle)
+                .unwrap_or_else(|| panic!("{label}: {needle}: {job}"))
+        };
+        // The identity is the one the token names, read by rk under
+        // --as-bot, never a name the pipeline carries or configures,
+        // because the bot's name is a setup declaration.
+        assert!(!pipeline.contains("release-bot"), "{label}");
+        for absent in ["glab", "sed ", "git config", "$bot"] {
+            assert!(!job.contains(absent), "{label}: {absent}: {job}");
+        }
+        let mints = mint_lines(job);
+        assert!(!mints.is_empty(), "{label}: {job}");
+        for mint in mints {
+            assert!(mint.contains(" --as-bot --apply"), "{label}: {mint}");
+        }
+        assert!(
+            at(
+                "git remote set-url origin \"https://oauth2:${RELEASE_BOT_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git\""
+            ) < at("rk lines mint"),
+            "{label}"
+        );
+        for line in job
+            .lines()
+            .filter(|line| line.contains("RELEASE_BOT_TOKEN"))
+        {
+            assert!(
+                !line.contains("echo") && !line.contains("printf"),
+                "{label}: a line prints the token: {line}"
+            );
+        }
+        for absent in ["CI_JOB_TOKEN", "id_tokens", "rk release"] {
+            assert!(!job.contains(absent), "{label}: {absent}: {job}");
+        }
+        let scratch = tempfile::tempdir().expect("a scratch dir exists");
+        let out = run_step(
+            &gitlab_blocks(job).join("\n"),
+            scratch.path(),
+            &[
+                ("CI_COMMIT_BRANCH", "release/1.4"),
+                ("LINE", "1.5"),
+                ("EXPECT", "0123456789abcdef0123456789abcdef01234567"),
+            ],
+        );
+        assert!(!out.status.success(), "{label}");
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains(
+                "this pipeline runs release/1.4, and LINE names release/1.5; run the job on a pipeline of the line it names."
+            ),
+            "{label}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
+/// SATISFIES packaging:a-landed-job-takes-rk-by-one-route
+///
+/// The GitLab candidate job runs on the pair's glibc base, which installs
+/// `rk` at the landing binary's version, or on the recorded image with
+/// `rk` through the recorded prefix and no installer.
+#[test]
+fn each_gitlab_candidate_job_runs_rk_on_its_image() {
+    let version = env!("CARGO_PKG_VERSION");
+    for (driver, plain, recorded) in [
+        (
+            "bash",
+            landed_bash_pipeline(land_pair("bash", "gitlab").path(), "gitlab"),
+            bash_pipeline_with_environment("gitlab"),
+        ),
+        (
+            "python",
+            landed_bash_pipeline(land_python("gitlab", "").path(), "gitlab"),
+            python_pipeline_with_environment("gitlab"),
+        ),
+    ] {
+        let tooling = gitlab_job(&plain, ".tooling");
+        assert!(tooling.contains("  image: debian:"), "{driver}: {tooling}");
+        assert!(tooling.contains("-slim@sha256:"), "{driver}: {tooling}");
+        assert!(
+            tooling.contains(&format!("/v{version}/release-kit-installer.sh")),
+            "{driver}: {tooling}"
+        );
+        let job = gitlab_job(&plain, "release-candidate");
+        assert!(job.contains("  extends: .tooling\n"), "{driver}: {job}");
+        assert!(!job.contains("image:"), "{driver}: {job}");
+        assert!(!job.contains("before_script"), "{driver}: {job}");
+        let mints = mint_lines(job);
+        assert!(!mints.is_empty(), "{driver}: {job}");
+        for line in mints {
+            assert!(line.starts_with("rk lines mint "), "{driver}: {line}");
+        }
+        assert_no_landing_token(&plain);
+        let tooling = gitlab_job(&recorded, ".tooling");
+        assert!(
+            tooling.contains("  image: nixos/nix:2.35.2\n"),
+            "{driver}: {tooling}"
+        );
+        assert!(!recorded.contains("release-kit-installer.sh"), "{driver}");
+        let job = gitlab_job(&recorded, "release-candidate");
+        assert!(job.contains("  extends: .tooling\n"), "{driver}: {job}");
+        let mints = mint_lines(job);
+        assert!(!mints.is_empty(), "{driver}: {job}");
+        for line in mints {
+            assert!(
+                line.starts_with("nix develop --command rk lines mint "),
+                "{driver}: {line}"
+            );
+        }
+        assert_no_landing_token(&recorded);
+    }
+}
+
+/// SATISFIES packaging:a-landed-job-takes-rk-by-one-route
+///
+/// The GitHub candidate job installs `rk` at the landing binary's version,
+/// and for python the uv the project requires, or takes the recorded setup
+/// and runs `rk` through the recorded prefix with neither install. It
+/// installs no git-cliff, because a mint writes no changelog.
+#[test]
+fn each_github_candidate_job_takes_rk_by_one_route() {
+    use release_kit::landing::Integration;
+    let version = env!("CARGO_PKG_VERSION");
+    let installer = format!("{}/releases/download/v", env!("CARGO_PKG_REPOSITORY"));
+    for (driver, recorded) in [
+        ("bash", bash_pipeline_with_environment("github")),
+        ("python", python_pipeline_with_environment("github")),
+    ] {
+        let plain = release_workflow(driver, Integration::Forge);
+        let job = workflow_job(&plain, "release-candidate");
+        let install = workflow_step(job, "install rk");
+        assert!(
+            install.contains(&format!("RK_VERSION: \"{version}\"")),
+            "{driver}: {install}"
+        );
+        assert!(
+            install.contains(&format!(
+                "\"{installer}${{RK_VERSION}}/release-kit-installer.sh\""
+            )),
+            "{driver}: {install}"
+        );
+        assert!(
+            job.find("- name: install rk") < job.find("- name: mint"),
+            "{driver}"
+        );
+        assert_eq!(
+            job.contains("astral-sh/setup-uv@"),
+            driver == "python",
+            "{driver}: {job}"
+        );
+        assert!(!job.contains("git-cliff"), "{driver}: {job}");
+        for line in mint_lines(job) {
+            assert!(line.starts_with("rk lines mint "), "{driver}: {line}");
+        }
+        assert_no_landing_token(&plain);
+        let job = workflow_job(&recorded, "release-candidate");
+        assert!(job.contains("nix-installer-action@"), "{driver}: {job}");
+        // The candidate job pushes, so like the release job it takes the
+        // setup and never the cache.
+        assert!(!job.contains("magic-nix-cache-action"), "{driver}: {job}");
+        for absent in [
+            "release-kit-installer.sh",
+            "astral-sh/setup-uv",
+            "git-cliff",
+        ] {
+            assert!(!job.contains(absent), "{driver}: {absent}: {job}");
+        }
+        let mints = mint_lines(job);
+        assert_eq!(mints.len(), 2, "{driver}: {job}");
+        for line in mints {
+            assert!(
+                line.starts_with("nix develop --command rk lines mint "),
+                "{driver}: {line}"
+            );
+        }
+        assert_no_landing_token(&recorded);
+    }
+}
+
+/// SATISFIES release-candidates:a-mint-acts-only-on-the-tip-its-caller-saw
+///
+/// Every rendered candidate job of the engine pairs calls the verb with
+/// the tip its caller read and `--apply`, in its mint branch and in its
+/// promote branch.
+#[test]
+fn each_candidate_job_passes_expect_and_apply() {
+    let mut jobs: Vec<(String, String)> = engine_github_workflows()
+        .into_iter()
+        .map(|(label, workflow)| {
+            (
+                label,
+                workflow_job(&workflow, "release-candidate").to_owned(),
+            )
+        })
+        .collect();
+    jobs.extend(
+        engine_gitlab_pipelines()
+            .into_iter()
+            .map(|(label, pipeline)| {
+                (label, gitlab_job(&pipeline, "release-candidate").to_owned())
+            }),
+    );
+    for (label, job) in jobs {
+        let mints = mint_lines(&job);
+        assert_eq!(mints.len(), 2, "{label}: {job}");
+        assert_eq!(
+            mints
+                .iter()
+                .filter(|line| line.contains(" --promote "))
+                .count(),
+            1,
+            "{label}: {mints:?}"
+        );
+        for line in mints {
+            assert!(line.contains(" --expect \""), "{label}: {line}");
+            assert!(line.ends_with(" --apply"), "{label}: {line}");
+        }
+    }
+}
+
+/// SATISFIES release-candidates:a-pending-candidate-is-published-not-reminted
+///
+/// A line whose version file carries a candidate with no tag yet, as a
+/// mint whose publish failed leaves it: the rendered candidate job of each
+/// engine pair reports the pending candidate, exits 0, and pushes nothing.
+#[test]
+fn a_pending_cut_writes_and_pushes_nothing() {
+    let rk_dir = assert_cmd::cargo::cargo_bin("rk")
+        .parent()
+        .expect("the binary sits in a directory")
+        .to_path_buf();
+    for tech in ["bash", "python"] {
+        for forge in ["github", "gitlab"] {
+            let line = MintLine::on(tech, forge);
+            let tip = line.head();
+            line.mint(&["1.4", "--expect", &tip, "--apply"]).success();
+            let pending = line.head();
+            let pipeline = landed_bash_pipeline(&line.work, forge);
+            let script = if forge == "github" {
+                step_script(workflow_job(&pipeline, "release-candidate"), "mint")
+            } else {
+                gitlab_blocks(gitlab_job(&pipeline, "release-candidate")).join("\n")
+            };
+            let origin = line.dir.path().join("origin.git");
+            // The forge client names the bot the token belongs to.
+            let stubs = line.dir.path().join("stubs");
+            write_executable(
+                &stubs.join("glab"),
+                "#!/bin/sh\nprintf '{\"id\":7,\"username\":\"widget-bot\",\"name\":\"Widget Bot\"}\\n'\n",
+            );
+            let state = ScratchState::new();
+            let mut shell = std::process::Command::new("sh");
+            for var in GIT_HOOK_VARS {
+                shell.env_remove(var);
+            }
+            let path = std::env::join_paths([rk_dir.clone(), stubs.clone()].into_iter().chain(
+                std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+            ))
+            .expect("the PATH joins");
+            shell
+                .arg("-c")
+                .arg(&script)
+                .current_dir(&line.work)
+                .envs(state.vars())
+                .env("PATH", path)
+                .env("RK_UV_BIN", line.dir.path().join("stubs/uv"))
+                .env("LINE", "1.4")
+                .env("EXPECT", &pending)
+                .env("PROMOTE", "false")
+                .env("CI_COMMIT_BRANCH", "release/1.4")
+                .env("RELEASE_BOT_TOKEN", "bot-token")
+                .env("CI_SERVER_HOST", "forge.invalid")
+                .env("CI_PROJECT_PATH", "acme/widget")
+                // The push URL the job sets resolves to the local origin.
+                .env("GIT_CONFIG_COUNT", "1")
+                .env(
+                    "GIT_CONFIG_KEY_0",
+                    format!("url.{}.insteadOf", origin.display()),
+                )
+                .env(
+                    "GIT_CONFIG_VALUE_0",
+                    "https://oauth2:bot-token@forge.invalid/acme/widget.git",
+                );
+            let out = shell.output().expect("sh runs");
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            assert!(
+                out.status.success(),
+                "{tech} {forge}: {stdout}{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            assert!(stdout.contains("pending:"), "{tech} {forge}: {stdout}");
+            assert_eq!(line.head(), pending, "{tech} {forge}: the job committed");
+            // The job pointed origin at the forge URL, so read the origin by
+            // its path.
+            let origin = origin.to_str().expect("a UTF-8 path");
+            assert!(
+                git_out(&line.work, &["ls-remote", origin, "refs/heads/release/1.4"])
+                    .starts_with(&pending),
+                "{tech} {forge}: the job pushed"
+            );
+            assert_eq!(
+                git_out(&line.work, &["ls-remote", origin, "refs/tags/*"])
+                    .lines()
+                    .count(),
+                1,
+                "{tech} {forge}: the job tagged"
+            );
+        }
+    }
+}
+
+/// No job of either engine pipeline on GitLab holds a resource group two
+/// lines share, so one line's release never waits on another's.
+#[test]
+fn the_gitlab_release_groups_are_per_line() {
+    for (label, pipeline) in engine_gitlab_pipelines() {
+        let groups: Vec<&str> = pipeline
+            .lines()
+            .filter(|line| line.trim_start().starts_with("resource_group:"))
+            .collect();
+        assert!(groups.len() >= 4, "{label}: {groups:?}");
+        for group in groups {
+            assert!(group.ends_with("-$CI_COMMIT_REF_SLUG"), "{label}: {group}");
+        }
+    }
+}
+
+impl Engine {
+    /// `rk lines mint` as the candidate job runs it, from a fresh checkout
+    /// of the line: the engine's output directories of an earlier job are
+    /// gone.
+    fn mint(&self, args: &[&str]) -> serde_json::Value {
+        self.fresh();
+        let out = rk()
+            .env("RK_UV_BIN", self.stubs.path().join("uv"))
+            .args(["lines", "mint"])
+            .args(args)
+            .args(["--json", "--target"])
+            .arg(self.dir())
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        serde_json::from_slice(&out).expect("one JSON object")
+    }
+
+    /// Drop the output directories a build wrote, as a fresh job's
+    /// checkout holds none.
+    fn fresh(&self) {
+        for dir in ["dist", ".rk-release"] {
+            let _ = std::fs::remove_dir_all(self.dir().join(dir));
+        }
+    }
+
+    /// The tag the forge created, on the origin too, as the forge holds it,
+    /// so the next mint reads it.
+    fn tag_on_origin(&self, tag: &str) {
+        let sha = self.tag(tag).expect("the forge holds the tag");
+        git_in(self.dir(), &["tag", "-f", tag, &sha]);
+        git_in(
+            self.dir(),
+            &["push", "-q", "-f", "origin", &format!("refs/tags/{tag}")],
+        );
+    }
+}
+
+/// An engine pair released at `v1.4.2`, with the line `release/1.4` cut
+/// from it and `count` candidates minted through the verb, each released
+/// by its own mint push and tagged at it.
+fn engine_line_with_candidates(tech: &str, forge: &'static str, count: u32) -> Engine {
+    let engine = Engine::new(tech, forge, &[], "1.4.2");
+    engine.released("v1.4.2", &engine.head());
+    git_in(engine.dir(), &["push", "-q", "origin", "v1.4.2"]);
+    engine.line("1.4");
+    for n in 1..=count {
+        let tip = engine.head();
+        let minted = engine.mint(&["1.4", "--expect", &tip, "--apply"]);
+        let tag = format!("v1.4.3-rc.{n}");
+        assert_eq!(minted["mode"], "minted", "{tech} {forge}: {minted}");
+        assert_eq!(minted["tag"], tag.as_str(), "{tech} {forge}: {minted}");
+        let commit = minted["commit"].as_str().expect("a commit").to_owned();
+        let build = engine.ok("build");
+        assert_eq!(build["state"], "release", "{tech} {forge}: {build}");
+        assert_eq!(build["candidate"], true, "{tech} {forge}: {build}");
+        engine.ok("publish");
+        assert_eq!(
+            engine.tag(&tag).as_deref(),
+            Some(commit.as_str()),
+            "{tech} {forge}: {tag}"
+        );
+        engine.tag_on_origin(&tag);
+    }
+    engine
+}
+
+/// Promote the line's newest candidate through the verb, and answer the
+/// promotion's report.
+fn promote(engine: &Engine) -> serde_json::Value {
+    let tip = engine.head();
+    engine.mint(&["1.4", "--promote", "--expect", &tip, "--apply"])
+}
+
+/// SATISFIES release-engine:a-final-version-releases-at-its-request
+///
+/// On each engine pair, a mint push releases the next candidate, `-rc.2`
+/// to `-rc.3`, and the promotion of `-rc.3` releases `1.4.3` at the merge
+/// of the line's request.
+#[test]
+fn each_engine_pair_releases_a_promotion() {
+    for tech in ["bash", "python"] {
+        for forge in ["github", "gitlab"] {
+            let engine = engine_line_with_candidates(tech, forge, 3);
+            let promoted = promote(&engine);
+            assert_eq!(promoted["mode"], "promoted", "{tech} {forge}: {promoted}");
+            assert_eq!(engine.ok("build")["state"], "skip", "{tech} {forge}");
+            let request = engine.ok("request");
+            let number = request["request"].as_u64().expect("a request");
+            engine.fresh();
+            let merge = engine.merge(number);
+            assert_eq!(engine.ok("build")["state"], "release", "{tech} {forge}");
+            engine.ok("publish");
+            assert_eq!(
+                engine.tag("v1.4.3").as_deref(),
+                Some(merge.as_str()),
+                "{tech} {forge}"
+            );
+        }
+    }
+}
+
+/// SATISFIES release-candidates:a-promotion-writes-only-tested-code
+///
+/// The promotion of `-rc.2` writes `1.4.3` and its push releases nothing:
+/// no forge write and no tag. The line's request proposes `1.4.3` with its
+/// changelog, and its merge releases it as the stable release.
+#[test]
+fn the_promotion_releases_through_the_request() {
+    for tech in ["bash", "python"] {
+        for forge in ["github", "gitlab"] {
+            let engine = engine_line_with_candidates(tech, forge, 2);
+            let promoted = promote(&engine);
+            assert_eq!(promoted["tag"], "v1.4.3", "{tech} {forge}: {promoted}");
+            assert_eq!(promoted["version"], "1.4.3", "{tech} {forge}: {promoted}");
+            engine.clear_log();
+            assert_eq!(engine.ok("build")["state"], "skip", "{tech} {forge}");
+            assert_eq!(engine.ok("publish")["state"], "skip", "{tech} {forge}");
+            assert!(
+                engine_writes(&engine.log()).is_empty(),
+                "{tech} {forge}: {}",
+                engine.log()
+            );
+            assert!(engine.tag("v1.4.3").is_none(), "{tech} {forge}");
+            let request = engine.ok("request");
+            assert_eq!(request["proposal"], "1.4.3", "{tech} {forge}: {request}");
+            assert_eq!(request["tag"], "v1.4.3", "{tech} {forge}: {request}");
+            let files = engine.request_files("release/1.4");
+            assert!(
+                files.iter().any(|file| file == "CHANGELOG.md"),
+                "{tech} {forge}: {files:?}"
+            );
+            let number = request["request"].as_u64().expect("a request");
+            engine.fresh();
+            let merge = engine.merge(number);
+            let build = engine.ok("build");
+            assert_eq!(build["state"], "release", "{tech} {forge}: {build}");
+            assert_eq!(build["candidate"], false, "{tech} {forge}: {build}");
+            engine.ok("publish");
+            assert_eq!(
+                engine.tag("v1.4.3").as_deref(),
+                Some(merge.as_str()),
+                "{tech} {forge}"
+            );
+            if forge == "github" {
+                let release = engine.release("v1.4.3").expect("the release exists");
+                assert_eq!(release["prerelease"], false, "{release}");
+            }
+        }
+    }
+}
+
+/// SATISFIES release-engine:the-python-version-maps-to-the-tag
+///
+/// A python cut writes `1.4.3rc2` and releases as `v1.4.3-rc.2`, never as
+/// `v1.4.3rc2`, and its promotion writes `1.4.3`, which tags `v1.4.3`.
+#[test]
+fn the_python_release_tags_a_candidate_in_the_line_shape() {
+    for forge in ["github", "gitlab"] {
+        let engine = engine_line_with_candidates("python", forge, 2);
+        let project = std::fs::read_to_string(engine.dir().join("pyproject.toml")).expect("reads");
+        assert!(
+            project.contains("version = \"1.4.3rc2\""),
+            "{forge}: {project}"
+        );
+        assert!(engine.release("v1.4.3-rc.2").is_some(), "{forge}");
+        assert!(engine.tag("v1.4.3rc2").is_none(), "{forge}");
+        assert!(engine.release("v1.4.3rc2").is_none(), "{forge}");
+        promote(&engine);
+        let project = std::fs::read_to_string(engine.dir().join("pyproject.toml")).expect("reads");
+        assert!(
+            project.contains("version = \"1.4.3\""),
+            "{forge}: {project}"
+        );
+        let number = engine.ok("request")["request"].as_u64().expect("a request");
+        engine.fresh();
+        let merge = engine.merge(number);
+        assert_eq!(engine.ok("build")["tag"], "v1.4.3", "{forge}");
+        engine.ok("publish");
+        assert_eq!(
+            engine.tag("v1.4.3").as_deref(),
+            Some(merge.as_str()),
+            "{forge}"
+        );
+    }
+}
+
+/// SATISFIES staging:a-stage-is-one-target-specific-candidate
+///
+/// A fresh landing of each engine pair renders its candidate job, records
+/// the pipeline in the manifest, and the stage renders the same bytes.
+#[test]
+fn a_staged_engine_pipeline_carries_its_candidate_job() {
+    for (tech, forge, destination, header) in [
+        (
+            "bash",
+            "github",
+            ".github/workflows/release.yml",
+            "\n  release-candidate:\n",
+        ),
+        ("bash", "gitlab", ".gitlab-ci.yml", "\nrelease-candidate:\n"),
+        (
+            "python",
+            "github",
+            ".github/workflows/release.yml",
+            "\n  release-candidate:\n",
+        ),
+        (
+            "python",
+            "gitlab",
+            ".gitlab-ci.yml",
+            "\nrelease-candidate:\n",
+        ),
+    ] {
+        let scratch = tempfile::tempdir().expect("a scratch dir exists");
+        let target = tempfile::tempdir().expect("a scratch target exists");
+        std::fs::create_dir_all(target.path().join(".git")).expect("the target is a repository");
+        if tech == "python" {
+            seed_uv_project(target.path(), "0.1.0");
+        }
+        let output = scratch.path().join("stage");
+        rk().env_remove("RK_STAGE_ROOT")
+            .args(["stage", "--tech", tech, "--forge", forge])
+            .args([
+                "--repo",
+                "acme/widget",
+                "--integration",
+                "forge",
+                "--target",
+            ])
+            .arg(target.path())
+            .arg("--output")
+            .arg(&output)
+            .assert()
+            .success();
+        let staged = std::fs::read(output.join("artifacts").join(destination))
+            .expect("the stage carries the pipeline");
+        rk().args(["init", "--tech", tech, "--forge", forge])
+            .args([
+                "--repo",
+                "acme/widget",
+                "--integration",
+                "forge",
+                "--target",
+            ])
+            .arg(target.path())
+            .arg("--apply")
+            .assert()
+            .success();
+        let landed = std::fs::read(target.path().join(destination)).expect("the landing wrote it");
+        assert_eq!(staged, landed, "{tech} {forge}: one projection");
+        assert!(
+            String::from_utf8_lossy(&landed).contains(header),
+            "{tech} {forge}: no candidate job"
+        );
+        let manifest = read_manifest(target.path());
+        assert!(
+            manifest.to_string().contains(&format!("\"{destination}\"")),
+            "{tech} {forge}: {manifest}"
+        );
+    }
 }

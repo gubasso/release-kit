@@ -1,0 +1,4 @@
+RK_DEV_SETUP_STEPS      # rk comes from the project's development environment, through the
+      # prefix the project records, so the environment must carry rk, and for
+      # a python project the uv the project requires, which writes the version
+      # and relocks.

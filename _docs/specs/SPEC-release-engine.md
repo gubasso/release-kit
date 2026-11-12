@@ -96,7 +96,7 @@ The build action MUST release a final version only at the merge or squash commit
 - WHEN `rk release build` runs at that push
 - THEN it skips with exit 0, and the merge of the line's request releases `1.4.3`
 
-Verify: `cargo nextest run -E 'test(the_build_releases_only_at_the_request_merge) or test(the_mint_push_releases_a_candidate) or test(the_promote_push_does_not_release) or test(the_build_skips_the_baseline_and_a_new_version_file) or test(a_fresh_project_releases_through_its_first_request) or test(the_trigger_reads_the_commit_before_the_forge) or test(the_github_release_job_can_read_the_request_merge)'`
+Verify: `cargo nextest run -E 'test(the_build_releases_only_at_the_request_merge) or test(the_mint_push_releases_a_candidate) or test(the_promote_push_does_not_release) or test(the_build_skips_the_baseline_and_a_new_version_file) or test(a_fresh_project_releases_through_its_first_request) or test(the_trigger_reads_the_commit_before_the_forge) or test(the_github_release_job_can_read_the_request_merge) or test(each_engine_pair_releases_a_promotion)'`
 
 ### `release-engine:a-version-releases-once` — A version releases once
 
@@ -156,7 +156,7 @@ The python adapter MUST map a PEP 440 version to the semver-shaped tag and back,
 - WHEN the adapter names its tag and reads the tag back
 - THEN the tag is `v1.4.3-rc.2`, and it reads back as `1.4.3rc2`
 
-Verify: `cargo nextest run -E 'test(the_python_version_maps_to_the_tag_and_back)'`
+Verify: `cargo nextest run -E 'test(the_python_version_maps_to_the_tag_and_back) or test(the_python_release_tags_a_candidate_in_the_line_shape)'`
 
 ### `release-engine:git-cliff-runs-at-its-pin` — git-cliff runs at its pin
 

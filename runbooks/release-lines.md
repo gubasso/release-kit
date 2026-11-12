@@ -75,7 +75,7 @@ git log --oneline -1 origin/release/<line>
 
 ## 5. Mint the candidate
 
-A candidate is `v<version>-rc.<n>` on the line. On a rust pair, mint it with the tip you read: dispatch the release workflow on GitHub, or run the manual `release-candidate` job of the line's pipeline on GitLab with `LINE` and `EXPECT`. A bash or python pair has no candidate path yet, and its line's release request stays the human gate.
+A candidate is `v<version>-rc.<n>` on the line. The rust, bash, and python pairs each carry a candidate job. Mint it with the tip you read: dispatch the release workflow on GitHub, `release-plz.yml` on a rust pair and `release.yml` on a bash or python pair, or run the manual `release-candidate` job of the line's pipeline on GitLab with `LINE` and `EXPECT`.
 
 ```bash
 git fetch origin --tags --force
@@ -86,8 +86,8 @@ rk lines mint <line>
 On github:
 
 ```bash
-gh workflow run release-plz.yml --repo <repo> --ref release/<line> -f line=<line> -f expect=<sha>
-gh run list --repo <repo> --workflow release-plz.yml --branch release/<line> --event workflow_dispatch --limit 1 --json databaseId -q '.[0].databaseId'
+gh workflow run <workflow> --repo <repo> --ref release/<line> -f line=<line> -f expect=<sha>
+gh run list --repo <repo> --workflow <workflow> --branch release/<line> --event workflow_dispatch --limit 1 --json databaseId -q '.[0].databaseId'
 gh run watch <run-id> --repo <repo> --exit-status
 # check: the dispatch run, not the push run the mint starts, ends in success
 ```
@@ -111,7 +111,7 @@ rk lines rc <line>
 
 ## 6. Validate the candidate
 
-On a rust pair whose crate publishes to crates.io, a validator installs the candidate with `cargo install <crate> --version <version>-rc.<n>`. Where `profile.release.registry` is `none`, the validator installs it from its tag with `cargo install --git <repository URL> --tag v<version>-rc.<n>`.
+On a rust pair whose crate publishes to crates.io, a validator installs the candidate with `cargo install <crate> --version <version>-rc.<n>`. Where `profile.release.registry` is `none`, the validator installs it from its tag with `cargo install --git <repository URL> --tag v<version>-rc.<n>`. On a python pair that publishes to PyPI, `pip install <name>==<version>rc<n>` installs the candidate with no `--pre`. A bash pair, and a python pair under `none`, ship the candidate as the assets of its release page.
 
 On github:
 
@@ -124,7 +124,7 @@ On gitlab:
 
 ```bash
 glab release view "v<version>-rc.<n>"
-# check: the candidate's page stands and its description names the install command; run it and use what it installs — the human validation is the gate no command prints
+# check: the candidate's page stands and its description names the candidate on its first line, and on a rust pair the install command; install it and use it — the human validation is the gate no command prints
 ```
 
 ## 7. Answer a finding with the next rc

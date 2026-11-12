@@ -25,4 +25,4 @@ On a release-plz pair, the rc job runs `release-plz release` with a config deriv
 
 ## Status
 
-Implemented for the minting verb and the two rust pairs: `rk lines mint` mints and promotes, and the rust GitHub workflow and GitLab pipeline run it and publish the candidate. The bash and python pairs are not wired yet, as issues 73, 74, and 75 track.
+Implemented for the minting verb and every landed pair: `rk lines mint` mints and promotes. The rust GitHub workflow and GitLab pipeline run it and publish the candidate. The bash and python release pipelines on both forges run it in their `release-candidate` job, and `rk release publish` publishes the candidate its push releases, per `release-engine:a-candidate-is-a-prerelease`.

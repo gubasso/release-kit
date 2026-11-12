@@ -1447,17 +1447,6 @@ pub const LINE_PREFIX_TOKEN: &[u8] = b"RK_LINE_PREFIX";
 /// This one substitutes first: the plain token is its own prefix.
 pub const LINE_PREFIX_RE_TOKEN: &[u8] = b"RK_LINE_PREFIX_RE";
 
-/// The token a release workflow's job condition carries, so that a
-/// rendering which adds a second trigger cannot let the new event enter a
-/// job written for a push.
-///
-/// It is a token rather than a span because it substitutes in place, once
-/// per job, and one span replaces one occurrence. It is written as a
-/// trailing YAML comment and carries the space in front of it, so the
-/// authored condition is an expression a workflow linter reads and every
-/// rendering that adds no trigger strips the comment whole.
-pub const PUSH_GUARD_TOKEN: &[u8] = b" # RK_PUSH_GUARD";
-
 /// The check the release gate judges.
 pub const REQUIRED_CHECK_TOKEN: &[u8] = b"RK_REQUIRED_CHECK";
 
@@ -1610,6 +1599,12 @@ pub const DEV_ENVIRONMENT_GIT_USER: &str = "blocks/dev-environment-git-user.yaml
 /// of `rk` or git-cliff, which the environment carries.
 pub const DEV_ENVIRONMENT_ENGINE: &str = "blocks/dev-environment-engine.yaml.in";
 
+/// The tool steps of the GitHub candidate job of the bash and python pairs
+/// under a recorded development environment: the recorded setup, and no
+/// install of `rk` or uv, which the environment carries.
+pub const DEV_ENVIRONMENT_ENGINE_CANDIDATE: &str =
+    "blocks/dev-environment-engine-candidate.yaml.in";
+
 /// The six replaceable spans a recorded development environment answers.
 ///
 /// Each is an ordered begin and end marker: the GitHub release half's
@@ -1704,18 +1699,21 @@ fn dev_environment_replacements(params: &Params) -> Result<[Option<Vec<u8>>; 6],
         let _ = write!(items, "\n    - {}", serde_json::Value::String(line.clone()));
     }
     if matches!(params.driver(), Some("bash" | "python")) {
-        // An engine pipeline runs `rk release` outside the spans, through
-        // the run prefix. Its spans hold the tool installs alone: each
-        // GitHub job takes the recorded setup in their place, and the
-        // GitLab base takes the recorded image and the recorded lines,
-        // after the tool directory it puts on PATH and ahead of the forge
-        // client it fetches into that directory in either state.
+        // An engine pipeline runs `rk release` and `rk lines mint` outside
+        // the spans, through the run prefix. Its spans hold the tool
+        // installs alone: each GitHub job takes the recorded setup in their
+        // place, and the GitLab base, which the candidate job extends too,
+        // takes the recorded image and the recorded lines, after the tool
+        // directory it puts on PATH and ahead of the forge client it
+        // fetches into that directory in either state. The candidate job
+        // pushes, so like the release job it takes the setup and never the
+        // cache.
         return Ok([
             Some(half(DEV_ENVIRONMENT_ENGINE, &release)?),
             Some(half(DEV_ENVIRONMENT_ENGINE, &request)?),
             image,
             Some(items.into_bytes()),
-            None,
+            Some(half(DEV_ENVIRONMENT_ENGINE_CANDIDATE, &release)?),
             Some(Vec::new()),
         ]);
     }
@@ -1952,14 +1950,6 @@ fn substitute_tokens(baseline: &[u8], params: &Params) -> Vec<u8> {
         serde_json::Value::String(params.required_workflow().to_owned()).to_string();
     out = substitute(&out, REQUIRED_CHECK_TOKEN, required_check.as_bytes());
     out = substitute(&out, REQUIRED_WORKFLOW_TOKEN, required_workflow.as_bytes());
-    // The push guard is non-empty exactly where a second trigger is added,
-    // and the gate is what adds one.
-    let guard: &[u8] = if release_gates(params) {
-        b" && github.event_name == 'push'"
-    } else {
-        b""
-    };
-    out = substitute(&out, PUSH_GUARD_TOKEN, guard);
     out = substitute(
         &out,
         SELF_VERSION_TOKEN,

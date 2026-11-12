@@ -6,7 +6,9 @@
 # RK_IF_NO_REGISTRY # the release.
 #
 # The release jobs run on every push to the trunk, and to a RK_LINE_PREFIX* line
-# when a project keeps older lines. Each job calls rk, which holds the release
+# when a project keeps older lines. A last job, release-candidate, runs only by
+# hand on a pipeline of a line, and mints or promotes that line's release
+# candidate. Each job calls rk, which holds the release
 # logic and reads the driver, the style, the integration, and the registry
 # answer from the landing record. release-request runs rk release request,
 # which keeps the one release merge request, pyproject.toml and uv.lock through
@@ -131,7 +133,9 @@ release-request:
   extends: .tooling
   rules:
     - if: '$CI_COMMIT_BRANCH == "RK_TRUNK_BRANCH" || $CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/'
-  resource_group: release-request
+  # One group per branch, here and in every release job below: a line's
+  # release never waits on another line's.
+  resource_group: release-request-$CI_COMMIT_REF_SLUG
   script:
     - RK_DEV_RUN rk release request
 
@@ -148,7 +152,7 @@ build:
   extends: .tooling
   rules:
     - if: '$CI_COMMIT_BRANCH == "RK_TRUNK_BRANCH" || $CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/'
-  resource_group: release
+  resource_group: release-$CI_COMMIT_REF_SLUG
   variables:
     RUNNER_GENERATE_ARTIFACTS_METADATA: "true"
   script:
@@ -254,7 +258,7 @@ pypi: # RK_IF_REGISTRY
   needs: ["build", "provenance"] # RK_IF_REGISTRY
   rules: # RK_IF_REGISTRY
     - if: '$CI_COMMIT_BRANCH == "RK_TRUNK_BRANCH" || $CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/' # RK_IF_REGISTRY
-  resource_group: release # RK_IF_REGISTRY
+  resource_group: release-$CI_COMMIT_REF_SLUG # RK_IF_REGISTRY
   id_tokens: # RK_IF_REGISTRY
     SIGSTORE_ID_TOKEN: # RK_IF_REGISTRY
       aud: sigstore # RK_IF_REGISTRY
@@ -296,6 +300,44 @@ publish:
   # RK_IF_NO_REGISTRY needs: ["build", "provenance"]
   rules:
     - if: '$CI_COMMIT_BRANCH == "RK_TRUNK_BRANCH" || $CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/'
-  resource_group: release
+  resource_group: release-$CI_COMMIT_REF_SLUG
   script:
     - RK_DEV_RUN rk release publish
+
+# A release candidate, minted on purpose. Run this job by hand on a pipeline
+# of the line, with the variables LINE, the line's <major>.<minor>, and
+# EXPECT, the full SHA of the line's tip you read. PROMOTE=true promotes the
+# line's newest candidate instead. rk lines mint writes the candidate's
+# version, pyproject.toml and uv.lock through uv version, and pushes the line as the bot, because a push
+# made with the CI job token starts no pipeline. That push's pipeline
+# releases the candidate: build releases a candidate at the commit that
+# writes it, and publish creates its release, whose description names the
+# candidate on its first line, because a GitLab release carries no
+# prerelease badge (release-engine:a-candidate-is-a-prerelease). So this job
+# publishes nothing and creates no tag. A candidate the line already carries
+# with no tag yet is pending: rk reports it, writes and pushes nothing, and
+# exits 0 (release-candidates:a-pending-candidate-is-published-not-reminted).
+# A promotion writes the stable version alone, its push releases nothing,
+# and the line's release request proposes it.
+release-candidate:
+  extends: .tooling
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^RK_LINE_PREFIX_RE/'
+      when: manual
+      allow_failure: true
+  resource_group: release-candidate-$CI_COMMIT_REF_SLUG
+  script:
+    - |
+      set -eu
+      if [ "$CI_COMMIT_BRANCH" != "RK_LINE_PREFIX${LINE:-}" ]; then
+        echo "this pipeline runs $CI_COMMIT_BRANCH, and LINE names RK_LINE_PREFIX${LINE:-}; run the job on a pipeline of the line it names." >&2
+        exit 1
+      fi
+      # rk commits under the account the bot's token names on the forge,
+      # as the release request's commit does, and the push uses that token.
+      git remote set-url origin "https://oauth2:${RELEASE_BOT_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
+      if [ "${PROMOTE:-false}" = "true" ]; then
+        RK_DEV_RUN rk lines mint "$LINE" --promote --expect "${EXPECT:-}" --as-bot --apply
+      else
+        RK_DEV_RUN rk lines mint "$LINE" --expect "${EXPECT:-}" --as-bot --apply
+      fi

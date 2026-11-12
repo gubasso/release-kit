@@ -10,13 +10,15 @@ Rules governing how `rk lines mint` prepares a release candidate on a release li
 
 `rk lines mint` MUST write the candidate's version into the target's version file, commit it, and push the line, and MUST NOT create a tag, because each pair's release half owns its tag, and a tag `rk` pushed first would make that half skip the publish.
 
+Under `--as-bot`, which only a bash or python line takes, `rk lines mint` MUST read the account the forge names for the job's bot credential through the engine's identity reader before it writes any file, MUST commit as that account with every inherited git identity variable cleared, and MUST refuse with the tree and the remote unchanged where the forge names no account, because a GitLab job holds no other source for the bot's identity and must not parse the forge's answer itself.
+
 #### Scenario: A candidate is minted
 
 - GIVEN a line `release/1.4` whose remote holds `v1.4.2` and `v1.4.3-rc.2`
 - WHEN `rk lines mint 1.4 --expect <tip> --apply` runs
 - THEN the line carries one new commit with `1.4.3-rc.3` in its version file, and neither the clone nor the remote holds `v1.4.3-rc.3`
 
-Verify: `cargo nextest run -E 'binary(cli) & test(a_mint_takes_the_next_rc_from_the_remote_tags)'`
+Verify: `cargo nextest run -E 'binary(cli) & (test(a_mint_takes_the_next_rc_from_the_remote_tags) | test(each_github_candidate_job_pushes_as_the_bot) | test(a_gitlab_cut_as_the_bot_commits_as_the_forge_names) | test(an_unreadable_bot_identity_refuses_before_writing) | test(a_cut_without_as_bot_keeps_the_caller_identity) | test(a_rust_cut_refuses_as_bot))'`
 
 ### `release-candidates:a-promotion-writes-only-tested-code` — A promotion writes only tested code
 
@@ -46,7 +48,7 @@ Verify: `cargo nextest run -E 'binary(cli) & (test(promotion) | test(a_python_pr
 - WHEN `rk lines mint 1.4 --expect A --apply` runs
 - THEN it refuses with `state-drift`, names B, and leaves the version file and the remote unchanged
 
-Verify: `cargo nextest run -E 'binary(cli) & (test(a_mint_refuses_a_moved_tip_before_writing) | test(a_mint_refuses_a_wrong_checkout))'`
+Verify: `cargo nextest run -E 'binary(cli) & (test(a_mint_refuses_a_moved_tip_before_writing) | test(a_mint_refuses_a_wrong_checkout) | test(each_candidate_job_passes_expect_and_apply) | test(each_gitlab_candidate_job_is_manual_and_pushes_as_the_bot))'`
 
 ### `release-candidates:a-lost-race-names-the-winning-tip` — A lost race names the winning tip
 
@@ -82,4 +84,4 @@ When the version file already carries a candidate of the derived base whose tag 
 - WHEN `rk lines mint 1.4 --expect <tip> --apply` runs
 - THEN it reports `pending` for `1.4.3-rc.1`, and the line gains no commit
 
-Verify: `cargo nextest run -E 'binary(cli) & test(a_mint_takes_its_stable_base_as_settled)'`
+Verify: `cargo nextest run -E 'binary(cli) & (test(a_mint_takes_its_stable_base_as_settled) | test(a_pending_cut_writes_and_pushes_nothing))'`
