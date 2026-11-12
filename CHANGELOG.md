@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.14](https://github.com/gubasso/release-kit/compare/v0.9.13...v0.9.14) - 2026-11-12
+
+### Added
+
+- *(landing)* retire an unedited destination the release stops landing
+- *(lines)* cut a release candidate on the bash and python pairs
+- *(release/python)* release a uv project through rk on GitHub and GitLab
+- *(release/bash)* run the bash release through rk release request, build, and publish
+
+### Fixed
+
+- *(setup)* keep checking a python target on a host without uv
+
+### Other
+
+- *(hooks)* keep prek from running the test fixture configurations
+
 ## [0.9.13](https://github.com/gubasso/release-kit/compare/v0.9.12...v0.9.13) - 2026-11-12
 
 ### Added
