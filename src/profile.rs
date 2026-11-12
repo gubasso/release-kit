@@ -561,18 +561,6 @@ impl Params {
         })
     }
 
-    /// The command an automatic bash release builds with, the default where
-    /// nothing answered it.
-    #[must_use]
-    pub fn build_command(&self) -> &str {
-        self.profile
-            .release
-            .build
-            .as_ref()
-            .and_then(|build| build.command.as_deref())
-            .unwrap_or(BuildAnswer::COMMAND)
-    }
-
     /// The packages an automatic bash release installs before it builds,
     /// the default where nothing answered them.
     #[must_use]

@@ -75,13 +75,47 @@ purpose = "verifies a published distribution's PEP 740 attestations in the relea
 check = "https://api.github.com/repos/pypi/pypi-attestations/releases/latest"
 checked = 2026-09-02
 
+# sha256 is the digest of the x86_64-unknown-linux-musl archive the GitLab
+# rk jobs download, which they check before they unpack it. The release
+# publishes a SHA-512 beside the archive, and the SHA-256 here is computed
+# from the archive that SHA-512 verified.
 [[tool]]
 name = "git-cliff"
-version = "2.13.1"
-used_by = ["release.automation/bash"]
+version = "2.14.2"
+sha256 = "fa21e2fc70046fcfd0e43e5e4613873ab799aff3d9dc8559c00d31b270e417d0"
+used_by = ["release.automation/bash", "release.automation/python"]
 purpose = "computes the bump from Conventional Commits and rewrites the changelog"
 check = "https://api.github.com/repos/orhun/git-cliff/releases/latest"
-checked = 2026-09-02
+checked = 2026-11-12
+
+# The forge client rk drives on GitLab. sha256 is the digest of the
+# linux_amd64 archive that the release's checksums.txt names, which the
+# GitLab rk jobs check before they unpack it. The check reads the release
+# permalink, which GitLab answers with the newest release.
+[[tool]]
+name = "glab"
+version = "1.130.0"
+sha256 = "ce06313b2075af25180cd195ab3496d42bc5857c85a1c12ba996838dfe9d822c"
+used_by = ["release.automation/bash"]
+purpose = "the forge client rk release request, build, and publish drive in the GitLab release pipeline"
+check = "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/releases/permalink/latest"
+checked = 2026-11-12
+
+# The base image of the GitLab rk jobs. The rk archive targets
+# x86_64-unknown-linux-gnu, so the image is glibc, never alpine. The version
+# is the Debian point release its slim tag names, and digest is the image
+# index the pipeline pins. The check reads every page of the Docker Hub tags
+# whose name holds a dot, which are the numbered point releases and their slim
+# variants, and takes the greatest tag that opens with a version. The full tag
+# list runs past the pages Docker Hub serves to an anonymous read.
+[[tool]]
+name = "debian-image"
+version = "13.7"
+digest = "sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2"
+used_by = ["release.automation/bash"]
+purpose = "runs the rk jobs of the GitLab release pipeline on glibc"
+check = "https://hub.docker.com/v2/namespaces/library/repositories/debian/tags?page_size=100&name=."
+checked = 2026-11-12
 
 [[tool]]
 name = "cosign"

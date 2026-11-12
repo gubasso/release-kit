@@ -24,6 +24,7 @@ use crate::error::RkError;
 use crate::landing::manifest::{self, CheckoutMode, Integration, Manifest, Style};
 use crate::output::Output;
 use crate::profile::ReleaseMode;
+use crate::release_engine;
 use crate::release_state::{
     self, Answer, Api, ForgeCli, LastRelease, Merged, Page, Pair, Request, Run, Symptom,
 };
@@ -124,7 +125,28 @@ pub fn run(args: &ReleaseArgs) -> Result<(), RkError> {
             timeout,
             json,
         } => status(target, wait.as_deref(), *timeout, Output::new(*json)),
+        ReleaseAction::Request { target, json } => {
+            render_done(&release_engine::request::run(target)?, Output::new(*json))
+        }
+        ReleaseAction::Build { target, json } => {
+            render_done(&release_engine::build::run(target)?, Output::new(*json))
+        }
+        ReleaseAction::Publish { target, json } => {
+            render_done(&release_engine::publish::run(target)?, Output::new(*json))
+        }
     }
+}
+
+/// Render one engine action's report: the human lines and the next steps,
+/// or the JSON document under `--json`.
+fn render_done<R: Serialize>(done: &release_engine::Done<R>, out: Output) -> Result<(), RkError> {
+    for line in &done.lines {
+        out.result_line(line);
+    }
+    if !done.next.is_empty() {
+        out.next(&done.next);
+    }
+    out.emit(&done.report)
 }
 
 /// Everything the forge answered, gathered once.
@@ -298,7 +320,7 @@ fn pair_of(target: &Utf8Path, manifest: &Manifest) -> Result<Pair, String> {
         _ => false,
     };
     Ok(Pair {
-        package: release_state::package_name(target.as_std_path(), &driver),
+        package: crate::release_engine::adapter::package_name(target.as_std_path(), &driver),
         registry_answer: manifest.profile.release.registry,
         driver,
         forge,

@@ -121,7 +121,7 @@ Verify: `cargo nextest run -E 'test(the_package_wrapper_mirrors_the_hard_tool_re
 
 ### `packaging:a-launcher-resolves-through-one-owner` — A launcher resolves through one owner
 
-Production code MUST NOT launch `git` or `sh` by literal name outside the shared resolvers in `src/probes.rs`, because a direct launch bypasses the `RK_GIT_BIN` and `RK_SH_BIN` overrides silently and hides a runtime dependency from the registry the wrapper mirrors.
+Production code MUST NOT launch `git`, `sh`, `git-cliff`, or `uv` by literal name outside the shared resolvers in `src/probes.rs`, because a direct launch bypasses the `RK_GIT_BIN`, `RK_SH_BIN`, `RK_GIT_CLIFF_BIN`, and `RK_UV_BIN` overrides silently and hides a runtime dependency from the registry the wrapper mirrors.
 
 #### Scenario: A new call site launches git directly
 

@@ -106,3 +106,36 @@ tracked:
       - advance last_checked
     dependents:
       - _docs/specs/SPEC-distribution.md
+  - id: release-please-uv-lock
+    path: _docs/reference/REFERENCE-release-engine-sources.md
+    last_checked: 2026-11-12
+    cadence_days: 60
+    why: release-please may merge its uv.lock updater, which changes the options the release engine's decision considered
+    revalidate:
+      - re-read https://github.com/googleapis/release-please/pull/2693 and https://github.com/googleapis/release-please/issues/2561
+      - update the release-please section of _docs/reference/REFERENCE-release-engine-sources.md, and re-run scenario A of the comparison where the updater shipped
+      - advance last_checked
+    dependents:
+      - _docs/comparison-docs/COMPARISON-release-tools-for-a-uv-project.md
+  - id: uv-build-dynamic-version
+    path: _docs/reference/REFERENCE-release-engine-sources.md
+    last_checked: 2026-11-12
+    cadence_days: 90
+    why: the uv_build backend may accept a dynamic version, which changes why the release writes the version into pyproject.toml
+    revalidate:
+      - re-read https://github.com/astral-sh/uv/issues/14037
+      - update the uv section of _docs/reference/REFERENCE-release-engine-sources.md
+      - advance last_checked
+    dependents:
+      - _docs/comparison-docs/COMPARISON-release-tools-for-a-uv-project.md
+  - id: releaser-pleaser-gitlab
+    path: _docs/reference/REFERENCE-release-engine-sources.md
+    last_checked: 2026-11-12
+    cadence_days: 90
+    why: releaser-pleaser may gain a command hook or new updaters, which changes whether it could relock a uv project on GitLab
+    revalidate:
+      - re-read https://github.com/apricote/releaser-pleaser/releases and its updaters
+      - update the releaser-pleaser section of _docs/reference/REFERENCE-release-engine-sources.md
+      - advance last_checked
+    dependents:
+      - _docs/comparison-docs/COMPARISON-release-tools-for-a-uv-project.md

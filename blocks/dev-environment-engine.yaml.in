@@ -1,0 +1,4 @@
+RK_DEV_SETUP_STEPS      # rk and git-cliff come from the project's development environment,
+      # through the prefix the project records, so the environment must carry
+      # rk, and git-cliff at the version versions.toml pins, which rk checks
+      # before it writes anything (release-engine:git-cliff-runs-at-its-pin).

@@ -199,7 +199,10 @@ const fn wants_json(command: &Commands) -> bool {
             | LinesAction::Retire { json, .. } => *json,
         },
         Commands::Release(args) => match &args.action {
-            ReleaseAction::Status { json, .. } => *json,
+            ReleaseAction::Status { json, .. }
+            | ReleaseAction::Request { json, .. }
+            | ReleaseAction::Build { json, .. }
+            | ReleaseAction::Publish { json, .. } => *json,
         },
         Commands::Integrate(args) => args.json,
         Commands::Message(args) => args.json,

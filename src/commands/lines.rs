@@ -19,6 +19,7 @@ use crate::diagnostic::{Diagnostic, Reason};
 use crate::error::RkError;
 use crate::maintenance::{self, Deletion};
 use crate::output::Output;
+use crate::release_engine::adapter::{self, Version};
 use crate::worktree::{Worktree, parse_worktrees};
 
 /// Route one `rk lines` invocation.
@@ -348,73 +349,15 @@ fn rc(line: &str, target: &Utf8Path, out: Output) -> Result<(), RkError> {
     })
 }
 
-/// A version on a line: `<major>.<minor>.<patch>`, and the candidate
-/// number when it is a release candidate.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct LineVersion {
-    major: u64,
-    minor: u64,
-    patch: u64,
-    rc: Option<u64>,
-}
-
-impl LineVersion {
-    /// Parse the semver spelling `1.4.3` or `1.4.3-rc.2`, or the PEP 440
-    /// spelling `1.4.3rc2`. Any other prerelease or build segment is not a
-    /// version this verb writes or reads.
-    fn parse(text: &str) -> Option<Self> {
-        let (stable, rc) = if let Some((stable, n)) = text.split_once("-rc.") {
-            (stable, Some(n))
-        } else if let Some((stable, n)) = text.split_once("rc") {
-            (stable, Some(n))
-        } else {
-            (text, None)
-        };
-        let number = |part: &str| -> Option<u64> {
-            (!part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
-                .then(|| part.parse().ok())
-                .flatten()
-        };
-        let mut parts = stable.split('.');
-        let version = Self {
-            major: number(parts.next()?)?,
-            minor: number(parts.next()?)?,
-            patch: number(parts.next()?)?,
-            rc: match rc {
-                Some(n) => Some(number(n)?),
-                None => None,
-            },
-        };
-        parts.next().is_none().then_some(version)
-    }
-
-    /// The version as the driver's manifest spells it: PEP 440 for
-    /// python, semver for every other driver.
-    fn spelled(self, driver: &str) -> String {
-        let stable = format!("{}.{}.{}", self.major, self.minor, self.patch);
-        match (self.rc, driver) {
-            (None, _) => stable,
-            (Some(n), "python") => format!("{stable}rc{n}"),
-            (Some(n), _) => format!("{stable}-rc.{n}"),
-        }
-    }
-
-    /// The tag the release half creates for this version, the same on
-    /// every driver.
-    fn tag(self) -> String {
-        format!("v{}", self.spelled("semver"))
-    }
-}
-
 /// What a mint does, decided from the remote tags and the manifest alone.
 #[derive(Debug, PartialEq, Eq)]
 enum MintDecision {
     /// Write this candidate's version, commit, and push.
-    Mint(LineVersion),
+    Mint(Version),
     /// The manifest already carries a candidate whose tag does not exist:
     /// the release half has not published it yet, so nothing is written
     /// and the caller's release step publishes it.
-    Pending(LineVersion),
+    Pending(Version),
 }
 
 /// Decide the next candidate on line `<major>.<minor>`.
@@ -425,10 +368,10 @@ enum MintDecision {
 /// ships `<major>.<minor>.x`, so no argument names the base.
 fn decide_mint(
     line: (u64, u64),
-    remote_tags: &[LineVersion],
-    manifest: Option<LineVersion>,
+    remote_tags: &[Version],
+    manifest: Option<Version>,
 ) -> Result<MintDecision, String> {
-    let on_line: Vec<LineVersion> = remote_tags
+    let on_line: Vec<Version> = remote_tags
         .iter()
         .copied()
         .filter(|tag| (tag.major, tag.minor) == line)
@@ -459,7 +402,7 @@ fn decide_mint(
         .filter_map(|tag| tag.rc)
         .max()
         .map_or(1, |n| n + 1);
-    Ok(MintDecision::Mint(LineVersion {
+    Ok(MintDecision::Mint(Version {
         major: line.0,
         minor: line.1,
         patch: base_patch,
@@ -505,16 +448,11 @@ struct MintContext<'a> {
     file: &'static str,
     tip: String,
     tags: Vec<RemoteTag>,
-    manifest: Option<LineVersion>,
+    manifest: Option<Version>,
 }
 
 impl MintContext<'_> {
-    fn report(
-        &self,
-        mode: &'static str,
-        version: LineVersion,
-        commit: Option<String>,
-    ) -> MintReport {
+    fn report(&self, mode: &'static str, version: Version, commit: Option<String>) -> MintReport {
         MintReport {
             schema: "rk.lines-mint/1",
             mode,
@@ -523,12 +461,12 @@ impl MintContext<'_> {
             tip: self.tip.clone(),
             version: version.spelled(&self.driver),
             tag: version.tag(),
-            package: crate::release_state::package_name(self.target.as_std_path(), &self.driver),
+            package: adapter::package_name(self.target.as_std_path(), &self.driver),
             commit,
         }
     }
 
-    fn versions(&self) -> Vec<LineVersion> {
+    fn versions(&self) -> Vec<Version> {
         self.tags.iter().map(|tag| tag.version).collect()
     }
 }
@@ -552,7 +490,7 @@ fn mint(
         )));
     }
     let driver = recorded_driver(target)?;
-    let (file, _) = crate::release_state::version_file(&driver).ok_or_else(|| {
+    let (file, _) = adapter::version_file(&driver).ok_or_else(|| {
         RkError::refusal(
             Diagnostic::new(
                 Reason::StateDrift,
@@ -566,9 +504,9 @@ fn mint(
     if let Some(expect) = expect {
         refuse_a_moved_line(target, &branch, &tip, expect)?;
     }
-    let manifest = crate::release_state::manifest_version(target.as_std_path(), &driver)
+    let manifest = adapter::manifest_version(target.as_std_path(), &driver)
         .as_deref()
-        .and_then(LineVersion::parse);
+        .and_then(Version::parse);
     let context = MintContext {
         line,
         numbers,
@@ -665,7 +603,7 @@ fn promote_candidate(context: &MintContext<'_>, apply: bool, out: Output) -> Res
             .target_state("unchanged"),
         )
     })?;
-    let stable = LineVersion {
+    let stable = Version {
         rc: None,
         ..newest.version
     };
@@ -725,7 +663,7 @@ fn promote_candidate(context: &MintContext<'_>, apply: bool, out: Output) -> Res
 
 /// The newest tagged candidate of the line's next release.
 fn newest_candidate(line: (u64, u64), tags: &[RemoteTag]) -> Option<&RemoteTag> {
-    let versions: Vec<LineVersion> = tags.iter().map(|tag| tag.version).collect();
+    let versions: Vec<Version> = tags.iter().map(|tag| tag.version).collect();
     let MintDecision::Mint(next) = decide_mint(line, &versions, None).ok()? else {
         return None;
     };
@@ -739,7 +677,7 @@ fn newest_candidate(line: (u64, u64), tags: &[RemoteTag]) -> Option<&RemoteTag> 
 /// push is the lost race, named with the tip that won.
 fn commit_and_push(
     context: &MintContext<'_>,
-    version: LineVersion,
+    version: Version,
     message: &str,
 ) -> Result<String, RkError> {
     let MintContext {
@@ -762,10 +700,8 @@ fn commit_and_push(
             .status
             .success();
     let lock = if lock_tracked {
-        let old = crate::release_state::manifest_version(target.as_std_path(), driver)
-            .unwrap_or_default();
-        let name =
-            crate::release_state::package_name(target.as_std_path(), driver).unwrap_or_default();
+        let old = adapter::manifest_version(target.as_std_path(), driver).unwrap_or_default();
+        let name = adapter::package_name(target.as_std_path(), driver).unwrap_or_default();
         versioned_lock(target, &name, &old, &spelled)?
     } else {
         None
@@ -826,7 +762,7 @@ fn commit_and_push(
 /// One `v<line>.*` tag on the remote: its version and the commit it names.
 #[derive(Debug, Clone)]
 struct RemoteTag {
-    version: LineVersion,
+    version: Version,
     commit: String,
 }
 
@@ -887,7 +823,7 @@ fn remote_line(
         .filter_map(|(name, commit)| {
             let version = name
                 .strip_prefix("refs/tags/v")
-                .and_then(LineVersion::parse)
+                .and_then(Version::parse)
                 .filter(|version| version.rc.is_none() || name.contains("-rc."))?;
             Some(RemoteTag { version, commit })
         })
@@ -959,7 +895,7 @@ fn refuse_a_moved_line(
 /// The version file's new content with `version` written in, every other
 /// byte of a TOML manifest kept.
 fn versioned_manifest(target: &Utf8Path, driver: &str, version: &str) -> Result<String, RkError> {
-    let (file, table) = crate::release_state::version_file(driver)
+    let (file, table) = adapter::version_file(driver)
         .ok_or_else(|| RkError::Usage(format!("no version file for {driver}")))?;
     let Some(table) = table else {
         return Ok(format!("{version}\n"));
@@ -1080,10 +1016,10 @@ fn same_but_version(driver: &str, file: &str, name: &str, sides: &Sides<'_>) -> 
         return masked_lock(sides.before, name, sides.own_before)
             .is_some_and(|before| Some(before) == masked_lock(sides.after, name, sides.own_after));
     }
-    match crate::release_state::version_file(driver) {
+    match adapter::version_file(driver) {
         Some((_, None)) => {
-            LineVersion::parse(sides.before.trim()).is_some()
-                && LineVersion::parse(sides.after.trim()).is_some()
+            Version::parse(sides.before.trim()).is_some()
+                && Version::parse(sides.after.trim()).is_some()
         }
         Some((_, Some(table))) => {
             let masked = |text: &str| -> Option<toml::Table> {
@@ -1150,7 +1086,7 @@ fn untested_commits(
     if !listed.status.success() {
         return Err(refuse(last_line(&listed.stderr)));
     }
-    let name = crate::release_state::package_name(target.as_std_path(), driver).unwrap_or_default();
+    let name = adapter::package_name(target.as_std_path(), driver).unwrap_or_default();
     let mut untested = Vec::new();
     for commit in String::from_utf8_lossy(&listed.stdout).lines() {
         if !version_only(context, &name, commit)? {
@@ -1544,24 +1480,10 @@ fn last_line(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{LineVersion, MintDecision, decide_mint};
+    use super::{MintDecision, Version, decide_mint};
 
-    fn version(text: &str) -> LineVersion {
-        LineVersion::parse(text).expect("a version this verb reads")
-    }
-
-    #[test]
-    fn a_version_reads_and_spells_each_technology() {
-        let rc = version("1.4.3-rc.2");
-        assert_eq!(rc, version("1.4.3rc2"));
-        assert_eq!(rc.spelled("rust"), "1.4.3-rc.2");
-        assert_eq!(rc.spelled("bash"), "1.4.3-rc.2");
-        assert_eq!(rc.spelled("python"), "1.4.3rc2");
-        assert_eq!(rc.tag(), "v1.4.3-rc.2");
-        assert_eq!(version("1.4.3").spelled("python"), "1.4.3");
-        for other in ["1.4", "1.4.3.1", "1.4.3-beta.1", "1.4.3-rc.", "v1.4.3", ""] {
-            assert_eq!(LineVersion::parse(other), None, "{other}");
-        }
+    fn version(text: &str) -> Version {
+        Version::parse(text).expect("a version this verb reads")
     }
 
     #[test]

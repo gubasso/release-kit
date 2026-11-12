@@ -1272,10 +1272,6 @@ pub const SQUASH_ON_MERGE_TOKEN: &[u8] = b"RK_SQUASH_ON_MERGE";
 /// landed release workflow, `lines` leaves every request unarmed.
 pub const STYLE_TOKEN: &[u8] = b"RK_STYLE";
 
-/// The build command a bash release pipeline runs, from
-/// `profile.release.build.command`; only the two bash pipelines carry it.
-pub const BUILD_COMMAND_TOKEN: &[u8] = b"RK_BUILD_COMMAND";
-
 /// The packages a bash release pipeline installs before it builds, from
 /// `profile.release.build.packages`; only the two bash pipelines carry it.
 pub const BUILD_PACKAGES_TOKEN: &[u8] = b"RK_BUILD_PACKAGES";
@@ -1337,8 +1333,8 @@ pub fn release_driver_shape(driver: Option<&str>) -> Option<(&'static str, &'sta
         // release-plz names its own branch, and the release half already
         // recognizes a bump by this prefix.
         Some("rust") => Some(("release-plz-", "release-plz-pr")),
-        // The bash pipeline writes the branch itself, in the request job.
-        Some("bash") => Some(("chore/release-v", "release-request")),
+        // The engine keeps one request per base on rk-release/<base>.
+        Some("bash") => Some((crate::release_engine::REQUEST_PREFIX, "release-request")),
         // release-please's own branch module builds this prefix from the
         // target branch, with an optional components or groups suffix, so
         // the trunk token stands inside the shape and resolves with it.
@@ -1361,21 +1357,12 @@ pub fn release_driver_shape(driver: Option<&str>) -> Option<(&'static str, &'sta
 /// The spans are in file order: the trigger the gate wakes on, the
 /// standing arm the gate replaces, and the gate's own job.
 #[must_use]
-pub fn release_gate_spans(driver: Option<&str>) -> [(&'static [u8], &'static [u8]); 3] {
-    // The bash pipeline arms inside a shell script rather than in a step of
-    // its own, so its arm markers are shell comments at the script's own
-    // indentation. Every other marker is a YAML comment at column zero.
-    let arm: (&[u8], &[u8]) = if driver == Some("bash") {
-        (
-            b"\n          # RK_GATE_ARM_BEGIN",
-            b"\n          # RK_GATE_ARM_END",
-        )
-    } else {
-        (b"\n# RK_GATE_ARM_BEGIN", b"\n# RK_GATE_ARM_END")
-    };
+pub const fn release_gate_spans() -> [(&'static [u8], &'static [u8]); 3] {
+    // A workflow whose request half arms inside rk release request carries
+    // no arm span, and its pair of markers simply matches nothing.
     [
         (b"\n# RK_GATE_TRIGGER_BEGIN", b"\n# RK_GATE_TRIGGER_END"),
-        arm,
+        (b"\n# RK_GATE_ARM_BEGIN", b"\n# RK_GATE_ARM_END"),
         (b"\n# RK_GATE_JOB_BEGIN", b"\n# RK_GATE_JOB_END"),
     ]
 }
@@ -1470,14 +1457,21 @@ pub const SELF_RELEASES_TOKEN: &[u8] = b"RK_SELF_RELEASES";
 /// development environment.
 pub const DEV_ENVIRONMENT_GIT_USER: &str = "blocks/dev-environment-git-user.yaml.in";
 
+/// The tool steps of each GitHub job that runs `rk release` under a
+/// recorded development environment: the recorded setup, and no install
+/// of `rk` or git-cliff, which the environment carries.
+pub const DEV_ENVIRONMENT_ENGINE: &str = "blocks/dev-environment-engine.yaml.in";
+
 /// The six replaceable spans a recorded development environment answers.
 ///
 /// Each is an ordered begin and end marker: the GitHub release half's
 /// tool steps, the GitHub request half's tool steps, the GitLab release
 /// template's image, its tool download, the GitHub release-candidate
-/// job's tool steps, and the GitLab release-candidate job's `rk` install,
-/// which a recorded environment drops because the environment carries
-/// `rk`.
+/// job's tool steps, and the GitLab `rk` install, which a recorded
+/// environment drops because the environment carries `rk`. The pipelines
+/// of the drivers the `rk` engine releases carry the same markers around
+/// their own tool steps, and [`dev_environment_replacements`] answers them
+/// by driver.
 ///
 /// The markers are YAML comments at column zero carrying the newline in
 /// front of them, so a landing with no answer strips the pairs and leaves
@@ -1557,15 +1551,30 @@ fn dev_environment_replacements(params: &Params) -> Result<[Option<Vec<u8>>; 6],
         .collect();
     let image = (!answer.gitlab.image.is_empty())
         .then(|| format!("\n  image: {}", answer.gitlab.image).into_bytes());
-    let script = if answer.gitlab.before_script.is_empty() {
+    let mut items = String::new();
+    for line in &answer.gitlab.before_script {
+        let _ = write!(items, "\n    - {}", serde_json::Value::String(line.clone()));
+    }
+    if matches!(params.driver(), Some("bash" | "python")) {
+        // An engine pipeline runs `rk release` outside the spans, through
+        // the run prefix. Its spans hold the tool installs alone: each
+        // GitHub job takes the recorded setup in their place, and the
+        // GitLab base takes the recorded image and the recorded lines,
+        // after the tool directory it puts on PATH and ahead of the forge
+        // client it fetches into that directory in either state.
+        return Ok([
+            Some(half(DEV_ENVIRONMENT_ENGINE, &release)?),
+            Some(half(DEV_ENVIRONMENT_ENGINE, &request)?),
+            image,
+            Some(items.into_bytes()),
+            None,
+            Some(Vec::new()),
+        ]);
+    }
+    let script = if items.is_empty() {
         Vec::new()
     } else {
-        let mut lines = "\n  before_script:".to_owned();
-        for line in &answer.gitlab.before_script {
-            lines.push_str("\n    - ");
-            lines.push_str(&serde_json::Value::String(line.clone()).to_string());
-        }
-        lines.into_bytes()
+        format!("\n  before_script:{items}").into_bytes()
     };
     Ok([
         Some(half(DEV_ENVIRONMENT_RELEASE, &release)?),
@@ -1723,7 +1732,7 @@ pub fn render(baseline: &[u8], params: &Params) -> Vec<u8> {
     // A block this binary cannot read leaves the authored arm standing,
     // which is the rendering every other shape already takes.
     if let Ok(values) = release_gate_replacements(params) {
-        for ((begin, end), value) in release_gate_spans(params.driver()).iter().zip(values) {
+        for ((begin, end), value) in release_gate_spans().iter().zip(values) {
             out = replace_span(&out, begin, end, value.as_deref());
         }
     }
@@ -1818,14 +1827,14 @@ fn substitute_tokens(baseline: &[u8], params: &Params) -> Vec<u8> {
         .map(|answer| format!("{} ", answer.run))
         .unwrap_or_default();
     out = substitute(&out, DEV_RUN_TOKEN, run.as_bytes());
-    // The build answers substitute after every other token, so a command
-    // that happens to spell a token lands literally.
+    // The build packages substitute after every other token, so a package
+    // list that happens to spell a token lands literally. rk reads the
+    // build command from the record, so no pipeline carries it.
     out = substitute(
         &out,
         BUILD_PACKAGES_TOKEN,
         params.build_packages().as_bytes(),
     );
-    out = substitute(&out, BUILD_COMMAND_TOKEN, params.build_command().as_bytes());
     out
 }
 

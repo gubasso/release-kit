@@ -109,7 +109,7 @@ pub fn observe(ctx: &Ctx) -> Vec<Milestone> {
         ];
     };
     let registry = release_state::registry_for(driver, ctx.profile.release.registry);
-    let package = release_state::package_name(ctx.target.as_std_path(), driver);
+    let package = crate::release_engine::adapter::package_name(ctx.target.as_std_path(), driver);
     let mut found = vec![first_version(registry, package.as_deref())];
     found.push(automated_release(ctx, driver));
     // The operator's registry forms exist only where a registry receives

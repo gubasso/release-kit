@@ -21,7 +21,7 @@ registry = RK_CONFIG_PROFILE_RELEASE_REGISTRY # P: crates-io or none, where the 
 
 [profile.release.build]
 command = RK_CONFIG_PROFILE_RELEASE_BUILD_COMMAND # P: the command that produces dist/*.tar.gz and its .sha256; bash driver alone
-packages = RK_CONFIG_PROFILE_RELEASE_BUILD_PACKAGES # P: the packages the release image installs before it runs the command; bash driver alone
+packages = RK_CONFIG_PROFILE_RELEASE_BUILD_PACKAGES # P: the apt packages the release image installs before it runs the command; bash driver alone
 
 [git]
 trunk = RK_CONFIG_GIT_TRUNK # P: the one permanent branch, rendered into every artifact naming it

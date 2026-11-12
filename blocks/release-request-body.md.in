@@ -1,0 +1,3 @@
+Releases RK_TAG from RK_BASE. The rk release engine keeps this request: it writes the version through the project's own tool and the changelog through git-cliff, and refreshes this request on every push to RK_BASE.
+
+Merging this request is the release. Its merge commit builds the artifacts, attests them, and publishes RK_TAG, and the publish creates the tag last.

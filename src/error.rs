@@ -245,6 +245,40 @@ mod tests {
         }
     }
 
+    #[test]
+    fn the_release_engine_refusals_exit_73() {
+        let cases: Vec<(RkError, u8)> = vec![
+            // The release engine refuses the default CI token before any
+            // push, a git-cliff off its pin before any write, and a tag
+            // or bytes that conflict with what already shipped before the
+            // next forge write.
+            (
+                RkError::refusal(Diagnostic::new(
+                    Reason::DefaultCiToken,
+                    "the push credential is GITHUB_TOKEN",
+                )),
+                73,
+            ),
+            (
+                RkError::refusal(Diagnostic::new(
+                    Reason::ToolOffPin,
+                    "git-cliff 2.13.1 is not the pin",
+                )),
+                73,
+            ),
+            (
+                RkError::refusal(Diagnostic::new(
+                    Reason::ReleaseConflict,
+                    "v1.0.0 already tags another commit",
+                )),
+                73,
+            ),
+        ];
+        for (err, code) in cases {
+            assert_eq!(err.exit_code(), code, "wrong exit code for {err:?}");
+        }
+    }
+
     /// Beside the code, every variant answers with a reason, and a refusal
     /// keeps the one it was built with.
     #[test]

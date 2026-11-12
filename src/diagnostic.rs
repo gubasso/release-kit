@@ -85,11 +85,19 @@ pub enum Reason {
     /// An explicit flag contradicts an answer a preset flag sets, such as
     /// `--integration forge` beside `--workflow-only`.
     PresetContradiction,
+    /// The release would act with the forge's default CI token, whose
+    /// push starts no pipeline.
+    DefaultCiToken,
+    /// A pinned tool runs at another version than its pin.
+    ToolOffPin,
+    /// The forge or the registry already holds a release that conflicts
+    /// with this commit's: a tag at another commit, or other bytes.
+    ReleaseConflict,
 }
 
 /// Every reason, in declaration order; a test asserts against this so an
 /// addition is deliberate and a rename impossible.
-pub const REASONS: [Reason; 28] = [
+pub const REASONS: [Reason; 31] = [
     Reason::Usage,
     Reason::TargetNotFound,
     Reason::ForgeUndetected,
@@ -118,6 +126,9 @@ pub const REASONS: [Reason; 28] = [
     Reason::RecordInvalid,
     Reason::MergeFormMismatch,
     Reason::PresetContradiction,
+    Reason::DefaultCiToken,
+    Reason::ToolOffPin,
+    Reason::ReleaseConflict,
 ];
 
 impl Reason {
@@ -153,6 +164,9 @@ impl Reason {
             Self::RecordInvalid => "record-invalid",
             Self::MergeFormMismatch => "merge-form-mismatch",
             Self::PresetContradiction => "preset-contradiction",
+            Self::DefaultCiToken => "default-ci-token",
+            Self::ToolOffPin => "tool-off-pin",
+            Self::ReleaseConflict => "release-conflict",
         }
     }
 }
@@ -313,6 +327,9 @@ mod tests {
                 "record-invalid",
                 "merge-form-mismatch",
                 "preset-contradiction",
+                "default-ci-token",
+                "tool-off-pin",
+                "release-conflict",
             ]
         );
     }

@@ -3,7 +3,8 @@
 use camino::Utf8PathBuf;
 use clap::{Args, Subcommand};
 
-/// Report where the target's release stands.
+/// Report where the target's release stands, and run the release
+/// engine's actions.
 #[derive(Debug, Args)]
 pub struct ReleaseArgs {
     /// What to report.
@@ -32,6 +33,48 @@ pub enum ReleaseAction {
         /// How long `--wait` waits before it gives up, in seconds.
         #[arg(long, default_value_t = 3600, requires = "wait")]
         timeout: u64,
+
+        /// Emit one JSON object on stdout instead of the human report.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Keep the one release request of the pushed base on
+    /// `rk-release/<base>`: propose the next version, write it and the
+    /// changelog, force-push as the bot, open or edit the request, and arm
+    /// it where the record's style arms. Runs in CI on a push to the
+    /// trunk or a release line; every fact comes from the record.
+    Request {
+        /// The checkout the release job runs in.
+        #[arg(long, default_value = ".")]
+        target: Utf8PathBuf,
+
+        /// Emit one JSON object on stdout instead of the human report.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Decide whether this push releases, and build it: report
+    /// `release`, `resume`, or `skip`, and write the artifacts'
+    /// checksums, the notes, and the report into `.rk-release/`. A skip
+    /// exits 0.
+    Build {
+        /// The checkout the release job runs in.
+        #[arg(long, default_value = ".")]
+        target: Utf8PathBuf,
+
+        /// Emit one JSON object on stdout instead of the human report.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Publish what `rk release build` reported, after the provenance:
+    /// upload every asset, then create the forge release, which creates
+    /// the tag last. A rerun keeps what already exists and adds what is missing.
+    Publish {
+        /// The checkout the release job runs in.
+        #[arg(long, default_value = ".")]
+        target: Utf8PathBuf,
 
         /// Emit one JSON object on stdout instead of the human report.
         #[arg(long)]

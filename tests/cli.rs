@@ -1911,6 +1911,8 @@ fn every_git_and_sh_launch_resolves_through_the_shared_resolver() {
                 // launches.
                 if line.contains(r#"Command::new("git")"#)
                     || line.contains(r#"Command::new("sh")"#)
+                    || line.contains(r#"Command::new("git-cliff")"#)
+                    || line.contains(r#"Command::new("uv")"#)
                     || line.contains(r#"program: "git""#)
                     || line.contains(r#"program: "sh""#)
                 {
@@ -11998,25 +12000,42 @@ fn this_projects_ci_gate_is_shaped_to_report() {
 }
 
 /// The bash/github release workflow mints the attestation before the release
-/// page exists: the page is public the moment `gh release create` runs, so an
-/// attest step after it leaves a window — permanent, if the run dies between
-/// the two — where a public release points at an unattested tarball. The
-/// assertion is on the order of the two in the file, not on their presence.
+/// page exists: the page is public the moment `rk release publish` creates
+/// it, so an attest step after it leaves a window, permanent if the run dies
+/// between the two, where a public release points at an unattested tarball.
+/// The assertion is on the order of the steps in the file, not on their
+/// presence, and the attest step runs exactly where the build releases or
+/// resumes.
+///
+/// SATISFIES release-engine:the-tag-is-created-last
 #[test]
 fn the_bash_github_workflow_attests_before_it_creates_the_release() {
     let text = std::fs::read_to_string(repo_path(
         "snippets/bash/github/.github/workflows/release.yml",
     ))
     .expect("the workflow reads");
-    let attest = text
-        .find("uses: actions/attest@")
-        .expect("the workflow carries an attest step");
-    let create = text
-        .find("gh release create")
-        .expect("the workflow creates the release");
+    let step_at = |name: &str| {
+        text.find(&format!("- name: {name}\n"))
+            .unwrap_or_else(|| panic!("the workflow has no {name} step"))
+    };
+    let (build, attest, publish) = (step_at("build"), step_at("attest"), step_at("publish"));
+    assert!(workflow_step(&text, "build").contains("rk release build"));
+    assert!(workflow_step(&text, "attest").contains("uses: actions/attest@"));
+    assert!(workflow_step(&text, "publish").contains("rk release publish"));
     assert!(
-        attest < create,
-        "the attest step must precede gh release create, so nothing publicly reachable exists before its attestation does"
+        build < attest && attest < publish,
+        "the attest step must sit between rk release build and rk release publish, so nothing publicly reachable exists before its attestation does"
+    );
+    let step = workflow_step(&text, "attest");
+    assert!(
+        step.contains(
+            "if: steps.build.outputs.state == 'release' || steps.build.outputs.state == 'resume'"
+        ),
+        "the attest step runs where the build releases or resumes: {step}"
+    );
+    assert!(
+        step.contains("subject-path: ${{ steps.build.outputs.artifacts }}"),
+        "the attest step signs the artifacts the build reports: {step}"
     );
 }
 
@@ -12094,6 +12113,15 @@ fn the_bash_gitlab_build_emits_metadata_and_an_isolated_job_signs_it() {
         !build.contains("SIGSTORE_ID_TOKEN"),
         "the build job must not carry the signing token"
     );
+    // rk builds and writes its report, which the signing job reads to tell
+    // a release in flight from a push that releases nothing.
+    assert!(build.contains("rk release build"), "{build}");
+    assert!(build.contains("- .rk-release/"), "{build}");
+    assert!(
+        provenance.contains("jq -r .state .rk-release/build.json"),
+        "{provenance}"
+    );
+    assert!(provenance.contains("release|resume) ;;"), "{provenance}");
 }
 
 /// The bundle self-verification pins the signer: the GitLab.com issuer and
@@ -12122,68 +12150,6 @@ fn the_bash_gitlab_bundle_verification_pins_issuer_and_identity() {
     );
 }
 
-/// A push that releases nothing writes no release-version marker, and both
-/// downstream jobs exit on its absence before taking any action, so an
-/// ordinary work merge signs and publishes nothing.
-#[test]
-fn the_bash_gitlab_downstream_jobs_guard_on_the_release_marker() {
-    for job in ["provenance", "attach"] {
-        let body = bash_gitlab_job(job);
-        let guard = body
-            .find("[ ! -f release-version ]")
-            .unwrap_or_else(|| panic!("{job} carries no release-version guard"));
-        for action in ["cosign", "--upload-file", "releases"] {
-            if let Some(position) = body.find(action) {
-                assert!(
-                    guard < position,
-                    "{job}: the release-version guard must precede `{action}`"
-                );
-            }
-        }
-    }
-    let build = bash_gitlab_job("build");
-    let clear = build
-        .find("rm -f release-version")
-        .expect("the build job clears a stale or tracked marker");
-    let bail = build
-        .find("nothing to release")
-        .expect("the build job keeps the bump guard");
-    let marker = build
-        .find("> release-version")
-        .expect("the build job writes the marker");
-    assert!(
-        clear < bail && bail < marker,
-        "the marker is cleared before the bump guard and written only past it, so a pre-existing file cannot survive a no-bump push into the artifacts"
-    );
-}
-
-/// A rerun repairs a partial release instead of skipping it: uploads are
-/// per-file and conditional on what the package registry already holds, and
-/// an existing release page gains its missing asset links rather than being
-/// left as found.
-#[test]
-fn the_bash_gitlab_attach_job_settles_a_partial_release() {
-    let attach = bash_gitlab_job("attach");
-    assert!(
-        attach.contains("package_files"),
-        "the attach job reads what the package registry already holds"
-    );
-    assert!(
-        attach.contains(
-            r#"select(.package_type == "generic" and .name == "release" and .version == $v)"#
-        ),
-        "the package lookup selects the exact package: package_name is a fuzzy filter on this API"
-    );
-    assert!(
-        attach.contains("assets/links"),
-        "an existing release gains its missing links on a rerun"
-    );
-    assert!(
-        !attach.contains("leaving it as it is"),
-        "an existing release is settled, never skipped"
-    );
-}
-
 /// A self-managed instance cannot mint keyless certificates, and the
 /// pipeline says so at run time and releases without provenance, rather
 /// than failing compilation or the release. The guard sits in the signing
@@ -12201,11 +12167,15 @@ fn the_bash_gitlab_pipeline_degrades_honestly_off_gitlab_com() {
         guard < fetch,
         "the instance guard precedes the cosign fetch"
     );
-    let attach = bash_gitlab_job("attach");
+    // The publish job runs after the provenance job whatever it signed, and
+    // rk takes the bundle only where the file exists, so the self-managed
+    // path still releases.
+    let publish = bash_gitlab_job("publish");
     assert!(
-        attach.contains("-f \"$tarball.sigstore.json\""),
-        "publication treats the bundle as conditionally present, so the self-managed path still releases"
+        publish.contains("needs: [\"build\", \"provenance\"]"),
+        "{publish}"
     );
+    assert!(publish.contains("rk release publish"), "{publish}");
 }
 
 /// cosign is pinned like every other tool: the version in the pipeline is
@@ -18366,7 +18336,6 @@ fn every_arming_step_authenticates_as_the_bot() {
     for path in [
         "snippets/rust/github/.github/workflows/release-plz.yml",
         "snippets/python/github/.github/workflows/release-please.yml",
-        "snippets/bash/github/.github/workflows/release.yml",
     ] {
         let text = std::fs::read_to_string(repo_path(path)).expect("the snippet reads");
         assert!(
@@ -18395,32 +18364,54 @@ fn every_arming_step_authenticates_as_the_bot() {
             "{path}: an arm under the default token merges a bump that starts no workflow"
         );
     }
-    for path in [
-        "snippets/rust/gitlab/.gitlab-ci.yml",
-        "snippets/bash/gitlab/.gitlab-ci.yml",
-    ] {
-        let text = std::fs::read_to_string(repo_path(path)).expect("the snippet reads");
-        assert!(
-            text.contains("RELEASE_STYLE: RK_STYLE"),
-            "{path}: the rendered style is the arm's gate"
-        );
-        assert!(
-            text.contains("auto_merge=true&merge_when_pipeline_succeeds=true"),
-            "{path}: the arm sets auto-merge under both parameter names"
-        );
-        assert!(
-            !text.contains("CI_JOB_TOKEN"),
-            "{path}: an arm under the job token merges a bump that releases nothing"
-        );
-        let arm_at = text.find("standing arm").expect("the arming block exists");
-        assert!(
-            text[arm_at..].contains("PRIVATE-TOKEN: $RELEASE_BOT_TOKEN"),
-            "{path}: the arm authenticates as the bot"
-        );
-        assert!(
-            text[arm_at..].contains("a line's request is never armed"),
-            "{path}: the arm must step aside off the trunk"
-        );
+    let path = "snippets/rust/gitlab/.gitlab-ci.yml";
+    let text = std::fs::read_to_string(repo_path(path)).expect("the snippet reads");
+    assert!(
+        text.contains("RELEASE_STYLE: RK_STYLE"),
+        "{path}: the rendered style is the arm's gate"
+    );
+    assert!(
+        text.contains("auto_merge=true&merge_when_pipeline_succeeds=true"),
+        "{path}: the arm sets auto-merge under both parameter names"
+    );
+    assert!(
+        !text.contains("CI_JOB_TOKEN"),
+        "{path}: an arm under the job token merges a bump that releases nothing"
+    );
+    let arm_at = text.find("standing arm").expect("the arming block exists");
+    assert!(
+        text[arm_at..].contains("PRIVATE-TOKEN: $RELEASE_BOT_TOKEN"),
+        "{path}: the arm authenticates as the bot"
+    );
+    assert!(
+        text[arm_at..].contains("a line's request is never armed"),
+        "{path}: the arm must step aside off the trunk"
+    );
+    // The engine pairs arm inside rk release request, which reads the style
+    // and the base from the record. The job that runs it hands it the bot's
+    // token and never the default one, and the pipeline arms nothing itself.
+    let github = std::fs::read_to_string(repo_path(
+        "snippets/bash/github/.github/workflows/release.yml",
+    ))
+    .expect("the snippet reads");
+    let request = workflow_step(&github, "maintain the release request");
+    assert!(
+        request.contains("GH_TOKEN: ${{ steps.app-token.outputs.token }}"),
+        "{request}"
+    );
+    assert!(request.contains("rk release request"), "{request}");
+    let gitlab = std::fs::read_to_string(repo_path("snippets/bash/gitlab/.gitlab-ci.yml"))
+        .expect("the snippet reads");
+    assert!(
+        gitlab.contains("GITLAB_TOKEN: $RELEASE_BOT_TOKEN"),
+        "{gitlab}"
+    );
+    for text in [&github, &gitlab] {
+        assert!(!text.contains("gh pr merge"), "{text}");
+        assert!(!text.contains("auto_merge=true"), "{text}");
+        assert!(!text.contains("CI_JOB_TOKEN"), "{text}");
+        assert!(!text.contains("secrets.GITHUB_TOKEN"), "{text}");
+        assert!(!text.contains("github.token"), "{text}");
     }
 }
 
@@ -18442,10 +18433,12 @@ fn every_app_token_mint_scopes_its_permissions() {
             "release-request",
             vec!["contents: write", "pull-requests: write"],
         ),
+        // The build reads the pull request the pushed commit merges, which
+        // is the one commit that releases a final version.
         (
             "bash/github/.github/workflows/release.yml",
-            "tag-and-attach",
-            vec!["contents: write"],
+            "release",
+            vec!["contents: write", "pull-requests: read"],
         ),
         (
             "python/github/.github/workflows/release-please.yml",
@@ -19587,6 +19580,11 @@ fn the_canon_claims_no_candidate_path_it_lacks() {
         let Ok(text) = std::fs::read_to_string(&path) else {
             continue;
         };
+        // The spec domain shares the plan's name: a rule ID and the spec's
+        // file name are citations, and every other use names the plan.
+        let text = text
+            .replace("release-engine:", "")
+            .replace("SPEC-release-engine", "");
         for phrase in stale {
             assert!(
                 !text.contains(phrase),
@@ -31424,7 +31422,14 @@ fn a_forge_integrated_target_keeps_the_standing_arm() {
     use release_kit::landing::Integration;
     for driver in ["rust", "python", "bash"] {
         let text = release_workflow(driver, Integration::Forge);
-        assert!(text.contains("--auto --squash --delete-branch"), "{driver}");
+        // The bash pair arms inside rk release request, so its workflow
+        // carries no arm, and the engine arms where the authored arm would.
+        if driver == "bash" {
+            assert!(!text.contains("gh pr merge"), "{driver}");
+            assert!(engine_arms(Integration::Forge), "{driver}");
+        } else {
+            assert!(text.contains("--auto --squash --delete-branch"), "{driver}");
+        }
         assert!(!text.contains("workflow_run"), "{driver}");
         assert!(!text.contains("release-gate:"), "{driver}");
         assert!(!text.contains("RK_GATE"), "{driver} leaks a marker");
@@ -31454,6 +31459,27 @@ fn the_release_request_is_gated_under_both_integration_modes() {
     let armed = release_workflow("rust", Integration::Forge);
     assert!(!armed.contains("GATE_CHECK"));
     assert!(armed.contains("--auto"));
+    // The bash pair renders the same gate, and under forge integration the
+    // engine arms the request where the rust workflow's standing arm does.
+    let gated = release_workflow("bash", Integration::Local);
+    assert!(gated.contains("GATE_CHECK: \"gate\""));
+    assert!(gated.contains("check_name=\"$GATE_CHECK\""));
+    assert!(!engine_arms(Integration::Local));
+    let armed = release_workflow("bash", Integration::Forge);
+    assert!(!armed.contains("GATE_CHECK"));
+    assert!(engine_arms(Integration::Forge));
+}
+
+/// Whether the engine arms a GitHub trunk request on the trunk under
+/// `integration`, the policy the bash pair's workflow leaves to rk.
+fn engine_arms(integration: release_kit::landing::Integration) -> bool {
+    release_kit::release_engine::guard::arms(
+        release_kit::detect::Forge::Github,
+        integration,
+        Some(release_kit::landing::Style::Trunk),
+        "master",
+        "master",
+    )
 }
 
 /// The gate judges the recorded check and waits on the recorded workflow.
@@ -31532,7 +31558,7 @@ fn each_driver_proves_its_release_request_identity() {
     for (driver, shape) in [
         ("rust", "BRANCH_SHAPE: release-plz-"),
         ("python", "BRANCH_SHAPE: release-please--branches--master"),
-        ("bash", "BRANCH_SHAPE: chore/release-v"),
+        ("bash", "BRANCH_SHAPE: rk-release/"),
     ] {
         let text = release_workflow(driver, Integration::Local);
         assert!(text.contains(shape), "{driver}");
@@ -31570,7 +31596,7 @@ fn an_imitating_request_never_merges() {
             "release-please--branches--master",
             "release-please--branches--master",
         ),
-        ("bash", "chore/release-v9.9.9", "chore/release-v"),
+        ("bash", "rk-release/master", "rk-release/"),
     ] {
         let mut owned = gate_candidate(7, "imitation");
         owned["head"]["ref"] = serde_json::json!(branch);
@@ -35999,11 +36025,6 @@ const RETIRED_SURFACE_ALLOWLIST: &[(&str, &str, &str)] = &[
         ".spec-driven-docs/manifest.json",
         "baseline_sha256",
         "spec-driven-docs' own receipt, a third-party tool's record",
-    ),
-    (
-        "snippets/bash/gitlab/.gitlab-ci.yml",
-        "reconciles rather than skips",
-        "the attach job's rerun semantics, ordinary English in a landed snippet",
     ),
     (
         "_docs/specs/SPEC-tracking.md",
@@ -46776,45 +46797,6 @@ fn the_bot_name_is_a_setup_declaration_and_reaches_no_byte() {
     );
 }
 
-/// The release request reads its commit identity from the forge and pushes
-/// as `oauth2`, so the commit links to the bot's account.
-#[test]
-fn the_bash_gitlab_release_request_reads_its_identity_from_the_forge() {
-    let target = tempfile::tempdir().expect("a scratch target exists");
-    rk().args([
-        "init",
-        "--tech",
-        "bash",
-        "--forge",
-        "gitlab",
-        "--repo",
-        "acme/widget",
-        "--target",
-    ])
-    .arg(target.path())
-    .arg("--apply")
-    .assert()
-    .success();
-    let pipeline = std::fs::read_to_string(target.path().join(".gitlab-ci.yml")).expect("lands");
-    assert!(
-        pipeline.contains(r#"me="$(api "$CI_API_V4_URL/user")""#),
-        "{pipeline}"
-    );
-    assert!(
-        pipeline.contains(r#"git config user.email "$email""#),
-        "{pipeline}"
-    );
-    assert!(
-        pipeline.contains("https://oauth2:${RELEASE_BOT_TOKEN}@"),
-        "{pipeline}"
-    );
-    assert!(!pipeline.contains("@invalid"), "{pipeline}");
-    assert!(
-        pipeline.contains("apk add --no-cache curl git jq tar make"),
-        "{pipeline}"
-    );
-}
-
 /// A proof committed before the name existed carries no `bot_name`, and a
 /// target that sets none still reads it compatible; setting the name moves
 /// the contract, so the proof reads stale naming it.
@@ -47212,126 +47194,652 @@ fn workflow_step(workflow: &str, name: &str) -> String {
     rest[..end].to_owned()
 }
 
-/// SATISFIES project-profile:release-intent-has-three-modes
-/// The GitLab build job builds and creates no tag, and names the version
-/// to git-cliff, because no tag exists yet for it to read.
-#[test]
-fn the_bash_gitlab_build_job_creates_no_tag() {
-    let target = land_pair("bash", "gitlab");
-    let pipeline = landed_bash_pipeline(target.path(), "gitlab");
-    assert!(pipeline.contains("\nbuild:\n"), "{pipeline}");
-    assert!(!pipeline.contains("tag-and-build"), "{pipeline}");
-    let build = bash_gitlab_job("build");
-    assert!(!build.contains("repository/tags"), "{build}");
-    assert!(
-        build.contains(r#"git cliff --unreleased --tag "v$version""#),
-        "{build}"
-    );
-    assert!(!build.contains("--latest"), "{build}");
+/// The one apt install line of a landed bash pipeline, trimmed.
+fn apt_install_line(pipeline: &str) -> String {
+    let lines: Vec<&str> = pipeline
+        .lines()
+        .filter(|line| line.contains("apt-get install -y --no-install-recommends"))
+        .collect();
+    assert_eq!(lines.len(), 1, "one apt install line: {pipeline}");
+    lines[0].trim().to_owned()
 }
 
-/// The GitLab attach job creates the tag and the release in one request,
-/// after every upload, and nothing else in the pipeline creates a tag.
-#[test]
-fn the_bash_gitlab_attach_creates_the_tag_with_the_release() {
-    let attach = bash_gitlab_job("attach");
-    let create = attach
-        .find(r#"api -X POST "$project/releases" \"#)
-        .expect("one release create");
-    assert!(attach.contains(r#"--arg ref "$CI_COMMIT_SHA""#), "{attach}");
-    assert!(attach.contains("ref: $ref"), "{attach}");
-    assert!(attach.contains("assets: {links: map("), "{attach}");
-    let last_upload = attach.rfind("upload \"$tarball").expect("the uploads");
-    assert!(last_upload < create, "{attach}");
-    let target = land_pair("bash", "gitlab");
-    let pipeline = landed_bash_pipeline(target.path(), "gitlab");
-    assert!(!pipeline.contains("repository/tags\" \\"), "{pipeline}");
-    assert!(
-        !pipeline.contains("-X POST \"$project/repository/tags"),
-        "{pipeline}"
-    );
-}
-
-/// The GitHub workflow builds, attests, and only then creates the tag and
-/// the release together, at the run's own commit.
-#[test]
-fn the_bash_github_release_attests_before_it_tags() {
-    let target = land_pair("bash", "github");
-    let workflow = landed_bash_pipeline(target.path(), "github");
-    let build = workflow_step(&workflow, "build");
-    assert!(!build.contains("git/refs"), "{build}");
-    assert!(
-        build.contains(r#"git cliff --unreleased --tag "v$version""#),
-        "{build}"
-    );
-    assert!(
-        !workflow.contains(r#"git fetch origin "refs/tags/"#),
-        "{workflow}"
-    );
-    let attest = workflow.find("actions/attest@").expect("the attest step");
-    let attach_at = workflow.find("- name: attach\n").expect("the attach step");
-    assert!(attest < attach_at, "{workflow}");
-    let attach = workflow_step(&workflow, "attach");
-    assert!(attach.contains("SHA: ${{ github.sha }}"), "{attach}");
-    assert!(
-        attach.contains("GH_REPO: ${{ github.repository }}"),
-        "{attach}"
-    );
-    assert!(attach.contains(r#"--target "$SHA""#), "{attach}");
-}
-
-/// A tag at another commit stops attach on both forges, naming the
-/// recovery section; a tag at the pipeline's own commit continues.
-#[test]
-fn the_bash_release_refuses_a_tag_at_another_commit_on_both_forges() {
-    for (forge, commit) in [("gitlab", "$CI_COMMIT_SHA"), ("github", "$SHA")] {
-        let target = land_pair("bash", forge);
-        let pipeline = landed_bash_pipeline(target.path(), forge);
-        assert!(
-            pipeline.contains("The tag exists and the release does not"),
-            "{forge}: {pipeline}"
-        );
-        assert!(
-            pipeline.contains(&format!(
-                r#"[ -n "$tagged" ] && [ "$tagged" != "{commit}" ]"#
-            )),
-            "{forge}: {pipeline}"
-        );
+/// A rendered pipeline keeps none of the landing's own tokens or markers.
+fn assert_no_landing_token(text: &str) {
+    for token in [
+        "RK_SELF", "RK_DEV", "RK_BUILD", "RK_GATE", "RK_PUSH", "RK_STYLE",
+    ] {
+        assert!(!text.contains(token), "{token} survives: {text}");
     }
 }
 
-/// Both bump guards refuse the landing commit, the baseline, and a version
-/// the forge already published at another commit, read from the forge and
-/// never from a version order. The GitHub guard reads the draft flag, so a
-/// draft continues to attach.
+/// The pinned version and the archive SHA-256 `versions.toml` records for
+/// `tool`.
+fn registry_archive(tool: &str) -> (String, String) {
+    let registry: toml::Table = std::fs::read_to_string(repo_path("versions.toml"))
+        .expect("the registry reads")
+        .parse()
+        .expect("the registry parses");
+    let row = registry["tool"]
+        .as_array()
+        .and_then(|tools| tools.iter().find(|row| row["name"].as_str() == Some(tool)))
+        .unwrap_or_else(|| panic!("versions.toml has no {tool} row"));
+    let field = |key: &str| {
+        row.get(key)
+            .and_then(toml::Value::as_str)
+            .unwrap_or_else(|| panic!("the {tool} row has no {key}"))
+            .to_owned()
+    };
+    (field("version"), field("sha256"))
+}
+
+/// A landed bash pipeline on `forge`, upgraded under the GitHub or GitLab
+/// development environment answer the rust tests record.
+fn bash_pipeline_with_environment(forge: &str) -> String {
+    let target = land_pair("bash", forge);
+    append_target_config(target.path(), &dev_environment_answer(forge));
+    rk().args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success();
+    landed_bash_pipeline(target.path(), forge)
+}
+
+/// The release job's App token reads the pull request a commit merges,
+/// because the build releases a final version only at the merge of its
+/// request, and both engine actions take that token as `GH_TOKEN`.
+///
+/// SATISFIES release-engine:a-final-version-releases-at-its-request
 #[test]
-fn the_bash_release_refuses_the_baseline_on_both_forges() {
-    for forge in ["gitlab", "github"] {
-        let target = land_pair("bash", forge);
-        let pipeline = landed_bash_pipeline(target.path(), forge);
-        for guard in [
-            r#"if [ -z "$previous" ]; then"#,
-            r#"if [ "$version" = "0.0.0" ]; then"#,
-            "is already released at $at; nothing to release.",
-        ] {
-            assert!(pipeline.contains(guard), "{forge}: {guard}: {pipeline}");
+fn the_github_release_job_can_read_the_request_merge() {
+    use release_kit::landing::Integration;
+    for integration in [Integration::Local, Integration::Forge] {
+        let workflow = release_workflow("bash", integration);
+        let job = workflow_job(&workflow, "release");
+        let at = job
+            .find("actions/create-github-app-token@")
+            .expect("the release job mints the app token");
+        let mint = &job[at..];
+        let mint = &mint[..mint.find("\n      - ").unwrap_or(mint.len())];
+        assert!(mint.contains("permission-contents: write"), "{mint}");
+        assert!(mint.contains("permission-pull-requests: read"), "{mint}");
+        for action in ["build", "publish"] {
+            let step = workflow_step(job, action);
+            assert!(
+                step.contains("GH_TOKEN: ${{ steps.app-token.outputs.token }}"),
+                "{action}: {step}"
+            );
+            assert!(
+                step.contains(&format!("run: rk release {action}")),
+                "{action}: {step}"
+            );
         }
-        assert!(!pipeline.contains("sort -V"), "{forge}: {pipeline}");
     }
-    // Only a release published at another commit is skipped: a draft, and
-    // a release at the pipeline's own commit, continue to attach.
-    let gitlab = landed_bash_pipeline(land_pair("bash", "gitlab").path(), "gitlab");
+}
+
+/// The build packages are apt names on both forges: the GitHub runner is
+/// Ubuntu, and the GitLab rk jobs run on a Debian image pinned by digest,
+/// never on alpine, whose musl the rk archive does not run on.
+///
+/// SATISFIES project-profile:release-intent-has-three-modes
+#[test]
+fn the_build_packages_install_through_apt_on_both_forges() {
+    for forge in ["github", "gitlab"] {
+        let target = land_pair("bash", forge);
+        rk().args([
+            "upgrade",
+            "--apply",
+            "--build-packages",
+            "make zstd",
+            "--target",
+        ])
+        .arg(target.path())
+        .assert()
+        .success();
+        let pipeline = landed_bash_pipeline(target.path(), forge);
+        let line = apt_install_line(&pipeline);
+        assert!(line.ends_with(" make zstd"), "{forge}: {line}");
+        if forge == "gitlab" {
+            let tooling = gitlab_job(&pipeline, ".tooling");
+            assert!(tooling.contains(&line), "{tooling}");
+            assert!(!tooling.contains("apk "), "{tooling}");
+            let image = tooling
+                .lines()
+                .find_map(|line| line.strip_prefix("  image: "))
+                .expect("the rk jobs name their image");
+            let (name, digest) = image
+                .split_once("@sha256:")
+                .expect("the image is pinned by digest");
+            assert!(name.starts_with("debian:"), "{image}");
+            assert!(
+                digest.len() == 64 && digest.chars().all(|c| c.is_ascii_hexdigit()),
+                "{image}"
+            );
+        }
+    }
+}
+
+/// Neither bash pipeline carries release logic of its own: outside the gate
+/// job and the provenance job, no line computes a bump, pushes, or calls a
+/// forge API. rk holds all of it.
+///
+/// SATISFIES release-engine:the-tag-is-created-last
+#[test]
+fn the_bash_pipelines_carry_no_release_shell() {
+    use release_kit::landing::Integration;
+    const RELEASE_SHELL: [&str; 16] = [
+        "git cliff",
+        "git-cliff --bump",
+        "--bumped-version",
+        "git push",
+        "git tag",
+        "gh api",
+        "gh pr",
+        "gh release",
+        "glab api",
+        "glab release",
+        "glab mr",
+        "CI_API_V4_URL",
+        "api.github.com",
+        "merge_requests",
+        "repository/tags",
+        "PRIVATE-TOKEN",
+    ];
+    let code = |text: &str| -> String {
+        text.lines()
+            .filter(|line| !line.trim_start().starts_with('#'))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let mut bodies = Vec::new();
+    for integration in [Integration::Local, Integration::Forge] {
+        let workflow = release_workflow("bash", integration);
+        for job in ["release-request", "release"] {
+            bodies.push((format!("github {job}"), code(workflow_job(&workflow, job))));
+        }
+    }
+    let pipeline = landed_bash_pipeline(land_pair("bash", "gitlab").path(), "gitlab");
+    for (name, body) in gitlab_sections_of(&pipeline) {
+        if name != "provenance" {
+            bodies.push((format!("gitlab {name}"), body));
+        }
+    }
+    for (name, body) in &bodies {
+        for shell in RELEASE_SHELL {
+            assert!(!body.contains(shell), "{name} carries {shell}: {body}");
+        }
+    }
+    for action in ["request", "build", "publish"] {
+        assert!(
+            bodies.iter().any(|(name, body)| name.starts_with("gitlab")
+                && body.contains(&format!("rk release {action}"))),
+            "the GitLab pipeline runs rk release {action}"
+        );
+    }
+}
+
+/// Every tool download the GitLab rk jobs make is checked against the
+/// SHA-256 `versions.toml` records beside the version it pins, before the
+/// archive is unpacked, and both forges install rk at the version of the
+/// binary that landed the pipeline.
+///
+/// SATISFIES release-engine:git-cliff-runs-at-its-pin
+#[test]
+fn every_engine_tool_download_verifies_its_checksum() {
+    let pipeline = landed_bash_pipeline(land_pair("bash", "gitlab").path(), "gitlab");
+    let tooling = gitlab_job(&pipeline, ".tooling");
+    for (tool, var) in [("git-cliff", "GIT_CLIFF"), ("glab", "GLAB")] {
+        let (version, sha256) = registry_archive(tool);
+        assert!(
+            sha256.len() == 64 && sha256.chars().all(|c| c.is_ascii_hexdigit()),
+            "{tool}: {sha256}"
+        );
+        assert!(
+            tooling.contains(&format!("{var}_VERSION: \"{version}\"")),
+            "{tool}: {tooling}"
+        );
+        assert!(
+            tooling.contains(&format!("{var}_SHA256: \"{sha256}\"")),
+            "{tool}: {tooling}"
+        );
+        let archive = format!("$RELEASE_TOOLS/{tool}.tar.gz");
+        let lines: Vec<&str> = tooling.lines().collect();
+        let at = |needle: &str| {
+            lines
+                .iter()
+                .position(|line| line.contains(&archive) && line.contains(needle))
+                .unwrap_or_else(|| panic!("{tool}: no {needle} line for {archive}: {tooling}"))
+        };
+        let fetch = at("curl -fsSL -o");
+        let check = at("sha256sum -c -");
+        let unpack = at("tar -xzf");
+        assert!(
+            lines[fetch].contains(&format!("${{{var}_VERSION}}")),
+            "{tool}: {}",
+            lines[fetch]
+        );
+        assert!(
+            lines[check].contains(&format!("${{{var}_SHA256}}")),
+            "{tool}: {}",
+            lines[check]
+        );
+        assert!(fetch < check && check < unpack, "{tool}: {tooling}");
+    }
+    let version = env!("CARGO_PKG_VERSION");
     assert!(
-        gitlab.contains(r#"if [ -n "$at" ] && [ "$at" != "$CI_COMMIT_SHA" ]; then"#),
-        "{gitlab}"
+        tooling.contains(&format!(
+            "{}/releases/download/v{version}/release-kit-installer.sh",
+            env!("CARGO_PKG_REPOSITORY")
+        )),
+        "{tooling}"
     );
+    let workflow = landed_bash_pipeline(land_pair("bash", "github").path(), "github");
+    let (cliff, _) = registry_archive("git-cliff");
+    for job in ["release-request", "release"] {
+        let body = workflow_job(&workflow, job);
+        assert!(
+            body.contains(&format!("pipx install git-cliff=={cliff}")),
+            "{job}: {body}"
+        );
+        assert!(
+            body.contains(&format!("RK_VERSION: \"{version}\"")),
+            "{job}: {body}"
+        );
+    }
+}
+
+/// Under a recorded development environment every rk job takes the
+/// recorded setup or image and runs rk through the recorded prefix, with
+/// no installer for rk and no install of git-cliff. glab is the forge
+/// client, so the GitLab jobs still fetch it at its pin.
+///
+/// SATISFIES target-config:a-dev-environment-is-a-recorded-answer
+#[test]
+fn each_engine_job_takes_rk_from_a_recorded_environment() {
+    let github = bash_pipeline_with_environment("github");
+    let _: serde_json::Value = yaml_serde::from_str(&github).expect("the workflow parses");
+    assert!(!github.contains("release-plz"), "{github}");
+    assert!(!github.contains("cargo "), "{github}");
+    assert!(!github.contains("release-kit-installer.sh"), "{github}");
+    assert!(!github.contains("pipx install git-cliff"), "{github}");
+    assert_no_landing_token(&github);
+    let request = workflow_job(&github, "release-request");
+    let release = workflow_job(&github, "release");
+    for job in [request, release] {
+        assert!(
+            job.contains("nix-installer-action@90bb610b90bf290cad97484ba341453bd1cbefea # v19"),
+            "{job}"
+        );
+    }
+    // The release job publishes, so it takes the setup and never the cache.
+    assert!(request.contains("magic-nix-cache-action"), "{request}");
+    assert!(!release.contains("magic-nix-cache-action"), "{release}");
+    assert!(
+        request.contains("run: nix develop --command rk release request"),
+        "{request}"
+    );
+    for action in ["build", "publish"] {
+        assert!(
+            release.contains(&format!("run: nix develop --command rk release {action}")),
+            "{release}"
+        );
+    }
+    let gitlab = bash_pipeline_with_environment("gitlab");
+    // The tool directory opens the one before_script, the recorded setup
+    // lines follow it, and the glab fetch follows them, so the recorded
+    // image needs curl, tar, and the coreutils alone.
+    let parsed: serde_json::Value = yaml_serde::from_str(&gitlab).expect("the pipeline parses");
+    let script: Vec<&str> = parsed[".tooling"]["before_script"]
+        .as_array()
+        .expect("the rk jobs carry a before_script")
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .collect();
+    assert!(script[0].contains("/rk-tools\""), "{script:?}");
+    assert_eq!(script.get(1), Some(&"echo ready"), "{script:?}");
+    assert!(
+        script[2..].iter().all(|line| line.contains("glab")),
+        "{script:?}"
+    );
+    let tooling = gitlab_job(&gitlab, ".tooling");
+    assert!(tooling.contains("  image: nixos/nix:2.35.2\n"), "{tooling}");
+    assert!(tooling.contains("    - \"echo ready\"\n"), "{tooling}");
+    assert!(!tooling.contains("debian:"), "{tooling}");
+    assert!(!tooling.contains("apt-get"), "{tooling}");
+    assert!(!tooling.contains("/git-cliff.tar.gz"), "{tooling}");
+    assert!(!tooling.contains("release-kit-installer.sh"), "{tooling}");
+    assert!(tooling.contains("$RELEASE_TOOLS/glab.tar.gz"), "{tooling}");
+    assert_no_landing_token(&gitlab);
+    for action in ["request", "build", "publish"] {
+        assert!(
+            gitlab.contains(&format!(
+                "    - nix develop --command rk release {action}\n"
+            )),
+            "{gitlab}"
+        );
+    }
+}
+
+/// With no development environment every rk job installs rk through the
+/// shell installer of the release whose version equals the landing
+/// binary's, and runs it with no prefix.
+///
+/// SATISFIES target-config:a-dev-environment-is-a-recorded-answer
+#[test]
+fn each_engine_job_installs_rk_at_the_landing_version_without_an_environment() {
+    let version = env!("CARGO_PKG_VERSION");
+    let installer = format!("{}/releases/download/v", env!("CARGO_PKG_REPOSITORY"));
     let github = landed_bash_pipeline(land_pair("bash", "github").path(), "github");
-    assert!(github.contains("--json isDraft"), "{github}");
-    assert!(github.contains(r#"[ "$released" = "false" ]"#), "{github}");
+    assert_no_landing_token(&github);
+    for (job, actions) in [
+        ("release-request", &["request"][..]),
+        ("release", &["build", "publish"][..]),
+    ] {
+        let body = workflow_job(&github, job);
+        let install = workflow_step(body, "install rk");
+        assert!(
+            install.contains(&format!("RK_VERSION: \"{version}\"")),
+            "{job}: {install}"
+        );
+        assert!(
+            install.contains(&format!(
+                "\"{installer}${{RK_VERSION}}/release-kit-installer.sh\""
+            )),
+            "{job}: {install}"
+        );
+        let install_at = body.find("- name: install rk").expect("the install step");
+        for action in actions {
+            let run = format!("run: rk release {action}\n");
+            let run_at = body
+                .find(&run)
+                .unwrap_or_else(|| panic!("{job} runs no {run}: {body}"));
+            assert!(install_at < run_at, "{job}: {body}");
+        }
+    }
+    let gitlab = landed_bash_pipeline(land_pair("bash", "gitlab").path(), "gitlab");
+    assert_no_landing_token(&gitlab);
+    let tooling = gitlab_job(&gitlab, ".tooling");
     assert!(
-        github.contains(r#"if [ -n "$at" ] && [ "$at" != "$SHA" ]; then"#),
-        "{github}"
+        tooling.contains(&format!(
+            "    - curl --proto '=https' --tlsv1.2 -LsSf \"{installer}{version}/release-kit-installer.sh\" | RELEASE_KIT_UNMANAGED_INSTALL=\"$RELEASE_TOOLS/bin\" sh\n"
+        )),
+        "{tooling}"
     );
+    for (job, action) in [
+        ("release-request", "request"),
+        ("build", "build"),
+        ("publish", "publish"),
+    ] {
+        let body = gitlab_job(&gitlab, job);
+        assert!(body.contains("  extends: .tooling\n"), "{job}: {body}");
+        assert!(
+            body.contains(&format!("    - rk release {action}\n")),
+            "{job}: {body}"
+        );
+    }
+}
+
+/// The absolute path of `tool` on the test's own `PATH`.
+fn tool_on_path(tool: &str) -> PathBuf {
+    std::env::split_paths(&std::env::var_os("PATH").expect("PATH is set"))
+        .map(|dir| dir.join(tool))
+        .find(|path| path.is_file())
+        .unwrap_or_else(|| panic!("{tool} is not on PATH"))
+}
+
+/// What one run of a GitLab rk job's shell reported: whether the shell
+/// succeeded, its output, and the path `command -v glab` gave when the
+/// job reached `rk`, or `None` where the job never reached it.
+struct Bootstrap {
+    ok: bool,
+    output: String,
+    glab_at_rk: Option<String>,
+    tools: PathBuf,
+    checkout: PathBuf,
+    _root: tempfile::TempDir,
+}
+
+/// Writes `text` to `path` as an executable script, creating its parent.
+fn write_executable(path: &Path, text: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).expect("the parent creates");
+    }
+    std::fs::write(path, text).expect("the script writes");
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+        .expect("the script is executable");
+}
+
+/// Builds in `serve` the glab archive, the git-cliff archive, and the rk
+/// installer a GitLab rk job downloads, and writes into `stubs` a `curl`
+/// that answers each download URL with its file. Returns the SHA-256 of
+/// the glab archive and of the git-cliff archive.
+fn serve_bootstrap_downloads(
+    serve: &Path,
+    stubs: &Path,
+    cliff_version: &str,
+    rk_stub: &str,
+) -> (String, String) {
+    use sha2::Digest as _;
+    write_executable(&serve.join("glab/bin/glab"), "#!/bin/sh\necho glab\n");
+    write_executable(
+        &serve.join(format!("cliff/git-cliff-{cliff_version}/git-cliff")),
+        "#!/bin/sh\necho git-cliff\n",
+    );
+    let archive = |name: &str, from: &str, member: &str| {
+        let status = std::process::Command::new("tar")
+            .arg("-czf")
+            .arg(serve.join(name))
+            .arg("-C")
+            .arg(serve.join(from))
+            .arg(member)
+            .status()
+            .expect("tar runs");
+        assert!(status.success(), "the {name} archive builds");
+        hex(&sha2::Sha256::digest(
+            std::fs::read(serve.join(name)).expect("the archive reads"),
+        ))
+    };
+    let glab_sha = archive("glab.tar.gz", "glab", "bin/glab");
+    let cliff_sha = archive(
+        "git-cliff.tar.gz",
+        "cliff",
+        &format!("git-cliff-{cliff_version}/git-cliff"),
+    );
+    std::fs::write(
+        serve.join("installer.sh"),
+        format!(
+            "mkdir -p \"$RELEASE_KIT_UNMANAGED_INSTALL\"\ncat > \"$RELEASE_KIT_UNMANAGED_INSTALL/rk\" <<'EOF'\n{rk_stub}EOF\nchmod +x \"$RELEASE_KIT_UNMANAGED_INSTALL/rk\"\n"
+        ),
+    )
+    .expect("the installer writes");
+    write_executable(
+        &stubs.join("curl"),
+        &format!(
+            "#!/bin/sh\nout=\nurl=\nwhile [ $# -gt 0 ]; do\n  case \"$1\" in\n    -o) out=\"$2\"; shift;;\n    https://*) url=\"$1\";;\n  esac\n  shift\ndone\ncase \"$url\" in\n  */glab_*) file=glab.tar.gz;;\n  */git-cliff-*) file=git-cliff.tar.gz;;\n  */release-kit-installer.sh) file=installer.sh;;\n  *) echo \"curl stub: no answer for $url\" >&2; exit 22;;\nesac\nif [ -n \"$out\" ]; then cp \"{serve}/$file\" \"$out\"; else cat \"{serve}/$file\"; fi\n",
+            serve = serve.display()
+        ),
+    );
+    (glab_sha, cliff_sha)
+}
+
+/// Runs the `.tooling` `before_script` and the release-request script of a
+/// landed GitLab bash pipeline in one `sh`, as the runner does, against a
+/// stub `curl` that serves a glab archive, a git-cliff archive, and an rk
+/// installer. The shell's `PATH` holds the stubs and a few base tools
+/// alone, never `/usr/local/bin`, and `TMPDIR` points into a scratch root.
+/// Where `matching` holds, each pinned SHA-256 is patched to the digest of
+/// the archive the stub serves, else the rendered digests stand.
+fn run_gitlab_bootstrap(pipeline: &str, matching: bool) -> Bootstrap {
+    let parsed: serde_json::Value = yaml_serde::from_str(pipeline).expect("the pipeline parses");
+    let strings = |value: &serde_json::Value| -> Vec<String> {
+        value
+            .as_array()
+            .expect("a script is a list")
+            .iter()
+            .map(|line| line.as_str().expect("a script line is a string").to_owned())
+            .collect()
+    };
+    let mut lines = strings(&parsed[".tooling"]["before_script"]);
+    lines.extend(strings(&parsed["release-request"]["script"]));
+    let root = tempfile::tempdir().expect("a scratch root");
+    let dir = |name: &str| {
+        let path = root.path().join(name);
+        std::fs::create_dir_all(&path).expect("the directory creates");
+        path
+    };
+    let (stubs, toolbox, serve, tmp, checkout) = (
+        dir("stubs"),
+        dir("toolbox"),
+        dir("serve"),
+        dir("tmp"),
+        dir("checkout"),
+    );
+    let probe = root.path().join("probe");
+    for tool in [
+        "sh",
+        "mkdir",
+        "tar",
+        "gzip",
+        "sha256sum",
+        "cat",
+        "cp",
+        "chmod",
+    ] {
+        std::os::unix::fs::symlink(tool_on_path(tool), toolbox.join(tool))
+            .expect("the base tool links");
+    }
+    let variables = parsed[".tooling"]["variables"]
+        .as_object()
+        .expect("the rk jobs carry variables");
+    let variable = |name: &str| {
+        variables[name]
+            .as_str()
+            .unwrap_or_else(|| panic!("no variable {name}"))
+            .to_owned()
+    };
+    let cliff_version = variable("GIT_CLIFF_VERSION");
+    let rk_stub = "#!/bin/sh\nprintf '%s\\n' \"$(command -v glab || echo none)\" > \"$RK_PROBE\"\n";
+    let (glab_sha, cliff_sha) = serve_bootstrap_downloads(&serve, &stubs, &cliff_version, rk_stub);
+    write_executable(&stubs.join("apt-get"), "#!/bin/sh\nexit 0\n");
+    write_executable(
+        &stubs.join("nix"),
+        "#!/bin/sh\nwhile [ \"$1\" != --command ]; do shift; done\nshift\nexec \"$@\"\n",
+    );
+    if parsed[".tooling"]["image"]
+        .as_str()
+        .is_some_and(|image| image.starts_with("nixos/nix"))
+    {
+        // The recorded environment carries rk.
+        write_executable(&stubs.join("rk"), rk_stub);
+    }
+    let mut shell = std::process::Command::new(toolbox.join("sh"));
+    shell
+        .arg("-e")
+        .arg("-c")
+        .arg(lines.join("\n"))
+        .current_dir(&checkout)
+        .env_clear()
+        .env(
+            "PATH",
+            std::env::join_paths([&stubs, &toolbox]).expect("the PATH joins"),
+        )
+        .env("TMPDIR", &tmp)
+        .env("HOME", root.path())
+        .env("RK_PROBE", &probe);
+    for (name, value) in variables {
+        if name.starts_with("GLAB_") || name.starts_with("GIT_CLIFF_") {
+            shell.env(name, value.as_str().expect("a variable is a string"));
+        }
+    }
+    if matching {
+        shell
+            .env("GLAB_SHA256", &glab_sha)
+            .env("GIT_CLIFF_SHA256", &cliff_sha);
+    }
+    let out = shell.output().expect("sh runs");
+    Bootstrap {
+        ok: out.status.success(),
+        output: format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        ),
+        glab_at_rk: std::fs::read_to_string(&probe)
+            .ok()
+            .map(|text| text.trim().to_owned()),
+        tools: tmp.join("rk-tools/bin"),
+        checkout,
+        _root: root,
+    }
+}
+
+/// Lowercase hexadecimal of a digest.
+fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    bytes.iter().fold(String::new(), |mut out, byte| {
+        let _ = write!(out, "{byte:02x}");
+        out
+    })
+}
+
+/// Asserts a GitLab rk job's shell resolved glab from the tool directory
+/// outside the checkout by the time it ran rk, and refused to run rk at all
+/// where a download did not match its pinned SHA-256.
+fn assert_gitlab_bootstrap_reaches_rk(pipeline: &str) {
+    let run = run_gitlab_bootstrap(pipeline, true);
+    assert!(run.ok, "the bootstrap fails: {}", run.output);
+    let glab = run.tools.join("glab");
+    assert_eq!(
+        run.glab_at_rk.as_deref(),
+        Some(glab.to_str().expect("a UTF-8 path")),
+        "{}",
+        run.output
+    );
+    assert!(
+        std::fs::read_dir(&run.checkout)
+            .expect("the checkout reads")
+            .next()
+            .is_none(),
+        "the bootstrap writes into the checkout"
+    );
+    for line in gitlab_job(pipeline, ".tooling").lines() {
+        let code = line.trim_start();
+        assert!(
+            code.starts_with('#') || !code.contains("/usr/local"),
+            "{line}"
+        );
+    }
+    let refused = run_gitlab_bootstrap(pipeline, false);
+    assert!(
+        !refused.ok,
+        "a mismatched archive passes: {}",
+        refused.output
+    );
+    assert_eq!(refused.glab_at_rk, None, "{}", refused.output);
+}
+
+/// The GitLab rk jobs install every tool they fetch into a directory they
+/// create under the temporary directory, outside the checkout, and put it
+/// on `PATH` before rk runs, so a recorded image with no `/usr/local`,
+/// such as `nixos/nix`, still reaches glab through the run prefix.
+///
+/// SATISFIES target-config:a-dev-environment-is-a-recorded-answer
+#[test]
+fn the_gitlab_rk_jobs_reach_glab_under_a_recorded_nix_image() {
+    assert_gitlab_bootstrap_reaches_rk(&bash_pipeline_with_environment("gitlab"));
+}
+
+/// With no recorded environment the GitLab rk jobs install glab, git-cliff,
+/// and rk into the same directory, and each resolves before rk runs.
+///
+/// SATISFIES release-engine:git-cliff-runs-at-its-pin
+#[test]
+fn the_gitlab_rk_jobs_reach_glab_without_an_environment() {
+    assert_gitlab_bootstrap_reaches_rk(&landed_bash_pipeline(
+        land_pair("bash", "gitlab").path(),
+        "gitlab",
+    ));
 }
 
 /// A build answer resolves flag over configuration, reports its source,
@@ -47382,15 +47890,13 @@ fn a_build_parameter_resolves_by_precedence_and_renders() {
         .arg(target.path())
         .assert()
         .success();
+        // rk reads the command from the record, so the pipeline names no
+        // command, and the packages render into its apt install.
         let pipeline = landed_bash_pipeline(target.path(), forge);
-        assert!(
-            pipeline.contains("\n      just dist\n")
-                || pipeline.contains("\n          just dist\n"),
-            "{forge}: {pipeline}"
-        );
+        assert!(!pipeline.contains("just dist"), "{forge}: {pipeline}");
         assert!(!pipeline.contains("make dist"), "{forge}: {pipeline}");
         assert!(
-            pipeline.contains(" just\n") || pipeline.contains(" just &&"),
+            apt_install_line(&pipeline).ends_with(" just"),
             "{forge}: {pipeline}"
         );
         let record = read_manifest(target.path());
@@ -47428,7 +47934,8 @@ fn a_build_parameter_refuses_a_driver_that_is_not_bash() {
 }
 
 /// An unanswered build parameter is absent: the record carries no build
-/// key, the pipelines render make dist, and nothing reads as pending.
+/// key, rk builds with make dist, the pipelines install make, and nothing
+/// reads as pending.
 #[test]
 fn a_record_without_build_parameters_reads_as_make_dist() {
     for forge in ["gitlab", "github"] {
@@ -47439,7 +47946,7 @@ fn a_record_without_build_parameters_reads_as_make_dist() {
         let config =
             std::fs::read_to_string(target.path().join(".release-kit/config.toml")).expect("reads");
         assert!(!config.contains("[profile.release.build]"), "{config}");
-        assert!(landed_bash_pipeline(target.path(), forge).contains("make dist"));
+        assert!(apt_install_line(&landed_bash_pipeline(target.path(), forge)).ends_with(" make"));
         rk().args(["upgrade", "--apply", "--target"])
             .arg(target.path())
             .assert()
@@ -47462,7 +47969,7 @@ fn a_record_without_build_parameters_reads_as_make_dist() {
         .arg(target.path())
         .assert()
         .success();
-    assert!(landed_bash_pipeline(target.path(), "gitlab").contains("make dist"));
+    assert!(apt_install_line(&landed_bash_pipeline(target.path(), "gitlab")).ends_with(" make"));
     let record =
         std::fs::read_to_string(target.path().join(".release-kit/manifest.json")).expect("reads");
     assert!(!record.contains("\"build\""), "{record}");
@@ -47731,151 +48238,6 @@ fn package_check_refuses_a_missing_or_unexecutable_local_command() {
     );
 }
 
-/// The script of one job or step of a landed pipeline, as the runner
-/// would execute it: the literal block after `from`, its indentation
-/// removed.
-fn pipeline_script(text: &str, from: &str, indent: usize) -> String {
-    let start = text.find(from).unwrap_or_else(|| panic!("no {from}"));
-    let rest = &text[start..];
-    let open = rest.find("|\n").expect("a literal block") + 2;
-    let prefix = " ".repeat(indent);
-    rest[open..]
-        .lines()
-        .take_while(|line| line.is_empty() || line.starts_with(&prefix))
-        .map(|line| line.strip_prefix(&prefix).unwrap_or(line))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// One attach script run with stub forge tools in a scratch workspace that
-/// holds the build's outputs, returning its status and the tools' log.
-fn run_attach(script: &str, tools: &[(&str, &str)], env: &[(&str, &str)]) -> (bool, String) {
-    use std::os::unix::fs::PermissionsExt as _;
-    let work = tempfile::tempdir().expect("a scratch workspace");
-    let bin = work.path().join("bin");
-    std::fs::create_dir_all(work.path().join("dist")).expect("dist");
-    std::fs::create_dir_all(&bin).expect("bin");
-    for name in [
-        "dist/w-1.0.0.tar.gz",
-        "dist/w-1.0.0.tar.gz.sha256",
-        "notes.md",
-    ] {
-        std::fs::write(work.path().join(name), "x\n").expect("writes");
-    }
-    std::fs::write(work.path().join("release-version"), "1.0.0\n").expect("writes");
-    for (name, body) in tools {
-        let path = bin.join(name);
-        std::fs::write(
-            &path,
-            format!("#!/bin/sh\necho \"{name} $*\" >> \"$LOG\"\n{body}\n"),
-        )
-        .expect("writes");
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("mode");
-    }
-    let log = work.path().join("log");
-    let mut command = std::process::Command::new("sh");
-    command
-        .arg("-c")
-        .arg(script)
-        .current_dir(work.path())
-        .env("LOG", &log)
-        .env(
-            "PATH",
-            format!(
-                "{}:{}",
-                bin.display(),
-                std::env::var("PATH").unwrap_or_default()
-            ),
-        );
-    for (key, value) in env {
-        command.env(key, value);
-    }
-    let status = command.output().expect("the script runs").status.success();
-    (status, std::fs::read_to_string(&log).unwrap_or_default())
-}
-
-/// The GitHub attach step refuses a tag it could not read, refuses a tag at
-/// another commit, and points a draft at this run's commit before it
-/// publishes it.
-#[test]
-fn the_bash_github_attach_reads_the_tag_in_three_states() {
-    let workflow = landed_bash_pipeline(land_pair("bash", "github").path(), "github");
-    let script = pipeline_script(&workflow, "- name: attach\n", 10);
-    let env = [("GH_REPO", "acme/w"), ("SHA", "new"), ("VERSION", "1.0.0")];
-    let unreadable = r#"case "$*" in "api repos/acme/w/git/ref/tags/v1.0.0") echo "HTTP 500" >&2; exit 1;; esac; exit 0"#;
-    let (ok, log) = run_attach(&script, &[("gh", unreadable)], &env);
-    assert!(!ok, "{log}");
-    assert!(
-        !log.contains("release create") && !log.contains("release edit"),
-        "{log}"
-    );
-    let elsewhere =
-        r#"case "$*" in "api repos/acme/w/commits/v1.0.0 -q .sha") echo old;; esac; exit 0"#;
-    let (ok, log) = run_attach(&script, &[("gh", elsewhere)], &env);
-    assert!(!ok, "{log}");
-    assert!(
-        !log.contains("release create") && !log.contains("release edit"),
-        "{log}"
-    );
-    let draft = r#"case "$*" in "api repos/acme/w/git/ref/tags/v1.0.0") echo "HTTP 404" >&2; exit 1;; "release view v1.0.0 --json isDraft -q .isDraft") echo true;; esac; exit 0"#;
-    let (ok, log) = run_attach(&script, &[("gh", draft)], &env);
-    assert!(ok, "{log}");
-    assert!(
-        log.contains("release edit v1.0.0 --target new --draft=false"),
-        "{log}"
-    );
-}
-
-/// The GitLab attach job refuses a tag it could not read and a tag at
-/// another commit, and creates the tag with the release where none exists.
-#[test]
-fn the_bash_gitlab_attach_reads_the_tag_in_three_states() {
-    let target = land_pair("bash", "gitlab");
-    let pipeline = landed_bash_pipeline(target.path(), "gitlab");
-    let from = pipeline.find("\nattach:\n").expect("the attach job");
-    let script = pipeline_script(&pipeline[from..], "script:\n    - |", 6);
-    let env = [
-        ("CI_API_V4_URL", "https://gitlab.example/api/v4"),
-        ("CI_PROJECT_ID", "7"),
-        ("CI_COMMIT_SHA", "new"),
-        ("RELEASE_BOT_TOKEN", "t"),
-    ];
-    let curl = |tag: &str| {
-        format!(
-            r#"case "$*" in
-  *"http_code"*"repository/tags/v1.0.0"*) {tag};;
-  *"/packages?"*) echo '[]';;
-  *"-X POST"*"/releases"*) cat >/dev/null; echo '{{}}';;
-  *"/releases/v1.0.0"*) exit 22;;
-esac
-exit 0"#
-        )
-    };
-    let unreadable = curl("printf 500");
-    let (ok, log) = run_attach(&script, &[("curl", &unreadable)], &env);
-    assert!(!ok, "{log}");
-    assert!(
-        !log.contains("-X POST https://gitlab.example/api/v4/projects/7/releases"),
-        "{log}"
-    );
-    let elsewhere = curl(
-        r#"prev=""; for a in "$@"; do [ "$prev" = "-o" ] && echo '{"commit":{"id":"old"}}' > "$a"; prev="$a"; done; printf 200"#,
-    );
-    let (ok, log) = run_attach(&script, &[("curl", &elsewhere)], &env);
-    assert!(!ok, "{log}");
-    assert!(
-        !log.contains("-X POST https://gitlab.example/api/v4/projects/7/releases"),
-        "{log}"
-    );
-    let absent = curl("printf 404");
-    let (ok, log) = run_attach(&script, &[("curl", &absent)], &env);
-    assert!(ok, "{log}");
-    assert!(
-        log.contains("-X POST https://gitlab.example/api/v4/projects/7/releases"),
-        "{log}"
-    );
-}
-
 const ACCEPTED_REASON: &str = "the release image carries a tool the packages parameter cannot name";
 
 /// The SHA-256 of a target file, as the receipt and an entry write it.
@@ -48134,19 +48496,13 @@ fn an_upgrade_refuses_a_further_edit_under_accepted_drift() {
 #[test]
 fn an_upgrade_reports_a_moved_candidate_under_accepted_drift() {
     let (target, _) = accepted_drift_target();
-    rk().args([
-        "upgrade",
-        "--apply",
-        "--build-command",
-        "just dist",
-        "--target",
-    ])
-    .arg(target.path())
-    .assert()
-    .success()
-    .stdout(predicate::str::contains(
-        "the candidate moved since the last landing",
-    ));
+    rk().args(["upgrade", "--apply", "--build-packages", "just", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "the candidate moved since the last landing",
+        ));
 }
 
 /// After the landing that preserved the file, status still reads it as
@@ -48437,9 +48793,9 @@ fn the_recovery_chapter_carries_the_gitlab_routes_and_the_unbump_precondition() 
         tag.contains("On GitHub, a bash pipeline starts no run on the tag push"),
         "{tag}"
     );
-    // Expired artifacts are rebuilt in producer order before attach.
+    // Expired artifacts are rebuilt in producer order before publish.
     assert!(
-        tag.contains("retry `build`, then `provenance` on that build, then `attach`"),
+        tag.contains("retry `build`, then `provenance` on that build, then `publish`"),
         "{tag}"
     );
     assert!(
@@ -48466,4 +48822,2015 @@ fn the_gitlab_forge_document_states_what_the_live_run_observed() {
         "{doc}"
     );
     assert!(doc.contains("mirrors a child pipeline's status"), "{doc}");
+}
+
+// ---------------------------------------------------------------------------
+// The release engine: rk release request, build, and publish
+
+/// The stand-in `gh` of the engine tests: a stateful forge in a directory.
+const ENGINE_GH: &str = r#"#!/bin/sh
+# A stand-in gh for the release engine tests: a stateful forge in a
+# directory, which answers the calls the engine makes and refuses what the
+# real gh refuses. A list answers one page, `per_page` long (30 by
+# default) up to the forge's cap, which `max-per-page` lowers. Under
+# `--paginate` gh asks for 100 a page where the path names no size, follows
+# every page, and prints one JSON array per page.
+S="$(dirname "$0")/state"
+printf 'gh %s\n' "$*" >> "$S/log"
+die() { echo "$1" >&2; exit 1; }
+missing() { die "gh: Not Found (HTTP 404)"; }
+digest() { sha256sum "$1" | cut -d ' ' -f 1; }
+list() { if ls "$1"/*.json >/dev/null 2>&1; then jq -s . "$1"/*.json; else echo '[]'; fi; }
+param() { printf '%s' "$path" | sed -n "s/.*[?&]$1=\([^&]*\).*/\1/p"; }
+pages() {
+  all="$(cat)"
+  per="$(param per_page)"
+  if [ -z "$per" ]; then if [ -n "$paginate" ]; then per=100; else per=30; fi; fi
+  cap="$(cat "$S/max-per-page" 2>/dev/null || echo 100)"
+  [ "$per" -gt "$cap" ] && per="$cap"
+  if [ -n "$paginate" ]; then
+    first=1; last=$(( ($(printf '%s' "$all" | jq length) + per - 1) / per ))
+    [ "$last" -ge 1 ] || last=1
+  else
+    first="$(param page)"; [ -n "$first" ] || first=1; last="$first"
+  fi
+  p="$first"
+  while [ "$p" -le "$last" ]; do
+    printf '%s' "$all" | jq -cj --argjson p "$p" --argjson s "$per" '.[($p - 1) * $s:$p * $s]'
+    p=$((p + 1))
+  done
+}
+case "$1" in
+api)
+  shift
+  method=GET; path=""; input=""; query=""; paginate=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --method|-X) method="$2"; shift 2 ;;
+      --input) input="$2"; shift 2 ;;
+      -f|-F) query="$2"; shift 2 ;;
+      --paginate) paginate=1; shift ;;
+      --jq|-q|--slurp|--template|-t) die "the stand-in models no $1" ;;
+      -*) die "unknown flag: $1" ;;
+      *) path="$1"; shift ;;
+    esac
+  done
+  body=""
+  if [ "$input" = "-" ]; then body="$(cat)"; printf '%s\n' "$body" >> "$S/log"; fi
+  if [ "$path" = "graphql" ]; then
+    case "$query" in *viewer*) echo '{"data":{"viewer":{"login":"rk-release[bot]","databaseId":42}}}'; exit 0 ;; esac
+    die "graphql: unknown query"
+  fi
+  [ -f "$S/fail/api" ] && die "gh: HTTP 502: Bad Gateway"
+  case "$method $path" in
+    "GET repos/"*"/commits/"*"/pulls"*)
+      sha="$(printf '%s' "$path" | sed 's#.*/commits/\([^/]*\)/pulls.*#\1#')"
+      if [ -f "$S/merged/$sha.json" ]; then cat "$S/merged/$sha.json"; else echo '[]'; fi | pages ;;
+    "GET repos/"*"/pulls?"*)
+      # Newest first, as the forge sorts; `head` is `<owner>:<branch>`.
+      list "$S/pulls" | jq --arg s "$(param state)" --arg b "$(param base)" --arg h "$(param head)" \
+        '[.[] | select(($s == "" or .state == $s) and ($b == "" or .base.ref == $b) and ($h == "" or ("acme:" + .head.ref) == $h))] | sort_by(-.number)' | pages ;;
+    "POST repos/"*"/pulls")
+      head="$(printf '%s' "$body" | jq -r .head)"
+      if list "$S/pulls" | jq -e --arg h "$head" 'any(.[]; .state == "open" and .head.ref == $h)' >/dev/null; then
+        die "gh: Validation Failed: A pull request already exists for $head. (HTTP 422)"
+      fi
+      n=$(( $(ls "$S/pulls" | wc -l) + 1 ))
+      printf '%s' "$body" | jq --argjson n "$n" '{number: $n, title, body, head: {ref: .head}, base: {ref: .base}, state: "open", auto_merge: null}' > "$S/pulls/$n.json"
+      cat "$S/pulls/$n.json" ;;
+    "PATCH repos/"*"/pulls/"*)
+      n="${path##*/}"; [ -f "$S/pulls/$n.json" ] || missing
+      jq --argjson b "$body" '. + ($b | with_entries(select(.value != null)))' "$S/pulls/$n.json" > "$S/tmp" && mv "$S/tmp" "$S/pulls/$n.json"
+      cat "$S/pulls/$n.json" ;;
+    "GET repos/"*"/releases/"*"/assets"*)
+      id="$(printf '%s' "$path" | sed 's#.*/releases/\([0-9]*\)/assets.*#\1#')"
+      file="$(for f in "$S"/releases/*.json; do [ "$(jq -r .id "$f")" = "$id" ] && echo "$f"; done | head -n 1)"
+      [ -n "$file" ] || missing
+      jq '.assets' "$file" | pages ;;
+    "GET repos/"*"/releases?"*)
+      # Newest first, as the forge sorts.
+      [ -f "$S/fail/release" ] && die "gh: HTTP 500: Internal Server Error"
+      list "$S/releases" | jq 'sort_by(-.id)' | pages ;;
+    "POST repos/"*"/releases")
+      tag="$(printf '%s' "$body" | jq -r .tag_name)"
+      [ -f "$S/releases/$tag.json" ] && die "gh: Validation Failed: already_exists (HTTP 422)"
+      id=$(( $(ls "$S/releases" | wc -l) + 1000 ))
+      printf '%s' "$body" | jq --argjson id "$id" '{id: $id, tag_name, target_commitish, name, body, draft, prerelease, make_latest: null, assets: []}' > "$S/releases/$tag.json"
+      if [ "$(jq -r .draft "$S/releases/$tag.json")" = "false" ] && [ ! -f "$S/tags/$tag" ]; then jq -r .target_commitish "$S/releases/$tag.json" > "$S/tags/$tag"; fi
+      cat "$S/releases/$tag.json" ;;
+    "PATCH repos/"*"/releases/"*)
+      id="${path##*/}"
+      file="$(for f in "$S"/releases/*.json; do [ "$(jq -r .id "$f")" = "$id" ] && echo "$f"; done | head -n 1)"
+      [ -n "$file" ] || missing
+      jq --argjson b "$body" '. + $b' "$file" > "$S/tmp" && mv "$S/tmp" "$file"
+      tag="$(jq -r .tag_name "$file")"
+      if [ "$(jq -r .draft "$file")" = "false" ] && [ ! -f "$S/tags/$tag" ]; then jq -r .target_commitish "$file" > "$S/tags/$tag"; fi
+      cat "$file" ;;
+    "GET repos/"*"/git/ref/tags/"*)
+      tag="${path##*/tags/}"
+      [ -f "$S/fail/tag" ] && die "gh: HTTP 500: Internal Server Error"
+      [ -f "$S/tags/$tag" ] || missing
+      jq -n --arg t "$tag" --arg s "$(cat "$S/tags/$tag")" '{ref: ("refs/tags/" + $t), object: {sha: $s, type: "commit"}}' ;;
+    *) missing ;;
+  esac ;;
+release)
+  [ "$2" = "upload" ] || die "unknown release command: $2"
+  tag="$3"; shift 3
+  clobber=""; files=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --clobber) clobber=1; shift ;;
+      --repo|-R) shift 2 ;;
+      -*) die "unknown flag: $1" ;;
+      *) files="$files
+$1"; shift ;;
+    esac
+  done
+  [ -f "$S/releases/$tag.json" ] || die "release not found"
+  [ -f "$S/fail/upload" ] && die "HTTP 502: upload failed"
+  mkdir -p "$S/assets/$tag"
+  printf '%s\n' "$files" | while IFS= read -r file; do
+    [ -n "$file" ] || continue
+    name="$(basename "$file")"
+    if jq -e --arg n "$name" 'any(.assets[]; .name == $n)' "$S/releases/$tag.json" >/dev/null && [ -z "$clobber" ]; then
+      die "asset under the same name already exists: [$name]"
+    fi
+    cp "$file" "$S/assets/$tag/$name"
+    jq --arg n "$name" --arg d "sha256:$(digest "$file")" '.assets = ([.assets[] | select(.name != $n)] + [{name: $n, digest: $d}])' "$S/releases/$tag.json" > "$S/tmp" && mv "$S/tmp" "$S/releases/$tag.json"
+  done || exit 1 ;;
+pr)
+  [ "$2" = "merge" ] || die "unknown pr command: $2"
+  n="$3"; shift 3
+  auto=""; method=""
+  for flag; do case "$flag" in --auto) auto=1 ;; --squash) method=squash ;; --rebase) method=rebase ;; --merge) method=merge ;; esac; done
+  [ -n "$auto" ] || die "the stand-in models only an auto merge"
+  [ -f "$S/pulls/$n.json" ] || die "no pull requests found for branch \"$n\""
+  [ -f "$S/fail/arm" ] && die "GraphQL: Pull request is in clean status (enablePullRequestAutoMerge)"
+  jq --arg m "$method" '.auto_merge = {merge_method: $m}' "$S/pulls/$n.json" > "$S/tmp" && mv "$S/tmp" "$S/pulls/$n.json" ;;
+*) die "unknown command: $1" ;;
+esac
+"#;
+
+/// The stand-in `glab` of the engine tests.
+const ENGINE_GLAB: &str = r#"#!/bin/sh
+# A stand-in glab for the release engine tests: a stateful GitLab in a
+# directory. A release create creates its tag first and keeps it when the
+# release save fails, as the forge's create service does. A list answers
+# one page, `per_page` long (20 by default) up to the forge's cap, which
+# `max-per-page` lowers. Under `--paginate` glab follows every page and
+# prints the items of all of them as one JSON array.
+S="$(dirname "$0")/state"
+printf 'glab %s\n' "$*" >> "$S/log"
+die() { echo "$1" >&2; exit 1; }
+missing() { die "glab: 404 Not Found"; }
+list() { if ls "$1"/*.json >/dev/null 2>&1; then jq -s . "$1"/*.json; else echo '[]'; fi; }
+param() { printf '%s' "$path" | sed -n "s/.*[?&]$1=\([^&]*\).*/\1/p" | sed 's/%2F/\//g'; }
+pages() {
+  all="$(cat)"
+  per="$(param per_page)"; [ -n "$per" ] || per=20
+  cap="$(cat "$S/max-per-page" 2>/dev/null || echo 100)"
+  [ "$per" -gt "$cap" ] && per="$cap"
+  if [ -n "$paginate" ]; then
+    first=1; last=$(( ($(printf '%s' "$all" | jq length) + per - 1) / per ))
+    [ "$last" -ge 1 ] || last=1
+  else
+    first="$(param page)"; [ -n "$first" ] || first=1; last="$first"
+  fi
+  p="$first"
+  while [ "$p" -le "$last" ]; do
+    printf '%s' "$all" | jq -c --argjson p "$p" --argjson s "$per" '.[($p - 1) * $s:$p * $s]'
+    p=$((p + 1))
+  done | jq -s 'add // []'
+}
+[ "$1" = "api" ] || die "unknown command: $1"
+shift
+method=GET; path=""; input=""; paginate=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --method|-X) method="$2"; shift 2 ;;
+    --input) input="$2"; shift 2 ;;
+    --header|-H) shift 2 ;;
+    --paginate) paginate=1; shift ;;
+    --field|-F|--raw-field|-f|--output) die "the stand-in models no $1" ;;
+    -*) die "unknown flag: $1" ;;
+    *) path="$1"; shift ;;
+  esac
+done
+[ -f "$S/fail/api" ] && die "glab: 502 Bad Gateway"
+body=""
+case "$method $path" in
+  "PUT projects/"*"/packages/generic/"*) ;;
+  *) if [ "$input" = "-" ]; then body="$(cat)"; printf '%s\n' "$body" >> "$S/log"; fi ;;
+esac
+case "$method $path" in
+  "GET user") echo '{"name":"Release Bot","username":"release-bot","email":""}' ;;
+  "GET projects/"*"/merge_requests?state=opened"*)
+    # Newest first, as the forge sorts.
+    list "$S/pulls" | jq --arg t "$(param target_branch)" --arg s "$(param source_branch)" \
+      '[.[] | select(.state == "opened" and .target_branch == $t and ($s == "" or .source_branch == $s))] | sort_by(-.iid)' | pages ;;
+  "POST projects/"*"/merge_requests")
+    src="$(printf '%s' "$body" | jq -r .source_branch)"
+    if list "$S/pulls" | jq -e --arg s "$src" 'any(.[]; .state == "opened" and .source_branch == $s)' >/dev/null; then
+      die "glab: 409 Conflict: Another open merge request already exists for this source branch"
+    fi
+    n=$(( $(ls "$S/pulls" | wc -l) + 1 ))
+    printf '%s' "$body" | jq --argjson n "$n" '{iid: $n, title, description, source_branch, target_branch, state: "opened", merge_when_pipeline_succeeds: false}' > "$S/pulls/$n.json"
+    cat "$S/pulls/$n.json" ;;
+  "PUT projects/"*"/merge_requests/"*"/merge?"*)
+    n="$(printf '%s' "$path" | sed 's#.*/merge_requests/\([0-9]*\)/merge.*#\1#')"
+    [ -f "$S/pulls/$n.json" ] || missing
+    [ -f "$S/fail/arm" ] && die "glab: 405 Method Not Allowed"
+    jq '.merge_when_pipeline_succeeds = true' "$S/pulls/$n.json" > "$S/tmp" && mv "$S/tmp" "$S/pulls/$n.json"
+    cat "$S/pulls/$n.json" ;;
+  "PUT projects/"*"/merge_requests/"*)
+    n="${path##*/}"; [ -f "$S/pulls/$n.json" ] || missing
+    jq --argjson b "$body" '. + ($b | del(.state_event)) | if $b.state_event == "close" then .state = "closed" else . end' "$S/pulls/$n.json" > "$S/tmp" && mv "$S/tmp" "$S/pulls/$n.json"
+    cat "$S/pulls/$n.json" ;;
+  "GET projects/"*"/repository/commits/"*"/merge_requests"*)
+    sha="$(printf '%s' "$path" | sed 's#.*/commits/\([^/]*\)/merge_requests.*#\1#')"
+    if [ -f "$S/merged/$sha.json" ]; then cat "$S/merged/$sha.json"; else echo '[]'; fi | pages ;;
+  "GET projects/"*"/repository/tags/"*)
+    tag="${path##*/tags/}"
+    [ -f "$S/fail/tag" ] && die "glab: 500 Internal Server Error"
+    [ -f "$S/tags/$tag" ] || missing
+    jq -n --arg t "$tag" --arg s "$(cat "$S/tags/$tag")" '{name: $t, commit: {id: $s}}' ;;
+  "GET projects/"*"/releases/"*"/assets/links"*)
+    tag="$(printf '%s' "$path" | sed 's#.*/releases/\([^/]*\)/assets/links.*#\1#')"
+    [ -f "$S/releases/$tag.json" ] || missing
+    jq '.assets.links' "$S/releases/$tag.json" | pages ;;
+  "GET projects/"*"/releases/"*)
+    tag="${path##*/releases/}"
+    [ -f "$S/fail/release" ] && die "glab: 500 Internal Server Error"
+    [ -f "$S/releases/$tag.json" ] || missing
+    cat "$S/releases/$tag.json" ;;
+  "POST projects/"*"/releases")
+    tag="$(printf '%s' "$body" | jq -r .tag_name)"
+    [ -f "$S/releases/$tag.json" ] && die "glab: 409 Conflict: Release already exists"
+    if [ ! -f "$S/tags/$tag" ]; then
+      ref="$(printf '%s' "$body" | jq -r '.ref // empty')"
+      [ -n "$ref" ] || die "glab: 400 Bad request: Ref is not specified"
+      printf '%s\n' "$ref" > "$S/tags/$tag"
+    fi
+    [ -f "$S/fail/release-save" ] && die "glab: 400 Bad request: the release did not save"
+    printf '%s' "$body" | jq --arg s "$(cat "$S/tags/$tag")" '{tag_name, name, description, commit: {id: $s}, assets: {links: .assets.links}}' > "$S/releases/$tag.json"
+    cat "$S/releases/$tag.json" ;;
+  "POST projects/"*"/releases/"*"/assets/links")
+    tag="$(printf '%s' "$path" | sed 's#.*/releases/\([^/]*\)/assets/links#\1#')"
+    [ -f "$S/releases/$tag.json" ] || missing
+    jq --argjson b "$body" '.assets.links += [$b]' "$S/releases/$tag.json" > "$S/tmp" && mv "$S/tmp" "$S/releases/$tag.json"
+    echo "$body" ;;
+  "GET projects/"*"/packages?"*)
+    version="$(param package_version)"
+    if [ -d "$S/packages/$version" ]; then
+      # The fuzzy name filter also answers an older package.
+      jq -n --arg v "$version" --argjson id "$(cat "$S/packages/$version.id")" '[{id: 1, name: "release-notes", version: $v, package_type: "generic"}, {id: $id, name: "release", version: $v, package_type: "generic"}]'
+    else echo '[]'; fi | pages ;;
+  "GET projects/"*"/packages/"*"/package_files"*)
+    id="$(printf '%s' "$path" | sed 's#.*/packages/\([0-9]*\)/package_files.*#\1#')"
+    version=""; for f in "$S"/packages/*.id; do [ "$(cat "$f")" = "$id" ] && version="$(basename "$f" .id)"; done
+    [ -n "$version" ] || missing
+    for f in "$S/packages/$version"/*; do
+      jq -n --arg n "$(basename "$f")" --arg d "$(sha256sum "$f" | cut -d ' ' -f 1)" '{file_name: $n, file_sha256: $d}'
+    done | jq -s . | pages ;;
+  "PUT projects/"*"/packages/generic/release/"*)
+    rest="${path#*/packages/generic/release/}"; version="${rest%%/*}"; name="${rest#*/}"
+    [ "$input" = "-" ] || die "the stand-in uploads from standard input alone"
+    [ -f "$S/fail/upload" ] && { cat >/dev/null; die "glab: 500 Internal Server Error"; }
+    if [ ! -d "$S/packages/$version" ]; then
+      mkdir -p "$S/packages/$version"
+      echo $(( $(ls "$S/packages" | grep -c '\.id$') + 100 )) > "$S/packages/$version.id"
+    fi
+    cat > "$S/packages/$version/$name"
+    echo '{"message":"201 Created"}' ;;
+  *) missing ;;
+esac
+"#;
+
+/// The stand-in git-cliff of the engine tests.
+const ENGINE_CLIFF: &str = r#"#!/bin/sh
+# A stand-in git-cliff: it reads the release tags and the Conventional
+# Commit subjects since the newest one, bumps by the landed cliff.toml's
+# rules (initial tag v0.1.0; before 1.0.0 a feature bumps the patch and a
+# breaking change the minor), and writes a changelog section.
+S="$(dirname "$0")/state"
+printf 'git-cliff %s\n' "$*" >> "$S/log"
+die() { echo "$1" >&2; exit 1; }
+latest() { git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null; }
+subjects() {
+  if [ -n "$(latest)" ]; then git log --format=%s "$(latest)..HEAD"; else git log --format=%s; fi | grep -v '^chore(release)' || true
+}
+section() { printf '## [%s]\n\n' "${1#v}"; subjects | sed 's/^/- /'; }
+case "$1" in
+  --version) echo "git-cliff $(cat "$S/cliff-version")"; exit 0 ;;
+  --bumped-version)
+    if [ -f "$S/cliff-propose" ]; then cat "$S/cliff-propose"; exit 0; fi
+    tag="$(latest)"
+    if [ -z "$tag" ]; then echo v0.1.0; exit 0; fi
+    IFS=. read -r major minor patch <<EOT
+${tag#v}
+EOT
+    patch="${patch%%-*}"
+    all="$(subjects)"
+    if printf '%s\n' "$all" | grep -qE '^[a-z]+(\([^)]*\))?!:|BREAKING CHANGE'; then
+      if [ "$major" = 0 ]; then minor=$((minor + 1)); patch=0; else major=$((major + 1)); minor=0; patch=0; fi
+    elif printf '%s\n' "$all" | grep -qE '^feat(\([^)]*\))?:'; then
+      if [ "$major" = 0 ]; then patch=$((patch + 1)); else minor=$((minor + 1)); patch=0; fi
+    elif printf '%s\n' "$all" | grep -qE '^fix(\([^)]*\))?:'; then
+      patch=$((patch + 1))
+    fi
+    echo "v$major.$minor.$patch" ;;
+  *)
+    tag=""; out=""; unreleased=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --tag) tag="$2"; shift 2 ;;
+        -o|--output) out="$2"; shift 2 ;;
+        --unreleased) unreleased=1; shift ;;
+        --bump) die "the engine never passes --bump" ;;
+        *) die "unknown argument: $1" ;;
+      esac
+    done
+    [ -n "$tag" ] && [ -n "$out" ] || die "the stand-in writes a named tag to a file"
+    if [ -n "$unreleased" ]; then section "$tag" > "$out"; else { printf '# Changelog\n\n'; section "$tag"; } > "$out"; fi ;;
+esac
+"#;
+
+/// The stand-in uv of the engine tests.
+const ENGINE_UV: &str = r#"#!/bin/sh
+# A stand-in uv for a project with a static version: `uv version` reads and
+# writes [project].version and relocks the project's own entry, and
+# `uv build` writes an sdist, a wheel, and the .gitignore uv puts in dist/.
+S="$(dirname "$0")/state"
+printf 'uv %s\n' "$*" >> "$S/log"
+die() { echo "error: $1" >&2; exit 2; }
+name="$(sed -n 's/^name = "\(.*\)"/\1/p' pyproject.toml | head -n 1)"
+current="$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml | head -n 1)"
+case "$1" in
+  version)
+    case "$2" in
+      --short) echo "$current" ;;
+      "") echo "$name $current" ;;
+      *)
+        [ "$3" = "--no-sync" ] || die "the stand-in models the engine's --no-sync call alone"
+        [ -f uv.lock ] || die "No \`uv.lock\` found"
+        sed -i "0,/^version = \"$current\"/s//version = \"$2\"/" pyproject.toml
+        awk -v n="$name" -v v="$2" '/^name = /{own = ($3 == "\"" n "\"")} own && /^version = /{print "version = \"" v "\""; own = 0; next} {print}' uv.lock > uv.lock.new && mv uv.lock.new uv.lock
+        echo "$name $current => $2" ;;
+    esac ;;
+  build)
+    [ -z "$2" ] || die "the stand-in builds into dist/ alone"
+    mkdir -p dist
+    printf '*\n' > dist/.gitignore
+    printf 'sdist %s %s %s\n' "$name" "$current" "$SOURCE_DATE_EPOCH" > "dist/$name-$current.tar.gz"
+    printf 'wheel %s %s %s%s\n' "$name" "$current" "$SOURCE_DATE_EPOCH" "$(cat "$S/uv-salt" 2>/dev/null)" > "dist/$name-$current-py3-none-any.whl" ;;
+  *) die "unknown command: $1" ;;
+esac
+"#;
+
+/// The stand-in curl of the engine tests, for the `PyPI` JSON API.
+const ENGINE_CURL: &str = r#"#!/bin/sh
+# A stand-in curl for PyPI's JSON API: the body seeded for a URL, then the
+# status code on its own line, as `-w '\n%{http_code}'` prints it.
+S="$(dirname "$0")/state"
+for url; do :; done
+printf 'curl %s\n' "$url" >> "$S/log"
+key="$(printf '%s' "$url" | tr '/:.?&=' '______')"
+if [ -f "$S/pypi/$key" ]; then cat "$S/pypi/$key"; printf '\n200'; else printf '{"message": "Not Found"}\n404'; fi
+"#;
+
+/// The bash build command of the engine fixtures, under the binding's
+/// output contract.
+const ENGINE_BUILD: &str = "mkdir -p dist\nv=\"$(cat VERSION)\"\nprintf 'widget %s %s\\n' \"$v\" \"$SOURCE_DATE_EPOCH\" > \"dist/widget-$v.tar.gz\"\n(cd dist && sha256sum \"widget-$v.tar.gz\" > \"widget-$v.tar.gz.sha256\")\n";
+
+/// The variables a CI job sets that the engine reads; every engine run
+/// starts without them, so the host's CI never leaks into a fixture.
+const ENGINE_CI_VARS: [&str; 10] = [
+    "GITHUB_TOKEN",
+    "GH_TOKEN",
+    "CI_JOB_TOKEN",
+    "GITLAB_TOKEN",
+    "CI_COMMIT_BRANCH",
+    "GITHUB_REF_NAME",
+    "GITHUB_REF_TYPE",
+    "GITHUB_OUTPUT",
+    "CI_SERVER_HOST",
+    "CI_API_V4_URL",
+];
+
+/// A landed engine target: the checkout, a local bare repository as its
+/// origin, and the stand-in tools with the forge's state beside them.
+struct Engine {
+    work: tempfile::TempDir,
+    _remote: tempfile::TempDir,
+    stubs: tempfile::TempDir,
+    forge: &'static str,
+}
+
+/// The pin `versions.toml` names for a tool.
+fn pinned(tool: &str) -> String {
+    let registry: toml::Table = std::fs::read_to_string(repo_path("versions.toml"))
+        .expect("the registry reads")
+        .parse()
+        .expect("the registry parses");
+    registry["tool"]
+        .as_array()
+        .and_then(|tools| tools.iter().find(|row| row["name"].as_str() == Some(tool)))
+        .and_then(|row| row["version"].as_str())
+        .expect("the tool is pinned")
+        .to_owned()
+}
+
+impl Engine {
+    /// Land `tech` on `forge` with `init` flags, at `version`, commit it,
+    /// and push it to the bare origin.
+    fn new(tech: &str, forge: &'static str, init: &[&str], version: &str) -> Self {
+        let work = tempfile::tempdir().expect("a scratch checkout exists");
+        // The python pair lands on GitHub alone in this release, so its
+        // GitLab fixture records the forge by hand.
+        let land_forge = if tech == "python" { "github" } else { forge };
+        let mut land = rk();
+        land.args(["init", "--tech", tech, "--forge", land_forge])
+            .args(["--repo", "acme/widget", "--target"])
+            .arg(work.path())
+            .args(init);
+        if tech == "bash" {
+            land.args(["--build-command", "sh build.sh"]);
+        }
+        land.arg("--apply").assert().success();
+        let dir = work.path();
+        if tech == "bash" {
+            std::fs::write(dir.join("build.sh"), ENGINE_BUILD).expect("writes");
+            std::fs::write(dir.join("VERSION"), format!("{version}\n")).expect("writes");
+        } else {
+            std::fs::write(
+                dir.join("pyproject.toml"),
+                format!("[project]\nname = \"acme\"\nversion = \"{version}\"\n"),
+            )
+            .expect("writes");
+            std::fs::write(
+                dir.join("uv.lock"),
+                format!("version = 1\n\n[[package]]\nname = \"acme\"\nversion = \"{version}\"\nsource = {{ editable = \".\" }}\n"),
+            )
+            .expect("writes");
+            std::fs::copy(
+                repo_path("snippets/bash/github/cliff.toml"),
+                dir.join("cliff.toml"),
+            )
+            .expect("copies");
+        }
+        if land_forge != forge {
+            let mut manifest = read_manifest(dir);
+            manifest["profile"]["forge"] = serde_json::json!(forge);
+            write_manifest(dir, &manifest);
+        }
+        let remote = tempfile::tempdir().expect("a scratch remote exists");
+        git_in(remote.path(), &["init", "-q", "--bare", "-b", "master"]);
+        git_in(dir, &["init", "-q", "-b", "master"]);
+        git_in(dir, &["config", "user.email", "rk@example.invalid"]);
+        git_in(dir, &["config", "user.name", "rk test"]);
+        git_in(dir, &["add", "-A"]);
+        git_in(dir, &["commit", "-qm", "chore: land release-kit"]);
+        git_in(
+            dir,
+            &[
+                "remote",
+                "add",
+                "origin",
+                &remote.path().display().to_string(),
+            ],
+        );
+        git_in(dir, &["push", "-q", "origin", "master"]);
+        let stubs = tempfile::tempdir().expect("a stub dir exists");
+        let state = stubs.path().join("state");
+        for sub in [
+            "pulls", "releases", "tags", "merged", "packages", "fail", "pypi", "assets",
+        ] {
+            std::fs::create_dir_all(state.join(sub)).expect("the state dir creates");
+        }
+        std::fs::write(state.join("log"), "").expect("writes");
+        std::fs::write(state.join("cliff-version"), pinned("git-cliff")).expect("writes");
+        for (name, body) in [
+            ("gh", ENGINE_GH),
+            ("glab", ENGINE_GLAB),
+            ("git-cliff", ENGINE_CLIFF),
+            ("uv", ENGINE_UV),
+            ("curl", ENGINE_CURL),
+        ] {
+            let path = stubs.path().join(name);
+            std::fs::write(&path, body).expect("the stand-in writes");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                    .expect("the stand-in is executable");
+            }
+        }
+        Self {
+            work,
+            _remote: remote,
+            stubs,
+            forge,
+        }
+    }
+
+    fn dir(&self) -> &Path {
+        self.work.path()
+    }
+
+    fn state(&self) -> PathBuf {
+        self.stubs.path().join("state")
+    }
+
+    /// One engine action, with the stand-ins first and the bot credential
+    /// the job sets.
+    fn run(&self, action: &str) -> Rk {
+        let mut command = rk();
+        for var in ENGINE_CI_VARS {
+            command.env_remove(var);
+        }
+        let token = if self.forge == "github" {
+            "GH_TOKEN"
+        } else {
+            "GITLAB_TOKEN"
+        };
+        command
+            .env("RK_GH_BIN", self.stubs.path().join("gh"))
+            .env("RK_GLAB_BIN", self.stubs.path().join("glab"))
+            .env("RK_GIT_CLIFF_BIN", self.stubs.path().join("git-cliff"))
+            .env("RK_UV_BIN", self.stubs.path().join("uv"))
+            .env("RK_CURL_BIN", self.stubs.path().join("curl"))
+            .env(token, "bot-token")
+            .args(["release", action, "--json", "--target"])
+            .arg(self.dir());
+        command
+    }
+
+    /// The report of an action that must succeed.
+    fn ok(&self, action: &str) -> serde_json::Value {
+        let out = self
+            .run(action)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        serde_json::from_slice(&out).expect("one JSON object")
+    }
+
+    /// The diagnostic of an action that must refuse with `code`.
+    fn refused(&self, action: &str, code: i32) -> serde_json::Value {
+        let out = self
+            .run(action)
+            .assert()
+            .code(code)
+            .get_output()
+            .stderr
+            .clone();
+        serde_json::from_slice(&out).expect("one JSON diagnostic")
+    }
+
+    /// Write `files`, commit them as `subject`, push, and answer the commit.
+    fn commit(&self, subject: &str, files: &[(&str, &str)]) -> String {
+        for (path, text) in files {
+            std::fs::write(self.dir().join(path), text).expect("writes");
+        }
+        git_in(self.dir(), &["add", "-A"]);
+        git_in(
+            self.dir(),
+            &["commit", "-q", "--allow-empty", "-m", subject],
+        );
+        let branch = git_out(self.dir(), &["symbolic-ref", "--short", "HEAD"]);
+        git_in(self.dir(), &["push", "-q", "origin", &branch]);
+        self.head()
+    }
+
+    fn head(&self) -> String {
+        git_out(self.dir(), &["rev-parse", "HEAD"])
+    }
+
+    /// Open the line `release/<line>` from the current tip and check it out.
+    fn line(&self, line: &str) {
+        let branch = format!("release/{line}");
+        git_in(self.dir(), &["checkout", "-q", "-b", &branch]);
+        git_in(self.dir(), &["push", "-q", "origin", &branch]);
+    }
+
+    /// Squash-merge the open request `number` into the current branch, push
+    /// it, and let the forge answer that the commit merges it. Answers the
+    /// merge commit.
+    fn merge(&self, number: u64) -> String {
+        let base = git_out(self.dir(), &["symbolic-ref", "--short", "HEAD"]);
+        let head = format!("rk-release/{base}");
+        git_in(self.dir(), &["fetch", "-q", "origin", &head]);
+        let fetched = git_out(self.dir(), &["rev-parse", "FETCH_HEAD"]);
+        git_in(self.dir(), &["merge", "-q", "--squash", "FETCH_HEAD"]);
+        let pull = self.pull(number);
+        let title = pull["title"].as_str().expect("a title").to_owned();
+        let sha = self.commit(&format!("{title} (#{number})"), &[]);
+        self.merged_at(&sha, number, &head, &base, &fetched);
+        let state = if self.forge == "github" {
+            "closed"
+        } else {
+            "merged"
+        };
+        let mut pull = pull;
+        pull["state"] = serde_json::json!(state);
+        std::fs::write(
+            self.state().join(format!("pulls/{number}.json")),
+            pull.to_string(),
+        )
+        .expect("writes");
+        sha
+    }
+
+    /// Let the forge answer that `sha` merges request `number` from `head`.
+    fn merged_at(&self, sha: &str, number: u64, head: &str, base: &str, source: &str) {
+        let answer = if self.forge == "github" {
+            serde_json::json!([{
+                "number": number, "merged_at": "2026-11-12T00:00:00Z",
+                "head": {"ref": head}, "base": {"ref": base}, "merge_commit_sha": sha
+            }])
+        } else {
+            serde_json::json!([{
+                "iid": number, "state": "merged", "source_branch": head,
+                "target_branch": base, "merge_commit_sha": null,
+                "squash_commit_sha": sha, "sha": source
+            }])
+        };
+        std::fs::write(
+            self.state().join(format!("merged/{sha}.json")),
+            answer.to_string(),
+        )
+        .expect("writes");
+    }
+
+    /// A published release of `tag` at `sha`, with its tag on the forge and
+    /// in the clone, as a fetch brings it.
+    fn released(&self, tag: &str, sha: &str) {
+        std::fs::write(self.state().join(format!("tags/{tag}")), format!("{sha}\n"))
+            .expect("writes");
+        let release = if self.forge == "github" {
+            serde_json::json!({"id": 900, "tag_name": tag, "target_commitish": sha,
+                "draft": false, "prerelease": false, "assets": []})
+        } else {
+            serde_json::json!({"tag_name": tag, "commit": {"id": sha},
+                "assets": {"links": []}})
+        };
+        std::fs::write(
+            self.state().join(format!("releases/{tag}.json")),
+            release.to_string(),
+        )
+        .expect("writes");
+        git_in(self.dir(), &["tag", "-f", tag, sha]);
+    }
+
+    fn pull(&self, number: u64) -> serde_json::Value {
+        let text = std::fs::read_to_string(self.state().join(format!("pulls/{number}.json")))
+            .expect("the request exists");
+        serde_json::from_str(&text).expect("parses")
+    }
+
+    fn pulls(&self) -> usize {
+        std::fs::read_dir(self.state().join("pulls"))
+            .expect("reads")
+            .count()
+    }
+
+    fn release(&self, tag: &str) -> Option<serde_json::Value> {
+        let text =
+            std::fs::read_to_string(self.state().join(format!("releases/{tag}.json"))).ok()?;
+        Some(serde_json::from_str(&text).expect("parses"))
+    }
+
+    fn tag(&self, tag: &str) -> Option<String> {
+        std::fs::read_to_string(self.state().join(format!("tags/{tag}")))
+            .ok()
+            .map(|sha| sha.trim().to_owned())
+    }
+
+    /// Lower the forge's page size cap to `size`, so a list spans pages.
+    fn page_size(&self, size: usize) {
+        std::fs::write(self.state().join("max-per-page"), size.to_string()).expect("writes");
+    }
+
+    fn fail(&self, what: &str) {
+        std::fs::write(self.state().join("fail").join(what), "").expect("writes");
+    }
+
+    fn heal(&self, what: &str) {
+        std::fs::remove_file(self.state().join("fail").join(what)).expect("removes");
+    }
+
+    fn log(&self) -> String {
+        std::fs::read_to_string(self.state().join("log")).unwrap_or_default()
+    }
+
+    fn clear_log(&self) {
+        std::fs::write(self.state().join("log"), "").expect("writes");
+    }
+
+    /// The branch the origin holds, where it holds one.
+    fn remote_branch(&self, branch: &str) -> Option<String> {
+        let out = git_out(
+            self.dir(),
+            &[
+                "ls-remote",
+                "--heads",
+                "origin",
+                &format!("refs/heads/{branch}"),
+            ],
+        );
+        out.split_whitespace().next().map(str::to_owned)
+    }
+
+    /// The files the tip of the request branch changed against its parent.
+    fn request_files(&self, base: &str) -> Vec<String> {
+        let head = format!("rk-release/{base}");
+        git_in(self.dir(), &["fetch", "-q", "origin", &head]);
+        let out = git_out(
+            self.dir(),
+            &["diff", "--name-only", "FETCH_HEAD^", "FETCH_HEAD"],
+        );
+        out.lines().map(str::to_owned).collect()
+    }
+
+    /// A file of the request branch's tip.
+    fn request_file(&self, base: &str, path: &str) -> String {
+        let head = format!("rk-release/{base}");
+        git_in(self.dir(), &["fetch", "-q", "origin", &head]);
+        git_out(self.dir(), &["show", &format!("FETCH_HEAD:{path}")])
+    }
+}
+
+/// The writes the forge stand-in logged, in order: every call but a read.
+fn engine_writes(log: &str) -> Vec<String> {
+    log.lines()
+        .filter(|line| {
+            line.starts_with("gh release upload")
+                || line.starts_with("gh pr merge")
+                || line.contains("--method POST")
+                || line.contains("--method PATCH")
+                || line.contains("--method PUT")
+        })
+        .map(str::to_owned)
+        .collect()
+}
+
+/// SATISFIES release-engine:one-request-per-base
+///
+/// A fix opens the one request at 0.1.1, and a breaking change, which the
+/// landed cliff.toml bumps to the minor before 1.0.0, moves the same
+/// request to 0.2.0: its branch is force-pushed and its title edited, and
+/// no second request opens.
+#[test]
+fn the_request_opens_one_request_and_refreshes_it_in_place() {
+    for forge in ["github", "gitlab"] {
+        let engine = Engine::new("bash", forge, &[], "0.1.0");
+        engine.released("v0.1.0", &engine.head());
+        engine.commit("fix: mend the parser", &[("a.txt", "a\n")]);
+        let report = engine.ok("request");
+        assert_eq!(report["state"], "opened", "{forge}: {report}");
+        assert_eq!(report["proposal"], "0.1.1", "{forge}: {report}");
+        let number = report["request"].as_u64().expect("a number");
+        assert_eq!(engine.request_file("master", "VERSION"), "0.1.1");
+        engine.commit("feat!: change the format", &[("b.txt", "b\n")]);
+        let report = engine.ok("request");
+        assert_eq!(report["state"], "refreshed", "{forge}: {report}");
+        assert_eq!(report["proposal"], "0.2.0", "{forge}: {report}");
+        assert_eq!(
+            report["request"].as_u64(),
+            Some(number),
+            "{forge}: {report}"
+        );
+        assert_eq!(engine.pulls(), 1, "{forge}: no second request opens");
+        assert_eq!(engine.pull(number)["title"], "chore(release): v0.2.0");
+        assert_eq!(engine.request_file("master", "VERSION"), "0.2.0");
+        assert_eq!(
+            git_out(engine.dir(), &["symbolic-ref", "--short", "HEAD"]),
+            "master",
+            "{forge}: the checkout returns to the pushed branch"
+        );
+    }
+}
+
+/// SATISFIES release-engine:the-request-pushes-as-the-bot
+///
+/// The request commit carries the identity the forge names for the bot's
+/// token, so the forge links the commit to the bot's account: the App's
+/// login and its noreply address on GitHub, and the account's name with its
+/// username's noreply address on GitLab, where the account answers no email.
+/// An identity the job's environment exports to git does not displace it.
+#[test]
+fn the_request_commits_as_the_identity_the_forge_names() {
+    for (forge, identity) in [
+        (
+            "github",
+            "rk-release[bot] <42+rk-release[bot]@users.noreply.github.com>",
+        ),
+        ("gitlab", "Release Bot <release-bot@noreply.gitlab.com>"),
+    ] {
+        let identity = format!("{identity} {identity}");
+        let engine = Engine::new("bash", forge, &[], "0.1.0");
+        engine.released("v0.1.0", &engine.head());
+        engine.commit("fix: mend the parser", &[("a.txt", "a\n")]);
+        let out = engine
+            .run("request")
+            .env("GIT_AUTHOR_NAME", "Someone Else")
+            .env("GIT_AUTHOR_EMAIL", "else@example.invalid")
+            .env("GIT_COMMITTER_NAME", "Someone Else")
+            .env("GIT_COMMITTER_EMAIL", "else@example.invalid")
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON report");
+        assert_eq!(report["state"], "opened", "{forge}: {report}");
+        git_in(
+            engine.dir(),
+            &["fetch", "-q", "origin", "rk-release/master"],
+        );
+        assert_eq!(
+            git_out(
+                engine.dir(),
+                &["log", "-1", "--format=%an <%ae> %cn <%ce>", "FETCH_HEAD"]
+            ),
+            identity,
+            "{forge}"
+        );
+    }
+}
+
+/// SATISFIES release-engine:one-request-per-base
+///
+/// Once the proposed version is released elsewhere, nothing remains: the
+/// open request closes and its branch goes.
+#[test]
+fn the_request_closes_a_stale_request_when_nothing_remains() {
+    for forge in ["github", "gitlab"] {
+        let engine = Engine::new("bash", forge, &[], "0.1.0");
+        engine.released("v0.1.0", &engine.head());
+        let fix = engine.commit("fix: mend the parser", &[("a.txt", "a\n")]);
+        let number = engine.ok("request")["request"].as_u64().expect("a number");
+        engine.released("v0.1.1", &fix);
+        let report = engine.ok("request");
+        assert_eq!(report["state"], "closed", "{forge}: {report}");
+        assert_eq!(report["request"].as_u64(), Some(number));
+        let state = engine.pull(number)["state"].clone();
+        assert!(state == "closed", "{forge}: {state}");
+        assert_eq!(engine.remote_branch("rk-release/master"), None, "{forge}");
+        // A second run finds nothing open and closes nothing.
+        assert_eq!(engine.ok("request")["state"], "nothing", "{forge}");
+    }
+}
+
+/// SATISFIES release-engine:one-request-per-base
+///
+/// The open request sits on the second page of the forge's list, behind a
+/// newer request from another branch: the request finds it, refreshes it,
+/// and later closes it, and never opens a second one.
+#[test]
+fn an_open_request_on_a_later_page_is_refreshed_and_closed() {
+    for forge in ["github", "gitlab"] {
+        let engine = Engine::new("bash", forge, &[], "0.1.0");
+        engine.released("v0.1.0", &engine.head());
+        engine.commit("fix: mend the parser", &[("a.txt", "a\n")]);
+        let number = engine.ok("request")["request"].as_u64().expect("a number");
+        let other = if forge == "github" {
+            serde_json::json!({"number": 2, "title": "feat: other", "head": {"ref": "feat/other"},
+                "base": {"ref": "master"}, "state": "open", "auto_merge": null})
+        } else {
+            serde_json::json!({"iid": 2, "title": "feat: other", "source_branch": "feat/other",
+                "target_branch": "master", "state": "opened"})
+        };
+        std::fs::write(engine.state().join("pulls/2.json"), other.to_string()).expect("writes");
+        engine.page_size(1);
+        engine.commit("feat!: change the format", &[("b.txt", "b\n")]);
+        let report = engine.ok("request");
+        assert_eq!(report["state"], "refreshed", "{forge}: {report}");
+        assert_eq!(report["request"].as_u64(), Some(number), "{forge}");
+        assert_eq!(engine.pulls(), 2, "{forge}: no second release request");
+        engine.released("v0.2.0", &engine.head());
+        let report = engine.ok("request");
+        assert_eq!(report["state"], "closed", "{forge}: {report}");
+        assert_eq!(report["request"].as_u64(), Some(number), "{forge}");
+    }
+}
+
+/// SATISFIES release-engine:the-request-pushes-as-the-bot
+///
+/// The default CI token alone, or the bot variable set to its value,
+/// refuses before any forge call and any push.
+#[test]
+fn the_request_refuses_the_default_ci_token() {
+    for (forge, default, bot) in [
+        ("github", "GITHUB_TOKEN", "GH_TOKEN"),
+        ("gitlab", "CI_JOB_TOKEN", "GITLAB_TOKEN"),
+    ] {
+        let engine = Engine::new("bash", forge, &[], "0.1.0");
+        for same in [false, true] {
+            let mut command = engine.run("request");
+            command.env_remove(bot).env(default, "job-token");
+            if same {
+                command.env(bot, "job-token");
+            }
+            let out = command.assert().code(73).get_output().stderr.clone();
+            let diagnostic: serde_json::Value = serde_json::from_slice(&out).expect("JSON");
+            assert_eq!(
+                diagnostic["reason"], "default-ci-token",
+                "{forge}: {diagnostic}"
+            );
+            assert!(
+                diagnostic["message"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains(default),
+                "{forge}: {diagnostic}"
+            );
+        }
+        assert_eq!(engine.log(), "", "{forge}: no tool ran");
+        assert_eq!(engine.remote_branch("rk-release/master"), None, "{forge}");
+    }
+}
+
+/// SATISFIES release-engine:the-request-arms-where-the-projection-arms
+#[test]
+fn the_request_arms_only_where_the_projection_arms() {
+    let armed = |engine: &Engine, number: u64| -> bool {
+        let pull = engine.pull(number);
+        !pull["auto_merge"].is_null() && pull["auto_merge"] != serde_json::json!(false)
+            || pull["merge_when_pipeline_succeeds"] == true
+    };
+    for (forge, init, line, expected) in [
+        ("github", &["--integration", "forge"][..], false, true),
+        ("gitlab", &["--integration", "local"][..], false, true),
+        ("gitlab", &["--integration", "forge"][..], false, true),
+        ("github", &["--integration", "local"][..], false, false),
+        (
+            "github",
+            &["--integration", "forge", "--style", "lines"][..],
+            false,
+            false,
+        ),
+        ("gitlab", &["--style", "lines"][..], false, false),
+        ("github", &["--integration", "forge"][..], true, false),
+        ("gitlab", &[][..], true, false),
+    ] {
+        let engine = Engine::new("bash", forge, init, "0.1.0");
+        if line {
+            engine.line("0.1");
+        }
+        let report = engine.ok("request");
+        let number = report["request"].as_u64().expect("a request");
+        assert_eq!(
+            report["armed"], expected,
+            "{forge} {init:?} line={line}: {report}"
+        );
+        assert_eq!(
+            armed(&engine, number),
+            expected,
+            "{forge} {init:?} line={line}: {}",
+            engine.pull(number)
+        );
+    }
+}
+
+/// SATISFIES release-engine:the-adapter-owns-the-version-file
+#[test]
+fn the_python_request_relocks_with_the_bump() {
+    let engine = Engine::new("python", "github", &[], "0.1.0");
+    engine.released("v0.1.0", &engine.head());
+    engine.commit("fix: mend the parser", &[("a.py", "a = 1\n")]);
+    let report = engine.ok("request");
+    assert_eq!(report["proposal"], "0.1.1", "{report}");
+    let mut files = engine.request_files("master");
+    files.sort();
+    assert_eq!(files, ["CHANGELOG.md", "pyproject.toml", "uv.lock"]);
+    assert!(
+        engine
+            .request_file("master", "uv.lock")
+            .contains("version = \"0.1.1\"")
+    );
+    assert!(engine.log().contains("uv version 0.1.1 --no-sync"));
+}
+
+/// SATISFIES release-engine:a-final-version-releases-at-its-request
+///
+/// A uv project at 0.1.0 with no tag gets a request proposing 0.1.0; a
+/// push before its merge releases nothing, and the merge releases it.
+#[test]
+fn a_fresh_project_releases_through_its_first_request() {
+    let engine = Engine::new("python", "github", &[], "0.1.0");
+    engine.commit("feat: first feature", &[("a.py", "a = 1\n")]);
+    let report = engine.ok("request");
+    assert_eq!(report["proposal"], "0.1.0", "{report}");
+    let number = report["request"].as_u64().expect("a request");
+    assert_eq!(
+        engine.ok("build")["state"],
+        "skip",
+        "a push before the merge"
+    );
+    let merge = engine.merge(number);
+    let build = engine.ok("build");
+    assert_eq!(build["state"], "release", "{build}");
+    assert_eq!(build["tag"], "v0.1.0");
+    engine.ok("publish");
+    assert_eq!(engine.tag("v0.1.0").as_deref(), Some(merge.as_str()));
+}
+
+/// SATISFIES release-engine:the-request-never-numbers-a-candidate
+#[test]
+fn a_bash_baseline_releases_through_its_first_request() {
+    for forge in ["gitlab", "github"] {
+        let engine = Engine::new("bash", forge, &[], "0.0.0");
+        engine.commit("feat: first feature", &[("a.sh", "echo a\n")]);
+        let report = engine.ok("request");
+        assert_eq!(report["proposal"], "0.1.0", "{forge}: {report}");
+        let merge = engine.merge(report["request"].as_u64().expect("a request"));
+        assert_eq!(engine.ok("build")["state"], "release", "{forge}");
+        engine.ok("publish");
+        assert_eq!(
+            engine.tag("v0.1.0").as_deref(),
+            Some(merge.as_str()),
+            "{forge}"
+        );
+    }
+}
+
+/// SATISFIES release-engine:a-final-version-releases-at-its-request
+#[test]
+fn the_build_releases_only_at_the_request_merge() {
+    for forge in ["github", "gitlab"] {
+        // A final version any other commit writes skips.
+        let engine = Engine::new("bash", forge, &[], "0.1.0");
+        engine.commit(
+            "chore: write the version by hand",
+            &[("VERSION", "0.2.0\n")],
+        );
+        let build = engine.ok("build");
+        assert_eq!(build["state"], "skip", "{forge}: {build}");
+        // A merged request whose head is not the engine's skips.
+        let sha = engine.commit("chore: bump (#7)", &[("VERSION", "0.3.0\n")]);
+        engine.merged_at(&sha, 7, "feat/bump", "master", &sha);
+        assert_eq!(engine.ok("build")["state"], "skip", "{forge}");
+        // The engine's own request, squash-merged, releases.
+        let report = engine.ok("request");
+        engine.merge(report["request"].as_u64().expect("a request"));
+        assert_eq!(engine.ok("build")["state"], "release", "{forge}");
+    }
+}
+
+/// SATISFIES release-engine:a-final-version-releases-at-its-request
+///
+/// The push that writes a candidate releases it, as the mint pushes it.
+#[test]
+fn the_mint_push_releases_a_candidate() {
+    for forge in ["github", "gitlab"] {
+        let engine = Engine::new("bash", forge, &[], "1.4.2");
+        engine.released("v1.4.2", &engine.head());
+        engine.line("1.4");
+        let mint = engine.commit(
+            "chore(release): mint v1.4.3-rc.1",
+            &[("VERSION", "1.4.3-rc.1\n")],
+        );
+        let build = engine.ok("build");
+        assert_eq!(build["state"], "release", "{forge}: {build}");
+        assert_eq!(build["candidate"], true);
+        engine.ok("publish");
+        assert_eq!(
+            engine.tag("v1.4.3-rc.1").as_deref(),
+            Some(mint.as_str()),
+            "{forge}"
+        );
+    }
+}
+
+/// SATISFIES release-engine:a-final-version-releases-at-its-request
+///
+/// The promote push writes the stable version, and only the line's
+/// request merge releases it.
+#[test]
+fn the_promote_push_does_not_release() {
+    for forge in ["github", "gitlab"] {
+        let engine = Engine::new("bash", forge, &[], "1.4.3-rc.1");
+        engine.line("1.4");
+        engine.commit(
+            "chore(release): promote v1.4.3-rc.1 to v1.4.3",
+            &[("VERSION", "1.4.3\n")],
+        );
+        let build = engine.ok("build");
+        assert_eq!(build["state"], "skip", "{forge}: {build}");
+        assert!(engine.tag("v1.4.3").is_none());
+    }
+}
+
+/// SATISFIES release-engine:a-version-releases-once
+#[test]
+fn the_build_skips_an_ordinary_push_after_a_release() {
+    let engine = Engine::new("bash", "github", &[], "0.1.0");
+    engine.released("v0.1.0", &engine.head());
+    engine.commit("fix: mend the parser", &[("a.txt", "a\n")]);
+    let build = engine.ok("build");
+    assert_eq!(build["state"], "skip", "{build}");
+    assert!(engine_writes(&engine.log()).is_empty(), "{}", engine.log());
+}
+
+/// SATISFIES release-engine:a-final-version-releases-at-its-request
+///
+/// The landing commit introduces VERSION, and 0.0.0 never releases, even
+/// at a commit the forge says merges the engine's request.
+#[test]
+fn the_build_skips_the_baseline_and_a_new_version_file() {
+    for forge in ["github", "gitlab"] {
+        let engine = Engine::new("bash", forge, &[], "0.0.0");
+        let landing = engine.head();
+        engine.merged_at(&landing, 1, "rk-release/master", "master", &landing);
+        let build = engine.ok("build");
+        assert_eq!(build["state"], "skip", "{forge}: {build}");
+        assert!(
+            build["reason"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("version file")
+        );
+        let sha = engine.commit("chore(release): v0.0.0 (#2)", &[("a.txt", "a\n")]);
+        engine.merged_at(&sha, 2, "rk-release/master", "master", &sha);
+        let build = engine.ok("build");
+        assert_eq!(build["state"], "skip", "{forge}: {build}");
+        assert!(
+            build["reason"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("baseline")
+        );
+    }
+}
+
+/// SATISFIES release-engine:a-version-releases-once
+///
+/// A version that returns to one released at an earlier commit skips,
+/// even where its commit merges the engine's request.
+#[test]
+fn the_build_skips_an_un_bump() {
+    for forge in ["github", "gitlab"] {
+        let engine = Engine::new("bash", forge, &[], "0.1.0");
+        let first = engine.head();
+        engine.released("v0.1.0", &first);
+        engine.commit("chore: 0.1.1", &[("VERSION", "0.1.1\n")]);
+        let back = engine.commit("chore(release): v0.1.0 (#3)", &[("VERSION", "0.1.0\n")]);
+        engine.merged_at(&back, 3, "rk-release/master", "master", &back);
+        let build = engine.ok("build");
+        assert_eq!(build["state"], "skip", "{forge}: {build}");
+        assert!(
+            build["reason"]
+                .as_str()
+                .unwrap_or_default()
+                .contains(&first),
+            "{build}"
+        );
+    }
+}
+
+/// SATISFIES release-engine:every-step-converges
+#[test]
+fn the_build_resumes_at_the_same_commit() {
+    for forge in ["github", "gitlab"] {
+        let engine = Engine::new("bash", forge, &[], "0.1.0");
+        let report = engine.ok("request");
+        let merge = engine.merge(report["request"].as_u64().expect("a request"));
+        // A tag left at this commit by a failed release save.
+        std::fs::write(engine.state().join("tags/v0.1.0"), &merge).expect("writes");
+        assert_eq!(engine.ok("build")["state"], "resume", "{forge}");
+        // A published release at this commit.
+        engine.released("v0.1.0", &merge);
+        assert_eq!(engine.ok("build")["state"], "resume", "{forge}");
+    }
+}
+
+/// SATISFIES release-engine:a-version-releases-once
+#[test]
+fn the_build_refuses_a_conflicting_tag() {
+    for forge in ["github", "gitlab"] {
+        let engine = Engine::new("bash", forge, &[], "0.1.0");
+        let landing = engine.head();
+        let report = engine.ok("request");
+        engine.merge(report["request"].as_u64().expect("a request"));
+        std::fs::write(engine.state().join("tags/v0.1.0"), &landing).expect("writes");
+        let diagnostic = engine.refused("build", 73);
+        assert_eq!(
+            diagnostic["reason"], "release-conflict",
+            "{forge}: {diagnostic}"
+        );
+        assert!(
+            diagnostic["action"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("The tag exists and the release does not"),
+            "{forge}: {diagnostic}"
+        );
+        assert!(
+            !engine.dir().join("dist").exists(),
+            "{forge}: nothing built"
+        );
+    }
+}
+
+/// SATISFIES release-engine:the-adapter-owns-the-version-file
+#[test]
+fn the_build_keeps_support_files_out_of_dist() {
+    for (tech, forge) in [("python", "github"), ("bash", "gitlab")] {
+        let engine = Engine::new(tech, forge, &[], "0.1.0");
+        std::fs::create_dir_all(engine.dir().join("dist")).expect("creates");
+        std::fs::write(engine.dir().join("dist/stale.whl"), "old").expect("writes");
+        let report = engine.ok("request");
+        engine.merge(report["request"].as_u64().expect("a request"));
+        let build = engine.ok("build");
+        let mut reported: Vec<String> = build["artifacts"]
+            .as_array()
+            .expect("artifacts")
+            .iter()
+            .map(|artifact| artifact["path"].as_str().expect("a path").to_owned())
+            .collect();
+        reported.sort();
+        let mut held: Vec<String> = std::fs::read_dir(engine.dir().join("dist"))
+            .expect("dist exists")
+            .map(|entry| {
+                entry
+                    .expect("an entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .filter(|name| !name.starts_with('.'))
+            .map(|name| format!("dist/{name}"))
+            .collect();
+        held.sort();
+        assert_eq!(
+            held, reported,
+            "{tech}: dist holds only the adapter's artifacts"
+        );
+        for file in ["build.json", "notes.md", "SHA256SUMS"] {
+            assert!(
+                engine.dir().join(".rk-release").join(file).is_file(),
+                "{tech}: {file}"
+            );
+        }
+    }
+}
+
+/// SATISFIES release-engine:the-adapter-owns-the-version-file
+///
+/// The bash output contract is the tarball and its `.sha256`. A custom
+/// build that writes only the tarball fails the build postcondition: no
+/// report, no support file, and no forge write.
+#[test]
+fn a_bash_build_without_its_checksum_fails() {
+    for forge in ["github", "gitlab"] {
+        let engine = Engine::new("bash", forge, &[], "0.1.0");
+        engine.commit(
+            "build: write the tarball alone",
+            &[(
+                "build.sh",
+                "mkdir -p dist\nv=\"$(cat VERSION)\"\nprintf 'widget %s\\n' \"$v\" > \"dist/widget-$v.tar.gz\"\n",
+            )],
+        );
+        let report = engine.ok("request");
+        engine.merge(report["request"].as_u64().expect("a request"));
+        engine.clear_log();
+        let diagnostic = engine.refused("build", 1);
+        assert_eq!(
+            diagnostic["reason"], "postcondition-failed",
+            "{forge}: {diagnostic}"
+        );
+        assert!(
+            diagnostic["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("widget-0.1.0.tar.gz.sha256"),
+            "{forge}: {diagnostic}"
+        );
+        for file in ["build.json", "notes.md", "SHA256SUMS"] {
+            assert!(
+                !engine.dir().join(".rk-release").join(file).exists(),
+                "{forge}: {file}"
+            );
+        }
+        assert!(
+            engine_writes(&engine.log()).is_empty(),
+            "{forge}: {}",
+            engine.log()
+        );
+        assert!(engine.tag("v0.1.0").is_none(), "{forge}");
+        assert!(engine.release("v0.1.0").is_none(), "{forge}");
+    }
+}
+
+/// SATISFIES release-engine:the-tag-is-created-last
+///
+/// GitHub: a draft, every upload, then the publish that creates the tag.
+/// GitLab: every package upload, then the one release create.
+#[test]
+fn the_publish_creates_the_tag_and_the_release_last_on_each_forge() {
+    for forge in ["github", "gitlab"] {
+        let engine = Engine::new("bash", forge, &[], "0.1.0");
+        let report = engine.ok("request");
+        let merge = engine.merge(report["request"].as_u64().expect("a request"));
+        engine.ok("build");
+        assert!(
+            engine.tag("v0.1.0").is_none(),
+            "{forge}: the build creates no tag"
+        );
+        engine.clear_log();
+        let publish = engine.ok("publish");
+        assert_eq!(publish["state"], "published", "{forge}: {publish}");
+        let writes = engine_writes(&engine.log());
+        let last = writes.last().expect("writes").clone();
+        if forge == "github" {
+            assert!(
+                writes[0].contains("--method POST repos/acme/widget/releases"),
+                "{writes:?}"
+            );
+            assert!(engine.log().contains("\"draft\":true"), "{}", engine.log());
+            assert!(
+                writes[1].starts_with("gh release upload v0.1.0"),
+                "{writes:?}"
+            );
+            assert!(
+                last.contains("--method PATCH repos/acme/widget/releases/"),
+                "{writes:?}"
+            );
+        } else {
+            assert!(
+                writes[..writes.len() - 1]
+                    .iter()
+                    .all(|write| write.contains("packages/generic/release/0.1.0/")),
+                "{writes:?}"
+            );
+            assert!(
+                last.contains("--method POST projects/acme%2Fwidget/releases"),
+                "{writes:?}"
+            );
+        }
+        assert_eq!(
+            engine.tag("v0.1.0").as_deref(),
+            Some(merge.as_str()),
+            "{forge}"
+        );
+        assert_ne!(engine.release("v0.1.0").expect("a release")["draft"], true);
+    }
+}
+
+/// SATISFIES release-engine:every-step-converges
+///
+/// A same-commit draft with one asset missing and one with other bytes
+/// gets the missing one, the replaced one, and its publish.
+#[test]
+fn a_rerun_publishes_a_same_commit_draft() {
+    let engine = Engine::new("bash", "github", &[], "0.1.0");
+    let report = engine.ok("request");
+    let merge = engine.merge(report["request"].as_u64().expect("a request"));
+    engine.ok("build");
+    std::fs::write(
+        engine.state().join("releases/v0.1.0.json"),
+        serde_json::json!({"id": 1000, "tag_name": "v0.1.0", "target_commitish": merge,
+            "draft": true, "prerelease": false, "assets": [
+                {"name": "widget-0.1.0.tar.gz", "digest": "sha256:00"},
+                {"name": "SHA256SUMS", "digest": format!("sha256:{}", file_digest(&engine.dir().join(".rk-release/SHA256SUMS")))}
+            ]}).to_string(),
+    )
+    .expect("writes");
+    let publish = engine.ok("publish");
+    assert_eq!(publish["state"], "resumed", "{publish}");
+    assert_eq!(
+        publish["replaced"],
+        serde_json::json!(["widget-0.1.0.tar.gz"])
+    );
+    assert_eq!(
+        publish["uploaded"],
+        serde_json::json!(["widget-0.1.0.tar.gz.sha256"])
+    );
+    assert_eq!(publish["kept"], serde_json::json!(["SHA256SUMS"]));
+    let release = engine.release("v0.1.0").expect("the release");
+    assert_eq!(release["draft"], false);
+    assert_eq!(engine.tag("v0.1.0").as_deref(), Some(merge.as_str()));
+    let tarball = release["assets"]
+        .as_array()
+        .expect("assets")
+        .iter()
+        .find(|asset| asset["name"] == "widget-0.1.0.tar.gz")
+        .expect("the tarball")
+        .clone();
+    assert_eq!(
+        tarball["digest"],
+        format!(
+            "sha256:{}",
+            file_digest(&engine.dir().join("dist/widget-0.1.0.tar.gz"))
+        )
+    );
+}
+
+/// SATISFIES release-engine:a-version-releases-once
+#[test]
+fn a_failed_tag_read_refuses() {
+    for forge in ["github", "gitlab"] {
+        let engine = Engine::new("bash", forge, &[], "0.1.0");
+        let report = engine.ok("request");
+        engine.merge(report["request"].as_u64().expect("a request"));
+        engine.fail("tag");
+        let diagnostic = engine.refused("build", 73);
+        assert_eq!(
+            diagnostic["reason"], "release-conflict",
+            "{forge}: {diagnostic}"
+        );
+        assert!(
+            diagnostic["action"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("The tag exists")
+        );
+        engine.heal("tag");
+        engine.ok("build");
+        engine.fail("tag");
+        engine.clear_log();
+        let diagnostic = engine.refused("publish", 73);
+        assert_eq!(
+            diagnostic["reason"], "release-conflict",
+            "{forge}: {diagnostic}"
+        );
+        assert!(
+            engine_writes(&engine.log()).is_empty(),
+            "{forge}: {}",
+            engine.log()
+        );
+    }
+}
+
+/// SATISFIES release-engine:every-step-converges
+///
+/// `PyPI` holds the wheel's name with other bytes and no forge page exists:
+/// the build refuses before any write.
+#[test]
+fn the_build_refuses_a_rebuild_that_differs_from_pypi() {
+    let engine = Engine::new("python", "github", &[], "0.1.0");
+    let report = engine.ok("request");
+    engine.merge(report["request"].as_u64().expect("a request"));
+    std::fs::write(
+        engine
+            .state()
+            .join("pypi/https___pypi_org_pypi_acme_0_1_0_json"),
+        serde_json::json!({"urls": [{"filename": "acme-0.1.0-py3-none-any.whl",
+            "digests": {"sha256": "0".repeat(64)}}]})
+        .to_string(),
+    )
+    .expect("writes");
+    engine.clear_log();
+    let diagnostic = engine.refused("build", 73);
+    assert_eq!(diagnostic["reason"], "release-conflict", "{diagnostic}");
+    assert!(
+        diagnostic["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("yank")
+    );
+    assert!(engine_writes(&engine.log()).is_empty(), "{}", engine.log());
+    assert!(!engine.dir().join(".rk-release/build.json").exists());
+    // The same bytes PyPI serves pass.
+    let wheel = file_digest(&engine.dir().join("dist/acme-0.1.0-py3-none-any.whl"));
+    std::fs::write(
+        engine
+            .state()
+            .join("pypi/https___pypi_org_pypi_acme_0_1_0_json"),
+        serde_json::json!({"urls": [{"filename": "acme-0.1.0-py3-none-any.whl",
+            "digests": {"sha256": wheel}}]})
+        .to_string(),
+    )
+    .expect("writes");
+    assert_eq!(engine.ok("build")["state"], "release");
+}
+
+/// SATISFIES release-engine:the-request-never-numbers-a-candidate
+#[test]
+fn the_request_never_numbers_a_candidate() {
+    let engine = Engine::new("bash", "github", &[], "1.4.3-rc.1");
+    engine.line("1.4");
+    let report = engine.ok("request");
+    assert_eq!(report["state"], "nothing", "{report}");
+    assert!(report.get("proposal").is_none(), "{report}");
+    engine.commit(
+        "chore(release): promote v1.4.3-rc.1 to v1.4.3",
+        &[("VERSION", "1.4.3\n")],
+    );
+    let report = engine.ok("request");
+    assert_eq!(report["proposal"], "1.4.3", "{report}");
+    assert_eq!(report["base"], "release/1.4");
+    let promoted = engine.head();
+    engine.released("v1.4.3", &promoted);
+    engine.commit("fix: mend the parser", &[("a.txt", "a\n")]);
+    std::fs::write(engine.state().join("cliff-propose"), "v1.4.4-rc.1\n").expect("writes");
+    let diagnostic = engine.refused("request", 73);
+    assert!(
+        diagnostic["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("prerelease"),
+        "{diagnostic}"
+    );
+}
+
+/// SATISFIES release-engine:the-request-never-numbers-a-candidate
+///
+/// A tag is not a release. A tag a failed GitLab release save left, or a
+/// tag beside an unpublished GitHub draft, keeps the final version the base
+/// carries, and the request proposes it unchanged.
+#[test]
+fn the_request_keeps_a_final_version_whose_tag_has_no_release() {
+    for forge in ["github", "gitlab"] {
+        let engine = Engine::new("bash", forge, &[], "0.1.0");
+        let landing = engine.head();
+        std::fs::write(engine.state().join("tags/v0.1.0"), format!("{landing}\n")).expect("writes");
+        git_in(engine.dir(), &["tag", "v0.1.0", &landing]);
+        if forge == "github" {
+            std::fs::write(
+                engine.state().join("releases/v0.1.0.json"),
+                serde_json::json!({"id": 900, "tag_name": "v0.1.0", "target_commitish": landing,
+                    "draft": true, "prerelease": false, "assets": []})
+                .to_string(),
+            )
+            .expect("writes");
+        }
+        engine.commit("fix: mend the parser", &[("a.txt", "a\n")]);
+        let report = engine.ok("request");
+        assert_eq!(report["state"], "opened", "{forge}: {report}");
+        assert_eq!(report["proposal"], "0.1.0", "{forge}: {report}");
+    }
+}
+
+/// SATISFIES release-engine:the-request-never-numbers-a-candidate
+///
+/// A release read that fails is not an absence: the request refuses before
+/// it pushes or writes anything.
+#[test]
+fn a_failed_release_read_refuses_the_request() {
+    for forge in ["github", "gitlab"] {
+        let engine = Engine::new("bash", forge, &[], "0.1.0");
+        engine.released("v0.1.0", &engine.head());
+        engine.commit("fix: mend the parser", &[("a.txt", "a\n")]);
+        engine.fail("release");
+        engine.clear_log();
+        let diagnostic = engine.refused("request", 73);
+        assert_eq!(
+            diagnostic["reason"], "observation-incomplete",
+            "{forge}: {diagnostic}"
+        );
+        assert!(
+            engine_writes(&engine.log()).is_empty(),
+            "{forge}: {}",
+            engine.log()
+        );
+        assert_eq!(engine.remote_branch("rk-release/master"), None, "{forge}");
+    }
+}
+
+/// SATISFIES release-engine:the-tag-is-created-last
+#[test]
+fn a_failed_gitlab_upload_leaves_no_tag() {
+    let engine = Engine::new("bash", "gitlab", &[], "0.1.0");
+    let report = engine.ok("request");
+    engine.merge(report["request"].as_u64().expect("a request"));
+    engine.ok("build");
+    engine.fail("upload");
+    engine.run("publish").assert().code(70);
+    assert!(engine.tag("v0.1.0").is_none());
+    assert!(engine.release("v0.1.0").is_none());
+    engine.heal("upload");
+    assert_eq!(engine.ok("publish")["state"], "published");
+    assert!(engine.tag("v0.1.0").is_some());
+}
+
+/// SATISFIES release-engine:every-step-converges
+///
+/// A full build, an attest stand-in, and a publish; then a rerun after
+/// the page lost one asset adds that asset and writes nothing else.
+#[test]
+fn a_rerun_repairs_a_partial_release() {
+    for forge in ["github", "gitlab"] {
+        let engine = Engine::new("bash", forge, &[], "0.1.0");
+        let report = engine.ok("request");
+        engine.merge(report["request"].as_u64().expect("a request"));
+        engine.ok("build");
+        // The attest step: a provenance bundle beside the tarball.
+        std::fs::write(
+            engine.dir().join("dist/widget-0.1.0.tar.gz.sigstore.json"),
+            "{}",
+        )
+        .expect("writes");
+        engine.ok("publish");
+        let path = engine.state().join("releases/v0.1.0.json");
+        let mut release: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("reads")).expect("parses");
+        if forge == "github" {
+            let assets = release["assets"].as_array_mut().expect("assets");
+            assets.retain(|asset| asset["name"] != "widget-0.1.0.tar.gz.sha256");
+        } else {
+            let links = release["assets"]["links"].as_array_mut().expect("links");
+            links.retain(|link| link["name"] != "widget-0.1.0.tar.gz.sha256");
+            std::fs::remove_file(
+                engine
+                    .state()
+                    .join("packages/0.1.0/widget-0.1.0.tar.gz.sha256"),
+            )
+            .expect("removes");
+        }
+        std::fs::write(&path, release.to_string()).expect("writes");
+        engine.clear_log();
+        let publish = engine.ok("publish");
+        assert_eq!(publish["state"], "resumed", "{forge}: {publish}");
+        assert_eq!(
+            publish["uploaded"],
+            serde_json::json!(["widget-0.1.0.tar.gz.sha256"]),
+            "{forge}"
+        );
+        let writes = engine_writes(&engine.log());
+        let expected = if forge == "github" { 1 } else { 2 };
+        assert_eq!(writes.len(), expected, "{forge}: {writes:?}");
+        assert!(
+            writes
+                .iter()
+                .all(|write| write.contains("widget-0.1.0.tar.gz.sha256")
+                    || write.contains("/assets/links")),
+            "{forge}: {writes:?}"
+        );
+    }
+}
+
+/// SATISFIES release-engine:every-step-converges
+///
+/// A full rerun after a published GitHub release builds the same tarball
+/// and attests it again, which signs new bundle bytes. The publish keeps
+/// the bundle the release holds beside the matching tarball and writes
+/// nothing. On an unpublished draft the new bundle replaces the held one.
+#[test]
+fn a_full_rerun_keeps_the_provenance_of_a_published_release() {
+    let engine = Engine::new("bash", "github", &[], "0.1.0");
+    let report = engine.ok("request");
+    engine.merge(report["request"].as_u64().expect("a request"));
+    let bundle = engine.dir().join("dist/widget-0.1.0.tar.gz.sigstore.json");
+    engine.ok("build");
+    std::fs::write(&bundle, "{\"run\":1}\n").expect("writes");
+    let first = file_digest(&bundle);
+    engine.ok("publish");
+    // The rerun: build, a fresh attestation, publish.
+    assert_eq!(engine.ok("build")["state"], "resume");
+    std::fs::write(&bundle, "{\"run\":2}\n").expect("writes");
+    engine.clear_log();
+    let publish = engine.ok("publish");
+    assert_eq!(publish["state"], "resumed", "{publish}");
+    let kept = publish["kept"].as_array().expect("kept").clone();
+    assert!(
+        kept.contains(&serde_json::json!("widget-0.1.0.tar.gz.sigstore.json")),
+        "{publish}"
+    );
+    assert_eq!(publish["uploaded"], serde_json::json!([]), "{publish}");
+    assert_eq!(publish["replaced"], serde_json::json!([]), "{publish}");
+    assert!(engine_writes(&engine.log()).is_empty(), "{}", engine.log());
+    let held = engine.release("v0.1.0").expect("the release")["assets"]
+        .as_array()
+        .expect("assets")
+        .iter()
+        .find(|asset| asset["name"] == "widget-0.1.0.tar.gz.sigstore.json")
+        .expect("the bundle")
+        .clone();
+    assert_eq!(held["digest"], format!("sha256:{first}"));
+    // An unpublished draft takes the new bundle like any differing file.
+    let path = engine.state().join("releases/v0.1.0.json");
+    let mut release: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("reads")).expect("parses");
+    release["draft"] = serde_json::json!(true);
+    std::fs::write(&path, release.to_string()).expect("writes");
+    std::fs::write(&bundle, "{\"run\":3}\n").expect("writes");
+    let publish = engine.ok("publish");
+    assert_eq!(
+        publish["replaced"],
+        serde_json::json!(["widget-0.1.0.tar.gz.sigstore.json"]),
+        "{publish}"
+    );
+}
+
+/// SATISFIES release-engine:every-step-converges
+///
+/// The GitLab release create fails after every package upload and leaves
+/// its tag. A full rerun builds the same tarball and attests it again: the
+/// publish keeps every held package file, the old bundle included, links
+/// them, and creates the release.
+#[test]
+fn a_full_rerun_creates_the_gitlab_release_after_an_interrupted_create() {
+    let engine = Engine::new("bash", "gitlab", &[], "0.1.0");
+    let report = engine.ok("request");
+    let merge = engine.merge(report["request"].as_u64().expect("a request"));
+    let bundle = engine.dir().join("dist/widget-0.1.0.tar.gz.sigstore.json");
+    engine.ok("build");
+    std::fs::write(&bundle, "{\"run\":1}\n").expect("writes");
+    engine.fail("release-save");
+    engine.run("publish").assert().code(70);
+    assert_eq!(engine.tag("v0.1.0").as_deref(), Some(merge.as_str()));
+    assert!(engine.release("v0.1.0").is_none());
+    engine.heal("release-save");
+    // The rerun: build, a fresh attestation, publish.
+    assert_eq!(engine.ok("build")["state"], "resume");
+    std::fs::write(&bundle, "{\"run\":2}\n").expect("writes");
+    engine.clear_log();
+    let publish = engine.ok("publish");
+    assert_eq!(publish["state"], "resumed", "{publish}");
+    assert_eq!(publish["uploaded"], serde_json::json!([]), "{publish}");
+    let mut kept: Vec<String> = publish["kept"]
+        .as_array()
+        .expect("kept")
+        .iter()
+        .map(|name| name.as_str().expect("a name").to_owned())
+        .collect();
+    kept.sort();
+    let expected = [
+        "SHA256SUMS",
+        "widget-0.1.0.tar.gz",
+        "widget-0.1.0.tar.gz.sha256",
+        "widget-0.1.0.tar.gz.sigstore.json",
+    ];
+    assert_eq!(kept, expected, "{publish}");
+    let release = engine.release("v0.1.0").expect("the release");
+    let mut linked: Vec<String> = release["assets"]["links"]
+        .as_array()
+        .expect("links")
+        .iter()
+        .map(|link| link["name"].as_str().expect("a name").to_owned())
+        .collect();
+    linked.sort();
+    assert_eq!(linked, expected, "{release}");
+    let writes = engine_writes(&engine.log());
+    assert_eq!(writes.len(), 1, "{writes:?}");
+    assert!(writes[0].contains("--method POST projects/acme%2Fwidget/releases"));
+}
+
+/// SATISFIES release-engine:a-version-releases-once
+///
+/// A release on the second page of the forge's list is still a release:
+/// an un-bump to it skips, and a rerun at its commit repairs it rather
+/// than drafting it again.
+#[test]
+fn a_release_on_a_later_page_is_found() {
+    for forge in ["github", "gitlab"] {
+        let engine = Engine::new("bash", forge, &[], "0.1.0");
+        let first = engine.head();
+        engine.released("v0.1.0", &first);
+        engine.released("v0.0.9", &first);
+        if forge == "github" {
+            // A newer release sorts first and fills the first page.
+            let path = engine.state().join("releases/v0.0.9.json");
+            let mut newer: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&path).expect("reads"))
+                    .expect("parses");
+            newer["id"] = serde_json::json!(950);
+            std::fs::write(&path, newer.to_string()).expect("writes");
+        }
+        engine.page_size(1);
+        engine.commit("chore: 0.1.1", &[("VERSION", "0.1.1\n")]);
+        let back = engine.commit("chore(release): v0.1.0 (#3)", &[("VERSION", "0.1.0\n")]);
+        engine.merged_at(&back, 3, "rk-release/master", "master", &back);
+        let build = engine.ok("build");
+        assert_eq!(build["state"], "skip", "{forge}: {build}");
+        assert!(
+            build["reason"]
+                .as_str()
+                .unwrap_or_default()
+                .contains(&first),
+            "{forge}: {build}"
+        );
+    }
+    for forge in ["github", "gitlab"] {
+        let engine = Engine::new("bash", forge, &[], "0.1.0");
+        let report = engine.ok("request");
+        let merge = engine.merge(report["request"].as_u64().expect("a request"));
+        engine.ok("build");
+        engine.ok("publish");
+        let path = engine.state().join("releases/v0.1.0.json");
+        let mut release: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("reads")).expect("parses");
+        if forge == "github" {
+            let assets = release["assets"].as_array_mut().expect("assets");
+            assets.retain(|asset| asset["name"] != "widget-0.1.0.tar.gz.sha256");
+            // A newer release sorts first and fills the first page.
+            std::fs::write(
+                engine.state().join("releases/v0.2.0-draft.json"),
+                serde_json::json!({"id": 2000, "tag_name": "v0.2.0", "target_commitish": merge,
+                    "draft": true, "prerelease": false, "assets": []})
+                .to_string(),
+            )
+            .expect("writes");
+        } else {
+            let links = release["assets"]["links"].as_array_mut().expect("links");
+            links.retain(|link| link["name"] != "widget-0.1.0.tar.gz.sha256");
+        }
+        std::fs::write(&path, release.to_string()).expect("writes");
+        engine.page_size(1);
+        engine.clear_log();
+        let publish = engine.ok("publish");
+        assert_eq!(publish["state"], "resumed", "{forge}: {publish}");
+        let field = if forge == "github" {
+            "uploaded"
+        } else {
+            "linked"
+        };
+        assert_eq!(
+            publish[field],
+            serde_json::json!(["widget-0.1.0.tar.gz.sha256"]),
+            "{forge}: {publish}"
+        );
+        let writes = engine_writes(&engine.log());
+        assert_eq!(writes.len(), 1, "{forge}: {writes:?}");
+    }
+}
+
+/// SATISFIES release-engine:every-step-converges
+///
+/// Every file the forge holds counts, whichever page lists it: a rerun
+/// with nothing missing keeps every file and writes nothing.
+#[test]
+fn an_asset_on_a_later_page_is_found() {
+    for forge in ["github", "gitlab"] {
+        let engine = Engine::new("bash", forge, &[], "0.1.0");
+        let report = engine.ok("request");
+        engine.merge(report["request"].as_u64().expect("a request"));
+        engine.ok("build");
+        engine.ok("publish");
+        engine.page_size(1);
+        engine.clear_log();
+        let publish = engine.ok("publish");
+        assert_eq!(publish["state"], "resumed", "{forge}: {publish}");
+        assert_eq!(
+            publish["uploaded"],
+            serde_json::json!([]),
+            "{forge}: {publish}"
+        );
+        assert_eq!(
+            publish["kept"].as_array().map(Vec::len),
+            Some(3),
+            "{forge}: {publish}"
+        );
+        assert!(
+            engine_writes(&engine.log()).is_empty(),
+            "{forge}: {}",
+            engine.log()
+        );
+    }
+}
+
+/// SATISFIES release-engine:every-step-converges
+#[test]
+fn the_publish_refuses_an_asset_whose_digest_differs() {
+    for forge in ["github", "gitlab"] {
+        let engine = Engine::new("bash", forge, &[], "0.1.0");
+        let report = engine.ok("request");
+        let merge = engine.merge(report["request"].as_u64().expect("a request"));
+        engine.ok("build");
+        if forge == "github" {
+            std::fs::write(
+                engine.state().join("releases/v0.1.0.json"),
+                serde_json::json!({"id": 900, "tag_name": "v0.1.0", "target_commitish": merge,
+                    "draft": false, "prerelease": false,
+                    "assets": [{"name": "widget-0.1.0.tar.gz", "digest": "sha256:00"}]})
+                .to_string(),
+            )
+            .expect("writes");
+        } else {
+            let dir = engine.state().join("packages/0.1.0");
+            std::fs::create_dir_all(&dir).expect("creates");
+            std::fs::write(engine.state().join("packages/0.1.0.id"), "100").expect("writes");
+            std::fs::write(dir.join("widget-0.1.0.tar.gz"), "other bytes").expect("writes");
+        }
+        std::fs::write(engine.state().join("tags/v0.1.0"), &merge).expect("writes");
+        engine.clear_log();
+        let diagnostic = engine.refused("publish", 73);
+        assert_eq!(
+            diagnostic["reason"], "release-conflict",
+            "{forge}: {diagnostic}"
+        );
+        assert!(
+            diagnostic["action"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("A published version is defective"),
+            "{forge}: {diagnostic}"
+        );
+        assert!(
+            engine_writes(&engine.log()).is_empty(),
+            "{forge}: {}",
+            engine.log()
+        );
+    }
+}
+
+/// SATISFIES release-engine:a-candidate-is-a-prerelease
+#[test]
+fn a_candidate_publishes_as_a_prerelease_on_each_forge() {
+    for forge in ["github", "gitlab"] {
+        let engine = Engine::new("bash", forge, &[], "1.4.2");
+        engine.released("v1.4.2", &engine.head());
+        engine.line("1.4");
+        engine.commit(
+            "chore(release): mint v1.4.3-rc.1",
+            &[("VERSION", "1.4.3-rc.1\n")],
+        );
+        engine.ok("build");
+        engine.ok("publish");
+        let release = engine.release("v1.4.3-rc.1").expect("the candidate page");
+        if forge == "github" {
+            assert_eq!(release["prerelease"], true, "{release}");
+            assert_eq!(release["make_latest"], "false", "{release}");
+        } else {
+            let description = release["description"].as_str().expect("a description");
+            assert!(
+                description
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .contains("Release candidate v1.4.3-rc.1"),
+                "{description}"
+            );
+        }
+    }
+}
+
+/// SATISFIES release-engine:git-cliff-runs-at-its-pin
+#[test]
+fn the_engine_refuses_git_cliff_off_its_pin() {
+    let engine = Engine::new("bash", "github", &[], "0.1.0");
+    std::fs::write(engine.state().join("cliff-version"), "2.0.0").expect("writes");
+    for action in ["request", "build"] {
+        let diagnostic = engine.refused(action, 73);
+        assert_eq!(
+            diagnostic["reason"], "tool-off-pin",
+            "{action}: {diagnostic}"
+        );
+        assert!(
+            diagnostic["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains(&pinned("git-cliff"))
+        );
+    }
+    assert_eq!(engine.remote_branch("rk-release/master"), None);
+}
+
+/// SATISFIES release-engine:the-output-declares-its-schema
+///
+/// Each action prints one JSON document naming its schema; a build skip
+/// writes the same document for the jobs after it.
+#[test]
+fn each_engine_action_prints_its_schema() {
+    let engine = Engine::new("bash", "gitlab", &[], "0.1.0");
+    let request = engine.ok("request");
+    assert_eq!(request["schema"], "rk.release-request/1");
+    let build = engine.ok("build");
+    assert_eq!(build["schema"], "rk.release-build/1");
+    let written: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(engine.dir().join(".rk-release/build.json")).expect("reads"),
+    )
+    .expect("parses");
+    assert_eq!(written, build);
+    let publish = engine.ok("publish");
+    assert_eq!(publish["schema"], "rk.release-publish/1");
+    assert_eq!(publish["state"], "skip");
+}
+
+/// SATISFIES release-engine:the-output-declares-its-schema
+///
+/// On GitHub the build also writes its state, version, tag, candidate
+/// flag, and artifact list to `$GITHUB_OUTPUT`, where the attest step and
+/// the publish step read them.
+#[test]
+fn the_build_writes_its_report_to_the_github_output() {
+    let engine = Engine::new("bash", "github", &[], "0.1.0");
+    let report = engine.ok("request");
+    let merge = engine.merge(report["request"].as_u64().expect("a request"));
+    let output = engine.stubs.path().join("github-output");
+    engine
+        .run("build")
+        .env("GITHUB_OUTPUT", &output)
+        .assert()
+        .success();
+    let written = std::fs::read_to_string(&output).expect("the output file");
+    for line in [
+        "state=release",
+        "version=0.1.0",
+        "tag=v0.1.0",
+        "candidate=false",
+        &format!("artifacts<<rk-release-{merge}"),
+        "dist/widget-0.1.0.tar.gz",
+        "dist/widget-0.1.0.tar.gz.sha256",
+    ] {
+        assert!(written.lines().any(|row| row == line), "{line}: {written}");
+    }
+    assert_eq!(
+        written.lines().last(),
+        Some(format!("rk-release-{merge}").as_str())
+    );
 }

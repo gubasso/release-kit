@@ -190,9 +190,10 @@ fn resolve_ref(action: &str, pinned_commit: &str) -> (&'static str, Option<Strin
 }
 
 /// The page bound for a paged answer: at 100 entries a page, ten pages is
-/// a thousand tags, past any project this registry pins. A source deeper
-/// than that reads as unreachable rather than as a version this check
-/// silently guessed.
+/// a thousand tags, past any forge project this registry pins, and Docker
+/// Hub refuses an anonymous read past its tenth page. A source deeper than
+/// that reads as unreachable rather than as a version this check silently
+/// guessed.
 const MAX_PAGES: u32 = 10;
 
 /// One GET, or `None` where the fetch failed.
@@ -226,8 +227,22 @@ fn paged(url: &str, page: u32) -> String {
 /// Reaching the bound with a page still full is not an answer: the list
 /// continues past what was read, so the greatest version is unknown. That
 /// reads as `source-unreachable`, the same as a failed fetch, rather than
-/// as the greatest of the pages that happened to fit.
+/// as the greatest of the pages that happened to fit. A Docker Hub tag
+/// list is an object that links its next page, and it is read the same
+/// way: every page to the same bound, the greatest numbered tag across
+/// them, and a failed page or a bound reached with a next page still
+/// named reads as `source-unreachable`.
 fn check_one(tool: &str, pinned: &str, url: &str) -> PinResult {
+    check_with(tool, pinned, url, fetch)
+}
+
+/// [`check_one`] over any fetch, so a test can answer each URL itself.
+fn check_with(
+    tool: &str,
+    pinned: &str,
+    url: &str,
+    fetch: impl Fn(&str) -> Option<Vec<u8>>,
+) -> PinResult {
     let result = |result, available| PinResult {
         tool: tool.to_owned(),
         pinned: pinned.to_owned(),
@@ -264,6 +279,26 @@ fn check_one(tool: &str, pinned: &str, url: &str) -> PinResult {
         if !ended {
             return result("source-unreachable", None);
         }
+    } else {
+        // A Docker Hub tag list names its next page in `next`, and its
+        // order does not establish the greatest version, so every page is
+        // read, to the bound.
+        let mut next = next_page(&body);
+        let mut pages = 1;
+        while let Some(link) = next {
+            if pages == MAX_PAGES {
+                return result("source-unreachable", None);
+            }
+            let Some(body) = fetch(&link) else {
+                return result("source-unreachable", None);
+            };
+            if !is_tag_list(&body) {
+                return result("source-unparsable", None);
+            }
+            best = greater(best, latest_version(&body));
+            next = next_page(&body);
+            pages += 1;
+        }
     }
     let Some(available) = best else {
         return result("source-unparsable", None);
@@ -278,6 +313,27 @@ fn check_one(tool: &str, pinned: &str, url: &str) -> PinResult {
 /// Whether the answer is one page of a list rather than a single object.
 fn is_page(body: &[u8]) -> bool {
     serde_json::from_slice::<serde_json::Value>(body).is_ok_and(|value| value.is_array())
+}
+
+/// Whether the answer is a page of a Docker Hub tag list.
+fn is_tag_list(body: &[u8]) -> bool {
+    serde_json::from_slice::<serde_json::Value>(body).is_ok_and(|value| {
+        value
+            .get("results")
+            .is_some_and(serde_json::Value::is_array)
+    })
+}
+
+/// The link a Docker Hub tag list page gives to the page after it, or
+/// `None` on its last page and on every other answer.
+fn next_page(body: &[u8]) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_slice(body).ok()?;
+    value.get("results")?.as_array()?;
+    value
+        .get("next")?
+        .as_str()
+        .filter(|link| !link.is_empty())
+        .map(str::to_owned)
 }
 
 /// Whether the answer is a page past the end of the list.
@@ -301,15 +357,18 @@ fn greater(left: Option<String>, right: Option<String>) -> Option<String> {
     }
 }
 
-/// The latest version a source's JSON names, across the three answer
+/// The latest version a source's JSON names, across the four answer
 /// shapes: `max_stable_version` from a crates.io answer, `tag_name` from a
-/// forge's releases answer, and the greatest `name` from a forge's tags
-/// answer, which is an array.
+/// forge's releases answer, the greatest `name` from a forge's tags
+/// answer, which is an array, and the greatest numbered `name` in the
+/// `results` of a Docker Hub tag list.
 ///
 /// The tags shape exists for a project that publishes tags and cuts no
 /// releases, so no releases answer names its latest version. The greatest
 /// is taken rather than the first, because the endpoint promises no
-/// ordering.
+/// ordering. A Docker Hub tag counts only where it opens with its version,
+/// read up to the variant suffix, so `13.7-slim` reads as `13.7` and a
+/// dated suite tag never passes for a version.
 fn latest_version(body: &[u8]) -> Option<String> {
     let value: serde_json::Value = serde_json::from_slice(body).ok()?;
     if let Some(tags) = value.as_array() {
@@ -317,6 +376,20 @@ fn latest_version(body: &[u8]) -> Option<String> {
             .iter()
             .filter_map(|tag| tag.get("name").and_then(serde_json::Value::as_str))
             .filter_map(number_from)
+            .max_by(|left, right| numeric_parts(left).cmp(&numeric_parts(right)));
+    }
+    if let Some(results) = value.get("results").and_then(serde_json::Value::as_array) {
+        return results
+            .iter()
+            .filter_map(|tag| tag.get("name").and_then(serde_json::Value::as_str))
+            .filter(|name| name.starts_with(|c: char| c.is_ascii_digit()))
+            .map(|name| {
+                name.split(|c: char| !(c.is_ascii_digit() || c == '.'))
+                    .next()
+                    .unwrap_or_default()
+                    .trim_end_matches('.')
+                    .to_owned()
+            })
             .max_by(|left, right| numeric_parts(left).cmp(&numeric_parts(right)));
     }
     let raw = value
@@ -355,7 +428,65 @@ fn is_current(pinned: &str, available: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{PinResult, Report, is_current, latest_version};
+    use super::{PinResult, Report, check_with, is_current, latest_version};
+
+    /// One page of a Docker Hub tag list naming `tags`, with `next` as its
+    /// link to the page after it.
+    fn tag_page(next: Option<&str>, tags: &[&str]) -> Vec<u8> {
+        serde_json::json!({
+            "next": next,
+            "results": tags.iter().map(|name| serde_json::json!({"name": name})).collect::<Vec<_>>(),
+        })
+        .to_string()
+        .into_bytes()
+    }
+
+    const HUB: &str =
+        "https://hub.docker.com/v2/namespaces/library/repositories/debian/tags?page_size=100";
+
+    /// A newer numbered tag on a later page of a Docker Hub tag list wins,
+    /// because the list's order does not establish the greatest version.
+    #[test]
+    fn a_docker_hub_tag_list_reads_a_newer_tag_on_a_later_page() {
+        let checked = check_with("debian-image", "13.7", HUB, |url| match url {
+            HUB => Some(tag_page(
+                Some("https://hub.example/p2"),
+                &["13.7-slim", "13-slim"],
+            )),
+            "https://hub.example/p2" => Some(tag_page(None, &["13.8-slim", "12.15-slim"])),
+            _ => None,
+        });
+        assert_eq!(checked.result, "update-available");
+        assert_eq!(checked.available.as_deref(), Some("13.8"));
+    }
+
+    /// A later page that fails leaves the greatest version unknown, so the
+    /// pin reads as not observed, never as current.
+    #[test]
+    fn a_docker_hub_tag_list_with_a_failed_page_is_not_observed() {
+        let checked = check_with("debian-image", "13.7", HUB, |url| {
+            (url == HUB).then(|| tag_page(Some("https://hub.example/p2"), &["13.7-slim"]))
+        });
+        assert_eq!(checked.result, "source-unreachable");
+        assert_eq!(checked.available, None);
+    }
+
+    /// A list that still names a next page at the bound is read only in
+    /// part, so the pin reads as not observed, never as current.
+    #[test]
+    fn a_docker_hub_tag_list_past_the_bound_is_not_observed() {
+        let checked = check_with("debian-image", "13.7", HUB, |url| {
+            let page: u32 = url
+                .strip_prefix("https://hub.example/p")
+                .map_or(1, |page| page.parse().expect("a page number"));
+            Some(tag_page(
+                Some(&format!("https://hub.example/p{}", page + 1)),
+                &["13.7-slim"],
+            ))
+        });
+        assert_eq!(checked.result, "source-unreachable");
+        assert_eq!(checked.available, None);
+    }
 
     #[test]
     fn a_source_version_is_read_from_both_answer_shapes() {
@@ -394,6 +525,27 @@ mod tests {
         );
         assert_eq!(latest_version(b"[]"), None);
         assert_eq!(latest_version(br#"[{"sha":"abc"}]"#), None);
+    }
+
+    /// Docker Hub's tag list, for an image that cuts no forge release. Only
+    /// a tag that opens with its version counts, read up to the variant
+    /// suffix, so a dated or suite-named tag never passes for a version.
+    #[test]
+    fn a_docker_hub_tag_list_reads_the_greatest_numbered_tag() {
+        assert_eq!(
+            latest_version(
+                br#"{"count":5,"next":null,"results":[{"name":"trixie-20261104-slim"},{"name":"13.7-slim"},{"name":"13-slim"},{"name":"12.15-slim"},{"name":"stable-slim"}]}"#
+            ),
+            Some("13.7".to_owned())
+        );
+        assert_eq!(
+            latest_version(br#"{"results":[{"name":"13.10-slim"},{"name":"13.9-slim"}]}"#),
+            Some("13.10".to_owned())
+        );
+        assert_eq!(
+            latest_version(br#"{"results":[{"name":"stable-slim"}]}"#),
+            None
+        );
     }
 
     #[test]

@@ -1,6 +1,7 @@
-# git-cliff configuration. git cliff --bump derives the next version from
-# Conventional Commits and rewrites the changelog deterministically; the
-# release workflow drives it, and VERSION stays the committed source of truth.
+# git-cliff configuration. rk release request asks git-cliff for the next
+# version, which git-cliff derives from Conventional Commits, and writes the
+# changelog through it deterministically. VERSION stays the committed source
+# of truth.
 
 [changelog]
 header = """
@@ -34,9 +35,9 @@ commit_parsers = [
 ]
 
 [bump]
-# The unreleased baseline in VERSION is 0.0.0; with no tag yet, the first
-# release request bumps straight to this initial tag instead of deadlocking
-# on the default it would otherwise share with the committed version.
+# The unreleased baseline in VERSION is 0.0.0. With no tag yet, the first
+# release request proposes this initial tag instead of deadlocking on the
+# default it would otherwise share with the committed version.
 initial_tag = "v0.1.0"
 # Before 1.0.0 the minor position is the breaking position: a feature bumps
 # the patch and a breaking change bumps the minor, per the method invariant.

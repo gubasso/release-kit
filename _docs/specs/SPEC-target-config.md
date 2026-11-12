@@ -266,7 +266,7 @@ Verify: `cargo nextest run -E 'test(a_malformed_acquisition_minimum_refuses_as_c
 
 Where a project runs its tools in its own development environment, the configuration MAY record how in the `dev_environment` table: `run`, the command prefix, `github.setup` and `github.cache`, the action steps that put the environment on a runner, and `gitlab.image` and `gitlab.before_script`. Only the operator writes the table, and a landing verb MUST NOT infer it from a file the target carries, because release-kit assumes no environment manager. The resolution MUST take the table over the record, record the answer, and keep the table on every rewrite. A `run` that is empty MUST state that the project gives no answer and clear a recorded one.
 
-Every action step MUST pin `uses` to a full commit SHA. An unpinned step, a `run` that cannot stand in one shell line and one plain YAML scalar, and a `run` with no setup for the landed forge MUST refuse as `config-invalid` and name the key. With an answer, the rendered rust release jobs MUST run release-plz through `run`, take the setup steps, and install no toolchain and no release-plz themselves, and only the job that holds no publishing credential MUST take the cache steps. With no answer, every rendered byte MUST equal the rendering before the table existed.
+Every action step MUST pin `uses` to a full commit SHA. An unpinned step, a `run` that cannot stand in one shell line and one plain YAML scalar, and a `run` with no setup for the landed forge MUST refuse as `config-invalid` and name the key. With an answer, the rendered rust release jobs MUST run release-plz through `run`, take the setup steps, and install no toolchain and no release-plz themselves, the rendered jobs of the bash pairs that run `rk release` MUST run `rk` through `run`, take the setup steps on GitHub and the image and setup lines on GitLab, and install no `rk` and no git-cliff themselves, and only the job that holds no publishing credential MUST take the cache steps. With no answer, every rendered byte MUST equal the rendering before the table existed.
 
 #### Scenario: A project records its development environment
 
@@ -280,7 +280,7 @@ Every action step MUST pin `uses` to a full commit SHA. An unpinned step, a `run
 - WHEN any verb that reads the configuration runs
 - THEN it refuses as `config-invalid` naming `dev_environment.github.setup[0].uses`, and nothing is written
 
-Verify: `cargo nextest run -E 'test(dev_environment)'`
+Verify: `cargo nextest run -E 'test(dev_environment) or test(each_engine_job_takes_rk_from_a_recorded_environment) or test(each_engine_job_installs_rk_at_the_landing_version_without_an_environment)'`
 
 ### `target-config:a-security-scope-is-one-paragraph` — A security scope is one paragraph
 

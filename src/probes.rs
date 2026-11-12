@@ -158,6 +158,25 @@ pub fn sh_bin() -> std::ffi::OsString {
     std::env::var_os("RK_SH_BIN").unwrap_or_else(|| "sh".into())
 }
 
+/// One owner for the git-cliff binary the release engine spawns.
+///
+/// `RK_GIT_CLIFF_BIN` substitutes it, the same contract `RK_GIT_BIN`
+/// states. The engine compares the binary's version with the
+/// `versions.toml` pin before it trusts any output.
+#[must_use]
+pub fn git_cliff_bin() -> std::ffi::OsString {
+    std::env::var_os("RK_GIT_CLIFF_BIN").unwrap_or_else(|| "git-cliff".into())
+}
+
+/// One owner for the uv binary the python driver adapter spawns.
+///
+/// `RK_UV_BIN` substitutes it. The engine runs the uv the job installed,
+/// and uv enforces the target's own `required-version`.
+#[must_use]
+pub fn uv_bin() -> std::ffi::OsString {
+    std::env::var_os("RK_UV_BIN").unwrap_or_else(|| "uv".into())
+}
+
 /// Run the whole catalog, in its stable order.
 #[must_use]
 pub fn run_all() -> Vec<ProbeResult> {

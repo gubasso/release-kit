@@ -18,7 +18,7 @@ A binding is the release automation capability at two dimensions: the release dr
 | Axis                | Rust            | Python                               | JS and Node                          | Go                     | Bash                        |
 | ------------------- | --------------- | ------------------------------------ | ------------------------------------ | ---------------------- | --------------------------- |
 | Version file        | `Cargo.toml`    | `pyproject.toml` `[project] version` | `package.json` `version`             | the tag itself         | `VERSION`                   |
-| Release-request bot | release-plz     | release-please                       | Changesets                           | none                   | git-cliff                   |
+| Release-request bot | release-plz     | release-please                       | Changesets                           | none                   | rk with git-cliff           |
 | Registry and auth   | crates.io, OIDC | PyPI, OIDC                           | npm, OIDC                            | none; the module proxy | none                        |
 | Artifact builder    | cargo-dist      | wheels and sdist are the artifacts   | the registry tarball is the artifact | GoReleaser             | the build command's tarball |
 

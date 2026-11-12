@@ -36,6 +36,7 @@ pub mod probes;
 pub mod profile;
 pub mod projection;
 pub mod registry;
+pub mod release_engine;
 pub mod release_state;
 pub mod self_depend;
 pub mod setup;

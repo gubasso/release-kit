@@ -138,13 +138,14 @@
               # The changelog test renders the landed cliff.toml seeds through
               # the git-cliff the release pipelines install: the same release
               # tarball at the pin versions.toml names, not the nixpkgs build,
-              # which moves with the lock.
+              # which moves with the lock. The rk release engine refuses any
+              # other version.
               (pkgs.stdenvNoCC.mkDerivation rec {
                 pname = "git-cliff";
-                version = "2.13.1";
+                version = "2.14.2";
                 src = pkgs.fetchurl {
                   url = "https://github.com/orhun/git-cliff/releases/download/v${version}/git-cliff-${version}-x86_64-unknown-linux-musl.tar.gz";
-                  hash = "sha256-IA0lNdptlwPzvMik0VnDtV6s2wHPIUjFWz7undBNUkk=";
+                  hash = "sha256-+iHi/HAEb8/Q5D5eRhOHOreZr/PZ3IVZwA0xsnDkF9A=";
                 };
                 installPhase = ''
                   install -Dm755 git-cliff $out/bin/git-cliff

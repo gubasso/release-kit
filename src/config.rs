@@ -699,9 +699,9 @@ fn release_vocabulary(raw: &toml::Value) -> Result<(), RkError> {
     }
 }
 
-/// Whether a build command can stand in a pipeline script: one line, no
-/// control character, and not empty, because the pipelines run it as the
-/// one line their build step names.
+/// Whether a build command can run as one shell line: one line, no
+/// control character, and not empty, because `rk release build` runs it
+/// that way.
 ///
 /// # Errors
 /// The refusal text, naming the key and what it accepts.

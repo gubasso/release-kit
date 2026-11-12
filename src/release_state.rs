@@ -10,7 +10,7 @@
 //!
 //! SATISFIES release-state:a-forge-field-reads-unknown-without-credentials
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use camino::Utf8Path;
 use serde::Serialize;
@@ -206,8 +206,8 @@ impl Pair {
     pub fn request_prefix(&self) -> Option<&'static str> {
         match self.driver.as_str() {
             "rust" => Some("release-plz-"),
-            "python" => Some("release-please--"),
-            "bash" => Some("chore/release-v"),
+            // The engine keeps one request per base on `rk-release/<base>`.
+            "python" | "bash" => Some(crate::release_engine::REQUEST_PREFIX),
             _ => None,
         }
     }
@@ -217,8 +217,7 @@ impl Pair {
     pub fn publish_workflow(&self) -> Option<&'static str> {
         match (self.forge, self.driver.as_str()) {
             (Forge::Github, "rust") => Some("release-plz.yml"),
-            (Forge::Github, "python") => Some("release-please.yml"),
-            (Forge::Github, "bash") => Some("release.yml"),
+            (Forge::Github, "python" | "bash") => Some("release.yml"),
             _ => None,
         }
     }
@@ -764,51 +763,54 @@ pub fn registry_serves(registry: Registry, package: &str, version: Option<&str>)
     }
 }
 
-/// The package name the registry knows, read from the target's own
-/// version file: `[package].name` in `Cargo.toml`, `[project].name` in
-/// `pyproject.toml`.
-#[must_use]
-pub fn package_name(target: &Path, driver: &str) -> Option<String> {
-    let (file, table) = match driver {
-        "rust" => ("Cargo.toml", "package"),
-        "python" => ("pyproject.toml", "project"),
-        _ => return None,
-    };
-    let text = std::fs::read_to_string(target.join(file)).ok()?;
-    let value: toml::Table = toml::from_str(&text).ok()?;
-    value.get(table)?.get("name")?.as_str().map(str::to_owned)
-}
-
-/// The file that carries a driver's version, with the table that holds
-/// its `version` key, or `None` for the `VERSION` file whose whole content
-/// is the version.
-#[must_use]
-pub fn version_file(driver: &str) -> Option<(&'static str, Option<&'static str>)> {
-    match driver {
-        "rust" => Some(("Cargo.toml", Some("package"))),
-        "python" => Some(("pyproject.toml", Some("project"))),
-        "bash" => Some(("VERSION", None)),
-        _ => None,
+/// Every file the registry serves for `package` at `version`, with its
+/// SHA-256.
+///
+/// `Ok(None)` where the registry answers 404 for the version, and the
+/// reason where it answers anything else. It reads through the curl
+/// launcher [`registry_serves`] reads through.
+///
+/// # Errors
+///
+/// The reason where the registry gave no definite answer.
+pub fn registry_files(
+    registry: Registry,
+    package: &str,
+    version: &str,
+) -> Result<Option<Vec<(String, String)>>, String> {
+    let curl = std::env::var_os("RK_CURL_BIN").unwrap_or_else(|| "curl".into());
+    let output = std::process::Command::new(curl)
+        .args(["-sS", "-w", "\n%{http_code}", "--max-time", "20"])
+        .args(["-A", concat!("release-kit/", env!("CARGO_PKG_VERSION"))])
+        .arg(registry.url(package, Some(version)))
+        .output()
+        .map_err(|source| format!("curl did not run: {source}"))?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    let (body, code) = text
+        .trim_end()
+        .rsplit_once('\n')
+        .unwrap_or_else(|| ("", text.trim()));
+    match code.trim() {
+        "404" => Ok(None),
+        "200" => {
+            let value: Value =
+                serde_json::from_str(body).map_err(|_| "the answer is not JSON".to_owned())?;
+            Ok(Some(
+                value["urls"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|file| {
+                        Some((
+                            file["filename"].as_str()?.to_owned(),
+                            file["digests"]["sha256"].as_str()?.to_owned(),
+                        ))
+                    })
+                    .collect(),
+            ))
+        }
+        other => Err(format!("the registry answered {other:?}")),
     }
-}
-
-/// The version the target's own version file carries, in the
-/// technology's own spelling: `[package].version` in `Cargo.toml`,
-/// `[project].version` in `pyproject.toml`, the trimmed `VERSION` file.
-#[must_use]
-pub fn manifest_version(target: &Path, driver: &str) -> Option<String> {
-    let (file, table) = version_file(driver)?;
-    let text = std::fs::read_to_string(target.join(file)).ok()?;
-    let Some(table) = table else {
-        let version = text.trim();
-        return (!version.is_empty()).then(|| version.to_owned());
-    };
-    let value: toml::Table = toml::from_str(&text).ok()?;
-    value
-        .get(table)?
-        .get("version")?
-        .as_str()
-        .map(str::to_owned)
 }
 
 /// The GitLab project id a path names, URL-encoded once.

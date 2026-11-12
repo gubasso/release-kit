@@ -21,12 +21,12 @@ This applies to a target whose release intent is `automatic`. A rerun runs the c
 1. Where the cause was transient, such as a cancelled runner or a network error, re-run the failed jobs of the `release.yml` run that the tag push started. The run attaches the artifacts and mints their provenance.
 2. Where the cause was in the code, such as a target that does not build, fix it on the trunk and release the next version. Record the gap where the project keeps its known issues: the version shipped without its release page. Once a newer release of the line is complete, the symptom drops out.
 
-On GitHub, a bash pipeline starts no run on the tag push: its release workflow runs on the branch push alone, and that one run at the bump commit builds, attests, and publishes. Where the cause was transient, re-run the failed `tag-and-attach` job of that branch-push run; where it was in the code, take route 2.
+On GitHub, a bash pipeline starts no run on the tag push: its release workflow runs on the branch push alone, and that one run at the bump commit builds, attests, and publishes. Where the cause was transient, re-run the failed `release` job of that branch-push run; where it was in the code, take route 2.
 
-On GitLab, take the routes in the same order. A bash pipeline reaches this state when a release save failed after GitLab created the tag, when a pipeline ran before the tag moved to the release create, or when the tag names another commit and `attach` refuses it.
+On GitLab, take the routes in the same order. A bash pipeline reaches this state when a release save failed after GitLab created the tag, when a pipeline ran before the tag moved to the release create, or when the tag names another commit and `publish` refuses it.
 
-1. Where the tag names the pipeline's own commit, a rerun of `attach` creates the release on it.
-2. Where the tag names the bump commit and the cause was transient, retry the failed job of the tag's pipeline on the same commit while the artifacts of `build` and `provenance` persist, because `attach` uploads what the package registry lacks and links what the release page lacks. `attach` needs both jobs' artifacts, so where they expired, retry `build`, then `provenance` on that build, then `attach`, all on the same commit.
+1. Where the tag names the pipeline's own commit, a rerun of `publish` creates the release on it.
+2. Where the tag names the bump commit and the cause was transient, retry the failed job of the tag's pipeline on the same commit while the artifacts of `build` and `provenance` persist, because `publish` uploads what the package registry lacks and links what the release page lacks. `publish` needs both jobs' artifacts, so where they expired, retry `build`, then `provenance` on that build, then `publish`, all on the same commit.
 3. Where the cause was in the pipeline or the code, or the tag names another commit, fix it on the trunk and release the next version, as on GitHub.
 
 Never move or delete a protected tag, on either forge. The gated `dist-build` job of the Rust binding is the prevention: it builds every target before the merge, so a target the code cannot build fails the request instead of the release.

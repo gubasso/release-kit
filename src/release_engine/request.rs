@@ -1,0 +1,320 @@
+//! `rk release request`: keep the one release request of the pushed base.
+//!
+//! It runs on a push to the trunk or to a release line. It reads the
+//! version through the adapter and proposes the next one; where nothing
+//! remains to release it closes a stale request, and otherwise it writes
+//! the version and the changelog on `rk-release/<base>`, force-pushes it as
+//! the bot, opens or edits the request, and arms it where the projection
+//! arms.
+
+use camino::Utf8Path;
+use serde::Serialize;
+
+use crate::diagnostic::{Diagnostic, Reason};
+use crate::error::RkError;
+
+use super::adapter::Version;
+use super::forge::Client;
+use super::guard::{self, Proposal};
+use super::{Context, Done, cliff};
+
+/// The report's shape version.
+pub const SCHEMA: &str = "rk.release-request/1";
+
+/// The machine form of `rk release request`.
+#[derive(Debug, Serialize)]
+pub struct RequestReport {
+    /// The shape version of this document.
+    pub schema: &'static str,
+    /// `opened`, `refreshed`, `closed`, `nothing`, or `skip`.
+    pub state: &'static str,
+    /// Why nothing was proposed, where nothing was.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// The base the request merges into.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
+    /// The version the base carries, in the driver's spelling.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// The version the request proposes, in the driver's spelling.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proposal: Option<String>,
+    /// The tag the proposal releases as.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+    /// The request's number on the forge.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request: Option<u64>,
+    /// Whether the request stands armed after this run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub armed: Option<bool>,
+    /// Every file the request commit changed.
+    pub files: Vec<String>,
+}
+
+impl RequestReport {
+    const fn empty(state: &'static str) -> Self {
+        Self {
+            schema: SCHEMA,
+            state,
+            reason: None,
+            base: None,
+            version: None,
+            proposal: None,
+            tag: None,
+            request: None,
+            armed: None,
+            files: Vec::new(),
+        }
+    }
+}
+
+/// Keep the release request of the pushed base.
+///
+/// # Errors
+///
+/// A refusal of the default CI token, of git-cliff off its pin, or of a
+/// prerelease proposal; a forge or a push failure.
+pub fn run(target: &Utf8Path) -> Result<Done<RequestReport>, RkError> {
+    let context = Context::load(target)?;
+    if let Some(var) = super::default_ci_token(context.forge, |name| std::env::var(name).ok()) {
+        return Err(RkError::refusal(
+            Diagnostic::new(
+                Reason::DefaultCiToken,
+                format!(
+                    "the push credential is {var}, the forge's default CI token, and a push with it starts no pipeline"
+                ),
+            )
+            .expected(match context.forge {
+                crate::detect::Forge::Github => "GH_TOKEN set to the release App's token",
+                crate::detect::Forge::Gitlab => "GITLAB_TOKEN set from RELEASE_BOT_TOKEN",
+            })
+            .target_state("unchanged; nothing was pushed"),
+        ));
+    }
+    let Some(base) = context
+        .pushed_branch()
+        .filter(|branch| context.is_base(branch))
+    else {
+        let mut report = RequestReport::empty("skip");
+        report.reason = Some("the push is to no release base".to_owned());
+        return Ok(Done {
+            lines: vec!["skip: the push is to neither the trunk nor a release line".to_owned()],
+            report,
+            next: Vec::new(),
+        });
+    };
+    cliff::require_pin(target)?;
+    let client = Client::resolve(context.forge, target, &context.repo)?;
+    let current = context.adapter.read_version(target)?;
+    let branch = super::request_branch(&base);
+    let proposal = decide(&context, &client, target, current)?;
+    let mut report = RequestReport::empty("nothing");
+    report.base = Some(base.clone());
+    report.version = Some(current.spelled(context.driver()));
+    let next = match proposal {
+        Proposal::Refuse(reason) => {
+            return Err(RkError::refusal(
+                Diagnostic::new(Reason::StateDrift, reason)
+                    .expected("a final version for the request to propose")
+                    .action("rk lines mint numbers a candidate; the request proposes final versions alone")
+                    .target_state("unchanged"),
+            ));
+        }
+        Proposal::Nothing(reason) => return close_stale(&context, &client, &base, report, reason),
+        Proposal::Propose(next) => next,
+    };
+    let tag = context.adapter.tag_of(next);
+    let files = commit_request(&context, &client, next, &tag, &branch)?;
+    let title = format!("chore(release): {tag}");
+    let body = super::forge_text(
+        "blocks/release-request-body.md.in",
+        &[("RK_TAG", &tag), ("RK_BASE", &base)],
+    )?;
+    let (number, state) = match client.open_request(&base, &branch)? {
+        Some(number) => {
+            client.edit_request(number, &title, &body)?;
+            (number, "refreshed")
+        }
+        None => (
+            client.create_request(&base, &branch, &title, &body)?,
+            "opened",
+        ),
+    };
+    let arms = guard::arms(
+        context.forge,
+        context.integration,
+        context.style,
+        &base,
+        &context.trunk,
+    );
+    let armed = arms && client.arm(number, context.merge_form)?;
+    let mut lines = vec![format!(
+        "{state} release request #{number} proposing {} on {branch} into {base}",
+        next.spelled(context.driver())
+    )];
+    lines.push(match (arms, armed) {
+        (true, true) => "armed: the request merges itself once its checks pass".to_owned(),
+        (true, false) => {
+            "arm deferred: the forge cannot take it before the request's first pipeline; the next push re-arms".to_owned()
+        }
+        (false, _) => "not armed: a person merges this request".to_owned(),
+    });
+    report.state = state;
+    report.proposal = Some(next.spelled(context.driver()));
+    report.tag = Some(tag);
+    report.request = Some(number);
+    report.armed = Some(armed);
+    report.files = files;
+    Ok(Done {
+        report,
+        lines,
+        next: Vec::new(),
+    })
+}
+
+/// Whether the forge holds a published release of `version`: a release
+/// that is not a draft. A tag alone is no release, because a failed
+/// release save on GitLab leaves its tag behind, and a GitHub draft is
+/// unpublished. A read that failed refuses, because a release nobody read
+/// may exist.
+fn released(context: &Context, client: &Client, version: Version) -> Result<bool, RkError> {
+    // SATISFIES release-engine:the-request-never-numbers-a-candidate
+    Ok(client
+        .release(&context.adapter.tag_of(version))?
+        .is_some_and(|release| !release.draft))
+}
+
+/// The proposal for the version the base carries.
+fn decide(
+    context: &Context,
+    client: &Client,
+    target: &Utf8Path,
+    current: Version,
+) -> Result<Proposal, RkError> {
+    if current.is_candidate() {
+        return Ok(guard::propose(current, false, None));
+    }
+    let was_released = released(context, client, current)?;
+    let answer = if guard::needs_cliff(current, was_released) {
+        Some(cliff::bumped(target)?)
+    } else {
+        None
+    };
+    let proposal = guard::propose(current, was_released, answer.as_deref());
+    if let Proposal::Propose(next) = proposal
+        && next != current
+        && released(context, client, next)?
+    {
+        return Ok(Proposal::Nothing(format!(
+            "{} is already released",
+            next.tag()
+        )));
+    }
+    Ok(proposal)
+}
+
+/// Close the open request of `base`, where one is open, and delete its
+/// branch: nothing remains for it to release.
+fn close_stale(
+    context: &Context,
+    client: &Client,
+    base: &str,
+    mut report: RequestReport,
+    reason: String,
+) -> Result<Done<RequestReport>, RkError> {
+    let branch = super::request_branch(base);
+    let mut lines = vec![format!("nothing to release: {reason}")];
+    if let Some(number) = client.open_request(base, &branch)? {
+        client.close_request(number)?;
+        let held = super::git_ok(
+            &context.target,
+            &["ls-remote", "--heads", "origin", &branch],
+            "an origin remote git can read",
+        )?;
+        if !held.trim().is_empty() {
+            super::push(context, &["--delete", &branch])?;
+        }
+        lines.push(format!(
+            "closed the stale release request #{number} and deleted {branch}"
+        ));
+        report.state = "closed";
+        report.request = Some(number);
+    }
+    report.reason = Some(reason);
+    Ok(Done {
+        report,
+        lines,
+        next: Vec::new(),
+    })
+}
+
+/// Write the version and the changelog on a fresh `branch` from the pushed
+/// tip, commit them as the bot, force-push, and return the checkout to
+/// where it stood.
+fn commit_request(
+    context: &Context,
+    client: &Client,
+    next: Version,
+    tag: &str,
+    branch: &str,
+) -> Result<Vec<String>, RkError> {
+    let target = &context.target;
+    let original = super::git(target, &["symbolic-ref", "--short", "-q", "HEAD"])?;
+    let original = if original.status.success() {
+        String::from_utf8_lossy(&original.stdout).trim().to_owned()
+    } else {
+        context.head()?
+    };
+    super::git_ok(
+        target,
+        &["checkout", "-q", "-B", branch],
+        "a fresh request branch from the pushed tip",
+    )?;
+    let committed = (|| {
+        let mut files: Vec<String> = context
+            .adapter
+            .write_version(target, next)?
+            .into_iter()
+            .map(String::from)
+            .collect();
+        cliff::changelog(target, tag)?;
+        files.push("CHANGELOG.md".to_owned());
+        // SATISFIES bot-identity:the-bot-identity-reaches-one-project
+        let (name, email) = client.identity()?;
+        let mut add = vec!["add", "--"];
+        add.extend(files.iter().map(String::as_str));
+        super::git_ok(target, &add, "the release files staged")?;
+        let user = format!("user.name={name}");
+        let mail = format!("user.email={email}");
+        let message = format!("chore(release): {tag}");
+        super::git_ok(
+            target,
+            &[
+                "-c",
+                &user,
+                "-c",
+                &mail,
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                &message,
+            ],
+            "the release commit",
+        )?;
+        // SATISFIES release-engine:one-request-per-base
+        let refspec = format!("HEAD:refs/heads/{branch}");
+        super::push(context, &["--force", &refspec])?;
+        Ok::<_, RkError>(files)
+    })();
+    let restored = super::git_ok(
+        target,
+        &["checkout", "-q", "-f", &original],
+        "the checkout returned to the pushed tip",
+    );
+    let files = committed?;
+    restored?;
+    Ok(files)
+}
