@@ -98,14 +98,16 @@
         in
         {
           # What belongs here: a tool this project pins that no more specific
-          # owner declares, and a runtime pre-commit needs to build or run a hook.
-          # A hook tool that pre-commit can build (typos, zizmor, actionlint,
-          # md-toc, ...) is pinned in .pre-commit-config.yaml, and a language
-          # library never enters this shell. What does not: the host baseline.
-          # git is assumed present, because a pre-commit hook has no meaning
-          # without it; the Rust toolchain comes from rust-toolchain.toml through
-          # the overlay so CI and local development share one compiler. The
-          # installed package owns its own runtime closure in nix/package.nix.
+          # owner declares, and a runtime the hook runner needs to build or run
+          # a hook. A hook tool that the runner can build (typos, zizmor,
+          # actionlint, md-toc, ...) is pinned in .pre-commit-config.yaml, and a
+          # language library never enters this shell. What does not: the host
+          # baseline. git and the hook runner, prek, come from the host:
+          # .pre-commit-config.yaml declares the oldest prek it accepts, and
+          # ci.yml installs that version. The Rust toolchain comes from
+          # rust-toolchain.toml through the overlay so CI and local development
+          # share one compiler. The installed package owns its own runtime
+          # closure in nix/package.nix.
           #
           # rk is absent on purpose, and it is the one tool this shell may not
           # carry. A binary embeds the sources it was compiled from, so an rk
@@ -123,7 +125,6 @@
               pkgs.cargo-nextest
               pkgs.cargo-deny
               pkgs.just
-              pkgs.pre-commit
               pkgs.dprint
               # The markdownlint-cli2 hook builds on this nodejs
               # (default_language_version in .pre-commit-config.yaml).
@@ -131,7 +132,7 @@
               # The Verify lines of the specs that sdd ships call rg.
               pkgs.ripgrep
               pkgs.lychee
-              # actionlint, a hook that pre-commit builds, runs shellcheck from
+              # actionlint, a hook that the hook runner builds, runs shellcheck from
               # PATH on the `run:` scripts of the workflows it reads.
               pkgs.shellcheck
               pkgs.jq

@@ -32,6 +32,13 @@ jobs:
         with:
           use-flakehub: false
           use-gha-cache: true
+      # The hook runner comes from the host, not the devshell, so this job
+      # installs it here at the minimum_prek_version of
+      # .pre-commit-config.yaml. nix develop keeps it on PATH.
+      - uses: j178/prek-action@44924fe9ef4a6f88253c4b6b1bf11c689d3ce53d # v3.1.0
+        with:
+          install-only: true
+          prek-version: "0.5.7"
       # sdd is this repository's docs gate and comes from the flake input the
       # devshell carries, so this job installs it nowhere: the shell that runs
       # just check is the shell that has it, and flake.lock is what pins it.

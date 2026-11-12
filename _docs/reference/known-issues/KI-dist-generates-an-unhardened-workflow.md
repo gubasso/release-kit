@@ -26,8 +26,8 @@ retire_when: each mask retires with its own upstream fix, once the cargo-dist pi
 ## Signal
 
 ```bash
-pre-commit run zizmor-own --all-files
-pre-commit run actionlint --files .github/workflows/release.yml
+prek run zizmor-own --all-files
+prek run actionlint --files .github/workflows/release.yml
 ```
 
 Removing the `release.yml` entries from `zizmor.yml` returns five findings. Removing the `release.yml` entry from `.github/actionlint.yaml` returns five shellcheck relays.

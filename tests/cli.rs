@@ -49,7 +49,7 @@ fn package_file_count() -> usize {
 
 fn rk() -> Rk {
     // Scrubbed of the variables a running git hook exports: a suite that
-    // executes under pre-commit from a linked worktree would otherwise
+    // executes under the hook runner from a linked worktree would otherwise
     // hand every child a GIT_DIR resolving to the real repository.
     let mut command = Command::cargo_bin("rk").expect("the rk binary builds");
     for var in GIT_HOOK_VARS {
@@ -5695,7 +5695,7 @@ impl ForgeFixture {
         // A real repository, so the branch-reminder step has a hooks
         // directory to write into; it has no remote, so detection still
         // resolves nothing and every test passes --repo and --forge.
-        // Scrubbed like every other fixture git: under a pre-commit run
+        // Scrubbed like every other fixture git: under a hook run
         // from a linked worktree, the exported hook variables resolve to
         // the real repository's shared config, and an unscrubbed init
         // acts there instead of in the tempdir.
@@ -11751,7 +11751,7 @@ esac
 // rk branches prune and the post-merge reminder step
 
 /// The variables a running git hook exports; a scratch-repo test under
-/// pre-commit inherits them and must not let them retarget its git.
+/// the hook runner inherits them and must not let them retarget its git.
 const GIT_HOOK_VARS: [&str; 4] = [
     "GIT_DIR",
     "GIT_WORK_TREE",
@@ -11896,7 +11896,7 @@ fn branch_names(dir: &Path) -> String {
 }
 
 /// An rk command with the hook variables scrubbed, so the suite behaves
-/// the same under a pre-commit run as it does standalone.
+/// the same under the hook runner as it does standalone.
 fn rk_scrubbed() -> Rk {
     let mut command = rk();
     for var in GIT_HOOK_VARS {
@@ -50805,11 +50805,11 @@ fn removing_the_entry_makes_the_file_rendered_drift_again() {
 #[test]
 fn the_status_hook_passes_on_a_repository_with_accepted_drift() {
     assert!(
-        std::process::Command::new("pre-commit")
+        std::process::Command::new("prek")
             .arg("--version")
             .output()
             .is_ok_and(|out| out.status.success()),
-        "pre-commit is in the devshell, which flake.nix owns"
+        "prek, the hook runner, comes from the host"
     );
     let (target, _) = accepted_drift_target();
     seed_setup_proof(target.path());
@@ -50817,7 +50817,7 @@ fn the_status_hook_passes_on_a_repository_with_accepted_drift() {
     git_in(target.path(), &["add", "-A"]);
     let bin = assert_cmd::cargo::cargo_bin("rk");
     let bin_dir = bin.parent().expect("a directory");
-    let mut command = std::process::Command::new("pre-commit");
+    let mut command = std::process::Command::new("prek");
     for var in GIT_HOOK_VARS {
         command.env_remove(var);
     }
@@ -50833,7 +50833,7 @@ fn the_status_hook_passes_on_a_repository_with_accepted_drift() {
             ),
         )
         .output()
-        .expect("pre-commit runs");
+        .expect("prek runs");
     assert!(
         out.status.success(),
         "{}\n{}",

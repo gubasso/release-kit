@@ -39,11 +39,11 @@ build:
 #
 # The build comes first because several hooks call this checkout's own rk,
 # which they find on PATH. Loading the configuration for the manual run is
-# what refuses an invalid pre-commit configuration, so no separate
+# what refuses an invalid hook configuration, so no separate
 # validate step remains.
 check:
     cargo build -q
-    PATH="$(pwd)/target/debug:$PATH" pre-commit run --hook-stage manual --all-files
+    PATH="$(pwd)/target/debug:$PATH" prek run --hook-stage manual --all-files
 
 # Install this checkout as the user's rk, plus the user-scope agent skills.
 # The installed skills are this checkout's build artifact and never an edit

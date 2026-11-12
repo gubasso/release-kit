@@ -1,3 +1,6 @@
+# The hook runner is prek, from the host. This is the oldest prek the
+# configuration accepts, and ci.yml installs the same version.
+minimum_prek_version: "0.5.7"
 default_install_hook_types: [pre-commit, commit-msg, pre-push]
 # A hook with no stages: key runs at commit and in the manual sweep that
 # `just check` and `rk integrate` run, and never again at push.
@@ -187,7 +190,7 @@ repos:
         stages: [pre-push, manual]
         pass_filenames: false
       # The scratch landing round trip, through the recipe that owns it.
-      # Never make this entry `just check`: that recipe invokes pre-commit
+      # Never make this entry `just check`: that recipe invokes prek
       # and the hook would re-enter itself.
       # owner: devshell (project-environment) the just recipe builds rk and lands it in a scratch target.
       - id: scratch-landing
@@ -210,7 +213,7 @@ repos:
         always_run: true
         stages: [pre-push, manual]
         pass_filenames: false
-  # zizmor and actionlint take their upstream hooks, which pre-commit builds
+  # zizmor and actionlint take their upstream hooks, which prek builds
   # (python and golang). actionlint runs shellcheck from PATH on the `run:`
   # scripts, so the devshell keeps shellcheck for it.
   - repo: https://github.com/zizmorcore/zizmor-pre-commit
