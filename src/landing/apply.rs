@@ -67,9 +67,15 @@ pub enum Action {
     /// A recorded seeded file stays and its bytes differ from the receipt:
     /// the target tuned it, which is what a seeded file is for.
     Drift,
-    /// A recorded destination this binary no longer produces: left on
-    /// disk, target-owned from this landing, out of the new receipt.
-    Released,
+    /// A recorded whole rendered file this binary no longer produces,
+    /// whose bytes the record still vouches for: removed, and out of the
+    /// new receipt.
+    Retired,
+    /// A recorded destination this binary no longer produces that the
+    /// target owns: a seeded or state file, a marked region, a rendered
+    /// file someone edited, or one the target's own state withholds. Left
+    /// on disk, target-owned from this landing, out of the new receipt.
+    Dropped,
 }
 
 impl Action {
@@ -82,7 +88,8 @@ impl Action {
             Self::Matched => "matched",
             Self::Preserved => "preserved",
             Self::Drift => "drift",
-            Self::Released => "released",
+            Self::Retired => "retired",
+            Self::Dropped => "dropped",
         }
     }
 }
@@ -185,7 +192,7 @@ pub struct Decision {
     /// The destination, relative to the target.
     pub destination: String,
     /// The kind the candidate declares, or the recorded kind for a
-    /// released destination.
+    /// destination this binary no longer produces.
     pub kind: Kind,
     /// What happens to it.
     pub action: Action,
@@ -297,7 +304,7 @@ impl Held {
 }
 
 /// The landing decided and ready: the projection, every decision in
-/// projection order with the released destinations after them, every
+/// projection order with the dropped and retired destinations after them, every
 /// collision, and the configuration the landing writes first.
 #[derive(Debug)]
 pub struct Prepared {
@@ -580,24 +587,77 @@ pub fn decide(
         });
     }
     if let Some(record) = recorded {
-        for file in &record.files {
-            let produced = projection
-                .candidates
-                .iter()
-                .any(|candidate| candidate.destination == file.destination);
-            if !produced {
-                decisions.push(Decision {
-                    destination: file.destination.clone(),
-                    kind: file.kind,
-                    action: Action::Released,
-                    accepted: None,
-                });
-            }
-        }
+        decisions.extend(dropped(target, record, projection)?);
     }
     collisions.sort_by(|a, b| a.path.cmp(&b.path));
     collisions.dedup_by(|a, b| a.path == b.path);
     Ok((decisions, collisions))
+}
+
+/// Decide every recorded destination `projection` no longer produces.
+///
+/// A whole rendered file whose bytes the record still vouches for is
+/// `retired`, and a landing removes it: release-kit wrote those bytes and
+/// nobody changed them, and a workflow left behind keeps running beside
+/// its successor. One already absent is retired too, because nothing of
+/// it remains. Every other such destination is `dropped` and stays on
+/// disk as the target's own: a seeded or state file, whose bytes are the
+/// target's by kind, a marked region inside the target's document, a
+/// rendered file someone edited, an entry that is no regular file, and a
+/// destination the target's own state withholds. Each leaves the receipt.
+///
+/// `rk stage`, `rk stage compare`, the upgrade preview, and the apply all
+/// decide through this one function.
+///
+/// SATISFIES landing:a-dropped-file-stays
+///
+/// # Errors
+///
+/// A read of the held target that fails for a reason other than absence.
+pub fn dropped(
+    target: &Held,
+    recorded: &Manifest,
+    projection: &Projection,
+) -> Result<Vec<Decision>, RkError> {
+    let mut decisions = Vec::new();
+    for file in &recorded.files {
+        let produced = projection
+            .candidates
+            .iter()
+            .any(|candidate| candidate.destination == file.destination);
+        if produced {
+            continue;
+        }
+        let withheld = projection
+            .omissions
+            .iter()
+            .any(|omission| omission.destination == file.destination);
+        let retirable = !withheld
+            && file.kind == Kind::Rendered
+            && file.placement == manifest::Placement::Whole;
+        let action = if retirable && unedited(&target.root, file)? {
+            Action::Retired
+        } else {
+            Action::Dropped
+        };
+        decisions.push(Decision {
+            destination: file.destination.clone(),
+            kind: file.kind,
+            action,
+            accepted: None,
+        });
+    }
+    Ok(decisions)
+}
+
+/// Whether a recorded whole file is absent, or a regular file holding the
+/// bytes the record vouches for.
+fn unedited(root: &File, file: &FileRecord) -> std::io::Result<bool> {
+    Ok(match locate(root, &file.destination)? {
+        Located::Absent => true,
+        Located::Collision(_) => false,
+        present @ Located::Present { .. } => Digest::of(&present.read()?) == file.sha256,
+    })
 }
 
 /// What stands at a destination inside the held target.
@@ -929,6 +989,9 @@ pub fn land(
     // file must still stand, and an adopted value must still equal the
     // candidate, or the landing refuses with the old receipt intact.
     let unwritten = reverify(root, prepared, origin)?;
+    // Every file the landing retires must still hold the bytes the record
+    // vouches for, or it became the target's after the decision.
+    let retiring = retiring(root, recorded, prepared)?;
     // Every named conflict is saved before the first write, so a failed
     // save leaves the target exactly as it stood.
     let replaced = save_replacements(target, root, prepared)?;
@@ -971,6 +1034,12 @@ pub fn land(
                 Placement::Region { .. } => manifest::Placement::Region,
             },
         });
+    }
+    // The retired files go after every write and before the receipt, so
+    // a stop between leaves the old receipt naming each one, and the
+    // rerun finds it absent and retires it again.
+    for destination in &retiring {
+        writer.remove(destination)?;
     }
     let receipt = receipt(
         &prepared.params,
@@ -1112,6 +1181,38 @@ fn reverify(
     Ok(digests)
 }
 
+/// Every destination the landing retires, each read again through the
+/// held directory: it must still be absent or hold the bytes the record
+/// vouches for.
+///
+/// # Errors
+///
+/// A `state-drift` refusal naming the destination someone edited since the
+/// decision, with nothing written; and any read failure.
+fn retiring(
+    root: &File,
+    recorded: Option<&Manifest>,
+    prepared: &Prepared,
+) -> Result<Vec<String>, RkError> {
+    let mut out = Vec::new();
+    for decision in &prepared.decisions {
+        if decision.action != Action::Retired {
+            continue;
+        }
+        let Some(file) = recorded.and_then(|record| record.file(&decision.destination)) else {
+            continue;
+        };
+        if !unedited(root, file)? {
+            return Err(moved(
+                &decision.destination,
+                "no longer holds the bytes the record vouches for",
+            ));
+        }
+        out.push(decision.destination.clone());
+    }
+    Ok(out)
+}
+
 /// The refusal for a destination that changed between the decision and
 /// the first write.
 fn moved(destination: &str, what: &str) -> RkError {
@@ -1226,6 +1327,27 @@ impl Writer<'_> {
                 Ok(())
             }
             Err(error) => Err(self.failure(destination, bytes, &error)),
+        }
+    }
+
+    /// Remove the retired file at the relative `destination` through the
+    /// held directory chain, following no link; an absent file is already
+    /// retired.
+    fn remove(&mut self, destination: &str) -> Result<(), RkError> {
+        let path = Path::new(destination);
+        let (parent, name) = split(path)?;
+        let dir = match held::hold_dir_existing(self.root, parent) {
+            Ok(dir) => dir,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(self.failure(destination, &[], &error)),
+        };
+        match std::fs::remove_file(held::proc_path(&dir).join(name)) {
+            Ok(()) => {
+                self.completed.push(destination.to_owned());
+                Ok(())
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(self.failure(destination, &[], &error)),
         }
     }
 
@@ -1367,38 +1489,44 @@ mod tests {
         assert!(!target.join("dist-workspace.toml").exists());
     }
 
-    /// A recorded destination the projection stops producing is released:
-    /// on disk, named, and out of the receipt.
+    /// A recorded destination the projection stops producing leaves the
+    /// receipt: removed where its bytes are the ones the record vouches
+    /// for, and kept, named dropped, where someone edited them.
     #[test]
-    fn a_released_destination_stays_and_leaves_the_receipt() {
-        let (_dir, target) = target();
-        landed(&target, None, Origin::Init);
-        let mut record = manifest::load(&target).expect("loads").expect("exists");
-        std::fs::write(target.join("legacy.yml"), "old\n").expect("writes");
-        record.files.push(manifest::FileRecord {
-            destination: "legacy.yml".into(),
-            kind: crate::landing::Kind::Rendered,
-            sha256: crate::digest::Digest::of(b"old\n"),
-            placement: manifest::Placement::Whole,
-        });
-        let (decisions, _) = decide(
-            &Held::open(&target).expect("opens"),
-            Some(&record),
-            &Projection::compute(&ProjectionInput {
-                params: params(),
-                evidence: TargetEvidence::gather(&target, Some(&record)).expect("gathers"),
-            })
-            .expect("projects"),
-            &std::collections::BTreeMap::new(),
-        )
-        .expect("decides");
-        let released = decisions
-            .iter()
-            .find(|decision| decision.destination == "legacy.yml")
-            .expect("the released destination is decided");
-        assert_eq!(released.action, Action::Released);
-        let outcome = landed(&target, Some(&record), Origin::Upgrade);
-        assert!(target.join("legacy.yml").is_file());
-        assert!(outcome.receipt.file("legacy.yml").is_none());
+    fn a_dropped_destination_is_retired_unless_the_target_edited_it() {
+        for (bytes, action, stays) in [
+            (&b"old\n"[..], Action::Retired, false),
+            (&b"edited\n"[..], Action::Dropped, true),
+        ] {
+            let (_dir, target) = target();
+            landed(&target, None, Origin::Init);
+            let mut record = manifest::load(&target).expect("loads").expect("exists");
+            std::fs::write(target.join("legacy.yml"), bytes).expect("writes");
+            record.files.push(manifest::FileRecord {
+                destination: "legacy.yml".into(),
+                kind: crate::landing::Kind::Rendered,
+                sha256: crate::digest::Digest::of(b"old\n"),
+                placement: manifest::Placement::Whole,
+            });
+            let (decisions, _) = decide(
+                &Held::open(&target).expect("opens"),
+                Some(&record),
+                &Projection::compute(&ProjectionInput {
+                    params: params(),
+                    evidence: TargetEvidence::gather(&target, Some(&record)).expect("gathers"),
+                })
+                .expect("projects"),
+                &std::collections::BTreeMap::new(),
+            )
+            .expect("decides");
+            let decided = decisions
+                .iter()
+                .find(|decision| decision.destination == "legacy.yml")
+                .expect("the dropped destination is decided");
+            assert_eq!(decided.action, action);
+            let outcome = landed(&target, Some(&record), Origin::Upgrade);
+            assert_eq!(target.join("legacy.yml").is_file(), stays);
+            assert!(outcome.receipt.file("legacy.yml").is_none());
+        }
     }
 }

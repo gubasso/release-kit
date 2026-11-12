@@ -147,14 +147,14 @@ On github:
 
 ```bash
 gh pr list --repo <repo> --state open --base release/<line>
-# check: the line's release request proposes the validated version
+# check: the line's release request proposes the validated version; on a bash or python pair its branch is rk-release/release/<line>
 ```
 
 On gitlab:
 
 ```bash
-glab mr list
-# check: the line's release request proposes the validated version
+glab mr list --target-branch release/<line>
+# check: the line's release request proposes the validated version; on a bash or python pair its branch is rk-release/release/<line>
 ```
 
 ### 8b. Retire the line

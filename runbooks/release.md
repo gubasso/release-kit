@@ -17,7 +17,7 @@ gh pr view <release pr> --repo <repo> --json autoMergeRequest
 # 4. let it merge; on an unarmed request, merge it
 gh pr checks <release pr> --repo <repo> --watch
 gh pr merge <release pr> --repo <repo> --squash --delete-branch   # unarmed only
-# 5. wait for the publish workflow on the merge commit, then the artifact workflow on its tag
+# 5. wait for the publish workflow on the merge commit, then, on rust, the artifact workflow on its tag
 # 6. verify
 ```
 
@@ -131,7 +131,7 @@ On worktree:
 
 ```bash
 rk worktree add "<bot branch>" --apply && cd "../<project>@<bot branch flattened>"
-# check: the source line reports remote — the bot's branch fits the grammar's release arm and is seated from origin's tip, never recreated from the trunk; step 4's merge retires the worktree through step 4 of rk guide worktree
+# check: the source line reports remote — the bot's branch, release-plz-<suffix> on rust or rk-release/<base> on bash and python, fits the grammar's release arms and is seated from origin's tip, never recreated from the trunk; step 4's merge retires the worktree through step 4 of rk guide worktree
 ```
 
 Then edit the changelog and push the correction:
@@ -209,7 +209,7 @@ git fetch origin && git rev-parse origin/master
 # check: prints the SHA the release runs on
 ```
 
-The push that lands the bump runs the binding's release path: automation tags `v<version>` and publishes, and the tag starts the artifact build where the binding has one.
+The push that lands the bump runs the binding's release path. On rust, release-plz tags `v<version>` and publishes, and the tag starts the artifact build where the binding has one. On bash and python, the release jobs run on this merge commit alone: `rk release build` builds, CI attests and uploads where the pair has a registry, and `rk release publish` creates the release page and the tag last.
 
 ## 5. Wait for the artifact build
 
@@ -227,6 +227,7 @@ gh run watch --repo <repo> --exit-status \
      --event push --commit "$SHA" --limit 1 --json databaseId -q '.[0].databaseId')"
 # check: each completes with 'success'; the binding names both workflow files
 # empty second id: the tag has not landed yet; rerun after a few seconds, and if it stays empty go to 6a, which names the failure
+# bash and python: release.yml is both workflows and runs on the merge commit alone, so the first watch is the whole wait and the second finds no run
 ```
 
 ""Where a job waits longer than the runner queue usually takes, tell a queued job from a stuck one before you wait more. [The GitHub forge document](../forges/github.md) states the same check.
@@ -261,12 +262,12 @@ The `--event push` filter narrows the second watch to the tag push, which is the
 
 ### 6a. The tag and the trunk name the same commit
 
-Universal, and the release itself: the bot writes an annotated tag, so `v<version>` names a tag object, and `^{commit}` is what makes the two values comparable.
+Universal, and the release itself. `^{commit}` is what makes the two values comparable whatever kind of tag the release wrote: release-plz writes an annotated tag, which names a tag object, and the forge release that `rk release publish` creates writes a lightweight tag, which names the commit.
 
 ```bash
 git fetch origin --tags --force
 git cat-file -t "v<version>"
-# check: prints tag
+# check: prints tag on rust, and commit on bash and python
 git rev-parse "v<version>^{commit}" origin/master
 # check: two identical SHAs
 ```
@@ -280,6 +281,14 @@ cargo info <crate> | grep -m1 -i '^version'
 # check: prints <version>
 ```
 
+On python:
+
+```bash
+curl -fsS -o /dev/null -w '%{http_code}\n' "https://pypi.org/pypi/<package>/<pep 440 version>/json"
+# check: prints 200; <pep 440 version> spells a candidate 1.4.3rc2, never 1.4.3-rc.2
+# the registry answer none: nothing goes to PyPI, and this check does not apply
+```
+
 ### 6c. The release page carries its artifacts
 
 On github:
@@ -290,9 +299,16 @@ gh release view v<version> --repo <repo> --json assets \
 # check: the artifact list is not empty, where the binding declares that surface
 ```
 
+On gitlab:
+
+```bash
+glab release view v<version>
+# check: the assets list the package files the pair builds, where the binding declares that surface
+```
+
 ### 6d. An installed binary reports the new version
 
-On github:
+On rust/github:
 
 ```bash
 curl -LsSf "https://github.com/<repo>/releases/download/v<version>/<crate>-installer.sh" | sh
@@ -347,8 +363,33 @@ cosign verify-blob-attestation --type slsaprovenance1 \
 On python/github:
 
 ```bash
+tmp="$(mktemp -d)"
+gh release download "v<version>" --repo <repo> --dir "$tmp" --pattern '*.tar.gz' --pattern '*.whl'
+gh attestation verify "$tmp"/* --repo <repo> \
+  --source-digest "$(git rev-parse "v<version>^{commit}")" \
+  --signer-workflow "<repo>/.github/workflows/<artifact workflow>"
+# check: the sdist and the wheel on the release page verify against the release commit and the signing workflow
 pypi-attestations verify pypi --repository "https://github.com/<repo>" "pypi:<distribution filename>"
 # check: prints OK, once per sdist and wheel the release published
+# the registry answer none: nothing goes to PyPI, and this check does not apply
+```
+
+On python/gitlab:
+
+```bash
+curl -fsSL -o "<distribution filename>" "<package file url>"
+curl -fsSL -o "<distribution filename>.sigstore.json" "<bundle file url>"
+cosign verify-blob-attestation --type slsaprovenance1 \
+  --bundle "<distribution filename>.sigstore.json" \
+  --certificate-oidc-issuer https://gitlab.com \
+  --certificate-identity "https://gitlab.com/<repo>//.gitlab-ci.yml@<built ref>" \
+  "<distribution filename>"
+# check: prints Verified OK, once per sdist and wheel; the release page links each file and its bundle
+# <built ref>: the ref the release was built from, refs/heads/master for a trunk release and refs/heads/release/<line> for a line release
+# self-managed instance: the pipeline stated the keyless-signing boundary and released without provenance; there is no bundle, and this check does not apply
+pypi-attestations verify pypi --repository "https://gitlab.com/<repo>" "pypi:<distribution filename>"
+# check: prints OK, once per sdist and wheel; PyPI documents attestations from a GitLab CI/CD trusted publisher, signed by pypi-attestations, and no live release of this pair has run the check yet
+# the registry answer none, or a self-managed instance: nothing goes to PyPI, and this check does not apply
 ```
 
 On rust/gitlab:
@@ -357,7 +398,7 @@ The pair declares no provenance surface — crates.io stores none, and the pair 
 
 ### 6f. Repair a failed tag push
 
-Anything but 6a's two identical SHAs means the tag push failed: rerun the publish workflow on the merge commit — never the artifact workflow, which only builds from a tag that already exists. A rerun runs the configuration of its own commit, so it recovers a transient failure and never a defect a later commit fixed. Where the fix landed after the bump and no tag and no release exist, take the un-bump of [recovery](../method/04-recovery.md#the-release-request-merged-and-nothing-published) instead.
+Anything but 6a's two identical SHAs means the tag never reached the forge: rerun the publish workflow on the merge commit — on rust never the artifact workflow, which only builds from a tag that already exists. On bash and python the release job is the publish workflow, and a rerun at the same commit resumes where it stopped. A rerun runs the configuration of its own commit, so it recovers a transient failure and never a defect a later commit fixed. Where the fix landed after the bump and no tag and no release exist, take the un-bump of [recovery](../method/04-recovery.md#the-release-request-merged-and-nothing-published) instead.
 
 On github:
 

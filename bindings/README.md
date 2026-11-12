@@ -8,6 +8,8 @@ One document per release driver: the four [diff-surface](../method/05-diff-surfa
 | [Python](./python.md) | `pyproject.toml` | rk with git-cliff | PyPI over OIDC, or none | the sdist and the wheel     |
 | [Bash](./bash.md)     | `VERSION`        | rk with git-cliff | none                    | the build command's tarball |
 
+Rust releases through release-plz. Python and bash release through the release engine in `rk` on both forges: `rk release request` keeps one request per base on the branch `rk-release/<base>`, and the release job runs `rk release build`, then the provenance and the registry upload that stay in CI, then `rk release publish`, which creates the release page and the tag last.
+
 The deterministic files each binding lands live under `snippets/<driver>/<forge>/` in this repository and reach a project through `rk init` once the profile's release driver selects them; `rk profile` reports the selection before anything lands. The tool versions they assume are pinned once, in the versions registry at the repository root, readable with `rk versions`.
 
 ## Generated files

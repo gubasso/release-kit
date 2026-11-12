@@ -39,7 +39,7 @@ use crate::projection::{Placement, Projection};
 use crate::skills;
 
 /// The shape version of the stage receipt and of the `rk stage` report.
-pub const STAGE_SCHEMA: &str = "rk.stage/7";
+pub const STAGE_SCHEMA: &str = "rk.stage/8";
 
 /// The receipt's name at the stage root.
 pub const RECEIPT_NAME: &str = "stage.json";
@@ -98,8 +98,14 @@ pub struct Receipt {
     /// The block destinations whose document offers the block no place.
     pub collisions: Vec<Note>,
     /// The destinations the landing record names that this projection no
-    /// longer produces: target-owned from the next landing on.
+    /// longer produces and a landing removes: whole rendered files whose
+    /// bytes the record still vouches for.
     pub retired: Vec<String>,
+    /// The destinations the landing record names that this projection no
+    /// longer produces and a landing keeps: target-owned from the next
+    /// landing on.
+    #[serde(default)]
+    pub dropped: Vec<String>,
     /// The recorded `seeded` destinations present on disk, which a
     /// production landing preserves.
     pub seeded_present: Vec<String>,
@@ -531,9 +537,11 @@ pub struct Composed {
     pub receipt: Receipt,
 }
 
-/// Compose the stage for `projection`, rooted at `stage_root`, from the
-/// projection, the resolved parameters, the target's record, and this
-/// binary's embedded knowledge.
+/// Compose the stage for `projection`, rooted at `stage_root`.
+///
+/// It draws on the projection, the resolved parameters, the target's
+/// record, the landing's decision for every recorded destination the
+/// projection no longer produces, and this binary's embedded knowledge.
 #[must_use]
 pub fn compose(
     projection: &Projection,
@@ -541,6 +549,7 @@ pub fn compose(
     canonical_target: &Path,
     stage_root: &Path,
     record: Option<&Manifest>,
+    dropped: &[crate::landing::apply::Decision],
     receipt_schema_version: Option<u64>,
 ) -> Composed {
     let mut files: Vec<(String, Cow<'static, [u8]>)> = Vec::new();
@@ -567,24 +576,21 @@ pub fn compose(
         files.push((format!("{REFERENCE_DIR}/{path}"), Cow::Borrowed(bytes)));
     }
     files.sort_by(|a, b| a.0.cmp(&b.0));
-    let produced = |destination: &str| {
-        projection
-            .candidates
+    // The landing's own decision, so the stage names each dropped
+    // destination with the word the landing prints.
+    let named = |action: crate::landing::apply::Action| -> Vec<String> {
+        dropped
             .iter()
-            .any(|candidate| candidate.destination == destination)
-            || projection
-                .omissions
-                .iter()
-                .any(|omission| omission.destination == destination)
+            .filter(|decision| decision.action == action)
+            .map(|decision| decision.destination.clone())
+            .collect()
     };
-    let mut retired = Vec::new();
+    let retired = named(crate::landing::apply::Action::Retired);
+    let dropped = named(crate::landing::apply::Action::Dropped);
     let mut seeded_present = Vec::new();
     let mut state_present = Vec::new();
     if let Some(record) = record {
         for file in &record.files {
-            if !produced(&file.destination) {
-                retired.push(file.destination.clone());
-            }
             let present = fs::symlink_metadata(canonical_target.join(&file.destination)).is_ok();
             match file.kind {
                 Kind::Seeded if present => seeded_present.push(file.destination.clone()),
@@ -626,6 +632,7 @@ pub fn compose(
             })
             .collect(),
         retired,
+        dropped,
         seeded_present,
         state_present,
         secrets_moved,
@@ -1031,7 +1038,7 @@ mod tests {
         }
     }
 
-    /// The complete `rk.stage/7` receipt shape, held by snapshot: a field
+    /// The complete `rk.stage/8` receipt shape, held by snapshot: a field
     /// rename or removal fails here and becomes a schema-version bump.
     #[test]
     fn the_stage_receipt_schema_snapshot_holds() {
@@ -1068,6 +1075,7 @@ mod tests {
             }],
             collisions: vec![],
             retired: vec!["old.yml".into()],
+            dropped: vec!["edited.yml".into()],
             seeded_present: vec!["release-plz.toml".into()],
             state_present: vec![],
             secrets_moved: Vec::new(),
@@ -1079,7 +1087,7 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&receipt).expect("a receipt serializes"),
             format!(
-                r#"{{"schema":"rk.stage/7","rk_version":"0.0.0","target":"/tmp/t","stage_root":"/tmp/s","parameters":{{"profile":{{"technologies":["rust"],"forge":"github","release":{{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}}}},"git":{{"trunk":"master","checkout_mode":"linked-worktree","integration":"local","merge_form":"squash"}},"capabilities":{{"nix_packaging":false,"reporting_policy":true,"scorecard":false,"workflow_guards":false}},"repo":"acme/widget","security_contact":"","security_response":"best-effort","required_check":"","required_workflow":""}},"capabilities":[],"receipt_schema_version":6,"candidates":[{{"destination":"AGENTS.md","kind":"rendered","placement":"region","sha256":"{}","region_sha256":"{}","sources":["blocks/routing.md.in"]}},{{"destination":"release-plz.toml","kind":"seeded","placement":"whole","sha256":"{}","sources":["snippets/rust/github/release-plz.toml"]}}],"omissions":[{{"destination":"flake.nix","reason":"the target already carries flake.nix"}}],"collisions":[],"retired":["old.yml"],"seeded_present":["release-plz.toml"],"state_present":[],"secrets_moved":[],"reference":["CHANGELOG.md","guidance","method","bindings","runbooks","forges","skills"]}}"#,
+                r#"{{"schema":"rk.stage/8","rk_version":"0.0.0","target":"/tmp/t","stage_root":"/tmp/s","parameters":{{"profile":{{"technologies":["rust"],"forge":"github","release":{{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}}}},"git":{{"trunk":"master","checkout_mode":"linked-worktree","integration":"local","merge_form":"squash"}},"capabilities":{{"nix_packaging":false,"reporting_policy":true,"scorecard":false,"workflow_guards":false}},"repo":"acme/widget","security_contact":"","security_response":"best-effort","required_check":"","required_workflow":""}},"capabilities":[],"receipt_schema_version":6,"candidates":[{{"destination":"AGENTS.md","kind":"rendered","placement":"region","sha256":"{}","region_sha256":"{}","sources":["blocks/routing.md.in"]}},{{"destination":"release-plz.toml","kind":"seeded","placement":"whole","sha256":"{}","sources":["snippets/rust/github/release-plz.toml"]}}],"omissions":[{{"destination":"flake.nix","reason":"the target already carries flake.nix"}}],"collisions":[],"retired":["old.yml"],"dropped":["edited.yml"],"seeded_present":["release-plz.toml"],"state_present":[],"secrets_moved":[],"reference":["CHANGELOG.md","guidance","method","bindings","runbooks","forges","skills"]}}"#,
                 Digest::of(b"a"),
                 Digest::of(b"r"),
                 Digest::of(b"b")
@@ -1240,6 +1248,7 @@ mod tests {
             omissions: vec![],
             collisions: vec![],
             retired: vec![],
+            dropped: vec![],
             seeded_present: vec![],
             state_present: vec![],
             secrets_moved: Vec::new(),

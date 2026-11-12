@@ -8,8 +8,9 @@
 //! replaced only where `--replace` names it, after its bytes are saved; a
 //! recorded seeded or state file is preserved with its current digest
 //! entering the receipt; a recorded marked region is replaced alone; a
-//! recorded destination the projection no longer produces is released to
-//! the target. A whole-file destination present on disk and absent from
+//! recorded destination the projection no longer produces is retired
+//! where its bytes are still the ones the record vouches for and dropped
+//! to the target otherwise. A whole-file destination present on disk and absent from
 //! the receipt is a conflict too. Every conflict not named refuses before
 //! any write, collected in one pass. `--stage` takes every answer from a
 //! stage's receipt. Preview by default; `--apply` lands under one target
@@ -41,10 +42,10 @@ struct FileEntry {
     /// The destination, relative to the target.
     path: String,
     /// The kind this projection declares for it, or the recorded kind of
-    /// a released destination.
+    /// a destination this projection no longer produces.
     kind: &'static str,
-    /// `created`, `replaced`, `matched`, `preserved`, `drift`, `released`,
-    /// or `collision` in a preview.
+    /// `created`, `replaced`, `matched`, `preserved`, `drift`, `retired`,
+    /// `dropped`, or `collision` in a preview.
     action: &'static str,
 }
 
@@ -282,7 +283,7 @@ pub fn run(args: &UpgradeArgs) -> Result<(), RkError> {
 }
 
 /// The report's shape version.
-const SCHEMA: &str = "rk.upgrade/11";
+const SCHEMA: &str = "rk.upgrade/12";
 
 /// Whether any answer flag was given, which `--stage` refuses beside it.
 const fn answered(args: &UpgradeArgs) -> bool {
@@ -578,7 +579,7 @@ mod tests {
         CapabilityRequests, GitWorkflow, ProfileSnapshot, ReleaseIntent, ReleaseMode,
     };
 
-    /// The complete `rk.upgrade/11` shape, held by snapshot.
+    /// The complete `rk.upgrade/12` shape, held by snapshot.
     #[test]
     fn the_upgrade_report_schema_snapshot_holds() {
         let report = Report {
@@ -640,14 +641,19 @@ mod tests {
                 FileEntry {
                     path: "legacy.yml".into(),
                     kind: "rendered",
-                    action: "released",
+                    action: "retired",
+                },
+                FileEntry {
+                    path: "edited.yml".into(),
+                    kind: "rendered",
+                    action: "dropped",
                 },
             ],
             next: vec!["rk upgrade --target /tmp/t --apply writes".into()],
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.upgrade/11","mode":"preview","target":"/tmp/t","from_version":"0.1.0","to_version":"0.2.0","profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"main-worktree","integration":"local","merge_form":"squash"},"capabilities":{"nix_packaging":false,"reporting_policy":true,"scorecard":false,"workflow_guards":false},"selection":[],"collisions":[{"path":"SECURITY.md","reason":"was edited after the landing","replaceable":true}],"replaced":[{"path":".github/workflows/release-plz.yml","saved_to":"/state/snapshots/widget-0123456789ab/20261009T120000Z/replaced/.github/workflows/release-plz.yml"}],"config":{"action":"added","changes":[],"content":"schema_version = 2\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"drift"},{"path":"legacy.yml","kind":"rendered","action":"released"}],"next":["rk upgrade --target /tmp/t --apply writes"]}"#
+            r#"{"schema":"rk.upgrade/12","mode":"preview","target":"/tmp/t","from_version":"0.1.0","to_version":"0.2.0","profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","style":"trunk","line_prefix":"release/"}},"git":{"trunk":"master","checkout_mode":"main-worktree","integration":"local","merge_form":"squash"},"capabilities":{"nix_packaging":false,"reporting_policy":true,"scorecard":false,"workflow_guards":false},"selection":[],"collisions":[{"path":"SECURITY.md","reason":"was edited after the landing","replaceable":true}],"replaced":[{"path":".github/workflows/release-plz.yml","saved_to":"/state/snapshots/widget-0123456789ab/20261009T120000Z/replaced/.github/workflows/release-plz.yml"}],"config":{"action":"added","changes":[],"content":"schema_version = 2\n"},"files":[{"path":"release-plz.toml","kind":"seeded","action":"drift"},{"path":"legacy.yml","kind":"rendered","action":"retired"},{"path":"edited.yml","kind":"rendered","action":"dropped"}],"next":["rk upgrade --target /tmp/t --apply writes"]}"#
         );
     }
 }

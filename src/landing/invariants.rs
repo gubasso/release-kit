@@ -447,8 +447,54 @@ pub fn target_failures(tech: &str, forge: &str, target: &Utf8Path) -> Vec<Invari
             failures.extend(dist_profile(target));
             failures
         }
+        ("bash" | "python", "github") => predecessor_workflows(target),
         _ => Vec::new(),
     }
+}
+
+/// The code of a release workflow of another tool beside the engine's.
+pub const PREDECESSOR_RELEASE_WORKFLOW: &str = "predecessor-release-workflow";
+
+/// The engine's own workflow on GitHub, which the inventory also lists as
+/// a predecessor path because cargo-dist writes the same name.
+const ENGINE_WORKFLOW: &str = ".github/workflows/release.yml";
+
+/// Every release workflow of another tool, as the migration inventory
+/// lists them, that stands beside the engine workflow.
+///
+/// Each runs on the same pushes as the engine and opens or publishes its
+/// own release, so the target holds two release mechanisms. An edited
+/// predecessor workflow the upgrade keeps as dropped is the case this
+/// exists for, and an unrecorded one counts the same. Every predecessor workflow the
+/// inventory lists runs on GitHub, so a GitLab target has none to fault.
+///
+/// SATISFIES release-engine:no-predecessor-workflow-runs-beside-the-engine
+fn predecessor_workflows(target: &Utf8Path) -> Vec<InvariantFailure> {
+    let regular = |path: &str| {
+        let full = target.join(path);
+        full.is_file() && !full.is_symlink()
+    };
+    if !regular(ENGINE_WORKFLOW) {
+        return Vec::new();
+    }
+    crate::migrate::inventory::PREDECESSORS
+        .iter()
+        .filter(|(path, _, kind)| {
+            *kind == crate::migrate::inventory::Kind::Workflow
+                && *path != ENGINE_WORKFLOW
+                && regular(path)
+        })
+        .map(|(path, tool, _)| {
+            InvariantFailure::new(
+                PREDECESSOR_RELEASE_WORKFLOW,
+                path,
+                format!(
+                    "a {tool} release workflow stands beside the engine workflow {ENGINE_WORKFLOW}, and each runs its own release"
+                ),
+                "close any release request the workflow opened and delete its branch, then delete the workflow, as the release-kit guidance for the release that moved this target onto the engine says",
+            )
+        })
+        .collect()
 }
 
 /// The code of a gate that names no check: the judgment then reads every

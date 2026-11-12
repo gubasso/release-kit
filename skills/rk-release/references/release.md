@@ -38,7 +38,7 @@ Where the run held the request or corrected its changelog, and nothing merged:
 
 After a merge on the trunk:
 
-1. Run `rk release status --target . --wait <sha> --json`. It waits for the publish run and the artifact run on that commit, selected by the commit and never by recency.
+1. Run `rk release status --target . --wait <sha> --json`. It waits for the publish run and the artifact run on that commit, or on a bash or python pair for the one release run, selected by the commit and never by recency.
 2. Where it exits 1, a run failed: hand the symptom it names to `recover`. Where it exits 73, the wait timed out: report the release as held at the wait, and run it again later.
 3. Verify by the guide's step 6. A verify that fails right after the merge is usually timing, because the artifact page lags the tag: run the wait again before calling it a failure.
 4. Fill the report's evidence line: `Release: v<version> · published · artifacts verified`, or `failed: <symptom>`.

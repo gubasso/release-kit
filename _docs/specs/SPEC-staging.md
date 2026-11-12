@@ -50,7 +50,7 @@ Verify: `cargo nextest run -E 'test(a_landing_reads_the_stage_parameters_and_ref
 
 ### `staging:the-comparison-is-the-landing-decision` — The comparison is the landing decision
 
-`rk stage compare <root> --target .` MUST report one row per destination the stage carries or the record names, with its state (`equal`, `absent`, `differs`, or `retired`), its kind (`rendered`, `region`, `seeded`, or `state`), its provenance where it differs or is retired (`attributed` where the receipt vouches for its bytes and Git touched the path, `reduced` where one holds, `unknown` where neither does), whether the receipt vouches for its bytes, the word the production verb prints, computed by the production decision itself, and whether that verb accepts `--replace` for it, true only for a `collision` the same decision marks replaceable, and MUST state where Git cannot answer and why.
+`rk stage compare <root> --target .` MUST report one row per destination the stage carries or the record names, with its state (`equal`, `absent`, or `differs` for a candidate, and for a destination the stage no longer carries, read from the target as it stands: `retired` while the landing still has to remove it, `equal` once neither the disk nor the record holds it, and `dropped` where the target keeps it), its kind (`rendered`, `region`, `seeded`, or `state`), its provenance where it differs, is retired, or is dropped (`attributed` where the receipt vouches for its bytes and Git touched the path, `reduced` where one holds, `unknown` where neither does), whether the receipt vouches for its bytes, the word the production verb prints, computed by the production decision itself, so a dropped destination reads `retired` or `dropped` as `landing:a-dropped-file-stays` decides, and whether that verb accepts `--replace` for it, true only for a `collision` the same decision marks replaceable, and MUST state where Git cannot answer and why. It MUST call the landing proven only where every `rendered` and `region` row reads `equal` or `dropped`, so a pending retirement stands against the proof and is named, and a settled one or a destination the target keeps does not and never reads `collision`.
 
 #### Scenario: A file someone edited after the landing is compared
 
@@ -58,7 +58,7 @@ Verify: `cargo nextest run -E 'test(a_landing_reads_the_stage_parameters_and_ref
 - WHEN `rk stage compare` runs against a stage of the same answers
 - THEN the workflow reads `differs` with provenance `reduced` and the word `collision`, which is what `rk upgrade` prints for it
 
-Verify: `cargo nextest run -E 'test(stage_compare_reports_each_state_kind_and_provenance) or test(stage_compare_reads_the_history_of_a_target_with_no_receipt)'`
+Verify: `cargo nextest run -E 'test(stage_compare_reports_each_state_kind_and_provenance) or test(stage_compare_reads_the_history_of_a_target_with_no_receipt) or test(stage_compare_preview_and_apply_agree_on_each_dropped_case) or test(an_unreadable_dropped_path_is_a_row_not_a_failed_report) or test(stage_compare_proves_a_landing_only_after_its_retirements_settle) or test(a_destination_the_target_keeps_never_blocks_the_proof)'`
 
 ### `staging:a-stage-is-one-target-specific-candidate` — A stage is one target-specific candidate
 
@@ -122,7 +122,7 @@ Verify: `cargo nextest run -E 'test(a_stage_holds_every_projected_artifact_byte_
 
 ### `staging:the-stage-receipt-is-explanatory-metadata` — The stage receipt is explanatory metadata
 
-`stage.json` MUST declare its `rk.stage` schema and carry the installed `rk` version, the canonical target identity, the resolved `stage_root`, the resolved parameters, the current receipt version where readable, and one entry per candidate or omission, and a landing command MUST read it only through `--stage <root>`, for its parameters alone.
+`stage.json` MUST declare its `rk.stage` schema and carry the installed `rk` version, the canonical target identity, the resolved `stage_root`, the resolved parameters, the current receipt version where readable, one entry per candidate or omission, and each recorded destination the projection no longer produces under `retired` or `dropped`, and a landing command MUST read it only through `--stage <root>`, for its parameters alone.
 
 #### Scenario: A stage receipt is offered to a landing verb
 

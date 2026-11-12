@@ -24,7 +24,7 @@ Make `master` the repository default, so the bot's release request targets it wi
 
 ## 2. Let automation act
 
-Grant the repository's CI permission to write and to open pull requests. Provide a bot identity — on GitHub, an App installed on the repository; on GitLab, a project access token or, on a GitLab.com Free group, a service account that is a member of this one project — and store its credentials as repository secrets. The bot identity is what makes the tag push retrigger workflows: a tag pushed with the default CI token starts nothing, which silently skips the artifact build.
+Grant the repository's CI permission to write and to open pull requests. Provide a bot identity — on GitHub, an App installed on the repository; on GitLab, a project access token or, on a GitLab.com Free group, a service account that is a member of this one project — and store its credentials as repository secrets. The bot identity is what makes the bot's pushes start workflows. A push with the default CI token starts nothing, so a release request it opens runs no checks, and a tag it pushes silently skips the artifact build.
 
 ## 3. Protect the trunk and the tags
 

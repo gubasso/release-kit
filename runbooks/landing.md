@@ -53,7 +53,7 @@ Remove nothing here. Step 5b owns the removal, and only under explicit cleanup a
 
 ```bash
 rk stage --target .
-# check: prints stage: <stage>, the parameters, the landing record's schema, one candidate line per destination, and the omitted, collision, retired, seeded present, and state present lines
+# check: prints stage: <stage>, the parameters, the landing record's schema, one candidate line per destination, and the omitted, collision, retired, dropped, seeded present, and state present lines
 # a first landing: pass --technology, --release-mode, and the checkout-mode, release-style, merge-form, and capability flags the request answers, so the stage renders the candidate the landing will render
 # the Git workflow with no release: pass --release-mode none --integration local --checkout-mode linked-worktree --workflow-guards, the four answers rk init --workflow-only sets (4a)
 # an exact directory wanted: pass --output <dir>. It must be absent or empty, and RK_STAGE_ROOT is the base otherwise
@@ -68,9 +68,9 @@ Add `<stage>` to the inventory of stage paths, and hold it for every step below.
 
 ```bash
 cat <stage>/stage.json
-# check: schema is rk.stage/5, rk_version is the binary's, and target is this repository
+# check: schema is rk.stage/8, rk_version is the binary's, and target is this repository
 # check: each candidates entry carries destination, kind, placement, sha256, sources, and region_sha256 where the placement is region
-# check: each omissions and collisions entry carries destination and reason, and each retired entry is a destination alone
+# check: each omissions and collisions entry carries destination and reason, and each retired and dropped entry is a destination alone
 ls -R <stage>/artifacts <stage>/reference
 # check: artifacts/ holds each candidate at its target-relative path. reference/ holds CHANGELOG.md, guidance/, method/, bindings/, runbooks/, forges/, and skills/ with one package per skill
 rk profile --target .
@@ -83,7 +83,7 @@ rk binding <tech>
 
 ```bash
 rk stage compare <stage> --target .
-# check: one row per destination the stage carries or the record names, each with its state (equal, absent, differs, retired), its kind (rendered, region, seeded, state), its provenance where it differs, and the word the landing will print
+# check: one row per destination the stage carries or the record names, each with its state (equal, absent, differs, retired, dropped), its kind (rendered, region, seeded, state), its provenance where it differs, and the word the landing will print
 # check: history names whether Git answered. Where it did not, every differing row reads reduced or unknown, and the report says why
 git log --oneline -- <path>
 git diff HEAD -- <path>
@@ -119,7 +119,7 @@ git status --porcelain
 ```
 
 - a conflict the operator keeps or discards: name it with `--replace <path>` in step 4. The landing saves its bytes first, then replaces it, and the report names where the copy went.
-- a retired destination: it stays on disk and leaves the receipt at step 4. Removing it is the operator's decision, recorded in the inventory.
+- a destination this release stops landing: it leaves the receipt at step 4. A `retired` one, a whole rendered file nobody edited, leaves the disk with it. A `dropped` one, which someone edited or which is a seeded or state file, stays as the target's own. Removing a dropped one is the operator's decision, recorded in the inventory.
 - a hook already doing one of the block's jobs: [the setup runbook](./setup.md) step 4d owns that choice.
 
 ## 4. Land
@@ -129,7 +129,7 @@ The production verb renders again from the binary and the target, with the answe
 ```bash
 rk init --stage <stage> --target .                # a target with no record and no release mechanism
 rk upgrade --stage <stage> --target .             # a recorded target
-# check: the preview lists each destination with its word: created, replaced, matched, preserved, drift, or released. A collision line names a conflict step 3 has not answered
+# check: the preview lists each destination with its word: created, replaced, matched, preserved, drift, retired, or dropped. A collision line names a conflict step 3 has not answered
 rk init --stage <stage> --target . --apply        # or rk upgrade, adding --replace <path> for each answered conflict
 # check: the same words, then added or updated .release-kit/config.toml, then wrote or rewrote .release-kit/manifest.json last. Every replaced conflict prints where its bytes were saved, and every sentinel left to fill is listed
 rk adopt --stage <stage> --target .               # a target landed before the record existed
@@ -167,7 +167,7 @@ The landing writes no version file, no changelog, no release automation, and no 
 
 ```bash
 rk stage compare <stage> --target .
-# check: every rendered and region row reads equal. A preserved or drift row can differ, because the landing kept the target's bytes, and so can a retired row, which the landing released to the target
+# check: every rendered and region row reads equal, and the output reads the landing is proven. A retired row reads equal once the landing removed it. A preserved or drift row can differ, because the landing kept the target's bytes, and so can a dropped row, which the landing left to the target
 rk status --target . --json
 # check: classification is current, or drift where a sentinel is still unanswered
 ```

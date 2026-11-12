@@ -71,6 +71,9 @@ impl Placement {
 /// Every predecessor file this release recognizes: its path, its tool,
 /// and its kind.
 pub const PREDECESSORS: [(&str, &str, Kind); 52] = [
+    // release-please stays a predecessor: the python binding no longer
+    // lands it, and a target an earlier release landed it in, or that ran
+    // it before release-kit, still carries these files.
     (
         "release-please-config.json",
         "release-please",

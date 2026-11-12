@@ -14,7 +14,7 @@
   - [`landing:a-missing-receipt-is-a-classification` — A missing receipt is a classification](#landinga-missing-receipt-is-a-classification--a-missing-receipt-is-a-classification)
   - [`landing:a-seeded-file-is-never-rewritten` — A seeded file is never rewritten](#landinga-seeded-file-is-never-rewritten--a-seeded-file-is-never-rewritten)
   - [`landing:a-seeded-file-still-carries-the-invariants` — A seeded file still carries the invariants](#landinga-seeded-file-still-carries-the-invariants--a-seeded-file-still-carries-the-invariants)
-  - [`landing:a-dropped-file-stays` — A dropped file stays](#landinga-dropped-file-stays--a-dropped-file-stays)
+  - [`landing:a-dropped-file-stays` — An unedited dropped file is retired](#landinga-dropped-file-stays--an-unedited-dropped-file-is-retired)
   - [`landing:a-target-is-never-downgraded` — A target is never downgraded](#landinga-target-is-never-downgraded--a-target-is-never-downgraded)
   - [`landing:status-judges-only-under-check` — Status judges only under check](#landingstatus-judges-only-under-check--status-judges-only-under-check)
   - [`landing:a-landing-classifies-its-target-first` — A landing classifies its target first](#landinga-landing-classifies-its-target-first--a-landing-classifies-its-target-first)
@@ -157,17 +157,17 @@ Verify: `cargo nextest run -E 'test(seeded_and_state_files_survive_and_their_cur
 
 Verify: `cargo nextest run -E 'binary(cli) or test(the_release_plz_invariant_names_each_contradiction) or test(a_seeded_release_plz_toml_that_agrees_passes) or test(a_dist_target_no_gated_job_builds_is_reported) or test(the_binding_dist_build_job_covers_every_target) or test(a_gate_named_by_its_check_context_resolves_to_its_job) or test(a_conditional_dist_build_counts_no_target)'`
 
-### `landing:a-dropped-file-stays` — A dropped file stays
+### `landing:a-dropped-file-stays` — An unedited dropped file is retired
 
-A destination this binary's projection stops producing MUST be left in place, named in the upgrade's output and in the stage receipt, and left out of the rewritten receipt, because a file release-kit stops shipping is a file the target owns from that moment.
+For each destination of the receipt that this binary's projection stops producing, a landing MUST remove a whole `rendered` file whose bytes still match the receipt's digest and name it `retired`, MUST keep every other one on disk and name it `dropped`, a seeded or state file, a marked region, an edited or irregular file, and one the target's state withholds, and MUST leave both out of the rewritten receipt, and `rk stage`, `rk stage compare`, and the upgrade preview MUST report the decision the apply takes, because a file release-kit wrote and nobody changed is release-kit's to take back, while a workflow left behind keeps running beside the one that replaced it.
 
-#### Scenario: A newer binary drops a workflow
+#### Scenario: A newer binary drops two workflows
 
-- GIVEN a receipt naming a destination this binary's projection no longer produces
-- WHEN `rk upgrade --apply` runs
-- THEN the file survives on disk, the output names it dropped, and the receipt no longer lists it
+- GIVEN a receipt naming two workflows this binary's projection no longer produces, one unedited and one edited since the landing
+- WHEN `rk stage`, the preview, and `rk upgrade --apply` run
+- THEN each names the first `retired` and the second `dropped`, the apply removes the first and keeps every byte of the second, and the receipt lists neither
 
-Verify: `cargo nextest run -E 'test(a_destination_retired_by_the_installed_version_stays_on_disk_and_leaves_the_receipt) or test(the_stage_receipt_and_human_output_snapshot_hold)'`
+Verify: `cargo nextest run -E 'test(a_dropped_unedited_destination_is_retired_on_upgrade) or test(a_dropped_edited_destination_stays_on_upgrade) or test(a_seeded_or_state_dropped_destination_is_never_removed) or test(stage_compare_preview_and_apply_agree_on_each_dropped_case) or test(a_destination_retired_by_the_installed_version_leaves_the_disk_and_the_receipt) or test(a_dropped_destination_is_retired_unless_the_target_edited_it) or test(the_stage_receipt_and_human_output_snapshot_hold)'`
 
 ### `landing:a-target-is-never-downgraded` — A target is never downgraded
 

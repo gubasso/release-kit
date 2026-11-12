@@ -36,7 +36,11 @@ Because the two vary independently, the release automation a project selects is 
 (rust,   gitlab) -> Cargo.toml, release-plz, crates.io+OIDC, none, glab
 (python, github) -> pyproject.toml, rk with git-cliff, PyPI+OIDC, wheels, gh
 (python, gitlab) -> pyproject.toml, rk with git-cliff, PyPI+OIDC, wheels, glab
+(bash,   github) -> VERSION, rk with git-cliff, none, the build command's tarball, gh
+(bash,   gitlab) -> VERSION, rk with git-cliff, none, the build command's tarball, glab
 ```
+
+The bot is a choice per pair. A pair takes an upstream tool where one keeps the release request and writes the version file on both forges, and the release engine in `rk` where none does. Rust keeps release-plz. The python and bash pairs run the engine: `rk release request` keeps one request per base on the branch `rk-release/<base>`, and the release half runs `rk release build`, then the provenance and the registry upload CI owns, then `rk release publish`, which creates the release page and the tag last. [The engine decision](../_docs/decisions/ADR-run-the-release-through-the-rk-engine.md) records why.
 
 An axis answer can be nothing, and the pair table already holds one: `(rust, gitlab)` has no artifact builder, the same shape as the Go column's bot and registry rows. [The Rust binding](../bindings/rust.md) carries that fact, because it is a property of the pair rather than of either axis alone. A pair the distribution ships no files for is a capability that is unavailable at those dimensions: the profile stays valid, and an apply that requires the automation refuses naming the available tuples.
 

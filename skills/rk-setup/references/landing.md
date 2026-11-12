@@ -21,9 +21,10 @@ The word is the production decision, so it decides the row. Provenance, `attribu
 | `equal`, or the word `created` or `matched` | nothing to decide                                                                |
 | the word `replaced`                         | the landing refreshes it, and the plan names a `reduced` or `unknown` provenance |
 | the word `preserved` or `drift`             | nothing to decide, because the landing keeps the project's bytes                 |
+| the word `retired`                          | nothing to decide, because the landing removes a file nobody edited              |
 | the word `collision`, `replaceable` true    | ask the operator, as a gated step, whether to keep the edit or discard it        |
 | the word `collision`, `replaceable` false   | a refusal no flag passes: report it as the operator's fix by hand                |
-| `retired`                                   | the task file says                                                               |
+| the word `dropped`                          | the task file says                                                               |
 
 For a `collision` whose `replaceable` is true, both answers name the path with `--replace`, which saves a copy before it overwrites. Name no other row: `--replace` refuses every path the verb does not mark replaceable. Never land over a `collision` without an answer.
 
@@ -43,7 +44,7 @@ Write only what the project owns, and write it before the landing:
 ## 5. Prove
 
 1. Run `rk stage compare <root> --target . --json` again.
-2. Confirm that every `rendered` and `region` row reads `equal`. A `seeded` or `state` row can differ, because the landing kept the project's bytes, and a `retired` row can too, because the landing released it to the project.
+2. Confirm that every `rendered` and `region` row reads `equal`. A row with the word `retired` reads `equal` once the landing removed the file, and the state `retired` means the removal is still pending. A `seeded` or `state` row can differ, because the landing kept the project's bytes, and a `dropped` row can too, because the landing left it to the project.
 3. Run `rk status --target . --json`, and confirm that `classification` reads `current`, or `drift` where only an unanswered sentinel remains.
 4. Carry the result into the proof line of the report, and keep the stage.
 

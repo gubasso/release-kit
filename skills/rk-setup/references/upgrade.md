@@ -19,11 +19,12 @@ Fill the pipeline:
 - Stage: `rk stage --target . --json`, with the answers from the pre-flight as flags. The configuration answers the rest.
 - Compare:
 
-| Row                                        | What follows                                                                              |
-| ------------------------------------------ | ----------------------------------------------------------------------------------------- |
-| `rendered`, `differs`, `attributed`        | refreshed by the landing                                                                  |
-| `differs`, `reduced` or `unknown`          | ask whether to keep the edit or discard it                                                |
-| `retired`: this release no longer lands it | ask whether to remove it, as a gated step after a commit, or keep it as the project's own |
+| Row                                 | What follows                                                                              |
+| ----------------------------------- | ----------------------------------------------------------------------------------------- |
+| `rendered`, `differs`, `attributed` | refreshed by the landing                                                                  |
+| `differs`, `reduced` or `unknown`   | ask whether to keep the edit or discard it                                                |
+| `retired`, the word `retired`       | removed by the landing, because nobody edited it since it landed                          |
+| `dropped`, the word `dropped`       | ask whether to remove it, as a gated step after a commit, or keep it as the project's own |
 
 - Land: `rk upgrade --stage <root> --target .`, then the same with `--apply` and one `--replace <path>` per answered conflict, as a gated step.
 
@@ -33,6 +34,6 @@ Fill the pipeline:
 2. Regenerate what a landed configuration generates, such as the artifact plan, through the binding's step, before any check reads it. `rk guide setup` 4b carries the command.
 3. Read `setup_proof` in `rk status --target . --json`. Where it reads `absent` or `stale`, the upgrade moved the setup contract: route to the `setup` task, then to `rk setup checkpoint --target .` on a host that holds the bot key, and commit the proof with the upgrade. Where a step this forge cannot run blocks the checkpoint, exclude it in `setup.excluded_steps` with its reason.
 4. `rk status --target . --json` reports `classification` `current`.
-5. Remove each retired file the operator chose to remove, as a gated step.
+5. Remove each dropped file the operator chose to remove, as a gated step.
 6. Remove each inactive legacy path by its exact path, only under explicit cleanup authorization, as `rk guide landing` 5b carries it. No `rk` verb removes this state.
 7. Route each saved copy as the pipeline says.

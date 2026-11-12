@@ -37,8 +37,8 @@ struct FileEntry {
     path: String,
     /// The declared ownership kind.
     kind: &'static str,
-    /// `created`, `replaced`, `matched`, `preserved`, `drift`, `released`,
-    /// or `collision` in a preview.
+    /// `created`, `replaced`, `matched`, `preserved`, `drift`, `retired`,
+    /// `dropped`, or `collision` in a preview.
     action: &'static str,
 }
 
@@ -441,7 +441,7 @@ fn report_apply(
     describe_selection(out, prepared);
     for decision in &prepared.decisions {
         out.result_line(describe(decision));
-        if decision.action != Action::Released {
+        if !matches!(decision.action, Action::Retired | Action::Dropped) {
             let bytes =
                 landing::read_recorded(held.base(), &decision.destination)?.unwrap_or_default();
             collect_sentinels(
@@ -578,8 +578,12 @@ pub(crate) fn describe(decision: &apply::Decision) -> String {
             decision.destination,
             decision.kind.as_str()
         ),
-        Action::Released => format!(
-            "released {} (no longer produced; target-owned from this landing)",
+        Action::Retired => format!(
+            "retired {} (no longer produced and unedited since it landed; the landing removes it)",
+            decision.destination
+        ),
+        Action::Dropped => format!(
+            "dropped {} (no longer produced; the target's own from this landing)",
             decision.destination
         ),
         Action::Matched => format!(

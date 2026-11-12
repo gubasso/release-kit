@@ -29,4 +29,4 @@ Enforced by `release-engine:one-request-per-base` and `release-engine:a-version-
 
 ## Status
 
-Accepted.
+Implemented: [`src/release_engine.rs`](../../src/release_engine.rs).

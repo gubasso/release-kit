@@ -16,13 +16,14 @@
   - [`release-engine:a-candidate-is-a-prerelease` — A candidate is a prerelease](#release-enginea-candidate-is-a-prerelease--a-candidate-is-a-prerelease)
   - [`release-engine:the-python-version-maps-to-the-tag` — The python version maps to the tag](#release-enginethe-python-version-maps-to-the-tag--the-python-version-maps-to-the-tag)
   - [`release-engine:git-cliff-runs-at-its-pin` — git-cliff runs at its pin](#release-enginegit-cliff-runs-at-its-pin--git-cliff-runs-at-its-pin)
+  - [`release-engine:no-predecessor-workflow-runs-beside-the-engine` — No predecessor workflow runs beside the engine](#release-engineno-predecessor-workflow-runs-beside-the-engine--no-predecessor-workflow-runs-beside-the-engine)
   - [`release-engine:the-output-declares-its-schema` — The output declares its schema](#release-enginethe-output-declares-its-schema--the-output-declares-its-schema)
 
 <!--TOC-->
 
 ## Purpose
 
-Rules governing the release engine that the `rk` binary runs in CI as `rk release request`, `rk release build`, and `rk release publish`, for each `(driver, forge)` pair whose driver has an adapter: today the bash and python drivers, on GitHub and GitLab. The request action keeps one release request per base branch. The build action decides whether a push releases and builds it. The publish action puts the release on the forge after the provenance and creates the tag last. Each action reads the driver, the forge, the repository, the trunk, the style, the integration, the line prefix, and the registry answer from the landing record, and takes no flag that restates one. What `rk release status` reads back belongs to `SPEC-release-state.md`, how `rk lines mint` writes a candidate belongs to `SPEC-release-candidates.md`, and the bot identity belongs to `SPEC-bot-identity.md`. No adopting project adopts this spec: a project cannot violate a rule about how `rk` behaves and cannot run the verification. The decisions behind these rules are `../decisions/ADR-run-the-release-through-the-rk-engine.md` and `../decisions/ADR-call-git-cliff-as-a-pinned-binary.md`, and the upstream facts are in `../reference/REFERENCE-release-engine-sources.md`.
+Rules governing the release engine that the `rk` binary runs in CI as `rk release request`, `rk release build`, and `rk release publish`, for each `(driver, forge)` pair whose driver has an adapter: today the bash and python drivers, on GitHub and GitLab. The request action keeps one release request per base branch. The build action decides whether a push releases and builds it. The publish action puts the release on the forge after the provenance and creates the tag last. Each action reads the driver, the forge, the repository, the trunk, the style, the integration, the line prefix, and the registry answer from the landing record, and takes no flag that restates one. What `rk release status` reads back belongs to `SPEC-release-state.md`, how `rk lines mint` writes a candidate belongs to `SPEC-release-candidates.md`, and the bot identity belongs to `SPEC-bot-identity.md`. No adopting project adopts this spec: a project cannot violate a rule about how `rk` behaves and cannot run the verification. The decisions behind these rules are `../decisions/ADR-run-the-release-through-the-rk-engine.md`, `../decisions/ADR-call-git-cliff-as-a-pinned-binary.md`, and `../decisions/ADR-retire-an-unedited-dropped-destination.md`, and the upstream facts are in `../reference/REFERENCE-release-engine-sources.md`.
 
 ## Requirements
 
@@ -169,6 +170,18 @@ The engine MUST run git-cliff at the version the embedded `versions.toml` pins, 
 - THEN it exits 73 with `tool-off-pin`, naming the pin, and nothing is pushed
 
 Verify: `cargo nextest run -E 'test(the_engine_refuses_git_cliff_off_its_pin) or test(every_engine_tool_download_verifies_its_checksum) or test(the_python_uv_version_follows_the_target_pin)'`
+
+### `release-engine:no-predecessor-workflow-runs-beside-the-engine` — No predecessor workflow runs beside the engine
+
+Where a bash or python target on GitHub holds the engine workflow `.github/workflows/release.yml`, `rk status --check` MUST count a violation with the code `predecessor-release-workflow` for each release workflow of another tool that the migration inventory lists and that stands beside it as a regular file, and MUST name the file, its tool, and the guidance that removes it, because each such workflow runs its own release on the same pushes and opens a second release request.
+
+#### Scenario: An upgrade kept an edited predecessor workflow
+
+- GIVEN a python target on GitHub whose edited release workflow from its previous release tool the upgrade kept as dropped
+- WHEN `rk status --check` runs
+- THEN it exits 1 naming the workflow and its tool, and it passes once the operator deletes the file
+
+Verify: `cargo nextest run -E 'test(status_check_faults_a_predecessor_workflow_beside_the_engine)'`
 
 ### `release-engine:the-output-declares-its-schema` — The output declares its schema
 

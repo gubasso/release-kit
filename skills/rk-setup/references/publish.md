@@ -4,7 +4,7 @@ Publish the first version and prove the automated path: `rk guide setup` §5 to 
 
 ## Pre-flight
 
-1. Read `rk binding <tech>`. Where the driver publishes to no registry, or `rk profile --target .` reports `registry: none`, skip §5, §6, and §8, and keep §7.
+1. Read `rk binding <tech>`. Where the driver publishes to no registry, or `rk profile --target .` reports `registry: none`, skip §5, §6, and §8, and keep §7. Where the binding registers a pending trusted publisher for a name the registry does not hold yet, as PyPI does, skip §5 and take §6 first.
 2. Run `rk setup status --target . --json` and `rk setup check --target . --json`. Read the `milestone` events: `first-version-published` and `automated-release-proven` read from the registry and the forge, and each registry form no API exposes reads `operator`, with its read-back check.
 3. Resume at the first milestone not yet observed. Nothing is remembered between runs.
 

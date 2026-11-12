@@ -9269,7 +9269,7 @@ fn an_upgrade_keeps_the_guards_of_a_record_that_predates_them() {
         .stdout
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["schema"], "rk.upgrade/11");
+    assert_eq!(report["schema"], "rk.upgrade/12");
     assert_eq!(report["pending"][0]["key"], "capabilities.workflow_guards");
     assert_eq!(report["pending"][0]["default"], "on");
     assert_eq!(report["capabilities"]["workflow_guards"], true);
@@ -10560,10 +10560,10 @@ fn an_upgrade_refuses_without_a_record_and_never_downgrades() {
         .stderr(predicate::str::contains("downgrading"));
 }
 
-/// A file the binary stops shipping is the target's from that moment:
-/// left in place, named, and gone from the record.
+/// A file the binary stops shipping, unedited since it landed, is retired:
+/// removed, named, and gone from the record.
 #[test]
-fn a_destination_retired_by_the_installed_version_stays_on_disk_and_leaves_the_receipt() {
+fn a_destination_retired_by_the_installed_version_leaves_the_disk_and_the_receipt() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
     land_rust(target.path()).success();
     let legacy = target.path().join("legacy.yml");
@@ -10583,7 +10583,7 @@ fn a_destination_retired_by_the_installed_version_stays_on_disk_and_leaves_the_r
         .arg(target.path())
         .assert()
         .success()
-        .stdout(predicate::str::contains("released legacy.yml"));
+        .stdout(predicate::str::contains("retired legacy.yml"));
     assert!(legacy.is_file(), "a preview writes nothing");
     let out = rk()
         .args(["upgrade", "--apply", "--json", "--target"])
@@ -10594,16 +10594,16 @@ fn a_destination_retired_by_the_installed_version_stays_on_disk_and_leaves_the_r
         .stdout
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    let released = report["files"]
+    let retired = report["files"]
         .as_array()
         .expect("files")
         .iter()
         .find(|file| file["path"] == "legacy.yml")
         .expect("the retired destination is named");
-    assert_eq!(released["action"], "released");
+    assert_eq!(retired["action"], "retired");
     assert!(
-        legacy.is_file(),
-        "deleting a workflow on a consumer's behalf is not a thing an upgrade does"
+        !legacy.exists(),
+        "a file release-kit wrote and nobody edited goes with the release that stops shipping it"
     );
     assert!(
         read_manifest(target.path())["files"]
@@ -10611,8 +10611,516 @@ fn a_destination_retired_by_the_installed_version_stays_on_disk_and_leaves_the_r
             .expect("files")
             .iter()
             .all(|file| file["destination"] != "legacy.yml"),
-        "the record must stop carrying a dropped file"
+        "the record must stop carrying a retired file"
     );
+}
+
+/// The workflow, configuration, and manifest an earlier release landed on a
+/// python target, each recorded with the kind that release gave it.
+const RELEASE_PLEASE_WORKFLOW: &str = ".github/workflows/release-please.yml";
+const RELEASE_PLEASE_CONFIG: &str = "release-please-config.json";
+const RELEASE_PLEASE_MANIFEST: &str = ".release-please-manifest.json";
+
+/// A python/github target landed by this binary, with the three release
+/// files an earlier release landed written beside it and named in its
+/// record, each with the digest of the bytes it holds: the workflow
+/// `rendered`, the configuration `seeded`, and the manifest `state`.
+fn release_please_target() -> tempfile::TempDir {
+    let target = status_repo();
+    seed_uv_project(target.path(), "0.1.0");
+    rk().args(["init", "--tech", "python", "--forge", "github"])
+        .args(["--repo", "acme/widget", "--target"])
+        .arg(target.path())
+        .arg("--apply")
+        .assert()
+        .success();
+    let mut manifest = read_manifest(target.path());
+    for (destination, kind, bytes) in [
+        (
+            RELEASE_PLEASE_WORKFLOW,
+            "rendered",
+            "name: release-please\non:\n  push:\n    branches: [master]\n",
+        ),
+        (
+            RELEASE_PLEASE_CONFIG,
+            "seeded",
+            "{\"packages\": {\".\": {\"release-type\": \"python\"}}}\n",
+        ),
+        (RELEASE_PLEASE_MANIFEST, "state", "{\".\": \"0.1.0\"}\n"),
+    ] {
+        let path = target.path().join(destination);
+        std::fs::create_dir_all(path.parent().expect("a parent")).expect("the parent creates");
+        std::fs::write(&path, bytes).expect("the earlier file writes");
+        manifest["files"]
+            .as_array_mut()
+            .expect("files")
+            .push(serde_json::json!({
+                "destination": destination,
+                "kind": kind,
+                "sha256": Digest::of(bytes.as_bytes()).to_string(),
+            }));
+    }
+    write_manifest(target.path(), &manifest);
+    target
+}
+
+/// The action an upgrade report gives `path`.
+fn upgrade_action(report: &serde_json::Value, path: &str) -> String {
+    report["files"]
+        .as_array()
+        .expect("files")
+        .iter()
+        .find(|file| file["path"] == path)
+        .unwrap_or_else(|| panic!("{path} is not named: {report}"))["action"]
+        .as_str()
+        .expect("an action word")
+        .to_owned()
+}
+
+/// `rk upgrade` against `target`, as JSON, previewing or applying.
+fn upgrade_json(target: &Path, apply: bool) -> serde_json::Value {
+    let mut command = rk();
+    command.args(["upgrade", "--json", "--target"]).arg(target);
+    if apply {
+        command.arg("--apply");
+    }
+    let out = command.assert().success().get_output().stdout.clone();
+    serde_json::from_slice(&out).expect("one JSON object")
+}
+
+/// Whether the record still names `destination`.
+fn recorded(target: &Path, destination: &str) -> bool {
+    read_manifest(target)["files"]
+        .as_array()
+        .expect("files")
+        .iter()
+        .any(|file| file["destination"] == destination)
+}
+
+/// SATISFIES landing:a-dropped-file-stays
+///
+/// A workflow this release stops landing, whose bytes the record still
+/// vouches for, is removed on upgrade: a release-please workflow left in
+/// place keeps opening its own release request beside the engine's.
+#[test]
+fn a_dropped_unedited_destination_is_retired_on_upgrade() {
+    let target = release_please_target();
+    let workflow = target.path().join(RELEASE_PLEASE_WORKFLOW);
+    rk().args(["upgrade", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!(
+            "retired {RELEASE_PLEASE_WORKFLOW}"
+        )));
+    assert!(workflow.is_file(), "a preview writes nothing");
+    let report = upgrade_json(target.path(), false);
+    assert_eq!(upgrade_action(&report, RELEASE_PLEASE_WORKFLOW), "retired");
+    let out = rk()
+        .args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let human = String::from_utf8_lossy(&out);
+    assert!(
+        human.contains(&format!("retired {RELEASE_PLEASE_WORKFLOW}")),
+        "{human}"
+    );
+    assert!(!workflow.exists(), "the unedited workflow is removed");
+    assert!(
+        !recorded(target.path(), RELEASE_PLEASE_WORKFLOW),
+        "the retired destination leaves the record"
+    );
+    // A second run finds nothing left to retire, and reads clean.
+    let report = upgrade_json(target.path(), true);
+    assert!(
+        report["files"]
+            .as_array()
+            .expect("files")
+            .iter()
+            .all(|file| file["path"] != RELEASE_PLEASE_WORKFLOW),
+        "{report}"
+    );
+}
+
+/// SATISFIES landing:a-dropped-file-stays
+///
+/// One changed byte makes the workflow the target's own: the upgrade keeps
+/// it, names it dropped, and the record lets it go.
+#[test]
+fn a_dropped_edited_destination_stays_on_upgrade() {
+    let target = release_please_target();
+    let workflow = target.path().join(RELEASE_PLEASE_WORKFLOW);
+    let mut bytes = std::fs::read(&workflow).expect("the workflow reads");
+    bytes[0] = b'N';
+    std::fs::write(&workflow, &bytes).expect("the edit writes");
+    let report = upgrade_json(target.path(), false);
+    assert_eq!(upgrade_action(&report, RELEASE_PLEASE_WORKFLOW), "dropped");
+    let out = rk()
+        .args(["upgrade", "--apply", "--target"])
+        .arg(target.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let human = String::from_utf8_lossy(&out);
+    assert!(
+        human.contains(&format!("dropped {RELEASE_PLEASE_WORKFLOW}")),
+        "{human}"
+    );
+    assert_eq!(
+        std::fs::read(&workflow).expect("the edited workflow stays"),
+        bytes,
+        "the edited workflow keeps every byte"
+    );
+    assert!(!recorded(target.path(), RELEASE_PLEASE_WORKFLOW));
+}
+
+/// SATISFIES landing:a-dropped-file-stays
+///
+/// A seeded or a state destination holds the target's bytes, so no upgrade
+/// removes it, whether or not the record still vouches for them.
+#[test]
+fn a_seeded_or_state_dropped_destination_is_never_removed() {
+    for edited in [false, true] {
+        let target = release_please_target();
+        if edited {
+            for destination in [RELEASE_PLEASE_CONFIG, RELEASE_PLEASE_MANIFEST] {
+                let path = target.path().join(destination);
+                let mut text = std::fs::read_to_string(&path).expect("reads");
+                text.push('\n');
+                std::fs::write(&path, text).expect("the edit writes");
+            }
+        }
+        let before: Vec<Vec<u8>> = [RELEASE_PLEASE_CONFIG, RELEASE_PLEASE_MANIFEST]
+            .iter()
+            .map(|destination| std::fs::read(target.path().join(destination)).expect("reads"))
+            .collect();
+        let report = upgrade_json(target.path(), true);
+        for (destination, bytes) in [RELEASE_PLEASE_CONFIG, RELEASE_PLEASE_MANIFEST]
+            .iter()
+            .zip(before)
+        {
+            assert_eq!(
+                upgrade_action(&report, destination),
+                "dropped",
+                "edited {edited}: {destination}"
+            );
+            assert_eq!(
+                std::fs::read(target.path().join(destination)).expect("the file stays"),
+                bytes,
+                "edited {edited}: {destination} keeps every byte"
+            );
+            assert!(!recorded(target.path(), destination), "{destination}");
+        }
+    }
+}
+
+/// SATISFIES landing:a-dropped-file-stays
+/// SATISFIES staging:the-comparison-is-the-landing-decision
+///
+/// The stage, the comparison, the upgrade preview, and the apply give each
+/// dropped destination one decision: the unedited rendered workflow is
+/// retired, and an edited rendered file, a seeded file, and a state file
+/// are dropped and kept.
+#[test]
+fn stage_compare_preview_and_apply_agree_on_each_dropped_case() {
+    const EDITED: &str = ".github/workflows/release-please-edited.yml";
+    let target = release_please_target();
+    std::fs::write(target.path().join(EDITED), "edited by the project\n").expect("writes");
+    let mut manifest = read_manifest(target.path());
+    manifest["files"]
+        .as_array_mut()
+        .expect("files")
+        .push(serde_json::json!({
+            "destination": EDITED,
+            "kind": "rendered",
+            "sha256": Digest::of(b"as an earlier release wrote it\n").to_string(),
+        }));
+    write_manifest(target.path(), &manifest);
+    let expected = [
+        (RELEASE_PLEASE_WORKFLOW, "retired"),
+        (EDITED, "dropped"),
+        (RELEASE_PLEASE_CONFIG, "dropped"),
+        (RELEASE_PLEASE_MANIFEST, "dropped"),
+    ];
+
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let stage = stage_into(target.path(), scratch.path(), &[]);
+    let receipt = stage_receipt(&stage);
+    let compare = compare_json(&stage, target.path());
+    let preview = upgrade_json(target.path(), false);
+    let applied = upgrade_json(target.path(), true);
+    for (destination, word) in expected {
+        let listed = |key: &str| {
+            receipt[key]
+                .as_array()
+                .unwrap_or_else(|| panic!("the receipt carries {key}: {receipt}"))
+                .contains(&serde_json::json!(destination))
+        };
+        assert!(listed(word), "stage: {destination} under {word}: {receipt}");
+        let other = if word == "retired" {
+            "dropped"
+        } else {
+            "retired"
+        };
+        assert!(!listed(other), "stage: {destination} under {other}");
+        assert_eq!(
+            compare_row(&compare, destination)["word"],
+            word,
+            "compare: {destination}"
+        );
+        assert_eq!(
+            upgrade_action(&preview, destination),
+            word,
+            "preview: {destination}"
+        );
+        assert_eq!(
+            upgrade_action(&applied, destination),
+            word,
+            "apply: {destination}"
+        );
+        assert_eq!(
+            target.path().join(destination).exists(),
+            word == "dropped",
+            "disk: {destination}"
+        );
+        assert!(!recorded(target.path(), destination), "{destination}");
+    }
+}
+
+/// `rk stage compare` as the human reads it.
+fn compare_human(stage: &Path, target: &Path) -> String {
+    let out = rk()
+        .args(["stage", "compare"])
+        .arg(stage)
+        .arg("--target")
+        .arg(target)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// SATISFIES staging:the-comparison-is-the-landing-decision
+///
+/// A retirement still to happen is a pending write: every candidate file
+/// matches, yet the unedited workflow the landing removes still stands, so
+/// the comparison names it and does not prove the landing. Once the apply
+/// removed it, the row reads retired and settled, no collision, and the
+/// landing is proven.
+#[test]
+fn stage_compare_proves_a_landing_only_after_its_retirements_settle() {
+    let target = release_please_target();
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let stage = stage_into(target.path(), scratch.path(), &[]);
+
+    let before = compare_json(&stage, target.path());
+    for row in before["rows"].as_array().expect("the rows") {
+        if row["path"] != RELEASE_PLEASE_WORKFLOW
+            && matches!(row["kind"].as_str(), Some("rendered" | "region"))
+            && row["state"] != "dropped"
+        {
+            assert_eq!(row["state"], "equal", "every candidate matches: {row}");
+        }
+    }
+    let row = compare_row(&before, RELEASE_PLEASE_WORKFLOW);
+    assert_eq!(
+        (&row["state"], &row["word"]),
+        (&serde_json::json!("retired"), &serde_json::json!("retired")),
+        "{row}"
+    );
+    let human = compare_human(&stage, target.path());
+    assert!(!human.contains("the landing is proven"), "{human}");
+    assert!(
+        human
+            .lines()
+            .any(|line| line.contains("retirement is pending")
+                && line.contains(RELEASE_PLEASE_WORKFLOW)),
+        "{human}"
+    );
+
+    rk().args(["upgrade", "--apply", "--stage"])
+        .arg(&stage)
+        .arg("--target")
+        .arg(target.path())
+        .assert()
+        .success();
+    assert!(!target.path().join(RELEASE_PLEASE_WORKFLOW).exists());
+
+    let after = compare_json(&stage, target.path());
+    let row = compare_row(&after, RELEASE_PLEASE_WORKFLOW);
+    assert_eq!(
+        (&row["state"], &row["word"]),
+        (&serde_json::json!("equal"), &serde_json::json!("retired")),
+        "{row}"
+    );
+    assert!(
+        after["rows"]
+            .as_array()
+            .expect("the rows")
+            .iter()
+            .all(|row| row["word"] != "collision"),
+        "{after}"
+    );
+    let human = compare_human(&stage, target.path());
+    assert!(human.contains("the landing is proven"), "{human}");
+    assert!(
+        human
+            .lines()
+            .any(|line| line.contains(RELEASE_PLEASE_WORKFLOW) && line.contains("settled")),
+        "{human}"
+    );
+}
+
+/// SATISFIES staging:the-comparison-is-the-landing-decision
+///
+/// An edited rendered file, a seeded file, and a state file the release no
+/// longer lands are the target's own: each reads dropped, never collision,
+/// and none of them stands against the proof, before the apply or after.
+#[test]
+fn a_destination_the_target_keeps_never_blocks_the_proof() {
+    const EDITED: &str = ".github/workflows/release-please-edited.yml";
+    let target = release_please_target();
+    std::fs::remove_file(target.path().join(RELEASE_PLEASE_WORKFLOW)).expect("removes");
+    std::fs::write(target.path().join(EDITED), "edited by the project\n").expect("writes");
+    let mut manifest = read_manifest(target.path());
+    let files = manifest["files"].as_array_mut().expect("files");
+    files.retain(|file| file["destination"] != RELEASE_PLEASE_WORKFLOW);
+    files.push(serde_json::json!({
+        "destination": EDITED,
+        "kind": "rendered",
+        "sha256": Digest::of(b"as an earlier release wrote it\n").to_string(),
+    }));
+    write_manifest(target.path(), &manifest);
+    let scratch = tempfile::tempdir().expect("a scratch dir exists");
+    let stage = stage_into(target.path(), scratch.path(), &[]);
+
+    for when in ["before", "after"] {
+        if when == "after" {
+            rk().args(["upgrade", "--apply", "--stage"])
+                .arg(&stage)
+                .arg("--target")
+                .arg(target.path())
+                .assert()
+                .success();
+        }
+        let report = compare_json(&stage, target.path());
+        for destination in [EDITED, RELEASE_PLEASE_CONFIG, RELEASE_PLEASE_MANIFEST] {
+            let row = compare_row(&report, destination);
+            assert_eq!(
+                (&row["state"], &row["word"]),
+                (&serde_json::json!("dropped"), &serde_json::json!("dropped")),
+                "{when}: {row}"
+            );
+            assert!(target.path().join(destination).is_file(), "{destination}");
+        }
+        let human = compare_human(&stage, target.path());
+        assert!(human.contains("the landing is proven"), "{when}: {human}");
+    }
+}
+
+/// SATISFIES release-engine:no-predecessor-workflow-runs-beside-the-engine
+///
+/// A release workflow of another tool, as the migration inventory lists
+/// them, beside the engine workflow of the same forge faults the check and
+/// names the file and the step that removes it: the edited release-please
+/// workflow an upgrade keeps, and an unrecorded one alike. A rust target
+/// keeps release-plz and no engine workflow, and a GitLab target runs no
+/// GitHub workflow, so neither faults.
+#[test]
+fn status_check_faults_a_predecessor_workflow_beside_the_engine() {
+    let failures = |target: &Path| -> Vec<serde_json::Value> {
+        status_json(target)["invariant_failures"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|failure| failure["code"] == "predecessor-release-workflow")
+            .collect()
+    };
+    let check = |target: &Path| {
+        rk().args(["status", "--check", "--target"])
+            .arg(target)
+            .output()
+            .expect("the check runs")
+    };
+
+    // The edited release-please workflow the upgrade kept.
+    let target = release_please_target();
+    let workflow = target.path().join(RELEASE_PLEASE_WORKFLOW);
+    let mut bytes = std::fs::read(&workflow).expect("the workflow reads");
+    bytes[0] = b'N';
+    std::fs::write(&workflow, &bytes).expect("the edit writes");
+    upgrade_json(target.path(), true);
+    assert!(workflow.is_file(), "the edited workflow stays");
+    seed_setup_proof(target.path());
+    let found = failures(target.path());
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0]["destination"], RELEASE_PLEASE_WORKFLOW);
+    assert!(
+        found[0]["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("release-please")
+                && reason.contains(".github/workflows/release.yml")),
+        "{found:?}"
+    );
+    assert!(
+        found[0]["remediation"]
+            .as_str()
+            .is_some_and(|remediation| remediation.contains("guidance")),
+        "{found:?}"
+    );
+    let out = check(target.path());
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains(RELEASE_PLEASE_WORKFLOW),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    std::fs::remove_file(&workflow).expect("the operator deletes it");
+    assert!(failures(target.path()).is_empty());
+
+    // An unrecorded predecessor workflow on a fresh bash landing, and none
+    // where the engine workflow is absent from the forge.
+    for (tech, forge, faults) in [
+        ("bash", "github", true),
+        ("python", "github", true),
+        ("bash", "gitlab", false),
+        ("python", "gitlab", false),
+        ("rust", "github", false),
+    ] {
+        let target = status_repo();
+        if tech == "python" {
+            seed_uv_project(target.path(), "0.1.0");
+        }
+        rk().args(["init", "--tech", tech, "--forge", forge])
+            .args(["--repo", "acme/widget", "--target"])
+            .arg(target.path())
+            .arg("--apply")
+            .assert()
+            .success();
+        seed_setup_proof(target.path());
+        let goreleaser = target.path().join(".github/workflows/goreleaser.yml");
+        std::fs::create_dir_all(goreleaser.parent().expect("a parent")).expect("creates");
+        std::fs::write(&goreleaser, "name: goreleaser\n").expect("writes");
+        let found = failures(target.path());
+        assert_eq!(!found.is_empty(), faults, "{tech}/{forge}: {found:?}");
+        if faults {
+            assert_eq!(found[0]["destination"], ".github/workflows/goreleaser.yml");
+            assert_eq!(
+                check(target.path()).status.code(),
+                Some(1),
+                "{tech}/{forge}"
+            );
+        }
+    }
 }
 
 /// A matching target adopts: the manifest appears with its origin, and
@@ -12719,9 +13227,21 @@ fn guide_release_renders_the_resolved_pairs_verifier() {
     let rust_gitlab = render("rust", "gitlab");
     assert!(rust_gitlab.contains("declares no provenance surface"));
     assert!(!rust_gitlab.contains("cosign verify-blob-attestation"));
+    // A python release carries the forge's provenance on its page and
+    // PEP 740 attestations on PyPI, so each forge verifies both.
     let python_github = render("python", "github");
     assert!(python_github.contains("pypi-attestations verify pypi"));
+    assert!(python_github.contains("gh attestation verify"));
+    assert!(
+        python_github.contains("--source-digest") && python_github.contains("--signer-workflow")
+    );
     assert!(!python_github.contains("cosign"));
+    let python_gitlab = render("python", "gitlab");
+    assert!(python_gitlab.contains("cosign verify-blob-attestation"));
+    assert!(python_gitlab.contains("@<built ref>"));
+    assert!(python_gitlab.contains("pypi-attestations verify pypi"));
+    assert!(python_gitlab.contains("--repository \"https://gitlab.com/<repo>\""));
+    assert!(!python_gitlab.contains("gh attestation verify"));
     let unresolved = rk()
         .args(["guide", "release"])
         .current_dir(bare.path())
@@ -12736,6 +13256,7 @@ fn guide_release_renders_the_resolved_pairs_verifier() {
         "On bash/github:",
         "On bash/gitlab:",
         "On python/github:",
+        "On python/gitlab:",
         "On rust/gitlab:",
     ] {
         assert!(
@@ -20201,7 +20722,7 @@ fn a_target_with_its_own_flake_keeps_it_and_the_pair_is_withheld() {
 
 /// The opt-in works after the fact in both directions: `--nix` adds the
 /// files and records it, `--no-nix` drops them from the record while the
-/// files stay the target's own.
+/// files, each seeded or state, stay the target's own.
 #[test]
 fn an_upgrade_moves_the_nix_opt_in_in_both_directions() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
@@ -20219,7 +20740,7 @@ fn an_upgrade_moves_the_nix_opt_in_in_both_directions() {
         .arg(target.path())
         .assert()
         .success()
-        .stdout(predicate::str::contains("released flake.nix"));
+        .stdout(predicate::str::contains("dropped flake.nix"));
     let manifest = read_manifest(target.path());
     assert_eq!(manifest["capabilities"]["nix_packaging"], false);
     assert!(
@@ -20839,8 +21360,8 @@ fn a_landing_without_the_code_scanning_flag_lands_neither_workflow() {
 }
 
 /// Switching provider retires one destination and adds the other: the
-/// retired file stays on disk as the target's own, exactly as any file this
-/// binary stops shipping does.
+/// unedited workflow leaves the disk and the receipt, exactly as any file
+/// this binary stops shipping does.
 #[test]
 fn switching_the_code_scanning_provider_retires_the_other_destination() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
@@ -20863,8 +21384,8 @@ fn switching_the_code_scanning_provider_retires_the_other_destination() {
         "the new provider's workflow lands"
     );
     assert!(
-        target.path().join(CODEQL_WORKFLOW).is_file(),
-        "a released destination stays on disk"
+        !target.path().join(CODEQL_WORKFLOW).exists(),
+        "an unedited retired destination leaves the disk"
     );
     let manifest = read_manifest(target.path());
     assert_eq!(manifest["capabilities"]["code_scanning"], "semgrep");
@@ -21209,8 +21730,8 @@ fn a_pre_code_scanning_record_upgrades_to_nothing_unrequested() {
 }
 
 /// Turning the capability off drops the destination from the receipt and
-/// leaves the file on disk as the target's own, like any file this binary
-/// stops shipping.
+/// retires the unedited workflow, like any file this binary stops
+/// shipping.
 #[test]
 fn an_upgrade_can_turn_the_scorecard_capability_off() {
     let target = tempfile::tempdir().expect("a scratch dir exists");
@@ -21220,8 +21741,8 @@ fn an_upgrade_can_turn_the_scorecard_capability_off() {
         .assert()
         .success();
     assert!(
-        target.path().join(SCORECARD_WORKFLOW).is_file(),
-        "a released destination stays on disk"
+        !target.path().join(SCORECARD_WORKFLOW).exists(),
+        "an unedited retired destination leaves the disk"
     );
     let manifest = read_manifest(target.path());
     assert_eq!(manifest["capabilities"]["scorecard"], false);
@@ -29943,7 +30464,7 @@ fn the_landing_runbook_names_the_real_stage_fields() {
     let scratch = tempfile::tempdir().expect("a scratch dir exists");
     let target = stage_target();
     let report = stage_json(target.path(), &scratch.path().join("stage"));
-    assert_eq!(report["schema"], "rk.stage/7");
+    assert_eq!(report["schema"], "rk.stage/8");
     for top in [
         "schema",
         "rk_version",
@@ -29952,6 +30473,7 @@ fn the_landing_runbook_names_the_real_stage_fields() {
         "omissions",
         "collisions",
         "retired",
+        "dropped",
     ] {
         assert!(!report[top].is_null(), "the stage carries {top}: {report}");
         assert!(step.contains(top), "step 2a names the {top} field");
@@ -29976,13 +30498,14 @@ fn the_landing_runbook_names_the_real_stage_fields() {
     }
     assert!(saw_region, "the fixture stages a marked region");
     assert!(step.contains("region_sha256 where the placement is region"));
-    // The omission and collision shapes, and the retired strings, from the
+    // The omission and collision shapes, and the dropped strings, from the
     // serializer's own snapshot (a format string, so its braces double):
     // the scratch target raises none of them.
     let snapshot = std::fs::read_to_string(repo_path("src/stage.rs")).expect("reads");
     for shape in [
         r#""omissions":[{{"destination":"flake.nix","reason":"#,
         r#""retired":["old.yml"]"#,
+        r#""dropped":["edited.yml"]"#,
     ] {
         assert!(
             snapshot.contains(shape),
@@ -29990,13 +30513,15 @@ fn the_landing_runbook_names_the_real_stage_fields() {
         );
     }
     assert!(step.contains("each omissions and collisions entry carries destination and reason"));
-    assert!(step.contains("each retired entry is a destination alone"));
-    assert!(
-        report["retired"]
-            .as_array()
-            .is_some_and(|r| r.iter().all(serde_json::Value::is_string)),
-        "retired entries are destination strings"
-    );
+    assert!(step.contains("each retired and dropped entry is a destination alone"));
+    for key in ["retired", "dropped"] {
+        assert!(
+            report[key]
+                .as_array()
+                .is_some_and(|r| r.iter().all(serde_json::Value::is_string)),
+            "{key} entries are destination strings"
+        );
+    }
 }
 
 /// The report words the landing runbook's step 3 cites for each front
@@ -30017,7 +30542,8 @@ fn the_landing_runbook_cites_the_words_the_fronts_print() {
         release_kit::landing::apply::Action::Matched,
         release_kit::landing::apply::Action::Preserved,
         release_kit::landing::apply::Action::Drift,
-        release_kit::landing::apply::Action::Released,
+        release_kit::landing::apply::Action::Retired,
+        release_kit::landing::apply::Action::Dropped,
     ] {
         assert!(
             step.contains(action.as_str()),
@@ -33502,6 +34028,7 @@ fn the_stage_receipt_and_human_output_snapshot_hold() {
         "omissions",
         "collisions",
         "retired",
+        "dropped",
         "seeded_present",
         "state_present",
         "secrets_moved",
@@ -33509,7 +34036,7 @@ fn the_stage_receipt_and_human_output_snapshot_hold() {
     ];
     assert_eq!(top_level_keys(&receipt_text), receipt_keys);
     let receipt = stage_receipt(&stage);
-    assert_eq!(receipt["schema"], "rk.stage/7");
+    assert_eq!(receipt["schema"], "rk.stage/8");
     assert_eq!(receipt["rk_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(receipt["target"], canonical_target.display().to_string());
     assert_eq!(receipt["stage_root"], stage.display().to_string());
@@ -33550,19 +34077,23 @@ fn the_stage_receipt_and_human_output_snapshot_hold() {
     );
 
     // A landed target explains its record: the schema version, the
-    // seeded files a landing keeps, and a recorded destination the
-    // projection no longer produces.
+    // seeded files a landing keeps, and the recorded destinations the
+    // projection no longer produces, one the landing retires and one it
+    // keeps because someone edited it.
     let landed = stage_target();
     land_rust(landed.path()).success();
+    std::fs::write(landed.path().join("edited-workflow.yml"), "mine").expect("writes");
     let mut manifest = read_manifest(landed.path());
-    manifest["files"]
-        .as_array_mut()
-        .expect("a file list")
-        .push(serde_json::json!({
-            "destination": "old-workflow.yml",
-            "kind": "rendered",
-            "sha256": Digest::of(b"old").to_string()
-        }));
+    for destination in ["old-workflow.yml", "edited-workflow.yml"] {
+        manifest["files"]
+            .as_array_mut()
+            .expect("a file list")
+            .push(serde_json::json!({
+                "destination": destination,
+                "kind": "rendered",
+                "sha256": Digest::of(b"old").to_string()
+            }));
+    }
     write_manifest(landed.path(), &manifest);
     let landed_out = scratch.path().join("landed");
     let human = stage_cmd(landed.path())
@@ -33579,7 +34110,15 @@ fn the_stage_receipt_and_human_output_snapshot_hold() {
         "{human}"
     );
     assert!(
-        human.contains("retired old-workflow.yml: recorded, no longer produced"),
+        human.contains(
+            "retired old-workflow.yml: recorded, no longer produced, and unedited; a landing removes it"
+        ),
+        "{human}"
+    );
+    assert!(
+        human.contains(
+            "dropped edited-workflow.yml: recorded and no longer produced; a landing keeps it as the target's own"
+        ),
         "{human}"
     );
     assert!(
@@ -33589,6 +34128,10 @@ fn the_stage_receipt_and_human_output_snapshot_hold() {
     let receipt = stage_receipt(&landed_out);
     assert_eq!(receipt["receipt_schema_version"], 12);
     assert_eq!(receipt["retired"], serde_json::json!(["old-workflow.yml"]));
+    assert_eq!(
+        receipt["dropped"],
+        serde_json::json!(["edited-workflow.yml"])
+    );
     assert!(
         receipt["seeded_present"]
             .as_array()
@@ -33705,7 +34248,7 @@ fn stage_clean_refuses_every_protected_or_ambiguous_path_and_deletes_one_valid_s
     std::fs::write(
         ancestor.join("stage.json"),
         format!(
-            r#"{{"schema":"rk.stage/7","stage_root":"{}","target":"{}"}}"#,
+            r#"{{"schema":"rk.stage/8","stage_root":"{}","target":"{}"}}"#,
             ancestor.display(),
             ancestor.join("inner").display()
         ),
@@ -34982,7 +35525,7 @@ fn production_outputs_carry_no_plan_bundle_or_release_selection_field() {
         "rk.init/11",
         "rk.assess/4",
         "rk.status/15",
-        "rk.upgrade/11",
+        "rk.upgrade/12",
         "rk.adopt/11",
     ] {
         assert!(
@@ -37298,7 +37841,7 @@ fn a_public_v0_4_0_target_upgrades_from_its_receipt_alone() {
         .stdout
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&out).expect("one JSON object");
-    assert_eq!(report["schema"], "rk.upgrade/11", "{report}");
+    assert_eq!(report["schema"], "rk.upgrade/12", "{report}");
     assert_eq!(report["from_version"], "0.4.0", "{report}");
     let action_of = |destination: &str| -> String {
         report["files"]
@@ -41189,8 +41732,8 @@ fn stage_compare_reports_each_state_kind_and_provenance() {
         &[".github/workflows/pr-title.yml"],
         b"# an older release's title check\n",
     );
-    // Retired: a destination the record names and this release no longer
-    // produces.
+    // Dropped and unedited: a destination the record names, vouches for,
+    // and this release no longer produces, so the landing retires it.
     std::fs::write(target.path().join("legacy.yml"), "old\n").expect("writes");
     manifest["files"]
         .as_array_mut()
@@ -41213,7 +41756,7 @@ fn stage_compare_reports_each_state_kind_and_provenance() {
     let scratch = tempfile::tempdir().expect("a scratch dir exists");
     let stage = stage_into(target.path(), scratch.path(), &COMPARE_FLAGS);
     let report = compare_json(&stage, target.path());
-    assert_eq!(report["schema"], "rk.stage-compare/1");
+    assert_eq!(report["schema"], "rk.stage-compare/3");
     assert_eq!(report["history"]["available"], true, "{report}");
 
     let row = compare_row(&report, ".github/workflows/pr-title.yml");
@@ -41247,10 +41790,7 @@ fn stage_compare_reports_each_state_kind_and_provenance() {
     let row = compare_row(&report, "legacy.yml");
     assert_eq!(
         (&row["state"], &row["word"]),
-        (
-            &serde_json::json!("retired"),
-            &serde_json::json!("released")
-        ),
+        (&serde_json::json!("retired"), &serde_json::json!("retired")),
         "{row}"
     );
     assert_eq!(compare_row(&report, "AGENTS.md")["kind"], "region");
@@ -41316,17 +41856,23 @@ fn stage_compare_reports_each_state_kind_and_provenance() {
         .success();
     let proven = compare_json(&stage, target.path());
     let rows = proven["rows"].as_array().expect("the rows");
+    let row = compare_row(&proven, "legacy.yml");
+    assert_eq!(
+        (&row["state"], &row["word"]),
+        (&serde_json::json!("equal"), &serde_json::json!("retired")),
+        "the retirement settled: {row}"
+    );
     assert!(
-        rows.iter().any(|row| row["state"] == "retired"),
-        "the stage still names the released destination: {proven}"
+        !target.path().join("legacy.yml").exists(),
+        "the landing retired it"
     );
     for row in rows {
-        if matches!(row["kind"].as_str(), Some("rendered" | "region")) && row["state"] != "retired"
+        if matches!(row["kind"].as_str(), Some("rendered" | "region")) && row["state"] != "dropped"
         {
             assert_eq!(row["state"], "equal", "{row}");
         }
     }
-    // The retired row is the target's now, so the verb reads the proof.
+    // The retirement settled, so the verb reads the proof.
     rk().args(["stage", "compare"])
         .arg(&stage)
         .arg("--target")
@@ -41338,11 +41884,12 @@ fn stage_compare_reports_each_state_kind_and_provenance() {
 
 /// SATISFIES staging:the-comparison-is-the-landing-decision
 ///
-/// The comparison reports every destination: a retired path no read
+/// The comparison reports every destination: a dropped path no read
 /// answers, a directory where the file stood, is a row with unknown
-/// provenance that nothing vouches for, and the other rows still come.
+/// provenance that nothing vouches for, the landing keeps it, and the
+/// other rows still come.
 #[test]
-fn an_unreadable_retired_path_is_a_row_not_a_failed_report() {
+fn an_unreadable_dropped_path_is_a_row_not_a_failed_report() {
     let target = plan_target();
     land_rust_guarded(target.path()).success();
     let mut manifest = read_manifest(target.path());
@@ -41361,7 +41908,8 @@ fn an_unreadable_retired_path_is_a_row_not_a_failed_report() {
     let stage = stage_into(target.path(), scratch.path(), &[]);
     let report = compare_json(&stage, target.path());
     let row = compare_row(&report, "legacy.yml");
-    assert_eq!(row["state"], "retired", "{row}");
+    assert_eq!(row["state"], "dropped", "{row}");
+    assert_eq!(row["word"], "dropped", "{row}");
     assert_eq!(row["provenance"], "unknown", "{row}");
     assert!(row["vouched"].is_null(), "{row}");
     assert_eq!(row["replaceable"], false, "{row}");
@@ -49064,6 +49612,51 @@ fn python_on_gitlab_lands_and_reads_clean() {
         .success();
 }
 
+/// A fresh landing of each engine pair records its pipeline, the stage
+/// renders the bytes the landing wrote, and the judged status reads clean
+/// once the setup proof stands.
+#[test]
+fn each_engine_pair_lands_and_reads_clean() {
+    for (tech, forge, pipeline) in [
+        ("bash", "github", ".github/workflows/release.yml"),
+        ("bash", "gitlab", ".gitlab-ci.yml"),
+        ("python", "github", ".github/workflows/release.yml"),
+        ("python", "gitlab", ".gitlab-ci.yml"),
+    ] {
+        let target = status_repo();
+        if tech == "python" {
+            seed_uv_project(target.path(), "0.1.0");
+        }
+        let flags = ["--tech", tech, "--forge", forge, "--repo", "acme/widget"];
+        rk().arg("init")
+            .args(flags)
+            .arg("--target")
+            .arg(target.path())
+            .arg("--apply")
+            .assert()
+            .success();
+        let manifest = read_manifest(target.path());
+        for destination in [pipeline, "cliff.toml"] {
+            manifest_file(&manifest, destination);
+        }
+        assert_eq!(manifest["profile"]["release"]["driver"], tech);
+        commit_all(target.path(), "chore: land release-kit");
+        let scratch = tempfile::tempdir().expect("a scratch dir exists");
+        let stage = stage_into(target.path(), scratch.path(), &flags);
+        let report = compare_json(&stage, target.path());
+        let rows = report["rows"].as_array().expect("the rows");
+        assert!(!rows.is_empty(), "{tech}/{forge}: {report}");
+        for row in rows {
+            assert_eq!(row["state"], "equal", "{tech}/{forge}: {row}");
+        }
+        seed_setup_proof(target.path());
+        rk().args(["status", "--check", "--target"])
+            .arg(target.path())
+            .assert()
+            .success();
+    }
+}
+
 /// The absolute path of `tool` on the test's own `PATH`.
 fn tool_on_path(tool: &str) -> PathBuf {
     std::env::split_paths(&std::env::var_os("PATH").expect("PATH is set"))
@@ -50272,20 +50865,44 @@ fn the_recovery_chapter_carries_the_gitlab_routes_and_the_unbump_precondition() 
         tag.contains("On GitLab, take the routes in the same order."),
         "{tag}"
     );
-    // A bash pipeline on GitHub starts no tag-push run: its one branch-push
-    // run builds, attests, and publishes, so that is the run to rerun.
+    // A bash or python pipeline on GitHub starts no tag-push run: its one
+    // branch-push run builds, attests, and publishes, so that is the run to
+    // rerun.
     assert!(
-        tag.contains("On GitHub, a bash pipeline starts no run on the tag push"),
+        tag.contains("On GitHub, a bash or python pipeline starts no run on the tag push"),
         "{tag}"
     );
-    // Expired artifacts are rebuilt in producer order before publish.
+    // Expired artifacts are rebuilt in producer order before publish, the
+    // PyPI upload included where the python pair runs it.
     assert!(
-        tag.contains("retry `build`, then `provenance` on that build, then `publish`"),
+        tag.contains(
+            "retry `build`, then `provenance` on that build, then `pypi` where it runs, then `publish`"
+        ),
         "{tag}"
+    );
+    // A python target un-bumps through its native tool, which keeps the
+    // lock in step.
+    assert!(
+        nothing.contains("`uv version <previous> --no-sync`"),
+        "{nothing}"
     );
     assert!(
         tag.contains("Never move or delete a protected tag, on either forge."),
         "{tag}"
+    );
+    // The skill's table holds the same precondition: the un-bump only where
+    // nothing is published, and a version the registry holds takes the
+    // rerun at the same commit.
+    let recover = release_skill("references/recover.md");
+    let row = recover
+        .lines()
+        .find(|line| line.starts_with("| `request-merged-nothing-published`"))
+        .expect("the skill's row for the symptom");
+    assert!(row.contains("nothing is published"), "{row}");
+    assert!(row.contains("no registry holds the version"), "{row}");
+    assert!(
+        row.contains("Where the registry already holds the version"),
+        "{row}"
     );
 }
 

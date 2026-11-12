@@ -38,7 +38,7 @@ The branch point is chosen, and chosen need not mean latest. With Carol's unflag
 
 ## Harden, then release
 
-Validation runs against the branch, through the rc cycle [release lines](./09-release-lines.md) owns: `v1.1.0-rc.1` is minted there with `rk lines mint`, and on a rust pair the release half tags it and publishes it as a prerelease, with installers on GitHub, which a human installs and uses. Suppose validation finds a pagination bug.
+Validation runs against the branch, through the rc cycle [release lines](./09-release-lines.md) owns: `v1.1.0-rc.1` is minted there with `rk lines mint`, and the release half tags it and publishes it as a prerelease, which a human installs and uses: on a rust pair with installers on GitHub, and on a bash or python pair through `rk release publish`. Suppose validation finds a pagination bug.
 
 The wrong instinct is to fix it on `release/1.1`. Instead, the fix lands on the trunk first — test, fix, pull request, squash-merge as commit M — and then that one commit crosses:
 

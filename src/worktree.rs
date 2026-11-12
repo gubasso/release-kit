@@ -36,6 +36,13 @@ pub fn matches_grammar(branch: &str) -> bool {
     {
         return true;
     }
+    // rk-release/.+ — the engine's release request branch for a base.
+    if branch
+        .strip_prefix(crate::release_engine::REQUEST_PREFIX)
+        .is_some_and(|base| !base.is_empty())
+    {
+        return true;
+    }
     // <type>/<slug> with the slug over [A-Za-z0-9._/-]+.
     if let Some((kind, slug)) = branch.split_once('/')
         && BRANCH_TYPES.contains(&kind)
@@ -457,6 +464,10 @@ mod tests {
             ("release-1.2", true),
             ("release-", false),
             ("release", false),
+            ("rk-release/master", true),
+            ("rk-release/release/1.4", true),
+            ("rk-release/", false),
+            ("rk-release", false),
             ("master", false),
             ("worktree-session", false),
             ("feature/x", false),

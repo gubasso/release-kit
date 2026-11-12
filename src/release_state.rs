@@ -544,7 +544,8 @@ pub struct Merged {
 /// SATISFIES release-state:a-symptom-names-its-recovery
 ///
 /// A merged request whose version has no tag, or no published version,
-/// published nothing. A published release whose pair builds artifacts and
+/// published nothing. Where the tag is absent and the registry holds the
+/// version, the evidence says so, because that closes the un-bump. A published release whose pair builds artifacts and
 /// whose page carries none lost its artifact build. An artifact no
 /// attestation covers was uploaded outside the run that signs.
 #[must_use]
@@ -557,6 +558,14 @@ pub fn symptoms(
     let mut found = Vec::new();
     if let Some(merged) = merged {
         let missing = match (merged.tagged, merged.published) {
+            // The registry answers here, because an untagged version on a
+            // pair with no registry reads unpublished: the version is out,
+            // so the un-bump is closed and the rerun at the same commit
+            // stays the path.
+            (Answer::No, Answer::Yes) => Some(format!(
+                "no tag v{0} exists, and the registry already holds {0}, so the version cannot return to its previous value",
+                merged.version
+            )),
             (Answer::No, _) => Some(format!("no tag v{} exists", merged.version)),
             (_, Answer::No) => Some(format!("{} is not published", merged.version)),
             _ => None,
@@ -1009,6 +1018,48 @@ mod tests {
         assert!(
             symptoms(None, &last("v1.2.3", Answer::Yes), Some(&empty), false).is_empty(),
             "a pair that builds no artifact has no artifact symptom"
+        );
+    }
+
+    /// With no tag, a version the registry already serves closes the
+    /// un-bump, so the evidence says the registry holds it.
+    #[test]
+    fn an_untagged_version_the_registry_holds_says_so() {
+        let merged = Merged {
+            number: 12,
+            version: "1.2.3".into(),
+            tagged: Answer::No,
+            published: Answer::Yes,
+        };
+        let found = symptoms(Some(&merged), &last("v1.2.2", Answer::Yes), None, false);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].code, super::MERGED_NOTHING_PUBLISHED);
+        assert!(
+            found[0]
+                .evidence
+                .contains("the registry already holds 1.2.3"),
+            "{}",
+            found[0].evidence
+        );
+        assert_eq!(
+            found[0].recovery,
+            "The release request merged and nothing published"
+        );
+        let unpublished = Merged {
+            published: Answer::No,
+            ..merged
+        };
+        let found = symptoms(
+            Some(&unpublished),
+            &last("v1.2.2", Answer::Yes),
+            None,
+            false,
+        );
+        assert_eq!(found[0].code, super::MERGED_NOTHING_PUBLISHED);
+        assert!(
+            !found[0].evidence.contains("registry"),
+            "{}",
+            found[0].evidence
         );
     }
 

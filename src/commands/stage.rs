@@ -94,6 +94,13 @@ fn compare(out: Output, root: &Utf8Path, target: &Utf8Path) -> Result<(), RkErro
         if let Some(provenance) = row.provenance {
             let _ = write!(line, ", provenance {provenance}");
         }
+        if row.word == "retired" {
+            line.push_str(if row.state == "retired" {
+                ", pending: the landing removes it"
+            } else {
+                ", settled: gone from the disk and the record"
+            });
+        }
         if let Some(edited) = row.edited_after_added {
             line.push_str(if edited {
                 ", edited after the commit that brought it"
@@ -106,13 +113,25 @@ fn compare(out: Output, root: &Utf8Path, target: &Utf8Path) -> Result<(), RkErro
     let next = if stage::compare::rendered_equal(&report) {
         vec!["every rendered destination is equal: the landing is proven".to_owned()]
     } else {
-        vec![
+        let mut next: Vec<String> = report
+            .rows
+            .iter()
+            .filter(|row| row.state == "retired")
+            .map(|row| {
+                format!(
+                    "a retirement is pending: the landing removes {}, and the proof waits for it",
+                    row.path
+                )
+            })
+            .collect();
+        next.extend([
             "a conflict reads collision: answer it, then name it with --replace <path> on the landing verb".to_owned(),
             format!(
                 "rk init, rk upgrade, or rk adopt --stage {} --target {} previews the landing",
                 report.stage_root, report.target
             ),
-        ]
+        ]);
+        next
     };
     out.next(&next);
     out.emit(&report)
@@ -170,12 +189,21 @@ fn create(args: &StageArgs) -> Result<(), RkError> {
     landing::accepted_drift_faults(&projection, record.as_ref(), config.as_ref())?;
     let (output, source) = stage::resolve_output(args.output.as_deref(), target.as_std_path())?;
     let prepared = stage::prepare(&output, source, target.as_std_path())?;
+    let dropped = match record.as_ref() {
+        Some(record) => crate::landing::apply::dropped(
+            &crate::landing::apply::Held::open(&target)?,
+            record,
+            &projection,
+        )?,
+        None => Vec::new(),
+    };
     let composed = stage::compose(
         &projection,
         &params,
         target.as_std_path(),
         prepared.resolved(),
         record.as_ref(),
+        &dropped,
         receipt_schema_version,
     );
     stage::write(&prepared, &composed)?;
@@ -259,7 +287,12 @@ fn render(out: Output, receipt: &Receipt, source: OutputSource) {
     }
     for destination in &receipt.retired {
         out.result_line(format!(
-            "retired {destination}: recorded, no longer produced; target-owned from the next landing"
+            "retired {destination}: recorded, no longer produced, and unedited; a landing removes it"
+        ));
+    }
+    for destination in &receipt.dropped {
+        out.result_line(format!(
+            "dropped {destination}: recorded and no longer produced; a landing keeps it as the target's own"
         ));
     }
     for moved in &receipt.secrets_moved {
@@ -367,6 +400,7 @@ mod tests {
             omissions: vec![],
             collisions: vec![],
             retired: vec![],
+            dropped: vec![],
             seeded_present: vec![],
             state_present: vec![],
             secrets_moved: Vec::new(),
@@ -381,7 +415,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.stage/7","rk_version":"0.0.0","target":"/tmp/t","stage_root":"/tmp/s","parameters":{"profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","line_prefix":"release/"}},"git":{"trunk":"main","checkout_mode":"main-worktree","integration":"local","merge_form":"squash"},"capabilities":{"nix_packaging":true,"reporting_policy":true,"scorecard":false,"workflow_guards":false},"repo":"acme/widget","security_contact":"","security_response":"best-effort","required_check":"","required_workflow":""},"capabilities":[],"receipt_schema_version":null,"candidates":[],"omissions":[],"collisions":[],"retired":[],"seeded_present":[],"state_present":[],"secrets_moved":[],"reference":["CHANGELOG.md"],"output_source":"--output","next":["rk stage clean /tmp/s removes the stage once the landing is verified"]}"#
+            r#"{"schema":"rk.stage/8","rk_version":"0.0.0","target":"/tmp/t","stage_root":"/tmp/s","parameters":{"profile":{"technologies":["rust"],"forge":"github","release":{"mode":"automatic","driver":"rust","line_prefix":"release/"}},"git":{"trunk":"main","checkout_mode":"main-worktree","integration":"local","merge_form":"squash"},"capabilities":{"nix_packaging":true,"reporting_policy":true,"scorecard":false,"workflow_guards":false},"repo":"acme/widget","security_contact":"","security_response":"best-effort","required_check":"","required_workflow":""},"capabilities":[],"receipt_schema_version":null,"candidates":[],"omissions":[],"collisions":[],"retired":[],"dropped":[],"seeded_present":[],"state_present":[],"secrets_moved":[],"reference":["CHANGELOG.md"],"output_source":"--output","next":["rk stage clean /tmp/s removes the stage once the landing is verified"]}"#
         );
     }
 

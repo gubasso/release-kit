@@ -2161,7 +2161,7 @@ pub fn authored(text: &str) -> &str {
 /// before creating anything. One owner by token: `concat!` cannot
 /// interpolate a const, so [`compose_hooks`] substitutes it for the
 /// template's `RK_BRANCH_GRAMMAR` token.
-pub const BRANCH_GRAMMAR: &str = r"^((build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)/[A-Za-z0-9._/-]+|([0-9]+|[A-Z][A-Z0-9]+-[0-9]+)-[A-Za-z0-9._-]+|release[-/].+)$";
+pub const BRANCH_GRAMMAR: &str = r"^((build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)/[A-Za-z0-9._/-]+|([0-9]+|[A-Z][A-Z0-9]+-[0-9]+)-[A-Za-z0-9._-]+|release[-/].+|rk-release/.+)$";
 
 /// The one commit scope shape.
 ///

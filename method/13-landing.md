@@ -23,7 +23,8 @@ Production decides each destination by its recorded kind alone, and its report u
 - `matched`: the whole file already held the candidate's bytes, so nothing was written. The receipt recorded it as generated, or no receipt named it.
 - `preserved`: a seeded or state file stays as the target left it, and its current digest enters the receipt.
 - `drift`: a seeded file differs from the receipt. It stays, and the report says so.
-- `released`: the receipt named a destination this binary no longer produces. The file stays on disk and leaves the receipt, target-owned from that moment.
+- `retired`: the receipt named a generated whole file this binary no longer produces, and still vouches for its bytes. The verb removes the file, and it leaves the receipt. Nobody changed what release-kit wrote, and a workflow left behind keeps running beside the one that replaced it.
+- `dropped`: the receipt named a destination this binary no longer produces, and the target owns its bytes: a seeded or state file, a marked region, or a generated file someone edited. The file stays on disk and leaves the receipt, target-owned from that moment.
 - `collision`: the verb refuses before its first write and names every such destination. It is a conflict where a whole file stands on disk that no receipt names and whose bytes differ from the candidate, or where a recorded generated file or region holds bytes the receipt no longer vouches for, because someone edited it.
 
 A conflict is refused because its bytes are someone's own work, and Git is not the only copy a landing may count on. No flag forces past it. Only a named `--replace <path>` passes it, and the verb first saves the conflict's bytes to `replaced/<path>` under `$XDG_STATE_HOME/release-kit/snapshots/<repo>/<timestamp>/`, a migration open or not, and the report names where. A saved copy never lives inside the stage, so cleaning the stage never deletes one. Every conflict the operator did not name still refuses, all of them before the first write, so an upgrade or a repair lands whole or not at all. A file that already holds the candidate's bytes is no conflict, because that is what a landing stopped part way leaves behind.
@@ -48,7 +49,7 @@ A documentation file the projection selects for this target is an ordinary candi
 2. Compare. Run `rk stage compare`, and read each destination's state, kind, provenance, and the word production will print. Judge only a collision. Where the comparison marks it replaceable, ask the operator whether to keep the edit, whose copy is saved and then replaced, or to discard it. Any other collision is a path the landing refuses until the operator fixes it by hand.
 3. Prepare. Gather the operator's answers and the task's own items within the request's authority. Copy nothing out of the stage into the target.
 4. Land. Run the production verb with `--stage <root>`, which renders again from the binary and the target, and read its preview. Then apply it, naming each answered conflict with `--replace <path>`.
-5. Prove. Run `rk stage compare` again: every rendered destination reads `equal`, and `rk status --json` reports `classification: current`. Keep the stage.
+5. Prove. Run `rk stage compare` again: every rendered destination reads `equal`, a retired one included once the landing removed it, and `rk status --json` reports `classification: current`. Keep the stage.
 
 The checks every run ends with, `rk status --check` and the project's own suite, and the stage cleanup after them, belong to the setup skill's general post-flight, not to this sequence. A failure there is repaired through another fresh production invocation, never by hand from the stage.
 
@@ -75,6 +76,6 @@ Release 0.4.x stored plans, results, run journals, and release caches under the 
 - A version gap alone is not work. A recorded target whose files match the candidate has nothing to take, whatever version the record names.
 - A stage that survives the landing is not a leak. It is the benchmark verification reads, and it goes last.
 - A refusal at the landing is a finding for the comparison, never a flag to add. Only a named `--replace`, after the operator answered the conflict, passes it.
-- A retired destination is the target's from the next receipt. Whether the migration removes it is the agent's finding for the operator, and production never deletes it.
+- A dropped destination is the target's from the next receipt. Whether the operator deletes it is the agent's finding for the operator, and production removes only a retired file, whose bytes the receipt still vouches for.
 - A partial landing is visible. Whole files stand beside the previous receipt, Git shows the diff, and the same command runs again.
 - A landing from a stage reads its parameters and renders again. A receipt from another binary or another target is refused, and no byte of the stage reaches the target.

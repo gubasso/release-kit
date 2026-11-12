@@ -28,18 +28,21 @@ use crate::landing::apply::{self, Held};
 use crate::landing::manifest;
 
 /// The report's shape version.
-pub const SCHEMA: &str = "rk.stage-compare/1";
+pub const SCHEMA: &str = "rk.stage-compare/3";
 
 /// One destination, compared.
 #[derive(Debug, Clone, Serialize)]
 pub struct Row {
     /// The destination, relative to the target.
     pub path: String,
-    /// `equal`, `absent`, `differs`, or `retired`.
+    /// `equal`, `absent`, or `differs` for a candidate. For a destination
+    /// the stage no longer carries: `retired` while the landing still has
+    /// to remove it, `equal` once it is gone from the disk and the record,
+    /// and `dropped` where the target keeps it.
     pub state: &'static str,
     /// `rendered`, `region`, `seeded`, or `state`.
     pub kind: &'static str,
-    /// For a destination that differs or is retired: `attributed` where
+    /// For a destination that differs, is retired, or is dropped: `attributed` where
     /// the record vouches for the bytes and Git touched the path,
     /// `reduced` where one of the two holds, `unknown` where neither does.
     pub provenance: Option<&'static str>,
@@ -50,7 +53,8 @@ pub struct Row {
     /// edit after the commit that brought it; null where Git cannot say.
     pub edited_after_added: Option<bool>,
     /// What the production landing prints for it: `created`, `replaced`,
-    /// `matched`, `preserved`, `drift`, `released`, or `collision`.
+    /// `matched`, `preserved`, `drift`, `retired`, `dropped`, or
+    /// `collision`.
     pub word: &'static str,
     /// Whether the landing verb accepts `--replace` for it: true only for
     /// a `collision` the production decision itself marks replaceable, so
@@ -198,7 +202,12 @@ pub fn compare(root: &Utf8Path, target: &Utf8Path) -> Result<Report, RkError> {
             word(&candidate.destination)?,
         ));
     }
-    for destination in &receipt.retired {
+    // Each destination the stage no longer carries, judged from the target
+    // as it stands now: the stage's lists only say which paths to read.
+    // The production decision answers while the record still names one. A
+    // path the record no longer names is settled: retired where nothing
+    // stands, and dropped to the target where its file stays.
+    for destination in receipt.retired.iter().chain(&receipt.dropped) {
         let record = recorded
             .as_ref()
             .and_then(|record| record.file(destination));
@@ -206,32 +215,41 @@ pub fn compare(root: &Utf8Path, target: &Utf8Path) -> Result<Report, RkError> {
             manifest::Placement::Region => "region",
             manifest::Placement::Whole => record.kind.as_str(),
         });
-        // The landing leaves a retired path alone, so an entry no read
-        // answers, such as a directory where the file stood, still has
-        // its row: nothing vouches for it, its provenance is unknown, and
-        // every other destination is reported.
+        // An entry no read answers, such as a directory where the file
+        // stood, is dropped and still has its row: nothing vouches for it,
+        // its provenance is unknown, and every other destination is
+        // reported.
         let Ok(current) = landing::read_recorded(held.base(), destination) else {
             rows.push(Row {
                 path: destination.clone(),
-                state: "retired",
+                state: "dropped",
                 kind,
                 provenance: Some("unknown"),
                 vouched: None,
                 edited_after_added: None,
-                word: "released",
+                word: prepared
+                    .decision(destination)
+                    .map_or("dropped", |decision| decision.action.as_str()),
                 replaceable: false,
             });
             continue;
         };
+        let (state, word) = match prepared.decision(destination) {
+            Some(decision) if decision.action == apply::Action::Retired => ("retired", "retired"),
+            Some(decision) => ("dropped", decision.action.as_str()),
+            None if current.is_some() => ("dropped", "dropped"),
+            None if receipt.dropped.contains(destination) => ("equal", "dropped"),
+            None => ("equal", "retired"),
+        };
         rows.push(row(
             destination,
-            "retired",
+            state,
             kind,
             record,
             current.as_deref(),
             &history,
             target,
-            ("released", false),
+            (word, false),
         ));
     }
     Ok(Report {
@@ -265,7 +283,7 @@ fn row(
         .available
         .then(|| commits_touching(target, path))
         .flatten();
-    let provenance = matches!(state, "differs" | "retired").then(|| {
+    let provenance = matches!(state, "differs" | "retired" | "dropped").then(|| {
         let record_half = vouched == Some(true);
         let history_half = commits.as_ref().is_some_and(|commits| commits > &0);
         match (record_half, history_half) {
@@ -345,15 +363,17 @@ fn git(target: &Utf8Path) -> Command {
     command
 }
 
-/// Whether every rendered destination of a report reads `equal`: the
-/// proof after a landing. A retired row is no candidate: the landing
-/// released it to the target, which owns its bytes from then on.
+/// Whether every rendered destination of a report reads `equal`.
+///
+/// It is the proof after a landing. A `retired` row is a removal still to
+/// happen, so it stands against the proof as any differing file does. A
+/// dropped row is no candidate: the target keeps it and owns its bytes.
 #[must_use]
 pub fn rendered_equal(report: &Report) -> bool {
     report
         .rows
         .iter()
-        .filter(|row| row.state != "retired" && matches!(row.kind, "rendered" | "region"))
+        .filter(|row| row.state != "dropped" && matches!(row.kind, "rendered" | "region"))
         .all(|row| row.state == "equal")
 }
 
@@ -361,7 +381,7 @@ pub fn rendered_equal(report: &Report) -> bool {
 mod tests {
     use super::{History, Report, Row};
 
-    /// The complete `rk.stage-compare/1` shape, held by snapshot.
+    /// The complete `rk.stage-compare/3` shape, held by snapshot.
     #[test]
     fn the_compare_report_schema_snapshot_holds() {
         let report = Report {
@@ -393,30 +413,41 @@ mod tests {
                     word: "replaced",
                     replaceable: false,
                 },
+                Row {
+                    path: ".github/workflows/old-release.yml".into(),
+                    state: "retired",
+                    kind: "rendered",
+                    provenance: Some("attributed"),
+                    vouched: Some(true),
+                    edited_after_added: None,
+                    word: "retired",
+                    replaceable: false,
+                },
             ],
         };
         assert_eq!(
             serde_json::to_string(&report).expect("a report serializes"),
-            r#"{"schema":"rk.stage-compare/1","stage_root":"/state/stages/abc/0.9.0","target":"/srv/widget","history":{"available":true,"reason":null},"rows":[{"path":".github/workflows/release-plz.yml","state":"differs","kind":"rendered","provenance":"reduced","vouched":false,"edited_after_added":null,"word":"collision","replaceable":true},{"path":"AGENTS.md","state":"equal","kind":"region","provenance":null,"vouched":true,"edited_after_added":null,"word":"replaced","replaceable":false}]}"#
+            r#"{"schema":"rk.stage-compare/3","stage_root":"/state/stages/abc/0.9.0","target":"/srv/widget","history":{"available":true,"reason":null},"rows":[{"path":".github/workflows/release-plz.yml","state":"differs","kind":"rendered","provenance":"reduced","vouched":false,"edited_after_added":null,"word":"collision","replaceable":true},{"path":"AGENTS.md","state":"equal","kind":"region","provenance":null,"vouched":true,"edited_after_added":null,"word":"replaced","replaceable":false},{"path":".github/workflows/old-release.yml","state":"retired","kind":"rendered","provenance":"attributed","vouched":true,"edited_after_added":null,"word":"retired","replaceable":false}]}"#
         );
         assert!(!super::rendered_equal(&report));
     }
 
-    /// A retired destination stays the target's after the landing, so
-    /// it never counts against the proof.
+    /// A dropped destination is the target's own, and a settled retirement
+    /// reads equal, so neither counts against the proof. A retirement still
+    /// to happen does.
     #[test]
-    fn a_retired_row_does_not_count_against_the_proof() {
-        let row = |path: &str, state: &'static str| Row {
+    fn only_a_pending_retirement_of_the_dropped_rows_counts_against_the_proof() {
+        let row = |path: &str, state: &'static str, word: &'static str| Row {
             path: path.into(),
             state,
             kind: "rendered",
             provenance: None,
             vouched: None,
             edited_after_added: None,
-            word: "released",
+            word,
             replaceable: false,
         };
-        let report = Report {
+        let mut report = Report {
             schema: super::SCHEMA,
             stage_root: "/state/stages/abc/0.9.0".into(),
             target: "/srv/widget".into(),
@@ -425,10 +456,15 @@ mod tests {
                 reason: None,
             },
             rows: vec![
-                row(".github/workflows/release-plz.yml", "equal"),
-                row(".github/workflows/legacy.yml", "retired"),
+                row(".github/workflows/release-plz.yml", "equal", "matched"),
+                row(".github/workflows/legacy.yml", "dropped", "dropped"),
+                row(".github/workflows/old-release.yml", "equal", "retired"),
             ],
         };
         assert!(super::rendered_equal(&report));
+        report
+            .rows
+            .push(row(".github/workflows/old.yml", "retired", "retired"));
+        assert!(!super::rendered_equal(&report));
     }
 }

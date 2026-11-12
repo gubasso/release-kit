@@ -61,7 +61,7 @@ A project that runs part of what still applies declares that before its first ap
 
 ## 0. Gate the package metadata
 
-Before anything that needs credentials or cannot be undone; the binding names what the registry rejects here. A rust crate whose `profile.release.registry` is `none` packages nothing, so the step reports not applicable there.
+Before anything that needs credentials or cannot be undone; the binding names what the registry rejects here. A rust or python project whose `profile.release.registry` is `none` packages nothing, so the step reports not applicable there.
 
 ```bash
 rk binding <tech>
@@ -427,7 +427,7 @@ prek install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push
 
 ## 5. Publish the first version by hand
 
-The upload is permanent: the registry never lets a version be overwritten, and the name is claimed for good. A rust crate whose `profile.release.registry` is `none` skips steps 5, 6, and 8: like bash, it publishes to no registry, and step 7 proves its first release.
+The upload is permanent: the registry never lets a version be overwritten, and the name is claimed for good. A rust or python project whose `profile.release.registry` is `none` skips steps 5, 6, and 8: like bash, it publishes to no registry, and step 7 proves its first release. A python project whose name PyPI does not hold yet skips step 5 too: step 6 registers a pending trusted publisher, and the first engine release uploads with no token.
 
 ### 5a. Gate the tree and read the version
 
@@ -444,6 +444,13 @@ On rust:
 
 ```bash
 cargo metadata --no-deps --format-version 1 -q | jq -r '.packages[0].version'
+# check: note it; 5c asserts against it
+```
+
+On python:
+
+```bash
+uv version --short
 # check: note it; 5c asserts against it
 ```
 
@@ -466,17 +473,20 @@ cargo info <crate> | grep -m1 -i '^version'
 On python:
 
 ```bash
-python -m build
-python -m twine upload dist/*                # reads the token from the environment
+uv build
+uv publish                                   # reads the token from UV_PUBLISH_TOKEN
+curl -fsS -o /dev/null -w '%{http_code}\n' "https://pypi.org/pypi/<package>/<version>/json"
+# check: prints 200 for the version 5a reported
+# already published: the registry refuses a version it already serves; go to step 6
 ```
 
-On bash, and for a rust crate whose `profile.release.registry` is `none`:
+On bash, and for a rust or python project whose `profile.release.registry` is `none`:
 
 There is no registry; the first release is proven by the automated path in step 7, and nothing is published by hand.
 
 ## 6. Register the trusted publisher
 
-Not for a crate that publishes to no registry. Manual — registry web UI, no API, once per package; the binding walks the form and its read-back check. Register the owner, the repository, and the publish workflow's filename, which must be the one that stays true. Then revoke the bootstrap token, both halves — the registry-side revoke and the host-side logout the binding carries — so the package has exactly one publishing path.
+Not for a project that publishes to no registry. Manual — registry web UI, no API, once per package; the binding walks the form and its read-back check. Register the owner, the repository, and the publish workflow's filename, which must be the one that stays true. Then revoke the bootstrap token, both halves — the registry-side revoke and the host-side logout the binding carries — so the package has exactly one publishing path.
 
 ## 7. Prove the automated path
 
@@ -517,8 +527,8 @@ gh run list --repo <repo> --workflow <publish workflow> --limit 1 --json conclus
 On github:
 
 ```bash
-gh pr list --repo <repo> --state open --json number,title
-# check: a release request from the bot is open, proposing the next version
+gh pr list --repo <repo> --state open --json number,title,headRefName
+# check: a release request from the bot is open, proposing the next version, from release-plz-<suffix> on rust or rk-release/master on bash and python
 # none open: the trunk matches the version step 5 published, so there is nothing to propose; land one change through 7a and rerun
 ```
 
@@ -526,7 +536,7 @@ On gitlab:
 
 ```bash
 glab mr list
-# check: a release request from the bot is open, proposing the next version
+# check: a release request from the bot is open, proposing the next version, from release-plz-<suffix> on rust or rk-release/master on bash and python
 ```
 
 ### 7d. Cut one release end to end
@@ -554,4 +564,4 @@ An upgrade or a new answer that moves the setup contract takes the same order: l
 
 ## 8. Require trusted publishing
 
-Not for a crate that publishes to no registry. Manual — registry web UI, no API, once per package, and only after step 7 proved one OIDC release; the binding names the switch, what it rejects from here on, and the recovery escape that starts by turning it off.
+Not for a project that publishes to no registry. Manual — registry web UI, no API, once per package, and only after step 7 proved one OIDC release; the binding names the switch, what it rejects from here on, and the recovery escape that starts by turning it off.

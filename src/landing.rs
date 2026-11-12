@@ -1418,8 +1418,8 @@ mod tests {
                 };
                 assert!(releasing.contains("- id: rk-no-hand-authored-tag"), "{at}");
                 assert!(
-                    releasing.contains(r"\.pre-commit-config\.yaml$|release-plz\.toml$|dist-workspace\.toml$|release-please-config\.json$|cliff\.toml$|\.release-please-manifest\.json$|VERSION$)'"),
-                    "{at}: the release-bearing pattern is unchanged: {releasing}"
+                    releasing.contains(r"\.pre-commit-config\.yaml$|release-plz\.toml$|dist-workspace\.toml$|cliff\.toml$|VERSION$)'"),
+                    "{at}: the release-bearing pattern names the release files a landing writes: {releasing}"
                 );
                 assert_eq!(releasing.contains("--force-scope"), guards, "{at}");
             }
